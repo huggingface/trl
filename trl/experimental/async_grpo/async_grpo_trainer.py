@@ -22,6 +22,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+import requests
 import torch
 from accelerate.logging import get_logger
 from datasets import Dataset, IterableDataset
@@ -30,9 +31,8 @@ from torch.utils.data import DataLoader
 from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenizerBase, TrainerCallback
 from transformers.data.data_collator import DataCollatorMixin
 
-from trl.trainer.base_trainer import _BaseTrainer
-from trl.trainer.utils import pad, patch_chunked_lm_head
-
+from ...trainer.base_trainer import _BaseTrainer
+from ...trainer.utils import nanmax, nanmin, pad, patch_chunked_lm_head
 from .async_grpo_config import AsyncGRPOConfig
 from .async_rollout_worker import AsyncRolloutWorker
 from .weight_transfer import WeightTransferClient
@@ -175,6 +175,119 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
             }
 
 
+def _get_vllm_max_model_len(server_url: str, timeout: float) -> int:
+    """Query the vLLM server for the served model's `max_model_len` (the cap on prompt + completion tokens)."""
+    response = requests.get(f"{server_url.rstrip('/')}/v1/models", timeout=timeout)
+    response.raise_for_status()
+    return response.json()["data"][0]["max_model_len"]
+
+
+def _balance_by_squared_length(examples: list[dict[str, Any]], num_groups: int) -> list[list[dict[str, Any]]]:
+    """Greedily partition `examples` into `num_groups` rows (one per DP rank), balancing each row's Σ Lᵢ².
+
+    Attention is O(L²) while the FFN is O(L), so equal token counts wouldn't equalize wall-time; balancing Σ Lᵢ² keeps
+    the per-micro-batch all-reduce free of stragglers. Samples are placed longest-first into the row with the smallest
+    running Σ Lᵢ² (LPT scheduling). With at least `num_groups` samples every row ends up non-empty.
+    """
+    groups = [[] for _ in range(num_groups)]
+    squared_loads = [0] * num_groups
+    for example in sorted(examples, key=lambda e: len(e["input_ids"]), reverse=True):
+        n = len(example["input_ids"])
+        i = min(range(num_groups), key=lambda j: squared_loads[j])
+        groups[i].append(example)
+        squared_loads[i] += n * n
+    return groups
+
+
+class FixedCountBatcher(torch.utils.data.IterableDataset):
+    """Fixed-count batcher (the planner) wrapping [`RolloutQueueDataset`].
+
+    Buffers `microbatch_size` (= `per_device_train_batch_size × num_processes`) samples, then partitions them across
+    the `num_processes` rows (one per DP rank) balanced by Σ Lᵢ² (attention cost) so no rank straggles at the
+    per-micro-batch all-reduce. The sample count is fixed, so this does not bound peak memory — use
+    [`TokenBudgetBatcher`] for that. With `microbatch_size >= num_processes` every row is non-empty.
+
+    Args:
+        dataset ([`RolloutQueueDataset`]):
+            Source yielding single rollout-sample dicts.
+        num_processes (`int`):
+            Number of DP ranks; the number of rows (one per rank) in each micro-batch.
+        microbatch_size (`int`):
+            Number of samples buffered into each micro-batch before it is partitioned and emitted.
+    """
+
+    def __init__(self, dataset: "RolloutQueueDataset", num_processes: int, microbatch_size: int):
+        self.dataset = dataset
+        self.num_processes = num_processes
+        self.microbatch_size = microbatch_size
+
+    def __iter__(self):
+        batch = []
+        for sample in self.dataset:
+            batch.append(sample)
+            if len(batch) == self.microbatch_size:
+                yield _balance_by_squared_length(batch, self.num_processes)
+                batch = []
+
+
+class TokenBudgetBatcher(torch.utils.data.IterableDataset):
+    """Token-budgeted dynamic batcher (the planner) wrapping [`RolloutQueueDataset`].
+
+    Keeps `num_processes` open rows (one per DP rank) and pulls single samples from the source one at a time, dropping
+    each into the row with the smallest running Σ Lᵢ² (attention cost) that still fits within `token_budget` tokens.
+    When the next sample fits in no row, the current micro-batch is emitted — a list of `num_processes` groups, already
+    partitioned per rank — and a fresh one is started with that sample. The number of samples per row is therefore
+    dynamic: short samples pack many per row, long ones pack few, while every row stays within `token_budget` tokens.
+    This bounds peak memory independently of `per_device_train_batch_size` and keeps the rows Σ Lᵢ²-balanced so no rank
+    straggles at the per-micro-batch all-reduce.
+
+    Every emitted micro-batch has all `num_processes` rows non-empty (a rank forwarding zero tokens would desync
+    FSDP/EP collectives): a micro-batch is only closed once every row holds at least one sample. A sample longer than
+    `token_budget` fits in no row, so it is dropped with a warning; set `token_budget` ≥ the vLLM server's
+    `max_model_len` (the cap on prompt + completion) to avoid dropping samples.
+
+    Args:
+        dataset ([`RolloutQueueDataset`]):
+            Source yielding single rollout-sample dicts.
+        num_processes (`int`):
+            Number of DP ranks; the number of rows (one per rank) in each micro-batch.
+        token_budget (`int`):
+            Maximum real tokens packed into a single row (one rank's forward).
+    """
+
+    def __init__(self, dataset: "RolloutQueueDataset", num_processes: int, token_budget: int):
+        self.dataset = dataset
+        self.num_processes = num_processes
+        self.token_budget = token_budget
+
+    def __iter__(self):
+        rows = [[] for _ in range(self.num_processes)]
+        squared_loads = [0] * self.num_processes  # Σ Lᵢ² per row, drives the balancing
+        token_counts = [0] * self.num_processes  # tokens per row, drives the budget
+        for sample in self.dataset:
+            n = len(sample["input_ids"])
+            if n > self.token_budget:
+                # Longer than the whole budget: fits in no row, so drop it (placing it would overshoot the budget
+                # or force an empty row that desyncs FSDP/EP collectives).
+                logger.warning(
+                    f"Dropping a rollout sample of {n} tokens that exceeds token_budget={self.token_budget}. "
+                    "Raise token_budget to avoid dropping samples."
+                )
+                continue
+            fits = [i for i in range(self.num_processes) if token_counts[i] + n <= self.token_budget]
+            if not fits:
+                # No row has room (all are non-empty, since this sample fits an empty one): close and reset.
+                yield rows
+                rows = [[] for _ in range(self.num_processes)]
+                squared_loads = [0] * self.num_processes
+                token_counts = [0] * self.num_processes
+                fits = list(range(self.num_processes))
+            i = min(fits, key=lambda j: squared_loads[j])
+            rows[i].append(sample)
+            squared_loads[i] += n * n
+            token_counts[i] += n
+
+
 class _EmptyIterableDataset(torch.utils.data.IterableDataset):
     """Placeholder for non-rank-0 processes. Never actually iterated."""
 
@@ -185,25 +298,31 @@ class _EmptyIterableDataset(torch.utils.data.IterableDataset):
 @dataclass
 class DataCollatorForRollout(DataCollatorMixin):
     """
-    Padding-free collator for rollout samples. Splits the global batch into `num_processes` groups (one per rank) and
-    concatenates each group's samples into a single packed row, with `position_ids` resetting per sequence and
-    advantages expanded per-token. Rows are padded only to the longest group, so the batch stays rectangular for
+    Padding-free collator (the packer) for rollout samples. Packs a micro-batch into `num_processes` rows (one per DP
+    rank): each row concatenates its samples into a single sequence, with `position_ids` resetting per sequence and
+    advantages expanded per-token. Rows are padded only to the longest row, so the batch stays rectangular for
     `DataLoaderDispatcher` to scatter row `i` -> rank `i`; this inter-rank padding is stripped per-rank in
     `compute_loss`.
+
+    The micro-batch arrives already partitioned into `num_processes` rows by the upstream planner
+    ([`FixedCountBatcher`] or [`TokenBudgetBatcher`]) — which balances each row's Σ Lᵢ² (attention cost) to avoid
+    stragglers at the gradient all-reduce — so the collator only tensorizes the given rows.
 
     Args:
         pad_token_id (`int`):
             Token id used to pad `input_ids`.
         num_processes (`int`, *optional*, defaults to `1`):
-            Number of ranks; the global batch is packed into this many rows.
+            Number of DP ranks; the micro-batch is packed into this many rows.
     """
 
     pad_token_id: int
     num_processes: int = 1
     return_tensors: str = "pt"
 
-    def torch_call(self, examples: list[dict[str, Any]]) -> dict[str, Any]:
-        groups = [examples[i :: self.num_processes] for i in range(self.num_processes)]
+    def torch_call(self, examples: list[Any]) -> dict[str, Any]:
+        # The dataloader uses batch_size=1 over a planner that pre-partitions each micro-batch into `num_processes`
+        # rows, so `examples` is a length-1 list holding that single micro-batch (one group per rank).
+        (groups,) = examples
 
         input_ids, attention_mask, completion_mask, old_log_probs, position_ids, advantages = [], [], [], [], [], []
         for group in groups:
@@ -231,16 +350,17 @@ class DataCollatorForRollout(DataCollatorMixin):
         position_ids = pad(position_ids, padding_value=0)
         advantages = pad(advantages, padding_value=0.0)
 
+        all_examples = [example for group in groups for example in group]
+
         # Total valid completion tokens across all samples in the full batch.
         # Repeated per rank so that DataLoaderDispatcher (dispatch_batches=True) slices correctly on dim=0
-        global_n_tokens = sum(sum(example["completion_mask"]) for example in examples)
+        global_n_tokens = sum(sum(example["completion_mask"]) for example in all_examples)
         global_n_tokens = torch.full((self.num_processes,), float(global_n_tokens), dtype=torch.float32)
 
         # Per-sample metrics grouped per rank, as a dict of 2D tensors (one row per rank) so that Accelerate's
         # recursive broadcast (dispatch_batches=True) can scatter them — it traverses nested dicts of tensors but
         # chokes on plain Python floats. Rows are padded with NaN so padded slots are ignored by the nan-aware
         # aggregation in `compute_loss`.
-        metrics_list = [example["metrics"] for example in examples]
         metrics = (
             {
                 key: pad(
@@ -250,9 +370,9 @@ class DataCollatorForRollout(DataCollatorMixin):
                     ],
                     padding_value=float("nan"),
                 )
-                for key in metrics_list[0]
+                for key in all_examples[0]["metrics"]
             }
-            if metrics_list and metrics_list[0]
+            if all_examples[0]["metrics"]
             else {}
         )
 
@@ -279,18 +399,18 @@ class AsyncGRPOTrainer(_BaseTrainer):
     Example:
 
     ```python
-    from trl.experimental.async_grpo import AsyncGRPOTrainer
-    from trl.rewards import accuracy_reward
-    from datasets import load_dataset
+    >>> from trl.experimental.async_grpo import AsyncGRPOTrainer
+    >>> from trl.rewards import accuracy_reward
+    >>> from datasets import load_dataset
 
-    dataset = load_dataset("trl-lib/DeepMath-103K", split="train")
+    >>> dataset = load_dataset("trl-lib/DeepMath-103K", split="train")
 
-    trainer = AsyncGRPOTrainer(
-        model="Qwen/Qwen2.5-0.5B-Instruct",
-        reward_funcs=accuracy_reward,
-        train_dataset=dataset,
-    )
-    trainer.train()
+    >>> trainer = AsyncGRPOTrainer(
+    ...     model="Qwen/Qwen2.5-0.5B-Instruct",
+    ...     reward_funcs=accuracy_reward,
+    ...     train_dataset=dataset,
+    ... )
+    >>> trainer.train()
     ```
 
     Args:
@@ -397,12 +517,13 @@ class AsyncGRPOTrainer(_BaseTrainer):
 
         # Training arguments
         self.epsilon_low = self.args.epsilon
-        self.epsilon_high = self.args.epsilon_high
+        self.epsilon_high = self.args.epsilon_high if self.args.epsilon_high is not None else self.args.epsilon
         self.temperature = self.args.temperature
 
         # Model
         model_name = model
         model_init_kwargs = self.args.model_init_kwargs or {}
+        model_init_kwargs.setdefault("trust_remote_code", self.args.trust_remote_code)
         # FlashAttention is required: training runs in padding-free mode, where sequences are concatenated into a
         # single row and `cu_seq_lens` are derived from `position_ids` resets. SDPA/eager can't handle this.
         model = AutoModelForCausalLM.from_pretrained(
@@ -416,15 +537,11 @@ class AsyncGRPOTrainer(_BaseTrainer):
         if self.args.use_liger_kernel:
             raise NotImplementedError("`use_liger_kernel` is not supported yet.")
 
-        # MoE load-balancing auxiliary loss, enabled via `output_router_logits` in `model_init_kwargs`
+        # MoE load-balancing auxiliary loss, applied to Mixture-of-Experts models (no effect otherwise)
         text_config = model.config.get_text_config()
-        self.aux_loss_enabled = getattr(text_config, "output_router_logits", False)
-        self.router_aux_loss_coef = getattr(text_config, "router_aux_loss_coef", 0.0)
-        if self.aux_loss_enabled and self.router_aux_loss_coef == 0.0:
-            logger.warning(
-                "You set `output_router_logits=True` in the model config, but `router_aux_loss_coef` is `0.0`, so the "
-                "auxiliary loss has no effect. Set `router_aux_loss_coef > 0.0` to enable it."
-            )
+        is_moe = getattr(text_config, "output_router_logits", None) is not None
+        self.aux_loss_enabled = is_moe and self.args.router_aux_loss_coef != 0.0
+        self.router_aux_loss_coef = self.args.router_aux_loss_coef
 
         patch_chunked_lm_head(
             model, chunk_size=8192, temperature=self.temperature, output_router_logits=self.aux_loss_enabled
@@ -432,7 +549,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
 
         # Processing class
         if processing_class is None:
-            processing_class = AutoTokenizer.from_pretrained(model_name)
+            processing_class = AutoTokenizer.from_pretrained(model_name, trust_remote_code=self.args.trust_remote_code)
         if processing_class.pad_token is None:
             processing_class.pad_token = processing_class.eos_token
 
@@ -542,6 +659,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
         self.add_callback(StepIntervalCallback(self._sync_weight, self.args.weight_sync_steps))
 
     def get_train_dataloader(self) -> DataLoader:
+        num_processes = self.accelerator.num_processes
         if self.accelerator.is_main_process:
             dataset = RolloutQueueDataset(
                 rollout_queue=self.rollout_queue,
@@ -550,14 +668,39 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 stale_after_s=self.args.heartbeat_stale_after_s,
                 max_staleness=self.args.max_staleness,
             )
+            # Default the token budget to the vLLM server's max_model_len (the cap on prompt + completion), so no
+            # rollout sample can exceed it. Only the built-in worker manages a vLLM server (weight_transfer is set);
+            # with a custom rollout_worker there may be none to query, so require an explicit budget instead.
+            if self.args.token_budget is None:
+                if self.weight_transfer is None:
+                    raise ValueError(
+                        "Set `token_budget` explicitly when passing a custom `rollout_worker`: the default is the "
+                        "vLLM server's max_model_len, which is only queried for the built-in rollout worker."
+                    )
+                self.args.token_budget = _get_vllm_max_model_len(
+                    self.args.vllm_server_base_url, self.args.vllm_server_timeout
+                )
+                logger.info(f"token_budget unset; defaulting to vLLM max_model_len={self.args.token_budget}")
+            # The planner partitions the rollout stream into Σ Lᵢ²-balanced micro-batches of `num_processes` rows.
+            # TokenBudgetBatcher caps each row at `token_budget` tokens (dynamic count, bounds peak memory);
+            # FixedCountBatcher uses a fixed `per_device_train_batch_size × num_processes` samples per micro-batch.
+            if self.args.token_budget > 0:
+                dataset = TokenBudgetBatcher(dataset, num_processes, self.args.token_budget)
+            else:
+                dataset = FixedCountBatcher(
+                    dataset, num_processes, self.args.per_device_train_batch_size * num_processes
+                )
         else:
             dataset = _EmptyIterableDataset()
 
+        # Each planner item is one complete micro-batch (`num_processes` pre-packed rows), so the dataloader pulls them
+        # one at a time (batch_size=1) and the collator tensorizes each into a rectangular `(num_processes, T_max)`
+        # batch that DataLoaderDispatcher scatters row `i` -> rank `i`.
         return self.accelerator.prepare(
             DataLoader(
                 dataset,
-                batch_size=self.args.per_device_train_batch_size * self.accelerator.num_processes,
-                collate_fn=DataCollatorForRollout(self.processing_class.pad_token_id, self.accelerator.num_processes),
+                batch_size=1,
+                collate_fn=DataCollatorForRollout(self.processing_class.pad_token_id, num_processes),
                 num_workers=0,
                 # NOTE(@aminediro):
                 # dispatch_batches = True for DataLoader whose underlying dataset is an IterableDataset
@@ -592,7 +735,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
         completion_mask = inputs["completion_mask"][mask_bool].unsqueeze(0)
         old_log_probs = inputs["old_log_probs"][mask_bool].unsqueeze(0)
         position_ids = inputs["position_ids"][mask_bool].unsqueeze(0)
-        per_token_advantages = inputs["advantages"][mask_bool].unsqueeze(0)
+        advantages = inputs["advantages"][mask_bool].unsqueeze(0)
 
         forward_start = time.time()
         outputs = model(
@@ -607,11 +750,13 @@ class AsyncGRPOTrainer(_BaseTrainer):
 
         completion_mask = completion_mask[:, 1:]
         old_log_probs = old_log_probs[:, 1:]
-        per_token_advantages = per_token_advantages[:, 1:]
+        advantages = advantages[:, 1:]
         log_ratio = log_probs - old_log_probs
-        ratio = torch.exp(log_ratio)
-        clipped = torch.clamp(ratio, 1 - self.epsilon_low, 1 + self.epsilon_high)
-        per_token_loss = -torch.min(ratio * per_token_advantages, clipped * per_token_advantages)
+        coef_1 = torch.exp(log_ratio)
+        coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
+        per_token_loss1 = coef_1 * advantages
+        per_token_loss2 = coef_2 * advantages
+        per_token_loss = -torch.min(per_token_loss1, per_token_loss2)
 
         # DDP/FSDP averages gradients across ranks (world_size).
         # To get correct per-token normalization we scale by 1/tokens_per_rank
@@ -635,11 +780,11 @@ class AsyncGRPOTrainer(_BaseTrainer):
             local_count = valid_mask.sum().float()
 
             local_ratio_sum = (
-                ratio[valid_mask].sum() if valid_mask.any() else torch.zeros((), device=completion_mask.device)
+                coef_1[valid_mask].sum() if valid_mask.any() else torch.zeros((), device=completion_mask.device)
             )
             # Approx KL: http://joschu.net/blog/kl-approx.html
             local_kl_sum = (
-                ((ratio[valid_mask] - 1) - log_ratio[valid_mask]).sum()
+                ((coef_1[valid_mask] - 1) - log_ratio[valid_mask]).sum()
                 if valid_mask.any()
                 else torch.zeros((), device=completion_mask.device)
             )
@@ -648,21 +793,66 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 entropy[valid_mask].sum() if valid_mask.any() else torch.zeros((), device=completion_mask.device)
             )
 
-            clipped = (ratio < 1 - self.epsilon_low) | (ratio > 1 + self.epsilon_high)
-            local_clip_sum = (
-                clipped[valid_mask].float().sum()
+            # Compute the clipped probability ratios. A token is counted as clipped only when clipping is binding in a
+            # policy-relevant direction: low clip when the advantage is negative, high clip when it is positive.
+            is_low_clipped = (coef_1 < 1 - self.epsilon_low) & (advantages < 0)
+            is_high_clipped = (coef_1 > 1 + self.epsilon_high) & (advantages > 0)
+            is_region_clipped = is_low_clipped | is_high_clipped
+            local_low_clip_sum = (
+                is_low_clipped[valid_mask].float().sum()
+                if valid_mask.any()
+                else torch.zeros((), device=completion_mask.device)
+            )
+            local_high_clip_sum = (
+                is_high_clipped[valid_mask].float().sum()
+                if valid_mask.any()
+                else torch.zeros((), device=completion_mask.device)
+            )
+            local_region_clip_sum = (
+                is_region_clipped[valid_mask].float().sum()
                 if valid_mask.any()
                 else torch.zeros((), device=completion_mask.device)
             )
 
-            # Batch all-reduce: [ratio_sum, kl_sum, entropy_sum, clip_sum, count]
-            stats = torch.stack([local_ratio_sum, local_kl_sum, local_entropy_sum, local_clip_sum, local_count])
+            # Per-rank clip fractions, gathered below to report the cross-rank saturation extrema.
+            local_low_clip_mean = local_low_clip_sum / local_count.clamp(min=1.0)
+            local_high_clip_mean = local_high_clip_sum / local_count.clamp(min=1.0)
+
+            # Batch all-reduce: [ratio_sum, kl_sum, entropy_sum, low_clip_sum, high_clip_sum, region_clip_sum, count]
+            stats = torch.stack(
+                [
+                    local_ratio_sum,
+                    local_kl_sum,
+                    local_entropy_sum,
+                    local_low_clip_sum,
+                    local_high_clip_sum,
+                    local_region_clip_sum,
+                    local_count,
+                ]
+            )
             stats = self.accelerator.reduce(stats, reduction="sum")
-            global_ratio_sum, global_kl_sum, global_entropy_sum, global_clip_sum, global_count = stats.unbind(0)
+            (
+                global_ratio_sum,
+                global_kl_sum,
+                global_entropy_sum,
+                global_low_clip_sum,
+                global_high_clip_sum,
+                global_region_clip_sum,
+                global_count,
+            ) = stats.unbind(0)
             self._metrics["train"]["ratio"].append((global_ratio_sum / global_count).item())
             self._metrics["train"]["kl"].append((global_kl_sum / global_count).item())
             self._metrics["train"]["entropy"].append((global_entropy_sum / global_count).item())
-            self._metrics["train"]["clip_ratio"].append((global_clip_sum / global_count).item())
+            self._metrics["train"]["clip_ratio/low_mean"].append((global_low_clip_sum / global_count).item())
+            self._metrics["train"]["clip_ratio/high_mean"].append((global_high_clip_sum / global_count).item())
+            self._metrics["train"]["clip_ratio/region_mean"].append((global_region_clip_sum / global_count).item())
+
+            # Cross-rank saturation extrema, mirroring GRPOTrainer's clip_ratio/low_min and clip_ratio/high_max:
+            # the smallest per-rank low-clip and largest per-rank high-clip fractions across ranks.
+            gathered_low_clip = self.accelerator.gather(local_low_clip_mean)
+            gathered_high_clip = self.accelerator.gather(local_high_clip_mean)
+            self._metrics["train"]["clip_ratio/low_min"].append(nanmin(gathered_low_clip).item())
+            self._metrics["train"]["clip_ratio/high_max"].append(nanmax(gathered_high_clip).item())
 
             if self.aux_loss_enabled:
                 gathered_aux = self.accelerator.reduce(aux_loss.detach().to(torch.float32), reduction="sum")

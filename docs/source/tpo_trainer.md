@@ -65,12 +65,12 @@ The reference response is typically the highest-quality completion available for
 
 ## Example script
 
-We provide an example script to train a model using the TPO method. The script is available at [`trl/experimental/tpo/tpo.py`](https://github.com/huggingface/trl/blob/main/trl/experimental/tpo/tpo.py).
+We provide an example script to train a model using the TPO method. The script is available at [`examples/scripts/tpo.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/tpo.py).
 
 To test the TPO script with the [Qwen 3 0.6B model](https://huggingface.co/Qwen/Qwen3-0.6B) on a triple-preference dataset, run the following command:
 
 ```bash
-accelerate launch trl/experimental/tpo/tpo.py \
+accelerate launch examples/scripts/tpo.py \
     --model_name_or_path Qwen/Qwen3-0.6B \
     --dataset_name tpo-alignment/triple-preference-ultrafeedback-40K \
     --beta 0.01 \
@@ -108,7 +108,7 @@ Setting `tpo_alpha=0.0` disables the NLL term entirely (the reference response i
 
 ## Logged metrics
 
-While training and evaluating we record the following metrics:
+While training and evaluating, we record the following metrics:
 
 * `loss`: The total TPO loss (contrastive + `tpo_alpha` × NLL) averaged over the current logging interval.
 * `entropy`: The average entropy of the model's predicted token distribution over completion tokens.

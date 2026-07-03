@@ -120,7 +120,7 @@ Padding tokens (if present) are ignored in the loss computation by applying an i
 
 ## Logged metrics
 
-While training and evaluating we record the following reward metrics:
+While training and evaluating, we record the following metrics:
 
 * `global_step`: The total number of optimizer steps taken so far.
 * `epoch`: The current epoch number, based on dataset iteration.

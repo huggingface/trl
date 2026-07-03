@@ -31,12 +31,14 @@ import pandas as pd
 import torch
 import torch.nn.functional as F
 import transformers
-from accelerate import PartialState, logging
+from accelerate.logging import get_logger
 from huggingface_hub import ModelCard, ModelCardData
 from packaging.version import Version
 from torch.utils.data import Sampler
 from transformers import (
     AutoConfig,
+    AutoModelForCausalLM,
+    AutoModelForImageTextToText,
     BitsAndBytesConfig,
     PretrainedConfig,
     PreTrainedModel,
@@ -44,13 +46,17 @@ from transformers import (
     is_trackio_available,
 )
 from transformers.models.auto.auto_factory import _BaseAutoModelClass
-from transformers.utils import (
-    is_peft_available,
-    is_rich_available,
-    is_torch_xpu_available,
-)
+from transformers.utils import is_peft_available, is_rich_available
 
 from ..trainer.model_config import ModelConfig
+
+
+if is_comet_available():
+    import comet_ml
+
+
+if is_peft_available():
+    from peft import LoraConfig, PeftConfig, PeftModel
 
 
 if is_rich_available():
@@ -59,14 +65,8 @@ if is_rich_available():
     from rich.table import Table
     from rich.text import Text
 
-if is_comet_available():
-    import comet_ml
 
-if is_peft_available():
-    from peft import LoraConfig, PeftConfig, PeftModel
-
-
-logger = logging.get_logger(__name__)
+logger = get_logger(__name__)
 
 
 def _is_port_free(port: int, host: str = "127.0.0.1") -> bool:
@@ -199,13 +199,6 @@ def get_quantization_config(model_args: ModelConfig) -> BitsAndBytesConfig | Non
         quantization_config = None
 
     return quantization_config
-
-
-def get_kbit_device_map() -> dict[str, int] | None:
-    if torch.cuda.is_available() or is_torch_xpu_available():
-        return {"": PartialState().local_process_index}
-    else:
-        return None
 
 
 def get_peft_config(model_args: ModelConfig) -> "PeftConfig | None":
@@ -890,7 +883,7 @@ def split_pixel_values_by_grid(batch: dict[str, torch.Tensor]) -> dict[str, torc
 
     For models with `image_grid_thw` (e.g. Qwen), the grid dimensions determine how many rows of `pixel_values` belong
     to each image. For models with `image_position_ids` instead (e.g. Gemma), `pixel_values` is indexed directly by
-    image count.
+    image count. For models with `spatial_shapes` (e.g. LFM2-VL), tile-indexed tensors are split using `num_tiles`.
     """
     if "pixel_values" not in batch or "num_images" not in batch:
         return batch
@@ -918,6 +911,20 @@ def split_pixel_values_by_grid(batch: dict[str, torch.Tensor]) -> dict[str, torc
         split_image_position_ids = list(torch.split(image_position_ids, num_images, dim=0))
         return {**batch, "pixel_values": split_pixel_values, "image_position_ids": split_image_position_ids}
 
+    if "spatial_shapes" in batch:
+        num_tiles = batch["num_tiles"]
+        pixel_attention_mask = batch["pixel_attention_mask"]
+        spatial_shapes = batch["spatial_shapes"]
+        split_pixel_values = list(torch.split(pixel_values, num_tiles, dim=0))
+        split_pixel_attention_mask = list(torch.split(pixel_attention_mask, num_tiles, dim=0))
+        split_spatial_shapes = list(torch.split(spatial_shapes, num_tiles, dim=0))
+        return {
+            **batch,
+            "pixel_values": split_pixel_values,
+            "pixel_attention_mask": split_pixel_attention_mask,
+            "spatial_shapes": split_spatial_shapes,
+        }
+
     return batch
 
 
@@ -940,6 +947,16 @@ def unsplit_pixel_values_by_grid(batch: dict[str, torch.Tensor | list[torch.Tens
     if isinstance(image_position_ids, list):
         merged = torch.cat(image_position_ids, dim=0)
         batch = {**batch, "image_position_ids": merged}
+
+    pixel_attention_mask = batch.get("pixel_attention_mask")
+    if isinstance(pixel_attention_mask, list):
+        merged = torch.cat(pixel_attention_mask, dim=0)
+        batch = {**batch, "pixel_attention_mask": merged}
+
+    spatial_shapes = batch.get("spatial_shapes")
+    if isinstance(spatial_shapes, list):
+        merged = torch.cat(spatial_shapes, dim=0)
+        batch = {**batch, "spatial_shapes": merged}
 
     return batch
 
@@ -1021,8 +1038,19 @@ def create_model_from_path(
         )
     kwargs["device_map"] = kwargs.get("device_map", "auto")
     if architecture is None:
-        config = AutoConfig.from_pretrained(model_id)
-        architecture = getattr(transformers, config.architectures[0])
+        # Best effort to infer architecture from config, but we fall back to AutoModelForCausalLM if we can't find it
+        config = AutoConfig.from_pretrained(model_id, trust_remote_code=kwargs.get("trust_remote_code", False))
+        architecture = getattr(transformers, config.architectures[0], None)
+        if architecture is None:
+            # Remote-code checkpoint: the architecture name lives in the dynamic module, not in
+            # `transformers`. Pick the most specific auto class declared in `config.auto_map`.
+            auto_map = config.auto_map or {}
+            for candidate in (AutoModelForImageTextToText, AutoModelForCausalLM):
+                if candidate.__name__ in auto_map:
+                    architecture = candidate
+                    break
+            else:
+                architecture = AutoModelForCausalLM
     model = architecture.from_pretrained(model_id, **kwargs)
     return model
 

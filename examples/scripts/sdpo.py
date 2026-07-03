@@ -27,7 +27,7 @@
 Usage:
 
 ```bash
-python trl/experimental/sdpo/sdpo.py \
+python examples/scripts/sdpo.py \
     --model_name_or_path Qwen/Qwen2.5-Math-1.5B-Instruct \
     --dataset_name openai/gsm8k \
     --dataset_config main \
@@ -73,7 +73,6 @@ from trl import (
     ModelConfig,
     ScriptArguments,
     TrlParser,
-    get_kbit_device_map,
     get_peft_config,
     get_quantization_config,
 )
@@ -298,7 +297,6 @@ if __name__ == "__main__":
     )
     quantization_config = get_quantization_config(model_args)
     if quantization_config is not None:
-        training_args.model_init_kwargs["device_map"] = get_kbit_device_map()
         training_args.model_init_kwargs["quantization_config"] = quantization_config
 
     if script_args.dataset_path is not None:

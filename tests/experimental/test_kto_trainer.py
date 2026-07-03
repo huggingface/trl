@@ -16,18 +16,20 @@ import multiprocess
 import pytest
 import torch
 import transformers
-from datasets import Dataset, load_dataset
+from datasets import load_dataset
 from packaging.version import Version
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+from transformers.utils import is_peft_available
 
 from trl.experimental.kto import KTOConfig, KTOTrainer
-from trl.experimental.kto.kto_trainer import (
-    DataCollatorForUnpairedPreference,
-    DataCollatorForVisionUnpairedPreference,
-    _get_kl_completion_ids,
-)
+from trl.experimental.kto.kto_trainer import DataCollatorForUnpairedPreference, DataCollatorForVisionUnpairedPreference
 
-from ..testing_utils import TrlTestCase, require_liger_kernel, require_peft, require_vision
+from ..testing_utils import TrlTestCase, require_bitsandbytes, require_liger_kernel, require_peft, require_vision
+
+
+if is_peft_available():
+    from peft import LoraConfig, PromptTuningConfig, get_peft_model
+    from peft.utils import TaskType
 
 
 @require_vision
@@ -38,7 +40,7 @@ class TestDataCollatorForVisionUnpairedPreference(TrlTestCase):
     )
     def test_mm_token_type_ids_shape(self):
         # Regression guard: when the processor returns mm_token_type_ids (Qwen2.5-VL after transformers#43972),
-        # the collator must produce a KL_completion_token_type_ids whose width matches KL_completion_input_ids,
+        # the collator must produce a KL_token_type_ids whose width matches KL_input_ids,
         # not the main completion's width (the two differ whenever their text lengths differ).
         from PIL import Image
         from transformers import AutoProcessor
@@ -63,14 +65,14 @@ class TestDataCollatorForVisionUnpairedPreference(TrlTestCase):
         output = collator(examples)
 
         assert "mm_token_type_ids" in output
-        assert output["mm_token_type_ids"].shape == output["completion_input_ids"].shape, (
+        assert output["mm_token_type_ids"].shape == output["input_ids"].shape, (
             f"mm_token_type_ids shape {output['mm_token_type_ids'].shape} != "
-            f"completion_input_ids shape {output['completion_input_ids'].shape}"
+            f"input_ids shape {output['input_ids'].shape}"
         )
-        assert "KL_completion_mm_token_type_ids" in output
-        assert output["KL_completion_mm_token_type_ids"].shape == output["KL_completion_input_ids"].shape, (
-            f"KL_completion_mm_token_type_ids shape {output['KL_completion_mm_token_type_ids'].shape} != "
-            f"KL_completion_input_ids shape {output['KL_completion_input_ids'].shape}"
+        assert "KL_mm_token_type_ids" in output
+        assert output["KL_mm_token_type_ids"].shape == output["KL_input_ids"].shape, (
+            f"KL_mm_token_type_ids shape {output['KL_mm_token_type_ids'].shape} != "
+            f"KL_input_ids shape {output['KL_input_ids'].shape}"
         )
 
     def test_output_keys(self):
@@ -99,16 +101,16 @@ class TestDataCollatorForVisionUnpairedPreference(TrlTestCase):
         # With KL
         collator = DataCollatorForVisionUnpairedPreference(processor, calculate_kl=True)
         output = collator(make_examples())
-        for key in ["completion_input_ids", "completion_attention_mask", "completion_mask", "pixel_values", "label"]:
+        for key in ["input_ids", "attention_mask", "completion_mask", "pixel_values", "label"]:
             assert key in output, f"Missing key: {key}"
-        for key in ["KL_completion_input_ids", "KL_completion_attention_mask", "KL_completion_mask"]:
+        for key in ["KL_input_ids", "KL_attention_mask", "KL_completion_mask"]:
             assert key in output, f"Missing KL key: {key}"
 
         # Without KL
         collator_no_kl = DataCollatorForVisionUnpairedPreference(processor, calculate_kl=False)
         output_no_kl = collator_no_kl(make_examples())
-        assert "completion_input_ids" in output_no_kl
-        assert "KL_completion_input_ids" not in output_no_kl
+        assert "input_ids" in output_no_kl
+        assert "KL_input_ids" not in output_no_kl
 
     def test_kl_cycling(self):
         # The KL completion for example i must be the completion from example i-1 (cycled by +1).
@@ -136,8 +138,8 @@ class TestDataCollatorForVisionUnpairedPreference(TrlTestCase):
         output = collator(examples)
         # KL completions are cycled: KL[0] = completion[-1], KL[1] = completion[0]
         # They must differ from the matching main completion (unless both are identical strings, which they aren't here)
-        assert not torch.equal(output["completion_input_ids"][0], output["KL_completion_input_ids"][0])
-        assert not torch.equal(output["completion_input_ids"][1], output["KL_completion_input_ids"][1])
+        assert not torch.equal(output["input_ids"][0], output["KL_input_ids"][0])
+        assert not torch.equal(output["input_ids"][1], output["KL_input_ids"][1])
 
 
 class TestDataCollatorForUnpairedPreference(TrlTestCase):
@@ -149,13 +151,13 @@ class TestDataCollatorForUnpairedPreference(TrlTestCase):
         ]
         result = collator(examples)
 
-        expected_completion_input_ids = torch.tensor(
+        expected_input_ids = torch.tensor(
             [
                 [1, 2, 3, 4, 5],  # prompt + completion (example 1)
                 [7, 8, 9, 10, 0],  # prompt + completion (example 2, padded)
             ]
         )
-        expected_completion_attention_mask = torch.tensor(
+        expected_attention_mask = torch.tensor(
             [
                 [1, 1, 1, 1, 1],
                 [1, 1, 1, 1, 0],
@@ -167,13 +169,13 @@ class TestDataCollatorForUnpairedPreference(TrlTestCase):
                 [0, 0, 1, 1, 0],  # completion (example 2, padded)
             ]
         )
-        expected_kl_completion_input_ids = torch.tensor(
+        expected_kl_input_ids = torch.tensor(
             [
                 [1, 2, 3, 6, 0],  # prompt + KL completion (example 1, padded)
                 [7, 8, 11, 12, 13],  # prompt + KL completion (example 2)
             ]
         )
-        expected_kl_completion_attention_mask = torch.tensor(
+        expected_kl_attention_mask = torch.tensor(
             [
                 [1, 1, 1, 1, 0],
                 [1, 1, 1, 1, 1],
@@ -187,19 +189,19 @@ class TestDataCollatorForUnpairedPreference(TrlTestCase):
         )
 
         assert set(result.keys()) == {
-            "completion_input_ids",
-            "completion_attention_mask",
+            "input_ids",
+            "attention_mask",
             "completion_mask",
-            "KL_completion_input_ids",
-            "KL_completion_attention_mask",
+            "KL_input_ids",
+            "KL_attention_mask",
             "KL_completion_mask",
             "label",
         }
-        torch.testing.assert_close(result["completion_input_ids"], expected_completion_input_ids)
-        torch.testing.assert_close(result["completion_attention_mask"], expected_completion_attention_mask)
+        torch.testing.assert_close(result["input_ids"], expected_input_ids)
+        torch.testing.assert_close(result["attention_mask"], expected_attention_mask)
         torch.testing.assert_close(result["completion_mask"], expected_completion_mask)
-        torch.testing.assert_close(result["KL_completion_input_ids"], expected_kl_completion_input_ids)
-        torch.testing.assert_close(result["KL_completion_attention_mask"], expected_kl_completion_attention_mask)
+        torch.testing.assert_close(result["KL_input_ids"], expected_kl_input_ids)
+        torch.testing.assert_close(result["KL_attention_mask"], expected_kl_attention_mask)
         torch.testing.assert_close(result["KL_completion_mask"], expected_kl_completion_mask)
         assert result["label"] == [True, False]
 
@@ -229,11 +231,11 @@ class TestDataCollatorForUnpairedPreference(TrlTestCase):
         expected_ref_kl_logps = torch.tensor([0.2, 0.4])
 
         assert set(result.keys()) == {
-            "completion_input_ids",
-            "completion_attention_mask",
+            "input_ids",
+            "attention_mask",
             "completion_mask",
-            "KL_completion_input_ids",
-            "KL_completion_attention_mask",
+            "KL_input_ids",
+            "KL_attention_mask",
             "KL_completion_mask",
             "ref_logps",
             "ref_KL_logps",
@@ -250,13 +252,13 @@ class TestDataCollatorForUnpairedPreference(TrlTestCase):
         ]
         result = collator(examples)
 
-        expected_completion_input_ids = torch.tensor(
+        expected_input_ids = torch.tensor(
             [
                 [1, 2, 0, 0, 0],  # prompt + completion (example 1, padded to multiple of 5)
                 [4, 5, 6, 7, 0],  # prompt + completion (example 2)
             ]
         )
-        expected_kl_completion_input_ids = torch.tensor(
+        expected_kl_input_ids = torch.tensor(
             [
                 [1, 3, 0, 0, 0],  # prompt + KL completion (example 1, padded to multiple of 5)
                 [4, 5, 8, 9, 0],  # prompt + KL completion (example 2)
@@ -264,16 +266,16 @@ class TestDataCollatorForUnpairedPreference(TrlTestCase):
         )
 
         assert set(result.keys()) == {
-            "completion_input_ids",
-            "completion_attention_mask",
+            "input_ids",
+            "attention_mask",
             "completion_mask",
-            "KL_completion_input_ids",
-            "KL_completion_attention_mask",
+            "KL_input_ids",
+            "KL_attention_mask",
             "KL_completion_mask",
             "label",
         }
-        torch.testing.assert_close(result["completion_input_ids"], expected_completion_input_ids)
-        torch.testing.assert_close(result["KL_completion_input_ids"], expected_kl_completion_input_ids)
+        torch.testing.assert_close(result["input_ids"], expected_input_ids)
+        torch.testing.assert_close(result["KL_input_ids"], expected_kl_input_ids)
 
 
 class TestKTOTrainer(TrlTestCase):
@@ -293,7 +295,7 @@ class TestKTOTrainer(TrlTestCase):
             ("standard_unpaired_preference", "apo_zero_unpaired", False, True),
         ],
     )
-    def test_kto_trainer(self, config_name, loss_type, pre_compute, eval_dataset):
+    def test_train(self, config_name, loss_type, pre_compute, eval_dataset):
         training_args = KTOConfig(
             output_dir=self.tmp_dir,
             per_device_train_batch_size=2,
@@ -330,7 +332,70 @@ class TestKTOTrainer(TrlTestCase):
             if param.sum() != 0:  # ignore 0 biases
                 assert not torch.equal(param, new_param)
 
-    def test_kto_trainer_with_ref_model_is_model(self):
+    @pytest.mark.parametrize("precompute_ref_log_probs", [False, True])
+    def test_evaluate_with_raw_dataset(self, precompute_ref_log_probs):
+        # `evaluate` should accept the same (unprocessed) dataset types as the trainer, e.g. a held-out test set
+        # passed directly to `evaluate`. With `precompute_ref_log_probs=True`, the reference log-probs must also be
+        # precomputed for the freshly-passed dataset. See https://github.com/huggingface/trl/issues/6115.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
+
+        training_args = KTOConfig(
+            output_dir=self.tmp_dir, precompute_ref_log_probs=precompute_ref_log_probs, report_to="none"
+        )
+        trainer = KTOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
+
+        metrics = trainer.evaluate(eval_dataset=dataset)
+        assert metrics["eval_loss"] is not None
+
+    def test_trust_remote_code(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
+        model_id = "trl-internal-testing/tiny-RemoteForCausalLM"
+
+        with pytest.raises(ValueError, match="custom code"):
+            KTOTrainer(
+                model=model_id,
+                args=KTOConfig(output_dir=self.tmp_dir, report_to="none"),
+                train_dataset=dataset,
+            )
+
+        trainer = KTOTrainer(
+            model=model_id,
+            args=KTOConfig(output_dir=self.tmp_dir, report_to="none", trust_remote_code=True),
+            train_dataset=dataset,
+        )
+        assert type(trainer.model).__name__ == "RemoteForCausalLM"
+
+    # Special case for harmony
+    def test_train_gpt_oss(self):
+        dataset = load_dataset("trl-internal-testing/harmony", "preference", split="train")
+
+        training_args = KTOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            report_to="none",
+        )
+        trainer = KTOTrainer(
+            model="trl-internal-testing/tiny-GptOssForCausalLM", args=training_args, train_dataset=dataset
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+        # MoE models log the load-balancing auxiliary loss (on by default)
+        assert trainer.aux_loss_enabled
+        assert trainer.state.log_history[-1]["aux_loss"] is not None
+
+    def test_train_with_ref_model_is_model_raises(self):
         training_args = KTOConfig(
             output_dir=self.tmp_dir,
             per_device_train_batch_size=2,
@@ -388,8 +453,8 @@ class TestKTOTrainer(TrlTestCase):
         # Verify the collator output (assembly, BOS/EOS insertion, labels).
         example = trainer.train_dataset[0]
         batch = trainer.data_collator([example])
-        # completion_input_ids ends with EOS
-        assert batch["completion_input_ids"][0, -1].item() == self.tokenizer.eos_token_id
+        # input_ids ends with EOS
+        assert batch["input_ids"][0, -1].item() == self.tokenizer.eos_token_id
         # completion_mask: prompt tokens are 0, completion tokens are 1; at least the prompt is masked
         assert "completion_mask" in batch
         completion_mask = batch["completion_mask"][0].tolist()
@@ -398,25 +463,7 @@ class TestKTOTrainer(TrlTestCase):
         assert first_completion > 0  # at least the prompt is masked
         assert all(m == 0 for m in completion_mask[:first_completion])
 
-        # Test corruption of (prompt, completion) pairs for KL dataset.
-        # _get_kl_completion_ids shifts completion_ids by one within each batch; prompt_ids are unchanged.
-        synthetic = Dataset.from_dict(
-            {
-                "prompt_ids": [[1, 2], [3, 4], [5, 6]],
-                "completion_ids": [[10, 11], [20, 21], [30, 31]],
-                "label": [True, False, True],
-            }
-        )
-        for batch_size in [2, 3]:
-            rotated = synthetic.map(_get_kl_completion_ids, batched=True, batch_size=batch_size)
-
-            # Verify that completion_ids have been rotated (differ from original). When the dataset length
-            # modulo batch_size equals 1, the last batch is unaltered: exclude it from the check.
-            for i in range(len(rotated) - 1):
-                assert synthetic["prompt_ids"][i] == rotated["prompt_ids"][i]
-                assert synthetic["completion_ids"][i] != rotated["completion_ids"][i]
-
-    def test_kto_trainer_without_providing_ref_model(self):
+    def test_train_without_providing_ref_model(self):
         training_args = KTOConfig(
             output_dir=self.tmp_dir,
             per_device_train_batch_size=2,
@@ -452,9 +499,7 @@ class TestKTOTrainer(TrlTestCase):
                 assert not torch.equal(param, new_param)
 
     @require_peft
-    def test_kto_trainer_without_providing_ref_model_with_lora(self):
-        from peft import LoraConfig
-
+    def test_train_without_providing_ref_model_with_lora(self):
         lora_config = LoraConfig(
             r=16,
             lora_alpha=32,
@@ -499,37 +544,6 @@ class TestKTOTrainer(TrlTestCase):
                 if param.sum() != 0:  # ignore 0 biases
                     assert not torch.equal(param, new_param)
 
-    @require_liger_kernel
-    def test_kto_trainer_with_liger(self):
-        """Test KTO trainer with Liger kernel enabled."""
-        training_args = KTOConfig(
-            output_dir=self.tmp_dir,
-            report_to="none",
-            use_liger_kernel=True,  # Enable Liger kernel
-        )
-
-        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
-
-        trainer = KTOTrainer(
-            model=self.model,
-            args=training_args,
-            processing_class=self.tokenizer,
-            train_dataset=dataset,
-        )
-
-        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
-
-        trainer.train()
-
-        assert trainer.state.log_history[-1]["train_loss"] is not None
-
-        # check the params have changed
-        for n, param in previous_trainable_params.items():
-            new_param = trainer.model.get_parameter(n)
-            # check the params have changed - ignore 0 biases
-            if param.sum() != 0:
-                assert not torch.equal(param, new_param)
-
     def test_compute_metrics(self):
         model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="float32")
         ref_model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
@@ -564,6 +578,527 @@ class TestKTOTrainer(TrlTestCase):
         trainer.train()
 
         assert trainer.state.log_history[-2]["eval_test"] == 0.0
+
+    def test_train_with_explicit_ref_model(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
+
+        training_args = KTOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            report_to="none",
+        )
+        # When specifying a ref model, it's usually because we want it to be a different checkpoint, but for testing
+        # purposes we will just use the same checkpoint
+        ref_model = AutoModelForCausalLM.from_pretrained(
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="float32"
+        )
+        trainer = KTOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            ref_model=ref_model,
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+            new_ref_param = trainer.ref_model.get_parameter(n)
+            torch.testing.assert_close(param, new_ref_param, msg=f"Reference model parameter {n} has changed.")
+
+    def test_train_with_sync_ref_model(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
+
+        training_args = KTOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            sync_ref_model=True,
+            ref_model_sync_steps=2,  # reduce sync steps to ensure a sync happens
+            report_to="none",
+        )
+        trainer = KTOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+        assert trainer.ref_model is not None
+        previous_ref_params = {n: param.clone() for n, param in trainer.ref_model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+            new_ref_param = trainer.ref_model.get_parameter(n)
+            assert not torch.equal(previous_ref_params[n], new_ref_param), f"Ref Parameter {n} has not changed."
+
+    def test_train_model_dtype(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
+
+        training_args = KTOConfig(
+            output_dir=self.tmp_dir,
+            model_init_kwargs={"dtype": torch.float16},
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            report_to="none",
+        )
+        trainer = KTOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            # For some reason model.layers.0.input_layernorm.weight doesn't change in GitHub Actions but does
+            # locally. We ignore this parameter for now
+            if "layernorm" in n:
+                continue
+            new_param = trainer.model.get_parameter(n)
+            # Check the torch dtype
+            assert new_param.dtype == torch.float16
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @require_peft
+    def test_train_peft_model(self):
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
+
+        base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
+
+        lora_config = LoraConfig()
+        model = get_peft_model(model, lora_config)
+
+        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
+
+        training_args = KTOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=1.0,  # use higher lr because gradients are tiny and default lr can stall updates
+            report_to="none",
+        )
+        trainer = KTOTrainer(model=model, args=training_args, train_dataset=dataset)
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the peft params have changed and the base model params have not changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            if n in base_param_names:  # We expect the base model params to be the same
+                torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed.")
+            elif "base_layer" not in n and "ref" not in n:  # and the peft params to be different (except base and ref)
+                assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    # In practice, this test is the same as `test_kto_trainer_without_providing_ref_model_with_lora`, since gradient
+    # checkpointing is enabled by default in `KTOTrainer`. We keep it as a regression guard: if the default ever
+    # changes, we still explicitly test PEFT + gradient checkpointing, which has caused issues in the past.
+    @require_peft
+    def test_train_with_peft_config_and_gradient_checkpointing(self):
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
+        base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
+
+        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
+
+        training_args = KTOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            gradient_checkpointing=True,
+            report_to="none",
+        )
+
+        trainer = KTOTrainer(
+            model=model_id,
+            args=training_args,
+            train_dataset=dataset,
+            peft_config=LoraConfig(),
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the peft params have changed and the base model params have not changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            if n in base_param_names:  # We expect the base model params to be the same
+                torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed.")
+            elif "base_layer" not in n:  # We expect the peft params to be different (except for the base layer)
+                assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @require_liger_kernel
+    def test_train_with_liger(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
+
+        training_args = KTOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            use_liger_kernel=True,
+            report_to="none",
+        )
+        trainer = KTOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @require_liger_kernel
+    @require_peft
+    def test_train_with_liger_kernel_and_peft(self):
+        # A LoRA adapter that does not target lm_head leaves the head as a plain Linear, so Liger reads the real
+        # weight. Verify the full PEFT+Liger path actually trains (peft params change, base params stay frozen).
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
+        base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
+        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
+        training_args = KTOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            use_liger_kernel=True,
+            report_to="none",
+        )
+        trainer = KTOTrainer(
+            model=model_id,
+            args=training_args,
+            train_dataset=dataset,
+            peft_config=LoraConfig(target_modules=["q_proj", "v_proj"]),
+        )
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+        trainer.train()
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            if n in base_param_names:
+                torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed.")
+            elif "base_layer" not in n:
+                assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @require_liger_kernel
+    @require_peft
+    def test_liger_kernel_with_peft_lm_head_raises(self):
+        # The Liger fused KTO loss reads `lm_head.weight` directly, so a LoRA adapter on `lm_head` is silently
+        # ignored and never trained. The trainer must fail fast instead of training a silently-frozen head.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
+        training_args = KTOConfig(output_dir=self.tmp_dir, use_liger_kernel=True, report_to="none")
+        with pytest.raises(ValueError, match="lm_head"):
+            KTOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                args=training_args,
+                train_dataset=dataset,
+                peft_config=LoraConfig(target_modules=["q_proj", "v_proj", "lm_head"]),
+            )
+
+    @require_liger_kernel
+    @require_peft
+    def test_liger_kernel_with_peft_prompt_learning_raises(self):
+        # Prompt-learning methods inject virtual tokens via PeftModel.forward(), which the Liger KTO loss bypasses.
+        # The trainer must fail fast to avoid computing the loss on the wrong (truncated) sequence.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
+        training_args = KTOConfig(output_dir=self.tmp_dir, use_liger_kernel=True, report_to="none")
+        with pytest.raises(ValueError, match="prompt-learning"):
+            KTOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                args=training_args,
+                train_dataset=dataset,
+                peft_config=PromptTuningConfig(task_type=TaskType.CAUSAL_LM, num_virtual_tokens=8),
+            )
+
+    @require_liger_kernel
+    def test_init_fails_with_compute_metrics_and_liger(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
+
+        training_args = KTOConfig(
+            output_dir=self.tmp_dir,
+            use_liger_kernel=True,
+            report_to="none",
+        )
+
+        with pytest.raises(ValueError, match="compute_metrics is not supported with the Liger kernel"):
+            KTOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                args=training_args,
+                train_dataset=dataset,
+                compute_metrics=lambda _: {},
+            )
+
+    @require_liger_kernel
+    def test_init_fails_with_moe_aux_loss_and_liger(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
+
+        # The MoE auxiliary loss is on by default; it is incompatible with the Liger fused loss.
+        training_args = KTOConfig(
+            output_dir=self.tmp_dir,
+            use_liger_kernel=True,
+            report_to="none",
+        )
+
+        with pytest.raises(ValueError, match="does not support the Mixture-of-Experts load-balancing auxiliary loss"):
+            KTOTrainer(
+                model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+                args=training_args,
+                train_dataset=dataset,
+            )
+
+    def test_train_with_iterable_dataset(self):
+        # KTO's default `kto` loss estimates the KL term from neighboring examples in a fixed-order batch, which is not
+        # possible with a streaming dataset; use `apo_zero_unpaired` which does not require the KL term.
+        dataset = load_dataset(
+            "trl-internal-testing/zen", "standard_unpaired_preference", split="train", streaming=True
+        )
+
+        training_args = KTOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            loss_type="apo_zero_unpaired",
+            max_steps=3,
+            report_to="none",
+        )
+        trainer = KTOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    def test_train_with_chat_template_kwargs(self):
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
+
+        training_args = KTOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            report_to="none",
+        )
+
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
+        # The following template is a simplified version of the Qwen chat template, where an additional argument
+        # `role_capital` is used to control the capitalization of roles.
+        tokenizer.chat_template = '{%- if messages[0]["role"] == "system" -%}    {{ "<|im_start|>" + ("SYSTEM" if role_capital else "system") + "\\n" + messages[0]["content"] + "<|im_end|>\\n" }}{%- else -%}    {{ "<|im_start|>" + ("SYSTEM" if role_capital else "system") + "\\nYou are Qwen, created by Alibaba Cloud. You are a helpful assistant.<|im_end|>\\n" }}{%- endif -%}{%- for message in messages -%}    {%- if (message.role == "user") or (message.role == "system" and not loop.first) or (message.role == "assistant" and not message.tool_calls) -%}        {{ "<|im_start|>" + (message.role.upper() if role_capital else message.role) + "\\n" + message.content + "<|im_end|>\\n" }}    {%- elif message.role == "assistant" -%}        {{ "<|im_start|>" + ("ASSISTANT" if role_capital else "assistant") }}        {%- if message.content -%}            {{ "\\n" + message.content }}        {%- endif -%}        {{ "<|im_end|>\\n" }}    {%- elif message.role == "tool" -%}        {%- if (loop.index0 == 0) or (messages[loop.index0 - 1].role != "tool") -%}            {{ "<|im_start|>" + ("USER" if role_capital else "user") }}        {%- endif -%}        {{ "\\n<tool_response>\\n" + message.content + "\\n</tool_response>" }}        {%- if loop.last or (messages[loop.index0 + 1].role != "tool") -%}            {{ "<|im_end|>\\n" }}        {%- endif -%}    {%- endif -%}{%- endfor -%}{%- if add_generation_prompt -%}    {{ "<|im_start|>" + ("ASSISTANT" if role_capital else "assistant") + "\\n" }}{%- endif -%}'
+
+        dataset = dataset.add_column(
+            "chat_template_kwargs", [{"role_capital": bool(i % 2)} for i in range(len(dataset))]
+        )
+        assert "chat_template_kwargs" in dataset.features
+
+        trainer = KTOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset,
+            processing_class=tokenizer,
+        )
+
+        assert trainer.processing_class.chat_template == tokenizer.chat_template
+
+        # `chat_template_kwargs` is applied per example: the prepared prompts must contain both the lowercase and the
+        # uppercase system header, proving the argument was threaded through tokenization (the dataset alternates
+        # `role_capital`). The exact row order is not asserted because preprocessing unpairs the dataset.
+        decoded_prompts = [
+            trainer.processing_class.decode(trainer.train_dataset[i]["prompt_ids"])
+            for i in range(len(trainer.train_dataset))
+        ]
+        assert any("<|im_start|>SYSTEM" in prompt for prompt in decoded_prompts)
+        assert any("<|im_start|>system" in prompt for prompt in decoded_prompts)
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    def test_train_toolcall_data(self):
+        dataset = load_dataset("trl-internal-testing/toolcall", "preference", split="train")
+
+        training_args = KTOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=2,  # toolcall sequences are longer than standard data, reduce batch size to avoid OOM
+            max_length=512,  # toolcall sequences are longer than standard data, limit length to avoid OOM
+            report_to="none",
+        )
+        trainer = KTOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    def test_train_with_eval(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference")
+
+        training_args = KTOConfig(output_dir=self.tmp_dir, eval_strategy="steps", eval_steps=3, report_to="none")
+        trainer = KTOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset["train"],
+            eval_dataset=dataset["test"],
+        )
+
+        trainer.train()
+
+        assert trainer.state.log_history[0]["eval_loss"] is not None
+
+    def test_train_with_multiple_eval_dataset(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference")
+
+        training_args = KTOConfig(output_dir=self.tmp_dir, eval_strategy="steps", eval_steps=3, report_to="none")
+        trainer = KTOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset["train"],
+            eval_dataset={"data1": dataset["test"], "data2": dataset["test"]},
+        )
+        trainer.train()
+
+        assert trainer.state.log_history[-3]["eval_data1_loss"] is not None
+        assert trainer.state.log_history[-2]["eval_data2_loss"] is not None
+
+    # In practice, this test is the same as `test_kto_trainer`, since gradient checkpointing is enabled by default in
+    # `KTOTrainer`. We keep it as a regression guard: if the default ever changes, we still explicitly test gradient
+    # checkpointing, which has caused issues in the past.
+    def test_train_with_gradient_checkpointing(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
+
+        training_args = KTOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            gradient_checkpointing=True,
+            report_to="none",
+        )
+        trainer = KTOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    def test_tag_added(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
+
+        trainer = KTOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            train_dataset=dataset,
+        )
+
+        for tag in ["kto", "trl"]:
+            assert tag in trainer.model.model_tags
+
+    @require_peft
+    def test_tag_added_peft(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
+
+        trainer = KTOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            train_dataset=dataset,
+            peft_config=LoraConfig(),
+        )
+
+        for tag in ["kto", "trl"]:
+            assert tag in trainer.model.model_tags
+
+    @require_peft
+    @require_bitsandbytes
+    def test_peft_with_quantization(self):
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+
+        quantization_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_use_double_quant=True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_compute_dtype=torch.float16,
+        )
+        model = AutoModelForCausalLM.from_pretrained(
+            model_id,
+            dtype="float32",
+            quantization_config=quantization_config,
+        )
+
+        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
+
+        # Initialize the trainer with the already configured PeftModel
+        training_args = KTOConfig(output_dir=self.tmp_dir, learning_rate=0.1, report_to="none")
+        trainer = KTOTrainer(model=model, args=training_args, train_dataset=dataset, peft_config=LoraConfig())
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the peft params have changed and the base model params have not changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            # In bitsandbytes, bias parameters are automatically cast to the input dtype during the forward pass if
+            # their dtype doesn’t match. This causes the module to change unexpectedly during the first forward pass of
+            # the training. To handle this, we cast these specific bias parameters to float32 before comparison.
+            # https://github.com/bitsandbytes-foundation/bitsandbytes/blob/45553f7392e524eacf400b132cfe01261f6477be/bitsandbytes/nn/modules.py#L518
+            # We still need to investigate why the compute dtype ends up being different than for these parameters.
+            if n in [
+                "base_model.model.model.layers.1.self_attn.k_proj.bias",
+                "base_model.model.model.layers.1.self_attn.q_proj.base_layer.bias",
+                "base_model.model.model.layers.1.self_attn.v_proj.base_layer.bias",
+            ]:
+                param = param.float()
+
+            if "lora" not in n:  # We expect the base model params to be the same
+                torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed.")
+            elif "lora" in n:  # We expect the peft params to be different
+                assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+            else:
+                raise ValueError(f"Unexpected parameter {n} in model: {trainer.model}")
 
 
 @require_vision
@@ -639,6 +1174,46 @@ class TestKTOTrainerVLM(TrlTestCase):
             else:
                 assert not torch.equal(param, new_param), f"Param {n} is not updated"
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+        ],
+    )
+    @pytest.mark.xfail(
+        Version(transformers.__version__) < Version("4.57.0"),
+        reason="Mixing text-only and image+text examples is only supported in transformers >= 4.57.0",
+        strict=False,
+    )
+    def test_train_vlm_multi_image(self, model_id):
+        dataset = load_dataset(
+            "trl-internal-testing/zen-multi-image", "conversational_unpaired_preference", split="train"
+        )
+
+        training_args = KTOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            max_length=None,  # for VLMs, truncating can remove image tokens, leading to errors
+            per_device_train_batch_size=2,  # VLM training is memory intensive, reduce batch size to avoid OOM
+            report_to="none",
+        )
+        trainer = KTOTrainer(
+            model=model_id,
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Param {n} is not updated"
+
     def test_train_vlm_apo_zero_unpaired(self):
         # apo_zero_unpaired does not need the KL term: verify that calculate_kl=False path works end-to-end.
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_unpaired_preference", split="train")
@@ -691,7 +1266,7 @@ class TestKTOTrainerVLM(TrlTestCase):
                 assert not torch.equal(param, new_param), f"Param {n} is not updated"
 
     def test_train_vlm_with_max_length(self):
-        # Regression test: mm_token_type_ids (and KL_completion_mm_token_type_ids) must be truncated alongside
+        # Regression test: mm_token_type_ids (and KL_mm_token_type_ids) must be truncated alongside
         # input_ids when max_length is set, otherwise a shape mismatch crashes the model forward pass.
         # max_length=37 truncates 1 completion token (total_len=38) while keeping all image tokens (prompt_len=34) safe.
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_unpaired_preference", split="train")
@@ -753,4 +1328,38 @@ class TestKTOTrainerVLM(TrlTestCase):
 
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Param {n} is not updated"
+
+
+@pytest.mark.slow
+class TestKTOTrainerSlow(TrlTestCase):
+    # Gemma 3n uses a timm encoder, making it difficult to create a smaller variant for testing.
+    # To ensure coverage, we run tests on the full model but mark them as slow to exclude from default runs.
+    @pytest.mark.skip(reason="Model google/gemma-3n-E2B-it is gated and requires HF token")
+    @require_vision
+    def test_train_vlm_gemma_3n(self):
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_unpaired_preference", split="train")
+
+        training_args = KTOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            max_length=None,  # for VLMs, truncating can remove image tokens, leading to errors
+            per_device_train_batch_size=2,  # VLM training is memory intensive, reduce batch size to avoid OOM
+            model_init_kwargs={"dtype": "bfloat16"},
+            report_to="none",
+        )
+        trainer = KTOTrainer(model="google/gemma-3n-E2B-it", args=training_args, train_dataset=dataset)
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            if "model.audio_tower" in n or "model.embed_audio" in n:
+                # The audio embedding parameters are not updated because this dataset contains no audio data
+                continue
             assert not torch.equal(param, new_param), f"Param {n} is not updated"
