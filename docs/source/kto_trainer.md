@@ -133,7 +133,7 @@ Here  \\( x \\) is the prompt,  \\( y \\) is the completion,  \\( \pi_{\theta} \
 
 ## Logged metrics
 
-While training and evaluating we record the following metrics:
+While training and evaluating, we record the following metrics:
 
 * `global_step`: The total number of optimizer steps taken so far.
 * `epoch`: The current epoch number, based on dataset iteration.
