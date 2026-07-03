@@ -28,9 +28,8 @@ from accelerate.logging import get_logger
 from accelerate.utils import is_peft_model
 from datasets import Dataset, IterableDataset
 from packaging.version import Version
-from transformers import AutoProcessor, DataCollator, PreTrainedModel, PreTrainedTokenizerBase
+from transformers import AutoProcessor, DataCollator, PreTrainedModel, PreTrainedTokenizerBase, TrainerCallback
 from transformers.data.data_collator import DataCollatorMixin
-from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_peft_available
 
@@ -463,8 +462,8 @@ class TPOTrainer(_BaseTrainer):
         # Add tags to the model
         self.model.add_model_tags(self._tag_names)
 
+    @staticmethod
     def _tokenize(
-        self,
         processing_class: PreTrainedTokenizerBase,
         input: str | list,
         **kwargs,
@@ -545,45 +544,47 @@ class TPOTrainer(_BaseTrainer):
             if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                 map_kwargs["desc"] = f"Tokenizing {dataset_name} dataset"
 
+            # Bind `_tokenize` to a local so `tokenize_fn` doesn't capture `self`: a closure over `self` makes the map
+            # function unhashable, forcing a random fingerprint that silently disables dataset caching.
+            tokenize = self._tokenize
+
             def tokenize_fn(example, processing_class):
                 tools = example.get("tools")
                 tools = json.loads(tools) if isinstance(tools, str) else tools
                 output = {}
                 if is_conversational(example):
-                    prompt_ids = self._tokenize(
+                    prompt_ids = tokenize(
                         processing_class,
                         example["prompt"],
                         tools=tools,
                         add_generation_prompt=True,
                         **example.get("chat_template_kwargs", {}),
                     )["input_ids"]
-                    prompt_chosen_ids = self._tokenize(
+                    prompt_chosen_ids = tokenize(
                         processing_class,
                         example["prompt"] + example["chosen"],
                         tools=tools,
                         **example.get("chat_template_kwargs", {}),
                     )["input_ids"]
-                    prompt_rejected_ids = self._tokenize(
+                    prompt_rejected_ids = tokenize(
                         processing_class,
                         example["prompt"] + example["rejected"],
                         tools=tools,
                         **example.get("chat_template_kwargs", {}),
                     )["input_ids"]
-                    prompt_reference_ids = self._tokenize(
+                    prompt_reference_ids = tokenize(
                         processing_class,
                         example["prompt"] + example["reference"],
                         tools=tools,
                         **example.get("chat_template_kwargs", {}),
                     )["input_ids"]
                 else:
-                    prompt_ids = self._tokenize(processing_class, example["prompt"])["input_ids"]
-                    prompt_chosen_ids = self._tokenize(processing_class, example["prompt"] + example["chosen"])[
+                    prompt_ids = tokenize(processing_class, example["prompt"])["input_ids"]
+                    prompt_chosen_ids = tokenize(processing_class, example["prompt"] + example["chosen"])["input_ids"]
+                    prompt_rejected_ids = tokenize(processing_class, example["prompt"] + example["rejected"])[
                         "input_ids"
                     ]
-                    prompt_rejected_ids = self._tokenize(processing_class, example["prompt"] + example["rejected"])[
-                        "input_ids"
-                    ]
-                    prompt_reference_ids = self._tokenize(processing_class, example["prompt"] + example["reference"])[
+                    prompt_reference_ids = tokenize(processing_class, example["prompt"] + example["reference"])[
                         "input_ids"
                     ]
 

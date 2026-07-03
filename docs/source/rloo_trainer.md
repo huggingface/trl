@@ -128,7 +128,7 @@ In a fully online, single-step setting (default),  \\( \frac{\pi_\theta(o_i \mid
 
 ## Logged metrics
 
-While training and evaluating, we record the following reward metrics:
+While training and evaluating, we record the following metrics:
 
 - `num_tokens`: The total number of tokens processed so far, including both prompts and completions.
 - `step_time`: The average time (in seconds) taken per training step (including generation).
