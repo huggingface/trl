@@ -73,6 +73,15 @@ class AsyncGRPOConfig(_BaseConfig):
         epsilon_high (`float`, *optional*):
             Upper-bound epsilon value for clipping. If not specified, it defaults to the same value as the lower-bound
             specified in argument `epsilon`. Paper [DAPO](https://huggingface.co/papers/2503.14476) recommends `0.28`.
+        token_budget (`int`, *optional*):
+            Maximum number of real tokens packed into a single row (one DP rank's forward) for dynamic
+            token-budgeted micro-batching. When `> 0`, a `TokenBudgetBatcher` forms Σ Lᵢ²-balanced micro-batches
+            whose rows each stay within this budget, bounding peak memory independently of the sample count (the
+            number of samples per row becomes dynamic). If `None` (default), it is set to the vLLM server's
+            `max_model_len` (queried at train start) — the cap on prompt + completion length — so no rollout sample
+            can ever exceed the budget. A sample longer than `token_budget` fits in no row and is dropped with a
+            warning. Set `<= 0` to disable token budgeting and instead pack a fixed `per_device_train_batch_size ×
+            num_processes` samples per micro-batch, Σ Lᵢ²-balanced across the rows.
 
         > Parameters that control the async rollout pipeline
 
@@ -202,6 +211,18 @@ class AsyncGRPOConfig(_BaseConfig):
         metadata={
             "help": "Upper-bound epsilon value for clipping. If not specified, it defaults to the same value as the "
             "lower-bound specified in argument `epsilon`. Paper DAPO recommends `0.28`."
+        },
+    )
+    token_budget: int | None = field(
+        default=None,
+        metadata={
+            "help": "Maximum number of real tokens packed into a single row (one DP rank's forward) for dynamic "
+            "token-budgeted micro-batching. When > 0, a `TokenBudgetBatcher` forms Σ Lᵢ²-balanced micro-batches "
+            "whose rows each stay within this budget, bounding peak memory independently of the sample count. If "
+            "None (default), it is set to the vLLM server's `max_model_len` (queried at train start), so no "
+            "rollout sample can ever exceed the budget. A sample longer than `token_budget` fits in no row and is "
+            "dropped with a warning. Set <= 0 to disable token budgeting and instead pack a fixed "
+            "`per_device_train_batch_size × num_processes` samples per micro-batch, Σ Lᵢ²-balanced across the rows."
         },
     )
 
