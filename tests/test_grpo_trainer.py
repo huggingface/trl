@@ -1653,13 +1653,14 @@ class TestGRPOTrainer(TrlTestCase):
     def test_entropy_bonus_flows_gradients(self):
         # Regression test: entropies were computed under torch.no_grad(), which made the entropy bonus a
         # no-op for training — it lowered the reported loss but contributed no gradient. When the bonus is
-        # active, entropies must carry grad; otherwise (logging / top_entropy_quantile only) they stay
-        # detached to save the memory of the full-vocab softmax graph.
+        # active (entropy_coef != 0 or use_adaptive_entropy), entropies must carry grad; otherwise they stay
+        # detached to save the memory of the full-vocab softmax graph (they only feed logging and the
+        # top_entropy_quantile mask, neither of which is differentiable).
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
-            args=GRPOConfig(output_dir=self.tmp_dir, report_to="none"),
+            args=GRPOConfig(output_dir=self.tmp_dir, report_to="none", entropy_coef=0.1),
             train_dataset=dataset,
         )
         model = trainer.model
@@ -1667,16 +1668,18 @@ class TestGRPOTrainer(TrlTestCase):
         attention_mask = torch.ones_like(input_ids)
 
         # Bonus active → entropies must be differentiable so the term contributes gradients.
-        _, entropies_grad, _ = trainer._get_per_token_logps_and_entropies(
-            model, input_ids, attention_mask, logits_to_keep=4, compute_entropy=True, entropy_needs_grad=True
+        _, entropies, _ = trainer._get_per_token_logps_and_entropies(
+            model, input_ids, attention_mask, logits_to_keep=4, compute_entropy=True
         )
-        assert entropies_grad.requires_grad
+        assert entropies.requires_grad
 
-        # Logging / mask only → entropies stay detached (preserving the memory optimization).
-        _, entropies_nograd, _ = trainer._get_per_token_logps_and_entropies(
-            model, input_ids, attention_mask, logits_to_keep=4, compute_entropy=True, entropy_needs_grad=False
+        # Bonus off → entropies stay detached (preserving the memory optimization).
+        trainer.entropy_coef = 0.0
+        trainer.use_adaptive_entropy = False
+        _, entropies, _ = trainer._get_per_token_logps_and_entropies(
+            model, input_ids, attention_mask, logits_to_keep=4, compute_entropy=True
         )
-        assert not entropies_nograd.requires_grad
+        assert not entropies.requires_grad
 
     def test_train_with_entropy_filter(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
