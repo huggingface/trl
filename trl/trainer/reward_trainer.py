@@ -674,25 +674,24 @@ class RewardTrainer(_BaseTrainer):
                         example["rejected"] = example["prompt"] + example["rejected"]
 
                     if is_conversational(example):
+                        chat_template_kwargs = example.get("chat_template_kwargs", {})
                         chosen_ids = tokenize(
                             processing_class,
                             example["chosen"],
                             tools=tools,
-                            **example.get("chat_template_kwargs", {}),
+                            **chat_template_kwargs,
                         )["input_ids"]
                         rejected_ids = tokenize(
                             processing_class,
                             example["rejected"],
                             tools=tools,
-                            **example.get("chat_template_kwargs", {}),
+                            **chat_template_kwargs,
                         )["input_ids"]
-                        output = {"chosen_ids": chosen_ids, "rejected_ids": rejected_ids}
                     else:
-                        output = {
-                            "chosen_ids": tokenize(processing_class, example["chosen"])["input_ids"],
-                            "rejected_ids": tokenize(processing_class, example["rejected"])["input_ids"],
-                        }
-                    return output
+                        chosen_ids = tokenize(processing_class, example["chosen"])["input_ids"]
+                        rejected_ids = tokenize(processing_class, example["rejected"])["input_ids"]
+
+                    return {"chosen_ids": chosen_ids, "rejected_ids": rejected_ids}
 
                 dataset = dataset.map(tokenize_fn, fn_kwargs={"processing_class": processing_class}, **map_kwargs)
 

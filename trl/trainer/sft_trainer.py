@@ -1238,8 +1238,8 @@ class SFTTrainer(_BaseTrainer):
                 "(e.g., `packing=True, packing_strategy='bfd'`), provide already truncated inputs, or set "
                 "`max_length=None`."
             )
-        # Skip dataset preparation if `skip_prepare_dataset=True` in `dataset_kwargs`, or if it's a VLM, where
-        # preprocessing (e.g., image-to-pixel conversion) is too costly and done on the fly instead.
+        # Skip dataset preparation if `skip_prepare_dataset=True` in `dataset_kwargs`, or for VLMs: tokenization and
+        # image processing happen on-the-fly in the collator.
         self._skip_prepare_dataset = (
             args.dataset_kwargs is not None
             and args.dataset_kwargs.get("skip_prepare_dataset", False)
@@ -1374,8 +1374,7 @@ class SFTTrainer(_BaseTrainer):
         """Tokenize a single example for dataset preprocessing.
 
         Dispatches to `apply_chat_template` for conversational input (list of message dicts) and to `__call__` for
-        non-conversational input (str). For VLMs, normalizes the batch dimension that processors emit even for single
-        examples.
+        non-conversational input (str).
 
         Args:
             processing_class ([`~transformers.PreTrainedTokenizerBase`] or [`~transformers.ProcessorMixin`]):
@@ -1500,6 +1499,7 @@ class SFTTrainer(_BaseTrainer):
                     if "prompt" in example:  # prompt-completion case
                         output = {}
                         if is_conversational(example):
+                            chat_template_kwargs = example.get("chat_template_kwargs", {})
                             prompt_ids = tokenize(
                                 processing_class,
                                 example["prompt"],
@@ -1507,7 +1507,7 @@ class SFTTrainer(_BaseTrainer):
                                 chat_template,
                                 tools=tools,
                                 add_generation_prompt=True,
-                                **example.get("chat_template_kwargs", {}),
+                                **chat_template_kwargs,
                             )["input_ids"]
                             prompt_completion_processed = tokenize(
                                 processing_class,
@@ -1516,7 +1516,7 @@ class SFTTrainer(_BaseTrainer):
                                 chat_template,
                                 tools=tools,
                                 return_assistant_tokens_mask=assistant_only_loss,
-                                **example.get("chat_template_kwargs", {}),
+                                **chat_template_kwargs,
                             )
                             prompt_completion_ids = prompt_completion_processed["input_ids"]
                             if "assistant_masks" in prompt_completion_processed:
@@ -1544,6 +1544,7 @@ class SFTTrainer(_BaseTrainer):
 
                     else:  # language modeling case
                         if is_conversational(example):
+                            chat_template_kwargs = example.get("chat_template_kwargs", {})
                             processed = tokenize(
                                 processing_class,
                                 example["messages"],
@@ -1551,7 +1552,7 @@ class SFTTrainer(_BaseTrainer):
                                 chat_template,
                                 tools=tools,
                                 return_assistant_tokens_mask=assistant_only_loss,
-                                **example.get("chat_template_kwargs", {}),
+                                **chat_template_kwargs,
                             )
                             output = {k: processed[k] for k in ("input_ids", "assistant_masks") if k in processed}
                         else:

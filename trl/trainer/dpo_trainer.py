@@ -698,9 +698,8 @@ class DPOTrainer(_BaseTrainer):
         if self._is_vision_dataset and args.precompute_ref_log_probs:
             raise ValueError(
                 "`precompute_ref_log_probs=True` is not supported for vision datasets. For vision-language "
-                "models, all data processing is performed on the fly rather than upfront, and running a full "
-                "forward pass of the reference model over the entire dataset is not supported for large "
-                "multimodal models. Set `precompute_ref_log_probs=False`."
+                "models, all data processing is performed on the fly rather than upfront. "
+                "Set `precompute_ref_log_probs=False`."
             )
         if data_collator is None and not self._is_vision_dataset:
             # Get the pad token: if not provided, use the one from the processing class or the eos token
@@ -804,8 +803,7 @@ class DPOTrainer(_BaseTrainer):
             self.liger_loss = LigerFusedLinearDPOLoss(beta=args.beta, loss_type=self.loss_types[0])
 
         # Dataset
-        # Skip dataset preparation if it's a VLM, where preprocessing (e.g., image-to-pixel conversion) is too costly
-        # and done on the fly instead.
+        # Skip dataset preparation for VLMs: tokenization and image processing happen on-the-fly in the collator.
         skip_prepare_dataset = self._is_vision_dataset
         if not skip_prepare_dataset:
             train_dataset = self._prepare_dataset(train_dataset, processing_class, args, "train")
@@ -912,7 +910,7 @@ class DPOTrainer(_BaseTrainer):
                     "you need a synced reference model. If you need `sync_ref_model` to work with PEFT, please open a "
                     "feature request at https://github.com/huggingface/trl/issues."
                 )
-            if args.precompute_ref_log_probs:
+            if self.precompute_ref_logps:
                 raise ValueError(
                     "You cannot use `sync_ref_model=True` together with `precompute_ref_log_probs=True`. "
                     "`precompute_ref_log_probs=True` assumes a fixed reference model, but with `sync_ref_model=True` "
@@ -921,7 +919,7 @@ class DPOTrainer(_BaseTrainer):
                 )
             self.add_callback(SyncRefModelCallback(ref_model=self.ref_model, accelerator=self.accelerator))
 
-        if args.precompute_ref_log_probs:
+        if self.precompute_ref_logps:
             if isinstance(self.train_dataset, IterableDataset) or isinstance(
                 self.eval_dataset, (IterableDataset, IterableDatasetDict)
             ):
@@ -960,8 +958,7 @@ class DPOTrainer(_BaseTrainer):
         """Tokenize a single example for dataset preprocessing.
 
         Dispatches to `apply_chat_template` for conversational input (list of message dicts) and to `__call__` for
-        non-conversational input (str). For VLMs, normalizes the batch dimension that processors emit even for single
-        examples.
+        non-conversational input (str).
 
         Args:
             processing_class ([`~transformers.PreTrainedTokenizerBase`] or [`~transformers.ProcessorMixin`]):
@@ -1034,29 +1031,29 @@ class DPOTrainer(_BaseTrainer):
             def tokenize_fn(example, processing_class, is_vlm):
                 tools = example.get("tools")
                 tools = json.loads(tools) if isinstance(tools, str) else tools
-                output = {}
                 if is_conversational(example):
+                    chat_template_kwargs = example.get("chat_template_kwargs", {})
                     prompt_ids = tokenize(
                         processing_class,
                         example["prompt"],
                         is_vlm,
                         tools=tools,
                         add_generation_prompt=True,
-                        **example.get("chat_template_kwargs", {}),
+                        **chat_template_kwargs,
                     )["input_ids"]
                     prompt_chosen_ids = tokenize(
                         processing_class,
                         example["prompt"] + example["chosen"],
                         is_vlm,
                         tools=tools,
-                        **example.get("chat_template_kwargs", {}),
+                        **chat_template_kwargs,
                     )["input_ids"]
                     prompt_rejected_ids = tokenize(
                         processing_class,
                         example["prompt"] + example["rejected"],
                         is_vlm,
                         tools=tools,
-                        **example.get("chat_template_kwargs", {}),
+                        **chat_template_kwargs,
                     )["input_ids"]
                 else:
                     prompt_ids = tokenize(processing_class, example["prompt"], is_vlm)["input_ids"]
@@ -1081,10 +1078,11 @@ class DPOTrainer(_BaseTrainer):
                         "token handling. Verify that the tokenizer is processing text consistently."
                     )
 
-                output["prompt_ids"] = prompt_ids
-                output["chosen_ids"] = prompt_chosen_ids[len(prompt_ids) :]
-                output["rejected_ids"] = prompt_rejected_ids[len(prompt_ids) :]
-                return output
+                return {
+                    "prompt_ids": prompt_ids,
+                    "chosen_ids": prompt_chosen_ids[len(prompt_ids) :],
+                    "rejected_ids": prompt_rejected_ids[len(prompt_ids) :],
+                }
 
             dataset = dataset.map(
                 tokenize_fn,

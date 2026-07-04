@@ -210,6 +210,7 @@ def apply_chat_template(
     For more details, see [`maybe_apply_chat_template`].
     """
     tools = tools or None  # `or None`: Llama bug: it renders tool boilerplate for tools=[]
+    chat_template_kwargs = example.get("chat_template_kwargs", {})
     # Check that the example has the correct keys
     supported_keys = ["prompt", "chosen", "rejected", "completion", "messages", "label"]
     example_keys = {key for key in example.keys() if key in supported_keys}
@@ -229,7 +230,7 @@ def apply_chat_template(
             example["messages"],
             tools=tools,
             tokenize=False,
-            **example.get("chat_template_kwargs", {}),
+            **chat_template_kwargs,
             **template_kwargs,
         )
 
@@ -250,7 +251,7 @@ def apply_chat_template(
             continue_final_message=continue_final_message,
             tokenize=False,
             add_generation_prompt=add_generation_prompt,
-            **example.get("chat_template_kwargs", {}),
+            **chat_template_kwargs,
             **template_kwargs,
         )
 
@@ -261,7 +262,7 @@ def apply_chat_template(
                 example["prompt"] + example["chosen"],
                 tools=tools,
                 tokenize=False,
-                **example.get("chat_template_kwargs", {}),
+                **chat_template_kwargs,
                 **template_kwargs,
             )
             # DeepSeek-R1 inserts a <tool_call> token when using `add_generation_prompt`, which can cause discrepancies
@@ -275,7 +276,7 @@ def apply_chat_template(
                 example["prompt"] + example["rejected"],
                 tools=tools,
                 tokenize=False,
-                **example.get("chat_template_kwargs", {}),
+                **chat_template_kwargs,
                 **template_kwargs,
             )
             # Handle DeepSeek-R1 <tool_call> token, see the above comment for details
@@ -288,7 +289,7 @@ def apply_chat_template(
                 example["prompt"] + example["completion"],
                 tools=tools,
                 tokenize=False,
-                **example.get("chat_template_kwargs", {}),
+                **chat_template_kwargs,
                 **template_kwargs,
             )
             # Handle DeepSeek-R1 <tool_call> token, see the above comment for details
@@ -302,7 +303,7 @@ def apply_chat_template(
                 example["chosen"],
                 tools=tools,
                 tokenize=False,
-                **example.get("chat_template_kwargs", {}),
+                **chat_template_kwargs,
                 **template_kwargs,
             )
         if "rejected" in example:
@@ -310,7 +311,7 @@ def apply_chat_template(
                 example["rejected"],
                 tools=tools,
                 tokenize=False,
-                **example.get("chat_template_kwargs", {}),
+                **chat_template_kwargs,
                 **template_kwargs,
             )
 

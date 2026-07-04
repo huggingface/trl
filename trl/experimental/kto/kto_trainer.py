@@ -614,6 +614,8 @@ class KTOTrainer(_BaseTrainer):
             processing_class = AutoProcessor.from_pretrained(
                 get_config_model_id(model.config), trust_remote_code=args.trust_remote_code
             )
+
+        # Handle pad token for processors or tokenizers
         if isinstance(processing_class, ProcessorMixin):
             self._tokenizer = processing_class.tokenizer
             self._is_vlm = True
@@ -622,6 +624,7 @@ class KTOTrainer(_BaseTrainer):
             self._is_vlm = False
         else:
             raise TypeError("The `processing_class` must be either a `PreTrainedTokenizerBase` or a `ProcessorMixin`")
+
         if self._tokenizer.pad_token is None:
             self._tokenizer.pad_token = self._tokenizer.eos_token
 
@@ -913,7 +916,7 @@ class KTOTrainer(_BaseTrainer):
                     "you need a synced reference model. If you need `sync_ref_model` to work with PEFT, please open a "
                     "feature request at https://github.com/huggingface/trl/issues."
                 )
-            if args.precompute_ref_log_probs:
+            if self.precompute_ref_logps:
                 raise ValueError(
                     "You cannot use `sync_ref_model=True` together with `precompute_ref_log_probs=True`. "
                     "`precompute_ref_log_probs=True` assumes a fixed reference model, but with `sync_ref_model=True` "
@@ -934,6 +937,7 @@ class KTOTrainer(_BaseTrainer):
                     "`precompute_ref_log_probs=True` is not supported with IterableDataset. Please use a map-style "
                     "Dataset or set `precompute_ref_log_probs=False`."
                 )
+
             self.train_dataset = self._precompute_ref_logps(
                 self.train_dataset,
                 "train",
@@ -1053,8 +1057,6 @@ class KTOTrainer(_BaseTrainer):
         if isinstance(dataset, Dataset):  # IterableDataset does not support num_proc
             map_kwargs["num_proc"] = args.dataset_num_proc
 
-        # Compute that only on the main process for faster data processing.
-        # see: https://github.com/huggingface/trl/pull/1255
         with PartialState().main_process_first():
             # Extract the prompt if needed
             first_example = next(iter(dataset))
@@ -1206,6 +1208,7 @@ class KTOTrainer(_BaseTrainer):
         model_hash = hash_module(self.ref_model or self.model)
         fingerprint = Hasher.hash((dataset._fingerprint, model_hash, self.calculate_KL))
         cache_file = dataset._get_cache_file_path(fingerprint)
+
         if os.path.exists(cache_file):
             return concatenate_datasets([dataset, Dataset.from_file(cache_file)], axis=1)
 
@@ -1255,51 +1258,51 @@ class KTOTrainer(_BaseTrainer):
 
     def compute_ref_log_probs(self, inputs):
         """Computes reference log probabilities for a single padded batch."""
+        _non_model_keys = {
+            "completion_mask",
+            "KL_input_ids",
+            "KL_attention_mask",
+            "KL_completion_mask",
+            "label",
+            "ref_logps",
+            "ref_KL_logps",
+        }
+        model_kwargs = {k: v for k, v in inputs.items() if k not in _non_model_keys}
+        model_kwargs["use_cache"] = False
+        if self.calculate_KL:
+            KL_model_kwargs = {
+                **model_kwargs,
+                "input_ids": inputs["KL_input_ids"],
+                "attention_mask": inputs["KL_attention_mask"],
+            }
+
         with torch.no_grad(), disable_gradient_checkpointing(self.model, self.args.gradient_checkpointing_kwargs):
             if self.ref_model is None:
                 if is_peft_model(self.model):
                     model = self.accelerator.unwrap_model(self.model)
                     with use_adapter(model, adapter_name="ref" if "ref" in model.peft_config else None):
-                        completion_logits = self.model(
-                            inputs["input_ids"],
-                            attention_mask=inputs["attention_mask"],
-                        ).logits
-
+                        completion_logits = self.model(**model_kwargs).logits
                         if self.calculate_KL:
-                            KL_logits = self.model(
-                                inputs["KL_input_ids"],
-                                attention_mask=inputs["KL_attention_mask"],
-                            ).logits
+                            KL_logits = self.model(**KL_model_kwargs).logits
                 else:
-                    completion_logits = self.model(
-                        inputs["input_ids"],
-                        attention_mask=inputs["attention_mask"],
-                    ).logits
-
+                    completion_logits = self.model(**model_kwargs).logits
                     if self.calculate_KL:
-                        KL_logits = self.model(
-                            inputs["KL_input_ids"],
-                            attention_mask=inputs["KL_attention_mask"],
-                        ).logits
+                        KL_logits = self.model(**KL_model_kwargs).logits
             else:
-                completion_logits = self.ref_model(inputs["input_ids"], attention_mask=inputs["attention_mask"]).logits
-
+                completion_logits = self.ref_model(**model_kwargs).logits
                 if self.calculate_KL:
-                    KL_logits = self.ref_model(
-                        inputs["KL_input_ids"],
-                        attention_mask=inputs["KL_attention_mask"],
-                    ).logits
+                    KL_logits = self.ref_model(**KL_model_kwargs).logits
 
-        shift_logits = completion_logits[:, :-1, :]
-        per_token_logps = selective_log_softmax(shift_logits, inputs["input_ids"][:, 1:])
-        per_token_logps[inputs["completion_mask"][:, 1:] == 0] = 0.0
-        completion_logps = per_token_logps.sum(-1)
+        shift_logits = completion_logits[..., :-1, :]
+        per_token_logps = selective_log_softmax(shift_logits, inputs["input_ids"][..., 1:])
+        per_token_logps[inputs["completion_mask"][..., 1:] == 0] = 0.0
+        completion_logps = per_token_logps.sum(dim=1)
 
         if self.calculate_KL:
-            shift_KL_logits = KL_logits[:, :-1, :]
-            KL_per_token_logps = selective_log_softmax(shift_KL_logits, inputs["KL_input_ids"][:, 1:])
-            KL_per_token_logps[inputs["KL_completion_mask"][:, 1:] == 0] = 0.0
-            KL_logps = KL_per_token_logps.sum(-1)
+            shift_KL_logits = KL_logits[..., :-1, :]
+            KL_per_token_logps = selective_log_softmax(shift_KL_logits, inputs["KL_input_ids"][..., 1:])
+            KL_per_token_logps[inputs["KL_completion_mask"][..., 1:] == 0] = 0.0
+            KL_logps = KL_per_token_logps.sum(dim=1)
         else:
             KL_logps = None
 
@@ -1371,7 +1374,7 @@ class KTOTrainer(_BaseTrainer):
         if is_peft_model(model):
             model = model.base_model.model
 
-        # `base_model` gives the inner module (skipping `lm_head`) — text decoder for LMs, multimodal wrapper for
+        # `base_model` gives the backbone model (skipping `lm_head`) — text decoder for LMs, multimodal wrapper for
         # VLMs (so vision-token injection runs before the text decoder). `get_decoder()` won't do: on VLMs it
         # returns just the text stack and feeds image-placeholder IDs through it.
         # Pre-5.0 transformers VLMs set `base_model_prefix = ""` so `base_model is self` (re-runs `lm_head`).
@@ -1384,7 +1387,6 @@ class KTOTrainer(_BaseTrainer):
         outputs = backbone(**model_kwargs)
         lm_head = model.get_output_embeddings()
 
-        # reference model
         with torch.no_grad(), disable_gradient_checkpointing(self.model, self.args.gradient_checkpointing_kwargs):
             if self.ref_model is None:
                 # PEFT model with no explicit reference model: recover reference behaviour by disabling / switching to
