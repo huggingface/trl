@@ -892,10 +892,15 @@ class GOLDTrainer(SFTTrainer):
                 "tokens in input_ids. Use truncation_mode='keep_start' (the default) or set max_length=None."
             )
 
-        # Respect a user-provided data_collator; otherwise, pick the right collator based on modality.
+        # Respect a user-provided data_collator for text; otherwise, pick the right collator based on modality.
         # For VLMs, always use identity collator to preserve raw PIL images in the dataloader.
         # Raw images are needed for: (1) vLLM generation, (2) cross-architecture teacher processing.
         # A separate _vlm_collator is stored for on-the-fly collation inside _fill_buffer.
+        if self._is_vision_dataset and data_collator is not None:
+            raise ValueError(
+                "Passing a custom data collator is not supported for VLM training. GOLD manages its own collation "
+                "to preserve raw images for generation and teacher processing; leave `data_collator=None`."
+            )
         self._vlm_collator = None
         if data_collator is None:
             if self._is_vision_dataset:
