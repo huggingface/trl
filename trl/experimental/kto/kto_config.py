@@ -42,6 +42,10 @@ class KTOConfig(_BaseConfig):
             Whether to allow loading models and tokenizers that ship custom Python code from the Hub. Forwarded to
             [`~transformers.AutoModelForCausalLM.from_pretrained`] and
             [`~transformers.AutoProcessor.from_pretrained`].
+        router_aux_loss_coef (`float`, *optional*, defaults to `0.001`):
+            Coefficient of the load-balancing auxiliary loss. Only has an effect when training a Mixture-of-Experts
+            (MoE) model; for other models it does nothing. The auxiliary loss is added to the training loss with this
+            weight. Set to `0.0` to disable it.
         disable_dropout (`bool`, *optional*, defaults to `True`):
             Whether to disable dropout in the model and reference model.
 
@@ -50,7 +54,7 @@ class KTOConfig(_BaseConfig):
         dataset_num_proc (`int`, *optional*):
             Number of processes to use for processing the dataset.
         max_length (`int` or `None`, *optional*, defaults to `1024`):
-            Maximum length of the tokenized sequence. Sequences longer than `max_length` are truncated from the left.
+            Maximum length of the tokenized sequence. Sequences longer than `max_length` are truncated from the right.
             If `None`, no truncation is applied.
         pad_to_multiple_of (`int`, *optional*):
             If set, the sequences will be padded to a multiple of this value.
@@ -138,6 +142,14 @@ class KTOConfig(_BaseConfig):
             "Forwarded to `AutoModelForCausalLM.from_pretrained` and `AutoProcessor.from_pretrained`."
         },
     )
+    router_aux_loss_coef: float = field(
+        default=0.001,
+        metadata={
+            "help": "Coefficient of the load-balancing auxiliary loss. Only has an effect when training a "
+            "Mixture-of-Experts (MoE) model; for other models it does nothing. The auxiliary loss is added to the "
+            "training loss with this weight. Set to `0.0` to disable it."
+        },
+    )
     disable_dropout: bool = field(
         default=True,
         metadata={"help": "Whether to disable dropout in the model and reference model."},
@@ -152,7 +164,7 @@ class KTOConfig(_BaseConfig):
         default=1024,
         metadata={
             "help": "Maximum length of the tokenized sequence. Sequences longer than `max_length` are truncated from "
-            "the left. If `None`, no truncation is applied."
+            "the right. If `None`, no truncation is applied."
         },
     )
     pad_to_multiple_of: int | None = field(

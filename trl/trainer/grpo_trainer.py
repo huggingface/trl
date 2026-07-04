@@ -46,6 +46,7 @@ from transformers import (
     AutoModelForSequenceClassification,
     AutoProcessor,
     AutoTokenizer,
+    BitsAndBytesConfig,
     GenerationConfig,
     PreTrainedModel,
     PreTrainedTokenizerBase,
@@ -104,7 +105,7 @@ if is_liger_kernel_available():
 
 if is_peft_available():
     import peft
-    from peft import LoraConfig, PeftConfig, PeftModel, get_peft_model
+    from peft import LoraConfig, PeftConfig, PeftModel, PromptLearningConfig, get_peft_model
     from peft.tuners.tuners_utils import BaseTunerLayer
 
 
@@ -234,6 +235,9 @@ class GRPOTrainer(_BaseTrainer):
         optimizers (`tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None]`, *optional*, defaults to `(None, None)`):
             A tuple containing the optimizer and the scheduler to use. Will default to an instance of `AdamW` on your
             model and a scheduler given by [`~transformers.get_linear_schedule_with_warmup`] controlled by `args`.
+        quantization_config ([`~transformers.BitsAndBytesConfig`], *optional*):
+            Quantization configuration used when loading the model from a model identifier. Combine with `peft_config`
+            for QLoRA training. Ignored if the model is already instantiated.
         peft_config ([`~peft.PeftConfig`], *optional*):
             PEFT configuration used to wrap the model. If `None`, the model is not wrapped.
         tools (list of `Callable`, *optional*):
@@ -288,6 +292,7 @@ class GRPOTrainer(_BaseTrainer):
         reward_processing_classes: PreTrainedTokenizerBase | list[PreTrainedTokenizerBase] | None = None,
         callbacks: list[TrainerCallback] | None = None,
         optimizers: tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None] = (None, None),
+        quantization_config: "BitsAndBytesConfig | None" = None,
         peft_config: "PeftConfig | None" = None,
         tools: list[Callable] | None = None,
         rollout_func: RolloutFunc | None = None,
@@ -301,7 +306,14 @@ class GRPOTrainer(_BaseTrainer):
 
         # Model
         if isinstance(model, str):
-            model_init_kwargs = args.model_init_kwargs or {}
+            model_init_kwargs = dict(args.model_init_kwargs or {})  # copy to avoid mutating model_init_kwargs
+            if quantization_config is not None:
+                if "quantization_config" in model_init_kwargs:
+                    raise ValueError(
+                        "You set `quantization_config` both as a trainer argument and in `args.model_init_kwargs`. "
+                        "Please set it in only one place, preferably as a trainer argument."
+                    )
+                model_init_kwargs["quantization_config"] = quantization_config
             # Distributed training requires device_map=None ("auto" fails)
             if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 model_init_kwargs["device_map"] = None
@@ -312,6 +324,11 @@ class GRPOTrainer(_BaseTrainer):
                 logger.warning(
                     "You passed `model_init_kwargs` to the `GRPOConfig`, but your model is already instantiated. "
                     "The `model_init_kwargs` will be ignored."
+                )
+            if quantization_config is not None:
+                logger.warning(
+                    "You passed `quantization_config` to the trainer, but your model is already instantiated. The "
+                    "`quantization_config` will be ignored."
                 )
         # Non-quantized models do not have the `is_loaded_in_{8,4}bit` attributes, whereas quantized models do
         _is_quantized_model = getattr(model, "is_loaded_in_4bit", False) or getattr(model, "is_loaded_in_8bit", False)
@@ -676,6 +693,18 @@ class GRPOTrainer(_BaseTrainer):
                     "fused GRPO loss reads `lm_head.weight` directly, so the adapter on the head is ignored and never "
                     "trained. Either remove `'lm_head'` from your `target_modules`, or set `use_liger_kernel=False`."
                 )
+            # Prompt-learning methods (PromptTuning, PrefixTuning, P-Tuning) inject virtual tokens via
+            # `PeftModel.forward()`. The Liger GRPO loss bypasses `PeftModel.forward()` by calling the backbone
+            # directly, so virtual tokens are never prepended and the loss is computed on the wrong sequence.
+            # Fail loudly rather than train on a silently corrupted input.
+            if any(isinstance(cfg, PromptLearningConfig) for cfg in model.peft_config.values()):
+                raise ValueError(
+                    "`use_liger_kernel=True` is incompatible with prompt-learning PEFT methods (PromptTuning, "
+                    "PrefixTuning, P-Tuning). The Liger GRPO loss bypasses `PeftModel.forward()` by calling the "
+                    "backbone directly, so virtual tokens are never prepended and the loss is computed on the "
+                    "wrong sequence. Use a weight-based adapter such as LoRA instead, or set "
+                    "`use_liger_kernel=False`."
+                )
         self.mask_truncated_completions = args.mask_truncated_completions
         self.top_entropy_quantile = args.top_entropy_quantile
         if self.use_liger_kernel and self.top_entropy_quantile < 1.0:
@@ -789,7 +818,9 @@ class GRPOTrainer(_BaseTrainer):
             self.ref_model = None
         else:
             # For deepspeed, fsdp or non-distributed models, create a reference model from scratch
-            model_init_kwargs = args.model_init_kwargs or {}
+            model_init_kwargs = dict(args.model_init_kwargs or {})  # copy to avoid mutating model_init_kwargs
+            if quantization_config is not None:
+                model_init_kwargs["quantization_config"] = quantization_config
             # Distributed training requires device_map=None ("auto" fails)
             if self.args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 model_init_kwargs["device_map"] = None
@@ -839,7 +870,7 @@ class GRPOTrainer(_BaseTrainer):
             # redirect the model.module forward to the model forward to ensure pre-forward hooks are called
             self._forward_redirection = _ForwardRedirection()
 
-            self.liger_grpo_loss = LigerFusedLinearGRPOLoss(
+            self.liger_loss = LigerFusedLinearGRPOLoss(
                 beta=self.beta,
                 epsilon_low=self.epsilon_low,
                 epsilon_high=self.epsilon_high,
@@ -2585,7 +2616,7 @@ class GRPOTrainer(_BaseTrainer):
 
                 gather_ctx = deepspeed.zero.GatheredParameters(params, modifier_rank=None)
         with gather_ctx:
-            loss, metrics = self.liger_grpo_loss(
+            loss, metrics = self.liger_loss(
                 _input=last_hidden_state,
                 lin_weight=lm_head_weight,
                 selected_token_ids=completion_ids,

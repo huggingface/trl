@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import contextlib
+import json
 import os
 import textwrap
 from collections import defaultdict
@@ -22,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 import torch
+import torch.nn.functional as F
 import transformers
 from accelerate import PartialState
 from accelerate.logging import get_logger
@@ -29,7 +31,6 @@ from accelerate.utils import is_peft_model, tqdm
 from datasets import Dataset, IterableDataset, IterableDatasetDict, concatenate_datasets
 from datasets.fingerprint import Hasher
 from packaging.version import Version
-from torch.nn import functional as F
 from torch.utils.data import DataLoader, Sampler, SequentialSampler
 from transformers import (
     AutoProcessor,
@@ -40,24 +41,26 @@ from transformers import (
     TrainerCallback,
 )
 from transformers.data.data_collator import DataCollatorMixin
-from transformers.trainer_utils import EvalLoopOutput, has_length
+from transformers.trainer_utils import EvalPrediction, has_length
 from transformers.utils import is_peft_available
 
 from ...data_utils import (
     apply_chat_template,
     extract_prompt,
+    get_dataset_column_names,
     is_conversational,
     prepare_multimodal_messages,
     unpair_preference_dataset,
 )
 from ...import_utils import is_liger_kernel_available
-from ...models import get_act_offloading_ctx_manager
-from ...models.utils import disable_gradient_checkpointing, prepare_deepspeed, prepare_fsdp
+from ...models import get_act_offloading_ctx_manager, prepare_deepspeed, prepare_fsdp
+from ...models.utils import disable_gradient_checkpointing
 from ...trainer.base_trainer import _BaseTrainer
 from ...trainer.callbacks import SyncRefModelCallback
 from ...trainer.utils import (
     create_model_from_path,
     disable_dropout_in_model,
+    entropy_from_logits,
     flush_left,
     get_config_model_id,
     hash_module,
@@ -74,40 +77,82 @@ if is_liger_kernel_available():
 
 if is_peft_available():
     import peft
-    from peft import LoraConfig, PeftConfig, PeftModel, get_peft_model
+    from peft import LoraConfig, PeftConfig, PeftModel, PromptLearningConfig, get_peft_model
+    from peft.tuners.tuners_utils import BaseTunerLayer
 
 
 logger = get_logger(__name__)
 
 
-def get_dataset_column_names(dataset: Dataset | IterableDataset) -> list[str]:
-    return list(next(iter(dataset)).keys()) if dataset.column_names is None else dataset.column_names
-
-
 @dataclass
 class DataCollatorForUnpairedPreference(DataCollatorMixin):
     """
-    Data collator for unpaired preference data. Assembles completions from raw token IDs and pads sequences to the
-    maximum length of the batch.
+    Data collator used for unpaired preference data. Inputs are dynamically padded to the maximum length of a batch.
 
-    Each example is expected to contain `"prompt_ids"` and `"completion_ids"` keys (and optionally a
-    `"KL_completion_ids"` key). The collator returns a dictionary containing:
-    - `"input_ids"`: prompt + completion token IDs, padded to the batch maximum length.
-    - `"attention_mask"`: attention mask, padded with 0s.
-    - `"completion_mask"`: binary mask where 1 marks completion tokens and 0 marks prompt or padding tokens.
+    This collator expects each example in the input list to be a dictionary containing the `"prompt_ids"` and
+    `"completion_ids"` keys (and optionally a `"KL_completion_ids"` key). The collator returns a dictionary containing
+    the following keys:
+    - `"input_ids"`: Tensor of input IDs, padded to the maximum length of the batch.
+    - `"attention_mask"`: Tensor of attention mask, padded to the maximum length of the batch.
+    - `"completion_mask"`: Tensor indicating the positions of the completion tokens, padded to the maximum length of
+        the batch.
 
     When `"KL_completion_ids"` is present, the same three tensors are returned for the (mismatched) KL sequence under
     the `"KL_input_ids"`, `"KL_attention_mask"` and `"KL_completion_mask"` keys.
 
+    The returned dictionary also contains a `"label"` key with the list of labels. Optionally, the examples can contain
+    `"ref_logps"` and `"ref_KL_logps"` keys, in which case the returned dictionary will also contain these keys with
+    the corresponding tensors.
+
     Args:
         pad_token_id (`int`):
-            Token ID to use for padding `input_ids` sequences.
+            Token ID to use for padding.
         max_length (`int`, *optional*):
-            Maximum sequence length after assembly. Sequences longer than `max_length` are truncated from the end.
+            Maximum length of the sequences in the batch. Sequences longer than `max_length` are truncated before
+            padding, which avoids allocating oversized tensors for batches containing very long sequences.
         pad_to_multiple_of (`int`, *optional*):
             If set, the sequences will be padded to a multiple of this value.
         return_tensors (`str`, *optional*, defaults to `"pt"`):
-            The tensor type to return. Currently, only `"pt"` (PyTorch tensors) is supported.
+            Type of Tensor to return. Only `"pt"` is currently supported.
+
+    Examples:
+    ```python
+    >>> from trl.experimental.kto.kto_trainer import DataCollatorForUnpairedPreference
+
+    >>> collator = DataCollatorForUnpairedPreference(pad_token_id=0)
+    >>> examples = [
+    ...     {"prompt_ids": [1, 2, 3], "completion_ids": [4, 5], "label": True},
+    ...     {"prompt_ids": [7, 8], "completion_ids": [9], "label": False},
+    ... ]
+    >>> collator(examples)
+    {'input_ids': tensor([[1, 2, 3, 4, 5],
+                          [7, 8, 9, 0, 0]]),
+     'attention_mask': tensor([[1, 1, 1, 1, 1],
+                               [1, 1, 1, 0, 0]]),
+     'completion_mask': tensor([[0, 0, 0, 1, 1],
+                                [0, 0, 1, 0, 0]]),
+     'label': [True, False]}
+
+    >>> # With KL completions
+    >>> examples = [
+    ...     {"prompt_ids": [1, 2, 3], "completion_ids": [4, 5], "KL_completion_ids": [6], "label": True},
+    ...     {"prompt_ids": [7, 8], "completion_ids": [9], "KL_completion_ids": [10, 11], "label": False},
+    ... ]
+    >>> collator(examples)
+    {'input_ids': tensor([[1, 2, 3, 4, 5],
+                          [7, 8, 9, 0, 0]]),
+     'attention_mask': tensor([[1, 1, 1, 1, 1],
+                               [1, 1, 1, 0, 0]]),
+     'completion_mask': tensor([[0, 0, 0, 1, 1],
+                                [0, 0, 1, 0, 0]]),
+     'KL_input_ids': tensor([[ 1,  2,  3,  6],
+                             [ 7,  8, 10, 11]]),
+     'KL_attention_mask': tensor([[1, 1, 1, 1],
+                                  [1, 1, 1, 1]]),
+     'KL_completion_mask': tensor([[0, 0, 0, 1],
+                                   [0, 0, 1, 1]]),
+     'label': [True, False]}
+    ```
     """
 
     pad_token_id: int
@@ -116,37 +161,38 @@ class DataCollatorForUnpairedPreference(DataCollatorMixin):
     return_tensors: str = "pt"
 
     def torch_call(self, examples: list[dict[str, Any]]) -> dict[str, Any]:
-        batch = {}
+        output = {}
         for prefix, ids_key in [("", "completion_ids"), ("KL_", "KL_completion_ids")]:
             if ids_key not in examples[0]:
                 continue
 
             full_ids_list = []
             completion_mask_list = []
-            for ex in examples:
-                prompt_ids = ex["prompt_ids"]
-                answer_ids = ex[ids_key]
+            for example in examples:
+                prompt_ids = example["prompt_ids"]
+                answer_ids = example[ids_key]
                 full_ids = prompt_ids + answer_ids
                 completion_mask = [0] * len(prompt_ids) + [1] * len(answer_ids)
+                # Truncate per sequence if necessary
                 if self.max_length is not None:
                     full_ids = full_ids[: self.max_length]
                     completion_mask = completion_mask[: self.max_length]
                 full_ids_list.append(full_ids)
                 completion_mask_list.append(completion_mask)
 
-            batch[f"{prefix}input_ids"] = pad(
+            output[f"{prefix}input_ids"] = pad(
                 [torch.tensor(ids, dtype=torch.int64) for ids in full_ids_list],
                 padding_value=self.pad_token_id,
                 padding_side="right",
                 pad_to_multiple_of=self.pad_to_multiple_of,
             )
-            batch[f"{prefix}attention_mask"] = pad(
+            output[f"{prefix}attention_mask"] = pad(
                 [torch.ones(len(ids), dtype=torch.int64) for ids in full_ids_list],
                 padding_value=0,
                 padding_side="right",
                 pad_to_multiple_of=self.pad_to_multiple_of,
             )
-            batch[f"{prefix}completion_mask"] = pad(
+            output[f"{prefix}completion_mask"] = pad(
                 [torch.tensor(m, dtype=torch.int64) for m in completion_mask_list],
                 padding_value=0,
                 padding_side="right",
@@ -154,48 +200,100 @@ class DataCollatorForUnpairedPreference(DataCollatorMixin):
             )
 
         if "ref_logps" in examples[0]:
-            batch["ref_logps"] = torch.tensor([ex["ref_logps"] for ex in examples])
+            output["ref_logps"] = torch.tensor([example["ref_logps"] for example in examples])
         if "ref_KL_logps" in examples[0]:
-            batch["ref_KL_logps"] = torch.tensor([ex["ref_KL_logps"] for ex in examples])
-        batch["label"] = [ex["label"] for ex in examples]
-        return batch
+            output["ref_KL_logps"] = torch.tensor([example["ref_KL_logps"] for example in examples])
+        output["label"] = [example["label"] for example in examples]
+        return output
 
 
 @dataclass
 class DataCollatorForVisionUnpairedPreference(DataCollatorMixin):
     """
-    Data collator for vision unpaired preference data. Performs tokenization and image processing on-the-fly.
+    Data collator for vision unpaired-preference tasks.
 
-    Unlike the text-only [`DataCollatorForUnpairedPreference`], this collator does not expect pre-tokenized inputs.
-    Instead, it takes raw examples with `"prompt"`, `"completion"`, and `"images"` (or `"image"`) keys and processes
-    them at collation time. When `calculate_kl` is `True`, the collator also produces KL sequences by cycling
-    completions within the batch — the same mismatching strategy as the text-only path, but done here rather than as a
-    dataset pre-processing step.
+    Unlike text-only datasets, where the collator typically receives pre-tokenized inputs ready for batching,
+    vision-language data processing involves converting images into pixel values. This conversion is disk-intensive,
+    making upfront preprocessing of the entire dataset impractical. Therefore, this collator performs tokenization and
+    image processing on-the-fly to efficiently prepare batches.
 
-    Each input example should contain at least:
-    - A `"prompt"` key with either a plain text string or a list of message dicts.
-    - A `"completion"` key with a plain text string or a list of message dicts.
+    When `calculate_kl` is `True`, the collator also produces KL sequences by cycling completions within the batch.
+
+    Each input example should be a dictionary containing at least:
     - An `"images"` key holding a list of images, or an `"image"` key holding a single image.
+    - Keys `"prompt"` and `"completion"` for the prompt and completion.
     - A `"label"` key (`bool`) indicating whether the completion is desirable.
 
-    The collator outputs:
-    - `"input_ids"`, `"attention_mask"`, `"completion_mask"`: full prompt+completion sequence.
-    - `"pixel_values"` and any additional processor outputs (e.g., `"image_grid_thw"`).
-    - `"label"`: list of booleans.
-    - When `calculate_kl=True`: `"KL_input_ids"`, `"KL_attention_mask"`, `"KL_completion_mask"` for the cycled KL
-      sequences.
+    The collator outputs a dictionary including:
+    - `"input_ids"`: Tensor of token IDs.
+    - `"attention_mask"`: Tensor indicating attention mask.
+    - `"pixel_values"`: Tensor representing image pixel values.
+    - `"completion_mask"`: Tensor indicating which tokens correspond to completions.
+    - `"label"`: List of booleans indicating whether each completion is desirable.
+    - When `calculate_kl` is `True`: `"KL_input_ids"`, `"KL_attention_mask"` and `"KL_completion_mask"` for the cycled
+      KL sequences.
+
+    Additional keys may be present depending on the processor, such as `"image_grid_thw"` or `"image_position_ids"`.
 
     Args:
         processor ([`~transformers.ProcessorMixin`]):
-            The processor used to tokenize text and process images.
+            The processor used to tokenize text and process images. It must be a subclass of
+            [`~transformers.ProcessorMixin`] and include a `tokenizer` with a defined `pad_token_id`.
         max_length (`int`, *optional*):
-            Maximum sequence length. Sequences longer than `max_length` are truncated.
+            Maximum sequence length. Sequences longer than `max_length` are truncated to `max_length`. If `None`, no
+            truncation is applied.
         calculate_kl (`bool`, *optional*, defaults to `True`):
             Whether to produce KL sequences by cycling completions within the batch.
         pad_to_multiple_of (`int`, *optional*):
             If set, the sequences will be padded to a multiple of this value.
         return_tensors (`str`, *optional*, defaults to `"pt"`):
-            The tensor type to return. Only `"pt"` is supported.
+            Type of Tensor to return. Only `"pt"` is currently supported.
+
+    Example:
+    ```python
+    >>> from trl.experimental.kto.kto_trainer import DataCollatorForVisionUnpairedPreference
+    >>> from transformers import AutoProcessor
+
+    >>> processor = AutoProcessor.from_pretrained("Qwen/Qwen2.5-VL-7B-Instruct")
+    >>> collator = DataCollatorForVisionUnpairedPreference(processor)
+    >>> examples = [
+    ...     {
+    ...         "images": [Image.open("image_0.png")],
+    ...         "prompt": [{"role": "user", "content": "What is this?"}],
+    ...         "completion": [{"role": "assistant", "content": "This is a cat."}],
+    ...         "label": True,
+    ...     },
+    ...     {
+    ...         "images": [Image.open("image_1.png")],
+    ...         "prompt": [{"role": "user", "content": "Describe this image."}],
+    ...         "completion": [{"role": "assistant", "content": "A beautiful landscape."}],
+    ...         "label": False,
+    ...     },
+    ... ]
+    >>> collator(examples)
+    {'input_ids': tensor([[151644,   8948,    198,   2610,    525,    264,  10950,  17847,     13, 151645,    198, 151644,    872,    198, 151652, 151655, 151655, 151655, 151655, 151653,   3838,    374,    419,     30, 151645,    198, 151644,  77091,    198,   1986,    374,    264,   8251,     13, 151645,    198],
+                          [151644,   8948,    198,   2610,    525,    264,  10950,  17847,     13, 151645,    198, 151644,    872,    198, 151652, 151655, 151655, 151655, 151655, 151653,  74785,    419,   2168,     13, 151645,    198, 151644,  77091,    198,     32,   6233,  18414,     13, 151645,    198, 151643]]),
+     'attention_mask': tensor([[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+                               [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0]]),
+     'pixel_values': tensor([[-0.0405, -0.0405, -0.0405,  ...,  1.3638,  1.3638,  1.3638],
+                             [-0.0405, -0.0405, -0.0405,  ...,  1.3638,  1.3638,  1.3638],
+                             [-0.0405, -0.0405, -0.0405,  ...,  1.3638,  1.3638,  1.3638],
+                             ...,
+                             [-1.3543, -1.3543, -1.3543,  ..., -0.2004, -0.2004, -0.2004],
+                             [-1.3543, -1.3543, -1.3543,  ..., -0.2004, -0.2004, -0.2004],
+                             [-1.3543, -1.3543, -1.3543,  ..., -0.2004, -0.2004, -0.2004]]),
+     'image_grid_thw': tensor([[1, 4, 4],
+                               [1, 4, 4]]),
+     'completion_mask': tensor([[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1],
+                                [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0]]),
+     'KL_input_ids': tensor([[151644,   8948,    198,   2610,    525,    264,  10950,  17847,     13, 151645,    198, 151644,    872,    198, 151652, 151655, 151655, 151655, 151655, 151653,   3838,    374,    419,     30, 151645,    198, 151644,  77091,    198,     32,   6233,  18414,     13, 151645,    198, 151643],
+                             [151644,   8948,    198,   2610,    525,    264,  10950,  17847,     13, 151645,    198, 151644,    872,    198, 151652, 151655, 151655, 151655, 151655, 151653,  74785,    419,   2168,     13, 151645,    198, 151644,  77091,    198,   1986,    374,    264,   8251,     13, 151645,    198]]),
+     'KL_attention_mask': tensor([[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0],
+                                  [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]]),
+     'KL_completion_mask': tensor([[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0],
+                                   [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1]]),
+     'label': [True, False]}
+    ```
     """
 
     processor: ProcessorMixin
@@ -248,31 +346,24 @@ class DataCollatorForVisionUnpairedPreference(DataCollatorMixin):
         input_ids = torch.cat((prompt_ids, completion_ids), dim=1)
         attention_mask = torch.cat((prompt_mask, completion_mask), dim=1)
         completion_mask = torch.cat((torch.zeros_like(prompt_mask), completion_mask), dim=1)
-
-        has_tti = "token_type_ids" in processed_prompts
-        has_mm_tti = "mm_token_type_ids" in processed_prompts
-
-        if has_tti:  # special case for Gemma
+        if "token_type_ids" in processed_prompts:  # special case for Gemma
             prompt_token_type_ids = processed_prompts["token_type_ids"]
             completion_token_type_ids = processed_completions["token_type_ids"]
             token_type_ids = torch.cat((prompt_token_type_ids, completion_token_type_ids), dim=1)
-        if has_mm_tti:  # special case for Qwen2.5-VL
+        if "mm_token_type_ids" in processed_prompts:  # special case for Qwen2.5-VL
             prompt_mm_token_type_ids = processed_prompts["mm_token_type_ids"]
-            completion_mm_token_type_ids = processed_completions.get(
-                "mm_token_type_ids", torch.zeros_like(completion_ids)
-            )
-            mm_token_type_ids = torch.cat((prompt_mm_token_type_ids, completion_mm_token_type_ids), dim=1)
+            mm_token_type_ids = torch.cat((prompt_mm_token_type_ids, torch.zeros_like(completion_ids)), dim=1)
 
         # Flush left to reduce padding
-        if has_tti and has_mm_tti:
+        if "token_type_ids" in processed_prompts and "mm_token_type_ids" in processed_prompts:
             attention_mask, input_ids, completion_mask, token_type_ids, mm_token_type_ids = flush_left(
                 attention_mask, input_ids, completion_mask, token_type_ids, mm_token_type_ids
             )
-        elif has_tti:
+        elif "token_type_ids" in processed_prompts:
             attention_mask, input_ids, completion_mask, token_type_ids = flush_left(
                 attention_mask, input_ids, completion_mask, token_type_ids
             )
-        elif has_mm_tti:
+        elif "mm_token_type_ids" in processed_prompts:
             attention_mask, input_ids, completion_mask, mm_token_type_ids = flush_left(
                 attention_mask, input_ids, completion_mask, mm_token_type_ids
             )
@@ -284,9 +375,9 @@ class DataCollatorForVisionUnpairedPreference(DataCollatorMixin):
             input_ids = input_ids[:, : self.max_length]
             attention_mask = attention_mask[:, : self.max_length]
             completion_mask = completion_mask[:, : self.max_length]
-            if has_tti:
+            if "token_type_ids" in processed_prompts:
                 token_type_ids = token_type_ids[:, : self.max_length]
-            if has_mm_tti:
+            if "mm_token_type_ids" in processed_prompts:
                 mm_token_type_ids = mm_token_type_ids[:, : self.max_length]
 
         # Build the output dictionary
@@ -294,9 +385,9 @@ class DataCollatorForVisionUnpairedPreference(DataCollatorMixin):
         output["input_ids"] = input_ids
         output["attention_mask"] = attention_mask
         output["completion_mask"] = completion_mask
-        if has_tti:
+        if "token_type_ids" in processed_prompts:
             output["token_type_ids"] = token_type_ids
-        if has_mm_tti:
+        if "mm_token_type_ids" in processed_prompts:
             output["mm_token_type_ids"] = mm_token_type_ids
 
         if self.calculate_kl:
@@ -318,24 +409,23 @@ class DataCollatorForVisionUnpairedPreference(DataCollatorMixin):
             kl_completion_mask = torch.cat((torch.zeros_like(prompt_mask), kl_mask), dim=1)
 
             # Build KL token-type tensors using the original (pre-flush) prompt tensors
-            if has_tti:
-                kl_completion_token_type_ids = processed_kl.get("token_type_ids", torch.zeros_like(kl_ids))
+            if "token_type_ids" in processed_prompts:
+                kl_completion_token_type_ids = processed_kl["token_type_ids"]
                 kl_token_type_ids = torch.cat((prompt_token_type_ids, kl_completion_token_type_ids), dim=1)
-            if has_mm_tti:
-                kl_completion_mm_token_type_ids = processed_kl.get("mm_token_type_ids", torch.zeros_like(kl_ids))
-                kl_mm_token_type_ids = torch.cat((prompt_mm_token_type_ids, kl_completion_mm_token_type_ids), dim=1)
+            if "mm_token_type_ids" in processed_prompts:
+                kl_mm_token_type_ids = torch.cat((prompt_mm_token_type_ids, torch.zeros_like(kl_ids)), dim=1)
 
-            if has_tti and has_mm_tti:
+            if "token_type_ids" in processed_prompts and "mm_token_type_ids" in processed_prompts:
                 kl_attention_mask, kl_input_ids, kl_completion_mask, kl_token_type_ids, kl_mm_token_type_ids = (
                     flush_left(
                         kl_attention_mask, kl_input_ids, kl_completion_mask, kl_token_type_ids, kl_mm_token_type_ids
                     )
                 )
-            elif has_tti:
+            elif "token_type_ids" in processed_prompts:
                 kl_attention_mask, kl_input_ids, kl_completion_mask, kl_token_type_ids = flush_left(
                     kl_attention_mask, kl_input_ids, kl_completion_mask, kl_token_type_ids
                 )
-            elif has_mm_tti:
+            elif "mm_token_type_ids" in processed_prompts:
                 kl_attention_mask, kl_input_ids, kl_completion_mask, kl_mm_token_type_ids = flush_left(
                     kl_attention_mask, kl_input_ids, kl_completion_mask, kl_mm_token_type_ids
                 )
@@ -349,20 +439,20 @@ class DataCollatorForVisionUnpairedPreference(DataCollatorMixin):
                 kl_input_ids = kl_input_ids[:, : self.max_length]
                 kl_attention_mask = kl_attention_mask[:, : self.max_length]
                 kl_completion_mask = kl_completion_mask[:, : self.max_length]
-                if has_tti:
+                if "token_type_ids" in processed_prompts:
                     kl_token_type_ids = kl_token_type_ids[:, : self.max_length]
-                if has_mm_tti:
+                if "mm_token_type_ids" in processed_prompts:
                     kl_mm_token_type_ids = kl_mm_token_type_ids[:, : self.max_length]
 
             output["KL_input_ids"] = kl_input_ids
             output["KL_attention_mask"] = kl_attention_mask
             output["KL_completion_mask"] = kl_completion_mask
-            if has_tti:
+            if "token_type_ids" in processed_prompts:
                 output["KL_token_type_ids"] = kl_token_type_ids
-            if has_mm_tti:
+            if "mm_token_type_ids" in processed_prompts:
                 output["KL_mm_token_type_ids"] = kl_mm_token_type_ids
 
-        output["label"] = [ex["label"] for ex in examples]
+        output["label"] = [example["label"] for example in examples]
         return output
 
 
@@ -395,7 +485,10 @@ class KTOTrainer(_BaseTrainer):
               path to a *directory* containing model weights saved using
               [`~transformers.PreTrainedModel.save_pretrained`], e.g., `'./my_model_directory/'`. The model is loaded
               using `<ModelArchitecture>.from_pretrained` (where `<ModelArchitecture>` is derived from the model
-              config) with the keyword arguments in `args.model_init_kwargs`.
+              config) with the keyword arguments in `args.model_init_kwargs`. If `dtype` is not specified in
+              `args.model_init_kwargs`, it defaults to `float32`. This differs from
+              [`~transformers.PreTrainedModel.from_pretrained`], where (since Transformers v5) the dtype is inferred
+              from the model config.
             - A [`~transformers.PreTrainedModel`] object. Only causal language models are supported.
             - A [`~peft.PeftModel`] object. Only causal language models are supported.
         ref_model ([`~transformers.PreTrainedModel`], *optional*):
@@ -470,7 +563,7 @@ class KTOTrainer(_BaseTrainer):
         train_dataset: Dataset | IterableDataset | None = None,
         eval_dataset: Dataset | IterableDataset | dict[str, Dataset | IterableDataset] | None = None,
         processing_class: PreTrainedTokenizerBase | ProcessorMixin | None = None,
-        compute_metrics: Callable[[EvalLoopOutput], dict] | None = None,
+        compute_metrics: Callable[[EvalPrediction], dict] | None = None,
         callbacks: list[TrainerCallback] | None = None,
         optimizers: tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None] = (None, None),
         peft_config: "PeftConfig | None" = None,
@@ -653,8 +746,6 @@ class KTOTrainer(_BaseTrainer):
         self.loss_type = args.loss_type
         self.desirable_weight = args.desirable_weight
         self.undesirable_weight = args.undesirable_weight
-        self.aux_loss_enabled = getattr(model.config, "output_router_logits", False)
-        self.aux_loss_coef = getattr(model.config, "router_aux_loss_coef", 0.0)
         self.calculate_KL = calculate_kl
         if self.calculate_KL and args.train_sampling_strategy != "sequential":
             raise ValueError(
@@ -667,13 +758,55 @@ class KTOTrainer(_BaseTrainer):
             raise ValueError(
                 "Actual (not effective) batch size must be > 1. KTO will not work properly because the KL term will be equivalent to the implied reward."
             )
-        if self.aux_loss_enabled and self.aux_loss_coef == 0.0:
-            logger.warning(
-                "You set `output_router_logits` to `True` in the model config, but `router_aux_loss_coef` is set to "
-                "`0.0`, meaning the auxiliary loss will not be used. Either set `router_aux_loss_coef` to a value "
-                "greater than `0.0`, or set `output_router_logits` to `False` if you don't want to use the auxiliary "
-                "loss.",
-            )
+        # Liger loss
+        self.use_liger_kernel = args.use_liger_kernel
+        if self.use_liger_kernel:
+            if not is_liger_kernel_available():
+                raise ImportError(
+                    "You set `use_liger_kernel=True` but the liger kernel is not available. "
+                    "Please install liger-kernel first: `pip install liger-kernel`"
+                )
+            if self.loss_type in ["apo_zero_unpaired"]:
+                raise ValueError(
+                    "You cannot set `loss_type='apo_zero_unpaired'` with liger-kernel."
+                    "Only KTO loss is supported with liger-kernel."
+                )
+            if compute_metrics is not None:
+                raise ValueError(
+                    "compute_metrics is not supported with the Liger kernel. compute_metrics requires to be able to "
+                    "recover the logits from the forward pass, but Liger kernel does not materialize logits."
+                )
+            if self.precompute_ref_logps:
+                raise ValueError(
+                    "Liger KTO loss does not support precomputing reference log probabilities. Either disable "
+                    "`precompute_ref_log_probs` or set `use_liger_kernel` to False."
+                )
+            if is_peft_model(model):
+                # The Liger fused KTO loss multiplies the hidden states by `lm_head.weight` directly. When the LM head
+                # is targeted by a PEFT adapter (`"lm_head"` in `target_modules`), `lm_head.weight` is the frozen base
+                # weight and the trainable adapter parameters live in separate submodules that Liger never sees. The
+                # head adapter would silently receive no gradient, so the model trains as if `lm_head` were frozen.
+                # Fail loudly rather than train a silently-frozen head.
+                output_embeddings = model.get_output_embeddings()
+                if isinstance(output_embeddings, BaseTunerLayer):
+                    raise ValueError(
+                        "`use_liger_kernel=True` is incompatible with applying a PEFT adapter to `lm_head`. The Liger "
+                        "fused KTO loss reads `lm_head.weight` directly, so the adapter on the head is ignored and "
+                        "never trained. Either remove `'lm_head'` from your `target_modules`, or set "
+                        "`use_liger_kernel=False`."
+                    )
+                # Prompt-learning methods (PromptTuning, PrefixTuning, P-Tuning) inject virtual tokens via
+                # `PeftModel.forward()`. The Liger KTO loss bypasses `PeftModel.forward()` by calling the backbone
+                # directly, so virtual tokens are never prepended and the loss is computed on the wrong sequence.
+                # Fail loudly rather than train on a silently corrupted input.
+                if any(isinstance(cfg, PromptLearningConfig) for cfg in model.peft_config.values()):
+                    raise ValueError(
+                        "`use_liger_kernel=True` is incompatible with prompt-learning PEFT methods (PromptTuning, "
+                        "PrefixTuning, P-Tuning). The Liger KTO loss bypasses `PeftModel.forward()` by calling the "
+                        "backbone directly, so virtual tokens are never prepended and the loss is computed on the "
+                        "wrong sequence. Use a weight-based adapter such as LoRA instead, or set "
+                        "`use_liger_kernel=False`."
+                    )
 
         # Dataset
         # Skip dataset preparation for VLMs: tokenization and image processing happen on-the-fly in the collator.
@@ -714,6 +847,18 @@ class KTOTrainer(_BaseTrainer):
         else:
             self.maybe_activation_offload_context = contextlib.nullcontext()
 
+        # MoE load-balancing auxiliary loss, applied to Mixture-of-Experts models (no effect otherwise)
+        text_config = model.config.get_text_config()
+        is_moe = getattr(text_config, "output_router_logits", None) is not None
+        self.aux_loss_enabled = is_moe and args.router_aux_loss_coef != 0.0
+        self.router_aux_loss_coef = args.router_aux_loss_coef
+        if self.aux_loss_enabled and self.use_liger_kernel:
+            raise ValueError(
+                "Liger KTO loss does not support the Mixture-of-Experts load-balancing auxiliary loss, because it "
+                "fuses the loss without materializing the router logits. Either set `router_aux_loss_coef` to `0.0` "
+                "to disable the auxiliary loss, or set `use_liger_kernel` to False."
+            )
+
         # Reference model
         if ref_model is None:
             if is_peft_model(self.model) or args.precompute_ref_log_probs:
@@ -740,6 +885,7 @@ class KTOTrainer(_BaseTrainer):
 
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
+        self._total_train_tokens = 0
 
         # Gradient accumulation requires scaled loss. Normally, loss scaling in the parent class depends on whether the
         # model accepts loss-related kwargs. Since we compute our own loss, this check is irrelevant. We set
@@ -776,34 +922,9 @@ class KTOTrainer(_BaseTrainer):
                 )
             self.add_callback(SyncRefModelCallback(ref_model=self.ref_model, accelerator=self.accelerator))
 
-        self.use_liger_kernel = args.use_liger_kernel
-        # Import Liger kernel if enabled
+        # The Liger loss is built here, because it needs `self.ref_model`
         if self.use_liger_kernel:
-            if not is_liger_kernel_available():
-                raise ImportError(
-                    "You set `use_liger_kernel=True` but the liger kernel is not available. "
-                    "Please install liger-kernel first: `pip install liger-kernel`"
-                )
-            if self.loss_type in ["apo_zero_unpaired"]:
-                raise ValueError(
-                    "You cannot set `loss_type='apo_zero_unpaired'` with liger-kernel."
-                    "Only KTO loss is supported with liger-kernel."
-                )
-            if compute_metrics is not None:
-                raise ValueError(
-                    "compute_metrics is not supported with the Liger kernel. compute_metrics requires to be able to "
-                    "recover the logits from the forward pass, but Liger kernel does not materialize logits."
-                )
-            if self.precompute_ref_logps:
-                raise ValueError(
-                    "You cannot use `precompute_ref_log_probs=True` with liger kernel. Please set "
-                    "`precompute_ref_log_probs=False`."
-                )
-            if is_peft_model(self.model):
-                raise ValueError(
-                    "You cannot use `use_liger_kernel=True` with Peft models. Please set `use_liger_kernel=False`."
-                )
-            self.liger_loss_fn = LigerFusedLinearKTOLoss(beta=self.beta, use_ref_model=(self.ref_model is not None))
+            self.liger_loss = LigerFusedLinearKTOLoss(beta=self.beta, use_ref_model=(self.ref_model is not None))
 
         if self.precompute_ref_logps:
             if isinstance(self.train_dataset, IterableDataset) or isinstance(
@@ -833,10 +954,11 @@ class KTOTrainer(_BaseTrainer):
                         self.args.precompute_ref_batch_size or self.args.per_device_eval_batch_size,
                     )
 
+    @staticmethod
     def _tokenize(
-        self,
         processing_class: PreTrainedTokenizerBase | ProcessorMixin,
         input: str | list,
+        is_vlm: bool,
         **kwargs,
     ) -> dict[str, list]:
         """Tokenize a single example for dataset preprocessing.
@@ -849,6 +971,9 @@ class KTOTrainer(_BaseTrainer):
                 The tokenizer or processor to use.
             input (`str` or `list`):
                 A string for non-conversational input, or a list of message dicts for conversational input.
+            is_vlm (`bool`):
+                Whether the processing class is a VLM processor, requiring multimodal message preparation and batch
+                dimension normalization.
             **kwargs:
                 Forwarded to `apply_chat_template` (e.g. `add_generation_prompt`, `return_assistant_tokens_mask`).
 
@@ -856,13 +981,13 @@ class KTOTrainer(_BaseTrainer):
             `dict` with at least an `"input_ids"` key mapping to a flat `list[int]`.
         """
         if isinstance(input, list):  # conversational: list of message dicts
-            if self._is_vlm:
+            if is_vlm:
                 input = prepare_multimodal_messages(input)
             result = processing_class.apply_chat_template(input, tokenize=True, return_dict=True, **kwargs)
         else:  # non-conversational: plain text string
             result = processing_class(text=input)
         # VLMs emit a batch dimension even for single examples; unwrap it
-        if self._is_vlm:
+        if is_vlm:
             return {k: v[0] for k, v in result.items()}
         return result
 
@@ -920,7 +1045,7 @@ class KTOTrainer(_BaseTrainer):
         self,
         dataset: Dataset | IterableDataset,
         processing_class: PreTrainedTokenizerBase | ProcessorMixin,
-        args: KTOConfig | None,
+        args: KTOConfig,
         dataset_name: str,
     ) -> Dataset | IterableDataset:
         # Build the kwargs for the `map` function
@@ -962,24 +1087,34 @@ class KTOTrainer(_BaseTrainer):
             if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                 map_kwargs["desc"] = f"Tokenizing {dataset_name} dataset"
 
-            def tokenize_fn(example, processing_class):
+            # Bind `_tokenize` to a local so `tokenize_fn` doesn't capture `self`: a closure over `self` makes the map
+            # function unhashable, forcing a random fingerprint that silently disables dataset caching.
+            tokenize = self._tokenize
+
+            def tokenize_fn(example, processing_class, is_vlm):
+                tools = example.get("tools")
+                tools = json.loads(tools) if isinstance(tools, str) else tools
                 if is_conversational(example):
                     chat_template_kwargs = example.get("chat_template_kwargs", {})
-                    prompt_ids = self._tokenize(
+                    prompt_ids = tokenize(
                         processing_class,
                         example["prompt"],
+                        is_vlm,
+                        tools=tools,
                         add_generation_prompt=True,
                         **chat_template_kwargs,
                     )["input_ids"]
-                    prompt_completion_ids = self._tokenize(
+                    prompt_completion_ids = tokenize(
                         processing_class,
                         example["prompt"] + example["completion"],
+                        is_vlm,
+                        tools=tools,
                         **chat_template_kwargs,
                     )["input_ids"]
                 else:
-                    prompt_ids = self._tokenize(processing_class, example["prompt"])["input_ids"]
-                    prompt_completion_ids = self._tokenize(
-                        processing_class, example["prompt"] + example["completion"]
+                    prompt_ids = tokenize(processing_class, example["prompt"], is_vlm)["input_ids"]
+                    prompt_completion_ids = tokenize(
+                        processing_class, example["prompt"] + example["completion"], is_vlm
                     )["input_ids"]
 
                 if not prompt_completion_ids[: len(prompt_ids)] == prompt_ids:
@@ -994,7 +1129,9 @@ class KTOTrainer(_BaseTrainer):
                     "completion_ids": prompt_completion_ids[len(prompt_ids) :],
                 }
 
-            dataset = dataset.map(tokenize_fn, fn_kwargs={"processing_class": processing_class}, **map_kwargs)
+            dataset = dataset.map(
+                tokenize_fn, fn_kwargs={"processing_class": processing_class, "is_vlm": self._is_vlm}, **map_kwargs
+            )
 
             # Get KL datasets if needed
             if self.calculate_KL:
@@ -1043,6 +1180,7 @@ class KTOTrainer(_BaseTrainer):
                     "image",
                     "images",
                     "label",
+                    "tools",
                     "chat_template_kwargs",
                 ]
             else:
@@ -1062,9 +1200,7 @@ class KTOTrainer(_BaseTrainer):
             if train_dataset is None or not has_length(train_dataset):
                 return None
             return SequentialSampler(train_dataset)
-        return super()._get_train_sampler(
-            train_dataset
-        )  # Override training step to add activation offloading context.
+        return super()._get_train_sampler(train_dataset)
 
     def _precompute_ref_logps(self, dataset: Dataset, name: str, batch_size: int) -> Dataset:
         model_hash = hash_module(self.ref_model or self.model)
@@ -1216,13 +1352,7 @@ class KTOTrainer(_BaseTrainer):
         num_chosen = labels.sum().to(self.accelerator.device)
         num_rejected = (len(labels) - num_chosen).to(self.accelerator.device)
 
-        policy_KL_logps = self._compute_kl_logps(model, batch)
-        ref_KL_logps = self._compute_kl_logps(self.ref_model, batch)
-        if self.calculate_KL:
-            kl = (policy_KL_logps - ref_KL_logps).mean().detach()
-            kl = self.accelerator.gather_for_metrics(kl).mean().clamp(min=0)
-        else:
-            kl = torch.zeros(1).to(self.accelerator.device)
+        KL_logps = self._compute_kl_logps(model, batch)
 
         _non_model_keys = {
             "completion_mask",
@@ -1237,8 +1367,9 @@ class KTOTrainer(_BaseTrainer):
         }
         model_kwargs = {k: v for k, v in batch.items() if k not in _non_model_keys}
         model_kwargs["use_cache"] = False
-        if self.aux_loss_enabled:
-            model_kwargs["output_router_logits"] = True
+
+        if is_peft_model(model):
+            model = model.base_model.model
 
         # `base_model` gives the inner module (skipping `lm_head`) — text decoder for LMs, multimodal wrapper for
         # VLMs (so vision-token injection runs before the text decoder). `get_decoder()` won't do: on VLMs it
@@ -1246,17 +1377,45 @@ class KTOTrainer(_BaseTrainer):
         # Pre-5.0 transformers VLMs set `base_model_prefix = ""` so `base_model is self` (re-runs `lm_head`).
         # Fall back to `.model` there.
         if self._is_vlm and Version(transformers.__version__) < Version("5.0.0"):
-            backbone, ref_backbone = model.model, self.ref_model.model
+            backbone = model.model
         else:
-            backbone, ref_backbone = model.base_model, self.ref_model.base_model
+            backbone = model.base_model
 
         outputs = backbone(**model_kwargs)
+        lm_head = model.get_output_embeddings()
 
         # reference model
         with torch.no_grad(), disable_gradient_checkpointing(self.model, self.args.gradient_checkpointing_kwargs):
-            ref_outputs = ref_backbone(**{k: v for k, v in model_kwargs.items() if k != "output_router_logits"})
-        lm_head = model.get_output_embeddings()
-        ref_lm_head = self.ref_model.get_output_embeddings()
+            if self.ref_model is None:
+                # PEFT model with no explicit reference model: recover reference behaviour by disabling / switching to
+                # the frozen "ref" adapter, exactly as _compute_loss does for logit-based reference computation.
+                model_unwrapped = self.accelerator.unwrap_model(self.model)
+                with use_adapter(
+                    model_unwrapped, adapter_name="ref" if "ref" in model_unwrapped.peft_config else None
+                ):
+                    ref_KL_logps = self._compute_kl_logps(self.model, batch)
+                    ref_model_inner = model_unwrapped.base_model.model
+                    if self._is_vlm and Version(transformers.__version__) < Version("5.0.0"):
+                        ref_backbone = ref_model_inner.model
+                    else:
+                        ref_backbone = ref_model_inner.base_model
+                    ref_outputs = ref_backbone(**model_kwargs)
+                    ref_lm_head = model_unwrapped.get_output_embeddings()
+            else:
+                ref_KL_logps = self._compute_kl_logps(self.ref_model, batch)
+                ref_model_inner = self.ref_model.base_model.model if is_peft_model(self.ref_model) else self.ref_model
+                if self._is_vlm and Version(transformers.__version__) < Version("5.0.0"):
+                    ref_backbone = ref_model_inner.model
+                else:
+                    ref_backbone = ref_model_inner.base_model
+                ref_outputs = ref_backbone(**model_kwargs)
+                ref_lm_head = self.ref_model.get_output_embeddings()
+
+        if self.calculate_KL:
+            kl = (KL_logps - ref_KL_logps).mean().detach()
+            kl = self.accelerator.gather_for_metrics(kl).mean().clamp(min=0)
+        else:
+            kl = torch.zeros(1).to(self.accelerator.device)
 
         shift_completion_mask = batch["completion_mask"][:, 1:]
         target = batch["input_ids"][:, 1:].clone()
@@ -1272,7 +1431,7 @@ class KTOTrainer(_BaseTrainer):
                 chosen_rewards_sum,
                 rejected_rewards_sum,
             ),
-        ) = self.liger_loss_fn(
+        ) = self.liger_loss(
             _input=outputs.last_hidden_state[:, :-1],
             lin_weight=lm_head.weight,
             target=target,
@@ -1283,10 +1442,14 @@ class KTOTrainer(_BaseTrainer):
             ref_bias=ref_lm_head.bias if hasattr(lm_head, "bias") else None,
             kl=kl,
         )
-        if self.aux_loss_enabled:
-            loss += self.aux_loss_coef * outputs.aux_loss
 
         self._metrics[mode]["kl"].append(kl.item())
+
+        # Number of tokens
+        if mode == "train":
+            num_tokens_in_batch = self.accelerator.gather_for_metrics(batch["attention_mask"].sum()).sum().item()
+            self._total_train_tokens += num_tokens_in_batch
+        self._metrics[mode]["num_tokens"] = [self._total_train_tokens]
 
         all_num_chosen = self.accelerator.gather_for_metrics(num_chosen).sum().item()
         all_num_rejected = self.accelerator.gather_for_metrics(num_rejected).sum().item()
@@ -1329,7 +1492,7 @@ class KTOTrainer(_BaseTrainer):
         num_chosen = labels.sum().to(self.accelerator.device)
         num_rejected = (len(labels) - num_chosen).to(self.accelerator.device)
 
-        policy_KL_logps = self._compute_kl_logps(model, batch)
+        KL_logps = self._compute_kl_logps(model, batch)
 
         _non_model_keys = {
             "completion_mask",
@@ -1347,8 +1510,6 @@ class KTOTrainer(_BaseTrainer):
             model_kwargs["output_router_logits"] = True
 
         outputs = model(**model_kwargs)
-        if self.aux_loss_enabled:
-            aux_loss = outputs.aux_loss
 
         shift_logits = outputs.logits[:, :-1, :]
         per_token_logps = selective_log_softmax(shift_logits, batch["input_ids"][:, 1:])
@@ -1366,10 +1527,10 @@ class KTOTrainer(_BaseTrainer):
         chosen_idx = torch.nonzero(bool_labels, as_tuple=False).view(-1)
         rejected_idx = torch.nonzero(~bool_labels, as_tuple=False).view(-1)
 
-        policy_chosen_logps = completion_logps.index_select(0, chosen_idx)
-        policy_rejected_logps = completion_logps.index_select(0, rejected_idx)
-        policy_chosen_logits = outputs.logits.index_select(0, chosen_idx)
-        policy_rejected_logits = outputs.logits.index_select(0, rejected_idx)
+        chosen_logps = completion_logps.index_select(0, chosen_idx)
+        rejected_logps = completion_logps.index_select(0, rejected_idx)
+        chosen_logits = outputs.logits.index_select(0, chosen_idx)
+        rejected_logits = outputs.logits.index_select(0, rejected_idx)
 
         if self.precompute_ref_logps:
             ref_chosen_logps = batch["ref_logps"].index_select(0, chosen_idx)
@@ -1399,13 +1560,13 @@ class KTOTrainer(_BaseTrainer):
             ref_rejected_logps = ref_completion_logps.index_select(0, rejected_idx)
 
         if self.calculate_KL:
-            kl = (policy_KL_logps - ref_KL_logps).mean().detach()
+            kl = (KL_logps - ref_KL_logps).mean().detach()
             kl = self.accelerator.gather_for_metrics(kl).mean().clamp(min=0)
         else:
-            kl = torch.zeros(1).to(policy_chosen_logps.device)
+            kl = torch.zeros(1).to(chosen_logps.device)
         # Chosen losses
-        if policy_chosen_logps.shape[0] != 0 or ref_chosen_logps.shape[0] != 0:
-            chosen_logratios = policy_chosen_logps - ref_chosen_logps
+        if chosen_logps.shape[0] != 0 or ref_chosen_logps.shape[0] != 0:
+            chosen_logratios = chosen_logps - ref_chosen_logps
 
             if self.loss_type == "kto":
                 # Eqn (7) of the KTO paper (https://huggingface.co/papers/2402.01306)
@@ -1422,8 +1583,8 @@ class KTOTrainer(_BaseTrainer):
             chosen_losses = torch.Tensor([]).to(self.accelerator.device)
             chosen_rewards = torch.Tensor([]).to(self.accelerator.device)
         # Rejected losses
-        if policy_rejected_logps.shape[0] != 0 or ref_rejected_logps.shape[0] != 0:
-            rejected_logratios = policy_rejected_logps - ref_rejected_logps
+        if rejected_logps.shape[0] != 0 or ref_rejected_logps.shape[0] != 0:
+            rejected_logratios = rejected_logps - ref_rejected_logps
 
             if self.loss_type == "kto":
                 rejected_losses = 1 - F.sigmoid(self.beta * (kl - rejected_logratios))
@@ -1442,6 +1603,24 @@ class KTOTrainer(_BaseTrainer):
 
         self._metrics[mode]["kl"].append(kl.item())
 
+        # Entropy
+        per_token_entropy = entropy_from_logits(shift_logits.detach())
+        mask = batch["completion_mask"][:, 1:]
+        entropy_sum = (per_token_entropy * mask).sum()
+        total_tokens = mask.sum()
+
+        # Gather counts across ranks and weight-average
+        entropy_sum = self.accelerator.gather_for_metrics(entropy_sum).sum()
+        total_tokens = self.accelerator.gather_for_metrics(total_tokens).sum()
+        entropy = (entropy_sum / total_tokens).item() if total_tokens > 0 else 0.0
+        self._metrics[mode]["entropy"].append(entropy)
+
+        # Number of tokens
+        if mode == "train":
+            num_tokens_in_batch = self.accelerator.gather_for_metrics(batch["attention_mask"].sum()).sum().item()
+            self._total_train_tokens += num_tokens_in_batch
+        self._metrics[mode]["num_tokens"] = [self._total_train_tokens]
+
         all_num_chosen = self.accelerator.gather_for_metrics(num_chosen).sum().item()
         all_num_rejected = self.accelerator.gather_for_metrics(num_rejected).sum().item()
 
@@ -1450,10 +1629,10 @@ class KTOTrainer(_BaseTrainer):
                 self.accelerator.gather_for_metrics(chosen_rewards.nansum()).nansum().item() / all_num_chosen
             )
             self._metrics[mode]["logps/chosen"].append(
-                self.accelerator.gather_for_metrics(policy_chosen_logps.nansum()).nansum().item() / all_num_chosen
+                self.accelerator.gather_for_metrics(chosen_logps.nansum()).nansum().item() / all_num_chosen
             )
             self._metrics[mode]["logits/chosen"].append(
-                self.accelerator.gather_for_metrics(policy_chosen_logits.nansum()).nansum().item() / all_num_chosen
+                self.accelerator.gather_for_metrics(chosen_logits.nansum()).nansum().item() / all_num_chosen
             )
 
         if all_num_rejected > 0:
@@ -1461,10 +1640,10 @@ class KTOTrainer(_BaseTrainer):
                 self.accelerator.gather_for_metrics(rejected_rewards.nansum()).nansum().item() / all_num_rejected
             )
             self._metrics[mode]["logps/rejected"].append(
-                self.accelerator.gather_for_metrics(policy_rejected_logps.nansum()).nansum().item() / all_num_rejected
+                self.accelerator.gather_for_metrics(rejected_logps.nansum()).nansum().item() / all_num_rejected
             )
             self._metrics[mode]["logits/rejected"].append(
-                self.accelerator.gather_for_metrics(policy_rejected_logits.nansum()).nansum().item() / all_num_rejected
+                self.accelerator.gather_for_metrics(rejected_logits.nansum()).nansum().item() / all_num_rejected
             )
 
         if all_num_chosen > 0 and all_num_rejected > 0:
@@ -1474,7 +1653,9 @@ class KTOTrainer(_BaseTrainer):
 
         loss = losses.nanmean()
         if self.aux_loss_enabled:
-            loss += self.aux_loss_coef * aux_loss
+            aux_loss = outputs.aux_loss
+            loss = loss + self.router_aux_loss_coef * aux_loss
+            self._metrics[mode]["aux_loss"].append(self.accelerator.gather_for_metrics(aux_loss).mean().item())
 
         return (loss, outputs) if return_outputs else loss
 
