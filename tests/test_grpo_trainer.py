@@ -1324,6 +1324,36 @@ class TestGRPOTrainer(TrlTestCase):
 
         torch.testing.assert_close(off_policy_mask_keep, expected_mask_keep)
 
+    def test_sampling_logps_none_yields_neutral_importance_ratio(self):
+        # Regression test for #6166: when vLLM returns a NaN logprob for a token, `extract_logprobs` replaces it
+        # with `None`, which crashes `torch.tensor(logps)` in `_generate_and_score_completions` with
+        # "Could not infer dtype of NoneType". The fix builds the tensor with those positions as NaN, then zeroes
+        # them out of the importance-sampling difference so the ratio is exactly 1 (a no-op correction) for that
+        # token, while every other token is untouched. This asserts that numerical contract on CPU (the full path
+        # is exercised by `test_train_vllm_importance_sampling_correction`, which requires vLLM).
+        sampling_per_token_logps_list = [[-0.5, None, -0.5]]  # middle token had a NaN logprob -> None from vLLM
+
+        # A raw `torch.tensor` on a list containing None reproduces the crash.
+        with pytest.raises(RuntimeError, match="Could not infer dtype of NoneType"):
+            torch.tensor(sampling_per_token_logps_list[0])
+
+        # The fix maps None -> NaN so the tensor builds, then neutralizes the difference at NaN positions.
+        sampling_per_token_logps = torch.tensor(
+            [[float("nan") if x is None else x for x in logps] for logps in sampling_per_token_logps_list]
+        )
+        old_per_token_logps = torch.tensor([[-0.3, -0.7, -0.2]])
+        mask = torch.ones_like(sampling_per_token_logps)
+
+        per_token_logps_diff = (old_per_token_logps - sampling_per_token_logps) * mask
+        per_token_logps_diff = torch.nan_to_num(per_token_logps_diff, nan=0.0)
+        ratio = torch.exp(per_token_logps_diff)
+
+        # The None/NaN token gets a neutral ratio of exactly 1.0; the others match the un-patched computation.
+        assert torch.isfinite(ratio).all(), "NaN leaked into the importance-sampling ratio"
+        torch.testing.assert_close(ratio[0, 1], torch.tensor(1.0))
+        expected_clean = torch.exp(old_per_token_logps[0, [0, 2]] - sampling_per_token_logps[0, [0, 2]])
+        torch.testing.assert_close(ratio[0, [0, 2]], expected_clean)
+
     def test_train_with_off_policy_mask(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 

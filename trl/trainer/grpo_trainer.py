@@ -2113,7 +2113,13 @@ class GRPOTrainer(_BaseTrainer):
             completion_mask, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
         ).to(device=device)
         if sampling_per_token_logps_list is not None:
-            sampling_per_token_logps = [torch.tensor(logps) for logps in sampling_per_token_logps_list]
+            # vLLM replaces a NaN token logprob with `None` (see `extract_logprobs`); map it back to NaN so the
+            # tensor builds (`torch.tensor([..., None, ...])` raises "Could not infer dtype of NoneType"). The NaN
+            # positions are neutralized in the importance-sampling ratio below so they contribute no correction.
+            sampling_per_token_logps = [
+                torch.tensor([float("nan") if x is None else x for x in logps])
+                for logps in sampling_per_token_logps_list
+            ]
             sampling_per_token_logps = pad(
                 sampling_per_token_logps,
                 padding_value=0.0,
@@ -2289,6 +2295,9 @@ class GRPOTrainer(_BaseTrainer):
             if self.use_vllm and self.vllm_importance_sampling_correction:
                 mask = completion_mask if tool_mask is None else completion_mask * tool_mask
                 per_token_logps_diff = (old_per_token_logps - sampling_per_token_logps) * mask
+                # Tokens whose sampling logprob was NaN (unavailable from vLLM) get a zero difference, so their
+                # importance ratio is exactly 1 (no correction) rather than propagating NaN through the loss.
+                per_token_logps_diff = torch.nan_to_num(per_token_logps_diff, nan=0.0)
 
                 sequence_level_is = self.vllm_importance_sampling_mode in ["sequence_mask", "sequence_truncate"]
                 if sequence_level_is:
