@@ -68,6 +68,7 @@ def build_config(**overrides):
         uld_skip_student_eos=False,
         uld_skip_teacher_eos=False,
         use_extended_uld=True,
+        uld_token_merge_strategy="observed",
         uld_use_hybrid_loss=False,
         uld_hybrid_matched_weight=None,
         uld_hybrid_unmatched_weight=None,
@@ -712,6 +713,206 @@ class TestGOLDTrainerDataset(TrlTestCase):
         assert 1 in row5["completion_mask"]
 
 
+
+    def test_chatml_collator_truncates_keeping_completion_end(self, llama_tokenizer):
+        """When the rendered chat-template message exceeds max_length, the collator must
+        keep the LAST max_length tokens (the model's recent context), not the first. Also verifies byte_offsets are sliced
+        consistently with input_ids."""
+        long_user = "Please summarize:\n" + ("very long context. " * 200)  # well over 512 tokens
+        long_assistant = "summary content goes here. " * 60
+        examples = [
+            {
+                "messages": [
+                    {"role": "user", "content": long_user},
+                    {"role": "assistant", "content": long_assistant},
+                ]
+            }
+        ]
+    
+        max_length = 256
+        collator = DataCollatorForChatML(tokenizer=llama_tokenizer, max_length=max_length)
+        batch = collator(examples)
+    
+        # Truncation must produce exactly max_length tokens (no left padding when full)
+        assert batch["input_ids"].shape[1] == max_length
+    
+        # The last token of the kept sequence must match the EOS / final assistant token
+        # of the full untruncated tokenization — proving we kept the END of the completion.
+        backend = llama_tokenizer.backend_tokenizer
+        formatted_message = llama_tokenizer.apply_chat_template(
+            examples[0]["messages"], add_generation_prompt=False, tokenize=False
+        )
+        [(full_ids, _)] = encode_with_byte_offsets(backend, [formatted_message], add_special_tokens=False)
+        assert batch["input_ids"][0, -1].item() == full_ids[-1]
+        assert tuple(batch["byte_offsets"][0, -1].tolist())[1] > 0  # last completion-relative offset is non-zero
+    
+    
+
+    def test_prepared_tokenized_rows_keep_completion_after_truncation(self, llama_tokenizer):
+        """When a GOLD row's prompt overflows max_length, dataset prep must keep the LAST max_length tokens (the
+        completion end), tracking the prompt/completion boundary via completion_mask so the collator labels the completion
+        instead of masking the whole sequence."""
+        long_user = "Please summarize:\n" + ("very long context. " * 200)  # prompt alone overflows max_length
+        assistant = "the short answer"
+        dataset = Dataset.from_dict(
+            {"messages": [[{"role": "user", "content": long_user}, {"role": "assistant", "content": assistant}]]}
+        )
+    
+        max_length = 64
+        args = SimpleNamespace(
+            dataset_num_proc=None,
+            dataset_text_field="text",
+            max_length=max_length,
+            packing_strategy="bfd",
+            use_liger_kernel=False,
+        )
+        trainer = GOLDTrainer.__new__(GOLDTrainer)
+        prepared = trainer._prepare_dataset_with_original_text(
+            dataset, llama_tokenizer, args, packing=False, formatting_func=None, dataset_name="train"
+        )
+        row = prepared[0]
+    
+        assert len(row["input_ids"]) == max_length  # truncated, not dropped
+        assert 1 in row["completion_mask"]  # completion survived front-truncation
+    
+        # original_prompt_text / original_completion_text must reflect the truncated ids the student kept,
+        # not the pre-truncation strings (otherwise the teacher would re-encode a longer prompt context).
+        completion_start = row["completion_mask"].index(1)
+        decode = partial(llama_tokenizer.decode, skip_special_tokens=False, clean_up_tokenization_spaces=False)
+        assert row["original_prompt_text"] == decode(row["input_ids"][:completion_start])
+        assert row["original_completion_text"] == decode(row["input_ids"][completion_start:])
+    
+        collator = DataCollatorForChatML(tokenizer=llama_tokenizer, max_length=max_length)
+        batch = collator([row])
+    
+        # The collator labels exactly the tracked completion tokens — never all -100 — and the assistant text survives.
+        completion_ids = [tid for tid, m in zip(row["input_ids"], row["completion_mask"], strict=False) if m == 1]
+        supervised = [label for label in batch["labels"][0].tolist() if label != -100]
+        assert supervised == completion_ids
+        assert assistant in llama_tokenizer.decode(completion_ids)
+    
+    
+
+    def test_prepared_tokenized_rows_rebase_byte_offsets_when_truncation_eats_into_completion(self, llama_tokenizer):
+        """When truncation drops the front of the completion (``drop > completion_start``), the kept byte_offsets
+        reference bytes in the original completion text — but ``original_completion_text`` is decoded fresh from the kept
+        ids and starts at byte 0. The kept offsets must be rebased so they match the teacher's re-encoding."""
+        short_prompt = "Q:"
+        long_completion = "word " * 300  # completion alone overflows max_length
+        dataset = Dataset.from_dict({"prompt": [short_prompt], "completion": [long_completion]})
+    
+        max_length = 32
+        args = SimpleNamespace(
+            dataset_num_proc=None,
+            dataset_text_field="text",
+            max_length=max_length,
+            packing_strategy="bfd",
+            use_liger_kernel=False,
+        )
+        trainer = GOLDTrainer.__new__(GOLDTrainer)
+        prepared = trainer._prepare_dataset_with_original_text(
+            dataset, llama_tokenizer, args, packing=False, formatting_func=None, dataset_name="train"
+        )
+        row = prepared[0]
+    
+        assert len(row["input_ids"]) == max_length
+        # Prompt is so short that truncation ate into the completion: no prompt tokens survive.
+        assert row["completion_mask"] == [1] * max_length
+    
+        # First kept completion token must start at byte 0 of the new (truncated) original_completion_text.
+        assert tuple(row["byte_offsets"][0]) == (0, len(b"word "))
+    
+    
+
+    def test_prepare_dataset_messages_uses_last_assistant_turn(self, qwen_tokenizer):
+        messages = [
+            {"role": "system", "content": "Be terse."},
+            {"role": "user", "content": "First?"},
+            {"role": "assistant", "content": "One."},
+            {"role": "user", "content": "Second?"},
+            {"role": "assistant", "content": "Two."},
+        ]
+        dataset = Dataset.from_dict({"messages": [messages]})
+        args = SimpleNamespace(
+            dataset_num_proc=None,
+            dataset_text_field="text",
+            max_length=512,
+            packing_strategy="bfd",
+            use_liger_kernel=False,
+        )
+        trainer = GOLDTrainer.__new__(GOLDTrainer)
+    
+        prepared = trainer._prepare_dataset_with_original_text(
+            dataset, qwen_tokenizer, args, packing=False, formatting_func=None, dataset_name="train"
+        )
+        row = prepared[0]
+        expected_prompt = qwen_tokenizer.apply_chat_template(messages[:-1], add_generation_prompt=True, tokenize=False)
+        expected_full = qwen_tokenizer.apply_chat_template(messages, add_generation_prompt=False, tokenize=False)
+    
+        assert row["original_prompt_text"] == expected_prompt
+        assert row["original_completion_text"] == expected_full[len(expected_prompt) :]
+        assert "One." not in row["original_completion_text"]
+        assert "Two." in row["original_completion_text"]
+    
+        completion_ids = [tid for tid, mask in zip(row["input_ids"], row["completion_mask"], strict=True) if mask == 1]
+        decoded_completion = qwen_tokenizer.decode(
+            completion_ids, skip_special_tokens=False, clean_up_tokenization_spaces=False
+        )
+        assert decoded_completion == row["original_completion_text"]
+    
+    
+
+    def test_alignment_groups_cover_all_tokens(self, llama_tokenizer, qwen_tokenizer):
+        config = build_config()
+        loss = ULDLoss(config, student_tokenizer=llama_tokenizer, teacher_tokenizer=qwen_tokenizer)
+    
+        text = "SmolLM3-3B says hi 😊 to 你好."
+        [(student_ids, student_offs)] = encode_with_byte_offsets(
+            llama_tokenizer.backend_tokenizer, [text], add_special_tokens=False
+        )
+        [(teacher_ids, teacher_offs)] = encode_with_byte_offsets(
+            qwen_tokenizer.backend_tokenizer, [text], add_special_tokens=False
+        )
+    
+        student_groups, teacher_groups = loss._align_by_byte_offsets(student_offs, teacher_offs)
+    
+        assert len(student_groups) == len(teacher_groups)
+        assert sorted(idx for group in student_groups for idx in group) == list(range(len(student_ids)))
+        assert sorted(idx for group in teacher_groups for idx in group) == list(range(len(teacher_ids)))
+        for student_group, teacher_group in zip(student_groups, teacher_groups, strict=True):
+            student_span = (student_offs[student_group[0]][0], student_offs[student_group[-1]][1])
+            teacher_span = (teacher_offs[teacher_group[0]][0], teacher_offs[teacher_group[-1]][1])
+            assert student_span == teacher_span
+    
+    
+
+    def test_on_policy_completion_byte_offsets_match_encode_offsets(self, smollm_tokenizer, qwen_tokenizer):
+        """On-policy offsets are derived from the generated token ids directly (per-token piece byte length, no
+        decode-then-re-encode round-trip). For ByteLevel BPE — the family of every cross-tokenizer pair GOLD targets
+        (SmolLM, Qwen, Llama 3+, …) — those per-token spans match what `encode_with_byte_offsets` produces on the same
+        text, so student and teacher offsets share one byte coordinate system."""
+        trainer = GOLDTrainer.__new__(GOLDTrainer)
+        trainer.use_uld_loss = True
+        trainer.teacher_tokenizer = qwen_tokenizer
+        trainer.uld_loss_fn = SimpleNamespace(use_extended_uld=True)
+        trainer.processing_class = smollm_tokenizer
+    
+        completion_text = "hello 你好 😊"
+        [(completion_ids, expected_offsets)] = encode_with_byte_offsets(
+            smollm_tokenizer.backend_tokenizer, [completion_text], add_special_tokens=False
+        )
+        input_ids = [smollm_tokenizer.pad_token_id] + completion_ids
+        labels = [-100] + completion_ids
+        updated_slice = {
+            "input_ids": torch.tensor([input_ids]),
+            "labels": torch.tensor([labels]),
+        }
+    
+        trainer._maybe_add_completion_byte_offsets(updated_slice)
+    
+        assert [tuple(offset) for offset in updated_slice["byte_offsets"][0, 1:].tolist()] == expected_offsets
+    
+    
 class TestULDLoss(TrlTestCase):
     def test_uldloss(self, llama_tokenizer, qwen_tokenizer, smollm_tokenizer):
         def _run_uldloss(config, student_tok, teacher_tok, prompt, completion):
@@ -806,6 +1007,431 @@ class TestULDLoss(TrlTestCase):
         torch.testing.assert_close(loss, expected, atol=1e-6, rtol=1e-5)
 
 
+
+    def test_merge_probabilities_multiplies_split_tokens_observed(self):
+        config = build_config(uld_token_merge_strategy="observed")
+        # Use simple 3-token vocabulary to validate merging behaviour
+        # probs[0] = marginal P(token | context) at position 0 for all vocab tokens
+        # probs[1] = P(token | context, token_0) at position 1 for all vocab tokens
+        probs = torch.tensor([[0.6, 0.3, 0.1], [0.2, 0.5, 0.3]])
+        loss = ULDLoss(config, student_tokenizer=None, teacher_tokenizer=None)
+    
+        # token_ids[1] = 1 means the actual token at position 1 is token ID 1
+        # So we should extract P(token_id=1 | ...) = probs[1, 1] = 0.5
+        token_ids = [0, 1]  # Actual generated tokens
+    
+        merged = loss._merge_probabilities_with_alignment_groups(probs, [[0, 1]], token_ids=token_ids)
+    
+        # Expected: first position's marginal distribution × scalar conditional prob of actual token at later position
+        # P_merged(y) = probs[0](y) × probs[1, token_ids[1]] = probs[0] × probs[1, 1]
+        expected = probs[0] * probs[1, 1]  # probs[1, 1] = 0.5
+        # Expected unnormalized: [0.6 * 0.5, 0.3 * 0.5, 0.1 * 0.5] = [0.30, 0.15, 0.05]
+    
+        torch.testing.assert_close(merged[0], expected)
+    
+    
+
+    def test_merge_probabilities_multiplies_split_tokens_bayesian(self):
+        config = build_config(uld_token_merge_strategy="bayesian")
+        # Use simple 3-token vocabulary to validate merging behaviour
+        # probs[0] = P(token | context) at position 0 for all vocab tokens
+        # probs[1] = P(token | context, token_0) at position 1 for all vocab tokens
+        probs = torch.tensor([[0.6, 0.3, 0.1], [0.2, 0.5, 0.3]])
+        loss = ULDLoss(config, student_tokenizer=None, teacher_tokenizer=None)
+    
+        # token_ids[0] = 0 means the actual token at position 0 is token ID 0
+        token_ids = [0, 1]  # Actual generated tokens
+    
+        merged = loss._merge_probabilities_with_alignment_groups(probs, [[0, 1]], token_ids=token_ids)
+    
+        # Expected: last position's full distribution × scalar prob of actual token at earlier position
+        # P_merged(y) = probs[1](y) × probs[0, token_ids[0]] = probs[1] × probs[0, 0]
+        expected = probs[1] * probs[0, 0]  # probs[0, 0] = 0.6
+        # Expected unnormalized: [0.2 * 0.6, 0.5 * 0.6, 0.3 * 0.6] = [0.12, 0.30, 0.18]
+    
+        torch.testing.assert_close(merged[0], expected)
+    
+    
+
+    def test_compute_distillation_loss_bayesian_shifts_answer_logits(self):
+        # The "bayesian" strategy shifts the answer-logit slice one position earlier (probs[k] predicts token_ids[k]).
+        # This also applies on the positional path (use_extended_uld=False), so check the loss uses the shifted slice.
+        config = build_config(use_extended_uld=False, uld_token_merge_strategy="bayesian")
+        loss_fn = ULDLoss(config, student_tokenizer=None, teacher_tokenizer=None)
+    
+        torch.manual_seed(0)
+        student_logits = torch.randn(1, 3, 4)
+        teacher_logits = torch.randn(1, 3, 4)
+        # Answer span starts at position 1 (size 2), leaving position 0 as the context the shift relies on.
+        student_labels = torch.tensor([[-100, 1, 2]])
+        teacher_labels = torch.tensor([[-100, 1, 2]])
+        student_input_ids = torch.tensor([[0, 1, 2]])
+        teacher_input_ids = torch.tensor([[0, 1, 2]])
+    
+        result = loss_fn._compute_distillation_loss(
+            student_logits, teacher_logits, student_labels, teacher_labels, student_input_ids, teacher_input_ids
+        )
+    
+        # Expected: probabilities come from the shifted positions [0, 1], not the answer positions [1, 2].
+        student_probs = torch.softmax(student_logits[0, 0:2], dim=-1)
+        teacher_probs = torch.softmax(teacher_logits[0, 0:2], dim=-1)
+        student_sorted = student_probs.sort(dim=-1, descending=True).values
+        teacher_sorted = teacher_probs.sort(dim=-1, descending=True).values
+        expected = (student_sorted - teacher_sorted).abs().sum() / student_probs.size(0)
+    
+        torch.testing.assert_close(result, expected)
+    
+        # The "observed" strategy uses the unshifted answer positions [1, 2], so it gives a different loss.
+        observed_fn = ULDLoss(build_config(use_extended_uld=False), student_tokenizer=None, teacher_tokenizer=None)
+        observed = observed_fn._compute_distillation_loss(
+            student_logits, teacher_logits, student_labels, teacher_labels, student_input_ids, teacher_input_ids
+        )
+        assert not torch.allclose(observed, expected)
+    
+    
+
+    def test_compute_distillation_loss_bayesian_skips_zero_start_span_positional(self):
+        # Front-truncation can drop the whole prompt, leaving an answer span that starts at index 0. The first token has
+        # no preceding predictor logit for the shift, so it must be skipped (start += 1, size -= 1) rather than wrapping
+        # around with negative indexing.
+        config = build_config(use_extended_uld=False, uld_token_merge_strategy="bayesian")
+        loss_fn = ULDLoss(config, student_tokenizer=None, teacher_tokenizer=None)
+    
+        torch.manual_seed(0)
+        student_logits = torch.randn(1, 3, 4)
+        teacher_logits = torch.randn(1, 3, 4)
+        # No -100 prefix: the answer span starts at index 0 with size 3.
+        student_labels = torch.tensor([[1, 2, 3]])
+        teacher_labels = torch.tensor([[1, 2, 3]])
+        student_input_ids = torch.tensor([[1, 2, 3]])
+        teacher_input_ids = torch.tensor([[1, 2, 3]])
+    
+        result = loss_fn._compute_distillation_loss(
+            student_logits, teacher_logits, student_labels, teacher_labels, student_input_ids, teacher_input_ids
+        )
+    
+        # After skipping the leading token: start=1, size=2 -> the shifted slice covers positions [0, 1].
+        student_probs = torch.softmax(student_logits[0, 0:2], dim=-1)
+        teacher_probs = torch.softmax(teacher_logits[0, 0:2], dim=-1)
+        student_sorted = student_probs.sort(dim=-1, descending=True).values
+        teacher_sorted = teacher_probs.sort(dim=-1, descending=True).values
+        expected = (student_sorted - teacher_sorted).abs().sum() / student_probs.size(0)
+    
+        torch.testing.assert_close(result, expected)
+    
+    
+
+    def test_compute_distillation_loss_bayesian_zero_loss_when_only_token_dropped(self):
+        # If the answer span is a single token at index 0, skipping it leaves nothing to score -> zero loss, no crash.
+        config = build_config(use_extended_uld=False, uld_token_merge_strategy="bayesian")
+        loss_fn = ULDLoss(config, student_tokenizer=None, teacher_tokenizer=None)
+    
+        student_logits = torch.randn(1, 2, 4)
+        teacher_logits = torch.randn(1, 2, 4)
+        student_labels = torch.tensor([[5, -100]])  # start 0, size 1
+        teacher_labels = torch.tensor([[5, -100]])
+        student_input_ids = torch.tensor([[5, 0]])
+        teacher_input_ids = torch.tensor([[5, 0]])
+    
+        result = loss_fn._compute_distillation_loss(
+            student_logits, teacher_logits, student_labels, teacher_labels, student_input_ids, teacher_input_ids
+        )
+    
+        torch.testing.assert_close(result, torch.zeros_like(result))
+    
+    
+
+    def test_compute_distillation_loss_bayesian_skips_zero_start_span_extended(self):
+        # Same zero-start scenario on the extended (byte-offset) path: the first aligned group pair is dropped instead of
+        # wrapping around, so the loss is finite.
+        config = build_config(use_extended_uld=True, uld_token_merge_strategy="bayesian")
+        loss_fn = ULDLoss(config, student_tokenizer=None, teacher_tokenizer=None)
+    
+        torch.manual_seed(0)
+        student_logits = torch.randn(1, 3, 4)
+        teacher_logits = torch.randn(1, 3, 4)
+        student_labels = torch.tensor([[1, 2, 3]])  # start 0, size 3
+        teacher_labels = torch.tensor([[1, 2, 3]])
+        student_input_ids = torch.tensor([[1, 2, 3]])
+        teacher_input_ids = torch.tensor([[1, 2, 3]])
+        # 1:1 byte alignment over the completion: each token spans one byte.
+        byte_offsets = torch.tensor([[[0, 1], [1, 2], [2, 3]]])
+    
+        result = loss_fn._compute_distillation_loss(
+            student_logits,
+            teacher_logits,
+            student_labels,
+            teacher_labels,
+            student_input_ids,
+            teacher_input_ids,
+            student_byte_offsets=byte_offsets,
+            teacher_byte_offsets=byte_offsets,
+        )
+    
+        assert torch.isfinite(result)
+    
+    
+
+    def test_uldloss_positional_mode_does_not_require_byte_offsets(self):
+        config = build_config(use_extended_uld=False)
+        loss_fn = ULDLoss(config, student_tokenizer=None, teacher_tokenizer=None)
+    
+        student_logits = torch.randn(1, 4, 5)
+        teacher_logits = torch.randn(1, 4, 6)
+        student_labels = torch.tensor([[-100, 1, 2, -100]])
+        teacher_labels = torch.tensor([[-100, 3, 4, -100]])
+        student_input_ids = torch.tensor([[0, 1, 2, 0]])
+        teacher_input_ids = torch.tensor([[0, 3, 4, 0]])
+    
+        loss = loss_fn(
+            student_logits=student_logits,
+            teacher_logits=teacher_logits,
+            student_labels=student_labels,
+            teacher_labels=teacher_labels,
+            student_input_ids=student_input_ids,
+            teacher_input_ids=teacher_input_ids,
+        )
+    
+        assert torch.isfinite(loss)
+    
+    
+
+    def test_initialize_vocabulary_mapping_contains_common_tokens(self, llama_tokenizer, qwen_tokenizer):
+        config = build_config(
+            uld_use_hybrid_loss=True,
+            uld_hybrid_matched_weight=1.0,
+            uld_hybrid_unmatched_weight=0.0,
+        )
+        loss = ULDLoss(config, student_tokenizer=llama_tokenizer, teacher_tokenizer=qwen_tokenizer)
+    
+        common_tokens = ["Hello", "world", "-", "ol", "LM", "3", "B"]
+        for token in common_tokens:
+            student_id = llama_tokenizer.convert_tokens_to_ids(token)
+            teacher_id = qwen_tokenizer.convert_tokens_to_ids(token)
+            assert student_id is not None
+            assert teacher_id is not None
+            assert teacher_id in loss._vocab_mapping
+            assert loss._vocab_mapping[teacher_id] == student_id
+            assert teacher_id in loss._teacher_matched_ids
+            assert student_id in loss._student_matched_ids
+    
+    
+
+    def test_get_start_and_size_answers_skips_prompt_tokens(self):
+        trainer = ULDLoss.__new__(ULDLoss)
+        trainer.ignore_index = -100
+    
+        answers = torch.tensor(
+            [
+                [-100, -100, -100, 10, 20, 30, -100, -100],
+                [-100, 5, 6, 7, -100, -100, -100, -100],
+                [-100, -100, -100, -100, -100, -100, -100, -100],
+            ]
+        )
+    
+        starts, sizes = trainer._get_start_and_size_answers(answers)
+    
+        assert starts == [3, 1, 0]
+        assert sizes == [3, 3, 0]
+    
+    
+    @pytest.mark.slow
+
+    def test_generalized_jsd_loss_accepts_probability_inputs(self):
+        student_probs = torch.tensor([[[0.6, 0.3, 0.1]]])
+        teacher_probs = torch.tensor([[[0.5, 0.4, 0.1]]])
+        mixture = 0.5 * (student_probs + teacher_probs)
+        expected = 0.5 * (
+            torch.sum(student_probs * (torch.log(student_probs) - torch.log(mixture)))
+            + torch.sum(teacher_probs * (torch.log(teacher_probs) - torch.log(mixture)))
+        )
+    
+        loss = GOLDTrainer.generalized_jsd_loss(
+            student_probs,
+            teacher_probs,
+            beta=0.5,
+            reduction="batchmean",
+            logits_are_probs=True,
+        )
+    
+        torch.testing.assert_close(loss, expected)
+    
+    
+
+    def test_uldloss_handles_llama_student_qwen_teacher_sequence(self, llama_tokenizer, qwen_tokenizer):
+        config = build_config(
+            uld_use_hybrid_loss=True,
+            uld_hybrid_matched_weight=0.6,
+            uld_hybrid_unmatched_weight=0.4,
+        )
+        loss_fn = ULDLoss(config, student_tokenizer=llama_tokenizer, teacher_tokenizer=qwen_tokenizer)
+    
+        prompt = "User: Summarize the difference between llamas and alpacas."
+        completion = "Assistant: Llamas are taller while alpacas have softer wool."
+    
+        student_ids, student_labels, student_offsets = encode_prompt_completion(llama_tokenizer, prompt, completion)
+        teacher_ids, teacher_labels, teacher_offsets = encode_prompt_completion(qwen_tokenizer, prompt, completion)
+    
+        pad_id_student = llama_tokenizer.pad_token_id
+        pad_id_teacher = qwen_tokenizer.pad_token_id
+        max_length = max(len(student_ids), len(teacher_ids))
+    
+        student_ids = pad_tokens(student_ids, pad_id_student, max_length)
+        teacher_ids = pad_tokens(teacher_ids, pad_id_teacher, max_length)
+        student_labels = pad_labels(student_labels, max_length)
+        teacher_labels = pad_labels(teacher_labels, max_length)
+        student_byte_offsets = pad_byte_offsets(student_offsets, max_length, padding_side="right").unsqueeze(0)
+        teacher_byte_offsets = pad_byte_offsets(teacher_offsets, max_length, padding_side="right").unsqueeze(0)
+    
+        student_input_ids = torch.tensor([student_ids])
+        teacher_input_ids = torch.tensor([teacher_ids])
+        student_labels = torch.tensor([student_labels])
+        teacher_labels = torch.tensor([teacher_labels])
+    
+        student_vocab = len(llama_tokenizer)
+        teacher_vocab = len(qwen_tokenizer)
+    
+        student_logits = torch.randn(1, max_length, student_vocab)
+        teacher_logits = torch.randn(1, max_length, teacher_vocab)
+    
+        loss = loss_fn(
+            student_logits=student_logits,
+            teacher_logits=teacher_logits,
+            student_labels=student_labels,
+            teacher_labels=teacher_labels,
+            student_input_ids=student_input_ids,
+            teacher_input_ids=teacher_input_ids,
+            student_byte_offsets=student_byte_offsets,
+            teacher_byte_offsets=teacher_byte_offsets,
+        )
+    
+        assert torch.isfinite(loss)
+        assert loss.dim() == 0
+        assert loss_fn.last_matched_loss is not None
+        assert loss_fn.last_unmatched_loss is not None
+    
+    
+
+    def test_uldloss_handles_smollm_student_qwen_teacher_sequence(self, smollm_tokenizer, qwen_tokenizer):
+        config = build_config(
+            uld_use_hybrid_loss=True,
+            uld_hybrid_matched_weight=0.5,
+            uld_hybrid_unmatched_weight=0.5,
+        )
+        loss_fn = ULDLoss(config, student_tokenizer=smollm_tokenizer, teacher_tokenizer=qwen_tokenizer)
+    
+        prompt = "User: Describe SmolLM3 in a sentence."
+        completion = "Assistant: SmolLM3 is a compact yet capable language model."
+    
+        student_ids, student_labels, student_offsets = encode_prompt_completion(smollm_tokenizer, prompt, completion)
+        teacher_ids, teacher_labels, teacher_offsets = encode_prompt_completion(qwen_tokenizer, prompt, completion)
+    
+        pad_id_student = smollm_tokenizer.pad_token_id
+        pad_id_teacher = qwen_tokenizer.pad_token_id
+        max_length = max(len(student_ids), len(teacher_ids))
+    
+        student_ids = pad_tokens(student_ids, pad_id_student, max_length)
+        teacher_ids = pad_tokens(teacher_ids, pad_id_teacher, max_length)
+        student_labels = pad_labels(student_labels, max_length)
+        teacher_labels = pad_labels(teacher_labels, max_length)
+        student_byte_offsets = pad_byte_offsets(student_offsets, max_length, padding_side="right").unsqueeze(0)
+        teacher_byte_offsets = pad_byte_offsets(teacher_offsets, max_length, padding_side="right").unsqueeze(0)
+    
+        student_input_ids = torch.tensor([student_ids])
+        teacher_input_ids = torch.tensor([teacher_ids])
+        student_labels = torch.tensor([student_labels])
+        teacher_labels = torch.tensor([teacher_labels])
+    
+        student_vocab = len(smollm_tokenizer)
+        teacher_vocab = len(qwen_tokenizer)
+    
+        student_logits = torch.randn(1, max_length, student_vocab)
+        teacher_logits = torch.randn(1, max_length, teacher_vocab)
+    
+        loss = loss_fn(
+            student_logits=student_logits,
+            teacher_logits=teacher_logits,
+            student_labels=student_labels,
+            teacher_labels=teacher_labels,
+            student_input_ids=student_input_ids,
+            teacher_input_ids=teacher_input_ids,
+            student_byte_offsets=student_byte_offsets,
+            teacher_byte_offsets=teacher_byte_offsets,
+        )
+    
+        assert torch.isfinite(loss)
+        assert loss.dim() == 0
+        assert loss_fn.last_matched_loss is not None
+        assert loss_fn.last_unmatched_loss is not None
+    
+    
+
+    def test_uldloss_hybrid_config_beta_zero(self, llama_tokenizer, qwen_tokenizer):
+        config = build_config(
+            uld_use_hybrid_loss=True,
+            uld_hybrid_matched_weight=0.0,
+            uld_hybrid_unmatched_weight=1.0,
+            uld_crossentropy_weight=0.0,
+            uld_distillation_weight=1.0,
+            uld_student_temperature=1.0,
+            uld_teacher_temperature=1.0,
+            temperature=1.0,
+            top_p=0.95,
+            top_k=0,
+            lmbda=1.0,
+            beta=0.0,
+        )
+        loss_fn = ULDLoss(config, student_tokenizer=llama_tokenizer, teacher_tokenizer=qwen_tokenizer)
+    
+        prompt = "User: Explain how GOLD handles tokenizer mismatches."
+        completion = "Assistant: GOLD merges aligned subwords and applies hybrid ULD loss."
+    
+        student_ids, student_labels, student_offsets = encode_prompt_completion(llama_tokenizer, prompt, completion)
+        teacher_ids, teacher_labels, teacher_offsets = encode_prompt_completion(qwen_tokenizer, prompt, completion)
+    
+        pad_id_student = llama_tokenizer.pad_token_id
+        pad_id_teacher = qwen_tokenizer.pad_token_id
+        max_length = max(len(student_ids), len(teacher_ids))
+    
+        student_ids = pad_tokens(student_ids, pad_id_student, max_length)
+        teacher_ids = pad_tokens(teacher_ids, pad_id_teacher, max_length)
+        student_labels = pad_labels(student_labels, max_length)
+        teacher_labels = pad_labels(teacher_labels, max_length)
+        student_byte_offsets = pad_byte_offsets(student_offsets, max_length, padding_side="right").unsqueeze(0)
+        teacher_byte_offsets = pad_byte_offsets(teacher_offsets, max_length, padding_side="right").unsqueeze(0)
+    
+        student_input_ids = torch.tensor([student_ids])
+        teacher_input_ids = torch.tensor([teacher_ids])
+        student_labels = torch.tensor([student_labels])
+        teacher_labels = torch.tensor([teacher_labels])
+    
+        student_vocab = len(llama_tokenizer)
+        teacher_vocab = len(qwen_tokenizer)
+        torch.manual_seed(0)
+        student_logits = torch.randn(1, max_length, student_vocab)
+        teacher_logits = torch.randn(1, max_length, teacher_vocab)
+    
+        loss = loss_fn(
+            student_logits=student_logits,
+            teacher_logits=teacher_logits,
+            student_labels=student_labels,
+            teacher_labels=teacher_labels,
+            student_input_ids=student_input_ids,
+            teacher_input_ids=teacher_input_ids,
+            student_byte_offsets=student_byte_offsets,
+            teacher_byte_offsets=teacher_byte_offsets,
+        )
+    
+        assert torch.isfinite(loss)
+        assert loss.dim() == 0
+        assert loss_fn.last_matched_loss is not None
+        assert loss_fn.last_unmatched_loss is not None
+    
+        expected = config.uld_hybrid_unmatched_weight * loss_fn.last_unmatched_loss
+        torch.testing.assert_close(loss, expected, atol=1e-6, rtol=1e-5)
+    
+    
+    
 class TestXTokenLoss(TrlTestCase):
     def test_xtoken_loss(self):
         # Build a minimal top-k projection matrix: V_s=4 student tokens -> V_t=5 teacher tokens.
@@ -1011,715 +1637,111 @@ class TestGOLDTrainerSlow(TrlTestCase):
 
 
 
-def test_chatml_collator_truncates_keeping_completion_end(llama_tokenizer):
-    """When the rendered chat-template message exceeds max_length, the collator must
-    keep the LAST max_length tokens (the model's recent context), not the first. Also verifies byte_offsets are sliced
-    consistently with input_ids."""
-    long_user = "Please summarize:\n" + ("very long context. " * 200)  # well over 512 tokens
-    long_assistant = "summary content goes here. " * 60
-    examples = [
-        {
-            "messages": [
-                {"role": "user", "content": long_user},
-                {"role": "assistant", "content": long_assistant},
-            ]
-        }
-    ]
 
-    max_length = 256
-    collator = DataCollatorForChatML(tokenizer=llama_tokenizer, max_length=max_length)
-    batch = collator(examples)
-
-    # Truncation must produce exactly max_length tokens (no left padding when full)
-    assert batch["input_ids"].shape[1] == max_length
-
-    # The last token of the kept sequence must match the EOS / final assistant token
-    # of the full untruncated tokenization — proving we kept the END of the completion.
-    backend = llama_tokenizer.backend_tokenizer
-    formatted_message = llama_tokenizer.apply_chat_template(
-        examples[0]["messages"], add_generation_prompt=False, tokenize=False
-    )
-    [(full_ids, _)] = encode_with_byte_offsets(backend, [formatted_message], add_special_tokens=False)
-    assert batch["input_ids"][0, -1].item() == full_ids[-1]
-    assert tuple(batch["byte_offsets"][0, -1].tolist())[1] > 0  # last completion-relative offset is non-zero
-
-
-def test_prepared_tokenized_rows_keep_completion_after_truncation(llama_tokenizer):
-    """When a GOLD row's prompt overflows max_length, dataset prep must keep the LAST max_length tokens (the
-    completion end), tracking the prompt/completion boundary via completion_mask so the collator labels the completion
-    instead of masking the whole sequence."""
-    long_user = "Please summarize:\n" + ("very long context. " * 200)  # prompt alone overflows max_length
-    assistant = "the short answer"
-    dataset = Dataset.from_dict(
-        {"messages": [[{"role": "user", "content": long_user}, {"role": "assistant", "content": assistant}]]}
-    )
-
-    max_length = 64
-    args = SimpleNamespace(
-        dataset_num_proc=None,
-        dataset_text_field="text",
-        max_length=max_length,
-        packing_strategy="bfd",
-        use_liger_kernel=False,
-    )
-    trainer = GOLDTrainer.__new__(GOLDTrainer)
-    prepared = trainer._prepare_dataset_with_original_text(
-        dataset, llama_tokenizer, args, packing=False, formatting_func=None, dataset_name="train"
-    )
-    row = prepared[0]
-
-    assert len(row["input_ids"]) == max_length  # truncated, not dropped
-    assert 1 in row["completion_mask"]  # completion survived front-truncation
-
-    # original_prompt_text / original_completion_text must reflect the truncated ids the student kept,
-    # not the pre-truncation strings (otherwise the teacher would re-encode a longer prompt context).
-    completion_start = row["completion_mask"].index(1)
-    decode = partial(llama_tokenizer.decode, skip_special_tokens=False, clean_up_tokenization_spaces=False)
-    assert row["original_prompt_text"] == decode(row["input_ids"][:completion_start])
-    assert row["original_completion_text"] == decode(row["input_ids"][completion_start:])
-
-    collator = DataCollatorForChatML(tokenizer=llama_tokenizer, max_length=max_length)
-    batch = collator([row])
-
-    # The collator labels exactly the tracked completion tokens — never all -100 — and the assistant text survives.
-    completion_ids = [tid for tid, m in zip(row["input_ids"], row["completion_mask"], strict=False) if m == 1]
-    supervised = [label for label in batch["labels"][0].tolist() if label != -100]
-    assert supervised == completion_ids
-    assert assistant in llama_tokenizer.decode(completion_ids)
-
-
-def test_prepared_tokenized_rows_rebase_byte_offsets_when_truncation_eats_into_completion(llama_tokenizer):
-    """When truncation drops the front of the completion (``drop > completion_start``), the kept byte_offsets
-    reference bytes in the original completion text — but ``original_completion_text`` is decoded fresh from the kept
-    ids and starts at byte 0. The kept offsets must be rebased so they match the teacher's re-encoding."""
-    short_prompt = "Q:"
-    long_completion = "word " * 300  # completion alone overflows max_length
-    dataset = Dataset.from_dict({"prompt": [short_prompt], "completion": [long_completion]})
-
-    max_length = 32
-    args = SimpleNamespace(
-        dataset_num_proc=None,
-        dataset_text_field="text",
-        max_length=max_length,
-        packing_strategy="bfd",
-        use_liger_kernel=False,
-    )
-    trainer = GOLDTrainer.__new__(GOLDTrainer)
-    prepared = trainer._prepare_dataset_with_original_text(
-        dataset, llama_tokenizer, args, packing=False, formatting_func=None, dataset_name="train"
-    )
-    row = prepared[0]
-
-    assert len(row["input_ids"]) == max_length
-    # Prompt is so short that truncation ate into the completion: no prompt tokens survive.
-    assert row["completion_mask"] == [1] * max_length
-
-    # First kept completion token must start at byte 0 of the new (truncated) original_completion_text.
-    assert tuple(row["byte_offsets"][0]) == (0, len(b"word "))
-
-
-def test_prepare_dataset_messages_uses_last_assistant_turn(qwen_tokenizer):
-    messages = [
-        {"role": "system", "content": "Be terse."},
-        {"role": "user", "content": "First?"},
-        {"role": "assistant", "content": "One."},
-        {"role": "user", "content": "Second?"},
-        {"role": "assistant", "content": "Two."},
-    ]
-    dataset = Dataset.from_dict({"messages": [messages]})
-    args = SimpleNamespace(
-        dataset_num_proc=None,
-        dataset_text_field="text",
-        max_length=512,
-        packing_strategy="bfd",
-        use_liger_kernel=False,
-    )
-    trainer = GOLDTrainer.__new__(GOLDTrainer)
-
-    prepared = trainer._prepare_dataset_with_original_text(
-        dataset, qwen_tokenizer, args, packing=False, formatting_func=None, dataset_name="train"
-    )
-    row = prepared[0]
-    expected_prompt = qwen_tokenizer.apply_chat_template(messages[:-1], add_generation_prompt=True, tokenize=False)
-    expected_full = qwen_tokenizer.apply_chat_template(messages, add_generation_prompt=False, tokenize=False)
-
-    assert row["original_prompt_text"] == expected_prompt
-    assert row["original_completion_text"] == expected_full[len(expected_prompt) :]
-    assert "One." not in row["original_completion_text"]
-    assert "Two." in row["original_completion_text"]
-
-    completion_ids = [tid for tid, mask in zip(row["input_ids"], row["completion_mask"], strict=True) if mask == 1]
-    decoded_completion = qwen_tokenizer.decode(
-        completion_ids, skip_special_tokens=False, clean_up_tokenization_spaces=False
-    )
-    assert decoded_completion == row["original_completion_text"]
-
-
-def test_alignment_groups_cover_all_tokens(llama_tokenizer, qwen_tokenizer):
-    config = build_config()
-    loss = ULDLoss(config, student_tokenizer=llama_tokenizer, teacher_tokenizer=qwen_tokenizer)
-
-    text = "SmolLM3-3B says hi 😊 to 你好."
-    [(student_ids, student_offs)] = encode_with_byte_offsets(
-        llama_tokenizer.backend_tokenizer, [text], add_special_tokens=False
-    )
-    [(teacher_ids, teacher_offs)] = encode_with_byte_offsets(
-        qwen_tokenizer.backend_tokenizer, [text], add_special_tokens=False
-    )
-
-    student_groups, teacher_groups = loss._align_by_byte_offsets(student_offs, teacher_offs)
-
-    assert len(student_groups) == len(teacher_groups)
-    assert sorted(idx for group in student_groups for idx in group) == list(range(len(student_ids)))
-    assert sorted(idx for group in teacher_groups for idx in group) == list(range(len(teacher_ids)))
-    for student_group, teacher_group in zip(student_groups, teacher_groups, strict=True):
-        student_span = (student_offs[student_group[0]][0], student_offs[student_group[-1]][1])
-        teacher_span = (teacher_offs[teacher_group[0]][0], teacher_offs[teacher_group[-1]][1])
-        assert student_span == teacher_span
-
-
-def test_on_policy_completion_byte_offsets_match_encode_offsets(smollm_tokenizer, qwen_tokenizer):
-    """On-policy offsets are derived from the generated token ids directly (per-token piece byte length, no
-    decode-then-re-encode round-trip). For ByteLevel BPE — the family of every cross-tokenizer pair GOLD targets
-    (SmolLM, Qwen, Llama 3+, …) — those per-token spans match what `encode_with_byte_offsets` produces on the same
-    text, so student and teacher offsets share one byte coordinate system."""
-    trainer = GOLDTrainer.__new__(GOLDTrainer)
-    trainer.use_uld_loss = True
-    trainer.teacher_tokenizer = qwen_tokenizer
-    trainer.uld_loss_fn = SimpleNamespace(use_extended_uld=True)
-    trainer.processing_class = smollm_tokenizer
-
-    completion_text = "hello 你好 😊"
-    [(completion_ids, expected_offsets)] = encode_with_byte_offsets(
-        smollm_tokenizer.backend_tokenizer, [completion_text], add_special_tokens=False
-    )
-    input_ids = [smollm_tokenizer.pad_token_id] + completion_ids
-    labels = [-100] + completion_ids
-    updated_slice = {
-        "input_ids": torch.tensor([input_ids]),
-        "labels": torch.tensor([labels]),
-    }
-
-    trainer._maybe_add_completion_byte_offsets(updated_slice)
-
-    assert [tuple(offset) for offset in updated_slice["byte_offsets"][0, 1:].tolist()] == expected_offsets
-
-
-def test_merge_probabilities_multiplies_split_tokens_observed():
-    config = build_config(uld_token_merge_strategy="observed")
-    # Use simple 3-token vocabulary to validate merging behaviour
-    # probs[0] = marginal P(token | context) at position 0 for all vocab tokens
-    # probs[1] = P(token | context, token_0) at position 1 for all vocab tokens
-    probs = torch.tensor([[0.6, 0.3, 0.1], [0.2, 0.5, 0.3]])
-    loss = ULDLoss(config, student_tokenizer=None, teacher_tokenizer=None)
-
-    # token_ids[1] = 1 means the actual token at position 1 is token ID 1
-    # So we should extract P(token_id=1 | ...) = probs[1, 1] = 0.5
-    token_ids = [0, 1]  # Actual generated tokens
-
-    merged = loss._merge_probabilities_with_alignment_groups(probs, [[0, 1]], token_ids=token_ids)
-
-    # Expected: first position's marginal distribution × scalar conditional prob of actual token at later position
-    # P_merged(y) = probs[0](y) × probs[1, token_ids[1]] = probs[0] × probs[1, 1]
-    expected = probs[0] * probs[1, 1]  # probs[1, 1] = 0.5
-    # Expected unnormalized: [0.6 * 0.5, 0.3 * 0.5, 0.1 * 0.5] = [0.30, 0.15, 0.05]
-
-    torch.testing.assert_close(merged[0], expected)
-
-
-def test_merge_probabilities_multiplies_split_tokens_bayesian():
-    config = build_config(uld_token_merge_strategy="bayesian")
-    # Use simple 3-token vocabulary to validate merging behaviour
-    # probs[0] = P(token | context) at position 0 for all vocab tokens
-    # probs[1] = P(token | context, token_0) at position 1 for all vocab tokens
-    probs = torch.tensor([[0.6, 0.3, 0.1], [0.2, 0.5, 0.3]])
-    loss = ULDLoss(config, student_tokenizer=None, teacher_tokenizer=None)
-
-    # token_ids[0] = 0 means the actual token at position 0 is token ID 0
-    token_ids = [0, 1]  # Actual generated tokens
-
-    merged = loss._merge_probabilities_with_alignment_groups(probs, [[0, 1]], token_ids=token_ids)
-
-    # Expected: last position's full distribution × scalar prob of actual token at earlier position
-    # P_merged(y) = probs[1](y) × probs[0, token_ids[0]] = probs[1] × probs[0, 0]
-    expected = probs[1] * probs[0, 0]  # probs[0, 0] = 0.6
-    # Expected unnormalized: [0.2 * 0.6, 0.5 * 0.6, 0.3 * 0.6] = [0.12, 0.30, 0.18]
-
-    torch.testing.assert_close(merged[0], expected)
-
-
-def test_compute_distillation_loss_bayesian_shifts_answer_logits():
-    # The "bayesian" strategy shifts the answer-logit slice one position earlier (probs[k] predicts token_ids[k]).
-    # This also applies on the positional path (use_extended_uld=False), so check the loss uses the shifted slice.
-    config = build_config(use_extended_uld=False, uld_token_merge_strategy="bayesian")
-    loss_fn = ULDLoss(config, student_tokenizer=None, teacher_tokenizer=None)
-
-    torch.manual_seed(0)
-    student_logits = torch.randn(1, 3, 4)
-    teacher_logits = torch.randn(1, 3, 4)
-    # Answer span starts at position 1 (size 2), leaving position 0 as the context the shift relies on.
-    student_labels = torch.tensor([[-100, 1, 2]])
-    teacher_labels = torch.tensor([[-100, 1, 2]])
-    student_input_ids = torch.tensor([[0, 1, 2]])
-    teacher_input_ids = torch.tensor([[0, 1, 2]])
-
-    result = loss_fn._compute_distillation_loss(
-        student_logits, teacher_logits, student_labels, teacher_labels, student_input_ids, teacher_input_ids
-    )
-
-    # Expected: probabilities come from the shifted positions [0, 1], not the answer positions [1, 2].
-    student_probs = torch.softmax(student_logits[0, 0:2], dim=-1)
-    teacher_probs = torch.softmax(teacher_logits[0, 0:2], dim=-1)
-    student_sorted = student_probs.sort(dim=-1, descending=True).values
-    teacher_sorted = teacher_probs.sort(dim=-1, descending=True).values
-    expected = (student_sorted - teacher_sorted).abs().sum() / student_probs.size(0)
-
-    torch.testing.assert_close(result, expected)
-
-    # The "observed" strategy uses the unshifted answer positions [1, 2], so it gives a different loss.
-    observed_fn = ULDLoss(build_config(use_extended_uld=False), student_tokenizer=None, teacher_tokenizer=None)
-    observed = observed_fn._compute_distillation_loss(
-        student_logits, teacher_logits, student_labels, teacher_labels, student_input_ids, teacher_input_ids
-    )
-    assert not torch.allclose(observed, expected)
-
-
-def test_compute_distillation_loss_bayesian_skips_zero_start_span_positional():
-    # Front-truncation can drop the whole prompt, leaving an answer span that starts at index 0. The first token has
-    # no preceding predictor logit for the shift, so it must be skipped (start += 1, size -= 1) rather than wrapping
-    # around with negative indexing.
-    config = build_config(use_extended_uld=False, uld_token_merge_strategy="bayesian")
-    loss_fn = ULDLoss(config, student_tokenizer=None, teacher_tokenizer=None)
-
-    torch.manual_seed(0)
-    student_logits = torch.randn(1, 3, 4)
-    teacher_logits = torch.randn(1, 3, 4)
-    # No -100 prefix: the answer span starts at index 0 with size 3.
-    student_labels = torch.tensor([[1, 2, 3]])
-    teacher_labels = torch.tensor([[1, 2, 3]])
-    student_input_ids = torch.tensor([[1, 2, 3]])
-    teacher_input_ids = torch.tensor([[1, 2, 3]])
-
-    result = loss_fn._compute_distillation_loss(
-        student_logits, teacher_logits, student_labels, teacher_labels, student_input_ids, teacher_input_ids
-    )
-
-    # After skipping the leading token: start=1, size=2 -> the shifted slice covers positions [0, 1].
-    student_probs = torch.softmax(student_logits[0, 0:2], dim=-1)
-    teacher_probs = torch.softmax(teacher_logits[0, 0:2], dim=-1)
-    student_sorted = student_probs.sort(dim=-1, descending=True).values
-    teacher_sorted = teacher_probs.sort(dim=-1, descending=True).values
-    expected = (student_sorted - teacher_sorted).abs().sum() / student_probs.size(0)
-
-    torch.testing.assert_close(result, expected)
-
-
-def test_compute_distillation_loss_bayesian_zero_loss_when_only_token_dropped():
-    # If the answer span is a single token at index 0, skipping it leaves nothing to score -> zero loss, no crash.
-    config = build_config(use_extended_uld=False, uld_token_merge_strategy="bayesian")
-    loss_fn = ULDLoss(config, student_tokenizer=None, teacher_tokenizer=None)
-
-    student_logits = torch.randn(1, 2, 4)
-    teacher_logits = torch.randn(1, 2, 4)
-    student_labels = torch.tensor([[5, -100]])  # start 0, size 1
-    teacher_labels = torch.tensor([[5, -100]])
-    student_input_ids = torch.tensor([[5, 0]])
-    teacher_input_ids = torch.tensor([[5, 0]])
-
-    result = loss_fn._compute_distillation_loss(
-        student_logits, teacher_logits, student_labels, teacher_labels, student_input_ids, teacher_input_ids
-    )
-
-    torch.testing.assert_close(result, torch.zeros_like(result))
-
-
-def test_compute_distillation_loss_bayesian_skips_zero_start_span_extended():
-    # Same zero-start scenario on the extended (byte-offset) path: the first aligned group pair is dropped instead of
-    # wrapping around, so the loss is finite.
-    config = build_config(use_extended_uld=True, uld_token_merge_strategy="bayesian")
-    loss_fn = ULDLoss(config, student_tokenizer=None, teacher_tokenizer=None)
-
-    torch.manual_seed(0)
-    student_logits = torch.randn(1, 3, 4)
-    teacher_logits = torch.randn(1, 3, 4)
-    student_labels = torch.tensor([[1, 2, 3]])  # start 0, size 3
-    teacher_labels = torch.tensor([[1, 2, 3]])
-    student_input_ids = torch.tensor([[1, 2, 3]])
-    teacher_input_ids = torch.tensor([[1, 2, 3]])
-    # 1:1 byte alignment over the completion: each token spans one byte.
-    byte_offsets = torch.tensor([[[0, 1], [1, 2], [2, 3]]])
-
-    result = loss_fn._compute_distillation_loss(
-        student_logits,
-        teacher_logits,
-        student_labels,
-        teacher_labels,
-        student_input_ids,
-        teacher_input_ids,
-        student_byte_offsets=byte_offsets,
-        teacher_byte_offsets=byte_offsets,
-    )
-
-    assert torch.isfinite(result)
-
-
-def test_uldloss_positional_mode_does_not_require_byte_offsets():
-    config = build_config(use_extended_uld=False)
-    loss_fn = ULDLoss(config, student_tokenizer=None, teacher_tokenizer=None)
-
-    student_logits = torch.randn(1, 4, 5)
-    teacher_logits = torch.randn(1, 4, 6)
-    student_labels = torch.tensor([[-100, 1, 2, -100]])
-    teacher_labels = torch.tensor([[-100, 3, 4, -100]])
-    student_input_ids = torch.tensor([[0, 1, 2, 0]])
-    teacher_input_ids = torch.tensor([[0, 3, 4, 0]])
-
-    loss = loss_fn(
-        student_logits=student_logits,
-        teacher_logits=teacher_logits,
-        student_labels=student_labels,
-        teacher_labels=teacher_labels,
-        student_input_ids=student_input_ids,
-        teacher_input_ids=teacher_input_ids,
-    )
-
-    assert torch.isfinite(loss)
-
-
-def test_initialize_vocabulary_mapping_contains_common_tokens(llama_tokenizer, qwen_tokenizer):
-    config = build_config(
-        uld_use_hybrid_loss=True,
-        uld_hybrid_matched_weight=1.0,
-        uld_hybrid_unmatched_weight=0.0,
-    )
-    loss = ULDLoss(config, student_tokenizer=llama_tokenizer, teacher_tokenizer=qwen_tokenizer)
-
-    common_tokens = ["Hello", "world", "-", "ol", "LM", "3", "B"]
-    for token in common_tokens:
-        student_id = llama_tokenizer.convert_tokens_to_ids(token)
-        teacher_id = qwen_tokenizer.convert_tokens_to_ids(token)
-        assert student_id is not None
-        assert teacher_id is not None
-        assert teacher_id in loss._vocab_mapping
-        assert loss._vocab_mapping[teacher_id] == student_id
-        assert teacher_id in loss._teacher_matched_ids
-        assert student_id in loss._student_matched_ids
-
-
-def test_get_start_and_size_answers_skips_prompt_tokens():
-    trainer = ULDLoss.__new__(ULDLoss)
-    trainer.ignore_index = -100
-
-    answers = torch.tensor(
-        [
-            [-100, -100, -100, 10, 20, 30, -100, -100],
-            [-100, 5, 6, 7, -100, -100, -100, -100],
-            [-100, -100, -100, -100, -100, -100, -100, -100],
-        ]
-    )
-
-    starts, sizes = trainer._get_start_and_size_answers(answers)
-
-    assert starts == [3, 1, 0]
-    assert sizes == [3, 3, 0]
-
-
-@pytest.mark.slow
-def test_generate_on_policy_outputs_masks_prompt(llama_tokenizer):
-    trainer = GOLDTrainer.__new__(GOLDTrainer)
-    trainer.processing_class = llama_tokenizer
-
-    prompt_text = "<|begin_of_text|><|start_header_id|>user<|end_header_id|>\nHello?<|eot_id|>"
-    completion_text = "<|start_header_id|>assistant<|end_header_id|>\nHi there!"
-
-    prompt_ids = llama_tokenizer(prompt_text, add_special_tokens=False)["input_ids"]
-    completion_ids = llama_tokenizer(completion_text, add_special_tokens=False)["input_ids"]
-
-    pad_id = llama_tokenizer.pad_token_id
-    pad_width = 3
-    prompt_tensor = torch.full((1, len(prompt_ids) + pad_width), pad_id, dtype=torch.long)
-    prompt_tensor[0, pad_width:] = torch.tensor(prompt_ids, dtype=torch.long)
-    prompt_mask = (prompt_tensor != pad_id).long()
-
-    # model.generate() returns full sequences including left-padding from the input
-    completion_tensor = torch.tensor(completion_ids, dtype=torch.long).unsqueeze(0)
-    generated_sequence = torch.cat([prompt_tensor, completion_tensor], dim=1)
-
-    class DummyModel:
-        def generate(self, input_ids, attention_mask, generation_config, return_dict_in_generate):
-            assert torch.equal(input_ids, prompt_tensor)
-            assert torch.equal(attention_mask, prompt_mask)
-            return SimpleNamespace(sequences=generated_sequence)
-
-    generation_config = SimpleNamespace(max_completion_length=None, temperature=None, top_k=None, top_p=None)
-    new_ids, new_mask, new_labels, prompt_texts, completion_texts = GOLDTrainer.generate_on_policy_outputs(
-        trainer,
-        DummyModel(),
-        {"prompts": prompt_tensor, "prompt_attention_mask": prompt_mask},
-        generation_config,
-        pad_id,
-    )
-
-    assert torch.equal(new_ids, generated_sequence)
-    if pad_id is not None:
-        expected_mask = (generated_sequence != pad_id).long()
-        assert torch.equal(new_mask, expected_mask)
-    else:
-        assert torch.all(new_mask == 1)
-
-    padded_prompt_len = prompt_tensor.shape[1]
-    assert torch.all(new_labels[0, :padded_prompt_len] == -100)
-    assert torch.equal(new_labels[0, padded_prompt_len:], torch.tensor(completion_ids, dtype=torch.long))
-
-    unpadded_prompt_ids = prompt_tensor[0][prompt_mask[0].bool()].tolist()
-    assert prompt_texts[0] == llama_tokenizer.decode(
-        unpadded_prompt_ids, skip_special_tokens=False, clean_up_tokenization_spaces=False
-    )
-    assert completion_texts[0] == llama_tokenizer.decode(
-        completion_ids, skip_special_tokens=False, clean_up_tokenization_spaces=False
-    )
-
-
-@pytest.mark.slow
-def test_generate_on_policy_outputs_masks_prompt_smollm(smollm_tokenizer, openr1_examples):
-    trainer = GOLDTrainer.__new__(GOLDTrainer)
-    trainer.processing_class = smollm_tokenizer
-
-    collator = DataCollatorForChatML(tokenizer=smollm_tokenizer)
-    batch = collator([openr1_examples[0]])
-    batch = {k: v.cpu() if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
-
-    class DummyModel:
-        def generate(self, input_ids, attention_mask, generation_config, return_dict_in_generate):
-            assert torch.equal(input_ids, batch["prompts"])
-            assert torch.equal(attention_mask, batch["prompt_attention_mask"])
-            return SimpleNamespace(sequences=batch["input_ids"])
-
-    generation_config = SimpleNamespace(max_completion_length=None, temperature=None, top_k=None, top_p=None)
-    pad_id = smollm_tokenizer.pad_token_id
-    new_ids, new_mask, new_labels, prompt_texts, completion_texts = GOLDTrainer.generate_on_policy_outputs(
-        trainer,
-        DummyModel(),
-        {"prompts": batch["prompts"], "prompt_attention_mask": batch["prompt_attention_mask"]},
-        generation_config,
-        pad_id,
-    )
-
-    assert torch.equal(new_ids, batch["input_ids"])
-    if pad_id is not None:
-        expected_mask = (batch["input_ids"] != pad_id).long()
-        assert torch.equal(new_mask, expected_mask)
-    else:
-        assert torch.all(new_mask == 1)
-
-    prompt_len = int(batch["prompt_attention_mask"].sum().item())
-    tail_labels = new_labels[0, prompt_len:]
-    expected_tail = batch["input_ids"][0, prompt_len:]
-    active_mask = tail_labels != -100
-    assert torch.all(new_labels[0, :prompt_len] == -100)
-    assert torch.equal(tail_labels[active_mask], expected_tail[active_mask])
-    assert torch.all(tail_labels[~active_mask] == -100)
-
-    prompt_tokens = batch["prompts"][0, batch["prompt_attention_mask"][0].bool()]
-    decoded_prompt = smollm_tokenizer.decode(prompt_tokens.tolist(), skip_special_tokens=False)
-    assert prompt_texts[0] == decoded_prompt
-
-    assistant_completion = openr1_examples[0]["messages"][-1]["content"].strip()
-    assert assistant_completion in completion_texts[0]
-
-
-def test_generalized_jsd_loss_accepts_probability_inputs():
-    student_probs = torch.tensor([[[0.6, 0.3, 0.1]]])
-    teacher_probs = torch.tensor([[[0.5, 0.4, 0.1]]])
-    mixture = 0.5 * (student_probs + teacher_probs)
-    expected = 0.5 * (
-        torch.sum(student_probs * (torch.log(student_probs) - torch.log(mixture)))
-        + torch.sum(teacher_probs * (torch.log(teacher_probs) - torch.log(mixture)))
-    )
-
-    loss = GOLDTrainer.generalized_jsd_loss(
-        student_probs,
-        teacher_probs,
-        beta=0.5,
-        reduction="batchmean",
-        logits_are_probs=True,
-    )
-
-    torch.testing.assert_close(loss, expected)
-
-
-def test_uldloss_handles_llama_student_qwen_teacher_sequence(llama_tokenizer, qwen_tokenizer):
-    config = build_config(
-        uld_use_hybrid_loss=True,
-        uld_hybrid_matched_weight=0.6,
-        uld_hybrid_unmatched_weight=0.4,
-    )
-    loss_fn = ULDLoss(config, student_tokenizer=llama_tokenizer, teacher_tokenizer=qwen_tokenizer)
-
-    prompt = "User: Summarize the difference between llamas and alpacas."
-    completion = "Assistant: Llamas are taller while alpacas have softer wool."
-
-    student_ids, student_labels, student_offsets = encode_prompt_completion(llama_tokenizer, prompt, completion)
-    teacher_ids, teacher_labels, teacher_offsets = encode_prompt_completion(qwen_tokenizer, prompt, completion)
-
-    pad_id_student = llama_tokenizer.pad_token_id
-    pad_id_teacher = qwen_tokenizer.pad_token_id
-    max_length = max(len(student_ids), len(teacher_ids))
-
-    student_ids = pad_tokens(student_ids, pad_id_student, max_length)
-    teacher_ids = pad_tokens(teacher_ids, pad_id_teacher, max_length)
-    student_labels = pad_labels(student_labels, max_length)
-    teacher_labels = pad_labels(teacher_labels, max_length)
-    student_byte_offsets = pad_byte_offsets(student_offsets, max_length, padding_side="right").unsqueeze(0)
-    teacher_byte_offsets = pad_byte_offsets(teacher_offsets, max_length, padding_side="right").unsqueeze(0)
-
-    student_input_ids = torch.tensor([student_ids])
-    teacher_input_ids = torch.tensor([teacher_ids])
-    student_labels = torch.tensor([student_labels])
-    teacher_labels = torch.tensor([teacher_labels])
-
-    student_vocab = len(llama_tokenizer)
-    teacher_vocab = len(qwen_tokenizer)
-
-    student_logits = torch.randn(1, max_length, student_vocab)
-    teacher_logits = torch.randn(1, max_length, teacher_vocab)
-
-    loss = loss_fn(
-        student_logits=student_logits,
-        teacher_logits=teacher_logits,
-        student_labels=student_labels,
-        teacher_labels=teacher_labels,
-        student_input_ids=student_input_ids,
-        teacher_input_ids=teacher_input_ids,
-        student_byte_offsets=student_byte_offsets,
-        teacher_byte_offsets=teacher_byte_offsets,
-    )
-
-    assert torch.isfinite(loss)
-    assert loss.dim() == 0
-    assert loss_fn.last_matched_loss is not None
-    assert loss_fn.last_unmatched_loss is not None
-
-
-def test_uldloss_handles_smollm_student_qwen_teacher_sequence(smollm_tokenizer, qwen_tokenizer):
-    config = build_config(
-        uld_use_hybrid_loss=True,
-        uld_hybrid_matched_weight=0.5,
-        uld_hybrid_unmatched_weight=0.5,
-    )
-    loss_fn = ULDLoss(config, student_tokenizer=smollm_tokenizer, teacher_tokenizer=qwen_tokenizer)
-
-    prompt = "User: Describe SmolLM3 in a sentence."
-    completion = "Assistant: SmolLM3 is a compact yet capable language model."
-
-    student_ids, student_labels, student_offsets = encode_prompt_completion(smollm_tokenizer, prompt, completion)
-    teacher_ids, teacher_labels, teacher_offsets = encode_prompt_completion(qwen_tokenizer, prompt, completion)
-
-    pad_id_student = smollm_tokenizer.pad_token_id
-    pad_id_teacher = qwen_tokenizer.pad_token_id
-    max_length = max(len(student_ids), len(teacher_ids))
-
-    student_ids = pad_tokens(student_ids, pad_id_student, max_length)
-    teacher_ids = pad_tokens(teacher_ids, pad_id_teacher, max_length)
-    student_labels = pad_labels(student_labels, max_length)
-    teacher_labels = pad_labels(teacher_labels, max_length)
-    student_byte_offsets = pad_byte_offsets(student_offsets, max_length, padding_side="right").unsqueeze(0)
-    teacher_byte_offsets = pad_byte_offsets(teacher_offsets, max_length, padding_side="right").unsqueeze(0)
-
-    student_input_ids = torch.tensor([student_ids])
-    teacher_input_ids = torch.tensor([teacher_ids])
-    student_labels = torch.tensor([student_labels])
-    teacher_labels = torch.tensor([teacher_labels])
-
-    student_vocab = len(smollm_tokenizer)
-    teacher_vocab = len(qwen_tokenizer)
-
-    student_logits = torch.randn(1, max_length, student_vocab)
-    teacher_logits = torch.randn(1, max_length, teacher_vocab)
-
-    loss = loss_fn(
-        student_logits=student_logits,
-        teacher_logits=teacher_logits,
-        student_labels=student_labels,
-        teacher_labels=teacher_labels,
-        student_input_ids=student_input_ids,
-        teacher_input_ids=teacher_input_ids,
-        student_byte_offsets=student_byte_offsets,
-        teacher_byte_offsets=teacher_byte_offsets,
-    )
-
-    assert torch.isfinite(loss)
-    assert loss.dim() == 0
-    assert loss_fn.last_matched_loss is not None
-    assert loss_fn.last_unmatched_loss is not None
-
-
-def test_uldloss_hybrid_config_beta_zero(llama_tokenizer, qwen_tokenizer):
-    config = build_config(
-        uld_use_hybrid_loss=True,
-        uld_hybrid_matched_weight=0.0,
-        uld_hybrid_unmatched_weight=1.0,
-        uld_crossentropy_weight=0.0,
-        uld_distillation_weight=1.0,
-        uld_student_temperature=1.0,
-        uld_teacher_temperature=1.0,
-        temperature=1.0,
-        top_p=0.95,
-        top_k=0,
-        lmbda=1.0,
-        beta=0.0,
-    )
-    loss_fn = ULDLoss(config, student_tokenizer=llama_tokenizer, teacher_tokenizer=qwen_tokenizer)
-
-    prompt = "User: Explain how GOLD handles tokenizer mismatches."
-    completion = "Assistant: GOLD merges aligned subwords and applies hybrid ULD loss."
-
-    student_ids, student_labels, student_offsets = encode_prompt_completion(llama_tokenizer, prompt, completion)
-    teacher_ids, teacher_labels, teacher_offsets = encode_prompt_completion(qwen_tokenizer, prompt, completion)
-
-    pad_id_student = llama_tokenizer.pad_token_id
-    pad_id_teacher = qwen_tokenizer.pad_token_id
-    max_length = max(len(student_ids), len(teacher_ids))
-
-    student_ids = pad_tokens(student_ids, pad_id_student, max_length)
-    teacher_ids = pad_tokens(teacher_ids, pad_id_teacher, max_length)
-    student_labels = pad_labels(student_labels, max_length)
-    teacher_labels = pad_labels(teacher_labels, max_length)
-    student_byte_offsets = pad_byte_offsets(student_offsets, max_length, padding_side="right").unsqueeze(0)
-    teacher_byte_offsets = pad_byte_offsets(teacher_offsets, max_length, padding_side="right").unsqueeze(0)
-
-    student_input_ids = torch.tensor([student_ids])
-    teacher_input_ids = torch.tensor([teacher_ids])
-    student_labels = torch.tensor([student_labels])
-    teacher_labels = torch.tensor([teacher_labels])
-
-    student_vocab = len(llama_tokenizer)
-    teacher_vocab = len(qwen_tokenizer)
-    torch.manual_seed(0)
-    student_logits = torch.randn(1, max_length, student_vocab)
-    teacher_logits = torch.randn(1, max_length, teacher_vocab)
-
-    loss = loss_fn(
-        student_logits=student_logits,
-        teacher_logits=teacher_logits,
-        student_labels=student_labels,
-        teacher_labels=teacher_labels,
-        student_input_ids=student_input_ids,
-        teacher_input_ids=teacher_input_ids,
-        student_byte_offsets=student_byte_offsets,
-        teacher_byte_offsets=teacher_byte_offsets,
-    )
-
-    assert torch.isfinite(loss)
-    assert loss.dim() == 0
-    assert loss_fn.last_matched_loss is not None
-    assert loss_fn.last_unmatched_loss is not None
-
-    expected = config.uld_hybrid_unmatched_weight * loss_fn.last_unmatched_loss
-    torch.testing.assert_close(loss, expected, atol=1e-6, rtol=1e-5)
-
-
-
+    def test_generate_on_policy_outputs_masks_prompt(self, llama_tokenizer):
+        trainer = GOLDTrainer.__new__(GOLDTrainer)
+        trainer.processing_class = llama_tokenizer
+    
+        prompt_text = "<|begin_of_text|><|start_header_id|>user<|end_header_id|>\nHello?<|eot_id|>"
+        completion_text = "<|start_header_id|>assistant<|end_header_id|>\nHi there!"
+    
+        prompt_ids = llama_tokenizer(prompt_text, add_special_tokens=False)["input_ids"]
+        completion_ids = llama_tokenizer(completion_text, add_special_tokens=False)["input_ids"]
+    
+        pad_id = llama_tokenizer.pad_token_id
+        pad_width = 3
+        prompt_tensor = torch.full((1, len(prompt_ids) + pad_width), pad_id, dtype=torch.long)
+        prompt_tensor[0, pad_width:] = torch.tensor(prompt_ids, dtype=torch.long)
+        prompt_mask = (prompt_tensor != pad_id).long()
+    
+        # model.generate() returns full sequences including left-padding from the input
+        completion_tensor = torch.tensor(completion_ids, dtype=torch.long).unsqueeze(0)
+        generated_sequence = torch.cat([prompt_tensor, completion_tensor], dim=1)
+    
+        class DummyModel:
+            def generate(self, input_ids, attention_mask, generation_config, return_dict_in_generate):
+                assert torch.equal(input_ids, prompt_tensor)
+                assert torch.equal(attention_mask, prompt_mask)
+                return SimpleNamespace(sequences=generated_sequence)
+    
+        generation_config = SimpleNamespace(max_completion_length=None, temperature=None, top_k=None, top_p=None)
+        new_ids, new_mask, new_labels, prompt_texts, completion_texts = GOLDTrainer.generate_on_policy_outputs(
+            trainer,
+            DummyModel(),
+            {"prompts": prompt_tensor, "prompt_attention_mask": prompt_mask},
+            generation_config,
+            pad_id,
+        )
+    
+        assert torch.equal(new_ids, generated_sequence)
+        if pad_id is not None:
+            expected_mask = (generated_sequence != pad_id).long()
+            assert torch.equal(new_mask, expected_mask)
+        else:
+            assert torch.all(new_mask == 1)
+    
+        padded_prompt_len = prompt_tensor.shape[1]
+        assert torch.all(new_labels[0, :padded_prompt_len] == -100)
+        assert torch.equal(new_labels[0, padded_prompt_len:], torch.tensor(completion_ids, dtype=torch.long))
+    
+        unpadded_prompt_ids = prompt_tensor[0][prompt_mask[0].bool()].tolist()
+        assert prompt_texts[0] == llama_tokenizer.decode(
+            unpadded_prompt_ids, skip_special_tokens=False, clean_up_tokenization_spaces=False
+        )
+        assert completion_texts[0] == llama_tokenizer.decode(
+            completion_ids, skip_special_tokens=False, clean_up_tokenization_spaces=False
+        )
+    
+    
+    @pytest.mark.slow
+
+    def test_generate_on_policy_outputs_masks_prompt_smollm(self, smollm_tokenizer, openr1_examples):
+        trainer = GOLDTrainer.__new__(GOLDTrainer)
+        trainer.processing_class = smollm_tokenizer
+    
+        collator = DataCollatorForChatML(tokenizer=smollm_tokenizer)
+        batch = collator([openr1_examples[0]])
+        batch = {k: v.cpu() if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
+    
+        class DummyModel:
+            def generate(self, input_ids, attention_mask, generation_config, return_dict_in_generate):
+                assert torch.equal(input_ids, batch["prompts"])
+                assert torch.equal(attention_mask, batch["prompt_attention_mask"])
+                return SimpleNamespace(sequences=batch["input_ids"])
+    
+        generation_config = SimpleNamespace(max_completion_length=None, temperature=None, top_k=None, top_p=None)
+        pad_id = smollm_tokenizer.pad_token_id
+        new_ids, new_mask, new_labels, prompt_texts, completion_texts = GOLDTrainer.generate_on_policy_outputs(
+            trainer,
+            DummyModel(),
+            {"prompts": batch["prompts"], "prompt_attention_mask": batch["prompt_attention_mask"]},
+            generation_config,
+            pad_id,
+        )
+    
+        assert torch.equal(new_ids, batch["input_ids"])
+        if pad_id is not None:
+            expected_mask = (batch["input_ids"] != pad_id).long()
+            assert torch.equal(new_mask, expected_mask)
+        else:
+            assert torch.all(new_mask == 1)
+    
+        prompt_len = int(batch["prompt_attention_mask"].sum().item())
+        tail_labels = new_labels[0, prompt_len:]
+        expected_tail = batch["input_ids"][0, prompt_len:]
+        active_mask = tail_labels != -100
+        assert torch.all(new_labels[0, :prompt_len] == -100)
+        assert torch.equal(tail_labels[active_mask], expected_tail[active_mask])
+        assert torch.all(tail_labels[~active_mask] == -100)
+    
+        prompt_tokens = batch["prompts"][0, batch["prompt_attention_mask"][0].bool()]
+        decoded_prompt = smollm_tokenizer.decode(prompt_tokens.tolist(), skip_special_tokens=False)
+        assert prompt_texts[0] == decoded_prompt
+    
+        assistant_completion = openr1_examples[0]["messages"][-1]["content"].strip()
+        assert assistant_completion in completion_texts[0]
+    
+    
 class TestGOLDTrainerLoss(TrlTestCase):
     def setup_method(self):
         self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
