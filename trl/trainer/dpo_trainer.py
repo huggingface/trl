@@ -1179,17 +1179,17 @@ class DPOTrainer(_BaseTrainer):
                 if is_peft_model(self.model):
                     model = self.accelerator.unwrap_model(self.model)
                     with use_adapter(model, adapter_name="ref" if "ref" in model.peft_config else None):
-                        ref_outputs = self.model(**model_kwargs)
+                        ref_logits = self.model(**model_kwargs).logits
                 else:
-                    ref_outputs = self.model(**model_kwargs)
+                    ref_logits = self.model(**model_kwargs).logits
             else:
-                ref_outputs = self.ref_model(**model_kwargs)
+                ref_logits = self.ref_model(**model_kwargs).logits
 
         input_ids = inputs["input_ids"]
         completion_mask = inputs["completion_mask"]
         shift_labels = input_ids[..., 1:]
         shift_completion_mask = completion_mask[..., 1:]
-        ref_shift_logits = ref_outputs.logits[..., :-1, :]
+        ref_shift_logits = ref_logits[..., :-1, :]
         ref_per_token_logps = selective_log_softmax(ref_shift_logits, shift_labels)
         ref_per_token_logps[shift_completion_mask == 0] = 0.0
 
