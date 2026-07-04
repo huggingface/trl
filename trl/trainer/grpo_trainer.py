@@ -1219,7 +1219,6 @@ class GRPOTrainer(_BaseTrainer):
         logits_to_keep,
         batch_size=None,
         compute_entropy=False,
-        entropy_needs_grad=False,
         compute_aux_loss=False,
         pixel_values=None,
         image_grid_thw=None,
@@ -1302,9 +1301,8 @@ class GRPOTrainer(_BaseTrainer):
             all_logps.append(logps)
 
             if compute_entropy:
-                # Entropies are computed under no_grad by default (they are only used for logging and the
-                # top_entropy_quantile mask, neither of which is differentiable, and the full-vocab softmax
-                # is memory-heavy). When they feed the differentiable entropy bonus, they must carry grad.
+                # The entropy bonus is a differentiable loss term, so entropies must carry grad when it is active
+                entropy_needs_grad = self.entropy_coef != 0.0 or self.use_adaptive_entropy
                 if entropy_needs_grad:
                     entropies = entropy_from_logits(logits)
                 else:
@@ -2745,8 +2743,6 @@ class GRPOTrainer(_BaseTrainer):
             attention_mask,
             logits_to_keep,
             compute_entropy=True,
-            # The entropy bonus is a differentiable loss term, so entropies must carry grad when it is active.
-            entropy_needs_grad=self.entropy_coef != 0.0 or self.use_adaptive_entropy,
             compute_aux_loss=self.aux_loss_enabled,
             pixel_values=inputs.get("pixel_values"),
             image_grid_thw=inputs.get("image_grid_thw"),
