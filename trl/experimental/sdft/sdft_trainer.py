@@ -709,7 +709,9 @@ class SDFTTrainer(_BaseTrainer):
         student_prompt_ids_list = self._tokenize_prompts(prompts)
         if self.generate_from_teacher:
             generation_prompts = self.teacher_context_builder.select_generation_prompts(prompts, privileged_contexts)
-            generation_prompt_ids_list = self._tokenize_prompts(generation_prompts)
+            generation_prompt_ids_list = self._tokenize_prompts(
+                generation_prompts, chat_template_kwargs=self.teacher_chat_template_kwargs
+            )
         else:
             generation_prompts = prompts
             generation_prompt_ids_list = student_prompt_ids_list
@@ -950,6 +952,9 @@ class SDFTTrainer(_BaseTrainer):
 
         old_per_token_logps = inputs.get("old_per_token_logps")
         if self.args.distillation_is_clip is not None and old_per_token_logps is not None:
+            # Detached IS ratio is a per-token scalar multiplier — safe with any per_token_loss regime, including
+            # DOPD's four-regime routed loss whose stop-gradient sub-terms (regimes 2 and 4) are unaffected by an
+            # external detached weight.
             student_per_token_logps = selective_log_softmax(
                 distillation_logits.student_logits,
                 distillation_logits.completion_ids,
