@@ -87,27 +87,72 @@ logger = get_logger(__name__)
 @dataclass
 class DataCollatorForUnpairedPreference(DataCollatorMixin):
     """
-    Data collator for unpaired preference data. Assembles completions from raw token IDs and pads sequences to the
-    maximum length of the batch.
+    Data collator used for unpaired preference data. Inputs are dynamically padded to the maximum length of a batch.
 
-    Each example is expected to contain `"prompt_ids"` and `"completion_ids"` keys (and optionally a
-    `"KL_completion_ids"` key). The collator returns a dictionary containing:
-    - `"input_ids"`: prompt + completion token IDs, padded to the batch maximum length.
-    - `"attention_mask"`: attention mask, padded with 0s.
-    - `"completion_mask"`: binary mask where 1 marks completion tokens and 0 marks prompt or padding tokens.
+    This collator expects each example in the input list to be a dictionary containing the `"prompt_ids"` and
+    `"completion_ids"` keys (and optionally a `"KL_completion_ids"` key). The collator returns a dictionary containing
+    the following keys:
+    - `"input_ids"`: Tensor of input IDs, padded to the maximum length of the batch.
+    - `"attention_mask"`: Tensor of attention mask, padded to the maximum length of the batch.
+    - `"completion_mask"`: Tensor indicating the positions of the completion tokens, padded to the maximum length of
+        the batch.
 
     When `"KL_completion_ids"` is present, the same three tensors are returned for the (mismatched) KL sequence under
     the `"KL_input_ids"`, `"KL_attention_mask"` and `"KL_completion_mask"` keys.
 
+    The returned dictionary also contains a `"label"` key with the list of labels. Optionally, the examples can contain
+    `"ref_logps"` and `"ref_KL_logps"` keys, in which case the returned dictionary will also contain these keys with
+    the corresponding tensors.
+
     Args:
         pad_token_id (`int`):
-            Token ID to use for padding `input_ids` sequences.
+            Token ID to use for padding.
         max_length (`int`, *optional*):
-            Maximum sequence length after assembly. Sequences longer than `max_length` are truncated from the right.
+            Maximum length of the sequences in the batch. Sequences longer than `max_length` are truncated before
+            padding, which avoids allocating oversized tensors for batches containing very long sequences.
         pad_to_multiple_of (`int`, *optional*):
             If set, the sequences will be padded to a multiple of this value.
         return_tensors (`str`, *optional*, defaults to `"pt"`):
-            The tensor type to return. Currently, only `"pt"` (PyTorch tensors) is supported.
+            Type of Tensor to return. Only `"pt"` is currently supported.
+
+    Examples:
+    ```python
+    >>> from trl.experimental.kto.kto_trainer import DataCollatorForUnpairedPreference
+
+    >>> collator = DataCollatorForUnpairedPreference(pad_token_id=0)
+    >>> examples = [
+    ...     {"prompt_ids": [1, 2, 3], "completion_ids": [4, 5], "label": True},
+    ...     {"prompt_ids": [7, 8], "completion_ids": [9], "label": False},
+    ... ]
+    >>> collator(examples)
+    {'input_ids': tensor([[1, 2, 3, 4, 5],
+                          [7, 8, 9, 0, 0]]),
+     'attention_mask': tensor([[1, 1, 1, 1, 1],
+                               [1, 1, 1, 0, 0]]),
+     'completion_mask': tensor([[0, 0, 0, 1, 1],
+                                [0, 0, 1, 0, 0]]),
+     'label': [True, False]}
+
+    >>> # With KL completions
+    >>> examples = [
+    ...     {"prompt_ids": [1, 2, 3], "completion_ids": [4, 5], "KL_completion_ids": [6], "label": True},
+    ...     {"prompt_ids": [7, 8], "completion_ids": [9], "KL_completion_ids": [10, 11], "label": False},
+    ... ]
+    >>> collator(examples)
+    {'input_ids': tensor([[1, 2, 3, 4, 5],
+                          [7, 8, 9, 0, 0]]),
+     'attention_mask': tensor([[1, 1, 1, 1, 1],
+                               [1, 1, 1, 0, 0]]),
+     'completion_mask': tensor([[0, 0, 0, 1, 1],
+                                [0, 0, 1, 0, 0]]),
+     'KL_input_ids': tensor([[ 1,  2,  3,  6],
+                             [ 7,  8, 10, 11]]),
+     'KL_attention_mask': tensor([[1, 1, 1, 1],
+                                  [1, 1, 1, 1]]),
+     'KL_completion_mask': tensor([[0, 0, 0, 1],
+                                   [0, 0, 1, 1]]),
+     'label': [True, False]}
+    ```
     """
 
     pad_token_id: int
@@ -116,37 +161,38 @@ class DataCollatorForUnpairedPreference(DataCollatorMixin):
     return_tensors: str = "pt"
 
     def torch_call(self, examples: list[dict[str, Any]]) -> dict[str, Any]:
-        batch = {}
+        output = {}
         for prefix, ids_key in [("", "completion_ids"), ("KL_", "KL_completion_ids")]:
             if ids_key not in examples[0]:
                 continue
 
             full_ids_list = []
             completion_mask_list = []
-            for ex in examples:
-                prompt_ids = ex["prompt_ids"]
-                answer_ids = ex[ids_key]
+            for example in examples:
+                prompt_ids = example["prompt_ids"]
+                answer_ids = example[ids_key]
                 full_ids = prompt_ids + answer_ids
                 completion_mask = [0] * len(prompt_ids) + [1] * len(answer_ids)
+                # Truncate per sequence if necessary
                 if self.max_length is not None:
                     full_ids = full_ids[: self.max_length]
                     completion_mask = completion_mask[: self.max_length]
                 full_ids_list.append(full_ids)
                 completion_mask_list.append(completion_mask)
 
-            batch[f"{prefix}input_ids"] = pad(
+            output[f"{prefix}input_ids"] = pad(
                 [torch.tensor(ids, dtype=torch.int64) for ids in full_ids_list],
                 padding_value=self.pad_token_id,
                 padding_side="right",
                 pad_to_multiple_of=self.pad_to_multiple_of,
             )
-            batch[f"{prefix}attention_mask"] = pad(
+            output[f"{prefix}attention_mask"] = pad(
                 [torch.ones(len(ids), dtype=torch.int64) for ids in full_ids_list],
                 padding_value=0,
                 padding_side="right",
                 pad_to_multiple_of=self.pad_to_multiple_of,
             )
-            batch[f"{prefix}completion_mask"] = pad(
+            output[f"{prefix}completion_mask"] = pad(
                 [torch.tensor(m, dtype=torch.int64) for m in completion_mask_list],
                 padding_value=0,
                 padding_side="right",
@@ -154,48 +200,100 @@ class DataCollatorForUnpairedPreference(DataCollatorMixin):
             )
 
         if "ref_logps" in examples[0]:
-            batch["ref_logps"] = torch.tensor([ex["ref_logps"] for ex in examples])
+            output["ref_logps"] = torch.tensor([example["ref_logps"] for example in examples])
         if "ref_KL_logps" in examples[0]:
-            batch["ref_KL_logps"] = torch.tensor([ex["ref_KL_logps"] for ex in examples])
-        batch["label"] = [ex["label"] for ex in examples]
-        return batch
+            output["ref_KL_logps"] = torch.tensor([example["ref_KL_logps"] for example in examples])
+        output["label"] = [example["label"] for example in examples]
+        return output
 
 
 @dataclass
 class DataCollatorForVisionUnpairedPreference(DataCollatorMixin):
     """
-    Data collator for vision unpaired preference data. Performs tokenization and image processing on-the-fly.
+    Data collator for vision unpaired-preference tasks.
 
-    Unlike the text-only [`DataCollatorForUnpairedPreference`], this collator does not expect pre-tokenized inputs.
-    Instead, it takes raw examples with `"prompt"`, `"completion"`, and `"images"` (or `"image"`) keys and processes
-    them at collation time. When `calculate_kl` is `True`, the collator also produces KL sequences by cycling
-    completions within the batch — the same mismatching strategy as the text-only path, but done here rather than as a
-    dataset pre-processing step.
+    Unlike text-only datasets, where the collator typically receives pre-tokenized inputs ready for batching,
+    vision-language data processing involves converting images into pixel values. This conversion is disk-intensive,
+    making upfront preprocessing of the entire dataset impractical. Therefore, this collator performs tokenization and
+    image processing on-the-fly to efficiently prepare batches.
 
-    Each input example should contain at least:
-    - A `"prompt"` key with either a plain text string or a list of message dicts.
-    - A `"completion"` key with a plain text string or a list of message dicts.
+    When `calculate_kl` is `True`, the collator also produces KL sequences by cycling completions within the batch.
+
+    Each input example should be a dictionary containing at least:
     - An `"images"` key holding a list of images, or an `"image"` key holding a single image.
+    - Keys `"prompt"` and `"completion"` for the prompt and completion.
     - A `"label"` key (`bool`) indicating whether the completion is desirable.
 
-    The collator outputs:
-    - `"input_ids"`, `"attention_mask"`, `"completion_mask"`: full prompt+completion sequence.
-    - `"pixel_values"` and any additional processor outputs (e.g., `"image_grid_thw"`).
-    - `"label"`: list of booleans.
-    - When `calculate_kl=True`: `"KL_input_ids"`, `"KL_attention_mask"`, `"KL_completion_mask"` for the cycled KL
-      sequences.
+    The collator outputs a dictionary including:
+    - `"input_ids"`: Tensor of token IDs.
+    - `"attention_mask"`: Tensor indicating attention mask.
+    - `"pixel_values"`: Tensor representing image pixel values.
+    - `"completion_mask"`: Tensor indicating which tokens correspond to completions.
+    - `"label"`: List of booleans indicating whether each completion is desirable.
+    - When `calculate_kl` is `True`: `"KL_input_ids"`, `"KL_attention_mask"` and `"KL_completion_mask"` for the cycled
+      KL sequences.
+
+    Additional keys may be present depending on the processor, such as `"image_grid_thw"` or `"image_position_ids"`.
 
     Args:
         processor ([`~transformers.ProcessorMixin`]):
-            The processor used to tokenize text and process images.
+            The processor used to tokenize text and process images. It must be a subclass of
+            [`~transformers.ProcessorMixin`] and include a `tokenizer` with a defined `pad_token_id`.
         max_length (`int`, *optional*):
-            Maximum sequence length. Sequences longer than `max_length` are truncated.
+            Maximum sequence length. Sequences longer than `max_length` are truncated to `max_length`. If `None`, no
+            truncation is applied.
         calculate_kl (`bool`, *optional*, defaults to `True`):
             Whether to produce KL sequences by cycling completions within the batch.
         pad_to_multiple_of (`int`, *optional*):
             If set, the sequences will be padded to a multiple of this value.
         return_tensors (`str`, *optional*, defaults to `"pt"`):
-            The tensor type to return. Only `"pt"` is supported.
+            Type of Tensor to return. Only `"pt"` is currently supported.
+
+    Example:
+    ```python
+    >>> from trl.experimental.kto.kto_trainer import DataCollatorForVisionUnpairedPreference
+    >>> from transformers import AutoProcessor
+
+    >>> processor = AutoProcessor.from_pretrained("Qwen/Qwen2.5-VL-7B-Instruct")
+    >>> collator = DataCollatorForVisionUnpairedPreference(processor)
+    >>> examples = [
+    ...     {
+    ...         "images": [Image.open("image_0.png")],
+    ...         "prompt": [{"role": "user", "content": "What is this?"}],
+    ...         "completion": [{"role": "assistant", "content": "This is a cat."}],
+    ...         "label": True,
+    ...     },
+    ...     {
+    ...         "images": [Image.open("image_1.png")],
+    ...         "prompt": [{"role": "user", "content": "Describe this image."}],
+    ...         "completion": [{"role": "assistant", "content": "A beautiful landscape."}],
+    ...         "label": False,
+    ...     },
+    ... ]
+    >>> collator(examples)
+    {'input_ids': tensor([[151644,   8948,    198,   2610,    525,    264,  10950,  17847,     13, 151645,    198, 151644,    872,    198, 151652, 151655, 151655, 151655, 151655, 151653,   3838,    374,    419,     30, 151645,    198, 151644,  77091,    198,   1986,    374,    264,   8251,     13, 151645,    198],
+                          [151644,   8948,    198,   2610,    525,    264,  10950,  17847,     13, 151645,    198, 151644,    872,    198, 151652, 151655, 151655, 151655, 151655, 151653,  74785,    419,   2168,     13, 151645,    198, 151644,  77091,    198,     32,   6233,  18414,     13, 151645,    198, 151643]]),
+     'attention_mask': tensor([[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+                               [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0]]),
+     'pixel_values': tensor([[-0.0405, -0.0405, -0.0405,  ...,  1.3638,  1.3638,  1.3638],
+                             [-0.0405, -0.0405, -0.0405,  ...,  1.3638,  1.3638,  1.3638],
+                             [-0.0405, -0.0405, -0.0405,  ...,  1.3638,  1.3638,  1.3638],
+                             ...,
+                             [-1.3543, -1.3543, -1.3543,  ..., -0.2004, -0.2004, -0.2004],
+                             [-1.3543, -1.3543, -1.3543,  ..., -0.2004, -0.2004, -0.2004],
+                             [-1.3543, -1.3543, -1.3543,  ..., -0.2004, -0.2004, -0.2004]]),
+     'image_grid_thw': tensor([[1, 4, 4],
+                               [1, 4, 4]]),
+     'completion_mask': tensor([[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1],
+                                [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0]]),
+     'KL_input_ids': tensor([[151644,   8948,    198,   2610,    525,    264,  10950,  17847,     13, 151645,    198, 151644,    872,    198, 151652, 151655, 151655, 151655, 151655, 151653,   3838,    374,    419,     30, 151645,    198, 151644,  77091,    198,     32,   6233,  18414,     13, 151645,    198, 151643],
+                             [151644,   8948,    198,   2610,    525,    264,  10950,  17847,     13, 151645,    198, 151644,    872,    198, 151652, 151655, 151655, 151655, 151655, 151653,  74785,    419,   2168,     13, 151645,    198, 151644,  77091,    198,   1986,    374,    264,   8251,     13, 151645,    198]]),
+     'KL_attention_mask': tensor([[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0],
+                                  [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]]),
+     'KL_completion_mask': tensor([[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0],
+                                   [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1]]),
+     'label': [True, False]}
+    ```
     """
 
     processor: ProcessorMixin
@@ -248,31 +346,24 @@ class DataCollatorForVisionUnpairedPreference(DataCollatorMixin):
         input_ids = torch.cat((prompt_ids, completion_ids), dim=1)
         attention_mask = torch.cat((prompt_mask, completion_mask), dim=1)
         completion_mask = torch.cat((torch.zeros_like(prompt_mask), completion_mask), dim=1)
-
-        has_tti = "token_type_ids" in processed_prompts
-        has_mm_tti = "mm_token_type_ids" in processed_prompts
-
-        if has_tti:  # special case for Gemma
+        if "token_type_ids" in processed_prompts:  # special case for Gemma
             prompt_token_type_ids = processed_prompts["token_type_ids"]
             completion_token_type_ids = processed_completions["token_type_ids"]
             token_type_ids = torch.cat((prompt_token_type_ids, completion_token_type_ids), dim=1)
-        if has_mm_tti:  # special case for Qwen2.5-VL
+        if "mm_token_type_ids" in processed_prompts:  # special case for Qwen2.5-VL
             prompt_mm_token_type_ids = processed_prompts["mm_token_type_ids"]
-            completion_mm_token_type_ids = processed_completions.get(
-                "mm_token_type_ids", torch.zeros_like(completion_ids)
-            )
-            mm_token_type_ids = torch.cat((prompt_mm_token_type_ids, completion_mm_token_type_ids), dim=1)
+            mm_token_type_ids = torch.cat((prompt_mm_token_type_ids, torch.zeros_like(completion_ids)), dim=1)
 
         # Flush left to reduce padding
-        if has_tti and has_mm_tti:
+        if "token_type_ids" in processed_prompts and "mm_token_type_ids" in processed_prompts:
             attention_mask, input_ids, completion_mask, token_type_ids, mm_token_type_ids = flush_left(
                 attention_mask, input_ids, completion_mask, token_type_ids, mm_token_type_ids
             )
-        elif has_tti:
+        elif "token_type_ids" in processed_prompts:
             attention_mask, input_ids, completion_mask, token_type_ids = flush_left(
                 attention_mask, input_ids, completion_mask, token_type_ids
             )
-        elif has_mm_tti:
+        elif "mm_token_type_ids" in processed_prompts:
             attention_mask, input_ids, completion_mask, mm_token_type_ids = flush_left(
                 attention_mask, input_ids, completion_mask, mm_token_type_ids
             )
@@ -284,9 +375,9 @@ class DataCollatorForVisionUnpairedPreference(DataCollatorMixin):
             input_ids = input_ids[:, : self.max_length]
             attention_mask = attention_mask[:, : self.max_length]
             completion_mask = completion_mask[:, : self.max_length]
-            if has_tti:
+            if "token_type_ids" in processed_prompts:
                 token_type_ids = token_type_ids[:, : self.max_length]
-            if has_mm_tti:
+            if "mm_token_type_ids" in processed_prompts:
                 mm_token_type_ids = mm_token_type_ids[:, : self.max_length]
 
         # Build the output dictionary
@@ -294,9 +385,9 @@ class DataCollatorForVisionUnpairedPreference(DataCollatorMixin):
         output["input_ids"] = input_ids
         output["attention_mask"] = attention_mask
         output["completion_mask"] = completion_mask
-        if has_tti:
+        if "token_type_ids" in processed_prompts:
             output["token_type_ids"] = token_type_ids
-        if has_mm_tti:
+        if "mm_token_type_ids" in processed_prompts:
             output["mm_token_type_ids"] = mm_token_type_ids
 
         if self.calculate_kl:
@@ -318,24 +409,23 @@ class DataCollatorForVisionUnpairedPreference(DataCollatorMixin):
             kl_completion_mask = torch.cat((torch.zeros_like(prompt_mask), kl_mask), dim=1)
 
             # Build KL token-type tensors using the original (pre-flush) prompt tensors
-            if has_tti:
-                kl_completion_token_type_ids = processed_kl.get("token_type_ids", torch.zeros_like(kl_ids))
+            if "token_type_ids" in processed_prompts:
+                kl_completion_token_type_ids = processed_kl["token_type_ids"]
                 kl_token_type_ids = torch.cat((prompt_token_type_ids, kl_completion_token_type_ids), dim=1)
-            if has_mm_tti:
-                kl_completion_mm_token_type_ids = processed_kl.get("mm_token_type_ids", torch.zeros_like(kl_ids))
-                kl_mm_token_type_ids = torch.cat((prompt_mm_token_type_ids, kl_completion_mm_token_type_ids), dim=1)
+            if "mm_token_type_ids" in processed_prompts:
+                kl_mm_token_type_ids = torch.cat((prompt_mm_token_type_ids, torch.zeros_like(kl_ids)), dim=1)
 
-            if has_tti and has_mm_tti:
+            if "token_type_ids" in processed_prompts and "mm_token_type_ids" in processed_prompts:
                 kl_attention_mask, kl_input_ids, kl_completion_mask, kl_token_type_ids, kl_mm_token_type_ids = (
                     flush_left(
                         kl_attention_mask, kl_input_ids, kl_completion_mask, kl_token_type_ids, kl_mm_token_type_ids
                     )
                 )
-            elif has_tti:
+            elif "token_type_ids" in processed_prompts:
                 kl_attention_mask, kl_input_ids, kl_completion_mask, kl_token_type_ids = flush_left(
                     kl_attention_mask, kl_input_ids, kl_completion_mask, kl_token_type_ids
                 )
-            elif has_mm_tti:
+            elif "mm_token_type_ids" in processed_prompts:
                 kl_attention_mask, kl_input_ids, kl_completion_mask, kl_mm_token_type_ids = flush_left(
                     kl_attention_mask, kl_input_ids, kl_completion_mask, kl_mm_token_type_ids
                 )
@@ -349,20 +439,20 @@ class DataCollatorForVisionUnpairedPreference(DataCollatorMixin):
                 kl_input_ids = kl_input_ids[:, : self.max_length]
                 kl_attention_mask = kl_attention_mask[:, : self.max_length]
                 kl_completion_mask = kl_completion_mask[:, : self.max_length]
-                if has_tti:
+                if "token_type_ids" in processed_prompts:
                     kl_token_type_ids = kl_token_type_ids[:, : self.max_length]
-                if has_mm_tti:
+                if "mm_token_type_ids" in processed_prompts:
                     kl_mm_token_type_ids = kl_mm_token_type_ids[:, : self.max_length]
 
             output["KL_input_ids"] = kl_input_ids
             output["KL_attention_mask"] = kl_attention_mask
             output["KL_completion_mask"] = kl_completion_mask
-            if has_tti:
+            if "token_type_ids" in processed_prompts:
                 output["KL_token_type_ids"] = kl_token_type_ids
-            if has_mm_tti:
+            if "mm_token_type_ids" in processed_prompts:
                 output["KL_mm_token_type_ids"] = kl_mm_token_type_ids
 
-        output["label"] = [ex["label"] for ex in examples]
+        output["label"] = [example["label"] for example in examples]
         return output
 
 
@@ -656,8 +746,6 @@ class KTOTrainer(_BaseTrainer):
         self.loss_type = args.loss_type
         self.desirable_weight = args.desirable_weight
         self.undesirable_weight = args.undesirable_weight
-        self.aux_loss_enabled = getattr(model.config, "output_router_logits", False)
-        self.aux_loss_coef = getattr(model.config, "router_aux_loss_coef", 0.0)
         self.calculate_KL = calculate_kl
         if self.calculate_KL and args.train_sampling_strategy != "sequential":
             raise ValueError(
@@ -670,14 +758,6 @@ class KTOTrainer(_BaseTrainer):
             raise ValueError(
                 "Actual (not effective) batch size must be > 1. KTO will not work properly because the KL term will be equivalent to the implied reward."
             )
-        if self.aux_loss_enabled and self.aux_loss_coef == 0.0:
-            logger.warning(
-                "You set `output_router_logits` to `True` in the model config, but `router_aux_loss_coef` is set to "
-                "`0.0`, meaning the auxiliary loss will not be used. Either set `router_aux_loss_coef` to a value "
-                "greater than `0.0`, or set `output_router_logits` to `False` if you don't want to use the auxiliary "
-                "loss.",
-            )
-
         # Liger loss
         self.use_liger_kernel = args.use_liger_kernel
         if self.use_liger_kernel:
@@ -767,6 +847,18 @@ class KTOTrainer(_BaseTrainer):
         else:
             self.maybe_activation_offload_context = contextlib.nullcontext()
 
+        # MoE load-balancing auxiliary loss, applied to Mixture-of-Experts models (no effect otherwise)
+        text_config = model.config.get_text_config()
+        is_moe = getattr(text_config, "output_router_logits", None) is not None
+        self.aux_loss_enabled = is_moe and args.router_aux_loss_coef != 0.0
+        self.router_aux_loss_coef = args.router_aux_loss_coef
+        if self.aux_loss_enabled and self.use_liger_kernel:
+            raise ValueError(
+                "Liger KTO loss does not support the Mixture-of-Experts load-balancing auxiliary loss, because it "
+                "fuses the loss without materializing the router logits. Either set `router_aux_loss_coef` to `0.0` "
+                "to disable the auxiliary loss, or set `use_liger_kernel` to False."
+            )
+
         # Reference model
         if ref_model is None:
             if is_peft_model(self.model) or args.precompute_ref_log_probs:
@@ -793,6 +885,7 @@ class KTOTrainer(_BaseTrainer):
 
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
+        self._total_train_tokens = 0
 
         # Gradient accumulation requires scaled loss. Normally, loss scaling in the parent class depends on whether the
         # model accepts loss-related kwargs. Since we compute our own loss, this check is irrelevant. We set
@@ -1352,6 +1445,12 @@ class KTOTrainer(_BaseTrainer):
 
         self._metrics[mode]["kl"].append(kl.item())
 
+        # Number of tokens
+        if mode == "train":
+            num_tokens_in_batch = self.accelerator.gather_for_metrics(batch["attention_mask"].sum()).sum().item()
+            self._total_train_tokens += num_tokens_in_batch
+        self._metrics[mode]["num_tokens"] = [self._total_train_tokens]
+
         all_num_chosen = self.accelerator.gather_for_metrics(num_chosen).sum().item()
         all_num_rejected = self.accelerator.gather_for_metrics(num_rejected).sum().item()
 
@@ -1411,8 +1510,6 @@ class KTOTrainer(_BaseTrainer):
             model_kwargs["output_router_logits"] = True
 
         outputs = model(**model_kwargs)
-        if self.aux_loss_enabled:
-            aux_loss = outputs.aux_loss
 
         shift_logits = outputs.logits[:, :-1, :]
         per_token_logps = selective_log_softmax(shift_logits, batch["input_ids"][:, 1:])
@@ -1518,6 +1615,12 @@ class KTOTrainer(_BaseTrainer):
         entropy = (entropy_sum / total_tokens).item() if total_tokens > 0 else 0.0
         self._metrics[mode]["entropy"].append(entropy)
 
+        # Number of tokens
+        if mode == "train":
+            num_tokens_in_batch = self.accelerator.gather_for_metrics(batch["attention_mask"].sum()).sum().item()
+            self._total_train_tokens += num_tokens_in_batch
+        self._metrics[mode]["num_tokens"] = [self._total_train_tokens]
+
         all_num_chosen = self.accelerator.gather_for_metrics(num_chosen).sum().item()
         all_num_rejected = self.accelerator.gather_for_metrics(num_rejected).sum().item()
 
@@ -1550,7 +1653,9 @@ class KTOTrainer(_BaseTrainer):
 
         loss = losses.nanmean()
         if self.aux_loss_enabled:
-            loss += self.aux_loss_coef * aux_loss
+            aux_loss = outputs.aux_loss
+            loss = loss + self.router_aux_loss_coef * aux_loss
+            self._metrics[mode]["aux_loss"].append(self.accelerator.gather_for_metrics(aux_loss).mean().item())
 
         return (loss, outputs) if return_outputs else loss
 
