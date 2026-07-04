@@ -117,7 +117,7 @@ class DataCollatorForUnpairedPreference(DataCollatorMixin):
 
     Examples:
     ```python
-    >>> from trl.experimental.kto.kto_trainer import DataCollatorForUnpairedPreference
+    >>> from trl.trainer.kto_trainer import DataCollatorForUnpairedPreference
 
     >>> collator = DataCollatorForUnpairedPreference(pad_token_id=0)
     >>> examples = [
@@ -251,7 +251,7 @@ class DataCollatorForVisionUnpairedPreference(DataCollatorMixin):
 
     Example:
     ```python
-    >>> from trl.experimental.kto.kto_trainer import DataCollatorForVisionUnpairedPreference
+    >>> from trl.trainer.kto_trainer import DataCollatorForVisionUnpairedPreference
     >>> from transformers import AutoProcessor
 
     >>> processor = AutoProcessor.from_pretrained("Qwen/Qwen2.5-VL-7B-Instruct")
@@ -465,7 +465,7 @@ class KTOTrainer(_BaseTrainer):
     Example:
 
     ```python
-    >>> from trl.experimental.kto import KTOTrainer
+    >>> from trl import KTOTrainer
     >>> from datasets import load_dataset
 
     >>> dataset = load_dataset("trl-lib/kto-mix-14k", split="train")

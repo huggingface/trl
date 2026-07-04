@@ -173,7 +173,7 @@ model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2-0.5B-Instruct", dtype=t
 you can do so by passing the `model_init_kwargs={"dtype": torch.bfloat16}` argument to the [`experimental.kto.KTOConfig`].
 
 ```python
-from trl.experimental.kto import KTOConfig
+from trl import KTOConfig
 
 training_args = KTOConfig(
     model_init_kwargs={"dtype": torch.bfloat16},
@@ -188,7 +188,7 @@ We support tight integration with 🤗 PEFT library, allowing any user to conven
 
 ```python
 from datasets import load_dataset
-from trl.experimental.kto import KTOTrainer
+from trl import KTOTrainer
 from peft import LoraConfig
 
 dataset = load_dataset("trl-lib/kto-mix-14k", split="train")
@@ -225,7 +225,7 @@ For details on the expected dataset structure, see the [Dataset Format — Tool 
 [`experimental.kto.KTOTrainer`] fully supports training Vision-Language Models (VLMs). To train a VLM, provide a dataset with either an `image` column (single image per sample) or an `images` column (list of images per sample). For more information on the expected dataset structure, see the [Dataset Format — Vision Dataset](dataset_formats#vision-dataset) section.
 
 ```python
-from trl.experimental.kto import KTOConfig, KTOTrainer
+from trl import KTOConfig, KTOTrainer
 from datasets import load_dataset
 
 trainer = KTOTrainer(
