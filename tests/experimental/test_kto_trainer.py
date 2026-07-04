@@ -391,6 +391,10 @@ class TestKTOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+        # MoE models log the load-balancing auxiliary loss (on by default)
+        assert trainer.aux_loss_enabled
+        assert trainer.state.log_history[-1]["aux_loss"] is not None
+
     def test_train_with_ref_model_is_model_raises(self):
         training_args = KTOConfig(
             output_dir=self.tmp_dir,
@@ -841,6 +845,24 @@ class TestKTOTrainer(TrlTestCase):
                 args=training_args,
                 train_dataset=dataset,
                 compute_metrics=lambda _: {},
+            )
+
+    @require_liger_kernel
+    def test_init_fails_with_moe_aux_loss_and_liger(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
+
+        # The MoE auxiliary loss is on by default; it is incompatible with the Liger fused loss.
+        training_args = KTOConfig(
+            output_dir=self.tmp_dir,
+            use_liger_kernel=True,
+            report_to="none",
+        )
+
+        with pytest.raises(ValueError, match="does not support the Mixture-of-Experts load-balancing auxiliary loss"):
+            KTOTrainer(
+                model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+                args=training_args,
+                train_dataset=dataset,
             )
 
     def test_train_with_iterable_dataset(self):
