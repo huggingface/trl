@@ -1667,7 +1667,9 @@ class TestGRPOTrainer(TrlTestCase):
         input_ids = torch.tensor([[0, 1, 2, 3, 4, 5, 6, 7]], device=model.device)
         attention_mask = torch.ones_like(input_ids)
 
-        # Bonus active → entropies must be differentiable so the term contributes gradients.
+        # Bonus active (entropy_coef=0.1 sets _entropy_bonus_enabled at init) → entropies must be
+        # differentiable so the term contributes gradients.
+        assert trainer._entropy_bonus_enabled
         _, entropies, _ = trainer._get_per_token_logps_and_entropies(
             model, input_ids, attention_mask, logits_to_keep=4, compute_entropy=True
         )
@@ -1676,6 +1678,7 @@ class TestGRPOTrainer(TrlTestCase):
         # Bonus off → entropies stay detached (preserving the memory optimization).
         trainer.entropy_coef = 0.0
         trainer.use_adaptive_entropy = False
+        trainer._entropy_bonus_enabled = False  # self.entropy_coef != 0.0 or self.use_adaptive_entropy
         _, entropies, _ = trainer._get_per_token_logps_and_entropies(
             model, input_ids, attention_mask, logits_to_keep=4, compute_entropy=True
         )
