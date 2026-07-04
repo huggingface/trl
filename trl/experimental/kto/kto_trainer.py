@@ -1509,6 +1509,9 @@ class KTOTrainer(_BaseTrainer):
             "ref_KL_logps",
         }
         model_kwargs = {k: v for k, v in batch.items() if k not in _non_model_keys}
+        model_kwargs["use_cache"] = False
+        # MoE models: request router logits so the model returns `outputs.aux_loss`. VLM wrappers honor this only
+        # as a forward kwarg (not from the model config), so it must be passed here.
         if self.aux_loss_enabled:
             model_kwargs["output_router_logits"] = True
 

@@ -1326,6 +1326,7 @@ class DPOTrainer(_BaseTrainer):
         # as a forward kwarg (not from the model config), so it must be passed here.
         if self.aux_loss_enabled:
             model_kwargs["output_router_logits"] = True
+
         outputs = model(**model_kwargs)
 
         input_ids = inputs["input_ids"]
