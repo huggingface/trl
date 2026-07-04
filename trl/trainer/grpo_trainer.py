@@ -45,6 +45,7 @@ from transformers import (
     AutoModelForSequenceClassification,
     AutoProcessor,
     AutoTokenizer,
+    BitsAndBytesConfig,
     GenerationConfig,
     PreTrainedModel,
     PreTrainedTokenizerBase,
@@ -56,6 +57,7 @@ from transformers import (
 from transformers.utils import is_peft_available, is_rich_available
 
 from ..chat_template_utils import (
+    _SUPPORTS_RESPONSE_TEMPLATE,
     add_response_schema,
     get_training_chat_template,
     is_chat_template_prefix_preserving,
@@ -95,20 +97,22 @@ from .utils import (
 )
 
 
-if is_peft_available():
-    import peft
-    from peft import LoraConfig, PeftConfig, PeftModel, get_peft_model
-    from peft.tuners.tuners_utils import BaseTunerLayer
-
 if is_liger_kernel_available():
     from liger_kernel.chunked_loss import LigerFusedLinearGRPOLoss
 
 
-if is_wandb_available():
-    import wandb
+if is_peft_available():
+    import peft
+    from peft import LoraConfig, PeftConfig, PeftModel, PromptLearningConfig, get_peft_model
+    from peft.tuners.tuners_utils import BaseTunerLayer
+
 
 if is_trackio_available():
     import trackio
+
+
+if is_wandb_available():
+    import wandb
 
 
 logger = get_logger(__name__)
@@ -163,7 +167,10 @@ class GRPOTrainer(_BaseTrainer):
               path to a *directory* containing model weights saved using
               [`~transformers.PreTrainedModel.save_pretrained`], e.g., `'./my_model_directory/'`. The model is loaded
               using `<ModelArchitecture>.from_pretrained` (where `<ModelArchitecture>` is derived from the model
-              config) with the keyword arguments in `args.model_init_kwargs`.
+              config) with the keyword arguments in `args.model_init_kwargs`. If `dtype` is not specified in
+              `args.model_init_kwargs`, it defaults to `float32`. This differs from
+              [`~transformers.PreTrainedModel.from_pretrained`], where (since Transformers v5) the dtype is inferred
+              from the model config.
             - A [`~transformers.PreTrainedModel`] object. Only causal language models are supported.
             - A [`~peft.PeftModel`] object. Only causal language models are supported.
         reward_funcs (`RewardFunc | list[RewardFunc]`):
@@ -226,6 +233,9 @@ class GRPOTrainer(_BaseTrainer):
         optimizers (`tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None]`, *optional*, defaults to `(None, None)`):
             A tuple containing the optimizer and the scheduler to use. Will default to an instance of `AdamW` on your
             model and a scheduler given by [`~transformers.get_linear_schedule_with_warmup`] controlled by `args`.
+        quantization_config ([`~transformers.BitsAndBytesConfig`], *optional*):
+            Quantization configuration used when loading the model from a model identifier. Combine with `peft_config`
+            for QLoRA training. Ignored if the model is already instantiated.
         peft_config ([`~peft.PeftConfig`], *optional*):
             PEFT configuration used to wrap the model. If `None`, the model is not wrapped.
         tools (list of `Callable`, *optional*):
@@ -280,6 +290,7 @@ class GRPOTrainer(_BaseTrainer):
         reward_processing_classes: PreTrainedTokenizerBase | list[PreTrainedTokenizerBase] | None = None,
         callbacks: list[TrainerCallback] | None = None,
         optimizers: tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None] = (None, None),
+        quantization_config: "BitsAndBytesConfig | None" = None,
         peft_config: "PeftConfig | None" = None,
         tools: list[Callable] | None = None,
         rollout_func: RolloutFunc | None = None,
@@ -293,7 +304,14 @@ class GRPOTrainer(_BaseTrainer):
 
         # Model
         if isinstance(model, str):
-            model_init_kwargs = args.model_init_kwargs or {}
+            model_init_kwargs = dict(args.model_init_kwargs or {})  # copy to avoid mutating model_init_kwargs
+            if quantization_config is not None:
+                if "quantization_config" in model_init_kwargs:
+                    raise ValueError(
+                        "You set `quantization_config` both as a trainer argument and in `args.model_init_kwargs`. "
+                        "Please set it in only one place, preferably as a trainer argument."
+                    )
+                model_init_kwargs["quantization_config"] = quantization_config
             # Distributed training requires device_map=None ("auto" fails)
             if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 model_init_kwargs["device_map"] = None
@@ -304,6 +322,11 @@ class GRPOTrainer(_BaseTrainer):
                 logger.warning(
                     "You passed `model_init_kwargs` to the `GRPOConfig`, but your model is already instantiated. "
                     "The `model_init_kwargs` will be ignored."
+                )
+            if quantization_config is not None:
+                logger.warning(
+                    "You passed `quantization_config` to the trainer, but your model is already instantiated. The "
+                    "`quantization_config` will be ignored."
                 )
         # Non-quantized models do not have the `is_loaded_in_{8,4}bit` attributes, whereas quantized models do
         _is_quantized_model = getattr(model, "is_loaded_in_4bit", False) or getattr(model, "is_loaded_in_8bit", False)
@@ -538,36 +561,40 @@ class GRPOTrainer(_BaseTrainer):
                     "full tool-calling conversation (user -> assistant with tool_calls -> tool)."
                 )
 
-        # Create the environments and extract their methods to be used as tools. We create one environment per rollout
-        generation_batch_size = args.per_device_train_batch_size * args.steps_per_generation
-        if environment_factory is not None:
-            self.environments = [environment_factory() for _ in range(generation_batch_size)]
-            environment_methods = [[] for _ in range(generation_batch_size)]
-            for i, environment in enumerate(self.environments):
-                has_reset = False
-                for name, member in inspect.getmembers(environment, predicate=inspect.ismethod):
-                    if name == "reset":
-                        has_reset = True
-                    elif not name.startswith("_"):
-                        environment_methods[i].append(member)
-                if not has_reset:
-                    raise ValueError(
-                        "Each environment instance returned by `environment_factory` must define a callable `reset` "
-                    )
-        else:
-            self.environments = None
-
+        # Set up the environment and extract its methods to be used as tools.
         tools = tools or []
-        self._sync_tool_dicts = [{} for _ in range(generation_batch_size)]
-        self._async_tool_dicts = [{} for _ in range(generation_batch_size)]
-        for i in range(generation_batch_size):
-            for tool in tools + (environment_methods[i] if self.environments is not None else []):
-                if inspect.iscoroutinefunction(tool):
-                    self._async_tool_dicts[i][tool.__name__] = tool
-                else:
-                    self._sync_tool_dicts[i][tool.__name__] = tool
+        self._standalone_tools = tools  # tools that are not bound to the environment
 
-        self.tools = tools + (environment_methods[0] if self.environments is not None else [])
+        if environment_factory is not None:
+            # The environment instances used by a batch are only known at batch time. Here we just probe one instance to
+            # validate its `reset` method and extract its tool methods, used to render the tool schema in the prompt.
+            # Instances are pooled and reused (reset) across batches; the probe seeds the pool so it is not wasted. The
+            # pool grows only when a batch needs more concurrent instances than have been created so far, preserving the
+            # "construct once, reset often" contract.
+            self.environment_factory = environment_factory
+            instance = environment_factory()
+            has_reset = False
+            methods = []
+            for member_name, member in inspect.getmembers(instance, predicate=inspect.ismethod):
+                if member_name == "reset":
+                    has_reset = True
+                elif not member_name.startswith("_"):
+                    methods.append(member)
+            if not has_reset:
+                raise ValueError(
+                    "Each environment instance returned by `environment_factory` must define a callable `reset`."
+                )
+            self._environment_pool = [instance]  # reusable environment instances
+            self.tools = tools + methods
+        else:
+            self.environment_factory = None
+            self.tools = tools
+
+        # The per-rollout environment instances and tool dicts both depend on the batch, so they are built in
+        # `_generate_and_score_completions`, right before generation. Only `self.environments` needs a default here,
+        # because `_calculate_rewards` reads it for every batch (including batches with no environments); the tool dicts
+        # are only read in the tool-calling loop, which runs after they have been (re)built.
+        self.environments = None
 
         # Check for async functions to start an event loop on a daemon thread
         self._has_async_funcs = any(inspect.iscoroutinefunction(func) for func in self.reward_funcs + self.tools)
@@ -580,12 +607,20 @@ class GRPOTrainer(_BaseTrainer):
             self.async_loop_ready_event.wait()
             atexit.register(shutdown_event_loop_in_daemon, self.async_loop_thread, self.async_loop)
 
-        # At the time of initial implementation, most tokenizers do not have built-in support for response schemas.
-        # While waiting for broader adoption, we provide this utility function to manually set the response schema for
-        # known chat templates. `response_schema` lives on the (inner) tokenizer, since `parse_response` is a tokenizer
-        # method that reads `self.response_schema`.
-        if self.tools and getattr(self._tokenizer, "response_schema", None) is None:
-            processing_class = add_response_schema(processing_class)
+        # `add_response_schema` sets the response template (transformers >= 5.13) or legacy schema for known chat
+        # templates, so tool calls can be parsed. Skip if one is already set; warn if it's a migratable legacy schema.
+        if self.tools:
+            has_template = getattr(self._tokenizer, "response_template", None) is not None
+            has_schema = getattr(self._tokenizer, "response_schema", None) is not None
+            if not has_template and not has_schema:
+                processing_class = add_response_schema(processing_class)
+            elif has_schema and not has_template and _SUPPORTS_RESPONSE_TEMPLATE:
+                warnings.warn(
+                    "The tokenizer has a legacy `response_schema` set but no `response_template`. The installed "
+                    "transformers supports the new-style `response_template`; consider migrating, as `response_schema` "
+                    "support will eventually be removed. See the Transformers response-parsing docs.",
+                    FutureWarning,
+                )
         # In multi-turn training, the chat template *must* be prefix-preserving. If the tokenizer's original template
         # isn't, we replace it at initialization with a training-safe, prefix-preserving template.
         if self.tools and not is_chat_template_prefix_preserving(processing_class):
@@ -655,6 +690,18 @@ class GRPOTrainer(_BaseTrainer):
                     "`use_liger_kernel=True` is incompatible with applying a PEFT adapter to `lm_head`. The Liger "
                     "fused GRPO loss reads `lm_head.weight` directly, so the adapter on the head is ignored and never "
                     "trained. Either remove `'lm_head'` from your `target_modules`, or set `use_liger_kernel=False`."
+                )
+            # Prompt-learning methods (PromptTuning, PrefixTuning, P-Tuning) inject virtual tokens via
+            # `PeftModel.forward()`. The Liger GRPO loss bypasses `PeftModel.forward()` by calling the backbone
+            # directly, so virtual tokens are never prepended and the loss is computed on the wrong sequence.
+            # Fail loudly rather than train on a silently corrupted input.
+            if any(isinstance(cfg, PromptLearningConfig) for cfg in model.peft_config.values()):
+                raise ValueError(
+                    "`use_liger_kernel=True` is incompatible with prompt-learning PEFT methods (PromptTuning, "
+                    "PrefixTuning, P-Tuning). The Liger GRPO loss bypasses `PeftModel.forward()` by calling the "
+                    "backbone directly, so virtual tokens are never prepended and the loss is computed on the "
+                    "wrong sequence. Use a weight-based adapter such as LoRA instead, or set "
+                    "`use_liger_kernel=False`."
                 )
         self.mask_truncated_completions = args.mask_truncated_completions
         self.top_entropy_quantile = args.top_entropy_quantile
@@ -758,7 +805,9 @@ class GRPOTrainer(_BaseTrainer):
             self.ref_model = None
         else:
             # For deepspeed, fsdp or non-distributed models, create a reference model from scratch
-            model_init_kwargs = args.model_init_kwargs or {}
+            model_init_kwargs = dict(args.model_init_kwargs or {})  # copy to avoid mutating model_init_kwargs
+            if quantization_config is not None:
+                model_init_kwargs["quantization_config"] = quantization_config
             # Distributed training requires device_map=None ("auto" fails)
             if self.args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 model_init_kwargs["device_map"] = None
@@ -808,7 +857,7 @@ class GRPOTrainer(_BaseTrainer):
             # redirect the model.module forward to the model forward to ensure pre-forward hooks are called
             self._forward_redirection = _ForwardRedirection()
 
-            self.liger_grpo_loss = LigerFusedLinearGRPOLoss(
+            self.liger_loss = LigerFusedLinearGRPOLoss(
                 beta=self.beta,
                 epsilon_low=self.epsilon_low,
                 epsilon_high=self.epsilon_high,
@@ -1801,8 +1850,11 @@ class GRPOTrainer(_BaseTrainer):
                 pct = prompt_completion_tool_ids[idx]  # = prompt-completion-tool
                 completion_ids[idx_with_tool] = pct[prompt_length:] + post_tool_ids[idx]
 
-            # Decode post-tool completions.
-            post_tool_completions = [parse_response(self._tokenizer, ids) if ids else {} for ids in post_tool_ids]
+            # Decode post-tool completions
+            post_tool_completions = [
+                parse_response(self._tokenizer, ids, prefix=prompt_completion_tool_ids[idx]) if ids else {}
+                for idx, ids in enumerate(post_tool_ids)
+            ]
 
             # Add post-tool completions to the existing completions
             for idx in range(len(idxs_with_tool)):
@@ -1852,12 +1904,14 @@ class GRPOTrainer(_BaseTrainer):
 
         # Decode completions. It's important to use `parse_response` when possible, because it handles tool calls.
         if is_conversational({"prompt": prompts[0]}):
-            if (
-                Version(transformers.__version__) >= Version("5.0.0")  # parse_response added in v5
-                and hasattr(self._tokenizer, "response_schema")  # attribute not set by default for now
-                and self._tokenizer.response_schema is not None  # only works if the tokenizer has a schema
+            if Version(transformers.__version__) >= Version("5.0.0") and (  # parse_response added in v5
+                getattr(self._tokenizer, "response_template", None) is not None  # new-style
+                or getattr(self._tokenizer, "response_schema", None) is not None  # old-style
             ):
-                completions = [[parse_response(self._tokenizer, ids)] for ids in completion_ids]
+                completions = [
+                    [parse_response(self._tokenizer, ids, prefix=prompt_ids[i])]
+                    for i, ids in enumerate(completion_ids)
+                ]
             else:
                 contents = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
                 completions = [[{"role": "assistant", "content": content}] for content in contents]
@@ -1951,6 +2005,37 @@ class GRPOTrainer(_BaseTrainer):
         mode = "train" if self.model.training else "eval"
 
         prompts = [x["prompt"] for x in inputs]
+
+        # Draw one reusable instance per rollout from the pool, creating more only when this batch needs more concurrent
+        # instances than exist.
+        if self.environment_factory is not None:
+            self.environments = []
+            for i in range(len(inputs)):
+                if i == len(self._environment_pool):
+                    self._environment_pool.append(self.environment_factory())
+                self.environments.append(self._environment_pool[i])
+
+        # Build the per-rollout tool dicts for this batch: the standalone tools plus, for each rollout, the methods of
+        # its environment. Done here (not at init) because the environment instances are drawn at batch time.
+        if self.tools:
+            self._sync_tool_dicts = []
+            self._async_tool_dicts = []
+            for i in range(len(inputs)):
+                methods = []
+                if self.environments:
+                    methods = [
+                        member
+                        for member_name, member in inspect.getmembers(self.environments[i], predicate=inspect.ismethod)
+                        if member_name != "reset" and not member_name.startswith("_")
+                    ]
+                sync_tool_dict, async_tool_dict = {}, {}
+                for tool in self._standalone_tools + methods:
+                    if inspect.iscoroutinefunction(tool):
+                        async_tool_dict[tool.__name__] = tool
+                    else:
+                        sync_tool_dict[tool.__name__] = tool
+                self._sync_tool_dicts.append(sync_tool_dict)
+                self._async_tool_dicts.append(async_tool_dict)
 
         if self.environments:
             for prompt, environment, reset_kwargs in zip(prompts, self.environments, inputs, strict=True):
@@ -2518,7 +2603,7 @@ class GRPOTrainer(_BaseTrainer):
 
                 gather_ctx = deepspeed.zero.GatheredParameters(params, modifier_rank=None)
         with gather_ctx:
-            loss, metrics = self.liger_grpo_loss(
+            loss, metrics = self.liger_loss(
                 _input=last_hidden_state,
                 lin_weight=lm_head_weight,
                 selected_token_ids=completion_ids,

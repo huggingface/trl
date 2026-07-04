@@ -46,8 +46,10 @@ if is_rich_available():
     from rich.progress import Progress
     from rich.table import Table
 
+
 if is_wandb_available():
     import wandb
+
 
 if is_weave_available():
     import weave
