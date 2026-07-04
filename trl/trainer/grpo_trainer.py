@@ -1799,16 +1799,26 @@ class GRPOTrainer(_BaseTrainer):
                     ]
             loop_images = [merged_images[i] for i in idxs_with_tool] if merged_images else None
             if multimodal_fields:
+                if "num_images" not in multimodal_fields and images is not None:
+                    multimodal_fields = {
+                        **multimodal_fields,
+                        "num_images": [len(img_list) if img_list else 0 for img_list in images],
+                    }
+                split_fields = split_pixel_values_by_grid(multimodal_fields)
                 loop_multimodal_fields = {}
-                for k, v in multimodal_fields.items():
+                for k, v in split_fields.items():
                     selected = [v[i] for i in idxs_with_tool]
+                    if isinstance(v, torch.Tensor):
+                        selected = torch.stack(selected)
                     # Per-token fields (e.g. token_type_ids) need zero-padding to match extended prompt length
-                    if isinstance(selected[0], list):
+                    elif isinstance(selected[0], list):
                         selected = [
                             s + [0] * (len(pct) - len(s))
                             for s, pct in zip(selected, prompt_completion_tool_ids, strict=True)
                         ]
                     loop_multimodal_fields[k] = selected
+                loop_multimodal_fields = unsplit_pixel_values_by_grid(loop_multimodal_fields)
+                loop_multimodal_fields.pop("num_images", None)
             else:
                 loop_multimodal_fields = {}
 

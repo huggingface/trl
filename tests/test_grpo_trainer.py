@@ -2996,7 +2996,7 @@ class TestGRPOTrainerVLM(TrlTestCase):
             img = PILImage.new("RGB", (64, 64), color="red")
             return [{"type": "image", "image": img}, {"type": "text", "text": "Here is the screenshot"}]
 
-        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
