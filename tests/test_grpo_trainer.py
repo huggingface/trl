@@ -1650,6 +1650,34 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    def test_entropy_bonus_flows_gradients(self):
+        # Regression test: entropies were computed under torch.no_grad(), which made the entropy bonus a
+        # no-op for training — it lowered the reported loss but contributed no gradient. When the bonus is
+        # active, entropies must carry grad; otherwise (logging / top_entropy_quantile only) they stay
+        # detached to save the memory of the full-vocab softmax graph.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=GRPOConfig(output_dir=self.tmp_dir, report_to="none"),
+            train_dataset=dataset,
+        )
+        model = trainer.model
+        input_ids = torch.tensor([[0, 1, 2, 3, 4, 5, 6, 7]], device=model.device)
+        attention_mask = torch.ones_like(input_ids)
+
+        # Bonus active → entropies must be differentiable so the term contributes gradients.
+        _, entropies_grad, _ = trainer._get_per_token_logps_and_entropies(
+            model, input_ids, attention_mask, logits_to_keep=4, compute_entropy=True, entropy_needs_grad=True
+        )
+        assert entropies_grad.requires_grad
+
+        # Logging / mask only → entropies stay detached (preserving the memory optimization).
+        _, entropies_nograd, _ = trainer._get_per_token_logps_and_entropies(
+            model, input_ids, attention_mask, logits_to_keep=4, compute_entropy=True, entropy_needs_grad=False
+        )
+        assert not entropies_nograd.requires_grad
+
     def test_train_with_entropy_filter(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         training_args = GRPOConfig(
