@@ -17,6 +17,7 @@
 import logging
 import math
 import os
+import shutil
 from contextlib import nullcontext
 from typing import TYPE_CHECKING
 
@@ -41,6 +42,7 @@ from .vllm_client import VLLMClient
 
 if is_vllm_available():
     from vllm import LLM, RequestOutput, SamplingParams
+    from vllm.lora.request import LoRARequest
     from vllm.sampling_params import StructuredOutputsParams
 
 
@@ -249,6 +251,8 @@ class VLLMGeneration:
         max_completion_length: int = 16,
         logprobs: int | None = 0,
         generation_kwargs: dict | None = None,
+        is_lora_model: bool = False,
+        lora_sync_output_dir: str | None = None,
     ):
         self.model = model
         self.accelerator = accelerator
@@ -283,6 +287,16 @@ class VLLMGeneration:
         self.max_completion_length = max_completion_length
         self.logprobs = logprobs
         self.generation_kwargs = generation_kwargs or {}
+        self.is_lora_model = is_lora_model
+        # Adapter-only LoRA sync is auto-detected in `_init_vllm`: it requires a LoRA model, server mode, and a server
+        # launched with `--enable-lora`. Otherwise we fall back to syncing full (merged) weights.
+        self.lora_sync = False
+        self.lora_name = "trl_lora_adapter"
+        self.lora_sync_output_dir = lora_sync_output_dir
+        self._lora_sync_version = 0
+        # Colocate adapter sync references the currently-loaded adapter by `lora_request` at generation time; set by
+        # `sync_weights`. Unused in server mode (the server applies the loaded adapter by name automatically).
+        self._lora_request = None
 
         self._init_vllm()
 
@@ -306,6 +320,39 @@ class VLLMGeneration:
                 self.vllm_client = VLLMClient(
                     base_url=base_url, group_port=self.group_port, connection_timeout=self.server_timeout
                 )
+                # Auto-detect adapter-only LoRA sync: a LoRA model against a server launched with `--enable-lora`. If
+                # the model is LoRA but the server is not LoRA-enabled, fall back to merged-weight sync and warn loudly,
+                # since the user likely intended the fast adapter path.
+                lora_sync = self.is_lora_model and self.vllm_client.server_enable_lora
+                server_max_lora_rank = self.vllm_client.server_max_lora_rank
+                if self.is_lora_model and not self.vllm_client.server_enable_lora:
+                    logger.warning(
+                        "Training a LoRA model against a vLLM server that was not launched with `--enable-lora`. "
+                        "Falling back to syncing full merged weights every step. To use the faster adapter-only sync, "
+                        "launch the server with `trl vllm-serve --model ... --enable-lora --max-lora-rank <rank>`."
+                    )
+            else:
+                lora_sync = False
+                server_max_lora_rank = None
+            # Broadcast the decision so every process agrees: `_save_lora_adapter` runs collective gathers that would
+            # otherwise deadlock against the merged-sync path. `server_max_lora_rank` rides along so the rank check
+            # below fires identically on every rank.
+            obj_list = [lora_sync, server_max_lora_rank]
+            broadcast_object_list(obj_list, from_process=0)
+            self.lora_sync, server_max_lora_rank = obj_list
+            # Fail fast with a clear message if the adapter rank exceeds the server's `--max-lora-rank` (only knowable
+            # when the server reported it), instead of hitting the server's opaque load-time error. `rank_pattern` may
+            # raise individual modules above the base `r`.
+            if self.lora_sync and server_max_lora_rank is not None:
+                active_peft_config = model.peft_config[model.active_adapters[0]]
+                adapter_rank = max([active_peft_config.r, *active_peft_config.rank_pattern.values()])
+                if adapter_rank > server_max_lora_rank:
+                    raise ValueError(
+                        f"The LoRA adapter rank ({adapter_rank}) exceeds the vLLM server's `--max-lora-rank` "
+                        f"({server_max_lora_rank}). Relaunch the server with `trl vllm-serve ... --max-lora-rank "
+                        f"{adapter_rank}` (or higher)."
+                    )
+            if accelerator.is_main_process and not self.lora_sync:
                 self.vllm_client.init_communicator(device=torch.cuda.current_device())
 
         elif self.mode == "colocate":
@@ -343,6 +390,19 @@ class VLLMGeneration:
                     elif isinstance(module, bnb.nn.Linear8bitLt):
                         raise ValueError("vLLM does not support in-flight 8-bit quantization.")
 
+            # Adapter-only LoRA sync: in colocate mode the trainer owns the vLLM engine, so (unlike server mode) it
+            # enables LoRA itself and infers `max_lora_rank` from the adapter — no server capability to detect. The
+            # trainer validates the adapter is syncable as a plain LoRA adapter after `__init__` returns.
+            self.lora_sync = self.is_lora_model
+            lora_kwargs = {}
+            if self.lora_sync:
+                if not is_vllm_available(min_version="0.15.0"):
+                    raise ImportError("Adapter-only LoRA sync in colocate mode requires vLLM >= 0.15.0.")
+                active_peft_config = model.peft_config[model.active_adapters[0]]
+                # `rank_pattern` may raise individual modules above the base `r`; vLLM needs the max.
+                max_lora_rank = max([active_peft_config.r, *active_peft_config.rank_pattern.values()])
+                lora_kwargs = {"enable_lora": True, "max_lora_rank": max_lora_rank}
+
             # Build LLM initialization kwargs
             self.llm = LLM(
                 model=model.name_or_path,
@@ -360,6 +420,7 @@ class VLLMGeneration:
                 # Important so temperature scaling/logit tweaking affects the TIS log probs
                 logprobs_mode="processed_logprobs",
                 quantization=quantization,
+                **lora_kwargs,
             )
             if self.enable_sleep_mode:
                 self.llm.sleep(level=2)
@@ -436,6 +497,48 @@ class VLLMGeneration:
         elif self._dist.fsdp_version == 2:
             self._sync_fsdp2_params_to_vllm(model)
 
+    def _save_lora_adapter(self) -> str:
+        """Save the active PEFT adapter to a versioned directory and return its path."""
+        model = self.model
+        accelerator = self.accelerator
+        adapter_name = model.active_adapters[0]
+        self._lora_sync_version += 1
+        root_dir = os.path.join(self.lora_sync_output_dir or os.getcwd(), ".vllm_lora_sync")
+        adapter_dir = os.path.join(root_dir, f"sync_{self._lora_sync_version}")
+        # Write to a temp dir and atomically rename into place, so the server (which may read over NFS) never sees a
+        # half-flushed adapter dir. `os.rename` is atomic within the same filesystem, and tmp_dir/adapter_dir share
+        # root_dir.
+        tmp_dir = f"{adapter_dir}.tmp"
+
+        with self._dist.gather_params([p for p in model.parameters() if p.requires_grad]):
+            with self._dist.summon_full_params(model, recurse=True, writeback=False):
+                state_dict = {
+                    name: param
+                    for name, param in model.state_dict().items()
+                    if "lora_" in name and f".{adapter_name}." in name
+                }
+                state_dict = {
+                    name: param.full_tensor().detach().cpu() if hasattr(param, "full_tensor") else param.detach().cpu()
+                    for name, param in state_dict.items()
+                }
+                if accelerator.is_main_process:
+                    shutil.rmtree(tmp_dir, ignore_errors=True)  # clear any leftover from a crashed prior run
+                    os.makedirs(tmp_dir, exist_ok=True)
+                    model.save_pretrained(
+                        tmp_dir,
+                        selected_adapters=[adapter_name],
+                        state_dict=state_dict,
+                        safe_serialization=True,
+                    )
+                    os.rename(tmp_dir, adapter_dir)
+
+        accelerator.wait_for_everyone()
+        if accelerator.is_main_process and self._lora_sync_version > 2:
+            old_dir = os.path.join(root_dir, f"sync_{self._lora_sync_version - 2}")
+            shutil.rmtree(old_dir, ignore_errors=True)
+        accelerator.wait_for_everyone()
+        return adapter_dir
+
     def sync_weights(self):
         """Synchronize model weights to vLLM.
 
@@ -450,6 +553,25 @@ class VLLMGeneration:
 
         model = self.model
         accelerator = self.accelerator
+
+        if self.lora_sync:
+            adapter_path = self._save_lora_adapter()
+            # `load_inplace=True` reloads the adapter under the same name/id with the freshly trained weights. vLLM
+            # keys its prefix cache on `lora_name` only, so an in-place swap leaves stale KV blocks that would serve
+            # the previous policy's outputs (vLLM issue #42125). Resetting the prefix cache after every swap is
+            # required for correctness here — do not remove it.
+            if self.mode == "server":
+                if accelerator.is_main_process:
+                    self.vllm_client.load_lora_adapter(self.lora_name, adapter_path, load_inplace=True)
+                    self.vllm_client.reset_prefix_cache()
+            else:
+                # Colocate: each rank owns its engine, so each reloads the adapter (pinned `lora_int_id=1`, matching the
+                # server). `generate` then activates it by passing a plain `lora_request` referencing the same id.
+                self.llm.llm_engine.add_lora(LoRARequest(self.lora_name, 1, adapter_path, load_inplace=True))
+                self.llm.reset_prefix_cache()
+                self._lora_request = LoRARequest(self.lora_name, 1, adapter_path)
+            accelerator.wait_for_everyone()
+            return
 
         if is_peft_model(model):
             # With PEFT and FSDP/DeepSpeed ZeRO Stage 3, we must gather the full model at once before merging, as
@@ -672,7 +794,12 @@ class VLLMGeneration:
                 torch.distributed.barrier(device_ids=[accelerator.local_process_index])
 
             with profiler:
-                all_outputs = self.llm.generate(vllm_prompts, sampling_params=sampling_params, use_tqdm=False)
+                all_outputs = self.llm.generate(
+                    vllm_prompts,
+                    sampling_params=sampling_params,
+                    lora_request=self._lora_request,  # `None` unless adapter-only LoRA sync is active
+                    use_tqdm=False,
+                )
 
             all_prompt_ids = [output.prompt_token_ids for output in all_outputs]
             all_completion_ids = [output.token_ids for outputs in all_outputs for output in outputs.outputs]

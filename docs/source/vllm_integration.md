@@ -428,3 +428,57 @@ training_args = RLOOConfig(
 
 > [!WARNING]
 > To reduce GPU memory usage when running vLLM, consider [enabling vLLM sleep mode](reducing_memory_usage#vllm-sleep-mode).
+
+### Faster weight sync for LoRA training
+
+When you train a [PEFT](peft_integration) LoRA model, TRL syncs only the small LoRA adapter to vLLM each step instead of merging and transferring the full model weights. This is much faster — only a few megabytes move per step — and it activates **automatically**, with no configuration flag, whenever vLLM is set up to serve LoRA adapters. If the requirement isn't met, TRL transparently falls back to merging and syncing the full weights.
+
+<hfoptions id="lora sync modes">
+<hfoption id="Server mode">
+
+Launch the server with LoRA enabled, passing `--max-lora-rank` (it must be at least the adapter's `r`):
+
+```bash
+trl vllm-serve --model <model_name> --enable-lora --max-lora-rank 32
+```
+
+Then train as usual with a LoRA `peft_config`. TRL detects the LoRA-enabled server (reported on the server's `/health/` endpoint) and switches to adapter-only sync automatically:
+
+```python
+from peft import LoraConfig
+
+from trl import GRPOConfig, GRPOTrainer
+
+trainer = GRPOTrainer(
+    model="<model_name>",
+    args=GRPOConfig(..., use_vllm=True, vllm_mode="server"),
+    peft_config=LoraConfig(r=32),
+    ...,
+)
+```
+
+If you train a LoRA model against a server launched **without** `--enable-lora`, TRL warns and falls back to full merged-weight sync. If the adapter's rank exceeds the server's `--max-lora-rank`, training stops early with a clear error.
+
+</hfoption>
+<hfoption id="Colocate mode">
+
+In colocate mode the trainer owns the vLLM engine, so there is nothing to configure on a server: TRL enables LoRA on the engine itself and infers `max_lora_rank` from the adapter. Just pass a LoRA `peft_config`:
+
+```python
+from peft import LoraConfig
+
+from trl import GRPOConfig, GRPOTrainer
+
+trainer = GRPOTrainer(
+    model="<model_name>",
+    args=GRPOConfig(..., use_vllm=True, vllm_mode="colocate"),
+    peft_config=LoraConfig(r=32),
+    ...,
+)
+```
+
+</hfoption>
+</hfoptions>
+
+> [!WARNING]
+> Adapter-only sync supports a single active, plain LoRA adapter. Configs with `modules_to_save`, DoRA, or a non-zero `bias` are not supported for fast sync and will raise an error; remove them or train without vLLM LoRA serving to fall back to full-weight sync.

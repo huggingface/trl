@@ -15,6 +15,7 @@
 import os
 import subprocess
 from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 import pytest
 from packaging.version import Version
@@ -30,6 +31,8 @@ from .testing_utils import (
     TrlTestCase,
     kill_process,
     require_3_accelerators,
+    require_peft,
+    require_torch_accelerator,
     require_torch_multi_accelerator,
     require_vision,
     require_vllm,
@@ -69,6 +72,48 @@ class TestChunkList(TrlTestCase):
             [1, "two", 3.0],
             [{"four": 4}, ["f", "i", "v", "e"]],
         ]
+
+
+class TestVLLMClient(TrlTestCase):
+    @pytest.mark.parametrize("enable_lora", [True, False])
+    def test_check_server_reads_enable_lora(self, enable_lora):
+        response = SimpleNamespace(
+            status_code=200, headers={}, json=lambda: {"status": "ok", "enable_lora": enable_lora}
+        )
+        with patch("trl.generation.vllm_client.requests.get", return_value=response):
+            client = VLLMClient(base_url="http://localhost:8000", connection_timeout=0)
+        assert client.server_enable_lora is enable_lora
+
+    @pytest.mark.parametrize("max_lora_rank", [16, None])
+    def test_check_server_reads_max_lora_rank(self, max_lora_rank):
+        response = SimpleNamespace(
+            status_code=200,
+            headers={},
+            json=lambda: {"status": "ok", "enable_lora": True, "max_lora_rank": max_lora_rank},
+        )
+        with patch("trl.generation.vllm_client.requests.get", return_value=response):
+            client = VLLMClient(base_url="http://localhost:8000", connection_timeout=0)
+        assert client.server_max_lora_rank == max_lora_rank
+
+    def test_load_lora_adapter_posts_payload(self):
+        with patch.object(VLLMClient, "check_server"):
+            client = VLLMClient(base_url="http://localhost:8000", connection_timeout=0)
+        client.session.post = MagicMock(return_value=SimpleNamespace(status_code=200))
+
+        client.load_lora_adapter("trl_lora_adapter", "/tmp/adapter", load_inplace=True)
+
+        client.session.post.assert_called_once_with(
+            "http://localhost:8000/v1/load_lora_adapter",
+            json={"lora_name": "trl_lora_adapter", "lora_path": "/tmp/adapter", "load_inplace": True},
+        )
+
+    def test_load_lora_adapter_raises_on_failure(self):
+        with patch.object(VLLMClient, "check_server"):
+            client = VLLMClient(base_url="http://localhost:8000", connection_timeout=0)
+        client.session.post = MagicMock(return_value=SimpleNamespace(status_code=500, text="error"))
+
+        with pytest.raises(Exception, match="Request failed: 500, error"):
+            client.load_lora_adapter("trl_lora_adapter", "/tmp/adapter", load_inplace=True)
 
 
 class TestExtractLogprobs(TrlTestCase):
@@ -1034,3 +1079,75 @@ class TestVLLMClientServerVLM(TrlTestCase):
     @classmethod
     def teardown_class(cls):
         kill_process(cls.server_process)
+
+
+@pytest.mark.slow
+@require_torch_accelerator
+@require_vllm
+@require_peft
+class TestVLLMClientServerLoRAInplaceSwap(TrlTestCase):
+    """
+    Regression guard for the in-place adapter swap (vLLM #42125): reloading a new adapter under the same name/int_id
+    with `load_inplace=True` (then resetting the prefix cache, exactly as `sync_weights` does) must actually change
+    the served output. If `load_inplace` were ignored or the prefix cache not reset, the server would keep serving the
+    previous adapter's weights/KV blocks and the swap would be silently lost — the failure mode this whole feature
+    must avoid.
+    """
+
+    model_id = "Qwen/Qwen2.5-1.5B"
+
+    @classmethod
+    def setup_class(cls):
+        import shutil
+        import tempfile
+
+        import torch
+        from peft import LoraConfig, get_peft_model
+
+        # Build two distinct adapters under the same config: A is the default save (PEFT zero-inits `lora_B`, so it is
+        # an identity adapter) and B has `lora_B` perturbed, so the two produce different greedy completions.
+        cls.tmp_adapters = tempfile.mkdtemp()
+        cls.adapter_a = os.path.join(cls.tmp_adapters, "adapter_a")
+        cls.adapter_b = os.path.join(cls.tmp_adapters, "adapter_b")
+        model = AutoModelForCausalLM.from_pretrained(cls.model_id)
+        peft_model = get_peft_model(
+            model, LoraConfig(task_type="CAUSAL_LM", target_modules=["q_proj", "v_proj"], r=8)
+        )
+        peft_model.save_pretrained(cls.adapter_a)
+        torch.manual_seed(0)
+        with torch.no_grad():
+            for name, param in peft_model.named_parameters():
+                if "lora_B" in name:
+                    param.add_(torch.randn_like(param) * 5.0)
+        peft_model.save_pretrained(cls.adapter_b)
+        del model, peft_model
+
+        env = os.environ.copy()
+        VISIBLE_DEVICES = "ZE_AFFINITY_MASK" if torch_device == "xpu" else "CUDA_VISIBLE_DEVICES"
+        env[VISIBLE_DEVICES] = "0"
+        cls.server_process = subprocess.Popen(
+            ["trl", "vllm-serve", "--model", cls.model_id, "--enable_lora", "--max_lora_rank", "8"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=env,
+        )
+        # This test only exercises adapter load + generate (no full-weight sync), so no `init_communicator`.
+        cls.client = VLLMClient(connection_timeout=240, host="localhost")
+        cls._shutil = shutil
+
+    def test_inplace_adapter_swap_changes_output(self):
+        prompts = ["The capital of France is"]
+        # Load adapter A, then generate greedily (temperature=0 → the adapter is the only variable).
+        self.client.load_lora_adapter("trl_lora_adapter", self.adapter_a, load_inplace=True)
+        self.client.reset_prefix_cache()
+        out_a = self.client.generate(prompts, n=1, temperature=0.0, max_tokens=16)["completion_ids"][0]
+        # Swap to adapter B in place under the same name/int_id and reset the prefix cache, exactly as `sync_weights`.
+        self.client.load_lora_adapter("trl_lora_adapter", self.adapter_b, load_inplace=True)
+        self.client.reset_prefix_cache()
+        out_b = self.client.generate(prompts, n=1, temperature=0.0, max_tokens=16)["completion_ids"][0]
+        assert out_a != out_b, "in-place adapter swap did not change output (stale adapter weights or prefix cache)"
+
+    @classmethod
+    def teardown_class(cls):
+        kill_process(cls.server_process)
+        cls._shutil.rmtree(cls.tmp_adapters, ignore_errors=True)
