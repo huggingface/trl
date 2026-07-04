@@ -3053,6 +3053,126 @@ class TestGRPOTrainerVLM(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @require_jmespath
+    def test_train_with_tools_multimodal_multi_image_prompt(self):
+        # Test that tools correctly slice multimodal tensors when prompts have multiple images of different sizes.
+        from PIL import Image as PILImage
+
+        def empty_tool() -> str:
+            """Does nothing."""
+            return "done"
+
+        img1 = PILImage.new("RGB", (32, 32), color="red")
+        img2 = PILImage.new("RGB", (64, 64), color="blue")
+        dataset = Dataset.from_list(
+            [
+                {
+                    "prompt": [
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "image", "image": img1},
+                                {"type": "image", "image": img2},
+                                {"type": "text", "text": "Describe"},
+                            ],
+                        }
+                    ]
+                },
+                {
+                    "prompt": [
+                        {
+                            "role": "user",
+                            "content": [{"type": "image", "image": img1}, {"type": "text", "text": "Describe"}],
+                        }
+                    ]
+                },
+            ]
+        )
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,
+            per_device_train_batch_size=2,
+            num_generations=2,
+            max_completion_length=512,
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
+            reward_funcs=lambda x, **kw: [1.0] * len(x),
+            args=training_args,
+            train_dataset=dataset,
+            tools=[empty_tool],
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        def fake_generate(input_ids, **kwargs):
+            if input_ids.shape[0] == 4:
+                # 4 completions (batch size 2 * 2 generations)
+                completion_ids = torch.tensor(
+                    [
+                        # tool call
+                        [248058, 198, 27, 23783, 30091, 22076, 29, 198, 510, 23783, 29, 198, 248059, 248046],
+                        # no tool call
+                        [
+                            40,
+                            1459,
+                            914,
+                            1366,
+                            866,
+                            5224,
+                            248046,
+                            248044,
+                            248044,
+                            248044,
+                            248044,
+                            248044,
+                            248044,
+                            248044,
+                        ],
+                        # tool call
+                        [248058, 198, 27, 23783, 30091, 22076, 29, 198, 510, 23783, 29, 198, 248059, 248046],
+                        # no tool call
+                        [
+                            40,
+                            1459,
+                            914,
+                            1366,
+                            866,
+                            5224,
+                            248046,
+                            248044,
+                            248044,
+                            248044,
+                            248044,
+                            248044,
+                            248044,
+                            248044,
+                        ],
+                    ],
+                    device=input_ids.device,
+                )
+            else:
+                completion_ids = torch.tensor(
+                    [
+                        [16936, 0, 248046],
+                    ]
+                    * input_ids.shape[0],
+                    device=input_ids.device,
+                )
+            return torch.cat([input_ids, completion_ids], dim=-1)
+
+        with patch.object(trainer.model, "generate", side_effect=fake_generate):
+            trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
 
 @pytest.mark.slow
 @require_torch_accelerator

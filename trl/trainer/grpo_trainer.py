@@ -1800,14 +1800,51 @@ class GRPOTrainer(_BaseTrainer):
             loop_images = [merged_images[i] for i in idxs_with_tool] if merged_images else None
             if multimodal_fields:
                 loop_multimodal_fields = {}
+
+                # Pre-calculate counts for multimodal tensors that are flattened across the batch.
+                num_images = [len(imgs) if imgs else 0 for imgs in (images or [])] or [0] * len(prompts)
+                pixel_values = multimodal_fields.get("pixel_values")
+                image_grid_thw = multimodal_fields.get("image_grid_thw")
+
+                rows_per_sample = None
+                if image_grid_thw is not None and pixel_values is not None:
+                    rows_per_image = image_grid_thw.prod(dim=-1)
+                    rows_per_sample_split = torch.split(rows_per_image, num_images)
+                    rows_per_sample = [s.sum().item() for s in rows_per_sample_split]
+
                 for k, v in multimodal_fields.items():
-                    selected = [v[i] for i in idxs_with_tool]
-                    # Per-token fields (e.g. token_type_ids) need zero-padding to match extended prompt length
-                    if isinstance(selected[0], list):
-                        selected = [
-                            s + [0] * (len(pct) - len(s))
-                            for s, pct in zip(selected, prompt_completion_tool_ids, strict=True)
-                        ]
+                    if k == "pixel_values" and rows_per_sample is not None:
+                        selected_list = []
+                        offset = 0
+                        for i, rows in enumerate(rows_per_sample):
+                            if i in idxs_with_tool and rows > 0:
+                                selected_list.append(v[offset : offset + rows])
+                            offset += rows
+                        selected = (
+                            torch.cat(selected_list)
+                            if selected_list
+                            else torch.empty((0, *v.shape[1:]), dtype=v.dtype, device=v.device)
+                        )
+                    elif k == "image_grid_thw" and rows_per_sample is not None:
+                        selected_list = []
+                        offset = 0
+                        for i, n_imgs in enumerate(num_images):
+                            if i in idxs_with_tool and n_imgs > 0:
+                                selected_list.append(v[offset : offset + n_imgs])
+                            offset += n_imgs
+                        selected = (
+                            torch.cat(selected_list)
+                            if selected_list
+                            else torch.empty((0, *v.shape[1:]), dtype=v.dtype, device=v.device)
+                        )
+                    else:
+                        selected = [v[i] for i in idxs_with_tool]
+                        # Per-token fields (e.g. token_type_ids) need zero-padding to match extended prompt length
+                        if isinstance(selected[0], list):
+                            selected = [
+                                s + [0] * (len(pct) - len(s))
+                                for s, pct in zip(selected, prompt_completion_tool_ids, strict=True)
+                            ]
                     loop_multimodal_fields[k] = selected
             else:
                 loop_multimodal_fields = {}
