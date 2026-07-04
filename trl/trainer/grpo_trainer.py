@@ -718,6 +718,9 @@ class GRPOTrainer(_BaseTrainer):
             )
         self.entropy_coef = args.entropy_coef
         self.use_adaptive_entropy = args.use_adaptive_entropy
+        # Whether the entropy bonus is active. Constant for the run: entropy_coef only mutates in adaptive
+        # mode, where this is True regardless of its value (so the bonus can recover after being decremented).
+        self._entropy_bonus_enabled = self.entropy_coef != 0.0 or self.use_adaptive_entropy
         # Cached entropy from the last optimizer step; inf so the first accumulation window
         # applies no bonus until a real measurement arrives (conservative default).
         self._last_world_entropy = float("inf")
@@ -725,7 +728,7 @@ class GRPOTrainer(_BaseTrainer):
         # accumulation window, so the adaptive controller sees the exact window-global entropy (not just the
         # last micro-batch). Reset to None at each optimizer step.
         self._entropy_window_stats = None
-        if self.use_liger_kernel and (self.entropy_coef != 0.0 or self.use_adaptive_entropy):
+        if self.use_liger_kernel and self._entropy_bonus_enabled:
             raise NotImplementedError("Entropy bonus is not supported with Liger kernel.")
 
         # Datasets
@@ -1301,9 +1304,10 @@ class GRPOTrainer(_BaseTrainer):
             all_logps.append(logps)
 
             if compute_entropy:
-                # The entropy bonus is a differentiable loss term, so entropies must carry grad when it is active
-                entropy_needs_grad = self.entropy_coef != 0.0 or self.use_adaptive_entropy
-                if entropy_needs_grad:
+                # The entropy bonus is a differentiable loss term, so entropies must carry grad when it is
+                # active. Otherwise they only feed logging and the top_entropy_quantile mask (neither
+                # differentiable), so we skip grad to avoid retaining the memory-heavy full-vocab softmax.
+                if self._entropy_bonus_enabled:
                     entropies = entropy_from_logits(logits)
                 else:
                     with torch.no_grad():
@@ -2888,11 +2892,10 @@ class GRPOTrainer(_BaseTrainer):
         else:
             raise ValueError(f"Unknown loss type: {self.loss_type}")
 
-        # Entropy bonus: add entropy regularization to encourage exploration.
-        # Gate: run whenever a non-zero static coef is set OR adaptive mode is enabled. Adaptive must always run even
-        # when self.entropy_coef has been decremented to entropy_coef_min (default 0) so it can recover once entropy
-        # drops below entropy_target again.
-        if self.entropy_coef != 0.0 or self.use_adaptive_entropy:
+        # Entropy bonus: add entropy regularization to encourage exploration. _entropy_bonus_enabled is set
+        # whenever a non-zero static coef is set OR adaptive mode is enabled (adaptive stays enabled even when
+        # entropy_coef has been decremented to entropy_coef_min so it can recover once entropy drops again).
+        if self._entropy_bonus_enabled:
             # When top_entropy_quantile < 1.0, entropy_mask restricts policy gradients to high-entropy
             # tokens. Use the same effective mask for the entropy bonus so it acts on the same tokens.
             effective_mask = mask if entropy_mask is None else mask * entropy_mask
