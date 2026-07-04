@@ -880,7 +880,7 @@ class KTOTrainer(_BaseTrainer):
         else:
             self.ref_model = ref_model
 
-        # Disable dropout in the model and reference model
+        # Disable dropout in the models
         if args.disable_dropout:
             disable_dropout_in_model(model)
             if self.ref_model is not None:
@@ -1119,6 +1119,7 @@ class KTOTrainer(_BaseTrainer):
                         processing_class, example["prompt"] + example["completion"], is_vlm
                     )["input_ids"]
 
+                # Check if the tokenized prompt starts with the tokenized prompt+completion
                 if not prompt_completion_ids[: len(prompt_ids)] == prompt_ids:
                     logger.warning(
                         "Mismatch between tokenized prompt and the start of tokenized prompt+completion. "
@@ -1281,19 +1282,19 @@ class KTOTrainer(_BaseTrainer):
                 if is_peft_model(self.model):
                     model = self.accelerator.unwrap_model(self.model)
                     with use_adapter(model, adapter_name="ref" if "ref" in model.peft_config else None):
-                        completion_logits = self.model(**model_kwargs).logits
+                        logits = self.model(**model_kwargs).logits
                         if self.calculate_KL:
                             KL_logits = self.model(**KL_model_kwargs).logits
                 else:
-                    completion_logits = self.model(**model_kwargs).logits
+                    logits = self.model(**model_kwargs).logits
                     if self.calculate_KL:
                         KL_logits = self.model(**KL_model_kwargs).logits
             else:
-                completion_logits = self.ref_model(**model_kwargs).logits
+                logits = self.ref_model(**model_kwargs).logits
                 if self.calculate_KL:
                     KL_logits = self.ref_model(**KL_model_kwargs).logits
 
-        shift_logits = completion_logits[..., :-1, :]
+        shift_logits = logits[..., :-1, :]
         per_token_logps = selective_log_softmax(shift_logits, inputs["input_ids"][..., 1:])
         per_token_logps[inputs["completion_mask"][..., 1:] == 0] = 0.0
         completion_logps = per_token_logps.sum(dim=1)
