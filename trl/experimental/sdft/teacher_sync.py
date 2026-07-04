@@ -133,7 +133,11 @@ class PEFTAdapterEMACallback(TrainerCallback):
 
         teacher_state = {k: torch.zeros_like(v) for k, v in student_state.items()}
 
-        model.add_adapter(self.teacher_adapter_name, self.teacher_adapter_config)
+        # The teacher adapter may already have been registered by the trainer's __init__ (needed so it
+        # exists before accelerate/DeepSpeed wraps the model under ZeRO-3). Only add it here if that
+        # hasn't happened yet — PEFT rejects re-adding an adapter name that's already registered.
+        if self.teacher_adapter_name not in model.peft_config:
+            model.add_adapter(self.teacher_adapter_name, self.teacher_adapter_config)
 
         model.set_adapter(self.teacher_adapter_name)
         set_peft_model_state_dict(model, teacher_state, adapter_name=self.teacher_adapter_name)
