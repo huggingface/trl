@@ -193,8 +193,9 @@ class DemonstrationTeacherContextBuilder:
             self._compose_teacher_prompt(prompt, privileged_context)
             for prompt, privileged_context in zip(prompts, privileged_contexts, strict=True)
         ]
-        # Score the teacher on the full prompt: the problem leads the teacher template, so left-truncating to
-        # max_prompt_length (correct for the student generation prompt) would drop it.
+        # Score the teacher on the full prompt: the problem leads the teacher template, so left-truncating
+        # would drop it. Generation also uses the untruncated teacher prompt for consistency, so teacher
+        # logits and on-policy completions always see the same context.
         teacher_prompt_ids_list = self.trainer._tokenize_prompts_untruncated(
             teacher_prompts, chat_template_kwargs=self.trainer.teacher_chat_template_kwargs
         )
@@ -709,7 +710,7 @@ class SDFTTrainer(_BaseTrainer):
         student_prompt_ids_list = self._tokenize_prompts(prompts)
         if self.generate_from_teacher:
             generation_prompts = self.teacher_context_builder.select_generation_prompts(prompts, privileged_contexts)
-            generation_prompt_ids_list = self._tokenize_prompts(
+            generation_prompt_ids_list = self._tokenize_prompts_untruncated(
                 generation_prompts, chat_template_kwargs=self.teacher_chat_template_kwargs
             )
         else:
