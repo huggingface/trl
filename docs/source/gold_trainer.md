@@ -179,7 +179,7 @@ python examples/scripts/gold.py \
 
 ## Training Vision Language Models
 
-[`GOLDTrainer`] supports VLM-to-VLM distillation. Both student and teacher must be vision-language models. To train a VLM, provide a dataset with either an `image` column (single image per sample) or an `images` column (list of images per sample). For more information on the expected dataset structure, see the [Dataset Format — Vision Dataset](dataset_formats#vision-dataset) section.
+[`GOLDTrainer`] supports VLM-to-VLM distillation. Both student and teacher must be vision-language models. To train a VLM, provide a dataset with either an `image` column (single image per sample) or an `images` column (list of images per sample). For more information on the expected dataset structure, see the [Dataset Format — Vision datasets](dataset_formats#vision-datasets) section.
 
 When the student and teacher share the same architecture and tokenizer (e.g. Qwen3-VL-8B to Qwen3-VL-2B), the standard generalized JSD loss applies directly. When they have different `model_type` (e.g. Qwen3-VL to LFM2.5-VL), set `use_uld_loss=True` to enable cross-tokenizer alignment via Universal Logit Distillation. Images are processed separately through each model's processor.
 
