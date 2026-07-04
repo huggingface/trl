@@ -21,8 +21,8 @@ Usage:
     python trl/experimental/gold/scripts/xtoken/train_xtoken.py
         --projection-matrix cross_tokenizer_data/projection_map_..._top_4_sorted.pt --loss-type p_kl --max-steps 100
 
-    # Use Nemotron text corpus (matches the NeMo-RL reference run data):
-    python trl/experimental/gold/scripts/xtoken/train_xtoken.py
+    # Use Nemotron text corpus (matches the NeMo-RL reference run data): python
+    trl/experimental/gold/scripts/xtoken/train_xtoken.py
         --dataset nemotron --projection-matrix ... --max-length 512
 
 Build the projection matrix first with the three scripts in this directory. See
