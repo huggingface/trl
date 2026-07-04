@@ -1516,10 +1516,14 @@ class KTOTrainer(_BaseTrainer):
 
         outputs = model(**model_kwargs)
 
-        shift_logits = outputs.logits[:, :-1, :]
-        per_token_logps = selective_log_softmax(shift_logits, batch["input_ids"][:, 1:])
-        per_token_logps[batch["completion_mask"][:, 1:] == 0] = 0.0
-        completion_logps = per_token_logps.sum(-1)
+        input_ids = batch["input_ids"]
+        completion_mask = batch["completion_mask"]
+        shift_logits = outputs.logits[..., :-1, :]
+        shift_labels = input_ids[..., 1:]
+        shift_completion_mask = completion_mask[..., 1:]
+        per_token_logps = selective_log_softmax(shift_logits, shift_labels)
+        per_token_logps[shift_completion_mask == 0] = 0.0  # mask out non-completion tokens
+        completion_logps = per_token_logps.sum(dim=1)  # sum over sequence length
 
         if completion_logps.shape[0] != len(batch["label"]):
             raise ValueError(
@@ -1545,9 +1549,17 @@ class KTOTrainer(_BaseTrainer):
             else:
                 ref_KL_logps = None
         else:
+            # The reference forward only needs logits for log-probs. Drop `output_router_logits` so the frozen
+            # reference model does not materialize router logits and compute a discarded MoE aux loss.
             ref_model_kwargs = {k: v for k, v in model_kwargs.items() if k != "output_router_logits"}
+            # When gradient checkpointing is enabled with use_reentrant=True (default), calling the model inside a
+            # torch.no_grad() block triggers a harmless PyTorch warning ("None of the inputs have requires_grad=True").
+            # Temporarily disable checkpointing to avoid this warning during inference.
             with torch.no_grad(), disable_gradient_checkpointing(self.model, self.args.gradient_checkpointing_kwargs):
                 if is_peft_model(self.model) and self.ref_model is None:
+                    # When training a PEFT adapter, how we obtain the reference depends on the setup:
+                    # - New adapter: disabling adapters yields the base model.
+                    # - Re-training an existing adapter: an initial copy is loaded under the name "ref".
                     ref_model_unwrapped = self.accelerator.unwrap_model(self.model)
                     with use_adapter(
                         ref_model_unwrapped, adapter_name="ref" if "ref" in ref_model_unwrapped.peft_config else None
@@ -1557,10 +1569,10 @@ class KTOTrainer(_BaseTrainer):
                 else:
                     ref_KL_logps = self._compute_kl_logps(self.ref_model, batch)
                     ref_outputs = self.ref_model(**ref_model_kwargs)
-            ref_shift_logits = ref_outputs.logits[:, :-1, :]
-            ref_per_token_logps = selective_log_softmax(ref_shift_logits, batch["input_ids"][:, 1:])
-            ref_per_token_logps[batch["completion_mask"][:, 1:] == 0] = 0.0
-            ref_completion_logps = ref_per_token_logps.sum(-1)
+            ref_shift_logits = ref_outputs.logits[..., :-1, :]
+            ref_per_token_logps = selective_log_softmax(ref_shift_logits, batch["input_ids"][..., 1:])
+            ref_per_token_logps[batch["completion_mask"][..., 1:] == 0] = 0.0  # mask out non-completion tokens
+            ref_completion_logps = ref_per_token_logps.sum(dim=1)
             ref_chosen_logps = ref_completion_logps.index_select(0, chosen_idx)
             ref_rejected_logps = ref_completion_logps.index_select(0, rejected_idx)
 
