@@ -185,6 +185,7 @@ When the student and teacher share the same architecture and tokenizer (e.g. Qwe
 
 ```python
 from datasets import load_dataset
+import torch
 from transformers import AutoModelForImageTextToText, AutoProcessor
 from trl.experimental.gold import GOLDConfig, GOLDTrainer
 
@@ -192,8 +193,8 @@ student_name = "Qwen/Qwen3-VL-2B-Instruct"
 teacher_name = "Qwen/Qwen3-VL-8B-Instruct"
 
 processor = AutoProcessor.from_pretrained(student_name, padding_side="left")
-student_model = AutoModelForImageTextToText.from_pretrained(student_name, torch_dtype="bfloat16")
-teacher_model = AutoModelForImageTextToText.from_pretrained(teacher_name, torch_dtype="bfloat16")
+student_model = AutoModelForImageTextToText.from_pretrained(student_name, dtype=torch.bfloat16)
+teacher_model = AutoModelForImageTextToText.from_pretrained(teacher_name, dtype=torch.bfloat16)
 
 train_dataset = load_dataset("trl-lib/llava-instruct-mix", split="train")
 
