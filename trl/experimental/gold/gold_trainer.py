@@ -1496,6 +1496,20 @@ class GOLDTrainer(SFTTrainer):
         generation_batch: dict[str, torch.Tensor | Any] | list[dict],
         buffer_steps: int,
     ):
+        # The batch is split into `buffer_steps` equal chunks via floor division (here and in
+        # `split_tensor_dict` below). A batch size that is not divisible by `buffer_steps` would
+        # silently drop examples or produce empty chunks, so fail fast instead.
+        batch_len = (
+            len(generation_batch)
+            if isinstance(generation_batch, list)
+            else next(t for t in generation_batch.values() if t is not None).shape[0]
+        )
+        if batch_len % buffer_steps != 0:
+            raise ValueError(
+                "The generation batch size must be divisible by gradient_accumulation_steps. Set "
+                "dataloader_drop_last=True or adjust per_device_train_batch_size / gradient_accumulation_steps."
+            )
+
         if self._vlm_collator is not None:
             # Identity collator path: generation_batch is list[dict] with raw PIL images.
             # Split into chunks via list slicing, then collate on-the-fly per slice.
