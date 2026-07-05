@@ -2704,7 +2704,7 @@ def test_on_policy_vlm_vllm_does_not_duplicate_repeated_sampler_batch(monkeypatc
 
     class StubProcessor:
         @staticmethod
-        def apply_chat_template(conversation, add_generation_prompt, tokenize, return_dict, processor_kwargs):
+        def apply_chat_template(conversation, add_generation_prompt, tokenize, return_dict, **kwargs):
             return {
                 "input_ids": [[1, 2, 3, 4, 5] for _ in conversation],
                 "attention_mask": [[1, 1, 1, 1, 1] for _ in conversation],

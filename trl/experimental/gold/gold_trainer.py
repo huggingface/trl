@@ -1703,17 +1703,25 @@ class GOLDTrainer(SFTTrainer):
                 continue
 
             # TODO: add self.tools support
+            # Workaround for a bug in transformers 5.3.0 where some processors (e.g. Qwen2.5-VL) crash on
+            # batched unpadded input (transformers#44514).
+            # Fixed in transformers 5.4.0 (transformers#44563).
+            needs_padding_workaround = Version("5.3.0") <= Version(transformers.__version__) < Version("5.4.0")
             tokenized = self.processing_class.apply_chat_template(
                 conversation=prompts,
                 add_generation_prompt=True,
                 tokenize=True,
                 return_dict=True,
-                processor_kwargs={"padding": True},
+                **({"padding": True} if needs_padding_workaround else {}),
             )
-            prompt_ids_list = [
-                [tok for tok, m in zip(ids, mask, strict=True) if m]
-                for ids, mask in zip(tokenized["input_ids"], tokenized["attention_mask"], strict=True)
-            ]
+            if needs_padding_workaround:
+                # Unpad input_ids: remove padding tokens using attention_mask to get per-sequence lists
+                prompt_ids_list = [
+                    [tok for tok, m in zip(ids, mask, strict=True) if m]
+                    for ids, mask in zip(tokenized["input_ids"], tokenized["attention_mask"], strict=True)
+                ]
+            else:
+                prompt_ids_list = tokenized["input_ids"]
             if prompt_max_length is not None:
                 # Do not truncate VLM prompts: a token-level slice can cut through the expanded image-token block,
                 # desyncing input_ids from the image features (garbage generations), and the buffered training
