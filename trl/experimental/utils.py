@@ -470,7 +470,8 @@ class DataCollatorForVisionLanguageChatML(DataCollatorMixin):
         # Normalize single image to list
         if "image" in examples[0]:
             for example in examples:
-                example["images"] = [example.pop("image")]
+                image = example.get("image")
+                example["images"] = [image] if image is not None else []
         images = [example.get("images", []) for example in examples]
         if all(img_list == [] for img_list in images):
             images = None
