@@ -2135,7 +2135,14 @@ class GRPOTrainer(_BaseTrainer):
             completion_mask, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
         ).to(device=device)
         if sampling_per_token_logps_list is not None:
-            sampling_per_token_logps = [torch.tensor(logps) for logps in sampling_per_token_logps_list]
+            # vLLM sets logprob to NaN for near-deterministic tokens (those where the sampled token
+            # had probability ≈ 1). The original list may therefore contain None entries (as produced
+            # by extract_logprobs()). torch.tensor() cannot handle None, so convert them to float NaN
+            # here; the NaN positions are handled in the importance-sampling correction block below.
+            sampling_per_token_logps = [
+                torch.tensor([float("nan") if lp is None else lp for lp in logps])
+                for logps in sampling_per_token_logps_list
+            ]
             sampling_per_token_logps = pad(
                 sampling_per_token_logps,
                 padding_value=0.0,
@@ -2310,6 +2317,13 @@ class GRPOTrainer(_BaseTrainer):
             # Compute the importance sampling ratio when using vLLM, to correct for potential distribution mismatch
             if self.use_vllm and self.vllm_importance_sampling_correction:
                 mask = completion_mask if tool_mask is None else completion_mask * tool_mask
+                # Replace any remaining NaN sampling logprobs (from near-deterministic tokens) with
+                # the recomputed logprobs so that those positions contribute an IS ratio of exactly
+                # 1 (i.e. exp(old - sampling) = exp(0) = 1), leaving the loss unchanged for tokens
+                # whose sampling distribution cannot be meaningfully estimated.
+                nan_mask = torch.isnan(sampling_per_token_logps)
+                if nan_mask.any():
+                    sampling_per_token_logps = torch.where(nan_mask, old_per_token_logps, sampling_per_token_logps)
                 per_token_logps_diff = (old_per_token_logps - sampling_per_token_logps) * mask
 
                 sequence_level_is = self.vllm_importance_sampling_mode in ["sequence_mask", "sequence_truncate"]

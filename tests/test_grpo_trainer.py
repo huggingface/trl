@@ -238,6 +238,64 @@ class TestGRPORolloutDispatch:
             trainer._generate(["prompt"])
 
 
+class TestVllmNanLogprobHandling:
+    """Regression tests for NaN/None logprob handling in GRPO with vLLM importance sampling.
+
+    vLLM returns NaN logprobs for near-deterministic tokens (sampled-token probability ≈ 1).
+    extract_logprobs() converts those NaN values to None. Prior to the fix these None values
+    caused a crash in _generate_and_score_completions: torch.tensor() raised
+    "RuntimeError: Could not infer dtype of NoneType" (issue #6166).
+    """
+
+    def test_none_logprobs_do_not_crash_tensor_construction(self):
+        """None entries from extract_logprobs() must not raise RuntimeError."""
+        # Simulate sampling_per_token_logps_list with a None at position 1
+        # (token 1 was near-deterministic; vLLM gave it NaN, extract_logprobs set it to None).
+        sampling_per_token_logps_list = [
+            [-0.5, None, -0.3],  # sequence 0: token 1 is near-deterministic
+            [-0.2, -0.7],  # sequence 1: all tokens have valid logprobs
+        ]
+
+        # Replicate the fixed construction from grpo_trainer.py
+        result = [
+            torch.tensor([float("nan") if lp is None else lp for lp in logps])
+            for logps in sampling_per_token_logps_list
+        ]
+
+        assert torch.isnan(result[0][1]), "None must become NaN after conversion"
+        assert not torch.isnan(result[0][0]), "Non-None values must remain finite"
+        assert not torch.isnan(result[1][0]), "Non-None values in other sequences must remain finite"
+
+    def test_nan_sampling_logprobs_yield_neutral_is_ratio(self):
+        """NaN sampling logprobs must produce an IS ratio of 1 after the fix."""
+        # Simulate old_per_token_logps (recomputed by the current training-model weights)
+        old_per_token_logps = torch.tensor([[-0.5, -1.2, -0.3]])
+        # sampling has NaN at position 1 (near-deterministic token from vLLM)
+        sampling_per_token_logps = torch.tensor([[-0.5, float("nan"), -0.3]])
+
+        # Apply the fix: replace NaN with old_per_token_logps so IS ratio = exp(0) = 1
+        nan_mask = torch.isnan(sampling_per_token_logps)
+        fixed = torch.where(nan_mask, old_per_token_logps, sampling_per_token_logps)
+
+        is_ratio = torch.exp(old_per_token_logps - fixed)
+        assert torch.isclose(is_ratio[0, 1], torch.tensor(1.0)), (
+            f"IS ratio at NaN position must be 1.0, got {is_ratio[0, 1].item()}"
+        )
+
+    def test_nan_removal_is_complete(self):
+        """After applying the fix, no NaN must remain in sampling_per_token_logps."""
+        old_logps = torch.tensor([[-0.5, -1.2, -0.3], [-0.8, -0.4, -0.9]])
+        sampling = torch.tensor([
+            [-0.5, float("nan"), -0.3],
+            [float("nan"), -0.4, float("nan")],
+        ])
+
+        nan_mask = torch.isnan(sampling)
+        fixed = torch.where(nan_mask, old_logps, sampling)
+
+        assert not torch.isnan(fixed).any(), "No NaN values must remain after applying the fix"
+
+
 @pytest.mark.skipif(
     Version(transformers.__version__) < Version("5.8.0"),
     reason="transformers continuous batching requires transformers>=5.8.0",
