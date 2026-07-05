@@ -28,7 +28,12 @@ import torch.nn as nn
 import torch.nn.functional as F
 import transformers
 from accelerate import PartialState
-from accelerate.utils import DistributedType, broadcast_object_list, gather_object, is_peft_model
+from accelerate.utils import (
+    DistributedType,
+    broadcast_object_list,
+    gather_object,
+    is_peft_model,
+)
 from datasets import Dataset, IterableDataset
 from packaging.version import Version
 from torch.utils.data import DataLoader
@@ -452,8 +457,14 @@ class ULDLoss(nn.Module):
                     # Drop the first positional target from both sides.
                     student_drop = teacher_drop = 1
 
-                student_start, student_size = student_start + student_drop, student_size - student_drop
-                teacher_start, teacher_size = teacher_start + teacher_drop, teacher_size - teacher_drop
+                student_start, student_size = (
+                    student_start + student_drop,
+                    student_size - student_drop,
+                )
+                teacher_start, teacher_size = (
+                    teacher_start + teacher_drop,
+                    teacher_size - teacher_drop,
+                )
                 if student_size <= 0 or teacher_size <= 0:
                     distillation_losses.append(student_logits[i].sum() * 0.0)
                     continue
@@ -868,7 +879,8 @@ class GOLDTrainer(SFTTrainer):
                     teacher_proc
                     if isinstance(teacher_model, str)
                     else AutoProcessor.from_pretrained(
-                        teacher_model.config._name_or_path, trust_remote_code=args.trust_remote_code
+                        teacher_model.config._name_or_path,
+                        trust_remote_code=args.trust_remote_code,
                     )
                 )
         if self._is_cross_architecture_vlm and not args.use_uld_loss:
@@ -976,7 +988,8 @@ class GOLDTrainer(SFTTrainer):
                 self.teacher_tokenizer.pad_token = self.teacher_tokenizer.eos_token
         elif args.use_uld_loss and args.teacher_tokenizer_name_or_path is not None:
             self.teacher_tokenizer = AutoTokenizer.from_pretrained(
-                args.teacher_tokenizer_name_or_path, trust_remote_code=args.trust_remote_code
+                args.teacher_tokenizer_name_or_path,
+                trust_remote_code=args.trust_remote_code,
             )
             if self.teacher_tokenizer.pad_token is None:
                 self.teacher_tokenizer.pad_token = self.teacher_tokenizer.eos_token
@@ -1702,8 +1715,17 @@ class GOLDTrainer(SFTTrainer):
                 for ids, mask in zip(tokenized["input_ids"], tokenized["attention_mask"], strict=True)
             ]
             if prompt_max_length is not None:
-                # Keep the start for VLMs because keep-end truncation can drop image tokens from the prompt.
-                prompt_ids_list = [prompt_ids[:prompt_max_length] for prompt_ids in prompt_ids_list]
+                # Do not truncate VLM prompts: a token-level slice can cut through the expanded image-token block,
+                # desyncing input_ids from the image features (garbage generations), and the buffered training
+                # examples are rebuilt from the untruncated rows, so the completion would be sampled under a
+                # different prompt than the one used for the loss. Fail fast instead.
+                for prompt_ids in prompt_ids_list:
+                    if len(prompt_ids) > prompt_max_length:
+                        raise ValueError(
+                            f"A tokenized VLM prompt has {len(prompt_ids)} tokens (including expanded image "
+                            f"tokens), exceeding the prompt budget of max_length - max_completion_length = "
+                            f"{self.args.max_length} - {max_completion_length} = {prompt_max_length}. Increase `max_length` or set it to `None`."
+                        )
 
             slice_raw_data[slice_idx] = (raw_examples, images, prompts, prompt_ids_list)
 

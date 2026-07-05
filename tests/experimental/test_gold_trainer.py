@@ -2694,7 +2694,7 @@ def test_on_policy_vlm_vllm_does_not_duplicate_repeated_sampler_batch(monkeypatc
     trainer._last_vllm_sync_step = -1
     trainer.vllm_sync_frequency = 1
     trainer.generation_config = SimpleNamespace(max_new_tokens=16)
-    trainer.args = SimpleNamespace(max_length=18)
+    trainer.args = SimpleNamespace(max_length=32)  # budget of 32 - 16 = 16 fits the 5-token stub prompts
     trainer._buffered_inputs = {}
     trainer._buffered_text_logs = {}
     trainer._teacher_processor = None
@@ -2791,7 +2791,7 @@ def test_on_policy_vlm_vllm_does_not_duplicate_repeated_sampler_batch(monkeypatc
     total_sampled_prompts = num_slices * unique_prompts_per_slice * num_generations
     assert received["n_prompts"] == total_sampled_prompts
     assert received["n_images"] == total_sampled_prompts
-    assert all(prompt == [1, 2] for prompt in received["prompts"])
+    assert all(prompt == [1, 2, 3, 4, 5] for prompt in received["prompts"])
 
     # Synthetic VLM examples are stored lazily and are not collated until their slice is consumed.
     assert len(collated_per_call) == 0
