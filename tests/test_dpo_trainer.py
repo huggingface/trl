@@ -15,7 +15,7 @@
 import pytest
 import torch
 import transformers
-from datasets import load_dataset
+from datasets import Dataset, load_dataset
 from packaging.version import Version
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 from transformers.testing_utils import torch_device
@@ -237,6 +237,20 @@ class TestDPOTrainer(TrlTestCase):
 
         metrics = trainer.evaluate(eval_dataset=dataset)
         assert metrics["eval_loss"] is not None
+
+    def test_precompute_ref_log_probs_with_in_memory_dataset(self):
+        # Regression test for https://github.com/huggingface/trl/issues/6291: in-memory datasets (e.g. built with
+        # `Dataset.from_dict`) don't automatically write a cache file on `map`, so `_precompute_ref_logps` failed
+        # with FileNotFoundError when loading the expected cache file.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        dataset = Dataset.from_dict(dataset[:])  # force an in-memory dataset with no cache files
+
+        training_args = DPOConfig(output_dir=self.tmp_dir, precompute_ref_log_probs=True, report_to="none")
+        trainer = DPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
+        assert "ref_chosen_logps" in trainer.train_dataset.column_names
+        assert "ref_rejected_logps" in trainer.train_dataset.column_names
 
     def test_trust_remote_code(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
