@@ -41,7 +41,7 @@ Usage:
 Full training:
 
 ```bash
-python trl/experimental/tpo/tpo.py \
+python examples/scripts/tpo.py \
     --dataset_name tpo-alignment/triple-preference-ultrafeedback-40K \
     --model_name_or_path Qwen/Qwen3-0.6B \
     --per_device_train_batch_size 2 \
@@ -57,7 +57,7 @@ python trl/experimental/tpo/tpo.py \
 TPO-L (length-normalized variant with target reward margin):
 
 ```bash
-python trl/experimental/tpo/tpo.py \
+python examples/scripts/tpo.py \
     --dataset_name tpo-alignment/triple-preference-ultrafeedback-40K \
     --model_name_or_path Qwen/Qwen3-0.6B \
     --per_device_train_batch_size 2 \
@@ -75,7 +75,7 @@ python trl/experimental/tpo/tpo.py \
 LoRA:
 
 ```bash
-python trl/experimental/tpo/tpo.py \
+python examples/scripts/tpo.py \
     --dataset_name tpo-alignment/triple-preference-ultrafeedback-40K \
     --model_name_or_path Qwen/Qwen3-0.6B \
     --per_device_train_batch_size 2 \
@@ -94,7 +94,7 @@ import torch
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser
 
-from trl import ModelConfig, ScriptArguments, get_kbit_device_map, get_peft_config, get_quantization_config
+from trl import ModelConfig, ScriptArguments, get_peft_config, get_quantization_config
 from trl.experimental.tpo import TPOConfig, TPOTrainer
 
 
@@ -153,15 +153,10 @@ if __name__ == "__main__":
     )
     quantization_config = get_quantization_config(model_args)
     if quantization_config is not None:
-        model_kwargs["device_map"] = get_kbit_device_map()
         model_kwargs["quantization_config"] = quantization_config
 
-    model = AutoModelForCausalLM.from_pretrained(
-        model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code, **model_kwargs
-    )
-    tokenizer = AutoTokenizer.from_pretrained(
-        model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code
-    )
+    model = AutoModelForCausalLM.from_pretrained(model_args.model_name_or_path, **model_kwargs)
+    tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 

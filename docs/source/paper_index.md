@@ -123,6 +123,31 @@ $$
 
 This token-level ratio is then combined with a shared advantage  \\( \hat{A}_i \\), and the GRPO objective clips and optimizes each token independently across the sequence.
 
+### Geometric-Mean Policy Optimization
+
+**📜 Paper**: https://huggingface.co/papers/2507.20673
+
+Geometric-Mean Policy Optimization (GMPO) is a GRPO variant that maximizes the *geometric* mean of the token-level importance ratios instead of the arithmetic mean. The geometric mean is far less sensitive to outlier ratios, so the policy update is more stable and tolerates a much wider clipping range. Clipping is applied per token, in log space, and is one-sided per the advantage sign (the standard PPO trust region) — crucially, *before* the geometric mean is taken. This is what distinguishes GMPO from GSPO (`importance_sampling_level="sequence"`), which clips the sequence-level ratio *after* averaging.
+
+The GMPO objective replaces GRPO's per-token arithmetic mean with the geometric mean of the (clipped) token ratios:
+
+$$
+\mathcal{J}_{\text{GMPO}}(\theta) = \mathbb{E}_{q, \{o_i\}} \left[ \frac{1}{G} \sum_{i=1}^{G} \left( \prod_{t=1}^{|o_i|} \min\left[ w_{i,t}(\theta)^{\operatorname{sgn}(\hat{A}_i)},\ \operatorname{clip}\left(w_{i,t}(\theta)^{\operatorname{sgn}(\hat{A}_i)}, \epsilon_1, \epsilon_2\right) \right]^{\operatorname{sgn}(\hat{A}_i)} \right)^{\frac{1}{|o_i|}} \hat{A}_i \right]
+$$
+
+where  \\( w_{i,t}(\theta) \\) is the per-token importance ratio. In practice the product and clipping are computed in log space for numerical stability, and the clip range  \\( (\epsilon_1, \epsilon_2) = (e^{-0.4}, e^{0.4}) \\) is markedly wider than GRPO/DAPO to encourage exploration.
+
+TRL provides an experimental implementation, see [Experimental - GMPO](gmpo):
+
+```python
+from trl.experimental.gmpo import GMPOConfig, GMPOTrainer
+
+training_args = GMPOConfig(
+    epsilon=0.4,  # log-space clip range -> ratios clipped to (exp(-0.4), exp(0.4)); paper, Sec. 4
+    beta=0.0,
+)
+```
+
 ### DAPO: An Open-Source LLM Reinforcement Learning System at Scale
 
 **📜 Paper**: https://huggingface.co/papers/2503.14476
@@ -164,6 +189,31 @@ trainer = GRPOTrainer(
 )
 ```
 
+### Demystifying Long Chain-of-Thought Reasoning in LLMs
+
+**📜 Paper**: https://huggingface.co/papers/2502.03373
+
+This paper studies long chain-of-thought RL and introduces two complementary rule-based rewards:
+
+- A **cosine length-scaled reward** ([`~rewards.get_cosine_scaled_reward`], Appendix C.1) that scales the correctness reward by completion length: a correct completion is rewarded more when it is shorter, while a wrong completion is penalized less when it is longer (preserving exploration).
+- An **n-gram repetition penalty** ([`~rewards.get_repetition_penalty_reward`], Appendix C.2) that discourages the degenerate, repetitive completions that emerge as a reward-hacking strategy under length shaping.
+
+The two are designed to be used together:
+
+```python
+from trl import GRPOTrainer
+from trl.rewards import get_cosine_scaled_reward, get_repetition_penalty_reward
+
+# max_len should match the generation budget (in tokens)
+cosine_scaled_reward = get_cosine_scaled_reward(max_len=4096)
+# Penalize repeated 3-grams, down to -1.0 for fully repetitive completions
+repetition_penalty = get_repetition_penalty_reward(ngram_size=3, max_penalty=-1.0)
+trainer = GRPOTrainer(
+    ...,
+    reward_funcs=[cosine_scaled_reward, repetition_penalty],
+)
+```
+
 ### INTELLECT-2: A Reasoning Model Trained Through Globally Decentralized Reinforcement Learning
 
 **📜 Paper**: https://huggingface.co/papers/2505.07291
@@ -179,6 +229,27 @@ training_args = GRPOConfig(
     beta=0.001,  # KL divergence coefficient in section 4.1 of the paper
     num_generations=16,  # responses per prompt in section 4.1 of the paper
     learning_rate=3e-7,  # section 4.1 of the paper
+)
+```
+
+### Skywork-OR1: Open Reasoning Models
+
+**📜 Paper**: https://huggingface.co/papers/2505.22312
+
+Skywork-OR1 is a family of open reasoning models trained with GRPO. The paper introduces **adaptive entropy control**: an entropy regularization term `−α·H(π_θ)` is added to the GRPO objective, and the coefficient `α` is automatically adjusted each optimizer step. When the model's mean per-token entropy falls at or below a target, `α` is incremented to encourage more exploration; otherwise it is decremented. The bonus is only applied while entropy is at or below the target. To replicate this adaptive entropy control, use the following configuration:
+
+```python
+from trl import GRPOConfig, GRPOTrainer
+
+training_args = GRPOConfig(
+    use_adaptive_entropy=True,   # enable adaptive entropy control (Section 3.3 of the paper)
+    entropy_coef=0.01,           # initial entropy regularization coefficient
+    entropy_target=5.0,          # target mean per-token entropy (nats); tune for your model
+    entropy_coef_delta=0.005,    # step size for coefficient updates per optimizer step
+)
+trainer = GRPOTrainer(
+    ...,
+    args=training_args,
 )
 ```
 
@@ -271,7 +342,7 @@ training_args = GRPOConfig(
 )
 ```
 
-Note that when using gradient accumulation, the loss is aggregated over the total number of tokens in the batch, but not over the accumulated batch. For more details, see the [GRPO Trainer - Loss types](grpo_trainer#loss_types).
+Note that when using gradient accumulation, the loss is aggregated over the total number of tokens in the batch, but not over the accumulated batch. For more details, see the [GRPO Trainer - Loss types](grpo_trainer#loss-types).
 
 ### Truncated Importance Sampling
 
@@ -1200,7 +1271,7 @@ KTO derives an alignment objective from prospect theory and learns directly from
 To reproduce the paper's setting, you can use the default configuration of [`experimental.kto.KTOTrainer`]:
 
 ```python
-from trl.experimental.kto import KTOConfig, KTOTrainer
+from trl import KTOConfig, KTOTrainer
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 model = AutoModelForCausalLM.from_pretrained(model_id)

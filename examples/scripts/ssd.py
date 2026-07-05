@@ -33,7 +33,7 @@ The dataset only requires a ``prompt`` column containing coding problem prompts.
 Example:
 
 ```bash
-python trl/experimental/ssd/ssd.py \
+python examples/scripts/ssd.py \
     --model_name_or_path Qwen/Qwen3-4B-Instruct-2507 \
     --dataset_name microsoft/rStar-Coder \
     --dataset_config seed_sft \
@@ -60,14 +60,7 @@ import torch
 from datasets import DatasetDict, load_dataset, load_from_disk
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from trl import (
-    ModelConfig,
-    ScriptArguments,
-    TrlParser,
-    get_kbit_device_map,
-    get_peft_config,
-    get_quantization_config,
-)
+from trl import ModelConfig, ScriptArguments, TrlParser, get_peft_config, get_quantization_config
 from trl.experimental.ssd import SSDConfig, SSDTrainer
 
 
@@ -101,22 +94,17 @@ if __name__ == "__main__":
         dtype = getattr(torch, model_args.dtype)
     model_kwargs = dict(
         revision=model_args.model_revision,
-        trust_remote_code=model_args.trust_remote_code,
         attn_implementation=model_args.attn_implementation,
         dtype=dtype,
     )
     quantization_config = get_quantization_config(model_args)
     if quantization_config is not None:
-        model_kwargs["device_map"] = get_kbit_device_map()
         model_kwargs["quantization_config"] = quantization_config
 
     training_args.model_init_kwargs = model_kwargs
 
     tokenizer = AutoTokenizer.from_pretrained(
-        model_args.model_name_or_path,
-        revision=model_args.model_revision,
-        trust_remote_code=model_args.trust_remote_code,
-        padding_side="left",
+        model_args.model_name_or_path, revision=model_args.model_revision, padding_side="left"
     )
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token

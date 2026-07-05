@@ -126,8 +126,8 @@ def _unwrap_model_for_generation(
 
     Example:
     ```python
-    with _unwrap_model_for_generation(model, accelerator) as unwrapped_model:
-        generated_outputs = unwrapped_model.generate(input_ids)
+    >>> with _unwrap_model_for_generation(model, accelerator) as unwrapped_model:
+    ...     generated_outputs = unwrapped_model.generate(input_ids)
     ```
     """
     unwrapped_model = accelerator.unwrap_model(model)
