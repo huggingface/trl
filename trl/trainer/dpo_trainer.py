@@ -34,17 +34,19 @@ from packaging.version import Version
 from torch.utils.data import DataLoader
 from transformers import (
     AutoProcessor,
+    BitsAndBytesConfig,
     DataCollator,
     PreTrainedModel,
     PreTrainedTokenizerBase,
     ProcessorMixin,
+    TrainerCallback,
 )
 from transformers.data.data_collator import DataCollatorMixin
-from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
-from transformers.utils import is_liger_kernel_available, is_peft_available
+from transformers.utils import is_peft_available
 
 from ..data_utils import apply_chat_template, extract_prompt, is_conversational, prepare_multimodal_messages
+from ..import_utils import is_liger_kernel_available
 from ..models import get_act_offloading_ctx_manager, prepare_deepspeed, prepare_fsdp
 from ..models.utils import disable_gradient_checkpointing
 from .base_trainer import _BaseTrainer
@@ -85,10 +87,6 @@ FLASH_ATTENTION_VARIANTS = {
 }
 
 
-def get_dataset_column_names(dataset: Dataset | IterableDataset) -> list[str]:
-    return list(next(iter(dataset)).keys()) if dataset.column_names is None else dataset.column_names
-
-
 @dataclass
 class DataCollatorForPreference(DataCollatorMixin):
     """
@@ -109,10 +107,10 @@ class DataCollatorForPreference(DataCollatorMixin):
         pad_token_id (`int`):
             Token ID to use for padding.
         max_length (`int`, *optional*):
-            Maximum length of the sequences after concatenation. Sequences longer than `max_length` are truncated
-            before padding, which avoids allocating oversized tensors for batches containing very long sequences.
+            Maximum length of the sequences in the batch. Sequences longer than `max_length` are truncated before
+            padding, which avoids allocating oversized tensors for batches containing very long sequences.
         truncation_mode (`str`, *optional*, defaults to `"keep_start"`):
-            Truncation mode when a concatenated sequence exceeds `max_length`. Possible values are `"keep_end"` and
+            Truncation mode to use when the sequence exceeds `max_length`. Possible values are `"keep_end"` and
             `"keep_start"`.
         pad_to_multiple_of (`int`, *optional*):
             If set, the sequences will be padded to a multiple of this value.
@@ -156,6 +154,7 @@ class DataCollatorForPreference(DataCollatorMixin):
         chosen_mask = [[0] * len(example["prompt_ids"]) + [1] * len(example["chosen_ids"]) for example in examples]
         rejected_mask = [[0] * len(example["prompt_ids"]) + [1] * len(example["rejected_ids"]) for example in examples]
 
+        # Truncate per sequence if necessary
         if self.max_length is not None:
             if self.truncation_mode == "keep_start":
                 sl = slice(None, self.max_length)
@@ -185,8 +184,9 @@ class DataCollatorForPreference(DataCollatorMixin):
         if "ref_rejected_logps" in examples[0]:
             ref_rejected_logps = torch.tensor([example["ref_rejected_logps"] for example in examples])
 
-        # Pad
         output = {}
+
+        # Pad
         output["input_ids"] = pad(
             input_ids,
             padding_value=self.pad_token_id,
@@ -229,8 +229,8 @@ class DataCollatorForVisionPreference(DataCollatorMixin):
     The collator outputs a dictionary including:
     - `"input_ids"`: Tensor of token IDs.
     - `"attention_mask"`: Tensor indicating attention mask.
-    - `"completion_mask"`: Tensor indicating which tokens correspond to completions.
     - `"pixel_values"`: Tensor representing image pixel values.
+    - `"completion_mask"`: Tensor indicating which tokens correspond to completions.
 
     Additional keys may be present depending on the processor, such as `"image_grid_thw"` or `"image_position_ids"`.
 
@@ -239,13 +239,12 @@ class DataCollatorForVisionPreference(DataCollatorMixin):
             The processor used to tokenize text and process images. It must be a subclass of
             [`~transformers.ProcessorMixin`] and include a `tokenizer` with a defined `pad_token_id`.
         max_length (`int`, *optional*):
-            Maximum sequence length. Sequences longer than `max_length` are truncated before padding, which avoids
-            allocating oversized tensors for batches containing very long sequences. Only `"keep_start"` truncation
-            applies to vision datasets; `"keep_end"` is rejected upstream.
+            Maximum sequence length. Sequences longer than `max_length` are truncated to `max_length`. If `None`, no
+            truncation is applied.
         pad_to_multiple_of (`int`, *optional*):
             If set, the sequences will be padded to a multiple of this value.
         return_tensors (`str`, *optional*, defaults to `"pt"`):
-            The tensor type to return. Currently, only `"pt"` (PyTorch tensors) is supported.
+            Type of Tensor to return. Only `"pt"` is currently supported.
 
     Example:
     ```python
@@ -330,21 +329,21 @@ class DataCollatorForVisionPreference(DataCollatorMixin):
             padding=True,
             padding_side="left",
             return_tensors=self.return_tensors,
-            add_special_tokens=False,  # to avoid adding the BOS, twice see https://huggingface.co/blog/qgallouedec/gotchas-in-tokenizer-behavior#7-chat-template-and-tokenization-dont-compose-due-to-special-tokens
+            add_special_tokens=False,  # to avoid adding the BOS twice, see https://huggingface.co/blog/qgallouedec/gotchas-in-tokenizer-behavior#7-chat-template-and-tokenization-dont-compose-due-to-special-tokens
         )
         processed_chosens = self.processor(
             text=chosens,
             padding=True,
             padding_side="right",
             return_tensors=self.return_tensors,
-            add_special_tokens=False,  # to avoid adding the BOS, twice see https://huggingface.co/blog/qgallouedec/gotchas-in-tokenizer-behavior#7-chat-template-and-tokenization-dont-compose-due-to-special-tokens
+            add_special_tokens=False,  # to avoid adding the BOS twice, see https://huggingface.co/blog/qgallouedec/gotchas-in-tokenizer-behavior#7-chat-template-and-tokenization-dont-compose-due-to-special-tokens
         )
         processed_rejecteds = self.processor(
             text=rejecteds,
             padding=True,
             padding_side="right",
             return_tensors=self.return_tensors,
-            add_special_tokens=False,  # to avoid adding the BOS, twice see https://huggingface.co/blog/qgallouedec/gotchas-in-tokenizer-behavior#7-chat-template-and-tokenization-dont-compose-due-to-special-tokens
+            add_special_tokens=False,  # to avoid adding the BOS twice, see https://huggingface.co/blog/qgallouedec/gotchas-in-tokenizer-behavior#7-chat-template-and-tokenization-dont-compose-due-to-special-tokens
         )
 
         # Concatenate prompts and completions
@@ -359,9 +358,11 @@ class DataCollatorForVisionPreference(DataCollatorMixin):
         completion_mask = torch.cat((torch.zeros_like(prompt_mask), completion_mask), dim=1)
         if "token_type_ids" in processed_prompts:  # special case for Gemma
             prompt_token_type_ids = processed_prompts["token_type_ids"]
-            chosen_type_ids = processed_chosens["token_type_ids"]
-            rejected_type_ids = processed_rejecteds["token_type_ids"]
-            completion_token_type_ids = torch.cat(tuple(pad([chosen_type_ids, rejected_type_ids], padding_value=0)))
+            chosen_token_type_ids = processed_chosens["token_type_ids"]
+            rejected_token_type_ids = processed_rejecteds["token_type_ids"]
+            completion_token_type_ids = torch.cat(
+                tuple(pad([chosen_token_type_ids, rejected_token_type_ids], padding_value=0))
+            )
             token_type_ids = torch.cat((prompt_token_type_ids, completion_token_type_ids), dim=1)
         if "mm_token_type_ids" in processed_prompts:  # special case for Qwen2.5-VL
             prompt_mm_token_type_ids = processed_prompts["mm_token_type_ids"]
@@ -383,6 +384,7 @@ class DataCollatorForVisionPreference(DataCollatorMixin):
         else:
             attention_mask, input_ids, completion_mask = flush_left(attention_mask, input_ids, completion_mask)
 
+        # Truncate if necessary
         if self.max_length is not None:
             input_ids = input_ids[:, : self.max_length]
             attention_mask = attention_mask[:, : self.max_length]
@@ -482,6 +484,9 @@ class DPOTrainer(_BaseTrainer):
         optimizers (`tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None]`, *optional*, defaults to `(None, None)`):
             A tuple containing the optimizer and the scheduler to use. Will default to an instance of `AdamW` on your
             model and a scheduler given by [`~transformers.get_linear_schedule_with_warmup`] controlled by `args`.
+        quantization_config ([`~transformers.BitsAndBytesConfig`], *optional*):
+            Quantization configuration used when loading the model from a model identifier. Combine with `peft_config`
+            for QLoRA training. Ignored if the model is already instantiated.
         peft_config ([`~peft.PeftConfig`], *optional*):
             PEFT configuration used to wrap the model. If `None`, the model is not wrapped.
     """
@@ -515,6 +520,7 @@ class DPOTrainer(_BaseTrainer):
         compute_metrics: Callable[[EvalPrediction], dict] | None = None,
         callbacks: list[TrainerCallback] | None = None,
         optimizers: tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None] = (None, None),
+        quantization_config: "BitsAndBytesConfig | None" = None,
         peft_config: "PeftConfig | None" = None,
     ):
         # Args
@@ -538,7 +544,14 @@ class DPOTrainer(_BaseTrainer):
 
         # Model
         if isinstance(model, str):
-            model_init_kwargs = args.model_init_kwargs or {}
+            model_init_kwargs = dict(args.model_init_kwargs or {})  # copy to avoid mutating model_init_kwargs
+            if quantization_config is not None:
+                if "quantization_config" in model_init_kwargs:
+                    raise ValueError(
+                        "You set `quantization_config` both as a trainer argument and in `args.model_init_kwargs`. "
+                        "Please set it in only one place, preferably as a trainer argument."
+                    )
+                model_init_kwargs["quantization_config"] = quantization_config
             # Distributed training requires device_map=None ("auto" fails)
             if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 model_init_kwargs["device_map"] = None
@@ -549,6 +562,11 @@ class DPOTrainer(_BaseTrainer):
                 logger.warning(
                     "You passed `model_init_kwargs` to the `DPOConfig`, but your model is already instantiated. "
                     "The `model_init_kwargs` will be ignored."
+                )
+            if quantization_config is not None:
+                logger.warning(
+                    "You passed `quantization_config` to the trainer, but your model is already instantiated. The "
+                    "`quantization_config` will be ignored."
                 )
         # Non-quantized models do not have the `is_loaded_in_{8,4}bit` attributes, whereas quantized models do
         _is_quantized_model = getattr(model, "is_loaded_in_4bit", False) or getattr(model, "is_loaded_in_8bit", False)
@@ -826,6 +844,18 @@ class DPOTrainer(_BaseTrainer):
         else:
             self.maybe_activation_offload_context = contextlib.nullcontext()
 
+        # MoE load-balancing auxiliary loss, applied to Mixture-of-Experts models (no effect otherwise)
+        text_config = model.config.get_text_config()
+        is_moe = getattr(text_config, "output_router_logits", None) is not None
+        self.aux_loss_enabled = is_moe and args.router_aux_loss_coef != 0.0
+        self.router_aux_loss_coef = args.router_aux_loss_coef
+        if self.aux_loss_enabled and self.use_liger_kernel:
+            raise ValueError(
+                "Liger DPO loss does not support the Mixture-of-Experts load-balancing auxiliary loss, because it "
+                "fuses the loss without materializing the router logits. Either set `router_aux_loss_coef` to `0.0` "
+                "to disable the auxiliary loss, or set `use_liger_kernel` to False."
+            )
+
         # Reference model
         if ref_model is None:
             if is_peft_model(self.model) or args.precompute_ref_log_probs:
@@ -834,7 +864,9 @@ class DPOTrainer(_BaseTrainer):
                 # memory during training.
                 self.ref_model = None
             else:
-                ref_model_init_kwargs = args.model_init_kwargs or {}
+                ref_model_init_kwargs = dict(args.model_init_kwargs or {})  # copy to avoid mutating model_init_kwargs
+                if quantization_config is not None:
+                    ref_model_init_kwargs["quantization_config"] = quantization_config
                 # Distributed training requires device_map=None ("auto" fails)
                 if self.args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                     ref_model_init_kwargs["device_map"] = None
@@ -1292,6 +1324,10 @@ class DPOTrainer(_BaseTrainer):
         _non_model_keys = {"completion_mask", "ref_chosen_logps", "ref_rejected_logps"}
         model_kwargs = {k: v for k, v in inputs.items() if k not in _non_model_keys}
         model_kwargs["use_cache"] = False
+        # MoE models: request router logits so the model returns `outputs.aux_loss`. VLM wrappers honor this only
+        # as a forward kwarg (not from the model config), so it must be passed here.
+        if self.aux_loss_enabled:
+            model_kwargs["output_router_logits"] = True
         outputs = model(**model_kwargs)
 
         input_ids = inputs["input_ids"]
@@ -1319,6 +1355,9 @@ class DPOTrainer(_BaseTrainer):
         if self.precompute_ref_logps:
             ref_chosen_logps, ref_rejected_logps = inputs["ref_chosen_logps"], inputs["ref_rejected_logps"]
         else:
+            # The reference forward only needs logits for log-probs. Drop `output_router_logits` so the frozen
+            # reference model does not materialize router logits and compute a discarded MoE aux loss.
+            ref_model_kwargs = {k: v for k, v in model_kwargs.items() if k != "output_router_logits"}
             # When gradient checkpointing is enabled with use_reentrant=True (default), calling the model inside a
             # torch.no_grad() block triggers a harmless PyTorch warning ("None of the inputs have requires_grad=True").
             # Temporarily disable checkpointing to avoid this warning during inference.
@@ -1329,9 +1368,9 @@ class DPOTrainer(_BaseTrainer):
                     # - Re-training an existing adapter: an initial copy is loaded under the name "ref".
                     model = self.accelerator.unwrap_model(model)
                     with use_adapter(model, adapter_name="ref" if "ref" in model.peft_config else None):
-                        ref_outputs = self.model(**model_kwargs)
+                        ref_outputs = self.model(**ref_model_kwargs)
                 else:
-                    ref_outputs = self.ref_model(**model_kwargs)
+                    ref_outputs = self.ref_model(**ref_model_kwargs)
 
             ref_shift_logits = ref_outputs.logits[..., :-1, :]
             ref_per_token_logps = selective_log_softmax(ref_shift_logits, shift_labels)
@@ -1528,6 +1567,11 @@ class DPOTrainer(_BaseTrainer):
                 per_sequence_loss *= chosen_weights * rejected_weights
 
             loss += per_sequence_loss.mean() * loss_weight
+
+        if self.aux_loss_enabled:
+            aux_loss = outputs.aux_loss
+            loss = loss + self.router_aux_loss_coef * aux_loss
+            self._metrics[mode]["aux_loss"].append(self.accelerator.gather_for_metrics(aux_loss).mean().item())
 
         # Log the metrics
         # Entropy

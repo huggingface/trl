@@ -62,7 +62,7 @@ accelerate launch examples/scripts/cpo.py \
 
 ## Logged metrics
 
-While training and evaluating, we record the following reward metrics:
+While training and evaluating, we record the following metrics:
 
 * `rewards/chosen`: the mean log probabilities of the policy model for the chosen responses scaled by beta
 * `rewards/rejected`: the mean log probabilities of the policy model for the rejected responses scaled by beta

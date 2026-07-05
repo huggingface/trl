@@ -232,6 +232,27 @@ training_args = GRPOConfig(
 )
 ```
 
+### Skywork-OR1: Open Reasoning Models
+
+**📜 Paper**: https://huggingface.co/papers/2505.22312
+
+Skywork-OR1 is a family of open reasoning models trained with GRPO. The paper introduces **adaptive entropy control**: an entropy regularization term `−α·H(π_θ)` is added to the GRPO objective, and the coefficient `α` is automatically adjusted each optimizer step. When the model's mean per-token entropy falls at or below a target, `α` is incremented to encourage more exploration; otherwise it is decremented. The bonus is only applied while entropy is at or below the target. To replicate this adaptive entropy control, use the following configuration:
+
+```python
+from trl import GRPOConfig, GRPOTrainer
+
+training_args = GRPOConfig(
+    use_adaptive_entropy=True,   # enable adaptive entropy control (Section 3.3 of the paper)
+    entropy_coef=0.01,           # initial entropy regularization coefficient
+    entropy_target=5.0,          # target mean per-token entropy (nats); tune for your model
+    entropy_coef_delta=0.005,    # step size for coefficient updates per optimizer step
+)
+trainer = GRPOTrainer(
+    ...,
+    args=training_args,
+)
+```
+
 ### Beyond the 80/20 Rule: High-Entropy Minority Tokens Drive Effective Reinforcement Learning for LLM Reasoning
 
 **📜 Paper**: https://huggingface.co/papers/2506.01939
@@ -1250,7 +1271,7 @@ KTO derives an alignment objective from prospect theory and learns directly from
 To reproduce the paper's setting, you can use the default configuration of [`experimental.kto.KTOTrainer`]:
 
 ```python
-from trl.experimental.kto import KTOConfig, KTOTrainer
+from trl import KTOConfig, KTOTrainer
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 model = AutoModelForCausalLM.from_pretrained(model_id)
