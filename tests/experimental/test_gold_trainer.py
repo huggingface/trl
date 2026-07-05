@@ -2304,6 +2304,7 @@ def _make_vlm_trainer_args(use_vllm=False):
         uld_skip_student_eos=False,
         uld_skip_teacher_eos=False,
         use_extended_uld=False,
+        uld_token_merge_strategy="observed",
     )
 
 
