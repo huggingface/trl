@@ -2799,6 +2799,12 @@ class GRPOTrainer(_BaseTrainer):
             # 2. Drift from training-inference mismatch (when using vLLM)
             # When using vLLM, prioritize sampling_per_token_logps, otherwise use old_per_token_logps
             sampling_per_token_logps = inputs.get("sampling_per_token_logps", old_per_token_logps)
+            # NaN sampling logprobs (near-deterministic tokens under vLLM) must be replaced before
+            # get_off_policy_mask — even when vllm_importance_sampling_correction is disabled —
+            # because a single NaN propagates through the sequence KL and poisons the loss mean.
+            nan_mask = torch.isnan(sampling_per_token_logps)
+            if nan_mask.any():
+                sampling_per_token_logps = torch.where(nan_mask, old_per_token_logps, sampling_per_token_logps)
 
             off_policy_mask = self.get_off_policy_mask(
                 advantages=advantages,
