@@ -2060,7 +2060,12 @@ class GRPOTrainer(_BaseTrainer):
                 self._async_tool_dicts.append(async_tool_dict)
 
         if self.environments:
-            for prompt, environment, reset_kwargs in zip(prompts, self.environments, inputs, strict=True):
+            # `self.environments` has `generation_batch_size` entries, but the final batch of an eval (or of
+            # training on a non-divisible dataset) can be partial, i.e. `len(prompts) < generation_batch_size`.
+            # Slice to the live batch so the strict zip holds on partial batches (see issue #6129).
+            for prompt, environment, reset_kwargs in zip(
+                prompts, self.environments[: len(prompts)], inputs, strict=True
+            ):
                 observation = environment.reset(**reset_kwargs)
                 if observation is None:
                     continue
