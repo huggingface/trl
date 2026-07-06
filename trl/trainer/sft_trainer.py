@@ -209,11 +209,10 @@ def _chunked_cross_entropy_loss(
     n_valid_tensor = valid.sum()
     # Host-side valid-token count. This sync also gates the number of chunks below; on XLA/Neuron it materializes a
     # host int, which is what bounds recompilation (see below), so it is not an extra cost.
-    n_valid = int(n_valid_tensor)
 
     correct = hidden.new_zeros((), dtype=torch.float32)
     entropy_sum = hidden.new_zeros((), dtype=torch.float32)
-    if n_valid == 0:
+    if n_valid_tensor == 0:
         # Whole micro-batch masked (e.g. completion-only loss + truncation). Keep the loss connected
         # to the autograd graph through every trainable parameter so `.backward()` succeeds and DDP /
         # FSDP gradient sync doesn't hang on a missing param.
@@ -232,7 +231,10 @@ def _chunked_cross_entropy_loss(
     # Process only the whole chunks covering the valid prefix. `n_process` is a multiple of `chunk_size`, so across
     # steps it takes at most `total / chunk_size` distinct values — bounding XLA recompiles to a small one-time set,
     # while on GPU it drops the fully-masked trailing chunks.
-    n_process = min(math.ceil(n_valid / chunk_size) * chunk_size, hidden.size(0))
+    n_process = torch.clamp(
+        (n_valid_tensor / chunk_size).ceil().to(torch.int64) * chunk_size,
+        min=hidden.size(0),
+    )
 
     loss = hidden.new_zeros((), dtype=torch.float32)
 
@@ -254,7 +256,7 @@ def _chunked_cross_entropy_loss(
         entropy_sum = entropy_sum + chunk_entropy
 
     if num_items_in_batch is None:
-        loss = loss / n_valid
+        loss = loss / n_valid_tensor
     else:
         if isinstance(num_items_in_batch, torch.Tensor):
             num_items_in_batch = num_items_in_batch.to(loss.device)
