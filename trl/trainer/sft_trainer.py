@@ -54,6 +54,7 @@ from ..chat_template_utils import (
     is_chat_template_stop_token_trained,
 )
 from ..data_utils import (
+    _tokenize,
     apply_chat_template,
     get_dataset_column_names,
     is_conversational,
@@ -786,49 +787,6 @@ def dft_loss(outputs, labels, num_items_in_batch=None):
         num_items_in_batch = loss_mask.sum()
     loss = (per_token_loss * loss_mask).sum() / num_items_in_batch
     return loss
-
-
-# `_tokenize` is a module-level function rather than a trainer method so that `tokenize_fn` (the `Dataset.map`
-# callback in `_prepare_dataset`) can reference it without closing over `self`: a closure over `self` would make the
-# map function unhashable, forcing a random fingerprint that silently disables dataset caching.
-def _tokenize(
-    processing_class: PreTrainedTokenizerBase | ProcessorMixin,
-    input: str | list,
-    chat_template: str | None,
-    **kwargs,
-) -> dict[str, list]:
-    """Tokenize a single example for dataset preprocessing.
-
-    Dispatches to `apply_chat_template` for conversational input (list of message dicts) and to `__call__` for
-    non-conversational input (str). For VLMs, normalizes the batch dimension that processors emit even for single
-    examples.
-
-    Args:
-        processing_class ([`~transformers.PreTrainedTokenizerBase`] or [`~transformers.ProcessorMixin`]):
-            The tokenizer or processor to use.
-        input (`str` or `list`):
-            A string for non-conversational input, or a list of message dicts for conversational input.
-        chat_template (`str` or `None`):
-            Chat template forwarded to `apply_chat_template` for conversational input.
-        **kwargs:
-            Forwarded to `apply_chat_template` (e.g. `add_generation_prompt`, `return_assistant_tokens_mask`).
-
-    Returns:
-        `dict` with at least an `"input_ids"` key mapping to a flat `list[int]`.
-    """
-    is_vlm = isinstance(processing_class, ProcessorMixin)
-    if isinstance(input, list):  # conversational: list of message dicts
-        if is_vlm:
-            input = prepare_multimodal_messages(input)
-        result = processing_class.apply_chat_template(
-            input, tokenize=True, return_dict=True, chat_template=chat_template, **kwargs
-        )
-    else:  # non-conversational: plain text string
-        result = processing_class(text=input)
-    # VLMs emit a batch dimension even for single examples; unwrap it
-    if is_vlm:
-        return {k: v[0] for k, v in result.items()}
-    return result
 
 
 class SFTTrainer(_BaseTrainer):
