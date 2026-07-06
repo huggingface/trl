@@ -85,6 +85,8 @@ def parse_args():
     p.add_argument("--per-device-batch-size", type=int, default=2)
     p.add_argument("--gradient-accumulation-steps", type=int, default=4)
     p.add_argument("--learning-rate", type=float, default=2e-5)
+    p.add_argument("--lmbda", type=float, default=0.0)
+    p.add_argument("--beta", type=float, default=1.0)
     p.add_argument("--temperature", type=float, default=1.0)
     p.add_argument("--xtoken-temperature", type=float, default=1.0)
     p.add_argument("--xtoken-kl-weight", type=float, default=1.0)
@@ -118,8 +120,8 @@ def main():
         # Sequence lengths
         max_length=args.max_length,
         max_completion_length=args.max_completion_length,
-        lmbda=0.0,
-        beta=1.0,
+        lmbda=args.lmbda,
+        beta=args.beta,
         # X-Token config
         xtoken_loss_type=args.loss_type,
         xtoken_projection_matrix_path=args.projection_matrix,
