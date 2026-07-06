@@ -148,9 +148,10 @@ class TestAsyncGRPOTrainer(TrlTestCase):
 class TestAsyncRolloutWorkerEnvironments(TrlTestCase):
     """Unit tests for the rollout worker's environment/tool wiring (no vLLM required)."""
 
-    def _make_loop(self, environment_factory):
+    def _make_loop(self, environment_factory, dataset=None):
         model_id = "trl-internal-testing/tiny-Qwen3MoeForCausalLM"
-        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        if dataset is None:
+            dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
         # `_AsyncRolloutLoop.__init__` only sets up state (no vLLM connection / generation happens here).
         return _AsyncRolloutLoop(
             model_name=model_id,
@@ -207,6 +208,33 @@ class TestAsyncRolloutWorkerEnvironments(TrlTestCase):
             # The probe instances seed the reuse pool, so they are not wasted.
             assert len(loop._environment_pool["counter"]) == 1
             assert len(loop._environment_pool["echo"]) == 1
+        finally:
+            loop._loop.close()
+
+    def test_unknown_environment_raises(self):
+        # An example whose `environment` field doesn't match any configured environment should fail with a clear error
+        # rather than a bare KeyError mid-rollout. The check fires before any generation, so no vLLM is needed here.
+        class CounterEnvironment:
+            def reset(self, **kwargs): ...
+
+            def increment(self, step: int) -> int:
+                """Increment the counter.
+
+                Args:
+                    step: Value to add.
+
+                Returns:
+                    The updated value.
+                """
+                return step
+
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        dataset = dataset.map(lambda example: {"environment": "unknown"})
+
+        loop = self._make_loop({"counter": CounterEnvironment}, dataset=dataset)
+        try:
+            with pytest.raises(ValueError, match="not among the environments"):
+                loop._loop.run_until_complete(loop._generate_loop(stop_event=loop._stop_event))
         finally:
             loop._loop.close()
 
