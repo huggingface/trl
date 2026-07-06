@@ -1367,7 +1367,6 @@ class SFTTrainer(_BaseTrainer):
     def _tokenize(
         processing_class: PreTrainedTokenizerBase | ProcessorMixin,
         input: str | list,
-        is_vlm: bool,
         chat_template: str | None,
         **kwargs,
     ) -> dict[str, list]:
@@ -1382,9 +1381,6 @@ class SFTTrainer(_BaseTrainer):
                 The tokenizer or processor to use.
             input (`str` or `list`):
                 A string for non-conversational input, or a list of message dicts for conversational input.
-            is_vlm (`bool`):
-                Whether the processing class is a VLM processor, requiring multimodal message preparation and batch
-                dimension normalization.
             chat_template (`str` or `None`):
                 Chat template forwarded to `apply_chat_template` for conversational input.
             **kwargs:
@@ -1393,6 +1389,7 @@ class SFTTrainer(_BaseTrainer):
         Returns:
             `dict` with at least an `"input_ids"` key mapping to a flat `list[int]`.
         """
+        is_vlm = isinstance(processing_class, ProcessorMixin)
         if isinstance(input, list):  # conversational: list of message dicts
             if is_vlm:
                 input = prepare_multimodal_messages(input)
@@ -1492,9 +1489,7 @@ class SFTTrainer(_BaseTrainer):
                 # map function unhashable, forcing a random fingerprint that silently disables dataset caching.
                 tokenize = self._tokenize
 
-                def tokenize_fn(
-                    example, processing_class, dataset_text_field, assistant_only_loss, is_vlm, chat_template
-                ):
+                def tokenize_fn(example, processing_class, dataset_text_field, assistant_only_loss, chat_template):
                     tools = example.get("tools")
                     tools = json.loads(tools) if isinstance(tools, str) else tools
                     if "prompt" in example:  # prompt-completion case
@@ -1503,7 +1498,6 @@ class SFTTrainer(_BaseTrainer):
                             prompt_ids = tokenize(
                                 processing_class,
                                 example["prompt"],
-                                is_vlm,
                                 chat_template,
                                 tools=tools,
                                 add_generation_prompt=True,
@@ -1512,7 +1506,6 @@ class SFTTrainer(_BaseTrainer):
                             prompt_completion_processed = tokenize(
                                 processing_class,
                                 example["prompt"] + example["completion"],
-                                is_vlm,
                                 chat_template,
                                 tools=tools,
                                 return_assistant_tokens_mask=assistant_only_loss,
@@ -1522,11 +1515,9 @@ class SFTTrainer(_BaseTrainer):
                             if "assistant_masks" in prompt_completion_processed:
                                 output["assistant_masks"] = prompt_completion_processed["assistant_masks"]
                         else:
-                            prompt_ids = tokenize(processing_class, example["prompt"], is_vlm, chat_template)[
-                                "input_ids"
-                            ]
+                            prompt_ids = tokenize(processing_class, example["prompt"], chat_template)["input_ids"]
                             prompt_completion_ids = tokenize(
-                                processing_class, example["prompt"] + example["completion"], is_vlm, chat_template
+                                processing_class, example["prompt"] + example["completion"], chat_template
                             )["input_ids"]
 
                         # Check if the tokenized prompt starts with the tokenized prompt+completion
@@ -1547,7 +1538,6 @@ class SFTTrainer(_BaseTrainer):
                             processed = tokenize(
                                 processing_class,
                                 example["messages"],
-                                is_vlm,
                                 chat_template,
                                 tools=tools,
                                 return_assistant_tokens_mask=assistant_only_loss,
@@ -1556,9 +1546,9 @@ class SFTTrainer(_BaseTrainer):
                             output = {k: processed[k] for k in ("input_ids", "assistant_masks") if k in processed}
                         else:
                             output = {
-                                "input_ids": tokenize(
-                                    processing_class, example[dataset_text_field], is_vlm, chat_template
-                                )["input_ids"]
+                                "input_ids": tokenize(processing_class, example[dataset_text_field], chat_template)[
+                                    "input_ids"
+                                ]
                             }
 
                     if "assistant_masks" in output and 1 not in output["assistant_masks"]:
@@ -1576,7 +1566,6 @@ class SFTTrainer(_BaseTrainer):
                         "processing_class": processing_class,
                         "dataset_text_field": args.dataset_text_field,
                         "assistant_only_loss": args.assistant_only_loss,
-                        "is_vlm": self._is_vlm,
                         "chat_template": self.chat_template,
                     },
                     **map_kwargs,
