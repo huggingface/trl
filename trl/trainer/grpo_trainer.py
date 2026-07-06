@@ -1527,13 +1527,26 @@ class GRPOTrainer(_BaseTrainer):
                 prompt_ids = tokenized["input_ids"]
             # For VLMs, the processor returns extra multimodal fields (pixel_values, image_grid_thw, etc.)
             multimodal_fields = {k: v for k, v in tokenized.items() if k not in ("input_ids", "attention_mask")}
+            
+            if self.use_vllm and images is not None:
+                texts = self.processing_class.apply_chat_template(
+                    conversation=prompts,
+                    chat_template=self.chat_template,
+                    add_generation_prompt=True,
+                    tokenize=False,
+                    **self.chat_template_kwargs,
+                )
+                vllm_prompt_ids = self.processing_class.tokenizer(texts, add_special_tokens=False)["input_ids"]
+            else:
+                vllm_prompt_ids = prompt_ids
         else:
             prompt_ids = self.processing_class(text=prompts)["input_ids"]
             images = None
             multimodal_fields = {}
-        return prompt_ids, images, multimodal_fields
+            vllm_prompt_ids = prompt_ids
+        return prompt_ids, images, multimodal_fields, vllm_prompt_ids
 
-    def _generate_single_turn(self, prompt_ids, images, multimodal_fields):
+    def _generate_single_turn(self, prompt_ids, images, multimodal_fields, vllm_prompt_ids=None):
         device = self.accelerator.device
         mode = "train" if self.model.training else "eval"
 
@@ -1548,7 +1561,7 @@ class GRPOTrainer(_BaseTrainer):
             # Generate using vLLM with raw token IDs
             num_generations = self.num_generations if mode == "train" else self.num_generations_eval
             _, completion_ids, logprobs, _ = self.vllm_generation.generate(
-                prompts=prompt_ids,
+                prompts=vllm_prompt_ids if vllm_prompt_ids is not None else prompt_ids,
                 images=images,
                 num_generations=num_generations,
                 profiler=profiling_context(self, "vLLM.generate"),
@@ -1920,8 +1933,8 @@ class GRPOTrainer(_BaseTrainer):
             images = None
             multimodal_fields = {}
         else:
-            prompt_ids, images, multimodal_fields = self._tokenize_prompts(prompts)
-            completion_ids, logprobs = self._generate_single_turn(prompt_ids, images, multimodal_fields)
+            prompt_ids, images, multimodal_fields, vllm_prompt_ids = self._tokenize_prompts(prompts)
+            completion_ids, logprobs = self._generate_single_turn(prompt_ids, images, multimodal_fields, vllm_prompt_ids=vllm_prompt_ids)
             extra_fields = {}
 
         # Decode completions. It's important to use `parse_response` when possible, because it handles tool calls.
