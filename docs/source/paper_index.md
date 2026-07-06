@@ -481,6 +481,36 @@ TRL exposes the Importance Sampling granularity level through the `vllm_importan
 
 See [Experimental - GFPO](gfpo).
 
+### GRPO-LEAD: A Difficulty-Aware Reinforcement Learning Approach for Concise Mathematical Reasoning
+
+**📜 Paper**: https://huggingface.co/papers/2504.09696
+
+GRPO-LEAD shapes the accuracy reward inside a GRPO group so that shorter correct completions receive a larger
+reward than longer correct ones, while incorrect completions receive a strictly negative reward. In TRL this is
+exposed as a reward factory that wraps [`reasoning_accuracy_reward`]:
+
+```python
+from trl import GRPOConfig, GRPOTrainer
+from trl.rewards import get_length_scaled_accuracy_reward
+
+length_scaled_accuracy = get_length_scaled_accuracy_reward(alpha=0.5, incorrect_reward=-1.0)
+
+trainer = GRPOTrainer(
+    ...,
+    reward_funcs=[length_scaled_accuracy],
+    args=GRPOConfig(num_generations=8),
+)
+```
+
+Within each group of completions that share a prompt, the reward for a correct completion is `exp(-alpha * z)`,
+where `z` is the z-score of its length among the correct completions in the group (tokens when `completion_ids`
+is provided, characters otherwise). Incorrect completions receive `incorrect_reward`, which shifts the
+break-even accuracy above 50% so that guessing only pays off once the model is confident.
+
+Unlike [`get_cosine_scaled_reward`], which maps an *absolute* token length onto a fixed cosine schedule via a
+`max_len` hyperparameter, this reward is *group-relative*: it standardizes length against the other correct
+completions of the same prompt, so it adapts to each prompt's difficulty without a length budget.
+
 ### Perception-Aware Policy Optimization for Multimodal Reasoning
 
 **📜 Paper**: https://huggingface.co/papers/2507.06448

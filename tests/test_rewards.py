@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import math
 import pickle
 import threading
 
@@ -20,8 +21,10 @@ import pytest
 from trl.rewards import (
     accuracy_reward,
     get_cosine_scaled_reward,
+    get_length_scaled_accuracy_reward,
     get_repetition_penalty_reward,
     get_soft_overlong_punishment,
+    graduated_format_reward,
     reasoning_accuracy_reward,
     think_format_reward,
 )
@@ -397,3 +400,174 @@ class TestCosineScaledReward:
         completion_ids = [[1] * 50]
         assert unpickled(completions, solution, completion_ids) == [pytest.approx(0.75)]
         assert unpickled.__name__ == "cosine_scaled_reward"
+
+
+class TestGraduatedFormatReward:
+    def test_strict_match_yields_full_reward(self):
+        completions = [
+            [{"content": "<think>\nReasoning.\n</think>\nAnswer."}],
+            [{"content": "<think>short</think> answer"}],
+            [{"content": "<think></think>\nAnswer."}],
+        ]
+        rewards = graduated_format_reward(completions)
+        assert rewards == [1.0, 1.0, 1.0]
+
+    def test_both_tags_but_malformed_yields_half_reward(self):
+        completions = [
+            # Closer before opener.
+            [{"content": "</think>\nReasoning.\n<think>"}],
+            # Nested <think> tags.
+            [{"content": "<think>outer <think>inner</think></think> answer"}],
+            # Content before the opening <think>.
+            [{"content": "prefix <think>reasoning</think> answer"}],
+        ]
+        rewards = graduated_format_reward(completions)
+        assert rewards == [0.5, 0.5, 0.5]
+
+    def test_single_tag_yields_quarter_reward(self):
+        completions = [
+            [{"content": "<think>reasoning without closing tag"}],
+            [{"content": "reasoning without opening tag</think> answer"}],
+        ]
+        rewards = graduated_format_reward(completions)
+        assert rewards == [0.25, 0.25]
+
+    def test_no_tags_yields_zero_reward(self):
+        completions = [
+            [{"content": "Plain answer with no reasoning tags."}],
+            [{"content": ""}],
+        ]
+        rewards = graduated_format_reward(completions)
+        assert rewards == [0.0, 0.0]
+
+
+class TestLengthScaledAccuracyReward:
+    @require_math_latex
+    def test_shorter_correct_completion_gets_higher_reward_than_longer(self):
+        reward_fn = get_length_scaled_accuracy_reward(alpha=0.5)
+        completions = [
+            [{"content": r"<think> short </think> \boxed{\frac{1}{3}}"}],
+            [{"content": r"<think> much longer reasoning content here </think> \boxed{\frac{1}{3}}"}],
+        ]
+        solutions = [r"\frac{1}{3}", r"\frac{1}{3}"]
+        prompts = ["same prompt", "same prompt"]
+        rewards = reward_fn(completions=completions, solution=solutions, prompts=prompts)
+        # Both are correct, so rewards should be within a group and geometric-mean 1.0 around the unit point.
+        assert rewards[0] > rewards[1]
+        assert math.isclose(rewards[0] * rewards[1], 1.0, rel_tol=1e-6)
+
+    @require_math_latex
+    def test_incorrect_completion_gets_incorrect_reward(self):
+        reward_fn = get_length_scaled_accuracy_reward(alpha=0.5, incorrect_reward=-1.0)
+        completions = [
+            [{"content": r"<think> short </think> \boxed{\frac{1}{3}}"}],
+            [{"content": r"<think> reasoning </think> \boxed{\frac{1}{2}}"}],
+        ]
+        solutions = [r"\frac{1}{3}", r"\frac{1}{3}"]
+        prompts = ["same prompt", "same prompt"]
+        rewards = reward_fn(completions=completions, solution=solutions, prompts=prompts)
+        # Only one correct completion in the group → no length scaling, reward=1.0.
+        assert rewards[0] == 1.0
+        assert rewards[1] == -1.0
+
+    @require_math_latex
+    def test_unparsable_gold_passes_through_as_none(self):
+        reward_fn = get_length_scaled_accuracy_reward()
+        completions = [
+            [{"content": r"<think> Reasoning </think> \boxed{42}"}],
+        ]
+        solutions = ["forty two"]
+        prompts = ["p"]
+        rewards = reward_fn(completions=completions, solution=solutions, prompts=prompts)
+        assert rewards[0] is None
+
+    @require_math_latex
+    def test_groups_are_scaled_independently(self):
+        reward_fn = get_length_scaled_accuracy_reward(alpha=0.5)
+        # Two prompts, two completions each. Per-group, the shorter correct beats the longer correct.
+        completions = [
+            [{"content": r"<think> a </think> \boxed{\frac{1}{3}}"}],
+            [{"content": r"<think> a much longer chain </think> \boxed{\frac{1}{3}}"}],
+            [{"content": r"<think> b </think> \boxed{2}"}],
+            [{"content": r"<think> b much longer chain </think> \boxed{2}"}],
+        ]
+        solutions = [r"\frac{1}{3}", r"\frac{1}{3}", "2", "2"]
+        prompts = ["p1", "p1", "p2", "p2"]
+        rewards = reward_fn(completions=completions, solution=solutions, prompts=prompts)
+        assert rewards[0] > rewards[1]
+        assert rewards[2] > rewards[3]
+        # Cross-group rewards are comparable: the "short correct" of each group should match.
+        assert math.isclose(rewards[0], rewards[2], rel_tol=1e-6)
+
+    @require_math_latex
+    def test_token_length_from_completion_ids_is_used_when_available(self):
+        reward_fn = get_length_scaled_accuracy_reward(alpha=0.5)
+        # Identical string content but different token counts via completion_ids → shorter ids gets higher reward.
+        completions = [
+            [{"content": r"<think> reasoning </think> \boxed{\frac{1}{3}}"}],
+            [{"content": r"<think> reasoning </think> \boxed{\frac{1}{3}}"}],
+        ]
+        solutions = [r"\frac{1}{3}", r"\frac{1}{3}"]
+        prompts = ["p", "p"]
+        completion_ids = [[1, 2, 3], [1, 2, 3, 4, 5, 6, 7, 8, 9]]
+        rewards = reward_fn(
+            completions=completions, solution=solutions, prompts=prompts, completion_ids=completion_ids
+        )
+        assert rewards[0] > rewards[1]
+
+    @require_math_latex
+    def test_alpha_zero_recovers_binary_accuracy(self):
+        reward_fn = get_length_scaled_accuracy_reward(alpha=0.0, incorrect_reward=-1.0)
+        completions = [
+            [{"content": r"<think> short </think> \boxed{\frac{1}{3}}"}],
+            [{"content": r"<think> much longer reasoning </think> \boxed{\frac{1}{3}}"}],
+            [{"content": r"<think> x </think> \boxed{\frac{1}{2}}"}],
+        ]
+        solutions = [r"\frac{1}{3}", r"\frac{1}{3}", r"\frac{1}{3}"]
+        prompts = ["p", "p", "p"]
+        rewards = reward_fn(completions=completions, solution=solutions, prompts=prompts)
+        assert rewards == [1.0, 1.0, -1.0]
+
+    @require_math_latex
+    def test_log_extra_emits_upstream_and_length_z_columns(self):
+        # Capture the columns the reward function pushes through `log_extra`. The wrapper must preserve the
+        # diagnostic columns emitted by `reasoning_accuracy_reward` and add a `length_z` column on top.
+        reward_fn = get_length_scaled_accuracy_reward(alpha=0.5)
+        completions = [
+            [{"content": r"<think> a </think> \boxed{\frac{1}{3}}"}],
+            [{"content": r"<think> a much longer chain </think> \boxed{\frac{1}{3}}"}],
+            [{"content": r"<think> wrong </think> \boxed{\frac{1}{2}}"}],
+        ]
+        solutions = [r"\frac{1}{3}", r"\frac{1}{3}", r"\frac{1}{3}"]
+        prompts = ["p", "p", "p"]
+
+        logged: dict[str, list] = {}
+
+        def log_extra(column: str, values: list) -> None:
+            logged[column] = values
+
+        reward_fn(completions=completions, solution=solutions, prompts=prompts, log_extra=log_extra)
+
+        assert set(logged) == {"solution", "gold_parsed", "answer_parsed", "length_z"}
+        assert logged["solution"] == solutions
+        assert len(logged["gold_parsed"]) == len(completions)
+        assert len(logged["answer_parsed"]) == len(completions)
+        # Two correct completions in the group → both get non-zero z-scores; the incorrect one gets None.
+        assert logged["length_z"][0] is not None and logged["length_z"][1] is not None
+        assert logged["length_z"][0] < 0 < logged["length_z"][1]
+        assert logged["length_z"][2] is None
+
+    @require_math_latex
+    def test_reward_is_picklable(self):
+        """The reward must survive pickling for the async GRPO rollout worker."""
+        reward_fn = get_length_scaled_accuracy_reward(alpha=0.5, incorrect_reward=-1.0)
+        unpickled = pickle.loads(pickle.dumps(reward_fn))
+        completions = [
+            [{"content": r"<think> short </think> \boxed{\frac{1}{3}}"}],
+            [{"content": r"<think> reasoning </think> \boxed{\frac{1}{2}}"}],
+        ]
+        solutions = [r"\frac{1}{3}", r"\frac{1}{3}"]
+        prompts = ["p", "p"]
+        rewards = unpickled(completions=completions, solution=solutions, prompts=prompts)
+        assert rewards == [1.0, -1.0]
+        assert unpickled.__name__ == "length_scaled_accuracy_reward"
