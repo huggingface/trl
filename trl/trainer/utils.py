@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import asyncio
+import functools
 import hashlib
 import importlib.resources as pkg_resources
 import os
@@ -20,7 +21,7 @@ import random
 import socket
 import threading
 import types
-from collections.abc import Mapping, Sequence, Sized
+from collections.abc import Callable, Mapping, Sequence, Sized
 from contextlib import contextmanager
 from importlib.metadata import version
 from itertools import accumulate
@@ -180,6 +181,17 @@ def disable_dropout_in_model(model: torch.nn.Module) -> None:
     for module in model.modules():
         if isinstance(module, torch.nn.Dropout):
             module.p = 0
+
+
+def get_callable_name(func: Callable) -> str:
+    """
+    Return a display name for a callable, supporting the picklable reward forms: module-level functions,
+    [`functools.partial`](https://docs.python.org/3/library/functools.html#functools.partial) (unwrapped to the wrapped
+    function's name), and callable class instances (which fall back to their class name).
+    """
+    while isinstance(func, functools.partial):
+        func = func.func
+    return getattr(func, "__name__", type(func).__name__)
 
 
 def get_quantization_config(model_args: ModelConfig) -> BitsAndBytesConfig | None:
