@@ -1534,10 +1534,20 @@ class DPOTrainer(_BaseTrainer):
                 chosen_logits, _ = shift_logits.chunk(2, dim=0)
                 chosen_labels, _ = shift_labels.chunk(2, dim=0)
                 chosen_mask, _ = shift_completion_mask.chunk(2, dim=0)
-                batch_loss = F.cross_entropy(chosen_logits[chosen_mask.bool()], chosen_labels[chosen_mask.bool()])
-                # Implementation convenience: expand the scalar SFT loss to a per-sequence tensor so it matches the
-                # shape of other losses; only the mean is used, so this is a no-op numerically.
-                per_sequence_loss = batch_loss.expand(chosen_logits.size(0))
+                chosen_mask_bool = chosen_mask.bool()
+                if chosen_mask_bool.any():
+                    batch_loss = F.cross_entropy(
+                        chosen_logits[chosen_mask_bool], chosen_labels[chosen_mask_bool]
+                    )
+                    # Implementation convenience: expand the scalar SFT loss to a per-sequence tensor so it matches the
+                    # shape of other losses; only the mean is used, so this is a no-op numerically.
+                    per_sequence_loss = batch_loss.expand(chosen_logits.size(0))
+                else:
+                    logger.warning(
+                        "Skipping 'sft' loss for a batch where all chosen completion tokens were truncated. "
+                        "Consider increasing `max_length`."
+                    )
+                    per_sequence_loss = chosen_logits[:, 0, :].softmax(dim=-1).mean(dim=-1) * 0.0
 
             elif loss_type == "sigmoid_norm":
                 chosen_mask, rejected_mask = completion_mask.chunk(2, dim=0)

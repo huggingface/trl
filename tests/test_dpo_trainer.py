@@ -15,7 +15,7 @@
 import pytest
 import torch
 import transformers
-from datasets import load_dataset
+from datasets import Dataset, load_dataset
 from packaging.version import Version
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 from transformers.testing_utils import torch_device
@@ -1172,6 +1172,57 @@ class TestDPOTrainer(TrlTestCase):
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
             else:
                 raise ValueError(f"Unexpected parameter {n} in model: {trainer.model}")
+
+    def test_evaluate_no_nan_when_sft_completions_truncated(self):
+        # Regression test: when max_length is smaller than the prompt length, all completion
+        # tokens are truncated away and chosen_mask is entirely False for the 'sft' loss branch.
+        # Previously, F.cross_entropy on the resulting empty tensor returned NaN which propagated
+        # into eval_loss.
+        prompts = ["Tell me all about the history of computing and its wide impact."] * 4
+        chosen = ["Great."] * 4
+        rejected = ["Bad."] * 4
+        dataset = Dataset.from_dict({"prompt": prompts, "chosen": chosen, "rejected": rejected})
+
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            loss_type="sft",
+            max_length=5,  # prompt tokenizes to more than 5 tokens; completions are fully truncated
+            report_to="none",
+        )
+        trainer = DPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset.select(range(2)),
+            eval_dataset=dataset.select(range(2, 4)),
+        )
+
+        results = trainer.evaluate()
+        assert not torch.isnan(torch.tensor(results["eval_loss"])), (
+            "eval_loss must be finite when completions are truncated"
+        )
+
+    def test_train_no_error_when_sft_completions_truncated(self):
+        # Regression test: when all completion tokens are truncated, the zero fallback in the sft
+        # branch must stay in the computation graph so loss.backward() doesn't raise.
+        prompts = ["Tell me all about the history of computing and its wide impact."] * 4
+        chosen = ["Great."] * 4
+        rejected = ["Bad."] * 4
+        dataset = Dataset.from_dict({"prompt": prompts, "chosen": chosen, "rejected": rejected})
+
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            loss_type="sft",
+            max_length=5,  # prompt tokenizes to more than 5 tokens; completions are fully truncated
+            max_steps=1,
+            report_to="none",
+        )
+        trainer = DPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+        trainer.train()
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
 
 @require_vision
