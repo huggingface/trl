@@ -299,7 +299,12 @@ def parse_args():
     p = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     p.add_argument("--student-model", required=True)
     p.add_argument("--teacher-model", required=True)
-    p.add_argument("--top-k", type=int, default=32, help="Top-k teacher tokens to keep per student token")
+    p.add_argument(
+        "--top-k",
+        type=int,
+        default=32,
+        help="Top-k teacher tokens to keep per student token. Sets an upper bound on xtoken_vocab_topk at training time.",
+    )
     p.add_argument(
         "--runtime-top-k", type=int, default=None, help="If set, also run sort_and_cut to this k after building"
     )
