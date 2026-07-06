@@ -1531,6 +1531,7 @@ class GRPOTrainer(_BaseTrainer):
             if self.use_vllm and images is not None:
                 texts = self.processing_class.apply_chat_template(
                     conversation=prompts,
+                    tools=self.tools or None,  # `or None`: Llama bug: it renders tool boilerplate for tools=[]
                     chat_template=self.chat_template,
                     add_generation_prompt=True,
                     tokenize=False,
