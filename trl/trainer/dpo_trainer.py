@@ -954,7 +954,6 @@ class DPOTrainer(_BaseTrainer):
     def _tokenize(
         processing_class: PreTrainedTokenizerBase | ProcessorMixin,
         input: str | list,
-        is_vlm: bool,
         **kwargs,
     ) -> dict[str, list]:
         """Tokenize a single example for dataset preprocessing.
@@ -968,15 +967,13 @@ class DPOTrainer(_BaseTrainer):
                 The tokenizer or processor to use.
             input (`str` or `list`):
                 A string for non-conversational input, or a list of message dicts for conversational input.
-            is_vlm (`bool`):
-                Whether the processing class is a VLM processor, requiring multimodal message preparation and batch
-                dimension normalization.
             **kwargs:
                 Forwarded to `apply_chat_template` (e.g. `add_generation_prompt`, `return_assistant_tokens_mask`).
 
         Returns:
             `dict` with at least an `"input_ids"` key mapping to a flat `list[int]`.
         """
+        is_vlm = isinstance(processing_class, ProcessorMixin)
         if isinstance(input, list):  # conversational: list of message dicts
             if is_vlm:
                 input = prepare_multimodal_messages(input)
@@ -1031,7 +1028,7 @@ class DPOTrainer(_BaseTrainer):
             # function unhashable, forcing a random fingerprint that silently disables dataset caching.
             tokenize = self._tokenize
 
-            def tokenize_fn(example, processing_class, is_vlm):
+            def tokenize_fn(example, processing_class):
                 tools = example.get("tools")
                 tools = json.loads(tools) if isinstance(tools, str) else tools
                 output = {}
@@ -1039,7 +1036,6 @@ class DPOTrainer(_BaseTrainer):
                     prompt_ids = tokenize(
                         processing_class,
                         example["prompt"],
-                        is_vlm,
                         tools=tools,
                         add_generation_prompt=True,
                         **example.get("chat_template_kwargs", {}),
@@ -1047,23 +1043,19 @@ class DPOTrainer(_BaseTrainer):
                     prompt_chosen_ids = tokenize(
                         processing_class,
                         example["prompt"] + example["chosen"],
-                        is_vlm,
                         tools=tools,
                         **example.get("chat_template_kwargs", {}),
                     )["input_ids"]
                     prompt_rejected_ids = tokenize(
                         processing_class,
                         example["prompt"] + example["rejected"],
-                        is_vlm,
                         tools=tools,
                         **example.get("chat_template_kwargs", {}),
                     )["input_ids"]
                 else:
-                    prompt_ids = tokenize(processing_class, example["prompt"], is_vlm)["input_ids"]
-                    prompt_chosen_ids = tokenize(processing_class, example["prompt"] + example["chosen"], is_vlm)[
-                        "input_ids"
-                    ]
-                    prompt_rejected_ids = tokenize(processing_class, example["prompt"] + example["rejected"], is_vlm)[
+                    prompt_ids = tokenize(processing_class, example["prompt"])["input_ids"]
+                    prompt_chosen_ids = tokenize(processing_class, example["prompt"] + example["chosen"])["input_ids"]
+                    prompt_rejected_ids = tokenize(processing_class, example["prompt"] + example["rejected"])[
                         "input_ids"
                     ]
 
@@ -1088,7 +1080,7 @@ class DPOTrainer(_BaseTrainer):
 
             dataset = dataset.map(
                 tokenize_fn,
-                fn_kwargs={"processing_class": processing_class, "is_vlm": self._is_vlm},
+                fn_kwargs={"processing_class": processing_class},
                 **map_kwargs,
             )
 
