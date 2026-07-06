@@ -1455,7 +1455,7 @@ class SFTTrainer(_BaseTrainer):
                             prompt_ids = _tokenize(
                                 processing_class,
                                 example["prompt"],
-                                chat_template,
+                                chat_template=chat_template,
                                 tools=tools,
                                 add_generation_prompt=True,
                                 **example.get("chat_template_kwargs", {}),
@@ -1463,7 +1463,7 @@ class SFTTrainer(_BaseTrainer):
                             prompt_completion_processed = _tokenize(
                                 processing_class,
                                 example["prompt"] + example["completion"],
-                                chat_template,
+                                chat_template=chat_template,
                                 tools=tools,
                                 return_assistant_tokens_mask=assistant_only_loss,
                                 **example.get("chat_template_kwargs", {}),
@@ -1472,9 +1472,13 @@ class SFTTrainer(_BaseTrainer):
                             if "assistant_masks" in prompt_completion_processed:
                                 output["assistant_masks"] = prompt_completion_processed["assistant_masks"]
                         else:
-                            prompt_ids = _tokenize(processing_class, example["prompt"], chat_template)["input_ids"]
+                            prompt_ids = _tokenize(processing_class, example["prompt"], chat_template=chat_template)[
+                                "input_ids"
+                            ]
                             prompt_completion_ids = _tokenize(
-                                processing_class, example["prompt"] + example["completion"], chat_template
+                                processing_class,
+                                example["prompt"] + example["completion"],
+                                chat_template=chat_template,
                             )["input_ids"]
 
                         # Check if the tokenized prompt starts with the tokenized prompt+completion
@@ -1495,7 +1499,7 @@ class SFTTrainer(_BaseTrainer):
                             processed = _tokenize(
                                 processing_class,
                                 example["messages"],
-                                chat_template,
+                                chat_template=chat_template,
                                 tools=tools,
                                 return_assistant_tokens_mask=assistant_only_loss,
                                 **example.get("chat_template_kwargs", {}),
@@ -1503,9 +1507,9 @@ class SFTTrainer(_BaseTrainer):
                             output = {k: processed[k] for k in ("input_ids", "assistant_masks") if k in processed}
                         else:
                             output = {
-                                "input_ids": _tokenize(processing_class, example[dataset_text_field], chat_template)[
-                                    "input_ids"
-                                ]
+                                "input_ids": _tokenize(
+                                    processing_class, example[dataset_text_field], chat_template=chat_template
+                                )["input_ids"]
                             }
 
                     if "assistant_masks" in output and 1 not in output["assistant_masks"]:
