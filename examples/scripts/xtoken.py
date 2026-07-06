@@ -11,21 +11,32 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""X-Token off-policy distillation with GOLDTrainer.
+# /// script
+# dependencies = [
+#     "trl @ git+https://github.com/huggingface/trl.git",
+#     "trackio",
+# ]
+# ///
 
-X-Token KD is inherently off-policy: the dataset provides the completion text, both student and teacher run forward
-passes on that text, and the cross-tokenizer KD loss is computed between their logits. No on-policy generation.
+# docstyle-ignore
+"""
+# X-Token off-policy distillation with GOLDTrainer:
+python examples/scripts/xtoken.py \
+    --student-model meta-llama/Llama-3.2-1B-Instruct \
+    --teacher-model Qwen/Qwen3-4B \
+    --projection-matrix cross_tokenizer_data/projection_map_..._top_4_sorted.pt \
+    --loss-type p_kl \
+    --max-steps 100
 
-Usage:
+# With Nemotron text corpus (matches the NeMo-RL reference run):
+python examples/scripts/xtoken.py \
+    --student-model meta-llama/Llama-3.2-1B-Instruct \
+    --teacher-model Qwen/Qwen3-4B \
+    --projection-matrix cross_tokenizer_data/projection_map_..._top_4_sorted.pt \
+    --dataset nemotron \
+    --max-length 512
 
-    python trl/experimental/gold/scripts/xtoken/train_xtoken.py
-        --projection-matrix cross_tokenizer_data/projection_map_..._top_4_sorted.pt --loss-type p_kl --max-steps 100
-
-    # Use Nemotron text corpus (matches the NeMo-RL reference run data): python
-    trl/experimental/gold/scripts/xtoken/train_xtoken.py
-        --dataset nemotron --projection-matrix ... --max-length 512
-
-Build the projection matrix first with the three scripts in this directory. See
+Build the projection matrix first with the scripts in trl/experimental/gold/scripts/xtoken/. See
 https://huggingface.co/papers/2605.21699.
 """
 
@@ -77,7 +88,9 @@ def parse_args():
     p.add_argument("--temperature", type=float, default=1.0)
     p.add_argument("--xtoken-temperature", type=float, default=1.0)
     p.add_argument("--xtoken-kl-weight", type=float, default=1.0)
-    p.add_argument("--xtoken-vocab-topk", type=int, default=32)
+    p.add_argument("--xtoken-ce-scale", type=float, default=0.1)
+    p.add_argument("--xtoken-vocab-topk", type=int, default=8192)
+    p.add_argument("--xtoken-dynamic-scaling", action=argparse.BooleanOptionalAction, default=True)
     p.add_argument("--output-dir", default="output/xtoken_run")
     p.add_argument("--logging-steps", type=int, default=1)
     p.add_argument("--report-to", default="trackio")
@@ -106,17 +119,15 @@ def main():
         max_length=args.max_length,
         max_completion_length=args.max_completion_length,
         lmbda=0.0,
-        use_vllm=False,
+        beta=1.0,
         # X-Token config
         xtoken_loss_type=args.loss_type,
         xtoken_projection_matrix_path=args.projection_matrix,
         xtoken_temperature=args.xtoken_temperature,
         xtoken_kl_weight=args.xtoken_kl_weight,
+        xtoken_ce_scale=args.xtoken_ce_scale,
         xtoken_vocab_topk=args.xtoken_vocab_topk,
-        xtoken_uncommon_topk=8192,
-        xtoken_dynamic_scaling=False,
-        # Standard KD params (beta=1 → pure KD, no JSD)
-        beta=1.0,
+        xtoken_dynamic_scaling=args.xtoken_dynamic_scaling,
         temperature=args.temperature,
         # Training
         per_device_train_batch_size=args.per_device_batch_size,

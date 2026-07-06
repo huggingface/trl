@@ -122,15 +122,15 @@ class GOLDConfig(SFTConfig):
             Path to a precomputed projection matrix file. Required when `xtoken_loss_type != "none"`.
         xtoken_temperature (`float`, *optional*, defaults to `1.0`):
             Temperature T for X-Token KD loss; the loss is multiplied by T² (Hinton 2015).
-        xtoken_dynamic_scaling (`bool`, *optional*, defaults to `False`):
+        xtoken_dynamic_scaling (`bool`, *optional*, defaults to `True`):
             Scale KD by `stop_gradient(CE / KD)` to balance loss magnitudes (paper Eq. 7).
         xtoken_uncommon_topk (`int`, *optional*, defaults to `8192`):
             H-KL: cap sorted-L1 uncommon comparison to the top-k tokens per side.
-        xtoken_vocab_topk (`int`, *optional*, defaults to `32`):
+        xtoken_vocab_topk (`int`, *optional*, defaults to `8192`):
             P-KL: restrict KL to the global top-k teacher tokens by max logit.
         xtoken_kl_weight (`float`, *optional*, defaults to `1.0`):
             Weight for the X-Token KD term when `xtoken_dynamic_scaling=False`.
-        xtoken_ce_scale (`float`, *optional*, defaults to `1.0`):
+        xtoken_ce_scale (`float`, *optional*, defaults to `0.1`):
             Scale factor for the CE term in the X-Token loss when `xtoken_dynamic_scaling=False`.
         > Parameters that control vLLM integration
 
@@ -412,7 +412,7 @@ class GOLDConfig(SFTConfig):
         },
     )
     xtoken_dynamic_scaling: bool = field(
-        default=False,
+        default=True,
         metadata={
             "help": (
                 "When True, scale the KD loss by stop_gradient(CE / KD) before adding CE, keeping CE and "
@@ -431,7 +431,7 @@ class GOLDConfig(SFTConfig):
         },
     )
     xtoken_vocab_topk: int = field(
-        default=32,
+        default=8192,
         metadata={
             "help": (
                 "P-KL only: after projecting student probs to teacher vocab, compute forward KL only over "
@@ -450,7 +450,7 @@ class GOLDConfig(SFTConfig):
         },
     )
     xtoken_ce_scale: float = field(
-        default=1.0,
+        default=0.1,
         metadata={
             "help": (
                 "Scale factor for the CE term in the X-Token loss. Only used when `xtoken_dynamic_scaling=False`."
