@@ -21,6 +21,8 @@
     title: DPO
   - local: grpo_trainer
     title: GRPO
+  - local: kto_trainer
+    title: KTO
   - local: reward_trainer
     title: Reward
   - local: rloo_trainer
@@ -119,8 +121,6 @@
     title: GRPO With Replay Buffer
   - local: gspo_token
     title: GSPO-token
-  - local: kto_trainer
-    title: KTO 
   - local: merge_model_callback
     title: MergeModelCallback
   - local: minillm_trainer
@@ -131,8 +131,6 @@
     title: Online DPO
   - local: orpo_trainer
     title: ORPO
-  - local: papo_trainer
-    title: PAPO
   - local: ppo_trainer
     title: PPO
   - local: prm_trainer

@@ -139,6 +139,7 @@ class OffloadActivations(saved_tensors_hooks):
 
         # Storage deduplication: maps storage key to tensor_id to avoid offloading same storage multiple times
         self.storage_to_tensor_id = {}
+        self._storage_key_by_tensor_id = {}
 
         # Parameter filtering: track parameter storage pointers to skip them during offloading
         self.param_storages = set()
@@ -194,6 +195,15 @@ class OffloadActivations(saved_tensors_hooks):
             # get the number of bytes in a tensor, for memory management purposes
             return x.element_size() * x.nelement()  # x.element_size() * x._base_storage().nbytes()
 
+        def track_storage_key(storage_key: tuple, tensor_id: int):
+            self.storage_to_tensor_id[storage_key] = tensor_id
+            self._storage_key_by_tensor_id[tensor_id] = storage_key
+
+        def release_storage_key(tensor_id: int):
+            storage_key = self._storage_key_by_tensor_id.pop(tensor_id, None)
+            if storage_key is not None and self.storage_to_tensor_id.get(storage_key) == tensor_id:
+                del self.storage_to_tensor_id[storage_key]
+
         # -------- core pack / unpack work -------- #
         def pack_tensor(activation: torch.Tensor) -> int:
             # activations are passed in during forward pass - from here we take over and return a unique id
@@ -206,6 +216,7 @@ class OffloadActivations(saved_tensors_hooks):
                 self.is_first_backward_call = True
                 # Reset deduplication map for new forward pass
                 self.storage_to_tensor_id = {}
+                self._storage_key_by_tensor_id = {}
 
             # query for basic tensor info
             num_bytes = get_num_bytes_tensor(activation)
@@ -218,6 +229,7 @@ class OffloadActivations(saved_tensors_hooks):
             if storage_key in self.storage_to_tensor_id:
                 # Storage already offloaded - don't offload again, just track the reference
                 self.tracker[tensor_id] = (activation, False, None, None, None)  # Keep on GPU, don't offload
+                track_storage_key(storage_key, tensor_id)
                 return tensor_id
 
             # Check if tensor is on CPU (skip offloading)
@@ -266,6 +278,7 @@ class OffloadActivations(saved_tensors_hooks):
                         _, ev = self.fwd_stash[id]
                         self.s0.wait_event(ev)
                         del self.fwd_stash[id]
+                        release_storage_key(id)
                     else:
                         break
 
@@ -335,8 +348,8 @@ class OffloadActivations(saved_tensors_hooks):
                 # Stash to keep activation alive til s1 is done
                 self.fwd_stash[tensor_id] = (activation, event)
 
-            # Track this storage for deduplication
-            self.storage_to_tensor_id[storage_key] = tensor_id
+                # Track storage only while fwd_stash keeps the GPU tensor live; single-stream has no release point.
+                track_storage_key(storage_key, tensor_id)
 
             return tensor_id
 
@@ -377,6 +390,7 @@ class OffloadActivations(saved_tensors_hooks):
 
             # clear tensor from tracking
             del self.tracker[unpack_tensor_id]
+            release_storage_key(unpack_tensor_id)
             # Only set is_first_forward_call to True when all tensors have been unpacked
             if len(self.tracker) == 0:
                 self.is_first_forward_call = True
@@ -515,6 +529,7 @@ class OffloadActivations(saved_tensors_hooks):
                         _, ev = self.fwd_stash[id]
                         self.s0.wait_event(ev)
                         del self.fwd_stash[id]
+                        release_storage_key(id)
 
                     # wait on prev node's events and del those
                     for id in prev_node_ids:
@@ -532,6 +547,7 @@ class OffloadActivations(saved_tensors_hooks):
 
             # clear tensor from tracking
             del self.tracker[unpack_tensor_id]
+            release_storage_key(unpack_tensor_id)
             # Only set is_first_forward_call to True when all tensors have been unpacked
             if len(self.tracker) == 0:
                 self.is_first_forward_call = True
@@ -589,6 +605,7 @@ class OffloadActivations(saved_tensors_hooks):
         """
         self.tracker.clear()
         self.storage_to_tensor_id.clear()
+        self._storage_key_by_tensor_id.clear()
         self.tensor_id = 0
         self.is_first_forward_call = True
         self.is_first_backward_call = True

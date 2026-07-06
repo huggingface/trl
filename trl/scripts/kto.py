@@ -71,8 +71,7 @@ def main(script_args, training_args, model_args, dataset_args):
     from accelerate.logging import get_logger
     from datasets import load_dataset
 
-    from trl import get_dataset, get_peft_config, get_quantization_config
-    from trl.experimental.kto import KTOTrainer
+    from trl import KTOTrainer, get_dataset, get_peft_config, get_quantization_config
 
     logger = get_logger(__name__)
 
@@ -125,8 +124,7 @@ def main(script_args, training_args, model_args, dataset_args):
 
 
 def make_parser(subparsers: argparse._SubParsersAction | None = None, prog: str | None = None):
-    from trl import DatasetMixtureConfig, ModelConfig, ScriptArguments, TrlParser
-    from trl.experimental.kto import KTOConfig
+    from trl import DatasetMixtureConfig, KTOConfig, ModelConfig, ScriptArguments, TrlParser
 
     dataclass_types = (ScriptArguments, KTOConfig, ModelConfig, DatasetMixtureConfig)
     if subparsers is not None:
