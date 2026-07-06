@@ -647,7 +647,7 @@ class KTOTrainer(_BaseTrainer):
         else:
             if args.model_init_kwargs is not None:
                 logger.warning(
-                    "You passed `model_init_kwargs` to the KTOConfig, but your model is already instantiated. "
+                    "You passed `model_init_kwargs` to the `KTOConfig`, but your model is already instantiated. "
                     "The `model_init_kwargs` will be ignored."
                 )
             if quantization_config is not None:
