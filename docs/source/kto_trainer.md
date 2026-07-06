@@ -2,11 +2,6 @@
 
 [![All_models-KTO-blue](https://img.shields.io/badge/All_models-KTO-blue)](https://huggingface.co/models?other=kto,trl)
 
-> [!WARNING]
-> As of TRL v1.0, `KTOTrainer` and `KTOConfig` have been moved to the `trl.experimental.kto` module.  
-> KTO API is experimental and may change at any time.
-> Promoting KTO back into the stable API is a high-priority task: KTO is slated for refactoring to align with the standard core trainer architecture.
-
 ## Overview
 
 TRL supports the Kahneman-Tversky Optimization (KTO) Trainer for training language models, as described in the paper [KTO: Model Alignment as Prospect Theoretic Optimization](https://huggingface.co/papers/2402.01306) by [Kawin Ethayarajh](https://huggingface.co/kawine), [Winnie Xu](https://huggingface.co/xwinxu), [Niklas Muennighoff](https://huggingface.co/Muennighoff), Dan Jurafsky, [Douwe Kiela](https://huggingface.co/douwekiela).
@@ -35,7 +30,7 @@ Below is the script to train the model:
 ```python
 # train_kto.py
 from datasets import load_dataset
-from trl.experimental.kto import KTOConfig, KTOTrainer
+from trl import KTOConfig, KTOTrainer
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
@@ -178,7 +173,7 @@ model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2-0.5B-Instruct", dtype=t
 you can do so by passing the `model_init_kwargs={"dtype": torch.bfloat16}` argument to the [`experimental.kto.KTOConfig`].
 
 ```python
-from trl.experimental.kto import KTOConfig
+from trl import KTOConfig
 
 training_args = KTOConfig(
     model_init_kwargs={"dtype": torch.bfloat16},
@@ -193,7 +188,7 @@ We support tight integration with 🤗 PEFT library, allowing any user to conven
 
 ```python
 from datasets import load_dataset
-from trl.experimental.kto import KTOTrainer
+from trl import KTOTrainer
 from peft import LoraConfig
 
 dataset = load_dataset("trl-lib/kto-mix-14k", split="train")
@@ -230,7 +225,7 @@ For details on the expected dataset structure, see the [Dataset Format — Tool 
 [`experimental.kto.KTOTrainer`] fully supports training Vision-Language Models (VLMs). To train a VLM, provide a dataset with either an `image` column (single image per sample) or an `images` column (list of images per sample). For more information on the expected dataset structure, see the [Dataset Format — Vision Dataset](dataset_formats#vision-dataset) section.
 
 ```python
-from trl.experimental.kto import KTOConfig, KTOTrainer
+from trl import KTOConfig, KTOTrainer
 from datasets import load_dataset
 
 trainer = KTOTrainer(
