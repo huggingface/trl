@@ -788,6 +788,52 @@ def dft_loss(outputs, labels, num_items_in_batch=None):
     return loss
 
 
+# `_tokenize` is a module-level function rather than a trainer method so that `tokenize_fn` (the `Dataset.map`
+# callback in `_prepare_dataset`) can reference it without closing over `self`: a closure over `self` would make the
+# map function unhashable, forcing a random fingerprint that silently disables dataset caching.
+def _tokenize(
+    processing_class: PreTrainedTokenizerBase | ProcessorMixin,
+    input: str | list,
+    is_vlm: bool,
+    chat_template: str | None,
+    **kwargs,
+) -> dict[str, list]:
+    """Tokenize a single example for dataset preprocessing.
+
+    Dispatches to `apply_chat_template` for conversational input (list of message dicts) and to `__call__` for
+    non-conversational input (str). For VLMs, normalizes the batch dimension that processors emit even for single
+    examples.
+
+    Args:
+        processing_class ([`~transformers.PreTrainedTokenizerBase`] or [`~transformers.ProcessorMixin`]):
+            The tokenizer or processor to use.
+        input (`str` or `list`):
+            A string for non-conversational input, or a list of message dicts for conversational input.
+        is_vlm (`bool`):
+            Whether the processing class is a VLM processor, requiring multimodal message preparation and batch
+            dimension normalization.
+        chat_template (`str` or `None`):
+            Chat template forwarded to `apply_chat_template` for conversational input.
+        **kwargs:
+            Forwarded to `apply_chat_template` (e.g. `add_generation_prompt`, `return_assistant_tokens_mask`).
+
+    Returns:
+        `dict` with at least an `"input_ids"` key mapping to a flat `list[int]`.
+    """
+    if isinstance(input, list):  # conversational: list of message dicts
+        if is_vlm:
+            input = prepare_multimodal_messages(input)
+        result = processing_class.apply_chat_template(
+            input, tokenize=True, return_dict=True, chat_template=chat_template, **kwargs
+        )
+    else:  # non-conversational: plain text string
+        result = processing_class(text=input)
+    # VLMs emit a batch dimension even for single examples; unwrap it
+    if is_vlm:
+        return {k: v[0] for k, v in result.items()}
+    return result
+
+
 class SFTTrainer(_BaseTrainer):
     """
     Trainer for Supervised Fine-Tuning (SFT) method.
@@ -1363,49 +1409,6 @@ class SFTTrainer(_BaseTrainer):
         # Add tags to the model
         self.model.add_model_tags(self._tag_names)
 
-    @staticmethod
-    def _tokenize(
-        processing_class: PreTrainedTokenizerBase | ProcessorMixin,
-        input: str | list,
-        is_vlm: bool,
-        chat_template: str | None,
-        **kwargs,
-    ) -> dict[str, list]:
-        """Tokenize a single example for dataset preprocessing.
-
-        Dispatches to `apply_chat_template` for conversational input (list of message dicts) and to `__call__` for
-        non-conversational input (str). For VLMs, normalizes the batch dimension that processors emit even for single
-        examples.
-
-        Args:
-            processing_class ([`~transformers.PreTrainedTokenizerBase`] or [`~transformers.ProcessorMixin`]):
-                The tokenizer or processor to use.
-            input (`str` or `list`):
-                A string for non-conversational input, or a list of message dicts for conversational input.
-            is_vlm (`bool`):
-                Whether the processing class is a VLM processor, requiring multimodal message preparation and batch
-                dimension normalization.
-            chat_template (`str` or `None`):
-                Chat template forwarded to `apply_chat_template` for conversational input.
-            **kwargs:
-                Forwarded to `apply_chat_template` (e.g. `add_generation_prompt`, `return_assistant_tokens_mask`).
-
-        Returns:
-            `dict` with at least an `"input_ids"` key mapping to a flat `list[int]`.
-        """
-        if isinstance(input, list):  # conversational: list of message dicts
-            if is_vlm:
-                input = prepare_multimodal_messages(input)
-            result = processing_class.apply_chat_template(
-                input, tokenize=True, return_dict=True, chat_template=chat_template, **kwargs
-            )
-        else:  # non-conversational: plain text string
-            result = processing_class(text=input)
-        # VLMs emit a batch dimension even for single examples; unwrap it
-        if is_vlm:
-            return {k: v[0] for k, v in result.items()}
-        return result
-
     def _prepare_dataset(
         self,
         dataset: Dataset | IterableDataset,
@@ -1488,10 +1491,6 @@ class SFTTrainer(_BaseTrainer):
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Tokenizing {dataset_name} dataset"
 
-                # Bind `_tokenize` to a local so `tokenize_fn` doesn't capture `self`: a closure over `self` makes the
-                # map function unhashable, forcing a random fingerprint that silently disables dataset caching.
-                tokenize = self._tokenize
-
                 def tokenize_fn(
                     example, processing_class, dataset_text_field, assistant_only_loss, is_vlm, chat_template
                 ):
@@ -1500,7 +1499,7 @@ class SFTTrainer(_BaseTrainer):
                     if "prompt" in example:  # prompt-completion case
                         output = {}
                         if is_conversational(example):
-                            prompt_ids = tokenize(
+                            prompt_ids = _tokenize(
                                 processing_class,
                                 example["prompt"],
                                 is_vlm,
@@ -1509,7 +1508,7 @@ class SFTTrainer(_BaseTrainer):
                                 add_generation_prompt=True,
                                 **example.get("chat_template_kwargs", {}),
                             )["input_ids"]
-                            prompt_completion_processed = tokenize(
+                            prompt_completion_processed = _tokenize(
                                 processing_class,
                                 example["prompt"] + example["completion"],
                                 is_vlm,
@@ -1522,10 +1521,10 @@ class SFTTrainer(_BaseTrainer):
                             if "assistant_masks" in prompt_completion_processed:
                                 output["assistant_masks"] = prompt_completion_processed["assistant_masks"]
                         else:
-                            prompt_ids = tokenize(processing_class, example["prompt"], is_vlm, chat_template)[
+                            prompt_ids = _tokenize(processing_class, example["prompt"], is_vlm, chat_template)[
                                 "input_ids"
                             ]
-                            prompt_completion_ids = tokenize(
+                            prompt_completion_ids = _tokenize(
                                 processing_class, example["prompt"] + example["completion"], is_vlm, chat_template
                             )["input_ids"]
 
@@ -1544,7 +1543,7 @@ class SFTTrainer(_BaseTrainer):
 
                     else:  # language modeling case
                         if is_conversational(example):
-                            processed = tokenize(
+                            processed = _tokenize(
                                 processing_class,
                                 example["messages"],
                                 is_vlm,
@@ -1556,7 +1555,7 @@ class SFTTrainer(_BaseTrainer):
                             output = {k: processed[k] for k in ("input_ids", "assistant_masks") if k in processed}
                         else:
                             output = {
-                                "input_ids": tokenize(
+                                "input_ids": _tokenize(
                                     processing_class, example[dataset_text_field], is_vlm, chat_template
                                 )["input_ids"]
                             }
