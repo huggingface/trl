@@ -462,7 +462,6 @@ class DataCollatorForVisionUnpairedPreference(DataCollatorMixin):
 def _tokenize(
     processing_class: PreTrainedTokenizerBase | ProcessorMixin,
     input: str | list,
-    is_vlm: bool,
     **kwargs,
 ) -> dict[str, list]:
     """Tokenize a single example for dataset preprocessing.
@@ -475,15 +474,13 @@ def _tokenize(
             The tokenizer or processor to use.
         input (`str` or `list`):
             A string for non-conversational input, or a list of message dicts for conversational input.
-        is_vlm (`bool`):
-            Whether the processing class is a VLM processor, requiring multimodal message preparation and batch
-            dimension normalization.
         **kwargs:
             Forwarded to `apply_chat_template` (e.g. `add_generation_prompt`, `return_assistant_tokens_mask`).
 
     Returns:
         `dict` with at least an `"input_ids"` key mapping to a flat `list[int]`.
     """
+    is_vlm = isinstance(processing_class, ProcessorMixin)
     if isinstance(input, list):  # conversational: list of message dicts
         if is_vlm:
             input = prepare_multimodal_messages(input)
@@ -1090,7 +1087,7 @@ class KTOTrainer(_BaseTrainer):
             if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                 map_kwargs["desc"] = f"Tokenizing {dataset_name} dataset"
 
-            def tokenize_fn(example, processing_class, is_vlm):
+            def tokenize_fn(example, processing_class):
                 tools = example.get("tools")
                 tools = json.loads(tools) if isinstance(tools, str) else tools
                 if is_conversational(example):
@@ -1098,7 +1095,6 @@ class KTOTrainer(_BaseTrainer):
                     prompt_ids = _tokenize(
                         processing_class,
                         example["prompt"],
-                        is_vlm,
                         tools=tools,
                         add_generation_prompt=True,
                         **chat_template_kwargs,
@@ -1106,15 +1102,14 @@ class KTOTrainer(_BaseTrainer):
                     prompt_completion_ids = _tokenize(
                         processing_class,
                         example["prompt"] + example["completion"],
-                        is_vlm,
                         tools=tools,
                         **chat_template_kwargs,
                     )["input_ids"]
                 else:
-                    prompt_ids = _tokenize(processing_class, example["prompt"], is_vlm)["input_ids"]
-                    prompt_completion_ids = _tokenize(
-                        processing_class, example["prompt"] + example["completion"], is_vlm
-                    )["input_ids"]
+                    prompt_ids = _tokenize(processing_class, example["prompt"])["input_ids"]
+                    prompt_completion_ids = _tokenize(processing_class, example["prompt"] + example["completion"])[
+                        "input_ids"
+                    ]
 
                 if not prompt_completion_ids[: len(prompt_ids)] == prompt_ids:
                     logger.warning(
@@ -1128,9 +1123,7 @@ class KTOTrainer(_BaseTrainer):
                     "completion_ids": prompt_completion_ids[len(prompt_ids) :],
                 }
 
-            dataset = dataset.map(
-                tokenize_fn, fn_kwargs={"processing_class": processing_class, "is_vlm": self._is_vlm}, **map_kwargs
-            )
+            dataset = dataset.map(tokenize_fn, fn_kwargs={"processing_class": processing_class}, **map_kwargs)
 
             # Get KL datasets if needed
             if self.calculate_KL:
