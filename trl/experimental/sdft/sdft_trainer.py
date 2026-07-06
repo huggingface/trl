@@ -306,7 +306,11 @@ class SDFTTrainer(_BaseTrainer):
         # module exactly once at initialization and cannot adopt modules added afterwards.
         if args.teacher_model_kind == "ema" and is_peft_model(model) and is_pure_lora_training(model):
             active_adapter = model.active_adapter or "default"
-            model.add_adapter("teacher", model.peft_config[active_adapter])
+            # Resuming from a checkpoint (or loading a PEFT model that already bundles the teacher adapter) can
+            # mean "teacher" is already registered here; PEFT rejects re-adding an existing adapter name, and
+            # PEFTAdapterEMACallback._initialize_teacher_adapter already guards this same call for that reason.
+            if "teacher" not in model.peft_config:
+                model.add_adapter("teacher", model.peft_config[active_adapter])
 
         if processing_class is None:
             processing_class = AutoProcessor.from_pretrained(
