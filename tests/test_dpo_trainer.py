@@ -15,7 +15,7 @@
 import pytest
 import torch
 import transformers
-from datasets import IterableDatasetDict, load_dataset
+from datasets import Dataset, IterableDatasetDict, load_dataset
 from packaging.version import Version
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 from transformers.testing_utils import torch_device
@@ -1023,6 +1023,26 @@ class TestDPOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    def test_fully_truncated_completion_examples_dropped(self):
+        """With `keep_start` truncation, an example whose prompt alone fills `max_length` loses every completion token
+        in the collator, so it's dropped during dataset preparation."""
+        dataset = Dataset.from_dict(
+            {
+                "prompt": ["Hi", "This is a very long prompt that fills up the whole max_length budget on its own"],
+                "chosen": [" there", " yes"],
+                "rejected": [" bye", " no"],
+            }
+        )
+
+        training_args = DPOConfig(output_dir=self.tmp_dir, max_length=6, truncation_mode="keep_start", report_to="none")
+        trainer = DPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
+
+        # Only the short-prompt example survives.
+        assert len(trainer.train_dataset) == 1
+        assert trainer.train_dataset[0]["prompt_ids"] == trainer.processing_class("Hi")["input_ids"]
 
     def test_train_toolcall_data(self):
         dataset = load_dataset("trl-internal-testing/toolcall", "preference", split="train")

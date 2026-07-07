@@ -16,7 +16,7 @@ import multiprocess
 import pytest
 import torch
 import transformers
-from datasets import IterableDatasetDict, load_dataset
+from datasets import Dataset, IterableDatasetDict, load_dataset
 from packaging.version import Version
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 from transformers.utils import is_peft_available
@@ -331,6 +331,24 @@ class TestKTOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             if param.sum() != 0:  # ignore 0 biases
                 assert not torch.equal(param, new_param)
+
+    def test_fully_truncated_completion_examples_dropped(self):
+        """The collator truncates with `keep_start`, so an example whose prompt alone fills `max_length` loses every
+        completion token; it's dropped during dataset preparation."""
+        dataset = Dataset.from_dict(
+            {
+                "prompt": ["Hi", "This is a very long prompt that fills up the whole max_length budget on its own"],
+                "completion": [" there", " yes"],
+                "label": [True, False],
+            }
+        )
+
+        training_args = KTOConfig(output_dir=self.tmp_dir, max_length=6, report_to="none")
+        trainer = KTOTrainer(model=self.model_id, args=training_args, train_dataset=dataset)
+
+        # Only the short-prompt example survives.
+        assert len(trainer.train_dataset) == 1
+        assert trainer.train_dataset[0]["prompt_ids"] == trainer.processing_class("Hi")["input_ids"]
 
     @pytest.mark.parametrize("precompute_ref_log_probs", [False, True])
     def test_evaluate_with_raw_dataset(self, precompute_ref_log_probs):
