@@ -1449,21 +1449,23 @@ class SFTTrainer(_BaseTrainer):
                 def tokenize_fn(example, processing_class, dataset_text_field, assistant_only_loss, chat_template):
                     tools = example.get("tools")
                     tools = json.loads(tools) if isinstance(tools, str) else tools
-                    apply_chat_template_kwargs = {"tools": tools, **example.get("chat_template_kwargs", {})}
+                    apply_chat_template_kwargs = {
+                        "chat_template": chat_template,
+                        "tools": tools,
+                        **example.get("chat_template_kwargs", {}),
+                    }
                     if "prompt" in example:  # prompt-completion case
                         output = {}
                         if is_conversational(example):
                             prompt_ids = _tokenize(
                                 processing_class,
                                 example["prompt"],
-                                chat_template=chat_template,
                                 add_generation_prompt=True,
                                 **apply_chat_template_kwargs,
                             )["input_ids"]
                             prompt_completion_processed = _tokenize(
                                 processing_class,
                                 example["prompt"] + example["completion"],
-                                chat_template=chat_template,
                                 return_assistant_tokens_mask=assistant_only_loss,
                                 **apply_chat_template_kwargs,
                             )
@@ -1498,7 +1500,6 @@ class SFTTrainer(_BaseTrainer):
                             processed = _tokenize(
                                 processing_class,
                                 example["messages"],
-                                chat_template=chat_template,
                                 return_assistant_tokens_mask=assistant_only_loss,
                                 **apply_chat_template_kwargs,
                             )
