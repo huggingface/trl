@@ -256,19 +256,23 @@ class GRPOTrainer(_BaseTrainer):
             with no duplication; it is responsible for returning the correct number of completions per prompt (see
             `num_generations` / `num_generations_eval` on the trainer). This feature is experimental and may change or
             be removed at any time without prior notice.
-        environment_factory (`EnvironmentFactory`, *optional*):
-            A callable that creates and returns an environment instance. The environment class should define methods
-            that can be invoked as tools during generation. Each method should comply with the same requirements as the
-            `tools` described above. If `environment_factory` is provided, an instance of the environment is created
-            for each generation in the batch, allowing for parallel and independent interactions. The environment must
+        environment_factory (`EnvironmentFactory` or `dict[str, EnvironmentFactory]`, *optional*):
+            A callable that creates and returns an environment instance, or a dictionary mapping environment names to
+            such callables. The environment class should define methods that can be invoked as tools during generation.
+            Each method should comply with the same requirements as the `tools` described above. The environment must
             also implement a callable `reset` method that can be used to reset state between generations. The `reset`
             method should return either `None` or a string: when it returns a string, that string is appended to the
             last user message before generation. The environment may also define a `get_reward` method taking no
             argument and returning a `float`: when present, the environment owns the reward, and `get_reward` is called
             once per completed rollout to score it from the environment's internal state. It acts as an additional
             reward source (with weight 1, logged under the environment's class name) alongside `reward_funcs`, which
-            then becomes optional. This feature is experimental and may change or be removed at any time without prior
-            notice.
+            then becomes optional.
+
+            With a single callable, every example uses the same environment, with one instance per rollout so their
+            interactions stay isolated. With a dictionary, each example must carry an `environment` field selecting its
+            environment by name, and only that environment's tools are exposed in its prompt — letting a single run mix
+            tasks (e.g. a coding environment and a game). This feature is experimental and may change or be removed at
+            any time without prior notice.
     """
 
     _tag_names = ["trl", "grpo"]
@@ -301,7 +305,7 @@ class GRPOTrainer(_BaseTrainer):
         peft_config: "PeftConfig | None" = None,
         tools: list[Callable] | None = None,
         rollout_func: RolloutFunc | None = None,
-        environment_factory: EnvironmentFactory | None = None,
+        environment_factory: EnvironmentFactory | dict[str, EnvironmentFactory] | None = None,
     ):
         # Args
         if args is None:
@@ -570,40 +574,61 @@ class GRPOTrainer(_BaseTrainer):
                     "full tool-calling conversation (user -> assistant with tool_calls -> tool)."
                 )
 
-        # Set up the environment and extract its methods to be used as tools.
+        # Set up the environments and extract their methods to be used as tools.
         tools = tools or []
-        self._standalone_tools = tools  # tools that are not bound to the environment
+        self._standalone_tools = tools  # tools that are not bound to an environment
 
-        if environment_factory is not None:
-            # The environment instances used by a batch are only known at batch time. Here we just probe one instance to
-            # validate its `reset` method and extract its tool methods, used to render the tool schema in the prompt.
-            # Instances are pooled and reused (reset) across batches; the probe seeds the pool so it is not wasted. The
-            # pool grows only when a batch needs more concurrent instances than have been created so far, preserving the
-            # "construct once, reset often" contract.
-            self.environment_factory = environment_factory
-            instance = environment_factory()
-            has_reset = False
-            has_reward = False
-            methods = []
-            for member_name, member in inspect.getmembers(instance, predicate=inspect.ismethod):
-                if member_name == "reset":
-                    has_reset = True
-                elif member_name == "get_reward":
-                    has_reward = True
-                elif not member_name.startswith("_"):
-                    methods.append(member)
-            if not has_reset:
-                raise ValueError(
-                    "Each environment instance returned by `environment_factory` must define a callable `reset`."
-                )
-            self._environment_pool = [instance]  # reusable environment instances
-            self.tools = tools + methods
+        # Normalize `environment_factory` to a `{name: factory}` mapping. A single callable is the special case of one
+        # unnamed (`None`) environment shared by every example; a dict maps the `environment` field of each example to
+        # its factory. `_multi_environment` records which case we are in: only then is the `environment` field read.
+        self._multi_environment = isinstance(environment_factory, dict)
+        if environment_factory is None:
+            self.environment_factories = None
+        elif self._multi_environment:
+            self.environment_factories = environment_factory
+        else:
+            self.environment_factories = {None: environment_factory}
 
-            # Expose the environment's `get_reward` as an extra reward source (named after the env class, weight 1).
-            # `get_reward` may be async (e.g. an LLM judge); wrap it accordingly so `_calculate_rewards` runs it on the
-            # daemon event loop like any other async reward func.
+        if self.environment_factories is not None:
+            # The environment an example uses is only known at batch time (it depends on the data). Here we just probe
+            # one instance of each environment to validate its `reset` method and extract its tool methods, used to
+            # render the per-example tool schema in the prompt. Instances are pooled and reused (reset) across batches;
+            # the probe seeds the pool so it is not wasted. The pool grows only when a batch needs more concurrent
+            # instances of an environment than have been created so far, preserving the "construct once, reset often"
+            # contract even when batches mix environments.
+            self._env_tools = {}  # {environment name: tools exposed when this environment is selected}
+            self._environment_pool = {}  # {environment name: list of reusable instances}
+            # `self.tools` is the union of every environment's tools, accumulated below as each environment is probed.
+            # Used where only the presence of a tool matters (chat template validation, async loop setup, tool metrics);
+            # the per-example schema is rendered in `_tokenize_prompts`.
+            self.tools = list(tools)
+            has_reward = False  # True if the environment owns the reward via a `get_reward` method
+            reward_env_type = None  # environment class exposing `get_reward`, used to name the reward source
+            for name, factory in self.environment_factories.items():
+                instance = factory()
+                has_reset = False
+                methods = []
+                for member_name, member in inspect.getmembers(instance, predicate=inspect.ismethod):
+                    if member_name == "reset":
+                        has_reset = True
+                    elif member_name == "get_reward":
+                        has_reward = True
+                        reward_env_type = type(instance)
+                    elif not member_name.startswith("_"):
+                        methods.append(member)
+                if not has_reset:
+                    raise ValueError(
+                        "Each environment instance returned by `environment_factory` must define a callable `reset`."
+                    )
+                self._env_tools[name] = tools + methods
+                self._environment_pool[name] = [instance]
+                self.tools += [method for method in methods if method not in self.tools]
+
+            # If an environment owns the reward via `get_reward`, expose it as an extra reward source (named after the
+            # env class, weight 1). `get_reward` may be async (e.g. an LLM judge); wrap it accordingly so
+            # `_calculate_rewards` runs it on the daemon event loop like any other async reward func.
             if has_reward:
-                if inspect.iscoroutinefunction(instance.get_reward):
+                if inspect.iscoroutinefunction(reward_env_type.get_reward):
 
                     async def get_reward(environments, **kwargs):
                         return [await environment.get_reward() for environment in environments]
@@ -614,11 +639,10 @@ class GRPOTrainer(_BaseTrainer):
                         return [environment.get_reward() for environment in environments]
 
                 self.reward_funcs.append(get_reward)
-                self.reward_func_names.append(type(instance).__name__)
+                self.reward_func_names.append(reward_env_type.__name__)
                 self.reward_processing_classes.append(None)
                 self.reward_weights = torch.cat([self.reward_weights, torch.ones(1)])
         else:
-            self.environment_factory = None
             self.tools = tools
 
         # At least one reward source is required: either `reward_funcs`, or an environment that owns the reward via a
@@ -629,10 +653,11 @@ class GRPOTrainer(_BaseTrainer):
                 "defines a `get_reward` method."
             )
 
-        # The per-rollout environment instances and tool dicts both depend on the batch, so they are built in
-        # `_generate_and_score_completions`, right before generation. Only `self.environments` needs a default here,
-        # because `_calculate_rewards` reads it for every batch (including batches with no environments); the tool dicts
-        # are only read in the tool-calling loop, which runs after they have been (re)built.
+        # The per-rollout environment instances and tool dicts both depend on the batch (which environment each example
+        # selects), so they are built in `_generate_and_score_completions`, right before generation. Only
+        # `self.environments` needs a default here, because `_calculate_rewards` reads it for every batch (including
+        # batches with no environments); the tool dicts are only read in the tool-calling loop, which runs after they
+        # have been (re)built.
         self.environments = None
 
         # Check for async functions to start an event loop on a daemon thread
@@ -1543,6 +1568,34 @@ class GRPOTrainer(_BaseTrainer):
                 images.append(prompt_images if prompt_images else None)
             images = images if has_images else None
 
+            if self.environment_factories is not None:
+                # Tools differ per example across environments, so render each prompt with its own tool schema.
+                prompt_ids = []
+                multimodal_fields = {}
+                for prompt, name in zip(prompts, self._batch_environments, strict=True):
+                    tokenized = self.processing_class.apply_chat_template(
+                        conversation=[prompt],
+                        tools=self._env_tools[name] or None,  # `or None`: Llama bug: tool boilerplate for tools=[]
+                        chat_template=self.chat_template,
+                        add_generation_prompt=True,
+                        tokenize=True,
+                        return_dict=True,
+                        **self.chat_template_kwargs,
+                    )
+                    prompt_ids.append(tokenized["input_ids"][0])
+                    # For VLMs, the processor returns extra multimodal fields (pixel_values, image_grid_thw, etc.)
+                    for k, v in tokenized.items():
+                        if k not in ("input_ids", "attention_mask"):
+                            multimodal_fields.setdefault(k, []).append(v)
+                # Merge the per-prompt fields so the result matches the single batched `apply_chat_template` call used
+                # when there are no environments: image fields (pixel_values, image_grid_thw, ...) are flattened over
+                # patches/images and concatenated; per-token fields (e.g. token_type_ids) stay batched per prompt.
+                multimodal_fields = {
+                    k: torch.cat(v) if isinstance(v[0], torch.Tensor) else [row for prompt_v in v for row in prompt_v]
+                    for k, v in multimodal_fields.items()
+                }
+                return prompt_ids, images, multimodal_fields
+
             # Workaround for a bug in transformers 5.3.0 where some processors (e.g. Qwen2.5-VL) crash on
             # batched unpadded input (transformers#44514).
             # Fixed in transformers 5.4.0 (transformers#44563).
@@ -2068,17 +2121,30 @@ class GRPOTrainer(_BaseTrainer):
 
         prompts = [x["prompt"] for x in inputs]
 
-        # Draw one reusable instance per rollout from the pool, creating more only when this batch needs more concurrent
-        # instances than exist.
-        if self.environment_factory is not None:
+        # Resolve each example's environment and draw one reusable instance per rollout from the pool, creating more
+        # only when this batch needs more concurrent instances of an environment than exist. `_batch_environments`
+        # records each example's environment so `_tokenize_prompts` can render the matching tool schema.
+        if self.environment_factories is not None:
+            self._batch_environments = [x.get("environment") if self._multi_environment else None for x in inputs]
+            if self._multi_environment:
+                for name in set(self._batch_environments):
+                    if name not in self.environment_factories:
+                        raise ValueError(
+                            f"Example has `environment={name!r}`, which is not among the environments passed to "
+                            f"`environment_factory`. Expected one of: {list(self.environment_factories)}."
+                        )
             self.environments = []
-            for i in range(len(inputs)):
-                if i == len(self._environment_pool):
-                    self._environment_pool.append(self.environment_factory())
-                self.environments.append(self._environment_pool[i])
+            pool_cursor = {}  # how many instances of each environment have been handed out so far this batch
+            for name in self._batch_environments:
+                pool = self._environment_pool[name]
+                index = pool_cursor.get(name, 0)
+                if index == len(pool):
+                    pool.append(self.environment_factories[name]())
+                pool_cursor[name] = index + 1
+                self.environments.append(pool[index])
 
         # Build the per-rollout tool dicts for this batch: the standalone tools plus, for each rollout, the methods of
-        # its environment. Done here (not at init) because the environment instances are drawn at batch time.
+        # its environment. Done here (not at init) because each example's environment, hence its tools, is data-dependent.
         if self.tools:
             self._sync_tool_dicts = []
             self._async_tool_dicts = []
@@ -2100,7 +2166,9 @@ class GRPOTrainer(_BaseTrainer):
                 self._async_tool_dicts.append(async_tool_dict)
 
         if self.environments:
-            for prompt, environment, reset_kwargs in zip(prompts, self.environments, inputs, strict=True):
+            for prompt, environment, x in zip(prompts, self.environments, inputs, strict=True):
+                # `environment` is a control field in multi-environment mode, so it is not forwarded to `reset`.
+                reset_kwargs = {k: v for k, v in x.items() if k != "environment"} if self._multi_environment else x
                 observation = environment.reset(**reset_kwargs)
                 if observation is None:
                     continue
@@ -2221,11 +2289,15 @@ class GRPOTrainer(_BaseTrainer):
             image_inputs = super()._prepare_inputs(image_inputs)
             forward_kwargs = dict(image_inputs)
         elif images is not None:
+            if self.environment_factories is not None:
+                per_prompt_tools = [self._env_tools[name] for name in self._batch_environments]
+            else:
+                per_prompt_tools = [self.tools] * len(prompts)
             prompts_text = [
                 apply_chat_template(
-                    {"prompt": prompt}, self.processing_class, tools=self.tools, **self.chat_template_kwargs
+                    {"prompt": prompt}, self.processing_class, tools=tools, **self.chat_template_kwargs
                 )["prompt"]
-                for prompt in prompts
+                for prompt, tools in zip(prompts, per_prompt_tools, strict=True)
             ]
             prompt_inputs = self.processing_class(images=images, text=prompts_text, padding=True, return_tensors="pt")
             prompt_inputs = super()._prepare_inputs(prompt_inputs)

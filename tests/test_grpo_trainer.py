@@ -2548,6 +2548,186 @@ class TestGRPOTrainer(TrlTestCase):
         strict=True,
     )
     @require_jmespath
+    @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
+    def test_train_with_multiple_environments(self):
+        # When `environment_factory` is a dict, each example selects its environment via its `environment` field, and
+        # only that environment's tools are exposed in the example's prompt. Here we build a mixed batch with both
+        # environments and check that a tool call from a "counter" example dispatches to the CounterEnvironment's
+        # `increment`, while a tool call from an "echo" example dispatches to the EchoEnvironment's `shout`.
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        # Tag each example with an environment, alternating between the two available ones. With `shuffle_dataset=False`
+        # and `num_generations=2`, every generation batch is then [counter, counter, echo, echo].
+        dataset = dataset.map(
+            lambda example, idx: {"environment": "counter" if idx % 2 == 0 else "echo"}, with_indices=True
+        )
+
+        reset_kwargs_seen = {"counter": [], "echo": []}
+        tool_calls_made = {"increment": [], "shout": []}
+
+        class CounterEnvironment:
+            def reset(self, **kwargs):
+                reset_kwargs_seen["counter"].append(kwargs)
+
+            def increment(self, step: int) -> int:
+                """
+                Increment the internal counter.
+
+                Args:
+                    step: Value to add to the counter.
+
+                Returns:
+                    The updated counter value.
+                """
+                tool_calls_made["increment"].append(step)
+                return step
+
+        class EchoEnvironment:
+            def reset(self, **kwargs):
+                reset_kwargs_seen["echo"].append(kwargs)
+
+            def shout(self, text: str) -> str:
+                """
+                Shout the given text.
+
+                Args:
+                    text: Text to shout.
+
+                Returns:
+                    The text in upper case.
+                """
+                tool_calls_made["shout"].append(text)
+                return text.upper()
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=4,  # 2 prompts x 2 generations, so a batch mixes both environments
+            num_generations=2,
+            shuffle_dataset=False,  # keep the [counter, counter, echo, echo] batch layout deterministic
+            report_to="none",
+        )
+
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+            environment_factory={"counter": CounterEnvironment, "echo": EchoEnvironment},
+        )
+
+        # Each environment exposes only its own tool.
+        assert [tool.__name__ for tool in trainer._env_tools["counter"]] == ["increment"]
+        assert [tool.__name__ for tool in trainer._env_tools["echo"]] == ["shout"]
+        # The probe instances seed the reuse pool, so they are not wasted.
+        assert len(trainer._environment_pool["counter"]) == 1
+        assert len(trainer._environment_pool["echo"]) == 1
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        def fake_generate(input_ids, **kwargs):
+            if input_ids.shape[0] == 4:  # first generation: batch is [counter, counter, echo, echo]
+                # fmt: off
+                completion_ids = torch.tensor(
+                    [
+                        # counter example: valid `increment` tool call (only CounterEnvironment exposes it)
+                        # '<tool_call>\n{"name": "increment", "arguments": {"step": 1}}\n</tool_call><|im_end|>' + pad
+                        [151657, 198, 4913, 606, 788, 330, 35744, 497, 330, 16370, 788, 5212, 9520, 788, 220, 16, 11248, 151658, 151645, 151643],
+                        # counter example: no tool call (gives reward variance within the group so gradients are non-zero)
+                        # "I won't<|im_end|>" + pad
+                        [40, 2765, 944, 151645, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643],
+                        # echo example: valid `shout` tool call (only EchoEnvironment exposes it)
+                        # '<tool_call>\n{"name": "shout", "arguments": {"text": "hi"}}\n</tool_call><|im_end|>'
+                        [151657, 198, 4913, 606, 788, 330, 927, 411, 497, 330, 16370, 788, 5212, 1318, 788, 330, 6023, 95642, 151658, 151645],
+                        # echo example: no tool call
+                        # "Done!<|im_end|>" + pad
+                        [17453, 0, 151645, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643],
+                    ],
+                    device=input_ids.device,
+                )
+                # fmt: on
+            else:  # regeneration after tool execution: only the two examples that issued a (valid) tool call
+                completion_ids = torch.tensor(
+                    [
+                        [17453, 0, 151645],  # 'Done!<|im_end|>'
+                        [17453, 0, 151645],
+                    ],
+                    device=input_ids.device,
+                )
+            return torch.cat([input_ids, completion_ids], dim=-1)
+
+        with patch.object(trainer.model, "generate", side_effect=fake_generate):
+            trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+        # The tool call from the counter example ran `increment` (defined only on CounterEnvironment) and the one from
+        # the echo example ran `shout` (defined only on EchoEnvironment): each rollout dispatched to its own tools.
+        assert tool_calls_made["increment"]
+        assert tool_calls_made["shout"]
+        # 2 of the 4 rollouts issued a tool call, and both calls succeeded.
+        assert trainer.state.log_history[-1]["tools/call_frequency"] == pytest.approx(2 / 4)
+        assert trainer.state.log_history[-1]["tools/failure_frequency"] == pytest.approx(0.0)
+        # Both environments were selected and reset, and `environment` is a control field not forwarded to `reset`.
+        assert reset_kwargs_seen["counter"] and reset_kwargs_seen["echo"]
+        assert all("environment" not in kwargs for kwargs in reset_kwargs_seen["counter"] + reset_kwargs_seen["echo"])
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @pytest.mark.xfail(
+        condition=Version(transformers.__version__) < Version("5.2.0"),
+        reason="Environment factory support is not available in transformers versions below 5.2.0",
+        strict=True,
+    )
+    @require_jmespath
+    @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
+    def test_train_with_unknown_environment_raises(self):
+        # With a dict `environment_factory`, an example whose `environment` field doesn't match any configured
+        # environment should fail with a clear error rather than a bare KeyError mid-rollout.
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        dataset = dataset.map(lambda example: {"environment": "unknown"})
+
+        class CounterEnvironment:
+            def reset(self, **kwargs): ...
+
+            def increment(self, step: int) -> int:
+                """
+                Increment the internal counter.
+
+                Args:
+                    step: Value to add to the counter.
+
+                Returns:
+                    The updated counter value.
+                """
+                return step
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            num_generations=2,
+            report_to="none",
+        )
+
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+            environment_factory={"counter": CounterEnvironment},
+        )
+
+        with pytest.raises(ValueError, match="not among the environments"):
+            trainer.train()
+
+    @pytest.mark.xfail(
+        condition=Version(transformers.__version__) < Version("5.2.0"),
+        reason="Environment factory support is not available in transformers versions below 5.2.0",
+        strict=True,
+    )
+    @require_jmespath
+    @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
     def test_train_with_environment_factory(self):
         # In this test, we define a simple tool that increments an internal counter. Regardless of the input prompt,
         # the model will generate 3 completions, 2 of which will be valid tool calls. Among the 2 tool calls, one will

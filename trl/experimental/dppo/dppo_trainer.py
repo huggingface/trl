@@ -856,14 +856,27 @@ class DPPOTrainer(GRPOTrainer):
 
         prompts = [x["prompt"] for x in inputs]
 
-        # Draw one reusable instance per rollout from the pool, creating more only when this batch needs more concurrent
-        # instances than exist.
-        if self.environment_factory is not None:
+        # Resolve each example's environment and draw one reusable instance per rollout from the pool, creating more
+        # only when this batch needs more concurrent instances of an environment than exist. `_batch_environments`
+        # records each example's environment so `_tokenize_prompts` can render the matching tool schema.
+        if self.environment_factories is not None:
+            self._batch_environments = [x.get("environment") if self._multi_environment else None for x in inputs]
+            if self._multi_environment:
+                for name in set(self._batch_environments):
+                    if name not in self.environment_factories:
+                        raise ValueError(
+                            f"Example has `environment={name!r}`, which is not among the environments passed to "
+                            f"`environment_factory`. Expected one of: {list(self.environment_factories)}."
+                        )
             self.environments = []
-            for i in range(len(inputs)):
-                if i == len(self._environment_pool):
-                    self._environment_pool.append(self.environment_factory())
-                self.environments.append(self._environment_pool[i])
+            pool_cursor = {}  # how many instances of each environment have been handed out so far this batch
+            for name in self._batch_environments:
+                pool = self._environment_pool[name]
+                index = pool_cursor.get(name, 0)
+                if index == len(pool):
+                    pool.append(self.environment_factories[name]())
+                pool_cursor[name] = index + 1
+                self.environments.append(pool[index])
 
         # Build the per-rollout tool dicts for this batch: the standalone tools plus, for each rollout, the methods of
         # its environment. Done here (not at init) because the environment instances are drawn at batch time.
@@ -888,10 +901,16 @@ class DPPOTrainer(GRPOTrainer):
                 self._async_tool_dicts.append(async_tool_dict)
 
         if self.environments:
-            for prompt, environment, reset_kwargs in zip(prompts, self.environments, inputs, strict=True):
+            for prompt, environment, x in zip(prompts, self.environments, inputs, strict=True):
+                # `environment` is a control field in multi-environment mode, so it is not forwarded to `reset`.
+                reset_kwargs = {k: v for k, v in x.items() if k != "environment"} if self._multi_environment else x
                 observation = environment.reset(**reset_kwargs)
                 if observation is None:
                     continue
+                if isinstance(observation, list) and isinstance(prompt[-1]["content"], str):
+                    prompt[-1]["content"] = [{"type": "text", "text": prompt[-1]["content"]}]
+                if isinstance(observation, str) and isinstance(prompt[-1]["content"], list):
+                    observation = [{"type": "text", "text": observation}]
                 prompt[-1]["content"] += observation
 
         if "images" in inputs[0]:
