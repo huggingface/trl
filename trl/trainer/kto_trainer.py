@@ -45,6 +45,7 @@ from transformers.trainer_utils import EvalPrediction, has_length
 from transformers.utils import is_peft_available
 
 from ..data_utils import (
+    _tokenize,
     apply_chat_template,
     extract_prompt,
     get_dataset_column_names,
@@ -454,43 +455,6 @@ class DataCollatorForVisionUnpairedPreference(DataCollatorMixin):
 
         output["label"] = [example["label"] for example in examples]
         return output
-
-
-# `_tokenize` is a module-level function rather than a trainer method so that `tokenize_fn` (the `Dataset.map`
-# callback in `_prepare_dataset`) can reference it without closing over `self`: a closure over `self` would make the
-# map function unhashable, forcing a random fingerprint that silently disables dataset caching.
-def _tokenize(
-    processing_class: PreTrainedTokenizerBase | ProcessorMixin,
-    input: str | list,
-    **kwargs,
-) -> dict[str, list]:
-    """Tokenize a single example for dataset preprocessing.
-
-    Dispatches to `apply_chat_template` for conversational input (list of message dicts) and to `__call__` for
-    non-conversational input (str).
-
-    Args:
-        processing_class ([`~transformers.PreTrainedTokenizerBase`] or [`~transformers.ProcessorMixin`]):
-            The tokenizer or processor to use.
-        input (`str` or `list`):
-            A string for non-conversational input, or a list of message dicts for conversational input.
-        **kwargs:
-            Forwarded to `apply_chat_template` (e.g. `add_generation_prompt`, `return_assistant_tokens_mask`).
-
-    Returns:
-        `dict` with at least an `"input_ids"` key mapping to a flat `list[int]`.
-    """
-    is_vlm = isinstance(processing_class, ProcessorMixin)
-    if isinstance(input, list):  # conversational: list of message dicts
-        if is_vlm:
-            input = prepare_multimodal_messages(input)
-        result = processing_class.apply_chat_template(input, tokenize=True, return_dict=True, **kwargs)
-    else:  # non-conversational: plain text string
-        result = processing_class(text=input)
-    # VLMs emit a batch dimension even for single examples; unwrap it
-    if is_vlm:
-        return {k: v[0] for k, v in result.items()}
-    return result
 
 
 class KTOTrainer(_BaseTrainer):
@@ -1090,20 +1054,18 @@ class KTOTrainer(_BaseTrainer):
             def tokenize_fn(example, processing_class):
                 tools = example.get("tools")
                 tools = json.loads(tools) if isinstance(tools, str) else tools
+                apply_chat_template_kwargs = {"tools": tools, **example.get("chat_template_kwargs", {})}
                 if is_conversational(example):
-                    chat_template_kwargs = example.get("chat_template_kwargs", {})
                     prompt_ids = _tokenize(
                         processing_class,
                         example["prompt"],
-                        tools=tools,
                         add_generation_prompt=True,
-                        **chat_template_kwargs,
+                        **apply_chat_template_kwargs,
                     )["input_ids"]
                     prompt_completion_ids = _tokenize(
                         processing_class,
                         example["prompt"] + example["completion"],
-                        tools=tools,
-                        **chat_template_kwargs,
+                        **apply_chat_template_kwargs,
                     )["input_ids"]
                 else:
                     prompt_ids = _tokenize(processing_class, example["prompt"])["input_ids"]
