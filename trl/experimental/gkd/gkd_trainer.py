@@ -43,11 +43,12 @@ from ..utils import DataCollatorForChatML, empty_cache
 from .gkd_config import GKDConfig
 
 
-if is_peft_available():
-    from peft import PeftConfig
-
 if is_liger_kernel_available():
     from liger_kernel.chunked_loss import LigerFusedLinearJSDLoss
+
+
+if is_peft_available():
+    from peft import PeftConfig
 
 
 class GKDTrainer(SFTTrainer):
@@ -145,7 +146,7 @@ class GKDTrainer(SFTTrainer):
         if args.use_liger_kernel:
             # Match the non-Liger path: pure JSD (no hard CE component) and no temperature
             # scaling, since `generalized_jsd_loss` is called without a `temperature` argument.
-            self.liger_jsd_loss = LigerFusedLinearJSDLoss(
+            self.liger_loss = LigerFusedLinearJSDLoss(
                 beta=args.beta,
                 ignore_index=-100,
                 compiled=False,
@@ -187,6 +188,14 @@ class GKDTrainer(SFTTrainer):
         if isinstance(teacher_model, str):
             teacher_model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
             teacher_model = AutoModelForCausalLM.from_pretrained(teacher_model, **teacher_model_init_kwargs)
+
+        if self.model.config.vocab_size != teacher_model.config.vocab_size:
+            raise ValueError(
+                f"The student model has vocab_size {self.model.config.vocab_size} but the teacher model has "
+                f"vocab_size {teacher_model.config.vocab_size}. GKD compares the teacher's full next-token "
+                f"distribution, which requires a shared vocabulary. Use a teacher with the same vocab_size, or "
+                f"GOLD for cross-tokenizer distillation."
+            )
 
         # Disable dropout in the model
         if args.disable_dropout:
@@ -357,7 +366,7 @@ class GKDTrainer(SFTTrainer):
             teacher_head = unwrapped_teacher.get_output_embeddings()
 
             # liger fused jsd loss
-            loss = self.liger_jsd_loss(
+            loss = self.liger_loss(
                 student_input=student_hidden,
                 student_weight=student_head.weight,
                 teacher_input=teacher_hidden,
