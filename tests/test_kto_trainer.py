@@ -16,7 +16,7 @@ import multiprocess
 import pytest
 import torch
 import transformers
-from datasets import load_dataset
+from datasets import IterableDatasetDict, load_dataset
 from packaging.version import Version
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 from transformers.utils import is_peft_available
@@ -863,6 +863,44 @@ class TestKTOTrainer(TrlTestCase):
                 model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
                 args=training_args,
                 train_dataset=dataset,
+            )
+
+    @pytest.mark.parametrize("iterable_as", ["train", "eval", "eval_dict", "eval_iterable_dataset_dict"])
+    def test_precompute_ref_log_probs_raises_for_iterable_dataset(self, iterable_as):
+        # `precompute_ref_log_probs=True` caches reference log-probs by index, which requires random access and is
+        # therefore incompatible with a streaming `IterableDataset` — whether passed directly or nested in a dict or
+        # `IterableDatasetDict` as the eval dataset.
+        map_dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
+        iterable_dataset = load_dataset(
+            "trl-internal-testing/zen", "standard_unpaired_preference", split="train", streaming=True
+        )
+
+        train_dataset, eval_dataset = map_dataset, None
+        if iterable_as == "train":
+            train_dataset = iterable_dataset
+        elif iterable_as == "eval":
+            eval_dataset = iterable_dataset
+        elif iterable_as == "eval_dict":
+            eval_dataset = {"eval": iterable_dataset}
+        elif iterable_as == "eval_iterable_dataset_dict":
+            eval_dataset = IterableDatasetDict({"eval": iterable_dataset})
+
+        # `apo_zero_unpaired` avoids KTO's KL term, which (like precompute) is incompatible with streaming datasets,
+        # so the precompute error is what surfaces. `max_steps` lets the iterable-train case reach the precompute
+        # check instead of failing earlier on the missing dataset length required by the learning-rate scheduler.
+        training_args = KTOConfig(
+            output_dir=self.tmp_dir,
+            loss_type="apo_zero_unpaired",
+            max_steps=1,
+            report_to="none",
+            precompute_ref_log_probs=True,
+        )
+        with pytest.raises(ValueError, match="precompute_ref_log_probs.*not supported with IterableDataset"):
+            KTOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                args=training_args,
+                train_dataset=train_dataset,
+                eval_dataset=eval_dataset,
             )
 
     def test_train_with_iterable_dataset(self):

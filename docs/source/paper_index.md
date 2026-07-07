@@ -475,12 +475,6 @@ $$
 
 TRL exposes the Importance Sampling granularity level through the `vllm_importance_sampling_mode` configuration parameter where `"sequence_*"` modes implement a sequence-level importance sampling ratio and `"token_*"` a per-token ratio.
 
-### Sample More to Think Less: Group Filtered Policy Optimization for Concise Reasoning
-
-**📜 Paper**: https://huggingface.co/papers/2508.09726
-
-See [Experimental - GFPO](gfpo).
-
 ### The Art of Scaling Reinforcement Learning
 
 **📜 Paper**: https://huggingface.co/papers/2510.13786
