@@ -23,7 +23,6 @@ from typing import TypedDict
 import requests
 import torch
 from accelerate.logging import get_logger
-from huggingface_hub import create_bucket
 
 from ...import_utils import is_vllm_available
 from .delta_codec import UpdateKind, extract_sparse_batched
@@ -324,6 +323,10 @@ class BucketWeightTransfer(WeightTransfer):
     def init(self, accelerator) -> None:
         if not accelerator.is_main_process:
             return
+        # Lazy import: the bucket API (`create_bucket`) requires a recent huggingface_hub, so only the bucket
+        # backend depends on it — the default NCCL path must import cleanly without it.
+        from huggingface_hub import create_bucket
+
         self._wait_for_server_ready_sync()
         create_bucket(self._bucket_id, exist_ok=True)
         requests.post(
