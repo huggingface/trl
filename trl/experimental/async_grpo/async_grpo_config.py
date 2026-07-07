@@ -96,7 +96,8 @@ class AsyncGRPOConfig(_BaseConfig):
         queue_maxsize (`int`, *optional*, defaults to `1024`):
             Maximum number of rollout samples to buffer in the rollout queue.
         weight_sync_steps (`int`, *optional*, defaults to `1`):
-            Number of training steps between weight synchronizations to the vLLM server.
+            Number of training steps between weight synchronizations to the vLLM server. Must be `1` when
+            `weight_sync_mode="sparse"` (the AdamW inversion only recovers the last step's changes).
         heartbeat_stale_after_s (`float`, *optional*, defaults to `300.0`):
             Seconds since the rollout worker's last heartbeat after which the trainer treats it as
             hung and aborts.
@@ -265,7 +266,10 @@ class AsyncGRPOConfig(_BaseConfig):
     )
     weight_sync_steps: int = field(
         default=1,
-        metadata={"help": "Number of training steps between weight synchronizations to the vLLM server."},
+        metadata={
+            "help": "Number of training steps between weight synchronizations to the vLLM server. Must be 1 when "
+            "weight_sync_mode='sparse' (the AdamW inversion only recovers the last step's changes)."
+        },
     )
     heartbeat_stale_after_s: float = field(
         default=300.0,
@@ -341,6 +345,11 @@ class AsyncGRPOConfig(_BaseConfig):
             raise ValueError("weight_sync_mode='full' transfers over NCCL; set weight_sync_backend='nccl'.")
         if self.weight_sync_backend == "bucket" and self.weight_sync_bucket_id is None:
             raise ValueError("weight_sync_backend='bucket' requires weight_sync_bucket_id to be set.")
+        if self.weight_sync_mode == "sparse" and self.weight_sync_steps > 1:
+            raise ValueError(
+                "weight_sync_mode='sparse' requires weight_sync_steps=1; use weight_sync_mode='full' for a larger "
+                "sync interval."
+            )
 
         # Accelerator config: required for the async IterableDataset-backed dataloader to work correctly.
         # split_batches=True and dispatch_batches=True ensure that the main process drives the dataloader
