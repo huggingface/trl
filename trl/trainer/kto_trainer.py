@@ -28,7 +28,7 @@ import transformers
 from accelerate import PartialState
 from accelerate.logging import get_logger
 from accelerate.utils import is_peft_model, tqdm
-from datasets import Dataset, IterableDataset, IterableDatasetDict, concatenate_datasets
+from datasets import Dataset, IterableDataset, concatenate_datasets
 from datasets.fingerprint import Hasher
 from packaging.version import Version
 from torch.utils.data import DataLoader, Sampler, SequentialSampler
@@ -928,13 +928,6 @@ class KTOTrainer(_BaseTrainer):
             self.liger_loss = LigerFusedLinearKTOLoss(beta=self.beta, use_ref_model=(self.ref_model is not None))
 
         if self.precompute_ref_logps:
-            if isinstance(self.train_dataset, IterableDataset) or isinstance(
-                self.eval_dataset, (IterableDataset, IterableDatasetDict)
-            ):
-                raise ValueError(
-                    "`precompute_ref_log_probs=True` is not supported with IterableDataset. Please use a map-style "
-                    "Dataset or set `precompute_ref_log_probs=False`."
-                )
             self.train_dataset = self._precompute_ref_logps(
                 self.train_dataset,
                 "train",
@@ -1157,6 +1150,11 @@ class KTOTrainer(_BaseTrainer):
         return super()._get_train_sampler(train_dataset)
 
     def _precompute_ref_logps(self, dataset: Dataset, name: str, batch_size: int) -> Dataset:
+        if isinstance(dataset, IterableDataset):
+            raise ValueError(
+                "`precompute_ref_log_probs=True` is not supported with IterableDataset. Please use a map-style "
+                "Dataset or set `precompute_ref_log_probs=False`."
+            )
         model_hash = hash_module(self.ref_model or self.model)
         fingerprint = Hasher.hash((dataset._fingerprint, model_hash, self.calculate_KL))
         cache_file = dataset._get_cache_file_path(fingerprint)
