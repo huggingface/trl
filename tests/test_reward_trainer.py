@@ -17,7 +17,7 @@ import pathlib
 
 import pytest
 import torch
-from datasets import load_dataset
+from datasets import DatasetDict, IterableDatasetDict, load_dataset
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 from transformers.utils import is_peft_available
 
@@ -719,6 +719,27 @@ class TestRewardTrainer(TrlTestCase):
 
         assert trainer.state.log_history[-3]["eval_data1_loss"] is not None
         assert trainer.state.log_history[-2]["eval_data2_loss"] is not None
+
+    @pytest.mark.parametrize("streaming", [False, True])
+    def test_init_with_eval_dataset_dict(self, streaming):
+        # `eval_dataset` may be a `DatasetDict` (map-style) or `IterableDatasetDict` (streaming) — e.g. the raw output
+        # of `load_dataset` without a `split` — not only a plain `dict`. Each split is prepared independently at init.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_implicit_prompt_preference", streaming=streaming)
+        dataset_dict_cls = IterableDatasetDict if streaming else DatasetDict
+        eval_dataset = dataset_dict_cls({"data1": dataset["test"], "data2": dataset["test"]})
+
+        training_args = RewardConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = RewardTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset["train"],
+            eval_dataset=eval_dataset,
+        )
+
+        assert set(trainer.eval_dataset.keys()) == {"data1", "data2"}
+        # Each split was tokenized independently.
+        assert "chosen_ids" in next(iter(trainer.eval_dataset["data1"]))
+        assert "chosen_ids" in next(iter(trainer.eval_dataset["data2"]))
 
     def test_train_with_compute_metrics(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_implicit_prompt_preference")
