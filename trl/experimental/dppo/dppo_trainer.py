@@ -14,6 +14,7 @@
 
 import asyncio
 import copy
+import inspect
 import math
 import textwrap
 from collections.abc import Callable
@@ -38,27 +39,18 @@ from transformers import (
 from transformers.utils import is_peft_available
 
 from ...chat_template_utils import parse_response
-from ...data_utils import (
-    apply_chat_template,
-    is_conversational,
-    prepare_multimodal_messages,
-)
+from ...data_utils import apply_chat_template, is_conversational, prepare_multimodal_messages
 from ...extras.profiling import profiling_context, profiling_decorator
 from ...models import unwrap_model_for_generation
 from ...models.utils import disable_gradient_checkpointing
 from ...trainer.grpo_trainer import EnvironmentFactory, GRPOTrainer, RewardFunc, RolloutFunc
-from ...trainer.utils import (
-    entropy_from_logits,
-    nanstd,
-    pad,
-    selective_log_softmax,
-    use_adapter,
-)
+from ...trainer.utils import entropy_from_logits, nanstd, pad, selective_log_softmax, use_adapter
 from .dppo_config import DPPOConfig
 
 
 if is_peft_available():
     from peft import PeftConfig, PeftModel
+
 
 SAFETY_CLAMP_MAX = 20
 
@@ -169,6 +161,15 @@ class DPPOTrainer(GRPOTrainer):
             process and the trainer instance. It must return a dict with `"prompt_ids"`, `"completion_ids"`, and
             `"logprobs"` fields. Any other fields are forwarded to the reward functions. This feature is experimental
             and may change or be removed at any time without prior notice.
+        environment_factory (`EnvironmentFactory`, *optional*):
+            A callable that creates and returns an environment instance. The environment class should define methods
+            that can be invoked as tools during generation. Each method should comply with the same requirements as the
+            `tools` described above. If `environment_factory` is provided, an instance of the environment is created
+            for each generation in the batch, allowing for parallel and independent interactions. The environment must
+            also implement a callable `reset` method that can be used to reset state between generations. The `reset`
+            method should return either `None` or a string: when it returns a string, that string is appended to the
+            last user message before generation. This feature is experimental and may change or be removed at any time
+            without prior notice.
     """
 
     _tag_names = ["trl", "dppo"]
@@ -246,23 +247,28 @@ class DPPOTrainer(GRPOTrainer):
                 images.append(prompt_images if prompt_images else None)
             images = images if has_images else None
 
-            # We pass padding=True to work around a bug introduced in transformers 5.2.0 in some processors
-            # (e.g. Qwen2.5-VL) that crash on batched unpadded input. We then unpad input_ids using attention_mask.
-            # See: https://github.com/huggingface/transformers/issues/44514
+            # Workaround for a bug in transformers 5.3.0 where some processors (e.g. Qwen2.5-VL) crash on
+            # batched unpadded input (transformers#44514).
+            # Fixed in transformers 5.4.0 (transformers#44563).
+            needs_padding_workaround = Version("5.3.0") <= Version(transformers.__version__) < Version("5.4.0")
             tokenized = self.processing_class.apply_chat_template(
                 conversation=prompts,
-                tools=self.tools,
+                tools=self.tools or None,  # `or None`: Llama bug: it renders tool boilerplate for tools=[]
                 chat_template=self.chat_template,
                 add_generation_prompt=True,
                 tokenize=True,
                 return_dict=True,
-                padding=True,
+                **({"padding": True} if needs_padding_workaround else {}),
                 **self.chat_template_kwargs,
             )
-            prompt_ids = [
-                [tok for tok, mask in zip(ids, attention_mask, strict=True) if mask]
-                for ids, attention_mask in zip(tokenized["input_ids"], tokenized["attention_mask"], strict=True)
-            ]
+            if needs_padding_workaround:
+                # Unpad input_ids: remove padding tokens using attention_mask to get per-sequence lists
+                prompt_ids = [
+                    [tok for tok, m in zip(ids, mask, strict=True) if m]
+                    for ids, mask in zip(tokenized["input_ids"], tokenized["attention_mask"], strict=True)
+                ]
+            else:
+                prompt_ids = tokenized["input_ids"]
             multimodal_fields = {k: v for k, v in tokenized.items() if k not in ("input_ids", "attention_mask")}
         else:
             prompt_ids = self.processing_class(text=prompts)["input_ids"]
@@ -328,7 +334,7 @@ class DPPOTrainer(GRPOTrainer):
             return prompt_ids, completion_ids, sampled_logprobs, topk_logprobs, topk_token_ids
         else:
             prompt_tensors = [torch.tensor(ids) for ids in prompt_ids]
-            padded_ids = pad(prompt_tensors, padding_value=self.pad_token_id, padding_side="left")
+            padded_ids = pad(prompt_tensors, padding_value=self._tokenizer.pad_token_id, padding_side="left")
             attention_mask = pad([torch.ones_like(t) for t in prompt_tensors], padding_value=0, padding_side="left")
             generate_inputs = {"input_ids": padded_ids, "attention_mask": attention_mask}
             for key, value in multimodal_fields.items():
@@ -355,9 +361,7 @@ class DPPOTrainer(GRPOTrainer):
                 torch.no_grad(),
                 FSDP.summon_full_params(self.model_wrapped, recurse=False) if self.is_fsdp_enabled else nullcontext(),
             ):
-                gen_output = unwrapped_model.generate(
-                    **generate_inputs, generation_config=gen_config, disable_compile=True
-                )
+                gen_output = unwrapped_model.generate(**generate_inputs, generation_config=gen_config)
 
             prompt_ids_tensor, prompt_mask = generate_inputs["input_ids"], generate_inputs["attention_mask"]
             prompt_length = prompt_ids_tensor.size(1)
@@ -393,7 +397,7 @@ class DPPOTrainer(GRPOTrainer):
                     topk_logps_chunks.append(topk_lp_t.cpu())
 
             # Mask everything after the first EOS token
-            is_eos = completion_ids == self.eos_token_id
+            is_eos = completion_ids == self._tokenizer.eos_token_id
             has_eos = is_eos.any(dim=1)
             eos_idx = torch.full((is_eos.size(0),), is_eos.size(1), dtype=torch.long, device=device)
             eos_idx[has_eos] = is_eos.int().argmax(dim=1)[has_eos]
@@ -491,7 +495,7 @@ class DPPOTrainer(GRPOTrainer):
             # Tokenize and filter samples whose length exceeds max allowed length
             pct_ids = self.processing_class.apply_chat_template(
                 prompt_completion_tools,
-                tools=self.tools,
+                tools=self.tools or None,  #  `or None`: Llama bug: it renders tool boilerplate for tools=[]
                 chat_template=self.chat_template,
                 add_generation_prompt=True,
                 tokenize=True,
@@ -590,7 +594,8 @@ class DPPOTrainer(GRPOTrainer):
 
             # Decode post-tool completions
             post_tool_completions = [
-                parse_response(self.processing_class, ids) if ids else {} for ids in post_tool_ids
+                parse_response(self._tokenizer, ids, prefix=prompt_completion_tool_ids[idx]) if ids else {}
+                for idx, ids in enumerate(post_tool_ids)
             ]
 
             for idx in range(len(idxs_with_tool)):
@@ -665,13 +670,14 @@ class DPPOTrainer(GRPOTrainer):
 
         # Decode completions. It's important to use `parse_response` when possible, because it handles tool calls.
         if is_conversational({"prompt": prompts[0]}):
-            if (
-                Version(transformers.__version__) >= Version("5.0.0")  # parse_response added in v5
-                and isinstance(self.processing_class, PreTrainedTokenizerBase)  # doesn't work with processors
-                and hasattr(self.processing_class, "response_schema")  # attribute not set by default for now
-                and self.processing_class.response_schema is not None  # only works if the tokenizer has a schema
+            if Version(transformers.__version__) >= Version("5.0.0") and (  # parse_response added in v5
+                getattr(self._tokenizer, "response_template", None) is not None  # new-style
+                or getattr(self._tokenizer, "response_schema", None) is not None  # old-style
             ):
-                completions = [[parse_response(self.processing_class, ids)] for ids in completion_ids]
+                completions = [
+                    [parse_response(self._tokenizer, ids, prefix=prompt_ids[i])]
+                    for i, ids in enumerate(completion_ids)
+                ]
             else:
                 contents = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
                 completions = [[{"role": "assistant", "content": content}] for content in contents]
@@ -714,7 +720,7 @@ class DPPOTrainer(GRPOTrainer):
         self._metrics[mode]["completions/min_length"].append(agg_completion_lengths.float().min().item())
         self._metrics[mode]["completions/max_length"].append(agg_completion_lengths.float().max().item())
 
-        eos_and_pad = [self.eos_token_id, self.pad_token_id]
+        eos_and_pad = [self._tokenizer.eos_token_id, self._tokenizer.pad_token_id]
         is_truncated = torch.tensor([ids[-1] not in eos_and_pad for ids in completion_ids], device=device)
         agg_is_truncated = self.accelerator.gather(is_truncated)
         self._metrics[mode]["completions/clipped_ratio"].append(agg_is_truncated.float().mean().item())
@@ -845,6 +851,37 @@ class DPPOTrainer(GRPOTrainer):
 
         prompts = [x["prompt"] for x in inputs]
 
+        # Draw one reusable instance per rollout from the pool, creating more only when this batch needs more concurrent
+        # instances than exist.
+        if self.environment_factory is not None:
+            self.environments = []
+            for i in range(len(inputs)):
+                if i == len(self._environment_pool):
+                    self._environment_pool.append(self.environment_factory())
+                self.environments.append(self._environment_pool[i])
+
+        # Build the per-rollout tool dicts for this batch: the standalone tools plus, for each rollout, the methods of
+        # its environment. Done here (not at init) because the environment instances are drawn at batch time.
+        if self.tools:
+            self._sync_tool_dicts = []
+            self._async_tool_dicts = []
+            for i in range(len(inputs)):
+                methods = []
+                if self.environments:
+                    methods = [
+                        member
+                        for member_name, member in inspect.getmembers(self.environments[i], predicate=inspect.ismethod)
+                        if member_name != "reset" and not member_name.startswith("_")
+                    ]
+                sync_tool_dict, async_tool_dict = {}, {}
+                for tool in self._standalone_tools + methods:
+                    if inspect.iscoroutinefunction(tool):
+                        async_tool_dict[tool.__name__] = tool
+                    else:
+                        sync_tool_dict[tool.__name__] = tool
+                self._sync_tool_dicts.append(sync_tool_dict)
+                self._async_tool_dicts.append(async_tool_dict)
+
         if self.environments:
             for prompt, environment, reset_kwargs in zip(prompts, self.environments, inputs, strict=True):
                 observation = environment.reset(**reset_kwargs)
@@ -874,7 +911,7 @@ class DPPOTrainer(GRPOTrainer):
                     "template internally."
                 )
             prompts = [
-                prepare_multimodal_messages(prompt, image_list)
+                prepare_multimodal_messages(prompt, images=image_list)
                 for prompt, image_list in zip(prompts, images, strict=True)
             ]
 
@@ -895,7 +932,7 @@ class DPPOTrainer(GRPOTrainer):
         prompt_mask = [torch.ones_like(ids, dtype=torch.long) for ids in prompt_ids]
         prompt_ids = pad(
             prompt_ids,
-            padding_value=self.pad_token_id,
+            padding_value=self._tokenizer.pad_token_id,
             padding_side="left",
             pad_to_multiple_of=self.pad_to_multiple_of,
         ).to(device=device)
@@ -906,7 +943,7 @@ class DPPOTrainer(GRPOTrainer):
         completion_mask = [torch.ones_like(ids, dtype=torch.long) for ids in completion_ids]
         completion_ids = pad(
             completion_ids,
-            padding_value=self.pad_token_id,
+            padding_value=self._tokenizer.pad_token_id,
             padding_side="right",
             pad_to_multiple_of=self.pad_to_multiple_of,
         ).to(device=device)
@@ -948,7 +985,7 @@ class DPPOTrainer(GRPOTrainer):
 
         # If mask_truncated_completions is enabled, zero out truncated completions for attention and loss masking
         if self.mask_truncated_completions:
-            eos_and_pad = [self.eos_token_id, self.pad_token_id]
+            eos_and_pad = [self._tokenizer.eos_token_id, self._tokenizer.pad_token_id]
             is_truncated = torch.tensor([ids[-1] not in eos_and_pad for ids in completion_ids_list], device=device)
             # Mask completion_mask for attention masking
             completion_mask = completion_mask * (~is_truncated).unsqueeze(1).int()
@@ -1012,7 +1049,7 @@ class DPPOTrainer(GRPOTrainer):
             # Compute the per-token log probabilities for the reference model
             if self.beta != 0.0:
                 if self.ref_model is not None:
-                    ref_per_token_logps, _ = self._get_per_token_logps_and_entropies(
+                    ref_per_token_logps, _, _ = self._get_per_token_logps_and_entropies(
                         self.ref_model,
                         prompt_completion_ids,
                         attention_mask,
@@ -1027,7 +1064,7 @@ class DPPOTrainer(GRPOTrainer):
                     # - Re-training an existing adapter: an initial copy is loaded under the name "ref".
                     model = self.accelerator.unwrap_model(self.model)
                     with use_adapter(model, adapter_name="ref" if "ref" in model.peft_config else None):
-                        ref_per_token_logps, _ = self._get_per_token_logps_and_entropies(
+                        ref_per_token_logps, _, _ = self._get_per_token_logps_and_entropies(
                             self.model,
                             prompt_completion_ids,
                             attention_mask,
@@ -1117,7 +1154,7 @@ class DPPOTrainer(GRPOTrainer):
             self._metrics[mode][f"rewards/{reward_func_name}/mean"].append(mean_rewards)
             std_func_rewards = nanstd(rewards_per_func[:, i]).item()
             self._metrics[mode][f"rewards/{reward_func_name}/std"].append(std_func_rewards)
-        rewards = rewards_per_func.nansum(dim=1)
+        rewards = (rewards_per_func * self.reward_weights.to(rewards_per_func.device).unsqueeze(0)).nansum(dim=1)
         self._metrics[mode]["reward"].append(rewards.mean().item())
         self._metrics[mode]["reward_std"].append(rewards.std().item())
         self._metrics[mode]["frac_reward_zero_std"].append(is_std_zero.float().mean().item())
@@ -1297,7 +1334,7 @@ class DPPOTrainer(GRPOTrainer):
                 **forward_kwargs,
             )
         else:
-            per_token_logps, entropies = self._get_per_token_logps_and_entropies(
+            per_token_logps, entropies, _ = self._get_per_token_logps_and_entropies(
                 model,
                 input_ids,
                 attention_mask,

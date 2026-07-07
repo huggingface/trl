@@ -14,9 +14,8 @@
 
 # /// script
 # dependencies = [
-#     "trl",
+#     "trl[peft]",
 #     "Pillow>=9.4.0",
-#     "peft",
 #     "trackio",
 #     "kernels",
 # ]
@@ -69,14 +68,9 @@ from trl import (
     SFTConfig,
     SFTTrainer,
     TrlParser,
-    get_kbit_device_map,
     get_peft_config,
     get_quantization_config,
 )
-
-
-# Enable logging in a Hugging Face Space
-os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 
 # For multi-image example
@@ -157,12 +151,9 @@ def main():
     quantization_config = get_quantization_config(model_args)
     if quantization_config is not None:
         # Passing None would not be treated the same as omitting the argument, so we include it only when valid.
-        model_kwargs["device_map"] = get_kbit_device_map()
         model_kwargs["quantization_config"] = quantization_config
 
-    model = AutoModelForImageTextToText.from_pretrained(
-        model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code, **model_kwargs
-    )
+    model = AutoModelForImageTextToText.from_pretrained(model_args.model_name_or_path, **model_kwargs)
 
     ################
     # Dataset

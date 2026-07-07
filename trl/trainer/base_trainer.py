@@ -14,8 +14,12 @@
 
 import os
 
-from transformers import Trainer, is_wandb_available
+import torch
+from accelerate.utils import is_peft_model
+from huggingface_hub.utils import send_telemetry
+from transformers import CONFIG_MAPPING, Trainer, is_wandb_available
 
+from .. import __version__
 from .utils import generate_model_card, get_comet_experiment_url, get_config_model_id, get_trackio_space_url
 
 
@@ -23,11 +27,101 @@ if is_wandb_available():
     import wandb
 
 
+# Trainer class names that may appear in telemetry topics. Any class outside this set — internal helpers,
+# in-flight subclasses not yet shipped, user-defined subclasses — is reported as "other" so unreleased or
+# private names never leak. Adding a new trainer requires an explicit entry here.
+_TELEMETRY_TRAINERS = {
+    # Stable
+    "DPOTrainer",
+    "GRPOTrainer",
+    "KTOTrainer",
+    "RewardTrainer",
+    "RLOOTrainer",
+    "SFTTrainer",
+    # Experimental
+    "A2POTrainer",
+    "AsyncGRPOTrainer",
+    "BCOTrainer",
+    "CPOTrainer",
+    "DistillationTrainer",
+    "DPPOTrainer",
+    "GFPOTrainer",
+    "GKDTrainer",
+    "GOLDTrainer",
+    "GRPOWithReplayBufferTrainer",
+    "MiniLLMTrainer",
+    "NashMDTrainer",
+    "OnlineDPOTrainer",
+    "ORPOTrainer",
+    "PPOTrainer",
+    "PRMTrainer",
+    "SDFTTrainer",
+    "SDPOTrainer",
+    "SSDTrainer",
+    "TPOTrainer",
+    "XPOTrainer",
+}
+
+
 class _BaseTrainer(Trainer):
     _tag_names = []
     _name = "Base"
     _paper = {}
     _template_file = None
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._send_telemetry()
+
+    def _send_telemetry(self):
+        # Only send from rank 0 to avoid multiplying pings by world size, and skip CI runs so automated tests don't
+        # bias the data. Honors `HF_HUB_DISABLE_TELEMETRY=1` and `HF_HUB_OFFLINE=1` (handled by `send_telemetry`).
+        if not self.accelerator.is_main_process or os.environ.get("CI"):
+            return
+        if self.is_deepspeed_enabled:
+            distributed = "deepspeed"
+        elif self.is_fsdp_enabled:
+            distributed = "fsdp"
+        elif self.accelerator.num_processes > 1:
+            distributed = "ddp"
+        else:
+            distributed = "none"
+        device = self.accelerator.device.type
+        if device == "cuda":
+            gpu = torch.cuda.get_device_name(0)
+        elif device == "xpu":
+            gpu = torch.xpu.get_device_name(0)
+        elif device == "npu":
+            gpu = torch.npu.get_device_name(0)
+        elif device == "mlu":
+            gpu = torch.mlu.get_device_name(0)
+        else:
+            gpu = "other"
+        # Bucketed to avoid fingerprinting individual deployments by their exact cluster size.
+        n = self.accelerator.num_processes
+        world_size = "1" if n == 1 else "2-8" if n <= 8 else "9-64" if n <= 64 else "65+"
+        # Trainer class and model arch are reported only if they come from a known upstream allowlist (TRL trainers,
+        # transformers `CONFIG_MAPPING`); anything else is reported as "other" so we never leak the names of internal,
+        # custom trainer subclasses or private model architectures.
+        cls = type(self)
+        trainer = (
+            cls.__name__ if cls.__name__ in _TELEMETRY_TRAINERS and cls.__module__.startswith("trl.") else "other"
+        )
+        model_type = self.model.config.model_type
+        model_arch = model_type if model_type in CONFIG_MAPPING else "other"
+        send_telemetry(
+            topic=f"trl/{trainer}",
+            library_name="trl",
+            library_version=__version__,
+            user_agent={
+                "model_arch": model_arch,
+                "peft": str(is_peft_model(self.model)).lower(),
+                "distributed": distributed,
+                "world_size": world_size,
+                "device": device,
+                "gpu": gpu,
+            },
+        )
 
     def create_model_card(
         self,

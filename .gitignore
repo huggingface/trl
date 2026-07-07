@@ -146,3 +146,7 @@ wandb/
 
 # uv
 uv.lock
+
+# AI agent generated artifacts
+/.agents/skills
+/.claude/skills

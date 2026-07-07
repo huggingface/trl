@@ -131,15 +131,15 @@ class TestDPPODivergenceMask:
 @pytest.mark.low_priority
 class TestDPPOTrainer(TrlTestCase):
     @pytest.mark.parametrize("divergence_type", ["binary_tv", "binary_kl"])
-    def test_training_binary(self, divergence_type):
+    def test_train_binary(self, divergence_type):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         training_args = DPPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,
-            per_device_train_batch_size=3,
-            num_generations=3,
-            max_completion_length=8,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
             divergence_type=divergence_type,
             report_to="none",
         )
@@ -161,15 +161,15 @@ class TestDPPOTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @pytest.mark.parametrize("config_name", ["standard_prompt_only", "conversational_prompt_only"])
-    def test_training_conversational(self, config_name):
+    def test_train_conversational(self, config_name):
         dataset = load_dataset("trl-internal-testing/zen", config_name, split="train")
 
         training_args = DPPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,
-            per_device_train_batch_size=3,
-            num_generations=3,
-            max_completion_length=8,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
             report_to="none",
         )
         trainer = DPPOTrainer(

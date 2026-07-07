@@ -14,8 +14,7 @@
 
 # /// script
 # dependencies = [
-#     "trl",
-#     "peft",
+#     "trl[peft]",
 #     "trackio",
 #     "kernels",
 # ]
@@ -50,8 +49,6 @@ python examples/scripts/gkd.py \
     --lora_alpha 16
 """
 
-import os
-
 from datasets import load_dataset
 from transformers import AutoTokenizer, GenerationConfig
 
@@ -60,15 +57,10 @@ from trl import (
     ModelConfig,
     ScriptArguments,
     TrlParser,
-    get_kbit_device_map,
     get_peft_config,
     get_quantization_config,
 )
 from trl.experimental.gkd import GKDConfig, GKDTrainer
-
-
-# Enable logging in a Hugging Face Space
-os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 
 if __name__ == "__main__":
@@ -80,7 +72,6 @@ if __name__ == "__main__":
     ################
     model_kwargs = dict(
         revision=model_args.model_revision,
-        trust_remote_code=model_args.trust_remote_code,
         attn_implementation=model_args.attn_implementation,
         dtype=model_args.dtype,
         use_cache=False if training_args.gradient_checkpointing else True,
@@ -88,29 +79,25 @@ if __name__ == "__main__":
     quantization_config = get_quantization_config(model_args)
     if quantization_config is not None:
         # Passing None would not be treated the same as omitting the argument, so we include it only when valid.
-        model_kwargs["device_map"] = get_kbit_device_map()
         model_kwargs["quantization_config"] = quantization_config
 
     training_args.model_init_kwargs = model_kwargs
 
     teacher_model_kwargs = dict(
         revision=model_args.model_revision,
-        trust_remote_code=model_args.trust_remote_code,
         attn_implementation=model_args.attn_implementation,
         dtype=model_args.dtype,
         use_cache=True,
     )
     if quantization_config is not None:
         # Passing None would not be treated the same as omitting the argument, so we include it only when valid.
-        model_kwargs["device_map"] = get_kbit_device_map()
-        model_kwargs["quantization_config"] = quantization_config
+        teacher_model_kwargs["quantization_config"] = quantization_config
 
     training_args.teacher_model_init_kwargs = teacher_model_kwargs
 
     tokenizer = AutoTokenizer.from_pretrained(
         model_args.model_name_or_path,
         revision=model_args.model_revision,
-        trust_remote_code=model_args.trust_remote_code,
         padding_side="left",
     )
     if tokenizer.pad_token is None:
@@ -134,7 +121,8 @@ if __name__ == "__main__":
         peft_config=get_peft_config(model_args),
     )
 
-    if training_args.eval_strategy != "no":
+    # LogCompletionsCallback needs a "prompt" column, absent from conversational datasets.
+    if training_args.eval_strategy != "no" and "prompt" in dataset[script_args.dataset_test_split].column_names:
         generation_config = GenerationConfig(
             max_new_tokens=training_args.max_new_tokens, do_sample=True, temperature=training_args.temperature
         )

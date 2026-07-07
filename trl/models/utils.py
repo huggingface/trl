@@ -87,6 +87,15 @@ def add_hooks(model: "DeepSpeedEngine") -> None:
         optimizer_offload = model.optimizer
     else:
         raise RuntimeError("The model optimizer is None, which is not yet supported.")
+
+    # Invalidate parameter coordinator trace to prevent stale state
+    # after generation forward passes (fixes ZeRO-3 + GKD compatibility)
+    if hasattr(optimizer_offload, "param_coordinator"):  # param_coordinator only exists in ZeRO stage 3
+        coordinator = optimizer_offload.param_coordinator
+        # Only invalidate if trace is not already invalid
+        if not coordinator.is_invalid_trace():
+            coordinator._invalidate_trace()
+
     if Version(deepspeed.__version__) >= Version("0.16.4"):
         # Account for renaming in https://github.com/deepspeedai/DeepSpeed/pull/6847
         optimizer_offload._register_deepspeed_module(optimizer_offload.module)
@@ -117,15 +126,17 @@ def _unwrap_model_for_generation(
 
     Example:
     ```python
-    with _unwrap_model_for_generation(model, accelerator) as unwrapped_model:
-        generated_outputs = unwrapped_model.generate(input_ids)
+    >>> with _unwrap_model_for_generation(model, accelerator) as unwrapped_model:
+    ...     generated_outputs = unwrapped_model.generate(input_ids)
     ```
     """
     unwrapped_model = accelerator.unwrap_model(model)
     is_gradient_checkpointing = unwrapped_model.is_gradient_checkpointing
     if is_gradient_checkpointing:
         unwrapped_model.gradient_checkpointing_disable()
-    if accelerator.state.deepspeed_plugin is not None and accelerator.state.deepspeed_plugin.zero_stage == 3:
+    from ..distributed import DistributedBackend
+
+    if DistributedBackend(accelerator).is_zero3:
         if not gather_deepspeed3_params:
             yield accelerator.unwrap_model(model)
         else:

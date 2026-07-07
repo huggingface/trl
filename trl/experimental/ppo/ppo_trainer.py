@@ -27,7 +27,8 @@ import pandas as pd
 import torch
 import torch.nn as nn
 import transformers
-from accelerate import Accelerator, logging
+from accelerate import Accelerator
+from accelerate.logging import get_logger
 from accelerate.utils import gather_object
 from datasets import Dataset
 from packaging.version import Version
@@ -37,6 +38,7 @@ from transformers import (
     DataCollatorWithPadding,
     FeatureExtractionMixin,
     GenerationConfig,
+    PreTrainedModel,
     PreTrainedTokenizerBase,
     ProcessorMixin,
     TrainerCallback,
@@ -48,23 +50,15 @@ from transformers.trainer import DEFAULT_CALLBACKS, DEFAULT_PROGRESS_CALLBACK
 from transformers.trainer_callback import CallbackHandler, ExportableState, PrinterCallback
 from transformers.utils import ModelOutput, is_peft_available, is_rich_available
 
-from ...models.utils import unwrap_model_for_generation
+from ...models.utils import prepare_deepspeed, unwrap_model_for_generation
 from ...trainer.base_trainer import _BaseTrainer
-from ...trainer.utils import (
-    disable_dropout_in_model,
-    log_table_to_comet_experiment,
-    pad,
-    prepare_deepspeed,
-    selective_log_softmax,
-)
-from ..utils import (
-    create_reference_model,
-    empty_cache,
-    first_true_indices,
-    get_reward,
-    peft_module_casting_to_bf16,
-)
+from ...trainer.utils import disable_dropout_in_model, log_table_to_comet_experiment, pad, selective_log_softmax
+from ..utils import create_reference_model, empty_cache, first_true_indices, get_reward, peft_module_casting_to_bf16
 from .ppo_config import PPOConfig
+
+
+if is_peft_available():
+    from peft import PeftConfig, PeftModel, get_peft_model
 
 
 if is_rich_available():
@@ -72,13 +66,10 @@ if is_rich_available():
     from rich.table import Table
 
 
-logger = logging.get_logger(__name__)
-
-if is_peft_available():
-    from peft import PeftConfig, PeftModel, get_peft_model
-
-
 INVALID_LOGPROB = 1.0
+
+
+logger = get_logger(__name__)
 
 
 def generate(
@@ -314,15 +305,15 @@ class PPOTrainer(_BaseTrainer):
             Training arguments.
         processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.BaseImageProcessor`], [`~transformers.FeatureExtractionMixin`] or [`~transformers.ProcessorMixin`]):
             Class to process the data.
-        model (`torch.nn.Module`):
+        model ([`~transformers.PreTrainedModel`]):
             Model to be trained. This is the policy model.
-        ref_model (`torch.nn.Module`, *optional*):
+        ref_model ([`~transformers.PreTrainedModel`], *optional*):
             Reference model used to compute the KL divergence. If `None`, a copy of the policy model is created.
-        reward_model (`torch.nn.Module`):
+        reward_model ([`~transformers.PreTrainedModel`]):
             Reward model used to compute the rewards.
         train_dataset ([`~datasets.Dataset`]):
             Dataset for training.
-        value_model (`torch.nn.Module`):
+        value_model ([`~transformers.PreTrainedModel`]):
             Value model used to predict the value of a state.
         data_collator ([`~transformers.DataCollatorWithPadding`], *optional*):
             Data collator to batch and pad samples from the dataset. If `None`, a default data collator is created
@@ -359,11 +350,11 @@ class PPOTrainer(_BaseTrainer):
         self,
         args: PPOConfig,
         processing_class: PreTrainedTokenizerBase | BaseImageProcessor | FeatureExtractionMixin | ProcessorMixin,
-        model: nn.Module,
-        ref_model: nn.Module | None,
-        reward_model: nn.Module,
+        model: PreTrainedModel,
+        ref_model: PreTrainedModel | None,
+        reward_model: PreTrainedModel,
         train_dataset: Dataset,
-        value_model: nn.Module,
+        value_model: PreTrainedModel,
         data_collator: DataCollatorWithPadding | None = None,
         eval_dataset: Dataset | dict[str, Dataset] | None = None,
         # less commonly used
@@ -417,12 +408,18 @@ class PPOTrainer(_BaseTrainer):
                 "[Approximating KL Divergence](http://joschu.net/blog/kl-approx.html) for details."
             )
 
-        # peft support
-        if not is_peft_available() and peft_config is not None:
-            raise ImportError(
-                "PEFT is not installed and you passed a `peft_config` in the trainer's kwargs, please install it to use the PEFT models"
-            )
-        elif is_peft_available() and peft_config is not None:
+        # PEFT
+        if peft_config is not None:
+            if not is_peft_available():
+                raise ImportError(
+                    "You passed `peft_config` but the `peft` library is not installed. "
+                    "Install it with `pip install trl[peft]`."
+                )
+            if not isinstance(peft_config, PeftConfig):
+                raise TypeError(
+                    f"`peft_config` must be a `peft.PeftConfig` instance (e.g. `peft.LoraConfig`), "
+                    f"got {type(peft_config).__name__}."
+                )
             if isinstance(self.policy_model, PeftModel):
                 raise ValueError(
                     "You passed a `PeftModel` instance together with a `peft_config` to the trainer. Please first "
@@ -555,17 +552,13 @@ class PPOTrainer(_BaseTrainer):
         self.eval_dataloader = accelerator.prepare(self.eval_dataloader)
 
         if self.is_deepspeed_enabled:
-            self.reward_model = prepare_deepspeed(
-                self.reward_model, args.per_device_train_batch_size, args.fp16, args.bf16
-            )
+            self.reward_model = prepare_deepspeed(self.reward_model, accelerator)
 
             if self.ref_model is None:
                 if not self.is_peft_model:
                     raise ValueError("No reference model and model is not a Peft model.")
             else:
-                self.ref_model = prepare_deepspeed(
-                    self.ref_model, args.per_device_train_batch_size, args.fp16, args.bf16
-                )
+                self.ref_model = prepare_deepspeed(self.ref_model, accelerator)
         else:
             if self.ref_model is None:
                 if not self.is_peft_model:

@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import warnings
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -38,6 +39,14 @@ class RLOOConfig(_BaseConfig):
         model_init_kwargs (`str`, `dict[str, Any]`, *optional*):
             Keyword arguments for [`~transformers.AutoModelForCausalLM.from_pretrained`], used when the `model`
             argument of the [`RLOOTrainer`] is provided as a string.
+        trust_remote_code (`bool`, *optional*, defaults to `False`):
+            Whether to allow loading models and tokenizers that ship custom Python code from the Hub. Forwarded to
+            [`~transformers.AutoModelForCausalLM.from_pretrained`] and
+            [`~transformers.AutoProcessor.from_pretrained`]. Also applied to reward-model and reward-tokenizer loads.
+        router_aux_loss_coef (`float`, *optional*, defaults to `0.001`):
+            Coefficient of the load-balancing auxiliary loss. Only has an effect when training a Mixture-of-Experts
+            (MoE) model; for other models it does nothing. The auxiliary loss is added to the training loss with this
+            weight. Set to `0.0` to disable it.
         disable_dropout (`bool`, *optional*, defaults to `False`):
             Whether to disable dropout in the model. This is useful for training with a reference model, as it prevents
             the model from generating different logprobs for the same input.
@@ -67,11 +76,11 @@ class RLOOConfig(_BaseConfig):
 
         > Parameters that control generation
 
-        generation_batch_size: (`int`, *optional*):
+        generation_batch_size (`int`, *optional*):
             Batch size to use for generation. If `None`, it defaults to the effective training batch size:
             `per_device_train_batch_size * num_processes * steps_per_generation`. In other words, there is one
             generation batch processed per optimization step. Mutually exclusive with `steps_per_generation`.
-        steps_per_generation: (`int`, *optional*):
+        steps_per_generation (`int`, *optional*):
             Number of steps per generation. If `None`, it defaults to `gradient_accumulation_steps`. Mutually exclusive
             with `generation_batch_size`.
         temperature (`float`, defaults to `1.0`):
@@ -96,10 +105,6 @@ class RLOOConfig(_BaseConfig):
             Float that penalizes new tokens based on whether they appear in the prompt and the generated text so far.
             Values > `1.0` encourage the model to use new tokens, while values < `1.0` encourage the model to repeat
             tokens.
-        use_transformers_paged (`bool`, *optional*, defaults to `False`):
-            Whether to use the `transformers` paged implementation for generation. If set to `True`, the `transformers`
-            paged implementation will be used for generation instead of the default padded implementation. This
-            parameter is only effective when `use_vllm` is set to `False`.
         cache_implementation (`str`, *optional*):
             Implementation of the cache method for faster generation when `use_vllm` is set to `False`.
 
@@ -156,6 +161,14 @@ class RLOOConfig(_BaseConfig):
             Enable vLLM sleep mode to offload weights/cache during the optimizer step. Keeps GPU memory usage low, but
             waking the engine adds host–device transfer latency.
 
+        > Parameters that control generation acceleration powered by transformers continuous batching
+
+        use_transformers_continuous_batching (`bool`, *optional*, defaults to `False`):
+            Whether to use transformers' continuous batching engine for generating completions. Requires
+            `transformers>=5.8.0`.
+        transformers_continuous_batching_config (`dict`, *optional*):
+            Keyword arguments for [`~transformers.generation.ContinuousBatchingConfig`].
+
         > Parameters that control the training
 
         beta (`float`, *optional*, defaults to `0.05`):
@@ -206,6 +219,17 @@ class RLOOConfig(_BaseConfig):
             Whether to log unique prompts. If `True`, only unique prompts are logged. If `False`, all prompts are
             logged.
 
+        > Deprecated parameters
+
+        use_transformers_paged:
+
+            <Deprecated version="1.2.0">
+
+            Parameter `use_transformers_paged` is deprecated and will be removed in version v2.0.0. Use
+            `use_transformers_continuous_batching` instead.
+
+            </Deprecated>
+
     > [!NOTE]
     > These parameters have default values different from [`~transformers.TrainingArguments`]:
     > - `logging_steps`: Defaults to `10` instead of `500`.
@@ -214,7 +238,10 @@ class RLOOConfig(_BaseConfig):
     > - `learning_rate`: Defaults to `1e-6` instead of `5e-5`.
     """
 
-    _VALID_DICT_FIELDS = _BaseConfig._VALID_DICT_FIELDS + ["model_init_kwargs"]
+    _VALID_DICT_FIELDS = _BaseConfig._VALID_DICT_FIELDS + [
+        "model_init_kwargs",
+        "transformers_continuous_batching_config",
+    ]
 
     # Parameters whose default values are overridden from TrainingArguments
     learning_rate: float = field(
@@ -228,6 +255,22 @@ class RLOOConfig(_BaseConfig):
         metadata={
             "help": "Keyword arguments for `transformers.AutoModelForCausalLM.from_pretrained`, used when the `model` "
             "argument of the `RLOOTrainer` is provided as a string."
+        },
+    )
+    trust_remote_code: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to allow loading models and tokenizers that ship custom Python code from the Hub. "
+            "Forwarded to `AutoModelForCausalLM.from_pretrained` and `AutoProcessor.from_pretrained`. Also applied to "
+            "reward-model and reward-tokenizer loads."
+        },
+    )
+    router_aux_loss_coef: float = field(
+        default=0.001,
+        metadata={
+            "help": "Coefficient of the load-balancing auxiliary loss. Only has an effect when training a "
+            "Mixture-of-Experts (MoE) model; for other models it does nothing. The auxiliary loss is added to the "
+            "training loss with this weight. Set to `0.0` to disable it."
         },
     )
     disable_dropout: bool = field(
@@ -343,14 +386,6 @@ class RLOOConfig(_BaseConfig):
             "help": "Float that penalizes new tokens based on whether they appear in the prompt and the generated "
             "text so far. Values > 1.0 encourage the model to use new tokens, while values < 1.0 encourage the model "
             "to repeat tokens."
-        },
-    )
-    use_transformers_paged: bool = field(
-        default=False,
-        metadata={
-            "help": "Whether to use the `transformers` paged implementation for generation. If set to `True`, the "
-            "`transformers` paged implementation will be used for generation instead of the default padded "
-            "implementation. This parameter is only effective when `use_vllm` is set to `False`."
         },
     )
     cache_implementation: str | None = field(
@@ -544,8 +579,46 @@ class RLOOConfig(_BaseConfig):
         },
     )
 
+    # Parameters that control generation acceleration powered by transformers continuous batching
+    use_transformers_continuous_batching: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to use transformers' continuous batching engine for generating completions. Requires "
+            "transformers>=5.8.0."
+        },
+    )
+    transformers_continuous_batching_config: dict | None = field(
+        default=None,
+        metadata={"help": "Keyword arguments for `transformers.generation.ContinuousBatchingConfig`."},
+    )
+
+    # Deprecated parameters
+    use_transformers_paged: bool = field(
+        default=False,
+        metadata={"help": "Deprecated. Use `use_transformers_continuous_batching` instead."},
+    )
+
     def __post_init__(self):
         super().__post_init__()
+
+        if self.use_transformers_paged:
+            warnings.warn(
+                "`use_transformers_paged` is deprecated and will be removed in v2.0.0. Use "
+                "`use_transformers_continuous_batching` instead.",
+                FutureWarning,
+                stacklevel=3,
+            )
+            self.use_transformers_continuous_batching = True
+
+        if self.parallelism_config is not None and (
+            self.parallelism_config.cp_enabled or self.parallelism_config.sp_enabled
+        ):
+            raise ValueError(
+                "RLOOTrainer does not support sequence-dim parallelism (`parallelism_config.cp_size > 1` or "
+                "`parallelism_config.sp_size > 1`) yet. RLOO builds model inputs after generation inside the trainer, "
+                "so Transformers' context-parallel / Ulysses sequence-parallel input sharding cannot be applied to the "
+                "raw generation batch. Set both `cp_size=1` and `sp_size=1`, or disable `parallelism_config`."
+            )
 
         num_processes = self.world_size
         # The current default effective batch size

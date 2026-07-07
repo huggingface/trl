@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import heapq
+import inspect
 from typing import Any
 
 import torch
@@ -70,6 +71,37 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
 
         prompts = [x["prompt"] for x in inputs]
 
+        # Draw one reusable instance per rollout from the pool, creating more only when this batch needs more concurrent
+        # instances than exist.
+        if self.environment_factory is not None:
+            self.environments = []
+            for i in range(len(inputs)):
+                if i == len(self._environment_pool):
+                    self._environment_pool.append(self.environment_factory())
+                self.environments.append(self._environment_pool[i])
+
+        # Build the per-rollout tool dicts for this batch: the standalone tools plus, for each rollout, the methods of
+        # its environment. Done here (not at init) because the environment instances are drawn at batch time.
+        if self.tools:
+            self._sync_tool_dicts = []
+            self._async_tool_dicts = []
+            for i in range(len(inputs)):
+                methods = []
+                if self.environments:
+                    methods = [
+                        member
+                        for member_name, member in inspect.getmembers(self.environments[i], predicate=inspect.ismethod)
+                        if member_name != "reset" and not member_name.startswith("_")
+                    ]
+                sync_tool_dict, async_tool_dict = {}, {}
+                for tool in self._standalone_tools + methods:
+                    if inspect.iscoroutinefunction(tool):
+                        async_tool_dict[tool.__name__] = tool
+                    else:
+                        sync_tool_dict[tool.__name__] = tool
+                self._sync_tool_dicts.append(sync_tool_dict)
+                self._async_tool_dicts.append(async_tool_dict)
+
         if "images" in inputs[0]:
             images = [example.get("images") for example in inputs]
         elif "image" in inputs[0]:
@@ -92,10 +124,11 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
                     "template internally."
                 )
             prompts = [
-                prepare_multimodal_messages(prompt, image_list)
+                prepare_multimodal_messages(prompt, images=image_list)
                 for prompt, image_list in zip(prompts, images, strict=True)
             ]
 
+        dataset_images = images  # preserve dataset images before _generate may overwrite
         (
             prompt_ids_list,
             completion_ids_list,
@@ -104,14 +137,18 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
             num_items_in_batch,
             sampling_per_token_logps_list,
             extra_fields,
+            images,
+            tool_images,
         ) = self._generate(prompts)
+        if images is None:
+            images = dataset_images  # restore dataset images (rollout_func path returns None)
 
         # Convert lists of token IDs to padded tensors
         prompt_ids = [torch.tensor(ids) for ids in prompt_ids_list]
         prompt_mask = [torch.ones_like(ids, dtype=torch.long) for ids in prompt_ids]
         prompt_ids = pad(
             prompt_ids,
-            padding_value=self.pad_token_id,
+            padding_value=self._tokenizer.pad_token_id,
             padding_side="left",
             pad_to_multiple_of=self.pad_to_multiple_of,
         ).to(device=device)
@@ -125,7 +162,7 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
         completion_mask = [torch.ones_like(ids, dtype=torch.long) for ids in completion_ids]
         completion_ids = pad(
             completion_ids,
-            padding_value=self.pad_token_id,
+            padding_value=self._tokenizer.pad_token_id,
             padding_side="right",
             pad_to_multiple_of=self.pad_to_multiple_of,
         ).to(device=device)
@@ -156,7 +193,7 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
 
         # If mask_truncated_completions is enabled, zero out truncated completions in completion_mask
         if self.mask_truncated_completions:
-            eos_and_pad = [self.eos_token_id, self.pad_token_id]
+            eos_and_pad = [self._tokenizer.eos_token_id, self._tokenizer.pad_token_id]
             is_truncated = torch.tensor([ids[-1] not in eos_and_pad for ids in completion_ids_list], device=device)
             completion_mask = completion_mask * (~is_truncated).unsqueeze(1).int()
 
@@ -167,7 +204,7 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
         logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
         batch_size = self.args.per_device_train_batch_size if mode == "train" else self.args.per_device_eval_batch_size
 
-        num_images = [len(img_list) for img_list in images] if images is not None else None
+        num_images = [len(img_list) if img_list else 0 for img_list in images] if images is not None else None
 
         # Get forward_kwargs for models with multimodal inputs
         if images is not None:
@@ -226,7 +263,7 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
             if self.args.gradient_accumulation_steps % generate_every != 0 or (
                 self.use_vllm and self.vllm_importance_sampling_correction
             ):
-                old_per_token_logps, _ = self._get_per_token_logps_and_entropies(
+                old_per_token_logps, _, _ = self._get_per_token_logps_and_entropies(
                     self.model,
                     prompt_completion_ids,
                     attention_mask,
@@ -242,13 +279,15 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
             if self.use_vllm and self.vllm_importance_sampling_correction:
                 importance_sampling_ratio = torch.exp(old_per_token_logps - sampling_per_token_logps)
                 importance_sampling_ratio = torch.clamp(
-                    importance_sampling_ratio, max=self.vllm_importance_sampling_cap
+                    importance_sampling_ratio,
+                    min=self.vllm_importance_sampling_clip_min,
+                    max=self.vllm_importance_sampling_clip_max,
                 )
 
             # Compute the per-token log probabilities for the reference model
             if self.beta != 0.0:
                 if self.ref_model is not None:
-                    ref_per_token_logps, _ = self._get_per_token_logps_and_entropies(
+                    ref_per_token_logps, _, _ = self._get_per_token_logps_and_entropies(
                         self.ref_model,
                         prompt_completion_ids,
                         attention_mask,
@@ -259,7 +298,7 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
                     )
                 else:
                     with self.accelerator.unwrap_model(self.model).disable_adapter():
-                        ref_per_token_logps, _ = self._get_per_token_logps_and_entropies(
+                        ref_per_token_logps, _, _ = self._get_per_token_logps_and_entropies(
                             self.model,
                             prompt_completion_ids,
                             attention_mask,
@@ -332,8 +371,9 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
             self._metrics[mode][f"rewards/{reward_func_name}/mean"].append(mean_rewards)
             std_func_rewards = nanstd(rewards_per_func[:, i]).item()
             self._metrics[mode][f"rewards/{reward_func_name}/std"].append(std_func_rewards)
-        self._metrics[mode]["reward"].append(mean_grouped_rewards.mean().item())
-        self._metrics[mode]["reward_std"].append(std_rewards.mean().item())
+        rewards = (rewards_per_func * self.reward_weights.to(rewards_per_func.device).unsqueeze(0)).nansum(dim=1)
+        self._metrics[mode]["reward"].append(rewards.mean().item())
+        self._metrics[mode]["reward_std"].append(rewards.std().item())
         self._metrics[mode]["frac_reward_zero_std"].append(is_std_zero.float().mean().item())
 
         # Log prompt and completion texts
@@ -467,7 +507,7 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
         Args:
             groups_with_variance: Boolean tensor indicating which groups have reward variance
             group_advantages: Tensor of shape (num_groups, num_generations) containing advantage values
-            std_rewards: Tensor of shape (num_groups, num_generations) containing std of rewards per group
+            group_std_rewards: Tensor of shape (num_groups, num_generations) containing std of rewards per group
             prompt_ids: Tensor containing prompt token IDs
             prompt_mask: Tensor containing prompt attention masks
             completion_ids: Tensor containing completion token IDs
@@ -593,7 +633,7 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
 
         Args:
             group_advantages: Tensor of shape (num_groups, num_generations) containing advantage values
-            std_rewards: Tensor of shape (num_groups, num_generations) containing std of rewards per group
+            group_std_rewards: Tensor of shape (num_groups, num_generations) containing std of rewards per group
             prompt_ids: Tensor containing prompt token IDs
             prompt_mask: Tensor containing prompt attention masks
             completion_ids: Tensor containing completion token IDs
@@ -659,7 +699,7 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
         if target_prompt_len > current_batch_prompt_seq_len:
             prompt_ids = pad(
                 list(prompt_ids.unbind(0)),
-                padding_value=self.pad_token_id,
+                padding_value=self._tokenizer.pad_token_id,
                 pad_to_multiple_of=target_prompt_len,
                 padding_side="left",
             )
@@ -670,7 +710,7 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
         if target_completion_len > current_batch_completion_seq_len:
             completion_ids = pad(
                 list(completion_ids.unbind(0)),
-                padding_value=self.pad_token_id,
+                padding_value=self._tokenizer.pad_token_id,
                 pad_to_multiple_of=target_completion_len,
                 padding_side="right",
             )
@@ -705,7 +745,7 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
             if sampled_data["prompt_ids"][i].size(1) < target_prompt_len:
                 sampled_data["prompt_ids"][i] = pad(
                     sampled_data["prompt_ids"][i],
-                    padding_value=self.pad_token_id,
+                    padding_value=self._tokenizer.pad_token_id,
                     pad_to_multiple_of=target_prompt_len,
                     padding_side="left",
                 )
@@ -720,7 +760,7 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
             if sampled_data["completion_ids"][i].size(1) < target_completion_len:
                 sampled_data["completion_ids"][i] = pad(
                     sampled_data["completion_ids"][i],
-                    padding_value=self.pad_token_id,
+                    padding_value=self._tokenizer.pad_token_id,
                     pad_to_multiple_of=target_completion_len,
                     padding_side="right",
                 )

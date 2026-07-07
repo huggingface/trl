@@ -21,7 +21,7 @@ import torch
 import transformers
 from packaging.version import Version
 
-from ..testing_utils import TrlTestCase, require_torch_multi_accelerator
+from ..testing_utils import TrlTestCase, require_liger_kernel, require_torch_multi_accelerator
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -41,9 +41,7 @@ def get_config_path(lazy_shared_datadir):
 
 
 @require_torch_multi_accelerator
-class TestDistributed(
-    TrlTestCase
-):  # pytest.param("zero3", marks=pytest.mark.xfail(reason="ZeRO 3 is currently failing, see #4899"))
+class TestDistributed(TrlTestCase):
     @pytest.mark.parametrize(
         "config",
         [
@@ -74,6 +72,42 @@ class TestDistributed(
                 "--model_name_or_path", "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
                 "--dataset_name", "trl-internal-testing/zen",
                 "--dataset_config", "standard_language_modeling",
+            ],
+            os.environ.copy(),
+        )
+        # fmt: on
+
+    @pytest.mark.parametrize(
+        "config",
+        [
+            "ddp",
+            pytest.param(
+                "zero2",
+                marks=pytest.mark.xfail(
+                    Version(transformers.__version__) == Version("5.1.0"),
+                    reason="Upstream incompatibility: deepspeed and transformers==5.1.0 (see transformers#43780)",
+                ),
+            ),
+            pytest.param(
+                "zero3",
+                marks=pytest.mark.xfail(
+                    Version(transformers.__version__) == Version("5.1.0"),
+                    reason="Upstream incompatibility: deepspeed and transformers==5.1.0 (see transformers#43780)",
+                ),
+            ),
+            "fsdp2",
+        ],
+    )
+    def test_sft_nll_loss(self, config, get_config_path):
+        # fmt: off
+        run_command(
+            [
+                "accelerate", "launch", "--config_file", get_config_path(config), "trl/scripts/sft.py",
+                "--output_dir", self.tmp_dir,
+                "--model_name_or_path", "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                "--dataset_name", "trl-internal-testing/zen",
+                "--dataset_config", "standard_language_modeling",
+                "--loss_type", "nll",
             ],
             os.environ.copy(),
         )
@@ -158,15 +192,17 @@ class TestDistributed(
             pytest.param(
                 "zero2",
                 marks=pytest.mark.xfail(
-                    condition=Version("2.10") <= Version(torch.__version__),
-                    reason="ZeRO 2 + PEFT is failing on torch 2.10; see #4884",
+                    condition=Version("2.10") <= Version(torch.__version__)
+                    and Version(transformers.__version__) < Version("5.1.0"),
+                    reason="ZeRO 2 + PEFT was failing before transformers 5.1.0 on torch 2.10; see #4884",
                 ),
             ),
             pytest.param(
                 "zero3",
                 marks=pytest.mark.xfail(
-                    condition=Version("2.10") <= Version(torch.__version__),
-                    reason="ZeRO 3 + PEFT is failing on torch 2.10; see #4884",
+                    condition=Version("2.10") <= Version(torch.__version__)
+                    and Version(transformers.__version__) < Version("5.1.0"),
+                    reason="ZeRO 3 + PEFT was failing before transformers 5.1.0 on torch 2.10; see #4884",
                 ),
             ),
             "fsdp2",
@@ -233,8 +269,21 @@ class TestDistributed(
                     reason="Upstream incompatibility: deepspeed and transformers==5.1.0 (see transformers#43780)",
                 ),
             ),
-            pytest.param("zero3", marks=pytest.mark.xfail(reason="ZeRO 3 is currently failing, see #4899")),
-            "fsdp2",
+            pytest.param(
+                "zero3",
+                marks=pytest.mark.xfail(
+                    Version("5.0.0") <= Version(transformers.__version__) < Version("5.5.4"),
+                    reason="ZeRO-3 fails with transformers >= 5.0.0 and < 5.5.4 (fixed in transformers#45414), see #4899",
+                    strict=True,
+                ),
+            ),
+            pytest.param(
+                "fsdp2",
+                marks=pytest.mark.skipif(
+                    Version("5.4.0") <= Version(transformers.__version__) < Version("5.6.0"),
+                    reason="Upstream issue: NaN weights on non-rank-0 FSDP processes (see #5386 and transformers#45050)",
+                ),
+            ),
         ],
     )
     def test_rloo(self, config, get_config_path):
@@ -263,7 +312,14 @@ class TestDistributed(
                     reason="Upstream incompatibility: deepspeed and transformers==5.1.0 (see transformers#43780)",
                 ),
             ),
-            pytest.param("zero3", marks=pytest.mark.xfail(reason="ZeRO 3 is currently failing, see #4899")),
+            pytest.param(
+                "zero3",
+                marks=pytest.mark.xfail(
+                    Version("5.0.0") <= Version(transformers.__version__) < Version("5.5.4"),
+                    reason="ZeRO-3 fails with transformers >= 5.0.0 and < 5.5.4 (fixed in transformers#45414), see #4899",
+                    strict=True,
+                ),
+            ),
             "fsdp2",
         ],
     )
@@ -277,6 +333,45 @@ class TestDistributed(
                 "--dataset_name", "trl-internal-testing/zen",
                 "--dataset_config", "conversational_prompt_only",
                 "--reward_model_name_or_path", "trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            ],
+            os.environ.copy(),
+        )
+        # fmt: on
+
+    @require_liger_kernel
+    @pytest.mark.parametrize(
+        "config",
+        [
+            "ddp",
+            pytest.param(
+                "zero2",
+                marks=pytest.mark.xfail(
+                    Version(transformers.__version__) == Version("5.1.0"),
+                    reason="Upstream incompatibility: deepspeed and transformers==5.1.0 (see transformers#43780)",
+                ),
+            ),
+            pytest.param(
+                "zero3",
+                marks=pytest.mark.xfail(
+                    Version("5.0.0") <= Version(transformers.__version__) < Version("5.5.4"),
+                    reason="ZeRO-3 fails with transformers >= 5.0.0 and < 5.5.4 (fixed in transformers#45414), see #4899",
+                    strict=True,
+                ),
+            ),
+            "fsdp2",
+        ],
+    )
+    def test_grpo_liger(self, config, get_config_path):
+        # fmt: off
+        run_command(
+            [
+                "accelerate", "launch", "--config_file", get_config_path(config), "trl/scripts/grpo.py",
+                "--output_dir", self.tmp_dir,
+                "--model_name_or_path", "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                "--dataset_name", "trl-internal-testing/zen",
+                "--dataset_config", "conversational_prompt_only",
+                "--reward_model_name_or_path", "trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                "--use_liger_kernel",
             ],
             os.environ.copy(),
         )

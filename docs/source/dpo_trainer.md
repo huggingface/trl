@@ -120,15 +120,16 @@ Several formulations of the objective have been proposed in the literature. Init
 | `"apo_zero"` or `loss_type="apo_down"` | The [APO](https://huggingface.co/papers/2408.06266) method introduces an anchored objective. `apo_zero` boosts winners and downweights losers (useful when the model underperforms the winners). `apo_down` downweights both, with stronger pressure on losers (useful when the model already outperforms winners). |
 | `"discopop"` | The [DiscoPOP](https://huggingface.co/papers/2406.08414) paper uses LLMs to discover more efficient offline preference optimization losses. In the paper the proposed DiscoPOP loss (which is a log-ratio modulated loss) outperformed other optimization losses on different tasks (IMDb positive text generation, Reddit TLDR summarization, and Alpaca Eval 2.0). |
 | `"sft"` | SFT (Supervised Fine-Tuning) loss is the negative log likelihood loss, used to train the model to generate preferred responses. |
+| `"sigmoid_norm"` | The [SimPO](https://huggingface.co/papers/2405.14734) authors address the length-bias in the original sigmoid loss by normalizing by the number of non-mask tokens; TRL exposes this as `loss_type="sigmoid_norm"`. |
 
 ## Logged metrics
 
-While training and evaluating we record the following reward metrics:
+While training and evaluating, we record the following metrics:
 
 * `global_step`: The total number of optimizer steps taken so far.
 * `epoch`: The current epoch number, based on dataset iteration.
 * `num_tokens`: The total number of tokens processed so far.
-* `loss`: The average cross-entropy loss computed over non-masked tokens in the current logging interval.
+* `loss`: The average DPO loss over the current logging interval.
 * `entropy`: The average entropy of the model's predicted token distribution over non-masked tokens.
 * `mean_token_accuracy`: The proportion of non-masked tokens for which the model’s top-1 prediction matches the token from the chosen completion.
 * `learning_rate`: The current learning rate, which may change dynamically if a scheduler is used.

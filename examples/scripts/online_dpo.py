@@ -14,8 +14,7 @@
 
 # /// script
 # dependencies = [
-#     "trl",
-#     "peft",
+#     "trl[peft]",
 #     "trackio",
 #     "kernels",
 # ]
@@ -49,8 +48,6 @@ python examples/scripts/online_dpo.py \
     --use_peft
 """
 
-import os
-
 import torch
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer, GenerationConfig
@@ -60,19 +57,11 @@ from trl import (
     ModelConfig,
     ScriptArguments,
     TrlParser,
-    get_kbit_device_map,
     get_peft_config,
     get_quantization_config,
 )
-from trl.experimental.judges import HfPairwiseJudge, OpenAIPairwiseJudge, PairRMJudge
 from trl.experimental.online_dpo import OnlineDPOConfig, OnlineDPOTrainer
 
-
-# Enable logging in a Hugging Face Space
-os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
-
-
-JUDGES = {"pair_rm": PairRMJudge, "openai": OpenAIPairwiseJudge, "hf": HfPairwiseJudge}
 
 if __name__ == "__main__":
     parser = TrlParser((ScriptArguments, OnlineDPOConfig, ModelConfig))
@@ -89,23 +78,18 @@ if __name__ == "__main__":
     quantization_config = get_quantization_config(model_args)
     if quantization_config is not None:
         # Passing None would not be treated the same as omitting the argument, so we include it only when valid.
-        model_kwargs["device_map"] = get_kbit_device_map()
         model_kwargs["quantization_config"] = quantization_config
 
-    model = AutoModelForCausalLM.from_pretrained(
-        model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code, **model_kwargs
-    )
+    model = AutoModelForCausalLM.from_pretrained(model_args.model_name_or_path, **model_kwargs)
 
     if training_args.reward_model_path is not None:
         reward_model = AutoModelForSequenceClassification.from_pretrained(
             training_args.reward_model_path,
             num_labels=1,
-            trust_remote_code=model_args.trust_remote_code,
             **model_kwargs,
         )
         reward_tokenizer = AutoTokenizer.from_pretrained(
             training_args.reward_model_path,
-            trust_remote_code=model_args.trust_remote_code,
             truncation=True,
             truncation_side="left",  # since we judge the completion, truncating left is more appropriate
         )
@@ -115,16 +99,9 @@ if __name__ == "__main__":
         reward_model = None
         reward_tokenizer = None
 
-    if training_args.judge is not None:
-        judge_cls = JUDGES[training_args.judge]
-        judge = judge_cls()
-    else:
-        judge = None
-
     tokenizer = AutoTokenizer.from_pretrained(
         model_args.model_name_or_path,
         padding_side="left",
-        trust_remote_code=model_args.trust_remote_code,
         **model_kwargs,
     )
     if tokenizer.pad_token_id is None:
@@ -135,7 +112,6 @@ if __name__ == "__main__":
     trainer = OnlineDPOTrainer(
         model=model,
         reward_funcs=reward_model,
-        judge=judge,
         args=training_args,
         train_dataset=dataset[script_args.dataset_train_split],
         eval_dataset=dataset[script_args.dataset_test_split] if training_args.eval_strategy != "no" else None,

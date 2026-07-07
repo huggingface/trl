@@ -14,9 +14,8 @@
 
 # /// script
 # dependencies = [
-#     "trl",
+#     "trl[peft]",
 #     "Pillow",
-#     "peft",
 #     "math-verify",
 #     "latex2sympy2_extended",
 #     "torchvision",
@@ -63,8 +62,6 @@ accelerate launch \
 
 """
 
-import os
-
 import torch
 from datasets import load_dataset
 
@@ -74,15 +71,10 @@ from trl import (
     RLOOTrainer,
     ScriptArguments,
     TrlParser,
-    get_kbit_device_map,
     get_peft_config,
     get_quantization_config,
 )
 from trl.rewards import accuracy_reward, think_format_reward
-
-
-# Enable logging in a Hugging Face Space
-os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 
 if __name__ == "__main__":
@@ -97,11 +89,6 @@ if __name__ == "__main__":
         attn_implementation=model_args.attn_implementation,
         dtype=dtype,
     )
-    quantization_config = get_quantization_config(model_args)
-    if quantization_config is not None:
-        # Passing None would not be treated the same as omitting the argument, so we include it only when valid.
-        training_args.model_init_kwargs["device_map"] = get_kbit_device_map()
-        training_args.model_init_kwargs["quantization_config"] = quantization_config
 
     ################
     # Dataset
@@ -153,6 +140,7 @@ if __name__ == "__main__":
         reward_funcs=[think_format_reward, accuracy_reward],
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
+        quantization_config=get_quantization_config(model_args),
         peft_config=get_peft_config(model_args),
     )
 

@@ -12,16 +12,25 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""
-CUDA_VISIBLE_DEVICES=1 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen3-4B \
-    --weight-transfer-config '{"backend":"nccl"}' \
-    --max-model-len 9216
+# /// script
+# dependencies = [
+#     "trl",
+#     "math-verify",
+#     "latex2sympy2_extended",
+#     "trackio",
+# ]
+# ///
 
-LOG_LEVEL=DEBUG CUDA_VISIBLE_DEVICES=0 accelerate launch examples/scripts/async_grpo.py
 """
+pip install math_verify
 
-import logging
-import os
+CUDA_VISIBLE_DEVICES=1 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen3-0.6B \
+    --max-model-len 2048 \
+    --logprobs-mode processed_logprobs \
+    --weight-transfer-config '{"backend":"nccl"}'
+
+CUDA_VISIBLE_DEVICES=0 accelerate launch examples/scripts/async_grpo.py
+"""
 
 from datasets import load_dataset
 
@@ -29,34 +38,33 @@ from trl.experimental.async_grpo import AsyncGRPOConfig, AsyncGRPOTrainer
 from trl.rewards import accuracy_reward
 
 
-logging.basicConfig(
-    level=getattr(logging, os.environ.get("LOG_LEVEL", "INFO").upper(), logging.INFO),
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-)
-logging.getLogger("trl").setLevel(logging.DEBUG)
-
-
 def format_sample(sample):
-    return {"prompt": sample["messages"][:1], "solution": sample["answer"]}
+    return {
+        "prompt": [{"role": "user", "content": sample["question"]}],
+        "solution": sample["answer"].split("####")[-1].strip(),
+    }
 
 
 def main() -> None:
-    dataset = load_dataset("open-r1/OpenR1-Math-220k", split="train[:10000]")
+    dataset = load_dataset("openai/gsm8k", "main", split="train")
     dataset = dataset.map(format_sample, remove_columns=dataset.column_names)
 
     config = AsyncGRPOConfig(
-        output_dir="./results",
-        per_device_train_batch_size=1,
-        num_train_epochs=1,
-        max_completion_length=4096,
-        max_steps=10,
+        output_dir="async_grpo_gsm8k",
+        save_strategy="no",
+        per_device_train_batch_size=16,
+        gradient_accumulation_steps=2,
+        max_completion_length=1024,
+        chat_template_kwargs={"enable_thinking": False},
+        max_steps=200,
+        learning_rate=1e-5,
         report_to="trackio",
-        trackio_space_id=None,
-        project="async_grpo",
+        trackio_space_id="async-grpo-gsm8k",
+        project="async-grpo-gsm8k",
         log_completions=True,
     )
     trainer = AsyncGRPOTrainer(
-        model="Qwen/Qwen3-4B",
+        model="Qwen/Qwen3-0.6B",
         args=config,
         train_dataset=dataset,
         reward_funcs=accuracy_reward,

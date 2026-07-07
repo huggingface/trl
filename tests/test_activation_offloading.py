@@ -18,6 +18,7 @@ from transformers import AutoModelForCausalLM
 from transformers.testing_utils import torch_device
 from transformers.utils import is_peft_available
 
+from trl.models import activation_offloading as activation_offloading_module
 from trl.models.activation_offloading import NoOpManager, OffloadActivations
 
 from .testing_utils import TrlTestCase, require_peft, require_torch_accelerator
@@ -195,6 +196,81 @@ class TestActivationOffloading(TrlTestCase):
         )
 
         loss.backward()
+
+    @require_torch_accelerator
+    def test_reused_storage_key_after_stash_reap_is_not_deduplicated(self):
+        """A reused allocator address should not be treated as a live view."""
+
+        class SaveTensor(torch.autograd.Function):
+            @staticmethod
+            def forward(ctx, tensor):
+                ctx.save_for_backward(tensor)
+                return tensor.sum()
+
+            @staticmethod
+            def backward(ctx, grad_output):
+                (tensor,) = ctx.saved_tensors
+                return torch.ones_like(tensor) * grad_output
+
+        first = torch.randn(4, 4, device=torch_device, requires_grad=True)
+        filler = torch.randn(4, 4, device=torch_device, requires_grad=True)
+        reused = torch.randn(4, 4, device=torch_device, requires_grad=True)
+
+        def fake_storage_key(tensor):
+            if id(tensor) in {id(first), id(reused)}:
+                return ("reused-storage-key", tensor.dtype)
+            return (id(tensor), tensor.dtype)
+
+        offload_ctx = OffloadActivations(
+            use_pin_memory=False,
+            use_streams=True,
+            min_offload_size=1,
+            max_fwd_stash_size=1,
+        )
+
+        original_get_unique_tensor_key = activation_offloading_module._get_unique_tensor_key
+        activation_offloading_module._get_unique_tensor_key = fake_storage_key
+        try:
+            with offload_ctx:
+                loss = SaveTensor.apply(first) + SaveTensor.apply(filler) + SaveTensor.apply(reused)
+        finally:
+            activation_offloading_module._get_unique_tensor_key = original_get_unique_tensor_key
+
+        offloaded_count = sum(1 for _, modified, _, _, _ in offload_ctx.tracker.values() if modified)
+        deduplicated_count = sum(1 for _, modified, _, _, _ in offload_ctx.tracker.values() if not modified)
+
+        assert offloaded_count == 3
+        assert deduplicated_count == 0
+
+        loss.backward()
+
+    @require_torch_accelerator
+    def test_stale_tracker_state_is_cleared_between_forwards(self):
+        """Test that tensors from unused graph branches don't accumulate across steps."""
+
+        class ModelWithUnusedBranch(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.used = nn.Linear(8, 8)
+                self.unused = nn.Linear(8, 8)
+
+            def forward(self, x):
+                return self.used(x).sum(), self.unused(x).sum()
+
+        model = ModelWithUnusedBranch().to(torch_device)
+        offload_ctx = OffloadActivations(use_pin_memory=False, use_streams=False, min_offload_size=1)
+        offload_ctx.update_model_params(model)
+        inp = torch.randn(4, 8, device=torch_device)
+
+        tracker_counts = []
+        for _ in range(3):
+            model.zero_grad(set_to_none=True)
+            with offload_ctx:
+                loss, _ = model(inp)
+            loss.backward()
+            tracker_counts.append(len(offload_ctx.tracker))
+
+        assert tracker_counts == [tracker_counts[0]] * len(tracker_counts)
 
     @require_torch_accelerator
     def test_parameter_filtering(self):

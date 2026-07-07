@@ -14,7 +14,7 @@ This post-training method was contributed by [Quentin Gallouédec](https://huggi
 
 ## Quick start
 
-This example demonstrates how to train a model using the GRPO method. We train a [Qwen 0.5B Instruct model](https://huggingface.co/Qwen/Qwen2-0.5B-Instruct) with the prompts from the [DeepMath-103K dataset](https://huggingface.co/datasets/trl-lib/DeepMath-103K). You can view the data in the dataset here:
+This example demonstrates how to train a model using the GRPO method. We train a [Qwen2.5 0.5B Instruct model](https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct) with the prompts from the [DeepMath-103K dataset](https://huggingface.co/datasets/trl-lib/DeepMath-103K). You can view the data in the dataset here:
 
 <iframe
   src="https://huggingface.co/datasets/trl-lib/DeepMath-103K/embed/viewer/default/train?row=0"
@@ -34,7 +34,7 @@ from trl.rewards import accuracy_reward
 dataset = load_dataset("trl-lib/DeepMath-103K", split="train")
 
 trainer = GRPOTrainer(
-    model="Qwen/Qwen2-0.5B-Instruct",
+    model="Qwen/Qwen2.5-0.5B-Instruct",
     reward_funcs=accuracy_reward,
     train_dataset=dataset,
 )
@@ -50,6 +50,8 @@ accelerate launch train_grpo.py
 Distributed across 8 GPUs, the training takes approximately 1 day.
 
 ![GRPO curves](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/grpo_curves.png)
+
+> **Note:** The reward curves above were generated with `Qwen/Qwen2-0.5B-Instruct`. Results with `Qwen/Qwen2.5-0.5B-Instruct` will be qualitatively similar.
 
 ## Looking deeper into the GRPO method
 
@@ -167,7 +169,7 @@ To use this formulation, set `loss_type="sapo"` in the [`GRPOConfig`].
 
 ## Logged metrics
 
-While training and evaluating, we record the following reward metrics:
+While training and evaluating, we record the following metrics:
 
 - `num_tokens`: The total number of tokens processed so far, including both prompts and completions. When using tools, only non-tool tokens are counted.
 - `step_time`: The average time (in seconds) taken per training step (including generation).
@@ -180,10 +182,12 @@ While training and evaluating, we record the following reward metrics:
 - `completions/clipped_ratio`: The ratio of truncated (clipped) completions.
 - `reward/{reward_func_name}/mean`: The average reward from a specific reward function.
 - `reward/{reward_func_name}/std`: The standard deviation of the reward from a specific reward function.
-- `reward`: The overall average reward after summing rewards across functions (unweighted).
-- `reward_std`: The standard deviation of summed rewards across functions (unweighted), computed over the full batch.
+- `reward`: The overall average reward after summing rewards across functions (weighted by `reward_weights`).
+- `reward_std`: The standard deviation of summed rewards across functions (weighted by `reward_weights`), computed over the full batch.
 - `frac_reward_zero_std`: The fraction of samples in the generation batch with a reward std of zero, implying there is little diversity for that prompt (all answers are correct or incorrect).
+- `policy_loss`: The policy gradient loss value (before any entropy bonus). Logged when `entropy_coef` is nonzero or `use_adaptive_entropy=True`.
 - `entropy`: Average entropy of token predictions across generated completions. (If `mask_truncated_completions=True`, masked sequences tokens are excluded.)
+- `entropy_coef`: The current entropy regularization coefficient. Logged when `entropy_coef` is nonzero or `use_adaptive_entropy=True`. Updated once per optimizer step when `use_adaptive_entropy=True`.
 - `kl`: The average KL divergence between the model and the reference model, calculated over generated completions. Logged only if `beta` is nonzero.
 - `clip_ratio/region_mean`: The ratio of token (or sequence, if `importance_sampling_level="sequence"`) probabilities where the GRPO objective is clipped to stay within the trust region:  \\( \text{clip}\left( r_{i,t}(\theta), 1 - \epsilon_\mathrm{low}, 1 + \epsilon_\mathrm{high} \right)\,, \quad r_{i,t}(\theta) = \frac{\pi_\theta(o_{i,t} \mid q, o_{i,< t})}{\pi_{\theta_{\text{old}}}(o_{i,t} \mid q, o_{i,< t})} \\). A higher value means more tokens are clipped, which constrains how much the policy $\pi_\theta$ can change.
 - `clip_ratio/low_mean`: The average ratio of token (or sequence, if `importance_sampling_level="sequence"`) probabilities that were clipped on the lower bound of the trust region:  \\(r_{i,t}(\theta) < 1 - \epsilon_\mathrm{low}\\).
@@ -262,7 +266,7 @@ For more information, see [Speeding up training with vLLM](speeding_up_training#
 
 
 #### Dealing with the Training-Inference Mismatch
-While vLLM greatly accelerates inference, it also decouples the inference engine from the training engine. In theory these engines are mathematically identical, in practice however they can produce different outputs due to precision effects and hardware specific optimizations. This divergence reflects the different optimization objectives of the two systems. This divergence reflects the distinct optimization goals of the two systems. Inference engines aim to maximize sampling throughput, typically measured in tokens per second, while maintaining acceptable sampling fidelity. Training frameworks instead focus on numerical stability and precision for gradient computation, often using higher precision formats like FP32 for master weights and optimizer states. These differing priorities and constraints introduce an inevitable, albeit subtle, mismatch between training and inference.
+While vLLM greatly accelerates inference, it also decouples the inference engine from the training engine. In theory these engines are mathematically identical, in practice however they can produce different outputs due to precision effects and hardware specific optimizations. This divergence reflects the different optimization objectives of the two systems. Inference engines aim to maximize sampling throughput, typically measured in tokens per second, while maintaining acceptable sampling fidelity. Training frameworks instead focus on numerical stability and precision for gradient computation, often using higher precision formats like FP32 for master weights and optimizer states. These differing priorities and constraints introduce an inevitable, albeit subtle, mismatch between training and inference.
 
 This mismatch leads to a biased gradient update which has been observed to destabilize training ([[1]](https://fengyao.notion.site/off-policy-rl)[[2]](https://yingru.notion.site/When-Speed-Kills-Stability-Demystifying-RL-Collapse-from-the-Training-Inference-Mismatch-271211a558b7808d8b12d403fd15edda)[[3]](https://thinkingmachines.ai/blog/defeating-nondeterminism-in-llm-inference/#true-on-policy-rl)[[4]](https://huggingface.co/papers/2510.26788)[[5]](https://huggingface.co/papers/2510.18855)). For simplicity, consider the REINFORCE policy gradient:
 
@@ -282,15 +286,43 @@ $$
 
 This turns an otherwise on policy RL problem into an off policy one.
 
-The standard way to correct for this distribution shift is **importance sampling (IS)**. We provide two IS variants: [Truncated Importance Sampling (TIS)](paper_index#truncated-importance-sampling) and [Masked Importance Sampling (MIS)](paper_index#masked-importance-sampling). Both variants can be applied either at the token level or at the sequence level.Let  \\( \rho \\) denote the importance weight, for example  \\( \rho_t \\) per token or  \\( \rho_{\text{seq}} \\) per sequence. Under TIS, ratios larger than `vllm_importance_sampling_cap` are clipped,
+The standard way to correct for this distribution shift is **importance sampling (IS)**. We provide two IS variants: [Truncated Importance Sampling (TIS)](paper_index#truncated-importance-sampling) and [Masked Importance Sampling (MIS)](paper_index#masked-importance-sampling). Both variants can be applied either at the token level or at the sequence level. Let  \\( \rho \\) denote the importance weight, for example  \\( \rho_t \\) per token or  \\( \rho_{\text{seq}} \\) per sequence. Under TIS, ratios outside of the range `[vllm_importance_sampling_clip_min, vllm_importance_sampling_clip_max]` are clipped,
 
 $$
-\rho \leftarrow \min(\rho, C).
+\rho \leftarrow \text{clip}(\rho, C_{\min}, C_{\max}).
 $$
 
-Under MIS, ratios larger than `vllm_importance_sampling_cap` are set to zero, so those samples do not contribute to the gradient. In other words, large ratio samples are downweighted under TIS and discarded under MIS. The configuration flag `vllm_importance_sampling_mode` chooses both the IS variant (masking or truncation) and the granularity (token level or sequence level).
+The original [TIS paper](https://huggingface.co/papers/1606.02647) proposed a single upper-bound clipping mechanism, i.e.,  \\( \min(\rho, C_{\max}) \\). The implementation in TRL generalized this by also introducing a lower bound, yielding the two-sided formulation shown above, inspired by the [IcePop](paper_index#masked-importance-sampling) method.  
+Note that in IcePop, the bounds are labelled as  \\( \alpha \\) and  \\( \beta \\) while in TRL we use  \\( C_{\min} \\) and  \\( C_{\max} \\).
+
+Under MIS, ratios outside of this range are set to zero, so those samples do not contribute to the gradient. In other words, outlier samples are downweighted under TIS and discarded under MIS. The configuration flag `vllm_importance_sampling_mode` chooses both the IS variant (masking or truncation) and the granularity (token level or sequence level).
 
 Importance sampling is the principled algorithmic response to the training–inference mismatch. However, there are also more direct approaches that attempt to reduce the mismatch between the two engines themselves. Most of these are engineering solutions. For example, [MiniMax M1 uses an FP32 language model head](https://huggingface.co/papers/2506.13585) in the inference engine. Thinking Machines has explored [deterministic inference kernels](https://thinkingmachines.ai/blog/defeating-nondeterminism-in-llm-inference/), although this comes with a significant efficiency cost. vLLM has shown [bitwise consistent policies](https://blog.vllm.ai/2025/11/10/bitwise-consistent-train-inference.html) by building on the batch invariant deterministic kernels from Thinking Machines, but as of November 2025 there remains a substantial throughput penalty relative to standard vLLM inference.
+
+### Speed up training with transformers continuous batching
+
+As an alternative to vLLM, you can use transformers' built-in continuous batching engine for faster generation. Continuous batching removes finished sequences from the batch immediately rather than waiting for the slowest one to finish. For tasks with variable completion lengths (e.g., math reasoning), this yields faster generation and lower VRAM usage than the default `generate()` at large batch sizes (N≥32).
+
+> [!TIP]
+> Continuous batching is a drop-in upgrade with no server setup or weight synchronization. It runs in-process and is well-suited for single-GPU training or memory-constrained environments. For maximum generation throughput at scale, use vLLM instead.
+
+```python
+from trl import GRPOConfig
+
+training_args = GRPOConfig(
+    ...,
+    use_transformers_continuous_batching=True,
+    transformers_continuous_batching_config={
+        "use_cuda_graph": False,
+        "max_memory_percent": 0.4,  # lower values leave more VRAM for the training backward pass
+    },
+)
+```
+
+> [!TIP]
+> TRL defaults `max_memory_percent` to `0.5` (instead of transformers' `0.9`) to leave enough VRAM for the training backward pass. Tune it down to `0.3`–`0.4` for large generation batches (N≥32) or if you see out-of-memory errors.
+
+For a full training example, see [`examples/scripts/grpo_continuous_batching.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/grpo_continuous_batching.py).
 
 ### GRPO at scale: train a 70B+ Model on multiple nodes
 
@@ -378,6 +410,7 @@ Reward functions can be either synchronous Python callables or asynchronous `asy
      - `trainer_state` ([`~transformers.TrainerState`]): The current state of the trainer. This can be used to implement dynamic reward functions, such as curriculum learning, where the reward is adjusted based on the training progress.
      - `log_extra`: a callable `log_extra(column: str, values: list)` to add extra columns to the completions table. See Example 6. In distributed training, it's important that all processes log the same set of keys.
      - `log_metric`: a callable `log_metric(name: str, value: float)` to log scalar metrics as plots alongside `kl`, `entropy`, etc. See Example 6. In distributed training, it's important that all processes log the same set of keys.
+     - `environments`: a list of environment instances, one per completion. Only present when `environment_factory` is provided. Use this to read state accumulated during the episode (e.g., `env.reward`).
      - All column names (but `prompt`) that the dataset may have. For example, if the dataset contains a column named `ground_truth`, the function will be called with `ground_truth` as a keyword argument.
 
      The easiest way to comply with this requirement is to use `**kwargs` in the function signature.
@@ -532,7 +565,7 @@ def coding_reward_func(prompts, completions, task, **kwargs):
 
 # Use both task-specific reward functions
 trainer = GRPOTrainer(
-    model="Qwen/Qwen2-0.5B-Instruct",
+    model="Qwen/Qwen2.5-0.5B-Instruct",
     reward_funcs=[math_reward_func, coding_reward_func],
     train_dataset=dataset,
 )
@@ -610,6 +643,46 @@ and the reward will be computed as the sum of the rewards from each function, or
 
 Note that [`GRPOTrainer`] supports multiple reward functions of different types. See the parameters documentation for more details.
 
+### Entropy regularization
+
+To encourage exploration and prevent the policy from collapsing to near-deterministic outputs, you can add an entropy bonus to the training objective. The entropy regularization augments the GRPO loss as follows:
+
+$$
+\mathcal{L}(\theta) = \mathcal{L}_{\text{GRPO}}(\theta) - \alpha \cdot \mathcal{H}(\pi_\theta),
+$$
+
+where \\(\mathcal{H}(\pi_\theta)\\) is the mean per-token entropy of the policy and \\(\alpha\\) is the entropy coefficient. The bonus is always the mean per-token entropy regardless of `loss_type`; it is not rescaled to match a loss type's policy normalization (e.g. Dr. GRPO's `batch_size * max_completion_length` denominator), so `entropy_coef` has the same meaning for every loss type.
+
+**Static entropy** — a fixed coefficient throughout training:
+
+```python
+from trl import GRPOConfig, GRPOTrainer
+
+training_args = GRPOConfig(entropy_coef=0.05, ...)
+```
+
+**Adaptive entropy** — the coefficient is updated each optimizer step based on a target entropy, as introduced in [Skywork-OR1](https://huggingface.co/papers/2505.22312). When the current entropy falls at or below `entropy_target`, the coefficient is incremented by `entropy_coef_delta`; otherwise it is decremented. The coefficient is only applied (i.e. non-zero) while entropy is at or below the target:
+
+```python
+training_args = GRPOConfig(
+    entropy_coef=0.01,          # initial coefficient
+    use_adaptive_entropy=True,
+    entropy_target=5.0,         # target mean per-token entropy (nats); tune for your model
+    entropy_coef_delta=0.005,   # step size per optimizer step
+    entropy_coef_min=0.0,
+    entropy_coef_max=1.0,
+    ...
+)
+```
+
+<Tip>
+
+Typical language models have per-token entropies of 2–10 nats, so the default `entropy_target=0.2` almost never triggers regularization — the bonus only engages once entropy is at or below the target, i.e. near-complete collapse. Set it to a value meaningful for your model, e.g. close to the entropy you observe early in training (logged as the `entropy` metric). When using `top_entropy_quantile < 1.0`, `entropy_target` applies to the high-entropy token subset — that subset's entropy will be higher than the logged full-token `entropy`, so calibrate accordingly.
+
+</Tip>
+
+When `use_adaptive_entropy=True`, the current entropy coefficient `entropy_coef` is saved alongside each checkpoint and restored on resume, so training is fully resumable.
+
 ### Rapid Experimentation for GRPO
 
 RapidFire AI is an open-source experimentation engine that sits on top of TRL and lets you launch multiple GRPO configurations at once, even on a single GPU. Instead of trying configurations sequentially, RapidFire lets you **see all their learning curves earlier, stop underperforming runs, and clone promising ones with new settings in flight** without restarting. For more information, see [RapidFire AI Integration](rapidfire_integration).
@@ -630,6 +703,9 @@ trainer = GRPOTrainer(
 
 Each tool must be a standard Python function with **type-hinted arguments and return types**, along with a **Google-style docstring** describing its purpose, arguments, and return value.
 For more details, see the [Passing tools guide](https://huggingface.co/docs/transformers/en/chat_extras#passing-tools).
+
+> [!TIP]
+> The GRPO tool call loop requires the chat template to be *prefix-preserving* (appending a tool message must not change how earlier messages are rendered). For known model families (e.g. Qwen3, DeepSeek-V3), TRL automatically swaps in a patched training template when tools are enabled. See [Chat Templates](chat_templates#training-templates) for the full list.
 
 Example:
 
@@ -668,7 +744,15 @@ trainer = GRPOTrainer(
 )
 ```
 
-You can also provide tools through `environment_factory`. In this mode, [`GRPOTrainer`] creates one environment instance per rollout and exposes the environment's public methods as tools.
+You can also provide tools through `environment_factory`. In this mode, [`GRPOTrainer`] creates one environment instance per rollout and exposes the environment's public methods as tools. See the [OpenEnv guide](openenv) for the `environment_factory` contract.
+
+All environments plug into the same `environment_factory` slot, so they are interchangeable at the TRL level — pick the one whose ecosystem fits your task:
+
+| Integration | What it is | Use it when |
+|---|---|---|
+| [OpenEnv](openenv) | The open environment standard (Gymnasium-style API, served over WebSocket or containerised execution), backed by Hugging Face and the community. | You're using a ready-made OpenEnv environment from the Hub, or defining your own against the open standard (e.g. Wordle, Sudoku, Catch). |
+| [OpenReward](openreward) | An integration with ORS-speaking environments (the [openreward.ai](https://openreward.ai) catalog or your own ORS server); tasks **and** rewards are served over HTTP. | You want to train against an ORS environment: the catalog (e.g. `Eigent/SETA`), one you self-host on your own infra, or a local server you're developing. |
+| [Harbor](harbor) | An integration with Harbor task suites: each task is an instruction, a real sandbox image (`docker`, `e2b`, ...), and an in-sandbox verifier. | You want to train against a Harbor task suite: a tree of tasks, each a self-contained sandbox plus verifier (e.g. a data-analysis agent that explores files in a sandbox and writes an answer a grader checks). |
 
 > [!IMPORTANT]
 > `environment_factory` requires `transformers>=5.2.0`.
@@ -715,12 +799,40 @@ trainer.train()
 
 `reset` can return either `None` or a string. In GRPO, when it returns a string, that string is appended to the last user message before generation.
 
+### Multimodal Tool Responses
+
+Tools can return images alongside text by returning a list of content blocks. This is useful for VLM agent training where the tool provides visual feedback (e.g., screenshots, plots, camera captures).
+
+```python
+from PIL import Image
+
+def take_screenshot() -> list:
+    """
+    Takes a screenshot of the current screen.
+
+    Returns:
+        The screenshot image with a description.
+    """
+    img = Image.open("screenshot.png")
+    return [{"type": "image", "image": img}, {"type": "text", "text": "Here is the screenshot."}]
+```
+
+The returned images are automatically injected into the conversation and passed to the VLM for subsequent generation turns.
+
 ### Supported Models
 
 Tested with:
 
+- [**Gemma4**](https://huggingface.co/collections/google/gemma-4) — e.g., `google/gemma-4-E2B-it`
+- **GLM-4-MoE** ([4.5](https://huggingface.co/collections/zai-org/glm-45), [4.6](https://huggingface.co/collections/zai-org/glm-46) or [4.7](https://huggingface.co/collections/zai-org/glm-47)) — e.g., `zai-org/GLM-4.7`
+- [**GPT-OSS**](https://huggingface.co/collections/openai/gpt-oss) — e.g., `openai/gpt-oss-20b`
+- [**Llama 3.1**](https://huggingface.co/collections/meta-llama/llama-31) — e.g., `meta-llama/Llama-3.1-8B-Instruct`
+- [**Llama 3.2**](https://huggingface.co/collections/meta-llama/llama-32) — e.g., `meta-llama/Llama-3.2-3B-Instruct`
+- [**Qwen2.5**](https://huggingface.co/collections/Qwen/qwen25) — e.g., `Qwen/Qwen2.5-0.5B-Instruct`
 - [**Qwen3**](https://huggingface.co/collections/Qwen/qwen3) — e.g., `Qwen/Qwen3-0.6B`
+- [**Qwen3-VL**](https://huggingface.co/collections/Qwen/qwen3-vl) — e.g., `Qwen/Qwen3-VL-2B-Instruct`
 - [**Qwen3.5**](https://huggingface.co/collections/Qwen/qwen35) — e.g., `Qwen/Qwen3.5-2B`
+- [**Qwen3.6**](https://huggingface.co/collections/Qwen/qwen36) — e.g., `Qwen/Qwen3.6-35B-A3B`
 
 > [!TIP]
 > Compatibility with all LLMs is not guaranteed. If you believe a model should be supported, feel free to open an issue on GitHub — or better yet, submit a pull request with the required changes.

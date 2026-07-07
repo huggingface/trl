@@ -42,9 +42,6 @@ class BCOConfig(_BaseConfig):
         beta (`float`, *optional*, defaults to `0.1`):
             Parameter controlling the deviation from the reference model. Higher β means less deviation from the
             reference model.
-        truncation_mode (`str`, *optional*, defaults to `"keep_end"`):
-            Truncation mode to use when the prompt is too long. Possible values are `"keep_end"` or `"keep_start"`.
-            This argument is required if you want to use the default data collator.
         disable_dropout (`bool`, *optional*, defaults to `True`):
             Whether to disable dropout in the model and reference model.
         generate_during_eval (`bool`, *optional*, defaults to `False`):
@@ -59,6 +56,9 @@ class BCOConfig(_BaseConfig):
         model_init_kwargs (`dict[str, Any]`, *optional*):
             Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the model and
             reference model from strings.
+        trust_remote_code (`bool`, *optional*, defaults to `False`):
+            Whether to allow loading models that ship custom Python code from the Hub. Forwarded to
+            [`~transformers.AutoModelForCausalLM.from_pretrained`] for both the model and reference model.
         dataset_num_proc (`int`, *optional*):
             Number of processes to use for processing the dataset.
         prompt_sample_size (`int`, *optional*, defaults to `1024`):
@@ -105,14 +105,6 @@ class BCOConfig(_BaseConfig):
             "Higher β means less deviation from the reference model."
         },
     )
-    truncation_mode: str = field(
-        default="keep_end",
-        metadata={
-            "help": "Truncation mode to use when the prompt is too long. Possible values are "
-            "`keep_end` or `keep_start`. This argument is required if you want to use the "
-            "default data collator."
-        },
-    )
     disable_dropout: bool = field(
         default=True,
         metadata={"help": "Whether to disable dropout in the model and reference model."},
@@ -145,6 +137,13 @@ class BCOConfig(_BaseConfig):
         metadata={
             "help": "Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the "
             "model from a string."
+        },
+    )
+    trust_remote_code: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to allow loading models that ship custom Python code from the Hub. Forwarded to "
+            "`AutoModelForCausalLM.from_pretrained` for both the model and reference model."
         },
     )
     dataset_num_proc: int | None = field(

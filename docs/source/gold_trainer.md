@@ -60,7 +60,7 @@ A more explicit setup might look like this when you need to customise model load
 
 ```python
 from datasets import load_dataset
-from trl import GOLDConfig, GOLDTrainer
+from trl.experimental.gold import GOLDConfig, GOLDTrainer
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 student_name = "meta-llama/Llama-3.2-1B-Instruct"
@@ -105,7 +105,7 @@ trainer.train()
 
 ### Expected dataset type
 
-GOLD requires a [conversational](dataset_formats#conversational) [language modeling](dataset_formats#language_modeling) dataset, e.g.:
+GOLD requires a [conversational](dataset_formats#conversational) [language modeling](dataset_formats#language-modeling) dataset, e.g.:
 
 ```python
 {"messages": [{"role": "user", "content": "What color is the sky?"},
@@ -159,6 +159,89 @@ P_merged("cool") = 0.1 × 0.9 = 0.09
 ```
 
 The merged distribution is unnormalized (sums to 0.81), but this is intentional and correct for ULD loss computation, which uses sorting and L1 distance.
+
+## Example script
+
+Use [`examples/scripts/gold.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/gold.py) to launch GOLD training from the command line. The script supports full training and LoRA via the standard `ModelConfig` flags.
+
+```bash
+python examples/scripts/gold.py \
+    --model_name_or_path meta-llama/Llama-3.2-1B-Instruct \
+    --teacher_model_name_or_path Qwen/Qwen2-1.5B-Instruct \
+    --dataset_name trl-lib/chatbot_arena_completions \
+    --learning_rate 2e-5 \
+    --per_device_train_batch_size 4 \
+    --gradient_accumulation_steps 8 \
+    --output_dir gold-model \
+    --num_train_epochs 1 \
+    --push_to_hub
+```
+
+## Training Vision Language Models
+
+[`GOLDTrainer`] supports VLM-to-VLM distillation. Both student and teacher must be vision-language models. To train a VLM, provide a dataset with either an `image` column (single image per sample) or an `images` column (list of images per sample). For more information on the expected dataset structure, see the [Dataset Format — Vision datasets](dataset_formats#vision-datasets) section.
+
+When the student and teacher share the same architecture and tokenizer (e.g. Qwen3-VL-8B to Qwen3-VL-2B), the standard generalized JSD loss applies directly. When they have different `model_type` (e.g. Qwen3-VL to LFM2.5-VL), set `use_uld_loss=True` to enable cross-tokenizer alignment via Universal Logit Distillation. Images are processed separately through each model's processor.
+
+```python
+from datasets import load_dataset
+import torch
+from transformers import AutoModelForImageTextToText, AutoProcessor
+from trl.experimental.gold import GOLDConfig, GOLDTrainer
+
+student_name = "Qwen/Qwen3-VL-2B-Instruct"
+teacher_name = "Qwen/Qwen3-VL-8B-Instruct"
+
+processor = AutoProcessor.from_pretrained(student_name, padding_side="left")
+student_model = AutoModelForImageTextToText.from_pretrained(student_name, dtype=torch.bfloat16)
+teacher_model = AutoModelForImageTextToText.from_pretrained(teacher_name, dtype=torch.bfloat16)
+
+train_dataset = load_dataset("trl-lib/llava-instruct-mix", split="train")
+
+trainer = GOLDTrainer(
+    model=student_model,
+    teacher_model=teacher_model,
+    args=GOLDConfig(
+        output_dir="gold-vlm-model",
+        max_length=None,
+        teacher_model_name_or_path=teacher_name,
+        use_uld_loss=False,
+    ),
+    train_dataset=train_dataset,
+    processing_class=processor,
+)
+trainer.train()
+```
+
+For cross-family distillation, set `use_uld_loss=True` and `teacher_tokenizer_name_or_path` to the teacher model name.
+
+Use [`trl/experimental/gold/gold_vlm.py`](https://github.com/huggingface/trl/blob/main/trl/experimental/gold/gold_vlm.py) to launch GOLD VLM training from the command line:
+
+```bash
+# Same-family distillation (JSD loss, vLLM enabled)
+accelerate launch trl/experimental/gold/gold_vlm.py \
+    --student_model_name Qwen/Qwen3-VL-2B-Instruct \
+    --teacher_model_name Qwen/Qwen3-VL-8B-Instruct
+
+# Cross-family distillation (ULD loss, local generation)
+accelerate launch trl/experimental/gold/gold_vlm.py \
+    --student_model_name LiquidAI/LFM2.5-VL-1.6B \
+    --teacher_model_name Qwen/Qwen3-VL-8B-Instruct \
+    --use_uld_loss \
+    --no-use_vllm
+```
+
+> [!TIP]
+> For VLMs, `truncation_mode='keep_end'` is not supported because image tokens reside in the prompt portion of the sequence and may be silently dropped. Use `truncation_mode='keep_start'` (the default) or set `max_length=None` in the [`GOLDConfig`]. This allows the model to process the full sequence length without truncating image tokens.
+>
+> ```python
+> GOLDConfig(max_length=None, ...)
+> ```
+>
+> Only use `max_length` when you've verified that truncation won't remove image tokens for the entire dataset.
+
+> [!NOTE]
+> Cross-architecture VLM distillation requires `use_uld_loss=True`. The trainer will raise an error if you attempt cross-architecture distillation without ULD loss.
 
 ## GOLDTrainer
 

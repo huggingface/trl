@@ -22,20 +22,22 @@
 # ///
 
 import argparse
-import os
-
-
-# Enable logging in a Hugging Face Space
-os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 
 def main(script_args, training_args, model_args, dataset_args):
-    from accelerate import logging
+    from accelerate.logging import get_logger
     from datasets import load_dataset
 
-    from trl import RewardTrainer, get_dataset, get_peft_config
+    from trl import RewardTrainer, get_dataset, get_peft_config, get_quantization_config
 
-    logger = logging.get_logger(__name__)
+    logger = get_logger(__name__)
+
+    training_args.model_init_kwargs = dict(
+        revision=model_args.model_revision,
+        trust_remote_code=training_args.trust_remote_code,
+        attn_implementation=model_args.attn_implementation,
+        dtype=model_args.dtype,
+    )
 
     # Load the dataset
     if dataset_args.datasets and script_args.dataset_name:
@@ -53,12 +55,13 @@ def main(script_args, training_args, model_args, dataset_args):
     else:
         raise ValueError("Either `datasets` or `dataset_name` must be provided.")
 
-    # Initialize the RewardTrainer
+    # Initialize the reward trainer
     trainer = RewardTrainer(
         model=model_args.model_name_or_path,
         args=training_args,
         train_dataset=dataset[script_args.dataset_train_split],
         eval_dataset=dataset[script_args.dataset_test_split] if training_args.eval_strategy != "no" else None,
+        quantization_config=get_quantization_config(model_args),
         peft_config=get_peft_config(model_args),
     )
 
