@@ -608,18 +608,23 @@ class AsyncGRPOTrainer(_BaseTrainer):
             weight_shapes.append(list(param.shape))
 
         # The weight transport lives on every rank: rank 0 drives it, the others walk the iterator during sync so the
-        # FSDP2 full_tensor() collectives line up. An injected stub worker (tests, no real vLLM) leaves it unset.
-        self.weight_transfer = make_weight_transfer(
-            self.args.weight_sync_backend,
-            vllm_server_url=self.args.vllm_server_base_url,
-            server_timeout=self.args.vllm_server_timeout,
-            weight_update_info={
-                "names": weight_names,
-                "dtype_names": weight_dtype_names,
-                "shapes": weight_shapes,
-            },
-            bucket_id=self.args.weight_sync_bucket_id,
-            encoding=self.args.weight_sync_encoding,
+        # FSDP2 full_tensor() collectives line up. An injected stub worker (tests, no real vLLM) leaves it unset —
+        # building the transport requires a vLLM install, so skip it entirely on that path.
+        self.weight_transfer = (
+            None
+            if rollout_worker is not None
+            else make_weight_transfer(
+                self.args.weight_sync_backend,
+                vllm_server_url=self.args.vllm_server_base_url,
+                server_timeout=self.args.vllm_server_timeout,
+                weight_update_info={
+                    "names": weight_names,
+                    "dtype_names": weight_dtype_names,
+                    "shapes": weight_shapes,
+                },
+                bucket_id=self.args.weight_sync_bucket_id,
+                encoding=self.args.weight_sync_encoding,
+            )
         )
 
         # Create the rollout worker and its queue on rank 0.
@@ -628,10 +633,9 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 raise ValueError("train_dataset is required for AsyncGRPOTrainer")
 
             if rollout_worker is not None:
-                # Injected worker (e.g. a stub in tests). The queue is owned by the worker; with no real vLLM to
-                # sync to, drop the transport so weight sync is a no-op.
+                # Injected worker (e.g. a stub in tests). The queue is owned by the worker; the transport was left
+                # unset above so weight sync is a no-op.
                 self.rollout_worker = rollout_worker
-                self.weight_transfer = None
             else:
                 self.rollout_worker = AsyncRolloutWorker(
                     model_name=model_name,
@@ -966,6 +970,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
         optimizer is AdamW (raises otherwise, pointing at weight_sync_mode='full'). No-op unless sparse sync."""
         if (
             self.args.weight_sync_mode == "sparse"
+            and self.weight_transfer is not None  # no transport (injected stub worker) -> nothing to detect for
             and self._change_detector is None
             and getattr(self, "optimizer", None)
         ):
