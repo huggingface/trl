@@ -783,7 +783,7 @@ def test_chatml_collator_truncates_keeping_completion_end(llama_tokenizer):
         }
     ]
 
-    max_length = 256
+    max_length = 512  # large enough to keep prompt tokens after the completion
     collator = DataCollatorForChatML(tokenizer=llama_tokenizer, max_length=max_length)
     batch = collator(examples)
 
