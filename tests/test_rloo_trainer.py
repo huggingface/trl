@@ -17,7 +17,7 @@ from unittest.mock import patch
 import pytest
 import torch
 import transformers
-from datasets import load_dataset
+from datasets import DatasetDict, IterableDatasetDict, load_dataset
 from packaging.version import Version
 from transformers import (
     AutoModelForCausalLM,
@@ -201,6 +201,55 @@ class TestRLOOTrainer(TrlTestCase):
         )
 
         trainer.train()
+
+    def test_init_with_eval_dataset_dict(self):
+        # `eval_dataset` may be a `DatasetDict` (e.g. the raw output of `load_dataset` without a `split`), not only a
+        # plain `dict`.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
+        eval_dataset = DatasetDict({"data1": dataset["test"], "data2": dataset["test"]})
+
+        training_args = RLOOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            per_device_eval_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            report_to="none",
+        )
+        trainer = RLOOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset["train"],
+            eval_dataset=eval_dataset,
+        )
+
+        assert set(trainer.eval_dataset.keys()) == {"data1", "data2"}
+
+    def test_init_with_iterable_dataset_dict_raises(self):
+        # Streaming datasets are not yet supported in RLOO, including when nested in an `IterableDatasetDict` eval set.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
+        iterable_dataset = load_dataset(
+            "trl-internal-testing/zen", "standard_prompt_only", split="train", streaming=True
+        )
+        eval_dataset = IterableDatasetDict({"data1": iterable_dataset, "data2": iterable_dataset})
+
+        training_args = RLOOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            per_device_eval_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            report_to="none",
+        )
+        with pytest.raises(NotImplementedError, match="Iterable datasets are not yet supported"):
+            RLOOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset["train"],
+                eval_dataset=eval_dataset,
+            )
 
     def test_train_multiple_iterations(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
