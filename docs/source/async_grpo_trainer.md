@@ -86,6 +86,13 @@ After each weight sync the trainer pushes the updated policy to the vLLM server.
       against the live weights, so **no pre-step snapshot is kept**. It requires a `torch.optim.AdamW` optimizer (the
       trainer raises otherwise) and a vLLM with sparse weight transfer ([vllm-project/vllm#40096](https://github.com/vllm-project/vllm/pull/40096)), served with `--model-impl transformers` and `VLLM_USE_V2_MODEL_RUNNER=0`. A full **anchor** is sent every `weight_sync_anchor_interval` syncs to bound drift.
     - `"full"` broadcasts the entire policy every sync. Use it when the optimizer is not AdamW. It is always sent over NCCL.
+
+    > [!WARNING]
+    > `"sparse"` is **not supported for MoE models** (Mixture-of-Experts). vLLM's transformers backend stores the
+    > experts as a fused buffer (`w13_weight`/`w2_weight`), so the in-place sparse apply cannot address them by their
+    > Hugging Face parameter names. The trainer raises at initialization for MoE models under `"sparse"` — use
+    > `weight_sync_mode="full"` for MoE (full sync loads the experts via `load_weights`, which handles the fused
+    > mapping, including under expert parallelism).
 - **`weight_sync_backend`**: the transport for sparse patches: `"nccl"` (default) or `"bucket"`.
 
 | backend    | data plane                                                                    | when to use                                                                                                    |

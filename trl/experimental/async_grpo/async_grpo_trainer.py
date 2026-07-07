@@ -627,6 +627,17 @@ class AsyncGRPOTrainer(_BaseTrainer):
             )
         )
 
+        if (
+            self.args.weight_sync_mode == "sparse"
+            and self.weight_transfer is not None
+            and any(".experts." in name for name in weight_names)
+        ):
+            raise ValueError(
+                "weight_sync_mode='sparse' is not supported for MoE models: vLLM's transformers backend stores the "
+                "experts as a fused buffer, so the sparse in-place apply cannot address them by their Hugging Face "
+                "parameter names. Use weight_sync_mode='full'."
+            )
+
         # Create the rollout worker and its queue on rank 0.
         if self.accelerator.is_main_process:
             if self.train_dataset is None:

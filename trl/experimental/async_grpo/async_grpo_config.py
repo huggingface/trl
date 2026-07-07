@@ -104,8 +104,10 @@ class AsyncGRPOConfig(_BaseConfig):
         weight_sync_mode (`str`, *optional*, defaults to `"sparse"`):
             How to sync the policy to vLLM. `"sparse"` sends only the changed bf16 weights (the changed set is
             recovered by inverting the AdamW step from the resident optimizer moments — no snapshot kept); requires a
-            `torch.optim.AdamW` optimizer and a vLLM with sparse weight transfer. `"full"` broadcasts the entire policy
-            over NCCL every sync (use this when the optimizer is not AdamW).
+            `torch.optim.AdamW` optimizer and a vLLM with sparse weight transfer. Not supported for MoE models (vLLM's
+            transformers backend stores experts fused, so the in-place sparse apply cannot address them by name); use
+            `"full"` for MoE. `"full"` broadcasts the entire policy over NCCL every sync (use this when the optimizer is
+            not AdamW, or for MoE models).
         weight_sync_backend (`str`, *optional*, defaults to `"nccl"`):
             Transport for the sparse patches: `"nccl"` (broadcast in place over the NCCL group) or `"bucket"` (upload
             to an HF Storage Bucket and apply from there). The `"full"` mode is always NCCL.
@@ -286,8 +288,10 @@ class AsyncGRPOConfig(_BaseConfig):
             "help": "How to sync the policy to vLLM. `'sparse'` (default) sends only the changed bf16 weights (the "
             "changed set is recovered by inverting the AdamW step from the resident optimizer moments); "
             "requires a `torch.optim.AdamW` optimizer and a vLLM with sparse weight transfer, served with "
-            "`--model-impl transformers` and `VLLM_USE_V2_MODEL_RUNNER=0`. `'full'` broadcasts the entire policy over "
-            "NCCL every sync (use this when the optimizer is not AdamW).",
+            "`--model-impl transformers` and `VLLM_USE_V2_MODEL_RUNNER=0`. Not supported for MoE models (experts are "
+            "stored fused on the vLLM side, so the in-place sparse apply cannot address them by name) -- use 'full'. "
+            "`'full'` broadcasts the entire policy over NCCL every sync (use this when the optimizer is not AdamW, or "
+            "for MoE models).",
             "choices": ["sparse", "full"],
         },
     )
