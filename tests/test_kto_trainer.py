@@ -1041,15 +1041,18 @@ class TestKTOTrainer(TrlTestCase):
         # `eval_dataset` may be a `DatasetDict` (map-style) or `IterableDatasetDict` (streaming) — e.g. the raw output
         # of `load_dataset` without a `split` — not only a plain `dict`. Each split is prepared independently at init.
         # `apo_zero_unpaired` avoids KTO's KL term, which is incompatible with streaming datasets.
-        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", streaming=streaming)
+        train_dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
+        eval_split = load_dataset(
+            "trl-internal-testing/zen", "standard_unpaired_preference", split="test", streaming=streaming
+        )
         dataset_dict_cls = IterableDatasetDict if streaming else DatasetDict
-        eval_dataset = dataset_dict_cls({"data1": dataset["test"], "data2": dataset["test"]})
+        eval_dataset = dataset_dict_cls({"data1": eval_split, "data2": eval_split})
 
         training_args = KTOConfig(output_dir=self.tmp_dir, loss_type="apo_zero_unpaired", report_to="none")
         trainer = KTOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             args=training_args,
-            train_dataset=dataset["train"],
+            train_dataset=train_dataset,
             eval_dataset=eval_dataset,
         )
 

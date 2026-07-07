@@ -1636,15 +1636,18 @@ class TestSFTTrainer(TrlTestCase):
     def test_init_with_eval_dataset_dict(self, streaming):
         # `eval_dataset` may be a `DatasetDict` (map-style) or `IterableDatasetDict` (streaming) — e.g. the raw output
         # of `load_dataset` without a `split` — not only a plain `dict`. Each split is prepared independently at init.
-        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", streaming=streaming)
+        train_dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        eval_split = load_dataset(
+            "trl-internal-testing/zen", "standard_language_modeling", split="test", streaming=streaming
+        )
         dataset_dict_cls = IterableDatasetDict if streaming else DatasetDict
-        eval_dataset = dataset_dict_cls({"data1": dataset["test"], "data2": dataset["test"]})
+        eval_dataset = dataset_dict_cls({"data1": eval_split, "data2": eval_split})
 
         training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
         trainer = SFTTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             args=training_args,
-            train_dataset=dataset["train"],
+            train_dataset=train_dataset,
             eval_dataset=eval_dataset,
         )
 
