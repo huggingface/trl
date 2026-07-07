@@ -636,6 +636,7 @@ class RewardTrainer(_BaseTrainer):
                 def tokenize_fn(example, processing_class):
                     tools = example.get("tools")
                     tools = json.loads(tools) if isinstance(tools, str) else tools
+                    apply_chat_template_kwargs = {"tools": tools, **example.get("chat_template_kwargs", {})}
                     if "prompt" in example:  # explicit prompt case
                         example["chosen"] = example["prompt"] + example["chosen"]
                         example["rejected"] = example["prompt"] + example["rejected"]
@@ -644,14 +645,12 @@ class RewardTrainer(_BaseTrainer):
                         chosen_ids = _tokenize(
                             processing_class,
                             example["chosen"],
-                            tools=tools,
-                            **example.get("chat_template_kwargs", {}),
+                            **apply_chat_template_kwargs,
                         )["input_ids"]
                         rejected_ids = _tokenize(
                             processing_class,
                             example["rejected"],
-                            tools=tools,
-                            **example.get("chat_template_kwargs", {}),
+                            **apply_chat_template_kwargs,
                         )["input_ids"]
                         output = {"chosen_ids": chosen_ids, "rejected_ids": rejected_ids}
                     else:

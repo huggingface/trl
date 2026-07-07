@@ -1054,20 +1054,18 @@ class KTOTrainer(_BaseTrainer):
             def tokenize_fn(example, processing_class):
                 tools = example.get("tools")
                 tools = json.loads(tools) if isinstance(tools, str) else tools
+                apply_chat_template_kwargs = {"tools": tools, **example.get("chat_template_kwargs", {})}
                 if is_conversational(example):
-                    chat_template_kwargs = example.get("chat_template_kwargs", {})
                     prompt_ids = _tokenize(
                         processing_class,
                         example["prompt"],
-                        tools=tools,
                         add_generation_prompt=True,
-                        **chat_template_kwargs,
+                        **apply_chat_template_kwargs,
                     )["input_ids"]
                     prompt_completion_ids = _tokenize(
                         processing_class,
                         example["prompt"] + example["completion"],
-                        tools=tools,
-                        **chat_template_kwargs,
+                        **apply_chat_template_kwargs,
                     )["input_ids"]
                 else:
                     prompt_ids = _tokenize(processing_class, example["prompt"])["input_ids"]

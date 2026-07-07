@@ -992,26 +992,24 @@ class DPOTrainer(_BaseTrainer):
             def tokenize_fn(example, processing_class):
                 tools = example.get("tools")
                 tools = json.loads(tools) if isinstance(tools, str) else tools
+                apply_chat_template_kwargs = {"tools": tools, **example.get("chat_template_kwargs", {})}
                 output = {}
                 if is_conversational(example):
                     prompt_ids = _tokenize(
                         processing_class,
                         example["prompt"],
-                        tools=tools,
                         add_generation_prompt=True,
-                        **example.get("chat_template_kwargs", {}),
+                        **apply_chat_template_kwargs,
                     )["input_ids"]
                     prompt_chosen_ids = _tokenize(
                         processing_class,
                         example["prompt"] + example["chosen"],
-                        tools=tools,
-                        **example.get("chat_template_kwargs", {}),
+                        **apply_chat_template_kwargs,
                     )["input_ids"]
                     prompt_rejected_ids = _tokenize(
                         processing_class,
                         example["prompt"] + example["rejected"],
-                        tools=tools,
-                        **example.get("chat_template_kwargs", {}),
+                        **apply_chat_template_kwargs,
                     )["input_ids"]
                 else:
                     prompt_ids = _tokenize(processing_class, example["prompt"])["input_ids"]

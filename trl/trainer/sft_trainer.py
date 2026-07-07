@@ -1449,6 +1449,7 @@ class SFTTrainer(_BaseTrainer):
                 def tokenize_fn(example, processing_class, dataset_text_field, assistant_only_loss, chat_template):
                     tools = example.get("tools")
                     tools = json.loads(tools) if isinstance(tools, str) else tools
+                    apply_chat_template_kwargs = {"tools": tools, **example.get("chat_template_kwargs", {})}
                     if "prompt" in example:  # prompt-completion case
                         output = {}
                         if is_conversational(example):
@@ -1456,17 +1457,15 @@ class SFTTrainer(_BaseTrainer):
                                 processing_class,
                                 example["prompt"],
                                 chat_template=chat_template,
-                                tools=tools,
                                 add_generation_prompt=True,
-                                **example.get("chat_template_kwargs", {}),
+                                **apply_chat_template_kwargs,
                             )["input_ids"]
                             prompt_completion_processed = _tokenize(
                                 processing_class,
                                 example["prompt"] + example["completion"],
                                 chat_template=chat_template,
-                                tools=tools,
                                 return_assistant_tokens_mask=assistant_only_loss,
-                                **example.get("chat_template_kwargs", {}),
+                                **apply_chat_template_kwargs,
                             )
                             prompt_completion_ids = prompt_completion_processed["input_ids"]
                             if "assistant_masks" in prompt_completion_processed:
@@ -1500,9 +1499,8 @@ class SFTTrainer(_BaseTrainer):
                                 processing_class,
                                 example["messages"],
                                 chat_template=chat_template,
-                                tools=tools,
                                 return_assistant_tokens_mask=assistant_only_loss,
-                                **example.get("chat_template_kwargs", {}),
+                                **apply_chat_template_kwargs,
                             )
                             output = {k: processed[k] for k in ("input_ids", "assistant_masks") if k in processed}
                         else:

@@ -400,7 +400,7 @@ def _tokenize(
     processing_class: PreTrainedTokenizerBase | ProcessorMixin,
     input: str | list,
     chat_template: str | None = None,
-    **kwargs,
+    **apply_chat_template_kwargs,
 ) -> dict[str, list]:
     """
     Tokenize a single example for dataset preprocessing.
@@ -416,7 +416,7 @@ def _tokenize(
             A string for non-conversational input, or a list of message dicts for conversational input.
         chat_template (`str`, *optional*):
             Chat template forwarded to `apply_chat_template` for conversational input.
-        **kwargs:
+        **apply_chat_template_kwargs:
             Forwarded to `apply_chat_template` (e.g. `add_generation_prompt`, `return_assistant_tokens_mask`, `tools`).
 
     Returns:
@@ -427,7 +427,7 @@ def _tokenize(
         if is_vlm:
             input = prepare_multimodal_messages(input)
         result = processing_class.apply_chat_template(
-            input, tokenize=True, return_dict=True, chat_template=chat_template, **kwargs
+            input, tokenize=True, return_dict=True, chat_template=chat_template, **apply_chat_template_kwargs
         )
     else:  # non-conversational: plain text string
         result = processing_class(text=input)
