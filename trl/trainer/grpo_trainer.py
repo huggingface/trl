@@ -37,7 +37,7 @@ import torch.utils.data
 import transformers
 from accelerate.logging import get_logger
 from accelerate.utils import gather, gather_object, is_peft_model, set_seed
-from datasets import Dataset, IterableDataset
+from datasets import Dataset, DatasetDict, IterableDataset, IterableDatasetDict
 from huggingface_hub import CommitScheduler, DatasetCard, DatasetCardData, create_repo
 from packaging.version import Version
 from torch import nn
@@ -209,7 +209,7 @@ class GRPOTrainer(_BaseTrainer):
             - [Standard](dataset_formats#standard): Each sample contains plain text.
             - [Conversational](dataset_formats#conversational): Each sample contains structured messages (e.g., role
               and content).
-        eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`] or `dict[str, Dataset | IterableDataset]`):
+        eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`], [`~datasets.DatasetDict`], [`~datasets.IterableDatasetDict`] or `dict[str, Dataset | IterableDataset]`):
             Dataset to use for evaluation. It must meet the same requirements as `train_dataset`.
         processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.ProcessorMixin`], *optional*):
             Processing class used to process the data. The padding side must be set to "left". If `None`, the
@@ -287,7 +287,12 @@ class GRPOTrainer(_BaseTrainer):
         reward_funcs: RewardFunc | list[RewardFunc],
         args: GRPOConfig | None = None,
         train_dataset: Dataset | IterableDataset | None = None,
-        eval_dataset: Dataset | IterableDataset | dict[str, Dataset | IterableDataset] | None = None,
+        eval_dataset: Dataset
+        | IterableDataset
+        | DatasetDict
+        | IterableDatasetDict
+        | dict[str, Dataset | IterableDataset]
+        | None = None,
         processing_class: PreTrainedTokenizerBase | ProcessorMixin | None = None,
         reward_processing_classes: PreTrainedTokenizerBase | list[PreTrainedTokenizerBase] | None = None,
         callbacks: list[TrainerCallback] | None = None,
