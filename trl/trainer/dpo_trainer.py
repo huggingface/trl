@@ -1036,8 +1036,8 @@ class DPOTrainer(_BaseTrainer):
             )
 
             # Drop examples whose prompt alone fills `max_length`: with `keep_start` truncation the collator would
-            # remove every completion token from both chosen and rejected, leaving no learning signal. `keep_end`
-            # keeps the completion end, so nothing is dropped there.
+            # remove every completion token, leaving no learning signal. `keep_end` keeps the completion end, so
+            # nothing is dropped there.
             if args.max_length is not None and args.truncation_mode == "keep_start":
                 if isinstance(dataset, Dataset):  # `IterableDataset.filter` does not support `desc`
                     map_kwargs["desc"] = f"Dropping examples with fully truncated completion from {dataset_name} dataset"
