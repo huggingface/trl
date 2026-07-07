@@ -52,7 +52,6 @@ _TELEMETRY_TRAINERS = {
     "NashMDTrainer",
     "OnlineDPOTrainer",
     "ORPOTrainer",
-    "PAPOTrainer",
     "PPOTrainer",
     "PRMTrainer",
     "SDFTTrainer",

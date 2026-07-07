@@ -978,6 +978,7 @@ class GRPOTrainer(_BaseTrainer):
                 * args.steps_per_generation,
                 enable_sleep_mode=args.vllm_enable_sleep_mode,
                 model_impl=args.vllm_model_impl,
+                trust_remote_code=args.trust_remote_code,
                 # Generation configuration
                 repetition_penalty=self.repetition_penalty,
                 temperature=self.temperature,
