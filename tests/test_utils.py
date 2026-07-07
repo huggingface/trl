@@ -980,6 +980,26 @@ class TestSplitPixelValuesByGrid(TrlTestCase):
         assert torch.equal(result["image_position_ids"][0], batch["image_position_ids"][:1])
         assert torch.equal(result["image_position_ids"][1], batch["image_position_ids"][1:])
 
+    def test_split_by_spatial_shapes(self):
+        batch = {
+            "num_images": [2, 1],
+            "num_tiles": [3, 2],
+            "pixel_values": torch.arange(5 * 4).reshape(5, 4),
+            "pixel_attention_mask": torch.arange(5 * 6).reshape(5, 6),
+            "spatial_shapes": torch.arange(5 * 2).reshape(5, 2),
+        }
+        result = split_pixel_values_by_grid(batch)
+        assert isinstance(result["pixel_values"], list)
+        assert len(result["pixel_values"]) == 2
+        assert torch.equal(result["pixel_values"][0], batch["pixel_values"][:3])
+        assert torch.equal(result["pixel_values"][1], batch["pixel_values"][3:])
+        assert isinstance(result["pixel_attention_mask"], list)
+        assert torch.equal(result["pixel_attention_mask"][0], batch["pixel_attention_mask"][:3])
+        assert torch.equal(result["pixel_attention_mask"][1], batch["pixel_attention_mask"][3:])
+        assert isinstance(result["spatial_shapes"], list)
+        assert torch.equal(result["spatial_shapes"][0], batch["spatial_shapes"][:3])
+        assert torch.equal(result["spatial_shapes"][1], batch["spatial_shapes"][3:])
+
 
 class TestUnsplitPixelValuesByGrid(TrlTestCase):
     def test_unsplit_correctly(self):
@@ -1003,6 +1023,23 @@ class TestUnsplitPixelValuesByGrid(TrlTestCase):
         result = unsplit_pixel_values_by_grid(batch)
         assert isinstance(result["image_position_ids"], torch.Tensor)
         assert torch.equal(result["image_position_ids"], image_position_ids_merged)
+
+    def test_unsplit_spatial_shapes(self):
+        pixel_values = [torch.randn(3, 4), torch.randn(2, 4)]
+        pixel_attention_mask = [torch.randn(3, 6), torch.randn(2, 6)]
+        spatial_shapes = [torch.tensor([[1, 2], [3, 4], [5, 6]]), torch.tensor([[7, 8], [9, 10]])]
+        batch = {
+            "pixel_values": pixel_values,
+            "pixel_attention_mask": pixel_attention_mask,
+            "spatial_shapes": spatial_shapes,
+        }
+        result = unsplit_pixel_values_by_grid(batch)
+        assert isinstance(result["pixel_values"], torch.Tensor)
+        torch.testing.assert_close(result["pixel_values"], torch.cat(pixel_values, dim=0))
+        assert isinstance(result["pixel_attention_mask"], torch.Tensor)
+        torch.testing.assert_close(result["pixel_attention_mask"], torch.cat(pixel_attention_mask, dim=0))
+        assert isinstance(result["spatial_shapes"], torch.Tensor)
+        assert torch.equal(result["spatial_shapes"], torch.cat(spatial_shapes, dim=0))
 
     def test_no_op_if_not_list(self):
         original = torch.randn(5, 3)
@@ -1145,6 +1182,13 @@ _CHUNKED_LM_HEAD_MODEL_IDS = [
         marks=pytest.mark.skipif(
             Version(transformers.__version__) < Version("5.3.0"),
             reason="Nemotron 3 was introduced in transformers>=5.3.0",
+        ),
+    ),
+    pytest.param(
+        "trl-internal-testing/tiny-Olmo3ForCausalLM",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("4.57.0"),
+            reason="Olmo 3 was introduced in transformers>=4.57.0",
         ),
     ),
     "trl-internal-testing/tiny-Phi3ForCausalLM-3",

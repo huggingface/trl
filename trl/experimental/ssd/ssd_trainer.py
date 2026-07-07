@@ -122,6 +122,7 @@ class SSDTrainer(_BaseTrainer):
             model_init_kwargs = args.model_init_kwargs or {}
             if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 model_init_kwargs["device_map"] = None
+            model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
             model = create_model_from_path(model, **model_init_kwargs)
         elif args.model_init_kwargs is not None:
             logger.warning(
@@ -157,7 +158,10 @@ class SSDTrainer(_BaseTrainer):
 
         if processing_class is None:
             processing_class = AutoProcessor.from_pretrained(
-                get_config_model_id(model.config), truncation_side="left", padding_side="left"
+                get_config_model_id(model.config),
+                truncation_side="left",
+                padding_side="left",
+                trust_remote_code=args.trust_remote_code,
             )
 
         if isinstance(processing_class, ProcessorMixin):
@@ -229,7 +233,6 @@ class SSDTrainer(_BaseTrainer):
             self.vllm_generation = VLLMGeneration(
                 model=self.model,
                 accelerator=self.accelerator,
-                is_fsdp_enabled=self.is_fsdp_enabled,
                 processing_class=self.processing_class,
                 mode=args.vllm_mode,
                 server_base_url=args.vllm_server_base_url,
@@ -245,6 +248,7 @@ class SSDTrainer(_BaseTrainer):
                 * args.steps_per_generation,
                 enable_sleep_mode=args.vllm_enable_sleep_mode,
                 model_impl=args.vllm_model_impl,
+                trust_remote_code=args.trust_remote_code,
                 repetition_penalty=args.repetition_penalty,
                 temperature=self.temperature,
                 top_p=args.top_p,

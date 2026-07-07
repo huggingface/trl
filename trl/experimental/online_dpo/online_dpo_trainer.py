@@ -25,7 +25,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.utils.data
 import transformers
-from accelerate import logging
+from accelerate.logging import get_logger
 from accelerate.utils import broadcast_object_list, gather_object, is_peft_model
 from datasets import Dataset
 from packaging.version import Version
@@ -59,6 +59,14 @@ from ..utils import DPODataCollatorWithPadding, create_reference_model, empty_ca
 from .online_dpo_config import OnlineDPOConfig
 
 
+if Version(transformers.__version__) >= Version("5.2.0"):
+    from transformers.trainer_pt_utils import nested_gather
+
+
+if is_bitsandbytes_available():
+    import bitsandbytes as bnb
+
+
 if is_peft_available():
     from peft import PeftConfig
 
@@ -72,18 +80,13 @@ else:
     IS_SAGEMAKER_MP_POST_1_10 = False
 
 
-if Version(transformers.__version__) >= Version("5.2.0"):
-    from transformers.trainer_pt_utils import nested_gather
-
-
 if is_vllm_available():
     from vllm import LLM, SamplingParams
     from vllm.sampling_params import StructuredOutputsParams
 
-if is_bitsandbytes_available():
-    import bitsandbytes as bnb
 
-logger = logging.get_logger(__name__)
+logger = get_logger(__name__)
+
 
 # A reward function can be a string, interpreted as a model ID and loaded as a pretrained model, a pretrained model, or
 # a callable that returns a list of floats (the rewards). The callable receives prompts, completions, and additional
@@ -204,6 +207,7 @@ class OnlineDPOTrainer(_BaseTrainer):
 
         # Process reward functions (convert strings to models, collect names)
         model_init_kwargs = args.model_init_kwargs or {}
+        model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
         for i, reward_func in enumerate(reward_funcs):
             if isinstance(reward_func, str):
                 # Load model from string path
@@ -229,7 +233,9 @@ class OnlineDPOTrainer(_BaseTrainer):
         for reward_processing_class_i, reward_func in zip(reward_processing_classes, reward_funcs, strict=True):
             if isinstance(reward_func, PreTrainedModel):
                 if reward_processing_class_i is None:
-                    reward_processing_class_i = AutoTokenizer.from_pretrained(reward_func.config._name_or_path)
+                    reward_processing_class_i = AutoTokenizer.from_pretrained(
+                        reward_func.config._name_or_path, trust_remote_code=args.trust_remote_code
+                    )
                 if reward_processing_class_i.pad_token_id is None:
                     reward_processing_class_i.pad_token = reward_processing_class_i.eos_token
                 # Set pad token ID on reward model config
@@ -271,6 +277,7 @@ class OnlineDPOTrainer(_BaseTrainer):
                     f"representing a `torch.dtype` (e.g., 'float32'), but got {dtype}."
                 )
             model_init_kwargs["device_map"] = model_init_kwargs.get("device_map", "auto")
+            model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
 
             model = AutoModelForCausalLM.from_pretrained(model_id, **model_init_kwargs)
         else:
@@ -644,19 +651,13 @@ class OnlineDPOTrainer(_BaseTrainer):
             all_images = gather_object(images)
 
         if self.accelerator.is_main_process:
-            # Since 'prompts' contains 'num_generations' duplicates, we first take unique prompts, and generate
-            # num_generations outputs for each one. This is faster than generating outputs for each duplicate
-            # prompt individually.
-            ordered_set_of_prompts = all_prompts[:: self.num_generations]
             if has_images:
-                ordered_set_of_images = [
-                    [img] if img is not None else None for img in all_images[:: self.num_generations]
-                ]
+                images_per_prompt = [[img] if img is not None else None for img in all_images]
             else:
-                ordered_set_of_images = None
+                images_per_prompt = None
             completion_ids = self.vllm_client.generate(
-                prompts=ordered_set_of_prompts,
-                images=ordered_set_of_images,
+                prompts=all_prompts,
+                images=images_per_prompt,
                 n=self.num_generations,
                 repetition_penalty=self.repetition_penalty,
                 temperature=self.temperature,
@@ -669,22 +670,23 @@ class OnlineDPOTrainer(_BaseTrainer):
                 else None,
                 generation_kwargs=self.args.generation_kwargs,
             )["completion_ids"]
-            # Flatten: each prompt generates 2 completions
-            completion_ids = [[comp_id] for prompt_completions in completion_ids for comp_id in prompt_completions]
         else:
             completion_ids = [None] * (len(all_prompts) * 2)
 
         # Broadcast completions to all processes
         completion_ids = broadcast_object_list(completion_ids, from_process=0)
 
-        # Each process takes its slice
+        # Slice to keep only the local part of the data
         process_slice = slice(
             self.accelerator.process_index * len(prompts) * 2,
             (self.accelerator.process_index + 1) * len(prompts) * 2,
         )
         completion_ids = completion_ids[process_slice]
+        # Reorder to block layout ([p0c0, p1c0, ..., p0c1, p1c1, ...]) to match the colocate and transformers
+        # generation paths, which is what the loss expects (`rewards.split(batch_size)`).
+        completion_ids = completion_ids[0::2] + completion_ids[1::2]
 
-        # Create prompt_ids by tokenizing locally
+        # Create prompt_ids by tokenizing locally, in the same block layout (2 copies per prompt)
         prompt_inputs = self.processing_class(
             text=prompts_text,
             return_tensors="pt",
@@ -692,9 +694,8 @@ class OnlineDPOTrainer(_BaseTrainer):
             padding_side="left",
             add_special_tokens=False,
         )
-        prompt_ids = []
-        for prompt_tokens in prompt_inputs["input_ids"]:
-            prompt_ids.extend([prompt_tokens.tolist(), prompt_tokens.tolist()])  # 2 copies for 2 completions
+        prompt_ids = [prompt_tokens.tolist() for prompt_tokens in prompt_inputs["input_ids"]]
+        prompt_ids = prompt_ids + prompt_ids  # 2 copies for 2 completions
         return completion_ids, prompt_ids
 
     def _generate_vllm_colocate(self, prompts, images=None):

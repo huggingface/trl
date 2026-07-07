@@ -21,6 +21,8 @@
     title: DPO
   - local: grpo_trainer
     title: GRPO
+  - local: kto_trainer
+    title: KTO
   - local: reward_trainer
     title: Reward
   - local: rloo_trainer
@@ -47,6 +49,8 @@
 - sections:
   - local: deepspeed_integration
     title: DeepSpeed
+  - local: harbor
+    title: Harbor
   - local: kernels_hub
     title: Kernels Hub
   - local: liger_kernel_integration
@@ -109,14 +113,14 @@
     title: GFPO
   - local: gkd_trainer
     title: GKD
+  - local: gmpo
+    title: GMPO
   - local: gold_trainer
     title: GOLD
   - local: grpo_with_replay_buffer
     title: GRPO With Replay Buffer
   - local: gspo_token
     title: GSPO-token
-  - local: kto_trainer
-    title: KTO 
   - local: merge_model_callback
     title: MergeModelCallback
   - local: minillm_trainer
@@ -127,8 +131,6 @@
     title: Online DPO
   - local: orpo_trainer
     title: ORPO
-  - local: papo_trainer
-    title: PAPO
   - local: ppo_trainer
     title: PPO
   - local: prm_trainer
@@ -144,3 +146,4 @@
   - local: xpo_trainer
     title: XPO
   title: Experimental
+  isExpanded: false

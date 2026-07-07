@@ -25,7 +25,7 @@
 """
 # Full training (off-policy only, lmbda=0):
 ```
-python trl/experimental/distillation/distillation.py \
+python examples/scripts/distillation.py \
     --model_name_or_path Qwen/Qwen2.5-0.5B-Instruct \
     --teacher_model_name_or_path Qwen/Qwen2.5-1.5B-Instruct \
     --dataset_name trl-lib/chatbot_arena_completions \
@@ -39,7 +39,7 @@ python trl/experimental/distillation/distillation.py \
 
 # Mixed on/off-policy (lmbda=0.5):
 ```
-python trl/experimental/distillation/distillation.py \
+python examples/scripts/distillation.py \
     --model_name_or_path Qwen/Qwen2.5-0.5B-Instruct \
     --teacher_model_name_or_path Qwen/Qwen2.5-1.5B-Instruct \
     --dataset_name trl-lib/chatbot_arena_completions \
@@ -54,7 +54,7 @@ python trl/experimental/distillation/distillation.py \
 
 # LoRA:
 ```
-python trl/experimental/distillation/distillation.py \
+python examples/scripts/distillation.py \
     --model_name_or_path Qwen/Qwen2.5-0.5B-Instruct \
     --teacher_model_name_or_path Qwen/Qwen2.5-1.5B-Instruct \
     --dataset_name trl-lib/chatbot_arena_completions \
@@ -82,12 +82,7 @@ def main(script_args, training_args, model_args):
     from datasets import load_dataset
     from transformers import GenerationConfig
 
-    from trl import (
-        LogCompletionsCallback,
-        get_kbit_device_map,
-        get_peft_config,
-        get_quantization_config,
-    )
+    from trl import LogCompletionsCallback, get_peft_config, get_quantization_config
     from trl.experimental.distillation import DistillationTrainer
 
     ################
@@ -96,22 +91,18 @@ def main(script_args, training_args, model_args):
     quantization_config = get_quantization_config(model_args)
     model_kwargs = dict(
         revision=model_args.model_revision,
-        trust_remote_code=model_args.trust_remote_code,
         attn_implementation=model_args.attn_implementation,
         dtype=model_args.dtype,
         use_cache=False if training_args.gradient_checkpointing else True,
-        device_map=get_kbit_device_map() if quantization_config is not None else None,
         quantization_config=quantization_config,
     )
     training_args.model_init_kwargs = model_kwargs
 
     teacher_model_kwargs = dict(
         revision=training_args.teacher_model_revision,
-        trust_remote_code=model_args.trust_remote_code,
         attn_implementation=model_args.attn_implementation,
         dtype=model_args.dtype,
         use_cache=True,
-        device_map=get_kbit_device_map() if quantization_config is not None else None,
         quantization_config=quantization_config,
     )
     if training_args.teacher_model_init_kwargs is not None:

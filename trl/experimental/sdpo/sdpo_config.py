@@ -119,6 +119,10 @@ class SDPOConfig(_BaseConfig):
         model_init_kwargs (`dict[str, Any]`, *optional*):
             Keyword arguments for `transformers.AutoModelForCausalLM.from_pretrained`, used when the `model` argument
             of the `SDPOTrainer` is provided as a string.
+        trust_remote_code (`bool`, *optional*, defaults to `False`):
+            Whether to allow loading models and tokenizers that ship custom Python code from the Hub. Forwarded to
+            [`~transformers.AutoModelForCausalLM.from_pretrained`] and [`~transformers.AutoProcessor.from_pretrained`].
+            Also applied to reward-model and reward-tokenizer loads.
         disable_dropout (`bool`, *optional*, defaults to `True`):
             Whether to disable dropout in the model. This is useful for training with a reference model, as it prevents
             the model from generating different logprobs for the same input.
@@ -178,6 +182,12 @@ class SDPOConfig(_BaseConfig):
         use_vllm (`bool`, *optional*, defaults to `False`):
             Whether to use vLLM for generating completions. If set to `True`, the trainer will use vLLM for generation
             instead of the default model.generate(). Requires `vllm` to be installed.
+        use_teacher_server (`bool`, *optional*, defaults to `False`):
+            Compute teacher logprobs from the running vLLM generation server instead of a local teacher forward. Only
+            supported for `teacher_model_kind='live'` with `use_vllm=True`, `vllm_mode='server'`,
+            `distillation_weight=1.0` (pure distillation), and `distillation_mode` in {'sampled_token', 'topk_logits'}
+            (the server returns the teacher's top-k logprobs, not the full vocabulary; `topk_logits` distills over the
+            teacher's own top-k support).
         vllm_mode (`str`, *optional*, defaults to `"colocate"`):
             Mode to use for vLLM integration when `use_vllm` is set to `True`. Must be one of `'server'` or
             `'colocate'`. `'server'`: The trainer will send generation requests to a separate vLLM server. Make sure a
@@ -248,6 +258,14 @@ class SDPOConfig(_BaseConfig):
         default=None,
         metadata={
             "help": "Keyword arguments for `transformers.AutoModelForCausalLM.from_pretrained`, used when the `model` argument of the `SDPOTrainer` is provided as a string."
+        },
+    )
+    trust_remote_code: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to allow loading models and tokenizers that ship custom Python code from the Hub. "
+            "Forwarded to `AutoModelForCausalLM.from_pretrained` and `AutoProcessor.from_pretrained`. Also applied to "
+            "reward-model and reward-tokenizer loads."
         },
     )
     disable_dropout: bool = field(
@@ -350,6 +368,16 @@ class SDPOConfig(_BaseConfig):
         default=False,
         metadata={
             "help": "Whether to use vLLM for generating completions. If set to `True`, the trainer will use vLLM for generation instead of the default model.generate(). Requires `vllm` to be installed."
+        },
+    )
+    use_teacher_server: bool = field(
+        default=False,
+        metadata={
+            "help": "Compute teacher logprobs from the running vLLM generation server instead of a local teacher "
+            "forward. Only supported for `teacher_model_kind='live'` with `use_vllm=True`, `vllm_mode='server'`, "
+            "`distillation_weight=1.0` (pure distillation), and `distillation_mode` in {'sampled_token', "
+            "'topk_logits'} (the server returns the teacher's top-k logprobs, not the full vocabulary; `topk_logits` "
+            "distills over the teacher's own top-k support)."
         },
     )
     vllm_mode: str = field(
@@ -576,6 +604,11 @@ class SDPOConfig(_BaseConfig):
         super().__post_init__()
         if not 0.0 <= self.distillation_weight <= 1.0:
             raise ValueError(f"`distillation_weight` must be in [0, 1], got {self.distillation_weight}.")
+        if self.distillation_mode == "sampled_token" and self.distillation_alpha != 1.0:
+            raise ValueError(
+                "`distillation_mode='sampled_token'` only supports reverse KL, so it requires "
+                f"`distillation_alpha=1.0`, got {self.distillation_alpha}."
+            )
         num_processes = self.world_size
         if self.generation_batch_size is None and self.steps_per_generation is None:
             self.steps_per_generation = self.gradient_accumulation_steps

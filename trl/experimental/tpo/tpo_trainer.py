@@ -28,14 +28,8 @@ from accelerate.logging import get_logger
 from accelerate.utils import is_peft_model
 from datasets import Dataset, IterableDataset
 from packaging.version import Version
-from transformers import (
-    AutoProcessor,
-    DataCollator,
-    PreTrainedModel,
-    PreTrainedTokenizerBase,
-)
+from transformers import AutoProcessor, DataCollator, PreTrainedModel, PreTrainedTokenizerBase, TrainerCallback
 from transformers.data.data_collator import DataCollatorMixin
-from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_peft_available
 
@@ -53,6 +47,7 @@ from .tpo_config import TPOConfig
 
 
 if is_peft_available():
+    import peft
     from peft import PeftConfig, PeftModel, get_peft_model
 
 
@@ -329,6 +324,7 @@ class TPOTrainer(_BaseTrainer):
             # Distributed training requires device_map=None ("auto" fails)
             if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 model_init_kwargs["device_map"] = None
+            model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
             model = create_model_from_path(model, **model_init_kwargs)
         else:
             if args.model_init_kwargs is not None:
@@ -339,7 +335,9 @@ class TPOTrainer(_BaseTrainer):
 
         # Processing class
         if processing_class is None:
-            processing_class = AutoProcessor.from_pretrained(get_config_model_id(model.config))
+            processing_class = AutoProcessor.from_pretrained(
+                get_config_model_id(model.config), trust_remote_code=args.trust_remote_code
+            )
         if not isinstance(processing_class, PreTrainedTokenizerBase):
             raise TypeError(
                 "The `processing_class` must be a `PreTrainedTokenizerBase`. `TPOTrainer` does not currently "
@@ -369,7 +367,29 @@ class TPOTrainer(_BaseTrainer):
                     "with the new `peft_config` to the trainer."
                 )
             # Create PEFT model
-            model = get_peft_model(model, peft_config)
+            # ZeRO-3 + PEFT for non-quantized models:
+            # - PEFT's default autocast_adapter_dtype=True upcasts LoRA adapter params to fp32 even when the base model is bf16.
+            # - ZeRO-3's _allgather_params_coalesced allocates output buffers using the dtype of the first persistent parameter,
+            #   so mixed-dtype persistent_parameters (bf16 base + fp32 LoRA) cause a TypeError on the first optimizer step.
+            # - Passing autocast_adapter_dtype=False keeps adapter params in the base model dtype (bf16), fixing the mismatch.
+            # - This is safe: the fp32 upcast is a QLoRA-specific concern (low-bit quantized base models), not needed for
+            #   non-quantized bf16 training.
+            # - See:
+            #   - TRL issue: https://github.com/huggingface/trl/issues/6089
+            #   - Upstream issue: https://github.com/deepspeedai/DeepSpeed/issues/8072
+            # - autocast_adapter_dtype was introduced in PEFT 0.12.0; before, no upcast existed: no need to pass the kwarg
+            _is_quantized_model = getattr(model, "is_loaded_in_4bit", False) or getattr(
+                model, "is_loaded_in_8bit", False
+            )
+            get_peft_model_kwargs = {}
+            if (
+                args.deepspeed_plugin is not None
+                and args.deepspeed_plugin.zero_stage == 3
+                and not _is_quantized_model
+                and Version(peft.__version__) >= Version("0.12.0")
+            ):
+                get_peft_model_kwargs["autocast_adapter_dtype"] = False
+            model = get_peft_model(model, peft_config, **get_peft_model_kwargs)
 
         # When using gradient checkpointing with PEFT, we need to enable input gradients. transformers.Trainer normally
         # handles this, but a bug currently prevents it; see https://github.com/huggingface/transformers/issues/42489
@@ -442,8 +462,8 @@ class TPOTrainer(_BaseTrainer):
         # Add tags to the model
         self.model.add_model_tags(self._tag_names)
 
+    @staticmethod
     def _tokenize(
-        self,
         processing_class: PreTrainedTokenizerBase,
         input: str | list,
         **kwargs,
@@ -524,45 +544,47 @@ class TPOTrainer(_BaseTrainer):
             if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                 map_kwargs["desc"] = f"Tokenizing {dataset_name} dataset"
 
+            # Bind `_tokenize` to a local so `tokenize_fn` doesn't capture `self`: a closure over `self` makes the map
+            # function unhashable, forcing a random fingerprint that silently disables dataset caching.
+            tokenize = self._tokenize
+
             def tokenize_fn(example, processing_class):
                 tools = example.get("tools")
                 tools = json.loads(tools) if isinstance(tools, str) else tools
                 output = {}
                 if is_conversational(example):
-                    prompt_ids = self._tokenize(
+                    prompt_ids = tokenize(
                         processing_class,
                         example["prompt"],
                         tools=tools,
                         add_generation_prompt=True,
                         **example.get("chat_template_kwargs", {}),
                     )["input_ids"]
-                    prompt_chosen_ids = self._tokenize(
+                    prompt_chosen_ids = tokenize(
                         processing_class,
                         example["prompt"] + example["chosen"],
                         tools=tools,
                         **example.get("chat_template_kwargs", {}),
                     )["input_ids"]
-                    prompt_rejected_ids = self._tokenize(
+                    prompt_rejected_ids = tokenize(
                         processing_class,
                         example["prompt"] + example["rejected"],
                         tools=tools,
                         **example.get("chat_template_kwargs", {}),
                     )["input_ids"]
-                    prompt_reference_ids = self._tokenize(
+                    prompt_reference_ids = tokenize(
                         processing_class,
                         example["prompt"] + example["reference"],
                         tools=tools,
                         **example.get("chat_template_kwargs", {}),
                     )["input_ids"]
                 else:
-                    prompt_ids = self._tokenize(processing_class, example["prompt"])["input_ids"]
-                    prompt_chosen_ids = self._tokenize(processing_class, example["prompt"] + example["chosen"])[
+                    prompt_ids = tokenize(processing_class, example["prompt"])["input_ids"]
+                    prompt_chosen_ids = tokenize(processing_class, example["prompt"] + example["chosen"])["input_ids"]
+                    prompt_rejected_ids = tokenize(processing_class, example["prompt"] + example["rejected"])[
                         "input_ids"
                     ]
-                    prompt_rejected_ids = self._tokenize(processing_class, example["prompt"] + example["rejected"])[
-                        "input_ids"
-                    ]
-                    prompt_reference_ids = self._tokenize(processing_class, example["prompt"] + example["reference"])[
+                    prompt_reference_ids = tokenize(processing_class, example["prompt"] + example["reference"])[
                         "input_ids"
                     ]
 
@@ -618,9 +640,9 @@ class TPOTrainer(_BaseTrainer):
 
         input_ids = inputs["input_ids"]
         completion_mask = inputs["completion_mask"]
-        shift_logits = outputs.logits[..., :-1, :].contiguous()
-        shift_labels = input_ids[..., 1:].contiguous()
-        shift_completion_mask = completion_mask[..., 1:].contiguous()
+        shift_logits = outputs.logits[..., :-1, :]
+        shift_labels = input_ids[..., 1:]
+        shift_completion_mask = completion_mask[..., 1:]
         per_token_logps = selective_log_softmax(shift_logits, shift_labels)
         per_token_logps[shift_completion_mask == 0] = 0.0  # mask out non-completion tokens
 
@@ -747,6 +769,28 @@ class TPOTrainer(_BaseTrainer):
         self._metrics[mode]["logps/rejected"].append(self.accelerator.gather(rejected_logps).mean().item())
 
         return (loss, outputs) if return_outputs else loss
+
+    def evaluate(
+        self,
+        eval_dataset: Dataset | dict[str, Dataset] | None = None,
+        ignore_keys: list[str] | None = None,
+        metric_key_prefix: str = "eval",
+    ) -> dict[str, float]:
+        # When a dataset is passed directly to `evaluate` (e.g. a held-out test set), preprocess it the same way
+        # `__init__` does, so that `evaluate` accepts the same dataset types as the trainer. `_prepare_dataset` is
+        # idempotent: it skips datasets that are already tokenized. A `str` selects a dataset that was already prepared
+        # at init time, so it's left untouched.
+        if eval_dataset is not None and not isinstance(eval_dataset, str):
+            if isinstance(eval_dataset, dict):
+                eval_dataset = {
+                    key: self._prepare_dataset(dataset, self.processing_class, self.args, key)
+                    for key, dataset in eval_dataset.items()
+                }
+            else:
+                eval_dataset = self._prepare_dataset(eval_dataset, self.processing_class, self.args, "eval")
+        return super().evaluate(
+            eval_dataset=eval_dataset, ignore_keys=ignore_keys, metric_key_prefix=metric_key_prefix
+        )
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         return self._compute_loss(model, inputs, return_outputs)

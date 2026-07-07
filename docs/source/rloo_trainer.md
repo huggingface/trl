@@ -62,7 +62,7 @@ At each training step, we sample a batch of prompts and generate a set of  \\( G
 
 In RLOO, the reward consists of two components: the reward provided by the reward model (or reward function) and a KL penalty that discourages the policy from deviating too far from a fixed reference policy
 
-1. For each of the  \\( G \\) generated sequences  \\( o_i = (o_{i,1}, \dots, o_{i,T}) \\) conditioned on a query \\( q \\), we compute a scalar reward using a reward model  \\( R(o_i, q) \\).
+1. For each of the  \\( G \\) generated sequences  \\( o_i = (o_{i,1}, \dots, o_{i,T}) \\) conditioned on a query  \\( q \\), we compute a scalar reward using a reward model  \\( R(o_i, q) \\).
 2. Concurrently, we estimate the KL divergence between the current policy  \\( \pi_\theta \\) and the fixed reference policy  \\( \pi_{\text{ref}} \\) over the sequence. The KL estimate for sequence  \\( o_i \\) is:
 
 $$
@@ -119,9 +119,16 @@ $$
 
 In a fully online, single-step setting (default),  \\( \frac{\pi_\theta(o_i \mid q)}{\pi_{\theta_\text{old}}(o_i \mid q)} = 1 \\) and this reduces to standard REINFORCE.
 
+> [!NOTE]
+> Unlike GRPO, RLOO does not backpropagate gradients through the KL term. Here the KL is purely used for reward shaping: it is computed under `no_grad` and folded into the scalar reward  \\( r_i \\), which becomes the detached advantage  \\( \hat{A}_i \\). 
+>
+> In other words, the only path the gradient takes into the policy is the importance-ratio term  \\( \frac{\pi_\theta(o_i \mid q)}{\pi_{\theta_\text{old}}(o_i \mid q)} \\), and the KL term does not backpropagate into the policy. 
+>
+> In contrast, [GRPO](grpo_trainer) adds an explicit, differentiable KL term to its objective, computed on the fly with the current policy  \\( \pi_\theta \\), so its gradient flows through both the ratio term and the KL penalty.
+
 ## Logged metrics
 
-While training and evaluating, we record the following reward metrics:
+While training and evaluating, we record the following metrics:
 
 - `num_tokens`: The total number of tokens processed so far, including both prompts and completions.
 - `step_time`: The average time (in seconds) taken per training step (including generation).

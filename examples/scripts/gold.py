@@ -23,7 +23,7 @@
 # docstyle-ignore
 """
 # Full training:
-python trl/experimental/gold/gold.py \
+python examples/scripts/gold.py \
     --model_name_or_path meta-llama/Llama-3.2-1B-Instruct \
     --teacher_model_name_or_path Qwen/Qwen2-1.5B-Instruct \
     --dataset_name trl-lib/chatbot_arena_completions \
@@ -35,7 +35,7 @@ python trl/experimental/gold/gold.py \
     --push_to_hub
 
 # LoRA:
-python trl/experimental/gold/gold.py \
+python examples/scripts/gold.py \
     --model_name_or_path meta-llama/Llama-3.2-1B-Instruct \
     --teacher_model_name_or_path Qwen/Qwen2-1.5B-Instruct \
     --dataset_name trl-lib/chatbot_arena_completions \
@@ -60,7 +60,6 @@ from trl import (
     ModelConfig,
     ScriptArguments,
     TrlParser,
-    get_kbit_device_map,
     get_peft_config,
     get_quantization_config,
 )
@@ -81,11 +80,9 @@ if __name__ == "__main__":
     quantization_config = get_quantization_config(model_args)
     model_kwargs = dict(
         revision=model_args.model_revision,
-        trust_remote_code=model_args.trust_remote_code,
         attn_implementation=model_args.attn_implementation,
         dtype=model_args.dtype,
         use_cache=False if training_args.gradient_checkpointing else True,
-        device_map=get_kbit_device_map() if quantization_config is not None else None,
         quantization_config=quantization_config,
     )
     training_args.model_init_kwargs = model_kwargs
@@ -94,11 +91,9 @@ if __name__ == "__main__":
         training_args.teacher_tokenizer_name_or_path = training_args.teacher_model_name_or_path
     teacher_model_kwargs = dict(
         revision=training_args.teacher_model_revision,
-        trust_remote_code=model_args.trust_remote_code,
         attn_implementation=model_args.attn_implementation,
         dtype=model_args.dtype,
         use_cache=True,
-        device_map=get_kbit_device_map() if quantization_config is not None else None,
         quantization_config=quantization_config,
     )
     if training_args.teacher_model_init_kwargs is not None:
@@ -108,7 +103,6 @@ if __name__ == "__main__":
     tokenizer = AutoTokenizer.from_pretrained(
         model_args.model_name_or_path,
         revision=model_args.model_revision,
-        trust_remote_code=model_args.trust_remote_code,
     )
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token

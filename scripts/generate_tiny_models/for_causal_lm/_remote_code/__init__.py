@@ -12,6 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-
-from .papo_config import PAPOConfig
-from .papo_trainer import PAPOTrainer
+# Source files for the tiny-RemoteForCausalLM Hub repo. Loaded as a sub-package
+# by ../remote_for_causal_lm.py and pushed verbatim to the Hub so consumers can
+# load the model with `trust_remote_code=True`.

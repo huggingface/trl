@@ -31,12 +31,14 @@ import pandas as pd
 import torch
 import torch.nn.functional as F
 import transformers
-from accelerate import PartialState, logging
+from accelerate.logging import get_logger
 from huggingface_hub import ModelCard, ModelCardData
 from packaging.version import Version
 from torch.utils.data import Sampler
 from transformers import (
     AutoConfig,
+    AutoModelForCausalLM,
+    AutoModelForImageTextToText,
     BitsAndBytesConfig,
     PretrainedConfig,
     PreTrainedModel,
@@ -44,13 +46,17 @@ from transformers import (
     is_trackio_available,
 )
 from transformers.models.auto.auto_factory import _BaseAutoModelClass
-from transformers.utils import (
-    is_peft_available,
-    is_rich_available,
-    is_torch_xpu_available,
-)
+from transformers.utils import is_peft_available, is_rich_available
 
 from ..trainer.model_config import ModelConfig
+
+
+if is_comet_available():
+    import comet_ml
+
+
+if is_peft_available():
+    from peft import LoraConfig, PeftConfig, PeftModel
 
 
 if is_rich_available():
@@ -59,14 +65,8 @@ if is_rich_available():
     from rich.table import Table
     from rich.text import Text
 
-if is_comet_available():
-    import comet_ml
 
-if is_peft_available():
-    from peft import LoraConfig, PeftConfig, PeftModel
-
-
-logger = logging.get_logger(__name__)
+logger = get_logger(__name__)
 
 
 def _is_port_free(port: int, host: str = "127.0.0.1") -> bool:
@@ -199,13 +199,6 @@ def get_quantization_config(model_args: ModelConfig) -> BitsAndBytesConfig | Non
         quantization_config = None
 
     return quantization_config
-
-
-def get_kbit_device_map() -> dict[str, int] | None:
-    if torch.cuda.is_available() or is_torch_xpu_available():
-        return {"": PartialState().local_process_index}
-    else:
-        return None
 
 
 def get_peft_config(model_args: ModelConfig) -> "PeftConfig | None":
@@ -890,7 +883,7 @@ def split_pixel_values_by_grid(batch: dict[str, torch.Tensor]) -> dict[str, torc
 
     For models with `image_grid_thw` (e.g. Qwen), the grid dimensions determine how many rows of `pixel_values` belong
     to each image. For models with `image_position_ids` instead (e.g. Gemma), `pixel_values` is indexed directly by
-    image count.
+    image count. For models with `spatial_shapes` (e.g. LFM2-VL), tile-indexed tensors are split using `num_tiles`.
     """
     if "pixel_values" not in batch or "num_images" not in batch:
         return batch
@@ -918,6 +911,20 @@ def split_pixel_values_by_grid(batch: dict[str, torch.Tensor]) -> dict[str, torc
         split_image_position_ids = list(torch.split(image_position_ids, num_images, dim=0))
         return {**batch, "pixel_values": split_pixel_values, "image_position_ids": split_image_position_ids}
 
+    if "spatial_shapes" in batch:
+        num_tiles = batch["num_tiles"]
+        pixel_attention_mask = batch["pixel_attention_mask"]
+        spatial_shapes = batch["spatial_shapes"]
+        split_pixel_values = list(torch.split(pixel_values, num_tiles, dim=0))
+        split_pixel_attention_mask = list(torch.split(pixel_attention_mask, num_tiles, dim=0))
+        split_spatial_shapes = list(torch.split(spatial_shapes, num_tiles, dim=0))
+        return {
+            **batch,
+            "pixel_values": split_pixel_values,
+            "pixel_attention_mask": split_pixel_attention_mask,
+            "spatial_shapes": split_spatial_shapes,
+        }
+
     return batch
 
 
@@ -940,6 +947,16 @@ def unsplit_pixel_values_by_grid(batch: dict[str, torch.Tensor | list[torch.Tens
     if isinstance(image_position_ids, list):
         merged = torch.cat(image_position_ids, dim=0)
         batch = {**batch, "image_position_ids": merged}
+
+    pixel_attention_mask = batch.get("pixel_attention_mask")
+    if isinstance(pixel_attention_mask, list):
+        merged = torch.cat(pixel_attention_mask, dim=0)
+        batch = {**batch, "pixel_attention_mask": merged}
+
+    spatial_shapes = batch.get("spatial_shapes")
+    if isinstance(spatial_shapes, list):
+        merged = torch.cat(spatial_shapes, dim=0)
+        batch = {**batch, "spatial_shapes": merged}
 
     return batch
 
@@ -1021,8 +1038,19 @@ def create_model_from_path(
         )
     kwargs["device_map"] = kwargs.get("device_map", "auto")
     if architecture is None:
-        config = AutoConfig.from_pretrained(model_id)
-        architecture = getattr(transformers, config.architectures[0])
+        # Best effort to infer architecture from config, but we fall back to AutoModelForCausalLM if we can't find it
+        config = AutoConfig.from_pretrained(model_id, trust_remote_code=kwargs.get("trust_remote_code", False))
+        architecture = getattr(transformers, config.architectures[0], None)
+        if architecture is None:
+            # Remote-code checkpoint: the architecture name lives in the dynamic module, not in
+            # `transformers`. Pick the most specific auto class declared in `config.auto_map`.
+            auto_map = config.auto_map or {}
+            for candidate in (AutoModelForImageTextToText, AutoModelForCausalLM):
+                if candidate.__name__ in auto_map:
+                    architecture = candidate
+                    break
+            else:
+                architecture = AutoModelForCausalLM
     model = architecture.from_pretrained(model_id, **kwargs)
     return model
 
@@ -1281,7 +1309,9 @@ class _ChunkedLogProbFunction(torch.autograd.Function):
         return grad_hidden.to(hidden.dtype), grad_weight.to(weight.dtype), None, None, None, None, None
 
 
-def patch_chunked_lm_head(model: torch.nn.Module, chunk_size: int, temperature: float) -> None:
+def patch_chunked_lm_head(
+    model: torch.nn.Module, chunk_size: int, temperature: float, output_router_logits: bool = False
+) -> None:
     final_logit_softcapping = getattr(model.config, "final_logit_softcapping", None)
 
     def _chunked_forward(
@@ -1295,7 +1325,10 @@ def patch_chunked_lm_head(model: torch.nn.Module, chunk_size: int, temperature: 
     ) -> dict[str, torch.Tensor]:
         assert labels is not None, "requires labels to not be None for logprob computation"
 
-        outputs = self.model(input_ids=input_ids, attention_mask=attention_mask, use_cache=use_cache, **kwargs)
+        decoder_kwargs = {"output_router_logits": True} if output_router_logits else {}
+        outputs = self.model(
+            input_ids=input_ids, attention_mask=attention_mask, use_cache=use_cache, **decoder_kwargs, **kwargs
+        )
         # NOTE(@aminediro): supporting Cohere2 models
         logit_scale = getattr(self.config, "logit_scale", 1.0)
         hidden_states = outputs.last_hidden_state  # [B, S+1, H]
@@ -1305,8 +1338,8 @@ def patch_chunked_lm_head(model: torch.nn.Module, chunk_size: int, temperature: 
         labels = labels[:, 1:]  # [B, S-1]
 
         b, s, h = hidden_states.shape
-        hidden_flat = hidden_states.reshape(b * s, h).contiguous()
-        targets_flat = labels.reshape(b * s).contiguous()
+        hidden_flat = hidden_states.reshape(b * s, h)
+        targets_flat = labels.reshape(b * s)
 
         # Filter to completion tokens only to avoid expensive matmuls on prompt tokens and tool results
         valid_mask = None
@@ -1335,9 +1368,35 @@ def patch_chunked_lm_head(model: torch.nn.Module, chunk_size: int, temperature: 
             logprobs = logprobs_valid
             entropy = entropy_valid
 
+        aux_loss = None
+        if output_router_logits:
+            # Mirror the per-family MoE forward: add `router_aux_loss_coef * load_balancing_loss_func(...)` to
+            # the main loss. Mixtral is the source of truth — every MoE family (Qwen3Moe, GptOss, OLMoE,
+            # Qwen2Moe, DBRX, JetMoE, PhiMoE, …) pulls this function from mixtral via the modular system, so a
+            # single import keeps us in lockstep with upstream for every family we test.
+            from transformers.models.mixtral.modeling_mixtral import load_balancing_loss_func
+
+            if Version(transformers.__version__) < Version("5.0.0"):
+                num_experts = self.num_experts
+                num_experts_per_tok = self.num_experts_per_tok
+            else:
+                # Upstream bug AttributeError: 'GptOssConfig' object has no attribute 'num_experts'; see #5754
+                if self.config.model_type == "gpt_oss" and Version("5.0.0") <= Version(
+                    transformers.__version__
+                ) < Version("5.6.0"):
+                    num_experts = self.num_experts
+                else:
+                    num_experts = self.config.num_experts
+                num_experts_per_tok = self.config.num_experts_per_tok
+            # Padding-free packs all real tokens into a single row, so `attention_mask` is None and every token counts.
+            aux_loss = load_balancing_loss_func(
+                outputs.router_logits, num_experts, num_experts_per_tok, attention_mask
+            )
+
         return {
             "log_probs": logprobs.reshape(b, s),
             "entropy": entropy.reshape(b, s),
+            "aux_loss": aux_loss,
         }
 
     model.forward = types.MethodType(_chunked_forward, model)

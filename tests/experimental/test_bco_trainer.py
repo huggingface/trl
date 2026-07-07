@@ -33,6 +33,28 @@ if is_peft_available():
 
 @pytest.mark.low_priority
 class TestBCOTrainer(TrlTestCase):
+    @require_sklearn
+    def test_trust_remote_code(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
+        model_id = "trl-internal-testing/tiny-RemoteForCausalLM"
+        tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
+
+        with pytest.raises(ValueError, match="custom code"):
+            BCOTrainer(
+                model=model_id,
+                args=BCOConfig(output_dir=self.tmp_dir, report_to="none"),
+                processing_class=tokenizer,
+                train_dataset=dataset,
+            )
+
+        trainer = BCOTrainer(
+            model=model_id,
+            args=BCOConfig(output_dir=self.tmp_dir, report_to="none", trust_remote_code=True),
+            processing_class=tokenizer,
+            train_dataset=dataset,
+        )
+        assert type(trainer.model).__name__ == "RemoteForCausalLM"
+
     @pytest.mark.parametrize(
         "config_name",
         [
@@ -79,6 +101,30 @@ class TestBCOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             if param.sum() != 0:  # ignore 0 biases
                 assert not torch.equal(param.cpu(), new_param.cpu())
+
+    @require_sklearn
+    def test_train_processing_class_autoloaded(self):
+        # processing_class is documented as optional: when omitted it should be
+        # auto-loaded from the model, consistent with DPOTrainer / RewardTrainer.
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
+        ref_model = AutoModelForCausalLM.from_pretrained(model_id)
+        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
+        training_args = BCOConfig(
+            output_dir=self.tmp_dir,
+            remove_unused_columns=False,
+            learning_rate=0.1,
+            report_to="none",
+        )
+        trainer = BCOTrainer(
+            model=model,
+            ref_model=ref_model,
+            args=training_args,
+            train_dataset=dataset,
+        )
+        assert trainer.processing_class is not None
+        trainer.train()
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
     @require_sklearn
     def test_train_with_precompute(self):
