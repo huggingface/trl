@@ -2975,6 +2975,76 @@ class TestGRPOTrainer(TrlTestCase):
         assert "guess" in tool_names
         assert "get_reward" not in tool_names
 
+    @pytest.mark.xfail(
+        condition=Version(transformers.__version__) < Version("5.2.0"),
+        reason="Environment factory support is not available in transformers versions below 5.2.0",
+        strict=True,
+    )
+    @require_jmespath
+    def test_environment_owned_reward_mixed_environments(self):
+        # With a dict `environment_factory`, only some environments may own their reward via `get_reward`. Each such
+        # environment contributes its own reward column (named after its class); a rollout is scored only when its
+        # environment is that class, so mixing a reward-owning env with a plain one must not raise.
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+
+        class ScoredEnvironment:  # owns its reward
+            def reset(self, **kwargs): ...
+
+            def act(self, x: int) -> int:
+                """
+                Act.
+
+                Args:
+                    x: A value.
+
+                Returns:
+                    The value.
+                """
+                return x
+
+            def get_reward(self) -> float:
+                return 1.0
+
+        class PlainEnvironment:  # no `get_reward`; scored by `reward_funcs`
+            def reset(self, **kwargs): ...
+
+            def play(self, x: int) -> int:
+                """
+                Play.
+
+                Args:
+                    x: A value.
+
+                Returns:
+                    The value.
+                """
+                return x
+
+        def format_reward(completions, **kwargs):
+            return [0.0 for _ in completions]
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir, per_device_train_batch_size=2, num_generations=2, report_to="none"
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            reward_funcs=format_reward,
+            args=training_args,
+            train_dataset=dataset,
+            environment_factory={"scored": ScoredEnvironment, "plain": PlainEnvironment},
+        )
+
+        # Only `ScoredEnvironment` owns a reward, so a single env-reward column is appended after the trainer-owned
+        # reward func, with a fixed weight of 1.
+        assert trainer.reward_func_names == ["format_reward", "ScoredEnvironment"]
+        assert trainer.reward_weights.tolist() == [1.0, 1.0]
+
+        # The env-reward func scores only rollouts bound to `ScoredEnvironment`; a `PlainEnvironment` rollout returns
+        # `None` (turned into NaN and ignored) instead of raising `AttributeError`.
+        env_reward_func = trainer.reward_funcs[-1]
+        rewards = env_reward_func(environments=[ScoredEnvironment(), PlainEnvironment()])
+        assert rewards == [1.0, None]
+
     def test_no_reward_source_raises(self):
         # `reward_funcs` is optional, but a reward must come from somewhere: with neither `reward_funcs` nor an
         # environment-owned `get_reward`, construction fails fast instead of training on an all-zero reward.

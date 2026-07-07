@@ -78,7 +78,7 @@ class RolloutGroup:
     tool_call_counts: list[int]
     tool_failure_counts: list[int]
     model_version: int
-    env_rewards: list[float]
+    env_rewards: list[tuple[type, float] | None]  # per rollout: (env class, reward) if its env owns a reward, else None
     queued_at: float = 0.0
 
 
@@ -242,7 +242,7 @@ class _AsyncRolloutLoop:
 
         tools = tools or []
         self._standalone_tools = tools  # tools that are not bound to an environment
-        self._env_has_reward = False  # True if the environment owns the reward via a `get_reward` method
+        self._env_reward_types = []  # env classes that own their reward via `get_reward`; one reward column each
 
         # Normalize `environment_factory` to a `{name: factory}` mapping. A single callable is the special case of one
         # unnamed (`None`) environment shared by every example; a dict maps the `environment` field of each example to
@@ -274,8 +274,8 @@ class _AsyncRolloutLoop:
                     if member_name == "reset":
                         has_reset = True
                     elif member_name == "get_reward":
-                        self._env_has_reward = True
-                        reward_env_type = type(instance)
+                        if type(instance) not in self._env_reward_types:
+                            self._env_reward_types.append(type(instance))
                     elif not member_name.startswith("_"):
                         methods.append(member)
                 if not has_reset:
@@ -285,16 +285,17 @@ class _AsyncRolloutLoop:
                 self._env_tools[name] = tools + methods
                 self._environment_pool[name] = [instance]
                 self.tools += [method for method in methods if method not in self.tools]
-            # The environment owns the reward via `get_reward`: expose it as an extra reward source, named after the
-            # env class (its per-rollout value is scored inline in `_generate_loop` and summed in `_score_group`).
-            if self._env_has_reward:
-                self.reward_func_names.append(reward_env_type.__name__)
+            # Each environment that owns its reward via `get_reward` becomes an extra reward source, named after the env
+            # class (its per-rollout value is scored inline in `_generate_loop` and summed in `_score_group`). One
+            # column per such class: mixing an env that owns its reward with one that does not is safe.
+            for env_type in self._env_reward_types:
+                self.reward_func_names.append(env_type.__name__)
         else:
             self.tools = tools
 
         # At least one reward source is required: either `reward_funcs`, or an environment that owns the reward via a
         # `get_reward` method.
-        if not self.reward_funcs and not self._env_has_reward:
+        if not self.reward_funcs and not self._env_reward_types:
             raise ValueError(
                 "No reward source provided. Pass `reward_funcs`, or an `environment_factory` whose environment "
                 "defines a `get_reward` method."
@@ -481,11 +482,16 @@ class _AsyncRolloutLoop:
                     # The environment owns the reward: score it now, while this rollout's environment still holds its
                     # final state and before returning it to the pool. `get_reward` may be async awaiting yields to
                     # inflight requests instead of halting them. The env is returned to the pool only after scoring, so
-                    # a concurrent rollout can't draw and reset it during the await.
-                    if self._env_has_reward:
-                        get_reward = environment.get_reward
-                        reward = await get_reward() if inspect.iscoroutinefunction(get_reward) else get_reward()
-                        group.env_rewards.append(reward)
+                    # a concurrent rollout can't draw and reset it during the await. Record `(env class, reward)` so
+                    # `_score_group` can place it in the matching env's reward column; rollouts whose env owns no reward
+                    # record `None` (turned into NaN and ignored) to stay aligned with the group's other per-rollout lists.
+                    if self._env_reward_types:
+                        if type(environment) in self._env_reward_types:
+                            get_reward = environment.get_reward
+                            reward = await get_reward() if inspect.iscoroutinefunction(get_reward) else get_reward()
+                            group.env_rewards.append((type(environment), reward))
+                        else:
+                            group.env_rewards.append(None)
                     if environment is not None:
                         self._environment_pool[name].append(environment)
                     self._total_completion_tokens += sum(tool_mask)
@@ -722,10 +728,13 @@ class _AsyncRolloutLoop:
                 for reward_func in self.reward_funcs
             ]
         )
-        # The environment owns the reward: add its per-rollout scores (captured at generation time in
-        # `group.env_rewards`) as an extra reward source, summed in with weight 1 like any reward func.
-        if self._env_has_reward:
-            all_rewards = [*all_rewards, group.env_rewards]
+        # Each environment that owns its reward contributes one reward column (named after its env class, in
+        # `_env_reward_types` order to match `reward_func_names`), summed in with weight 1 like any reward func. Scores
+        # were captured per rollout at generation time in `group.env_rewards` as `(env class, reward)`; a rollout is
+        # placed in a column only when its env is that class, so mixing reward-owning and plain envs is safe.
+        for env_type in self._env_reward_types:
+            column = [r[1] if (r is not None and r[0] is env_type) else None for r in group.env_rewards]
+            all_rewards = [*all_rewards, column]
 
         # Reward funcs may return None per-sample (unparseable gold). Convert to NaN. A completion
         # for which every func returned None is unscorable: nansum would give 0 and the row would

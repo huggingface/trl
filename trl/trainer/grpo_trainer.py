@@ -602,18 +602,16 @@ class GRPOTrainer(_BaseTrainer):
             # Used where only the presence of a tool matters (chat template validation, async loop setup, tool metrics);
             # the per-example schema is rendered in `_tokenize_prompts`.
             self.tools = list(tools)
-            has_reward = False  # True if the environment owns the reward via a `get_reward` method
-            reward_env_type = None  # environment class exposing `get_reward`, used to name the reward source
             for name, factory in self.environment_factories.items():
                 instance = factory()
                 has_reset = False
+                has_reward = False
                 methods = []
                 for member_name, member in inspect.getmembers(instance, predicate=inspect.ismethod):
                     if member_name == "reset":
                         has_reset = True
                     elif member_name == "get_reward":
                         has_reward = True
-                        reward_env_type = type(instance)
                     elif not member_name.startswith("_"):
                         methods.append(member)
                 if not has_reset:
@@ -624,24 +622,28 @@ class GRPOTrainer(_BaseTrainer):
                 self._environment_pool[name] = [instance]
                 self.tools += [method for method in methods if method not in self.tools]
 
-            # If an environment owns the reward via `get_reward`, expose it as an extra reward source (named after the
-            # env class, weight 1). `get_reward` may be async (e.g. an LLM judge); wrap it accordingly so
-            # `_calculate_rewards` runs it on the daemon event loop like any other async reward func.
-            if has_reward:
-                if inspect.iscoroutinefunction(reward_env_type.get_reward):
+                # If this environment owns its reward via `get_reward`, expose it as an extra reward source (named after
+                # the env class, weight 1). One column per env class that defines `get_reward`; a rollout is scored only
+                # when its environment is an instance of that class, so mixing an env that owns its reward with one that
+                # does not is safe (the latter's rollouts return `None`, turned into NaN and ignored). `get_reward` may
+                # be async (e.g. an LLM judge); wrap it accordingly so `_calculate_rewards` runs it on the daemon event
+                # loop like any other async reward func.
+                if has_reward:
+                    env_type = type(instance)
+                    if inspect.iscoroutinefunction(instance.get_reward):
 
-                    async def get_reward(environments, **kwargs):
-                        return [await environment.get_reward() for environment in environments]
+                        async def get_reward(environments, _env_type=env_type, **kwargs):
+                            return [await e.get_reward() if isinstance(e, _env_type) else None for e in environments]
 
-                else:
+                    else:
 
-                    def get_reward(environments, **kwargs):
-                        return [environment.get_reward() for environment in environments]
+                        def get_reward(environments, _env_type=env_type, **kwargs):
+                            return [e.get_reward() if isinstance(e, _env_type) else None for e in environments]
 
-                self.reward_funcs.append(get_reward)
-                self.reward_func_names.append(reward_env_type.__name__)
-                self.reward_processing_classes.append(None)
-                self.reward_weights = torch.cat([self.reward_weights, torch.ones(1)])
+                    self.reward_funcs.append(get_reward)
+                    self.reward_func_names.append(env_type.__name__)
+                    self.reward_processing_classes.append(None)
+                    self.reward_weights = torch.cat([self.reward_weights, torch.ones(1)])
         else:
             self.tools = tools
 
