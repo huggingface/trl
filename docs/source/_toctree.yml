@@ -109,8 +109,6 @@
     title: CPO
   - local: distillation_trainer
     title: Distillation
-  - local: gfpo
-    title: GFPO
   - local: gkd_trainer
     title: GKD
   - local: gmpo
@@ -131,8 +129,6 @@
     title: Online DPO
   - local: orpo_trainer
     title: ORPO
-  - local: papo_trainer
-    title: PAPO
   - local: ppo_trainer
     title: PPO
   - local: prm_trainer
