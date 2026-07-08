@@ -203,7 +203,7 @@ class TestDataCollatorForUnpairedPreference(TrlTestCase):
         torch.testing.assert_close(result["KL_input_ids"], expected_kl_input_ids)
         torch.testing.assert_close(result["KL_attention_mask"], expected_kl_attention_mask)
         torch.testing.assert_close(result["KL_completion_mask"], expected_kl_completion_mask)
-        assert result["label"] == [True, False]
+        torch.testing.assert_close(result["label"], torch.tensor([True, False]))
 
     def test_optional_reference_logps(self):
         collator = DataCollatorForUnpairedPreference(pad_token_id=0)
@@ -952,6 +952,24 @@ class TestKTOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    def test_evaluate_with_iterable_dataset(self):
+        # Regression test: Accelerate's dispatch for `IterableDataset` requires every batch field to be a tensor, so
+        # the collator must not leave `"label"` as a plain list of booleans, which broke streaming evaluation with
+        # `TypeError: Can only concatenate tensors but got <class 'bool'>`.
+        train_dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
+        eval_dataset = load_dataset(
+            "trl-internal-testing/zen", "standard_unpaired_preference", split="test", streaming=True
+        )
+
+        # `apo_zero_unpaired` avoids KTO's KL term, which is not possible with a streaming dataset.
+        training_args = KTOConfig(output_dir=self.tmp_dir, loss_type="apo_zero_unpaired", report_to="none")
+        trainer = KTOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=train_dataset
+        )
+
+        metrics = trainer.evaluate(eval_dataset=eval_dataset)
+        assert metrics["eval_loss"] is not None
 
     def test_train_with_chat_template_kwargs(self):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
