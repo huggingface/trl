@@ -602,6 +602,7 @@ class GRPOTrainer(_BaseTrainer):
             # Used where only the presence of a tool matters (chat template validation, async loop setup, tool metrics);
             # the per-example schema is rendered in `_tokenize_prompts`.
             self.tools = list(tools)
+            env_reward_types = []  # env classes already given a reward column (dedup: same class under two names)
             for name, factory in self.environment_factories.items():
                 instance = factory()
                 has_reset = False
@@ -623,13 +624,15 @@ class GRPOTrainer(_BaseTrainer):
                 self.tools += [method for method in methods if method not in self.tools]
 
                 # If this environment owns its reward via `get_reward`, expose it as an extra reward source (named after
-                # the env class, weight 1). One column per env class that defines `get_reward`; a rollout is scored only
-                # when its environment is an instance of that class, so mixing an env that owns its reward with one that
-                # does not is safe (the latter's rollouts return `None`, turned into NaN and ignored). `get_reward` may
-                # be async (e.g. an LLM judge); wrap it accordingly so `_calculate_rewards` runs it on the daemon event
-                # loop like any other async reward func.
-                if has_reward:
+                # the env class, weight 1). One column per env class that defines `get_reward` (deduplicated, since a
+                # dict factory may map several names to the same class); a rollout is scored only when its environment is
+                # an instance of that class, so mixing an env that owns its reward with one that does not is safe (the
+                # latter's rollouts return `None`, turned into NaN and ignored). `get_reward` may be async (e.g. an LLM
+                # judge); wrap it accordingly so `_calculate_rewards` runs it on the daemon event loop like any other
+                # async reward func.
+                if has_reward and type(instance) not in env_reward_types:
                     env_type = type(instance)
+                    env_reward_types.append(env_type)
                     if inspect.iscoroutinefunction(instance.get_reward):
 
                         async def get_reward(environments, _env_type=env_type, **kwargs):

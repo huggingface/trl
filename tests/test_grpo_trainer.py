@@ -2983,8 +2983,10 @@ class TestGRPOTrainer(TrlTestCase):
     @require_jmespath
     def test_environment_owned_reward_mixed_environments(self):
         # With a dict `environment_factory`, only some environments may own their reward via `get_reward`. Each such
-        # environment contributes its own reward column (named after its class); a rollout is scored only when its
-        # environment is that class, so mixing a reward-owning env with a plain one must not raise.
+        # env *class* contributes one reward column (named after its class); a rollout is scored only when its
+        # environment is that class, so mixing a reward-owning env with a plain one must not raise. Reward columns are
+        # deduplicated by class: two names mapping to the same `get_reward` class share a single column (no
+        # double-counting).
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
 
         class ScoredEnvironment:  # owns its reward
@@ -3031,11 +3033,12 @@ class TestGRPOTrainer(TrlTestCase):
             reward_funcs=format_reward,
             args=training_args,
             train_dataset=dataset,
-            environment_factory={"scored": ScoredEnvironment, "plain": PlainEnvironment},
+            # `scored` and `scored2` both build `ScoredEnvironment`, so they must collapse to a single reward column.
+            environment_factory={"scored": ScoredEnvironment, "scored2": ScoredEnvironment, "plain": PlainEnvironment},
         )
 
-        # Only `ScoredEnvironment` owns a reward, so a single env-reward column is appended after the trainer-owned
-        # reward func, with a fixed weight of 1.
+        # Only `ScoredEnvironment` owns a reward, and despite two names mapping to it, a single (deduplicated) env-reward
+        # column is appended after the trainer-owned reward func, with a fixed weight of 1.
         assert trainer.reward_func_names == ["format_reward", "ScoredEnvironment"]
         assert trainer.reward_weights.tolist() == [1.0, 1.0]
 
