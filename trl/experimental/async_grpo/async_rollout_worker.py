@@ -488,10 +488,11 @@ class _AsyncRolloutLoop:
                     # `_score_group` can place it in the matching env's reward column; rollouts whose env owns no reward
                     # record `None` (turned into NaN and ignored) to stay aligned with the group's other per-rollout lists.
                     if self._env_reward_types:
-                        if type(environment) in self._env_reward_types:
+                        env_type = type(environment)
+                        if env_type in self._env_reward_types:
                             get_reward = environment.get_reward
                             reward = await get_reward() if inspect.iscoroutinefunction(get_reward) else get_reward()
-                            group.env_rewards.append((type(environment), reward))
+                            group.env_rewards.append((env_type, reward))
                         else:
                             group.env_rewards.append(None)
                     if environment is not None:
