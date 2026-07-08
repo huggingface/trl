@@ -28,7 +28,7 @@ import transformers
 from accelerate import PartialState
 from accelerate.logging import get_logger
 from accelerate.utils import is_peft_model, tqdm
-from datasets import Dataset, IterableDataset, IterableDatasetDict, concatenate_datasets
+from datasets import Dataset, IterableDataset, concatenate_datasets
 from datasets.fingerprint import Hasher
 from packaging.version import Version
 from torch.utils.data import DataLoader, Sampler, SequentialSampler
@@ -45,6 +45,7 @@ from transformers.trainer_utils import EvalPrediction, has_length
 from transformers.utils import is_peft_available
 
 from ..data_utils import (
+    _tokenize,
     apply_chat_template,
     extract_prompt,
     get_dataset_column_names,
@@ -927,13 +928,6 @@ class KTOTrainer(_BaseTrainer):
             self.liger_loss = LigerFusedLinearKTOLoss(beta=self.beta, use_ref_model=(self.ref_model is not None))
 
         if self.precompute_ref_logps:
-            if isinstance(self.train_dataset, IterableDataset) or isinstance(
-                self.eval_dataset, (IterableDataset, IterableDatasetDict)
-            ):
-                raise ValueError(
-                    "`precompute_ref_log_probs=True` is not supported with IterableDataset. Please use a map-style "
-                    "Dataset or set `precompute_ref_log_probs=False`."
-                )
             self.train_dataset = self._precompute_ref_logps(
                 self.train_dataset,
                 "train",
@@ -953,43 +947,6 @@ class KTOTrainer(_BaseTrainer):
                         "eval",
                         self.args.precompute_ref_batch_size or self.args.per_device_eval_batch_size,
                     )
-
-    @staticmethod
-    def _tokenize(
-        processing_class: PreTrainedTokenizerBase | ProcessorMixin,
-        input: str | list,
-        is_vlm: bool,
-        **kwargs,
-    ) -> dict[str, list]:
-        """Tokenize a single example for dataset preprocessing.
-
-        Dispatches to `apply_chat_template` for conversational input (list of message dicts) and to `__call__` for
-        non-conversational input (str).
-
-        Args:
-            processing_class ([`~transformers.PreTrainedTokenizerBase`] or [`~transformers.ProcessorMixin`]):
-                The tokenizer or processor to use.
-            input (`str` or `list`):
-                A string for non-conversational input, or a list of message dicts for conversational input.
-            is_vlm (`bool`):
-                Whether the processing class is a VLM processor, requiring multimodal message preparation and batch
-                dimension normalization.
-            **kwargs:
-                Forwarded to `apply_chat_template` (e.g. `add_generation_prompt`, `return_assistant_tokens_mask`).
-
-        Returns:
-            `dict` with at least an `"input_ids"` key mapping to a flat `list[int]`.
-        """
-        if isinstance(input, list):  # conversational: list of message dicts
-            if is_vlm:
-                input = prepare_multimodal_messages(input)
-            result = processing_class.apply_chat_template(input, tokenize=True, return_dict=True, **kwargs)
-        else:  # non-conversational: plain text string
-            result = processing_class(text=input)
-        # VLMs emit a batch dimension even for single examples; unwrap it
-        if is_vlm:
-            return {k: v[0] for k, v in result.items()}
-        return result
 
     def _get_kl_dataset(
         self,
@@ -1087,35 +1044,27 @@ class KTOTrainer(_BaseTrainer):
             if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                 map_kwargs["desc"] = f"Tokenizing {dataset_name} dataset"
 
-            # Bind `_tokenize` to a local so `tokenize_fn` doesn't capture `self`: a closure over `self` makes the map
-            # function unhashable, forcing a random fingerprint that silently disables dataset caching.
-            tokenize = self._tokenize
-
-            def tokenize_fn(example, processing_class, is_vlm):
+            def tokenize_fn(example, processing_class):
                 tools = example.get("tools")
                 tools = json.loads(tools) if isinstance(tools, str) else tools
+                apply_chat_template_kwargs = {"tools": tools, **example.get("chat_template_kwargs", {})}
                 if is_conversational(example):
-                    chat_template_kwargs = example.get("chat_template_kwargs", {})
-                    prompt_ids = tokenize(
+                    prompt_ids = _tokenize(
                         processing_class,
                         example["prompt"],
-                        is_vlm,
-                        tools=tools,
                         add_generation_prompt=True,
-                        **chat_template_kwargs,
+                        **apply_chat_template_kwargs,
                     )["input_ids"]
-                    prompt_completion_ids = tokenize(
+                    prompt_completion_ids = _tokenize(
                         processing_class,
                         example["prompt"] + example["completion"],
-                        is_vlm,
-                        tools=tools,
-                        **chat_template_kwargs,
+                        **apply_chat_template_kwargs,
                     )["input_ids"]
                 else:
-                    prompt_ids = tokenize(processing_class, example["prompt"], is_vlm)["input_ids"]
-                    prompt_completion_ids = tokenize(
-                        processing_class, example["prompt"] + example["completion"], is_vlm
-                    )["input_ids"]
+                    prompt_ids = _tokenize(processing_class, example["prompt"])["input_ids"]
+                    prompt_completion_ids = _tokenize(processing_class, example["prompt"] + example["completion"])[
+                        "input_ids"
+                    ]
 
                 if not prompt_completion_ids[: len(prompt_ids)] == prompt_ids:
                     logger.warning(
@@ -1129,9 +1078,7 @@ class KTOTrainer(_BaseTrainer):
                     "completion_ids": prompt_completion_ids[len(prompt_ids) :],
                 }
 
-            dataset = dataset.map(
-                tokenize_fn, fn_kwargs={"processing_class": processing_class, "is_vlm": self._is_vlm}, **map_kwargs
-            )
+            dataset = dataset.map(tokenize_fn, fn_kwargs={"processing_class": processing_class}, **map_kwargs)
 
             # Get KL datasets if needed
             if self.calculate_KL:
@@ -1203,6 +1150,11 @@ class KTOTrainer(_BaseTrainer):
         return super()._get_train_sampler(train_dataset)
 
     def _precompute_ref_logps(self, dataset: Dataset, name: str, batch_size: int) -> Dataset:
+        if isinstance(dataset, IterableDataset):
+            raise ValueError(
+                "`precompute_ref_log_probs=True` is not supported with IterableDataset. Please use a map-style "
+                "Dataset or set `precompute_ref_log_probs=False`."
+            )
         model_hash = hash_module(self.ref_model or self.model)
         fingerprint = Hasher.hash((dataset._fingerprint, model_hash, self.calculate_KL))
         cache_file = dataset._get_cache_file_path(fingerprint)
