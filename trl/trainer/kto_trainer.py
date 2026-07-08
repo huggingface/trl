@@ -101,7 +101,7 @@ class DataCollatorForUnpairedPreference(DataCollatorMixin):
     When `"KL_completion_ids"` is present, the same three tensors are returned for the (mismatched) KL sequence under
     the `"KL_input_ids"`, `"KL_attention_mask"` and `"KL_completion_mask"` keys.
 
-    The returned dictionary also contains a `"label"` key with the list of labels. Optionally, the examples can contain
+    The returned dictionary also contains a `"label"` key with a tensor of labels. Optionally, the examples can contain
     `"ref_logps"` and `"ref_KL_logps"` keys, in which case the returned dictionary will also contain these keys with
     the corresponding tensors.
 
@@ -132,7 +132,7 @@ class DataCollatorForUnpairedPreference(DataCollatorMixin):
                                [1, 1, 1, 0, 0]]),
      'completion_mask': tensor([[0, 0, 0, 1, 1],
                                 [0, 0, 1, 0, 0]]),
-     'label': [True, False]}
+     'label': tensor([ True, False])}
 
     >>> # With KL completions
     >>> examples = [
@@ -152,7 +152,7 @@ class DataCollatorForUnpairedPreference(DataCollatorMixin):
                                   [1, 1, 1, 1]]),
      'KL_completion_mask': tensor([[0, 0, 0, 1],
                                    [0, 0, 1, 1]]),
-     'label': [True, False]}
+     'label': tensor([ True, False])}
     ```
     """
 
@@ -204,7 +204,7 @@ class DataCollatorForUnpairedPreference(DataCollatorMixin):
             output["ref_logps"] = torch.tensor([example["ref_logps"] for example in examples])
         if "ref_KL_logps" in examples[0]:
             output["ref_KL_logps"] = torch.tensor([example["ref_KL_logps"] for example in examples])
-        output["label"] = [example["label"] for example in examples]
+        output["label"] = torch.tensor([example["label"] for example in examples])
         return output
 
 
@@ -230,7 +230,7 @@ class DataCollatorForVisionUnpairedPreference(DataCollatorMixin):
     - `"attention_mask"`: Tensor indicating attention mask.
     - `"pixel_values"`: Tensor representing image pixel values.
     - `"completion_mask"`: Tensor indicating which tokens correspond to completions.
-    - `"label"`: List of booleans indicating whether each completion is desirable.
+    - `"label"`: Tensor of booleans indicating whether each completion is desirable.
     - When `calculate_kl` is `True`: `"KL_input_ids"`, `"KL_attention_mask"` and `"KL_completion_mask"` for the cycled
       KL sequences.
 
@@ -293,7 +293,7 @@ class DataCollatorForVisionUnpairedPreference(DataCollatorMixin):
                                   [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]]),
      'KL_completion_mask': tensor([[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0],
                                    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1]]),
-     'label': [True, False]}
+     'label': tensor([ True, False])}
     ```
     """
 
@@ -453,7 +453,7 @@ class DataCollatorForVisionUnpairedPreference(DataCollatorMixin):
             if "mm_token_type_ids" in processed_prompts:
                 output["KL_mm_token_type_ids"] = kl_mm_token_type_ids
 
-        output["label"] = [example["label"] for example in examples]
+        output["label"] = torch.tensor([example["label"] for example in examples])
         return output
 
 
