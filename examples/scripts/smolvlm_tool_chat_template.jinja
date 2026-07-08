@@ -1,0 +1,12 @@
+{# Tool-aware chat template for HuggingFaceTB/SmolVLM-Instruct. Keeps SmolVLM's native
+   "Role: <content> <end_of_utterance>" structure and <image> handling; renders assistant
+   turns as "Assistant: <content>" and tool-result turns (role == "tool") as a user-side
+   "<observation>" block. Tool schemas are baked into the system message text by the data
+   converter, so this template is schema-agnostic; assistant tool calls ride verbatim in the
+   assistant content as "<tool_call>{...}</tool_call>" text. No {% raw %}{% generation %}{% endraw %}
+   markers: masking is done by DataCollatorForVisionLanguageModeling(completion_only_loss=True)
+   on prompt/completion pairs, since assistant_only_loss is unsupported for VLMs. #}
+<|im_start|>{% for message in messages %}{% set role = message['role'] %}{% if role == 'tool' %}User: <observation>{% for line in message['content'] %}{% if line['type'] == 'text' %}{{ line['text'] }}{% endif %}{% endfor %}</observation><end_of_utterance>
+{% elif role == 'assistant' %}Assistant: {% for line in message['content'] %}{% if line['type'] == 'text' %}{{ line['text'] }}{% endif %}{% endfor %}{% if message.tool_calls %}{% for tc in message.tool_calls %}{% set fn = tc.function if tc.function is defined else tc %}<tool_call>{"name": "{{ fn.name }}", "arguments": {{ fn.arguments | tojson }}}</tool_call>{% endfor %}{% endif %}<end_of_utterance>
+{% else %}{{ role | capitalize }}{% if message['content'][0]['type'] == 'image' %}:{% else %}: {% endif %}{% for line in message['content'] %}{% if line['type'] == 'text' %}{{ line['text'] }}{% elif line['type'] == 'image' %}{{ '<image>' }}{% endif %}{% endfor %}<end_of_utterance>
+{% endif %}{% endfor %}{% if add_generation_prompt %}Assistant: {% endif %}

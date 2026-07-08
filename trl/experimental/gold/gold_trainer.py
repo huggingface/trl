@@ -12,7 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import asyncio
+import atexit
+import copy
+import inspect
+import json
 import random
+import sys
 import textwrap
 import warnings
 from collections import defaultdict, deque
@@ -22,6 +28,7 @@ from functools import partial
 from itertools import takewhile
 from typing import Any, Optional
 
+import numpy as np
 import torch
 import torch.distributed as dist
 import torch.nn as nn
@@ -54,6 +61,14 @@ from transformers.utils import (
     is_rich_available,
 )
 
+from ...chat_template_utils import (
+    _SUPPORTS_RESPONSE_TEMPLATE,
+    add_response_schema,
+    get_training_chat_template,
+    is_chat_template_prefix_preserving,
+    parse_response,
+    supports_tool_calling,
+)
 from ...data_utils import (
     is_conversational,
     maybe_convert_to_chatml,
@@ -62,9 +77,10 @@ from ...data_utils import (
 )
 from ...extras.profiling import profiling_decorator
 from ...generation.vllm_generation import VLLMGeneration
-from ...import_utils import is_vllm_available
+from ...import_utils import is_jmespath_available, is_vllm_available
 from ...models import prepare_deepspeed
 from ...models.utils import _ForwardRedirection, unwrap_model_for_generation
+from ...trainer.grpo_trainer import EnvironmentFactory
 from ...trainer.sft_trainer import SFTTrainer
 from ...trainer.utils import (
     RepeatSampler,
@@ -73,7 +89,9 @@ from ...trainer.utils import (
     get_config_model_id,
     identity,
     pad,
+    shutdown_event_loop_in_daemon,
     split_tensor_dict,
+    start_event_loop_in_daemon,
 )
 from ..utils import (
     DataCollatorForChatML,
@@ -814,6 +832,8 @@ class GOLDTrainer(SFTTrainer):
         ),
         preprocess_logits_for_metrics: (Callable[[torch.Tensor, torch.Tensor], torch.Tensor] | None) = None,
         peft_config: Optional["PeftConfig"] = None,
+        tools: list[Callable] | None = None,
+        environment_factory: EnvironmentFactory | None = None,
     ):
         self.model_name_or_path = model if isinstance(model, str) else model.config._name_or_path
         self.model_revision = (args.model_init_kwargs or {}).get("revision")
@@ -922,7 +942,13 @@ class GOLDTrainer(SFTTrainer):
                 )
                 data_collator = identity
             else:
-                data_collator = DataCollatorForChatML(tokenizer=self._tokenizer, max_length=args.max_length)
+                data_collator = DataCollatorForChatML(
+                    tokenizer=self._tokenizer,
+                    max_length=args.max_length,
+                    # With tools, the on-policy path re-renders prompts from messages (tool schemas + environment
+                    # observations), so the collator must forward the raw prompt message lists.
+                    forward_prompt_messages=bool(tools or environment_factory),
+                )
 
         # Liger fused GKD loss (JSD)
         self.use_liger_gkd_loss = False
@@ -996,6 +1022,153 @@ class GOLDTrainer(SFTTrainer):
 
         # Hybrid ULD loss configuration is handled in ULDLoss class
 
+        # Tools
+        if tools:
+            if not Version(transformers.__version__) >= Version("5.0.0"):
+                raise ImportError(
+                    "Using tools with GOLDTrainer requires transformers version 5.0.0 or higher. Please upgrade "
+                    "transformers with `pip install --upgrade transformers` to use this feature."
+                )
+        if environment_factory:
+            if not Version(transformers.__version__) >= Version("5.2.0"):
+                raise ImportError(
+                    "Using `environment_factory` with GOLDTrainer requires transformers version 5.2.0 or higher. "
+                    "Please install transformers from the main branch with `pip install "
+                    "git+https://github.com/huggingface/transformers.git@main` to use this feature."
+                )
+        if tools or environment_factory:
+            if not is_jmespath_available():
+                raise ImportError(
+                    "Using tools with GOLDTrainer requires the jmespath library for response parsing. Please install "
+                    "it with `pip install jmespath` to use this feature."
+                )
+            if not supports_tool_calling(processing_class):
+                raise ValueError(
+                    "The provided chat template does not support tool calling. The template must be able to render a "
+                    "full tool-calling conversation (user -> assistant with tool_calls -> tool)."
+                )
+            # Tools require the student to generate the tool calls, so teacher-generated sequences (seq_kd) are not
+            # supported: the tool-execution loop only runs during student (on-policy) generation.
+            if args.seq_kd:
+                raise ValueError("Using tools with GOLDTrainer is not supported together with `seq_kd=True`.")
+            # Tool masking relies on the student and teacher sharing a tokenizer (labels == -100 masks the same
+            # positions for both). Cross-tokenizer ULD would additionally need teacher-side masking, which is not
+            # supported.
+            if args.use_uld_loss:
+                raise ValueError(
+                    "Using tools with GOLDTrainer is only supported for same-family distillation (student and "
+                    "teacher sharing a tokenizer). Set `use_uld_loss=False`."
+                )
+            # The VLM tool path generates through vLLM (the transformers fallback collates lazily per slice and
+            # cannot host the multi-turn tool loop).
+            if self._is_vlm and not args.use_vllm:
+                raise ValueError("Using tools with a vision-language student requires `use_vllm=True`.")
+            # Packing concatenates multiple examples into one sequence and drops the per-token `tool_mask` /
+            # `completion_mask` columns, so tool-result tokens can no longer be masked out of the off-policy loss.
+            # Reject the combination instead of silently supervising tool results.
+            if args.packing:
+                raise ValueError("Using tools with GOLDTrainer is not supported together with `packing=True`.")
+            # Off-policy slices (lmbda < 1) consume dataset completions, so the dataset must itself carry the
+            # tool-calling conversation. Purely on-policy training (lmbda == 1) generates tool calls with the student
+            # and needs no tool data in the dataset.
+            if args.lmbda < 1.0:
+                tool_messages = dataset_sample.get("completion") or dataset_sample.get("messages") or []
+                has_tool_message = any(
+                    isinstance(message, dict) and (message.get("role") == "tool" or message.get("tool_calls"))
+                    for message in tool_messages
+                )
+                if "tools" not in dataset_sample or not has_tool_message:
+                    raise ValueError(
+                        "When training with `tools` and `lmbda < 1.0`, the training dataset must contain tool-calling "
+                        "data for the off-policy slices: a `tools` column and completion/messages that include at "
+                        "least one tool call (assistant `tool_calls`) or `tool` response. Set `lmbda=1.0` to train "
+                        "purely on-policy (student-generated tool calls), which does not require tool data in the "
+                        "dataset."
+                    )
+
+        # Set up the environment and extract its methods to be used as tools.
+        tools = tools or []
+        self._standalone_tools = tools  # tools that are not bound to the environment
+
+        if environment_factory is not None:
+            # The environment instances used by a batch are only known at batch time. Here we just probe one instance to
+            # validate its `reset` method and extract its tool methods, used to render the tool schema in the prompt.
+            # Instances are pooled and reused (reset) across batches; the probe seeds the pool so it is not wasted. The
+            # pool grows only when a batch needs more concurrent instances than have been created so far, preserving the
+            # "construct once, reset often" contract.
+            self.environment_factory = environment_factory
+            instance = environment_factory()
+            has_reset = False
+            methods = []
+            for member_name, member in inspect.getmembers(instance, predicate=inspect.ismethod):
+                if member_name == "reset":
+                    has_reset = True
+                elif not member_name.startswith("_"):
+                    methods.append(member)
+            if not has_reset:
+                raise ValueError(
+                    "Each environment instance returned by `environment_factory` must define a callable `reset`."
+                )
+            self._environment_pool = [instance]  # reusable environment instances
+            self.tools = tools + methods
+        else:
+            self.environment_factory = None
+            self.tools = tools
+
+        # The per-rollout environment instances and tool dicts both depend on the batch, so they are built in the
+        # on-policy generation path, right before generation.
+        self.environments = None
+
+        # Every tool-flow render that locates message boundaries by incremental prefix rendering — off-policy dataset
+        # prep, both collators, and `_get_tool_suffix_ids` on the on-policy path — requires a prefix-preserving chat
+        # template. If the tokenizer's template is not prefix-preserving (e.g. Qwen3 drops historical `<think>` blocks,
+        # shifting every incremental span so tool-result tokens leak into the loss), all of them render with the
+        # training-safe template instead; `None` keeps the tokenizer's own template.
+        self._tool_chat_template = None
+        if self.tools and not is_chat_template_prefix_preserving(processing_class):
+            self._tool_chat_template = get_training_chat_template(processing_class)
+        if isinstance(data_collator, DataCollatorForChatML):
+            data_collator.chat_template = self._tool_chat_template
+
+        # The VLM collator re-renders prompts and multi-turn tool completions, so it needs the tool schemas.
+        if self._vlm_collator is not None:
+            self._vlm_collator.tools = self.tools or None  # `or None`: Llama bug: renders boilerplate for tools=[]
+            self._vlm_collator.chat_template = self._tool_chat_template
+
+        # Check for async functions to start an event loop on a daemon thread
+        self._has_async_funcs = any(inspect.iscoroutinefunction(func) for func in self.tools)
+        if self._has_async_funcs:
+            self.async_loop_thread, self.async_loop, self.async_loop_ready_event = start_event_loop_in_daemon(
+                name="GOLDTrainer-AsyncLoop"
+            )
+            # wait until the event loop is running in the daemon thread
+            self.async_loop_ready_event.wait()
+            atexit.register(shutdown_event_loop_in_daemon, self.async_loop_thread, self.async_loop)
+
+        # `add_response_schema` sets the response template (transformers >= 5.13) or legacy schema for known chat
+        # templates, so tool calls can be parsed. Skip if one is already set; warn if it's a migratable legacy schema.
+        if self.tools:
+            has_template = getattr(self._tokenizer, "response_template", None) is not None
+            has_schema = getattr(self._tokenizer, "response_schema", None) is not None
+            if not has_template and not has_schema:
+                processing_class = add_response_schema(processing_class)
+            elif has_schema and not has_template and _SUPPORTS_RESPONSE_TEMPLATE:
+                warnings.warn(
+                    "The tokenizer has a legacy `response_schema` set but no `response_template`. The installed "
+                    "transformers supports the new-style `response_template`; consider migrating, as `response_schema` "
+                    "support will eventually be removed. See the Transformers response-parsing docs.",
+                    FutureWarning,
+                )
+        # In multi-turn training, the chat template *must* be prefix-preserving. If the tokenizer's original template
+        # isn't, we replace it with a training-safe, prefix-preserving template. This is (re-)applied *after*
+        # `super().__init__()` below, because `SFTTrainer.__init__` unconditionally sets `self.chat_template` from
+        # `assistant_only_loss` and would otherwise clobber the tool template back to `None`.
+        self.max_tool_calling_iterations = args.max_tool_calling_iterations or sys.maxsize
+        self.max_completion_length = args.max_completion_length
+        # GOLDConfig has no chat_template_kwargs; kept as an empty dict so the generation paths shared with
+        # GRPOTrainer stay identical.
+        self.chat_template_kwargs = {}
+
         super().__init__(
             model,
             args=args,
@@ -1009,6 +1182,13 @@ class GOLDTrainer(SFTTrainer):
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
             peft_config=peft_config,
         )
+
+        # Re-establish the prefix-preserving tool template that `SFTTrainer.__init__` just reset from
+        # `assistant_only_loss`. Only override for the tools path so the non-tool `assistant_only_loss` behavior set
+        # by `super().__init__()` is preserved. Without this, `_get_tool_suffix_ids` renders tool suffixes with the
+        # tokenizer's original (non-prefix-preserving) template and raises on templates like Qwen3.
+        if self.tools and self._tool_chat_template is not None:
+            self.chat_template = self._tool_chat_template
 
         if args.disable_dropout:
             disable_dropout_in_model(self.model)
@@ -1120,6 +1300,7 @@ class GOLDTrainer(SFTTrainer):
                 max_completion_length=args.max_completion_length,
                 logprobs=None,
             )
+            self.vllm_mode = args.vllm_mode
             self.vllm_sync_frequency = args.vllm_sync_frequency
             self._last_vllm_sync_step = -self.vllm_sync_frequency
 
@@ -1137,6 +1318,7 @@ class GOLDTrainer(SFTTrainer):
             "original_completion_text",
             "byte_offsets",
             "completion_mask",
+            "tool_mask",
             "images",
             "image",
             "pixel_values",
@@ -1593,6 +1775,9 @@ class GOLDTrainer(SFTTrainer):
     def _generate_on_policy_for_slices(
         self, slices: list[dict[str, torch.Tensor | Any]], on_policy_indices: list[int]
     ):
+        if self.tools:
+            return self._generate_on_policy_with_tools(slices, on_policy_indices)
+
         prompt_ids_list = []
         local_slice_indices = []
         for slice_idx in on_policy_indices:
@@ -1636,6 +1821,504 @@ class GOLDTrainer(SFTTrainer):
             self.generation_config.max_new_tokens,
         )
 
+    @profiling_decorator
+    def _generate_on_policy_with_tools(
+        self, slices: list[dict[str, torch.Tensor | Any]], on_policy_indices: list[int]
+    ):
+        """On-policy generation with tool calling: re-render prompts from messages with tool schemas (and environment
+        observations), generate, then run the multi-turn tool-execution loop."""
+        # Collect the raw prompt message lists forwarded by the collator. Copy to avoid mutating the batch: the
+        # environment reset and the tool loop both append messages to the prompts.
+        prompts = []
+        local_slice_indices = []
+        reset_kwargs_list = []
+        for slice_idx in on_policy_indices:
+            slice_reset_kwargs = slices[slice_idx].get("reset_kwargs")
+            for i, prompt in enumerate(slices[slice_idx]["prompt"]):
+                prompts.append(copy.deepcopy(prompt))
+                local_slice_indices.append(slice_idx)
+                if slice_reset_kwargs is not None:
+                    reset_kwargs_list.append(slice_reset_kwargs[i])
+
+        # Draw one reusable instance per rollout from the pool, creating more only when this batch needs more concurrent
+        # instances than exist.
+        if self.environment_factory is not None:
+            self.environments = []
+            for i in range(len(prompts)):
+                if i == len(self._environment_pool):
+                    self._environment_pool.append(self.environment_factory())
+                self.environments.append(self._environment_pool[i])
+
+        # Build the per-rollout tool dicts for this batch: the standalone tools plus, for each rollout, the methods of
+        # its environment. Done here (not at init) because the environment instances are drawn at batch time.
+        self._sync_tool_dicts = []
+        self._async_tool_dicts = []
+        for i in range(len(prompts)):
+            methods = []
+            if self.environments:
+                methods = [
+                    member
+                    for member_name, member in inspect.getmembers(self.environments[i], predicate=inspect.ismethod)
+                    if member_name != "reset" and not member_name.startswith("_")
+                ]
+            sync_tool_dict, async_tool_dict = {}, {}
+            for tool in self._standalone_tools + methods:
+                if inspect.iscoroutinefunction(tool):
+                    async_tool_dict[tool.__name__] = tool
+                else:
+                    sync_tool_dict[tool.__name__] = tool
+            self._sync_tool_dicts.append(sync_tool_dict)
+            self._async_tool_dicts.append(async_tool_dict)
+
+        if self.environments:
+            # `DataCollatorForChatML(forward_prompt_messages=True)` forwards the raw example dicts as `reset_kwargs`,
+            # so `reset` receives the same per-rollout kwargs as the VLM path and GRPO.
+            for prompt, environment, reset_kwargs in zip(prompts, self.environments, reset_kwargs_list, strict=True):
+                observation = environment.reset(**reset_kwargs)
+                if observation is None:
+                    continue
+                if isinstance(observation, list) and isinstance(prompt[-1]["content"], str):
+                    prompt[-1]["content"] = [{"type": "text", "text": prompt[-1]["content"]}]
+                if isinstance(observation, str) and isinstance(prompt[-1]["content"], list):
+                    observation = [{"type": "text", "text": observation}]
+                prompt[-1]["content"] += observation
+
+        # Render the prompts with the tool schemas so the model knows how to call them
+        tokenized = self.processing_class.apply_chat_template(
+            conversation=prompts,
+            tools=self.tools or None,  # `or None`: Llama bug: it renders tool boilerplate for tools=[]
+            chat_template=self.chat_template,
+            add_generation_prompt=True,
+            tokenize=True,
+            return_dict=True,
+            **self.chat_template_kwargs,
+        )
+        prompt_ids_list = tokenized["input_ids"]
+
+        prompts_text = self.processing_class.batch_decode(
+            prompt_ids_list,
+            skip_special_tokens=False,
+        )
+
+        completion_ids, logprobs = self._generate_single_turn(prompt_ids_list, None, {})
+
+        # Decode completions with `parse_response`, which handles tool calls (tools require transformers >= 5.0.0 and
+        # a response schema, both enforced at init).
+        completions = [
+            [parse_response(self._tokenizer, ids, prefix=prompt_ids_list[i])] for i, ids in enumerate(completion_ids)
+        ]
+
+        # Extract tool calls from the completions and (possibly) execute them
+        (
+            tool_mask,
+            completions,
+            completion_ids,
+            logprobs,
+            tool_call_count,
+            tool_failure_count,
+            tool_images,
+        ) = self._tool_call_loop(prompts, prompt_ids_list, completion_ids, completions, logprobs, None, {})
+        if any(imgs for imgs in tool_images):
+            raise NotImplementedError(
+                "Multimodal tool responses (tools returning images) are not supported by GOLDTrainer."
+            )
+
+        mode = "train" if self.model.training else "eval"
+        device = self.accelerator.device
+        agg_tool_call_count = self.accelerator.gather(torch.tensor(tool_call_count, device=device)).sum()
+        agg_num_prompts = self.accelerator.gather(torch.tensor(len(prompts), device=device)).sum()
+        tool_call_frequency = (agg_tool_call_count / agg_num_prompts).item()
+        self._metrics[mode]["tools/call_frequency"].append(tool_call_frequency)
+        agg_tool_failure_count = self.accelerator.gather(torch.tensor(tool_failure_count, device=device)).sum()
+        failure_frequency = (agg_tool_failure_count / agg_tool_call_count).item() if agg_tool_call_count > 0 else 0.0
+        self._metrics[mode]["tools/failure_frequency"].append(failure_frequency)
+
+        self._process_completions_to_buffer(
+            slices,
+            on_policy_indices,
+            local_slice_indices,
+            completion_ids,
+            prompt_ids_list,
+            prompts_text,
+            self.generation_config.max_new_tokens,
+            tool_masks=tool_mask,
+        )
+
+    def _unexpanded_prompt_ids(self, prompts):
+        """Tokenizer-only (unexpanded) prompt IDs for vLLM (issue #6294).
+
+        Render the prompts to text (which keeps a single `<image>` placeholder per image), then tokenize *without* the
+        image processor. vLLM applies its own image-token expansion for token-ID prompts, so it must receive these
+        unexpanded IDs; the processor-expanded IDs (with the image block already blown up to hundreds of tokens) would
+        be expanded a second time and desync from the image features.
+        """
+        texts = self.processing_class.apply_chat_template(
+            conversation=prompts,
+            tools=self.tools or None,  # `or None`: Llama bug: it renders tool boilerplate for tools=[]
+            chat_template=self.chat_template,
+            add_generation_prompt=True,
+            tokenize=False,
+            **self.chat_template_kwargs,
+        )
+        return self.processing_class.tokenizer(texts, add_special_tokens=False)["input_ids"]
+
+    def _generate_single_turn(self, prompt_ids, images, multimodal_fields, vllm_prompt_ids=None):
+        device = self.accelerator.device
+
+        # Generate completions using either vLLM or regular generation
+        if self.use_vllm:
+            # Sync weights to vLLM if the sync frequency has elapsed
+            if (
+                self.state.global_step != self._last_vllm_sync_step
+                and self.state.global_step >= self._last_vllm_sync_step + self.vllm_sync_frequency
+            ):
+                self.vllm_generation.sync_weights()
+                self._last_vllm_sync_step = self.state.global_step
+
+            # Generate using vLLM with raw token IDs. For VLMs, feed the *unexpanded* (tokenizer-only, single
+            # `<image>`) prompt IDs when available: vLLM re-expands image placeholders in token-ID prompts, so passing
+            # the processor-expanded IDs would double-expand and corrupt the sequence (issue #6294). The expanded
+            # `prompt_ids` remain the source of truth for the training forward pass and all length bookkeeping.
+            _, completion_ids, _, _ = self.vllm_generation.generate(
+                prompts=vllm_prompt_ids if vllm_prompt_ids is not None else prompt_ids,
+                images=images,
+                num_generations=self.num_generations,
+            )
+            logprobs = None  # GOLD does not use sampling logprobs
+
+        else:
+            # Regular generation path: left-pad token IDs into tensors
+            prompt_tensors = [torch.tensor(ids) for ids in prompt_ids]
+            padded_ids = pad(prompt_tensors, padding_value=self._tokenizer.pad_token_id, padding_side="left")
+            attention_mask = pad([torch.ones_like(t) for t in prompt_tensors], padding_value=0, padding_side="left")
+            generate_inputs = {"input_ids": padded_ids, "attention_mask": attention_mask}
+            # For VLMs, include multimodal fields as tensors (pixel_values, image_grid_thw, etc.)
+            for k, v in multimodal_fields.items():
+                if isinstance(v, torch.Tensor):
+                    generate_inputs[k] = v
+                elif isinstance(v, list) and v and isinstance(v[0], list):
+                    # Per-token field (e.g., token_type_ids): left-pad like input_ids
+                    generate_inputs[k] = pad([torch.tensor(x) for x in v], padding_value=0, padding_side="left")
+                else:
+                    generate_inputs[k] = torch.tensor(np.array(v))
+            generate_inputs = super()._prepare_inputs(generate_inputs)
+
+            with (
+                unwrap_model_for_generation(
+                    self.model,
+                    self.accelerator,
+                    generation_kwargs=self.generation_kwargs,
+                ) as unwrapped_model,
+                torch.no_grad(),
+            ):
+                prompt_completion_ids = unwrapped_model.generate(
+                    **generate_inputs, generation_config=self.generation_config
+                )
+            # Compute prompt length and extract completion ids
+            prompt_length = generate_inputs["input_ids"].size(1)
+            completion_ids = prompt_completion_ids[:, prompt_length:]
+
+            # Mask everything after the first EOS token
+            is_eos = completion_ids == self._tokenizer.eos_token_id
+            eos_idx = torch.full((is_eos.size(0),), is_eos.size(1), dtype=torch.long, device=device)
+            eos_idx[is_eos.any(dim=1)] = is_eos.int().argmax(dim=1)[is_eos.any(dim=1)]
+            sequence_indices = torch.arange(is_eos.size(1), device=device).expand(is_eos.size(0), -1)
+            completion_mask = (sequence_indices <= eos_idx.unsqueeze(1)).int()
+            completion_ids = [
+                c[m].tolist() for c, m in zip(completion_ids.cpu(), completion_mask.bool().cpu(), strict=True)
+            ]
+            logprobs = None  # not used in this case
+
+        return completion_ids, logprobs
+
+    def _get_tool_suffix_ids(self, tool_messages):
+        """Get token IDs for tool result formatting by using a minimal dummy conversation."""
+        # Use the real tool name instead of a dummy: some templates (e.g. GPT-OSS) derive the tool response
+        # header from the assistant's tool call name.
+        dummy_tool_calls = [{"type": "function", "function": {"name": tool_messages[0]["name"], "arguments": {}}}]
+        dummy_messages = [
+            {"role": "user", "content": "dummy"},
+            {
+                "role": "assistant",
+                # "content" is required here because VLM processors crash on tokenize=True without it
+                # (KeyError in processing_utils.py). See huggingface/transformers#45290.
+                "content": "",
+                "tool_calls": dummy_tool_calls,
+            },
+        ]
+        if self._is_vlm:
+            dummy_messages = prepare_multimodal_messages(dummy_messages)
+            tool_messages = prepare_multimodal_messages(tool_messages)
+
+        prefix_ids = self.processing_class.apply_chat_template(
+            dummy_messages,
+            add_generation_prompt=False,
+            tokenize=True,
+            chat_template=self.chat_template,
+            return_dict=False,
+            **self.chat_template_kwargs,
+        )
+        full_ids = self.processing_class.apply_chat_template(
+            dummy_messages + tool_messages,
+            add_generation_prompt=True,
+            tokenize=True,
+            chat_template=self.chat_template,
+            return_dict=False,
+            **self.chat_template_kwargs,
+        )
+        # VLM processors return batched output (list of lists), unbatch for single conversation
+        if self._is_vlm:
+            prefix_ids = prefix_ids[0]
+            full_ids = full_ids[0]
+
+        # Some chat templates (notably Qwen3/Qwen3.5) render "...<|im_end|>\n" after an assistant/tool block.
+        # When we compute `suffix_ids` by slicing `full_ids`, we must align the slicing boundary to
+        # EOS (not EOS + newline). Templates that don't use EOS as end-of-turn (e.g. Gemma uses
+        # <turn|>) skip this trimming.
+        eos_positions = [i for i, tok_id in enumerate(prefix_ids) if tok_id == self._tokenizer.eos_token_id]
+        if eos_positions:
+            prefix_ids = prefix_ids[: eos_positions[-1] + 1]
+
+        if full_ids[: len(prefix_ids)] != prefix_ids:
+            raise ValueError("Unexpected tokenization: the EOS-trimmed prefix IDs are not a prefix of the full IDs.")
+        return full_ids[len(prefix_ids) :]
+
+    def _tool_call_loop(
+        self,
+        prompts,
+        prompt_ids,
+        completion_ids,
+        completions,
+        logprobs,
+        images,
+        multimodal_fields,
+        vllm_prompt_ids=None,
+    ):
+        # `vllm_prompt_ids` (issue #6294): the unexpanded (tokenizer-only) prompt IDs used only for the vLLM generate
+        # calls in VLM mode. `prompt_ids` (processor-expanded) stays the source of truth for all length bookkeeping and
+        # the training forward pass. `None` for text models, where the two are identical.
+        # Tool execution loop: execute tools, then regenerate completions with tool results appended to the prompt
+        tool_calls = [completion[0].get("tool_calls") for completion in completions]
+        idxs_with_tool = [idx for idx, tool_call in enumerate(tool_calls) if tool_call]
+        tool_calls = [tool_calls[idx] for idx in idxs_with_tool]
+        tool_mask = [[1] * len(ids) for ids in completion_ids]  # 0 for tool result tokens, 1 elsewhere
+        # Collect images from multimodal tool responses for the forward pass
+        tool_images = [[] for _ in completion_ids]
+        tool_call_count = 0
+        tool_failure_count = 0
+        iteration_num = 0
+
+        while idxs_with_tool and iteration_num < self.max_tool_calling_iterations:
+            prompt_completion_tools = [prompts[i] for i in idxs_with_tool]  # select only prompts that need tool calls
+            # Snapshot state so we can rollback tool results that would exceed max_completion_length
+            completions_len_before = [len(completions[i]) for i in idxs_with_tool]
+            tool_images_len_before = [len(tool_images[i]) for i in idxs_with_tool]
+            prompts_len_before = [len(prompts[i]) for i in idxs_with_tool]
+
+            # Call the tools, and build the new prompt for generation
+            for idx in range(len(idxs_with_tool)):
+                idx_with_tool = idxs_with_tool[idx]
+                tool_call_list = tool_calls[idx]
+                prompt_completion_tool = prompt_completion_tools[idx]
+                sync_tool_dict = self._sync_tool_dicts[idx_with_tool]
+                async_tool_dict = self._async_tool_dicts[idx_with_tool]
+                # Append the last assistant message (which triggered tool_calls) to the prompt
+                prompt_completion_tool.append(completions[idx_with_tool][-1])
+                async_coros = []
+                tool_call_results = []
+                for tool_call in tool_call_list:
+                    tool_call_count += 1
+                    if tool_call["type"] == "function":
+                        function = tool_call["function"]
+                        name = function["name"]
+                        try:
+                            if name in sync_tool_dict:
+                                tool_call_results.append((name, sync_tool_dict[name](**function["arguments"])))
+                            elif name in async_tool_dict:
+                                async_coros.append((name, async_tool_dict[name](**function["arguments"])))
+                            else:
+                                raise ValueError(f"Tool {name} not found.")
+                        except Exception as e:
+                            tool_failure_count += 1
+                            result = {"error": str(e)}
+                            tool_call_results.append((name, result))
+                    else:
+                        tool_failure_count += 1
+                        name = tool_call.get("name", "unknown")
+                        tool_call_results.append((name, {"error": f"Unsupported tool call type: {tool_call['type']}"}))
+
+                if async_coros:
+
+                    async def _run_async_tools(async_coros):
+                        coros = [coro for _, coro in async_coros]
+                        results = await asyncio.gather(*coros, return_exceptions=True)
+                        return [(name, result) for (name, _), result in zip(async_coros, results, strict=False)]
+
+                    async_results = asyncio.run_coroutine_threadsafe(
+                        _run_async_tools(async_coros), self.async_loop
+                    ).result()
+
+                    for name, result in async_results:
+                        if isinstance(result, Exception):
+                            tool_failure_count += 1
+                            tool_call_results.append((name, {"error": str(result)}))
+                        else:
+                            tool_call_results.append((name, result))
+
+                for name, result in tool_call_results:
+                    # Support multimodal tool responses: if the tool returns a list of content blocks
+                    # (e.g., [{"type": "image", "image": ...}, {"type": "text", "text": "..."}]),
+                    # pass them through directly so _tokenize_prompts can extract images for VLMs.
+                    content = result if isinstance(result, list) else str(result)
+                    tool_message = {"role": "tool", "name": name, "content": content}
+                    # Collect images from multimodal tool responses
+                    if isinstance(content, list):
+                        for part in content:
+                            if isinstance(part, dict) and part.get("type") == "image":
+                                tool_images[idx_with_tool].append(part["image"])
+                    prompt_completion_tool.append(tool_message)
+                    completions[idx_with_tool].append(tool_message)
+
+            # Build token IDs by concatenation: prompt + completion + tool_suffix. The unexpanded variant (issue #6294)
+            # reuses the same completion + suffix (model/tool text has no image tokens) with the unexpanded prompt.
+            prompt_completion_tool_ids = []
+            vllm_prompt_completion_tool_ids = [] if vllm_prompt_ids is not None else None
+            for idx in range(len(idxs_with_tool)):
+                idx_with_tool = idxs_with_tool[idx]
+                # Extract trailing tool messages from completions
+                tool_messages = []
+                for message in reversed(completions[idx_with_tool]):
+                    if message["role"] == "tool":
+                        tool_messages.insert(0, message)
+                    else:
+                        break
+                suffix_ids = self._get_tool_suffix_ids(tool_messages)
+                prompt_completion_tool_ids.append(
+                    prompt_ids[idx_with_tool] + completion_ids[idx_with_tool] + suffix_ids
+                )
+                if vllm_prompt_ids is not None:
+                    vllm_prompt_completion_tool_ids.append(
+                        vllm_prompt_ids[idx_with_tool] + completion_ids[idx_with_tool] + suffix_ids
+                    )
+
+            # Drop tool results whose addition would push the sequence past max_completion_length (the completion
+            # budget) or past the backend context ceiling (vLLM and transformers will error out on inputs longer than
+            # the model's max length). The sample exits the loop with its completion as-is, and the tool
+            # messages/images appended this iteration are rolled back so completions and tool_images stay consistent
+            # with completion_ids.
+            if self.use_vllm and self.vllm_mode == "colocate":
+                max_model_len = self.vllm_generation.llm.llm_engine.model_config.max_model_len
+            else:
+                config = self.model.config.text_config if self._is_vlm else self.model.config
+                max_model_len = config.max_position_embeddings
+            overlong = [
+                len(pct) - len(prompt_ids[i]) > self.max_completion_length or len(pct) >= max_model_len
+                for i, pct in zip(idxs_with_tool, prompt_completion_tool_ids, strict=True)
+            ]
+            for idx in range(len(idxs_with_tool)):
+                if overlong[idx]:
+                    idx_with_tool = idxs_with_tool[idx]
+                    del completions[idx_with_tool][completions_len_before[idx] :]
+                    del tool_images[idx_with_tool][tool_images_len_before[idx] :]
+                    del prompts[idx_with_tool][prompts_len_before[idx] :]
+            # Keep only non-overlong items for further processing
+            idxs_with_tool = [idx for idx, o in zip(idxs_with_tool, overlong, strict=True) if not o]
+            prompt_completion_tool_ids = [
+                pct for pct, o in zip(prompt_completion_tool_ids, overlong, strict=True) if not o
+            ]
+            if vllm_prompt_ids is not None:
+                vllm_prompt_completion_tool_ids = [
+                    pct for pct, o in zip(vllm_prompt_completion_tool_ids, overlong, strict=True) if not o
+                ]
+            if not idxs_with_tool:
+                break  # all overlong, exit tool loop
+
+            # Filter images and multimodal fields to match the current subset (index into full batch).
+            # Merge tool response images so the model can see visual feedback during generation.
+            merged_images = images
+            if any(imgs for imgs in tool_images):
+                if merged_images is None:
+                    merged_images = [imgs if imgs else None for imgs in tool_images]
+                else:
+                    merged_images = [
+                        (existing or []) + new for existing, new in zip(merged_images, tool_images, strict=True)
+                    ]
+            loop_images = [merged_images[i] for i in idxs_with_tool] if merged_images else None
+            if multimodal_fields:
+                loop_multimodal_fields = {}
+                for k, v in multimodal_fields.items():
+                    selected = [v[i] for i in idxs_with_tool]
+                    # Per-token fields (e.g. token_type_ids) need zero-padding to match extended prompt length
+                    if isinstance(selected[0], list):
+                        selected = [
+                            s + [0] * (len(pct) - len(s))
+                            for s, pct in zip(selected, prompt_completion_tool_ids, strict=True)
+                        ]
+                    loop_multimodal_fields[k] = selected
+            else:
+                loop_multimodal_fields = {}
+
+            # Generate new completions after tool execution (using concatenated IDs, no re-tokenization)
+            post_tool_ids, post_tool_logprobs = self._generate_single_turn(
+                prompt_completion_tool_ids,
+                loop_images,
+                loop_multimodal_fields,
+                vllm_prompt_ids=vllm_prompt_completion_tool_ids,
+            )
+
+            # Truncate so that pct[len(prompt_ids[idx]) :] + post_tool does not exceed max_completion_length.
+            # The pre-regen check guarantees len(completion_tool_ids) <= max_completion_length, so any
+            # excess can only come from post_tool_ids. post_tool_ids is model-generated text and never
+            # contains image tokens, so a plain slice is safe.
+            for idx in range(len(idxs_with_tool)):
+                idx_with_tool = idxs_with_tool[idx]
+                completion_tool_length = len(prompt_completion_tool_ids[idx]) - len(prompt_ids[idx_with_tool])
+                excess_length = completion_tool_length + len(post_tool_ids[idx]) - self.max_completion_length
+                if excess_length > 0:
+                    new_len = len(post_tool_ids[idx]) - excess_length
+                    post_tool_ids[idx] = post_tool_ids[idx][:new_len]
+                    if logprobs is not None:
+                        post_tool_logprobs[idx] = post_tool_logprobs[idx][:new_len]
+
+            # Update tool_mask: the tool result should be 0 and the post-tool 1
+            for idx in range(len(idxs_with_tool)):
+                idx_with_tool = idxs_with_tool[idx]
+                prompt_completion_tool_length = len(prompt_completion_tool_ids[idx])
+                prompt_length = len(prompt_ids[idx_with_tool])
+                completion_length = len(completion_ids[idx_with_tool])
+                post_tool_length = len(post_tool_ids[idx])
+                tool_length = prompt_completion_tool_length - prompt_length - completion_length
+                tool_mask[idx_with_tool] += [0] * tool_length + [1] * post_tool_length
+                if logprobs is not None:
+                    logprobs[idx_with_tool] += [0.0] * tool_length + post_tool_logprobs[idx]
+
+            # Update completion_ids with the new completions (after tool execution)
+            for idx in range(len(idxs_with_tool)):
+                idx_with_tool = idxs_with_tool[idx]
+                prompt_length = len(prompt_ids[idx_with_tool])
+                pct = prompt_completion_tool_ids[idx]  # = prompt-completion-tool
+                completion_ids[idx_with_tool] = pct[prompt_length:] + post_tool_ids[idx]
+
+            # Decode post-tool completions
+            post_tool_completions = [
+                parse_response(self._tokenizer, ids, prefix=prompt_completion_tool_ids[idx]) if ids else {}
+                for idx, ids in enumerate(post_tool_ids)
+            ]
+
+            # Add post-tool completions to the existing completions
+            for idx in range(len(idxs_with_tool)):
+                idx_with_tool = idxs_with_tool[idx]
+                if post_tool_completions[idx]:  # {} if post-tool completions completely truncated
+                    completions[idx_with_tool].append(post_tool_completions[idx])
+
+            # Check for further tool calls
+            tool_calls = [completion.get("tool_calls") for completion in post_tool_completions]
+            idxs_with_tool = [idx for idx, tool_call in zip(idxs_with_tool, tool_calls, strict=True) if tool_call]
+            tool_calls = [tool_call for tool_call in tool_calls if tool_call]
+            iteration_num += 1
+
+        return tool_mask, completions, completion_ids, logprobs, tool_call_count, tool_failure_count, tool_images
+
     def _generate_non_vllm_for_slices(self, slices: list[dict[str, torch.Tensor | Any]], on_policy_indices: list[int]):
         """Fallback generation without vLLM (uses model.generate per slice)."""
         with unwrap_model_for_generation(
@@ -1672,7 +2355,6 @@ class GOLDTrainer(SFTTrainer):
 
     def _generate_on_policy_vlm_raw(self, raw_slices: list[list[dict]], on_policy_indices: list[int]):
         """On-policy generation from raw VLM examples, preserving PIL images for vLLM."""
-        all_prompt_ids = []
         all_images = []
         all_prompts = []
         all_raw_examples = []
@@ -1698,47 +2380,12 @@ class GOLDTrainer(SFTTrainer):
                 for prompt in prompts
             ]
 
+            slice_raw_data[slice_idx] = (raw_examples, images, prompts)
+
             if not self.use_vllm:
-                slice_raw_data[slice_idx] = (raw_examples, images, prompts, None)
                 continue
 
-            # TODO: add self.tools support
-            # Workaround for a bug in transformers 5.3.0 where some processors (e.g. Qwen2.5-VL) crash on
-            # batched unpadded input (transformers#44514).
-            # Fixed in transformers 5.4.0 (transformers#44563).
-            needs_padding_workaround = Version("5.3.0") <= Version(transformers.__version__) < Version("5.4.0")
-            tokenized = self.processing_class.apply_chat_template(
-                conversation=prompts,
-                add_generation_prompt=True,
-                tokenize=True,
-                return_dict=True,
-                **({"padding": True} if needs_padding_workaround else {}),
-            )
-            if needs_padding_workaround:
-                # Unpad input_ids: remove padding tokens using attention_mask to get per-sequence lists
-                prompt_ids_list = [
-                    [tok for tok, m in zip(ids, mask, strict=True) if m]
-                    for ids, mask in zip(tokenized["input_ids"], tokenized["attention_mask"], strict=True)
-                ]
-            else:
-                prompt_ids_list = tokenized["input_ids"]
-            if prompt_max_length is not None:
-                # Do not truncate VLM prompts: a token-level slice can cut through the expanded image-token block,
-                # desyncing input_ids from the image features (garbage generations), and the buffered training
-                # examples are rebuilt from the untruncated rows, so the completion would be sampled under a
-                # different prompt than the one used for the loss. Fail fast instead.
-                for prompt_ids in prompt_ids_list:
-                    if len(prompt_ids) > prompt_max_length:
-                        raise ValueError(
-                            f"A tokenized VLM prompt has {len(prompt_ids)} tokens (including expanded image "
-                            f"tokens), exceeding the prompt budget of max_length - max_completion_length = "
-                            f"{self.args.max_length} - {max_completion_length} = {prompt_max_length}. Increase `max_length` or set it to `None`."
-                        )
-
-            slice_raw_data[slice_idx] = (raw_examples, images, prompts, prompt_ids_list)
-
             for i, example in enumerate(raw_examples):
-                all_prompt_ids.append(prompt_ids_list[i])
                 all_images.append(images[i] if images is not None else None)
                 all_prompts.append(prompts[i])
                 all_raw_examples.append(example)
@@ -1746,7 +2393,7 @@ class GOLDTrainer(SFTTrainer):
 
         if not self.use_vllm:
             for slice_idx in on_policy_indices:
-                raw_examples, images, prompts, _ = slice_raw_data[slice_idx]
+                raw_examples, images, prompts = slice_raw_data[slice_idx]
                 has_images = images is not None and any(img is not None for img in images)
                 pending_slice = {"_gold_vlm_on_policy_raw_examples": raw_examples}
                 if self._teacher_processor is not None:
@@ -1754,6 +2401,87 @@ class GOLDTrainer(SFTTrainer):
                     pending_slice["_gold_vlm_raw_prompts"] = prompts
                 self._buffered_inputs[slice_idx] = pending_slice
             return
+
+        # With tools, draw environments, build per-rollout tool dicts and inject reset observations into the prompts
+        # before tokenization, so the observations render into the prompt the model actually sees.
+        if self.tools:
+            # Draw one reusable instance per rollout from the pool, creating more only when this batch needs more
+            # concurrent instances than exist.
+            if self.environment_factory is not None:
+                self.environments = []
+                for i in range(len(all_prompts)):
+                    if i == len(self._environment_pool):
+                        self._environment_pool.append(self.environment_factory())
+                    self.environments.append(self._environment_pool[i])
+
+            # Build the per-rollout tool dicts for this batch: the standalone tools plus, for each rollout, the
+            # methods of its environment. Done here (not at init) because the environment instances are drawn at batch
+            # time.
+            self._sync_tool_dicts = []
+            self._async_tool_dicts = []
+            for i in range(len(all_prompts)):
+                methods = []
+                if self.environments:
+                    methods = [
+                        member
+                        for member_name, member in inspect.getmembers(self.environments[i], predicate=inspect.ismethod)
+                        if member_name != "reset" and not member_name.startswith("_")
+                    ]
+                sync_tool_dict, async_tool_dict = {}, {}
+                for tool in self._standalone_tools + methods:
+                    if inspect.iscoroutinefunction(tool):
+                        async_tool_dict[tool.__name__] = tool
+                    else:
+                        sync_tool_dict[tool.__name__] = tool
+                self._sync_tool_dicts.append(sync_tool_dict)
+                self._async_tool_dicts.append(async_tool_dict)
+
+            if self.environments:
+                for prompt, environment, reset_kwargs in zip(
+                    all_prompts, self.environments, all_raw_examples, strict=True
+                ):
+                    observation = environment.reset(**reset_kwargs)
+                    if observation is None:
+                        continue
+                    if isinstance(observation, list) and isinstance(prompt[-1]["content"], str):
+                        prompt[-1]["content"] = [{"type": "text", "text": prompt[-1]["content"]}]
+                    if isinstance(observation, str) and isinstance(prompt[-1]["content"], list):
+                        observation = [{"type": "text", "text": observation}]
+                    prompt[-1]["content"] += observation
+
+        # Workaround for a bug in transformers 5.3.0 where some processors (e.g. Qwen2.5-VL) crash on
+        # batched unpadded input (transformers#44514).
+        # Fixed in transformers 5.4.0 (transformers#44563).
+        needs_padding_workaround = Version("5.3.0") <= Version(transformers.__version__) < Version("5.4.0")
+        tokenized = self.processing_class.apply_chat_template(
+            conversation=all_prompts,
+            tools=self.tools or None,  # `or None`: Llama bug: it renders tool boilerplate for tools=[]
+            chat_template=self.chat_template,
+            add_generation_prompt=True,
+            tokenize=True,
+            return_dict=True,
+            **({"padding": True} if needs_padding_workaround else {}),
+        )
+        if needs_padding_workaround:
+            # Unpad input_ids: remove padding tokens using attention_mask to get per-sequence lists
+            all_prompt_ids = [
+                [tok for tok, m in zip(ids, mask, strict=True) if m]
+                for ids, mask in zip(tokenized["input_ids"], tokenized["attention_mask"], strict=True)
+            ]
+        else:
+            all_prompt_ids = tokenized["input_ids"]
+        if prompt_max_length is not None:
+            # Do not truncate VLM prompts: a token-level slice can cut through the expanded image-token block,
+            # desyncing input_ids from the image features (garbage generations), and the buffered training
+            # examples are rebuilt from the untruncated rows, so the completion would be sampled under a
+            # different prompt than the one used for the loss. Fail fast instead.
+            for prompt_ids in all_prompt_ids:
+                if len(prompt_ids) > prompt_max_length:
+                    raise ValueError(
+                        f"A tokenized VLM prompt has {len(prompt_ids)} tokens (including expanded image "
+                        f"tokens), exceeding the prompt budget of max_length - max_completion_length = "
+                        f"{self.args.max_length} - {max_completion_length} = {prompt_max_length}. Increase `max_length` or set it to `None`."
+                    )
 
         all_prompts_text = self.processing_class.batch_decode(all_prompt_ids, skip_special_tokens=True)
         if (
@@ -1767,11 +2495,59 @@ class GOLDTrainer(SFTTrainer):
             generate_images = all_images
         else:
             generate_images = None
+        # Issue #6294: vLLM re-expands image placeholders in token-ID prompts, so it must receive the *unexpanded*
+        # (tokenizer-only, single-`<image>`) IDs. `all_prompt_ids` (processor-expanded) stays the source of truth for
+        # length bookkeeping, `parse_response` prefixes, and the tool loop. This method only runs for VLMs (dispatched
+        # via `_vlm_collator`), so un-expansion always applies.
+        vllm_all_prompt_ids = self._unexpanded_prompt_ids(all_prompts)
         _, completion_ids, _, _ = self.vllm_generation.generate(
-            prompts=all_prompt_ids,
+            prompts=vllm_all_prompt_ids,
             images=generate_images,
             num_generations=self.num_generations,
         )
+
+        # Extract tool calls from the completions and (possibly) execute them
+        if self.tools:
+            # Decode completions with `parse_response`, which handles tool calls (tools require transformers >= 5.0.0
+            # and a response schema, both enforced at init).
+            completions = [
+                [parse_response(self._tokenizer, ids, prefix=all_prompt_ids[i])]
+                for i, ids in enumerate(completion_ids)
+            ]
+            (
+                tool_mask,
+                completions,
+                completion_ids,
+                logprobs,
+                tool_call_count,
+                tool_failure_count,
+                tool_images,
+            ) = self._tool_call_loop(
+                all_prompts,
+                all_prompt_ids,
+                completion_ids,
+                completions,
+                None,
+                all_images,
+                {},
+                vllm_prompt_ids=vllm_all_prompt_ids,
+            )
+            if any(imgs for imgs in tool_images):
+                raise NotImplementedError(
+                    "Multimodal tool responses (tools returning images) are not supported by GOLDTrainer."
+                )
+
+            mode = "train" if self.model.training else "eval"
+            device = self.accelerator.device
+            agg_tool_call_count = self.accelerator.gather(torch.tensor(tool_call_count, device=device)).sum()
+            agg_num_prompts = self.accelerator.gather(torch.tensor(len(all_prompts), device=device)).sum()
+            tool_call_frequency = (agg_tool_call_count / agg_num_prompts).item()
+            self._metrics[mode]["tools/call_frequency"].append(tool_call_frequency)
+            agg_tool_failure_count = self.accelerator.gather(torch.tensor(tool_failure_count, device=device)).sum()
+            failure_frequency = (
+                (agg_tool_failure_count / agg_tool_call_count).item() if agg_tool_call_count > 0 else 0.0
+            )
+            self._metrics[mode]["tools/failure_frequency"].append(failure_frequency)
 
         all_completion_texts = []
         for comp_ids in completion_ids:
@@ -1792,6 +2568,7 @@ class GOLDTrainer(SFTTrainer):
         slice_images = {idx: [] for idx in on_policy_indices}
         slice_prompts = {idx: [] for idx in on_policy_indices}
         slice_prompts_text = {idx: [] for idx in on_policy_indices}
+        slice_structured = {idx: [] for idx in on_policy_indices} if self.tools else None
 
         for i, slice_idx in enumerate(local_slice_indices):
             slice_completions[slice_idx].append(all_completion_texts[i])
@@ -1799,6 +2576,8 @@ class GOLDTrainer(SFTTrainer):
             slice_images[slice_idx].append(all_images[i])
             slice_prompts[slice_idx].append(all_prompts[i])
             slice_prompts_text[slice_idx].append(all_prompts_text[i])
+            if self.tools:
+                slice_structured[slice_idx].append(completions[i])
 
         for slice_idx in on_policy_indices:
             completion_texts = slice_completions[slice_idx]
@@ -1810,14 +2589,19 @@ class GOLDTrainer(SFTTrainer):
             synthetic_examples = []
             for i, example in enumerate(raw_for_slice):
                 synthetic = dict(example)
-                # Wrap as content blocks so VLM chat templates (e.g. SmolVLM) that index
-                # `message.content[0]` can render the synthetic assistant turn.
-                synthetic["completion"] = [
-                    {
-                        "role": "assistant",
-                        "content": [{"type": "text", "text": completion_texts[i]}],
-                    }
-                ]
+                if self.tools:
+                    # Keep the structured multi-turn messages (assistant -> tool -> assistant ...) so the VLM
+                    # collator can re-render them and mask the tool-result spans out of the labels.
+                    synthetic["completion"] = slice_structured[slice_idx][i]
+                else:
+                    # Wrap as content blocks so VLM chat templates (e.g. SmolVLM) that index
+                    # `message.content[0]` can render the synthetic assistant turn.
+                    synthetic["completion"] = [
+                        {
+                            "role": "assistant",
+                            "content": [{"type": "text", "text": completion_texts[i]}],
+                        }
+                    ]
                 synthetic_examples.append(synthetic)
 
             has_images = any(img is not None for img in images_for_slice)
@@ -1842,6 +2626,7 @@ class GOLDTrainer(SFTTrainer):
         prompt_ids_list: list[list[int]],
         prompts_text: list[str],
         max_completion_length: int,
+        tool_masks: list[list[int]] | None = None,
     ):
         """
         Process vLLM completions and update buffered inputs for on-policy slices.
@@ -1852,11 +2637,14 @@ class GOLDTrainer(SFTTrainer):
         slice_completions = {idx: [] for idx in on_policy_indices}
         slice_prompt_ids = {idx: [] for idx in on_policy_indices}
         slice_prompts = {idx: [] for idx in on_policy_indices}
+        slice_tool_masks = {idx: [] for idx in on_policy_indices} if tool_masks is not None else None
 
         for i, slice_idx in enumerate(local_slice_indices):
             slice_completions[slice_idx].append(completion_ids[i])
             slice_prompt_ids[slice_idx].append(prompt_ids_list[i])
             slice_prompts[slice_idx].append(prompts_text[i])
+            if tool_masks is not None:
+                slice_tool_masks[slice_idx].append(tool_masks[i])
 
         for slice_idx in on_policy_indices:
             slice_inputs = slices[slice_idx]
@@ -1951,6 +2739,15 @@ class GOLDTrainer(SFTTrainer):
                 pad_token_id,
                 attention_mask=new_attention_mask,
             )
+
+            # Mask tool-result tokens out of the loss: tool_mask is 0 for tokens injected by tool results, 1 for
+            # model-generated tokens. Completions sit right of the padded prompt width.
+            if tool_masks is not None:
+                prompt_width = prompt_ids.shape[1]
+                for row, mask in enumerate(slice_tool_masks[slice_idx]):
+                    for j, keep in enumerate(mask[:max_completion_length]):
+                        if not keep:
+                            new_labels[row, prompt_width + j] = -100
 
             completion_texts = self.processing_class.batch_decode(
                 completion_ids_for_text,
@@ -2062,24 +2859,57 @@ class GOLDTrainer(SFTTrainer):
             if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                 map_kwargs["desc"] = f"Tokenizing {dataset_name} dataset (preserving original text)"
 
-            def tokenize_with_original_text(example, processing_class, dataset_text_field, max_length):
+            def tokenize_with_original_text(
+                example, processing_class, dataset_text_field, max_length, tool_chat_template
+            ):
                 """Emit input_ids, attention_mask, byte_offsets, completion_mask, and the original prompt/completion
                 text. Byte offsets and input_ids come from a single ``encode_with_byte_offsets`` call.
                 """
                 backend = processing_class.backend_tokenizer
                 result = {}
+                # Absolute UTF-8 byte spans of tool-result (`role == "tool"`) messages inside `full_text`. Used below
+                # to mask tool-result tokens out of the off-policy labels, mirroring the on-policy `tool_mask` and the
+                # VLM collator. `emit_tool_mask` is set for any conversational prompt-completion row carrying a `tools`
+                # column, so every row of a tools dataset emits a `tool_mask` (all-ones when it has no tool results),
+                # keeping the dataset features homogeneous.
+                tool_ranges: list[tuple[int, int]] = []
+                emit_tool_mask = False
+
+                # With tools, a `messages` conversation is a multi-turn tool trajectory: the completion spans every
+                # assistant/tool turn, so the prompt is everything up to the *first* assistant turn — not up to the
+                # last one, which would bury the assistant tool-call turns in the masked prompt. Convert to the
+                # prompt-completion layout so the branch below renders with the tool schemas and emits `tool_mask`
+                # (mirrors `DataCollatorForChatML` and the on-policy path).
+                if "prompt" not in example and "messages" in example and example.get("tools") is not None:
+                    messages = example["messages"]
+                    first_assistant = next(
+                        (i for i, m in enumerate(messages) if m.get("role") == "assistant"), max(len(messages) - 1, 0)
+                    )
+                    example = dict(example)
+                    example["prompt"] = messages[:first_assistant]
+                    example["completion"] = messages[first_assistant:]
+                    del example["messages"]
 
                 if "prompt" in example:  # prompt-completion case
                     if is_conversational(example):
+                        # Render with the dataset's tool schemas so the off-policy prompt matches the on-policy path
+                        # (`_generate_on_policy_with_tools` renders with `tools=`) and the general `DataCollatorForChatML`
+                        # branch. Dropping `tools=` here would strip the tool definitions from the off-policy prompt.
+                        tools = example.get("tools")
+                        tools = json.loads(tools) if isinstance(tools, str) else tools
                         prompt_text = processing_class.apply_chat_template(
                             example["prompt"],
+                            tools=tools,
                             add_generation_prompt=True,
                             tokenize=False,
+                            chat_template=tool_chat_template,
                             **example.get("chat_template_kwargs", {}),
                         )
                         full_text = processing_class.apply_chat_template(
                             example["prompt"] + example["completion"],
+                            tools=tools,
                             tokenize=False,
+                            chat_template=tool_chat_template,
                             **example.get("chat_template_kwargs", {}),
                         )
                         prompt_text = "".join(
@@ -2090,6 +2920,38 @@ class GOLDTrainer(SFTTrainer):
                             )
                         )
                         completion_text = full_text[len(prompt_text) :]
+
+                        messages = example["prompt"] + example["completion"]
+                        boundary = len(example["prompt"])
+                        emit_tool_mask = tools is not None
+                        if emit_tool_mask and any(m.get("role") == "tool" for m in messages[boundary:]):
+                            # Locate each tool message's rendered byte span by incremental prefix rendering (the same
+                            # technique the collators use; requires the prefix-preserving `tool_chat_template`).
+                            # Rendered with the same `tools=` and template as `full_text`, so the byte coordinates
+                            # stay aligned with `full_offs`.
+                            render_kwargs = example.get("chat_template_kwargs", {})
+                            prev = len(
+                                processing_class.apply_chat_template(
+                                    messages[:boundary],
+                                    tools=tools,
+                                    tokenize=False,
+                                    chat_template=tool_chat_template,
+                                    **render_kwargs,
+                                ).encode("utf-8")
+                            )
+                            for k in range(boundary, len(messages)):
+                                cur = len(
+                                    processing_class.apply_chat_template(
+                                        messages[: k + 1],
+                                        tools=tools,
+                                        tokenize=False,
+                                        chat_template=tool_chat_template,
+                                        **render_kwargs,
+                                    ).encode("utf-8")
+                                )
+                                if messages[k].get("role") == "tool":
+                                    tool_ranges.append((prev, cur))
+                                prev = cur
                     else:
                         prompt_text = example["prompt"]
                         completion_text = example["completion"]
@@ -2158,12 +3020,24 @@ class GOLDTrainer(SFTTrainer):
                     (s - prompt_byte_len, e - prompt_byte_len) for s, e in full_offs[completion_start:]
                 ]
 
+                # Per-token tool-result mask (1 = keep/supervise, 0 = tool-result token to drop from the loss). A token
+                # is a tool result when its absolute byte span overlaps any tool-message range. Applied to the labels
+                # by the collator on the off-policy path.
+                tool_mask = None
+                if emit_tool_mask:
+                    tool_mask = [
+                        0 if any(s < r_end and e > r_start for r_start, r_end in tool_ranges) else 1
+                        for s, e in full_offs
+                    ]
+
                 # Keep the last `max_length` tokens (the completion end). `completion_mask` tracks the
                 # boundary so it survives truncation without re-tokenizing the prompt.
                 if max_length is not None and len(input_ids) > max_length:
                     drop = len(input_ids) - max_length
                     input_ids = input_ids[drop:]
                     byte_offsets = byte_offsets[drop:]
+                    if tool_mask is not None:
+                        tool_mask = tool_mask[drop:]
                     completion_start = max(0, completion_start - drop)
                     # If truncation ate into the completion, rebase the kept completion offsets so they're
                     # relative to the new (truncated) `original_completion_text` the teacher will re-encode.
@@ -2186,6 +3060,8 @@ class GOLDTrainer(SFTTrainer):
                 result["attention_mask"] = [1] * len(input_ids)
                 result["byte_offsets"] = byte_offsets
                 result["completion_mask"] = [0] * completion_start + [1] * (len(input_ids) - completion_start)
+                if tool_mask is not None:
+                    result["tool_mask"] = tool_mask
                 return result
 
             dataset = dataset.map(
@@ -2194,6 +3070,7 @@ class GOLDTrainer(SFTTrainer):
                     "processing_class": processing_class,
                     "dataset_text_field": args.dataset_text_field,
                     "max_length": args.max_length,
+                    "tool_chat_template": self._tool_chat_template,
                 },
                 **map_kwargs,
             )
@@ -2218,7 +3095,11 @@ class GOLDTrainer(SFTTrainer):
                 dataset = dataset.select_columns(columns_to_select)
                 dataset = pack_dataset(dataset, args.max_length, args.packing_strategy, map_kwargs)
 
-            if args.use_liger_kernel:
+            # With tools, `DataCollatorForChatML(forward_prompt_messages=True)` re-renders the prompt from the raw
+            # `prompt`/`messages` and `tools` columns and forwards the full example dicts to
+            # `environment.reset(**kwargs)`, so every column is potentially needed — skip the narrowing entirely,
+            # matching the non-liger path (which never narrows).
+            if args.use_liger_kernel and not self.tools:
                 required_columns = {
                     "input_ids",
                     "attention_mask",
@@ -2228,6 +3109,9 @@ class GOLDTrainer(SFTTrainer):
                     "original_prompt_text",
                     "original_completion_text",
                     "byte_offsets",
+                    # Emitted whenever the dataset carries a `tools` column (even without trainer `tools`); the
+                    # collator needs it to keep tool-result tokens masked out of the labels.
+                    "tool_mask",
                 }
                 dataset = dataset.select_columns(required_columns.intersection(dataset.column_names))
 
