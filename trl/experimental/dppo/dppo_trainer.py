@@ -87,9 +87,10 @@ class DPPOTrainer(GRPOTrainer):
               config) with the keyword arguments in `args.model_init_kwargs`.
             - A [`~transformers.PreTrainedModel`] object. Only causal language models are supported.
             - A [`~peft.PeftModel`] object. Only causal language models are supported.
-        reward_funcs (`RewardFunc | list[RewardFunc]`):
+        reward_funcs (`RewardFunc | list[RewardFunc]`, *optional*):
             Reward functions to be used for computing the rewards. To compute the rewards, we call all the reward
-            functions with the prompts and completions and sum the rewards. Can be either:
+            functions with the prompts and completions and sum the rewards. May be omitted when the reward is supplied
+            by the environment through `environment_factory` (see below). Can be either:
 
             - A single reward function, such as:
                 - A string: The *model ID* of a pretrained model hosted inside a model repo on huggingface.co, or a
@@ -168,8 +169,12 @@ class DPPOTrainer(GRPOTrainer):
             for each generation in the batch, allowing for parallel and independent interactions. The environment must
             also implement a callable `reset` method that can be used to reset state between generations. The `reset`
             method should return either `None` or a string: when it returns a string, that string is appended to the
-            last user message before generation. This feature is experimental and may change or be removed at any time
-            without prior notice.
+            last user message before generation. The environment may also define a `get_reward` method taking no
+            argument and returning a `float`: when present, the environment owns the reward, and `get_reward` is called
+            once per completed rollout to score it from the environment's internal state. It acts as an additional
+            reward source (with weight 1, logged under the environment's class name) alongside `reward_funcs`, which
+            then becomes optional. This feature is experimental and may change or be removed at any time without prior
+            notice.
     """
 
     _tag_names = ["trl", "dppo"]
@@ -190,7 +195,7 @@ class DPPOTrainer(GRPOTrainer):
     def __init__(
         self,
         model: "str | PreTrainedModel | PeftModel",
-        reward_funcs: RewardFunc | list[RewardFunc],
+        reward_funcs: RewardFunc | list[RewardFunc] | None = None,
         args: DPPOConfig | None = None,
         train_dataset: Dataset | IterableDataset | None = None,
         eval_dataset: Dataset | IterableDataset | dict[str, Dataset | IterableDataset] | None = None,
@@ -851,14 +856,27 @@ class DPPOTrainer(GRPOTrainer):
 
         prompts = [x["prompt"] for x in inputs]
 
-        # Draw one reusable instance per rollout from the pool, creating more only when this batch needs more concurrent
-        # instances than exist.
-        if self.environment_factory is not None:
+        # Resolve each example's environment and draw one reusable instance per rollout from the pool, creating more
+        # only when this batch needs more concurrent instances of an environment than exist. `_batch_environments`
+        # records each example's environment so `_tokenize_prompts` can render the matching tool schema.
+        if self.environment_factories is not None:
+            self._batch_environments = [x.get("environment") if self._multi_environment else None for x in inputs]
+            if self._multi_environment:
+                for name in set(self._batch_environments):
+                    if name not in self.environment_factories:
+                        raise ValueError(
+                            f"Example has `environment={name!r}`, which is not among the environments passed to "
+                            f"`environment_factory`. Expected one of: {list(self.environment_factories)}."
+                        )
             self.environments = []
-            for i in range(len(inputs)):
-                if i == len(self._environment_pool):
-                    self._environment_pool.append(self.environment_factory())
-                self.environments.append(self._environment_pool[i])
+            pool_cursor = {}  # how many instances of each environment have been handed out so far this batch
+            for name in self._batch_environments:
+                pool = self._environment_pool[name]
+                index = pool_cursor.get(name, 0)
+                if index == len(pool):
+                    pool.append(self.environment_factories[name]())
+                pool_cursor[name] = index + 1
+                self.environments.append(pool[index])
 
         # Build the per-rollout tool dicts for this batch: the standalone tools plus, for each rollout, the methods of
         # its environment. Done here (not at init) because the environment instances are drawn at batch time.
@@ -871,7 +889,7 @@ class DPPOTrainer(GRPOTrainer):
                     methods = [
                         member
                         for member_name, member in inspect.getmembers(self.environments[i], predicate=inspect.ismethod)
-                        if member_name != "reset" and not member_name.startswith("_")
+                        if member_name not in ("reset", "get_reward") and not member_name.startswith("_")
                     ]
                 sync_tool_dict, async_tool_dict = {}, {}
                 for tool in self._standalone_tools + methods:
@@ -883,10 +901,16 @@ class DPPOTrainer(GRPOTrainer):
                 self._async_tool_dicts.append(async_tool_dict)
 
         if self.environments:
-            for prompt, environment, reset_kwargs in zip(prompts, self.environments, inputs, strict=True):
+            for prompt, environment, x in zip(prompts, self.environments, inputs, strict=True):
+                # `environment` is a control field in multi-environment mode, so it is not forwarded to `reset`.
+                reset_kwargs = {k: v for k, v in x.items() if k != "environment"} if self._multi_environment else x
                 observation = environment.reset(**reset_kwargs)
                 if observation is None:
                     continue
+                if isinstance(observation, list) and isinstance(prompt[-1]["content"], str):
+                    prompt[-1]["content"] = [{"type": "text", "text": prompt[-1]["content"]}]
+                if isinstance(observation, str) and isinstance(prompt[-1]["content"], list):
+                    observation = [{"type": "text", "text": observation}]
                 prompt[-1]["content"] += observation
 
         if "images" in inputs[0]:

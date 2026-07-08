@@ -49,7 +49,7 @@ from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_peft_available
 
 from ..chat_template_utils import clone_chat_template
-from ..data_utils import get_dataset_column_names, is_conversational
+from ..data_utils import _tokenize, get_dataset_column_names, is_conversational
 from ..models import get_act_offloading_ctx_manager
 from .base_trainer import _BaseTrainer
 from .reward_config import RewardConfig
@@ -581,34 +581,6 @@ class RewardTrainer(_BaseTrainer):
         # Add tags to the model
         self.model.add_model_tags(self._tag_names)
 
-    @staticmethod
-    def _tokenize(
-        processing_class: PreTrainedTokenizerBase,
-        input: str | list,
-        **kwargs,
-    ) -> dict[str, list]:
-        """Tokenize a single example for dataset preprocessing.
-
-        Dispatches to `apply_chat_template` for conversational input (list of message dicts) and to `__call__` for
-        non-conversational input (str).
-
-        Args:
-            processing_class ([`~transformers.PreTrainedTokenizerBase`]):
-                The tokenizer to use.
-            input (`str` or `list`):
-                A string for non-conversational input, or a list of message dicts for conversational input.
-            **kwargs:
-                Forwarded to `apply_chat_template` (e.g. `tools`).
-
-        Returns:
-            `dict` with at least an `"input_ids"` key mapping to a flat `list[int]`.
-        """
-        if isinstance(input, list):  # conversational: list of message dicts
-            result = processing_class.apply_chat_template(input, tokenize=True, return_dict=True, **kwargs)
-        else:  # non-conversational: plain text string
-            result = processing_class(text=input)
-        return result
-
     def _prepare_dataset(
         self,
         dataset: Dataset | IterableDataset,
@@ -661,36 +633,30 @@ class RewardTrainer(_BaseTrainer):
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Tokenizing {dataset_name} dataset"
 
-                # Bind `_tokenize` to a local so `tokenize_fn` doesn't capture `self`: a closure over `self` makes the
-                # map function unhashable, forcing a random fingerprint that silently disables dataset caching.
-                # `_tokenize` is a static method, so `self._tokenize` is a plain function (no bound `self`).
-                tokenize = self._tokenize
-
                 def tokenize_fn(example, processing_class):
                     tools = example.get("tools")
                     tools = json.loads(tools) if isinstance(tools, str) else tools
+                    apply_chat_template_kwargs = {"tools": tools, **example.get("chat_template_kwargs", {})}
                     if "prompt" in example:  # explicit prompt case
                         example["chosen"] = example["prompt"] + example["chosen"]
                         example["rejected"] = example["prompt"] + example["rejected"]
 
                     if is_conversational(example):
-                        chosen_ids = tokenize(
+                        chosen_ids = _tokenize(
                             processing_class,
                             example["chosen"],
-                            tools=tools,
-                            **example.get("chat_template_kwargs", {}),
+                            **apply_chat_template_kwargs,
                         )["input_ids"]
-                        rejected_ids = tokenize(
+                        rejected_ids = _tokenize(
                             processing_class,
                             example["rejected"],
-                            tools=tools,
-                            **example.get("chat_template_kwargs", {}),
+                            **apply_chat_template_kwargs,
                         )["input_ids"]
                         output = {"chosen_ids": chosen_ids, "rejected_ids": rejected_ids}
                     else:
                         output = {
-                            "chosen_ids": tokenize(processing_class, example["chosen"])["input_ids"],
-                            "rejected_ids": tokenize(processing_class, example["rejected"])["input_ids"],
+                            "chosen_ids": _tokenize(processing_class, example["chosen"])["input_ids"],
+                            "rejected_ids": _tokenize(processing_class, example["rejected"])["input_ids"],
                         }
                     return output
 
