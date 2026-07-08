@@ -78,9 +78,7 @@ class RolloutGroup:
     tool_call_counts: list[int]
     tool_failure_counts: list[int]
     model_version: int
-    env_rewards: list[
-        tuple[type, float] | None
-    ]  # per rollout: (env class, reward) if its env owns a reward, else None
+    env_rewards: list[tuple[type, float] | None]
     queued_at: float = 0.0
 
 
