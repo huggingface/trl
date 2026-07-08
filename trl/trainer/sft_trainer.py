@@ -233,7 +233,7 @@ def _chunked_cross_entropy_loss(
     # while on GPU it drops the fully-masked trailing chunks.
     n_process = torch.clamp(
         (n_valid_tensor / chunk_size).ceil().to(torch.int64) * chunk_size,
-        min=hidden.size(0),
+        max=hidden.size(0),
     )
 
     loss = hidden.new_zeros((), dtype=torch.float32)
