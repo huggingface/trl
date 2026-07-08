@@ -35,7 +35,8 @@ from ...trainer.base_trainer import _BaseTrainer
 from ...trainer.utils import nanmax, nanmin, pad, patch_chunked_lm_head
 from .async_grpo_config import AsyncGRPOConfig
 from .async_rollout_worker import AsyncRolloutWorker
-from .weight_transfer import WeightTransferClient
+from .weight_diff import AdamWInversionChangeDetector
+from .weight_transfer import make_weight_transfer
 
 
 logger = get_logger(__name__)
@@ -109,8 +110,8 @@ class _InitialWeightSyncCallback(TrainerCallback):
         if self._fired:
             return
         self._fired = True
-        if self._trainer.accelerator.is_main_process and self._trainer.weight_transfer is not None:
-            self._trainer.weight_transfer.init_weight_transfer()
+        if self._trainer.weight_transfer is not None:
+            self._trainer.weight_transfer.init(self._trainer.accelerator)
         self._trainer._sync_weight()
 
 
@@ -600,37 +601,57 @@ class AsyncGRPOTrainer(_BaseTrainer):
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
         self._train_tokens_start_time = None
         self.model_version = 0
-        # Create worker and queue on rank 0
+        self._change_detector: AdamWInversionChangeDetector | None = None  # sparse sync only; created in compute_loss
+        # Collect weight metadata once — names/dtypes/shapes are fixed for the lifetime of training, and identical
+        # across ranks (DTensor.shape returns the global shape without triggering any all-gather).
+        weight_names, weight_dtype_names, weight_shapes = [], [], []
+        for name, param in model.named_parameters():
+            name = name.removeprefix("module.")  # DDP/FSDP1 wrapping, avoids vllm module not exist error
+            weight_names.append(name)
+            weight_dtype_names.append(str(param.dtype).split(".")[-1])
+            weight_shapes.append(list(param.shape))
+
+        # The weight transport lives on every rank: rank 0 drives it, the others walk the iterator during sync so the
+        # FSDP2 full_tensor() collectives line up. An injected stub worker (tests, no real vLLM) leaves it unset —
+        # building the transport requires a vLLM install, so skip it entirely on that path.
+        self.weight_transfer = (
+            None
+            if rollout_worker is not None
+            else make_weight_transfer(
+                self.args.weight_sync_backend,
+                vllm_server_url=self.args.vllm_server_base_url,
+                server_timeout=self.args.vllm_server_timeout,
+                weight_update_info={
+                    "names": weight_names,
+                    "dtype_names": weight_dtype_names,
+                    "shapes": weight_shapes,
+                },
+                bucket_id=self.args.weight_sync_bucket_id,
+                encoding=self.args.weight_sync_encoding,
+            )
+        )
+
+        if (
+            self.args.weight_sync_mode == "sparse"
+            and self.weight_transfer is not None
+            and any(".experts." in name for name in weight_names)
+        ):
+            raise ValueError(
+                "weight_sync_mode='sparse' is not supported for MoE models: vLLM's transformers backend stores the "
+                "experts as a fused buffer, so the sparse in-place apply cannot address them by their Hugging Face "
+                "parameter names. Use weight_sync_mode='full'."
+            )
+
+        # Create the rollout worker and its queue on rank 0.
         if self.accelerator.is_main_process:
             if self.train_dataset is None:
                 raise ValueError("train_dataset is required for AsyncGRPOTrainer")
 
             if rollout_worker is not None:
-                # Use the injected worker (e.g. a stub in tests). The queue is owned by the worker.
-                # Weight transfer is also expected to be wired by the test fixture (or left as None
-                # if the stub doesn't sync to a real vLLM).
+                # Injected worker (e.g. a stub in tests). The queue is owned by the worker; the transport was left
+                # unset above so weight sync is a no-op.
                 self.rollout_worker = rollout_worker
-                self.weight_transfer = None
             else:
-                # Collect weight metadata once — names/dtypes/shapes are fixed for the lifetime of training.
-                # DTensor.shape returns the global shape without triggering any all-gather.
-                weight_names, weight_dtype_names, weight_shapes = [], [], []
-                for name, param in model.named_parameters():
-                    # DDP/FSDP1 wrapping, avoids vllm module not exist error
-                    name = name.removeprefix("module.")
-                    weight_names.append(name)
-                    weight_dtype_names.append(str(param.dtype).split(".")[-1])
-                    weight_shapes.append(list(param.shape))
-                self.weight_transfer = WeightTransferClient(
-                    vllm_server_url=self.args.vllm_server_base_url,
-                    server_timeout=self.args.vllm_server_timeout,
-                    weight_update_info={
-                        "names": weight_names,
-                        "dtype_names": weight_dtype_names,
-                        "shapes": weight_shapes,
-                        "packed": True,
-                    },
-                )
                 self.rollout_worker = AsyncRolloutWorker(
                     model_name=model_name,
                     dataset=train_dataset,
@@ -655,7 +676,6 @@ class AsyncGRPOTrainer(_BaseTrainer):
         else:
             self.rollout_queue = None
             self.rollout_worker = None
-            self.weight_transfer = None
 
         # Add callbacks. Registration order matters: weight sync first, then worker start.
         self.add_callback(_InitialWeightSyncCallback(self))
@@ -730,6 +750,10 @@ class AsyncGRPOTrainer(_BaseTrainer):
             ]
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+        # Create the change detector once the prepared optimizer exists (it validates AdamW up front,
+        # so a non-AdamW optimizer fails fast). No-op unless weight_sync_mode='sparse'.
+        self._maybe_init_change_detector()
+
         # Padding-free: the collator already packed this rank's samples into a single row (real tokens concatenated,
         # `position_ids` resetting per sequence, advantages expanded per-token), then padded the row to the longest
         # rank's length so DataLoaderDispatcher could scatter rectangular rows. Strip that trailing inter-rank padding
@@ -921,49 +945,88 @@ class AsyncGRPOTrainer(_BaseTrainer):
         super().log(logs, start_time)
         self._metrics[mode].clear()
 
-    def _streaming_iter(self):
-        # Iterate parameters one at a time. For FSDP2 (DTensor), full_tensor() all-gathers just this parameter across
-        # FSDP ranks, then frees it once the generator advances — avoiding materializing the full model in memory.
+    def _weight_iter(self, sparse: bool):
+        """Yield ``(name, full_tensor, mask)`` for weight sync.
+
+        For a sparse patch (``sparse=True``) only changed params are yielded, with their element-level change mask from
+        the AdamW-inversion detector; for a full transfer / anchor every param is yielded with ``mask=None``. Iterate
+        params one at a time: for FSDP2 (DTensor), ``full_tensor()`` all-gathers just this param across FSDP ranks then
+        frees it once the generator advances — avoiding materializing the full model. All ranks must walk this
+        identically so the ``full_tensor()`` collectives line up.
+
+        Under FSDP2 the change mask is itself a DTensor sharded exactly like the param (it is reconstructed from the
+        per-shard AdamW moments), so it is gathered to the global shape alongside the param. The skip decision uses
+        ``mask.any()``, which all-reduces for a DTensor and is therefore identical on every rank — keeping the
+        ``full_tensor()`` collectives that follow aligned.
+        """
         device = self.accelerator.device
+        masks = self._change_detector._validated_masks if (sparse and self._change_detector is not None) else {}
         for name, param in self.model.named_parameters():
             name = name.removeprefix("module.")  # DDP/FSDP1 wrapping
+            if sparse:
+                mask = masks.get(name)
+                if mask is None:
+                    continue  # param never stepped -> not in this delta (consistent across ranks)
+                # Gather the per-shard mask to the global shape first, so `.any()` runs on a plain tensor (DTensor
+                # has no sharding strategy for the reduction) and lines up with `full` below.
+                if isinstance(mask, DTensor):
+                    mask = mask.full_tensor()
+                if not bool(mask.any()):
+                    continue  # unchanged param -> not in this delta
+            else:
+                mask = None
             full = param.full_tensor() if isinstance(param, DTensor) else param.detach()
             if full.device != device:
                 full = full.to(device)
-            yield name, full
+            yield name, full, mask
+
+    def _maybe_init_change_detector(self):
+        """Create the AdamW-inversion change detector once the (prepared) optimizer exists. Validates that the
+        optimizer is AdamW (raises otherwise, pointing at weight_sync_mode='full'). No-op unless sparse sync."""
+        if (
+            self.args.weight_sync_mode == "sparse"
+            and self.weight_transfer is not None  # no transport (injected stub worker) -> nothing to detect for
+            and self._change_detector is None
+            and getattr(self, "optimizer", None)
+        ):
+            # Unwrap AcceleratedOptimizer to the native torch optimizer.
+            raw_optimizer = getattr(self.optimizer, "optimizer", self.optimizer)
+            self._change_detector = AdamWInversionChangeDetector(self.model, raw_optimizer)
 
     def _sync_weight(self):
+        # No real vLLM to sync to (injected stub worker in tests).
+        if self.weight_transfer is None:
+            return
         t0 = time.time()
-        logger.info("Weight sync: pausing vLLM...")
-        if self.accelerator.is_main_process and self.weight_transfer:
-            self.weight_transfer.pause()
-        t_pause = time.time()
-        logger.info(f"Weight sync: pause took {t_pause - t0:.1f}s, waiting for all ranks...")
+        next_version = self.model_version + 1
+        # In sparse mode, send a full anchor on the first sync and every Nth after, to bound drift from inversion
+        # misses; in full mode every sync is a full transfer. Computed identically on every rank (deterministic) so
+        # all ranks pick the same path and their full_tensor() collectives line up.
+        is_anchor = (
+            self.args.weight_sync_mode == "full"
+            or next_version == 1
+            or next_version % self.args.weight_sync_anchor_interval == 0
+        )
+        sparse = not is_anchor
 
-        self.accelerator.wait_for_everyone()
-        t_barrier = time.time()
+        # Reconstruct the change mask from the AdamW state (no snapshot) for a sparse patch.
+        if sparse and self._change_detector is not None:
+            self._change_detector.compute_masks()
 
-        logger.info(f"Weight sync: transferring weights... (barrier took {t_barrier - t_pause:.1f}s)")
-        if self.accelerator.is_main_process and self.weight_transfer:
-            self.weight_transfer.send_weights(self._streaming_iter())
-        else:
-            # Non-rank-0 processes must still participate in full_tensor() collectives for FSDP2.
-            for _ in self._streaming_iter():
-                pass
-        t_transfer = time.time()
+        # The transport owns its phasing (NCCL: single-phase broadcast; bucket: upload then apply).
+        self.weight_transfer.sync(
+            iter_fn=self._weight_iter,
+            sparse=sparse,
+            is_anchor=is_anchor,
+            version=next_version,
+            accelerator=self.accelerator,
+        )
 
-        self.accelerator.wait_for_everyone()
-
-        logger.info(f"Weight sync: resuming vLLM... (transfer took {t_transfer - t_barrier:.1f}s)")
-        if self.accelerator.is_main_process:
-            if self.weight_transfer:
-                self.weight_transfer.resume()
-            self.model_version += 1
-            if self.rollout_worker:
-                self.rollout_worker.update_model_version(self.model_version)
-        weight_sync_time_s = time.time() - t0
-        self._metrics["train"]["weight_sync_time_s"].append(weight_sync_time_s)
-        logger.info(f"Weight sync: done. Total {weight_sync_time_s:.1f}s")
+        # Bump on every rank to keep the anchor cadence in lockstep; only rank 0 owns the rollout worker's version.
+        self.model_version += 1
+        if self.accelerator.is_main_process and self.rollout_worker:
+            self.rollout_worker.update_model_version(self.model_version)
+        self._metrics["train"]["weight_sync_time_s"].append(time.time() - t0)
 
     def _inner_training_loop(self, *args, **kwargs):
         try:

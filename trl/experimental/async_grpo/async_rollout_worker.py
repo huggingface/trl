@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import asyncio
+import copy
 import inspect
 import multiprocessing as mp
 import os
@@ -77,6 +78,7 @@ class RolloutGroup:
     tool_mask: list[list[int]]
     tool_call_counts: list[int]
     tool_failure_counts: list[int]
+    environments: list[object]
     model_version: int
     queued_at: float = 0.0
 
@@ -419,6 +421,7 @@ class _AsyncRolloutLoop:
                             tool_mask=[],
                             tool_call_counts=[],
                             tool_failure_counts=[],
+                            environments=[],
                             model_version=self.model_version,
                         )
                         pending_completed[group_id] = 0
@@ -462,6 +465,10 @@ class _AsyncRolloutLoop:
                     group.tool_mask.append(tool_mask)
                     group.tool_call_counts.append(tool_call_count)
                     group.tool_failure_counts.append(tool_failure_count)
+                    if environment is not None:
+                        # NOTE(@aminediro) Snapshot the env (with its accumulated reward) for this completion; the
+                        # instance is reset and reused from the pool, so copy it before that happens.
+                        group.environments.append(copy.copy(environment))
                     self._total_completion_tokens += sum(tool_mask)
                     pending_completed[group_id] += 1
 
@@ -688,6 +695,8 @@ class _AsyncRolloutLoop:
             completion_ids=group.completions_ids,
             **group.reward_kwargs,
         )
+        if group.environments:
+            kwargs["environments"] = group.environments
         all_rewards = await asyncio.gather(
             *[
                 reward_func(**kwargs)
@@ -814,9 +823,9 @@ class AsyncRolloutWorker:
         child_ready_timeout: int = 300,
         **loop_kwargs: Any,
     ):
-        if not is_vllm_available(min_version="0.17.1"):
+        if not is_vllm_available(min_version="0.23.0"):
             raise ImportError(
-                "vLLM >= 0.17.1 is required to use AsyncRolloutWorker. Install it with: pip install 'vllm>=0.17.1'"
+                "vLLM >= 0.23.0 is required to use AsyncRolloutWorker. Install it with: pip install 'vllm>=0.23.0'"
             )
         ctx = mp.get_context("spawn")
         self._mp_ctx = ctx
