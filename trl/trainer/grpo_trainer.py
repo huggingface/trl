@@ -626,22 +626,23 @@ class GRPOTrainer(_BaseTrainer):
                 # If this environment owns its reward via `get_reward`, expose it as an extra reward source (named after
                 # the env class, weight 1). One column per env class that defines `get_reward` (deduplicated, since a
                 # dict factory may map several names to the same class); a rollout is scored only when its environment is
-                # an instance of that class, so mixing an env that owns its reward with one that does not is safe (the
-                # latter's rollouts return `None`, turned into NaN and ignored). `get_reward` may be async (e.g. an LLM
-                # judge); wrap it accordingly so `_calculate_rewards` runs it on the daemon event loop like any other
-                # async reward func.
+                # exactly that class, so mixing an env that owns its reward with one that does not is safe (the latter's
+                # rollouts return `None`, turned into NaN and ignored). Exact-type match (not `isinstance`) keeps this
+                # consistent with the async worker and avoids double-counting when one registered env subclasses another.
+                # `get_reward` may be async (e.g. an LLM judge); wrap it accordingly so `_calculate_rewards` runs it on
+                # the daemon event loop like any other async reward func.
                 if has_reward and type(instance) not in env_reward_types:
                     env_type = type(instance)
                     env_reward_types.append(env_type)
                     if inspect.iscoroutinefunction(instance.get_reward):
 
                         async def get_reward(environments, _env_type=env_type, **kwargs):
-                            return [await e.get_reward() if isinstance(e, _env_type) else None for e in environments]
+                            return [await e.get_reward() if type(e) is _env_type else None for e in environments]
 
                     else:
 
                         def get_reward(environments, _env_type=env_type, **kwargs):
-                            return [e.get_reward() if isinstance(e, _env_type) else None for e in environments]
+                            return [e.get_reward() if type(e) is _env_type else None for e in environments]
 
                     self.reward_funcs.append(get_reward)
                     self.reward_func_names.append(env_type.__name__)
