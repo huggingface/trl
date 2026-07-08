@@ -215,7 +215,6 @@ def main():
         server_process = None
         print(f"🌍 Using existing OpenSpiel Environment (Docker) at: {env_url}")
     elif args.env_mode == "docker-image":
-        # Start the container and get its URL; the rollout clients connect to it via base_url.
         provider = LocalDockerProvider()
         env_url = provider.start_container(args.env_image)
         provider.wait_for_ready(env_url)
