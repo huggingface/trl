@@ -17,7 +17,6 @@
 #     "trl[peft] @ git+https://github.com/huggingface/trl.git",
 #     "smolagents[toolkit]",
 #     "docling",
-#     "bitsandbytes",
 #     "trackio",
 #     "vllm",
 # ]
@@ -61,7 +60,6 @@ from transformers import (
     AutoModelForImageTextToText,
     AutoProcessor,
     AutoTokenizer,
-    BitsAndBytesConfig,
 )
 
 from trl.experimental.gold import GOLDConfig, GOLDTrainer
@@ -299,50 +297,69 @@ def main():
     parser.add_argument("--lmbda", type=float, default=0.5)
     parser.add_argument("--max_conversations", type=int, default=None)
     parser.add_argument("--output_dir", type=str, default=None)
+    parser.add_argument("--report_to", type=str, default="trackio", help="Experiment tracker, e.g. 'wandb' or 'trackio'.")
     cli_args = parser.parse_args()
 
-    peft_config = LoraConfig(r=16, lora_alpha=32, lora_dropout=0.05)
-    quant = BitsAndBytesConfig(
-        load_in_4bit=True, bnb_4bit_compute_dtype=torch.bfloat16, bnb_4bit_use_double_quant=True, bnb_4bit_quant_type="nf4"
+    # LoRA on all attention + MLP projections. r=32 / alpha=64 (alpha = 2*r) mirrors the step-1 SFT teacher; LoRA also
+    # regularizes the student. Both student and teacher are small (~2-3B), so we load them in bf16 with no 4-bit quant
+    # (bf16 trains better than QLoRA). Their weights are cheap; the 80 GB A100 budget is spent on the long-context
+    # activations and KV cache driven by the max_length / max_completion_length set per mode below.
+    peft_config = LoraConfig(
+        r=32,
+        lora_alpha=64,
+        lora_dropout=0.05,
+        target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
     )
 
     if cli_args.mode == "aya":
         student_id = cli_args.student_model_name or "CohereLabs/tiny-aya-global"
         processing_class = AutoTokenizer.from_pretrained(student_id)
         processing_class.chat_template = AYA_TEMPLATE.read_text()
-        student = AutoModelForCausalLM.from_pretrained(student_id, dtype=torch.bfloat16, quantization_config=quant)
+        student = AutoModelForCausalLM.from_pretrained(student_id, dtype=torch.bfloat16)
         teacher = AutoModelForCausalLM.from_pretrained(cli_args.teacher_model_name, dtype=torch.bfloat16)
         train_dataset = build_aya_dataset()
         tools, environment_factory = build_search_tools_aya(), None
         use_vllm = False
+        # Text tool trajectories: 8192-token window, 2048-token on-policy generation budget per rollout.
+        max_length, max_completion_length = 8192, 2048
     else:
         student_id = cli_args.student_model_name or "HuggingFaceTB/SmolVLM-Instruct"
         processing_class = AutoProcessor.from_pretrained(student_id)
         processing_class.chat_template = SMOLVLM_TEMPLATE.read_text()
-        student = AutoModelForImageTextToText.from_pretrained(student_id, dtype=torch.bfloat16, quantization_config=quant)
+        student = AutoModelForImageTextToText.from_pretrained(student_id, dtype=torch.bfloat16)
         teacher = AutoModelForImageTextToText.from_pretrained(cli_args.teacher_model_name, dtype=torch.bfloat16)
         train_dataset = build_smolvlm_dataset(list(SEARCH_VL_DOMAINS), cli_args.max_conversations)
         tools, environment_factory = build_search_tools(), LayoutParsingEnv
         use_vllm = True
+        # Image placeholder tokens dominate the sequence, so the window is far larger: 16384 in, 4096 generated.
+        max_length, max_completion_length = 16384, 4096
 
     args = GOLDConfig(
         output_dir=cli_args.output_dir or f"gold-{cli_args.mode}-tools",
         lmbda=cli_args.lmbda,
         beta=0.5,
         temperature=0.7,
-        max_completion_length=256,
-        max_length=2048,
+        max_completion_length=max_completion_length,
+        max_length=max_length,
         num_generations=2,
-        per_device_train_batch_size=2,
+        # Effective batch 16 (4 x 4) matches the step-1 SFT. On 80 GB the pressure is the long context windows above
+        # (and the VLM KV cache), not the weights — if you OOM, drop per_device_train_batch_size first (raise
+        # gradient_accumulation_steps to keep the effective batch at 16).
+        per_device_train_batch_size=4,
         gradient_accumulation_steps=4,
+        gradient_checkpointing=True,
+        gradient_checkpointing_kwargs={"use_reentrant": False},
+        optim="adamw_torch_fused",
         learning_rate=1e-4,
+        lr_scheduler_type="cosine",
+        warmup_ratio=0.03,
         max_steps=200,
         logging_steps=10,
         bf16=True,
         use_vllm=use_vllm,
         vllm_mode="colocate",
         vllm_gpu_memory_utilization=0.5,
-        report_to="trackio",
+        report_to=cli_args.report_to,
     )
 
     trainer = GOLDTrainer(

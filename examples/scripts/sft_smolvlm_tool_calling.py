@@ -15,13 +15,12 @@
 # /// script
 # dependencies = [
 #     "trl[peft]",
-#     "bitsandbytes",
 #     "trackio",
 # ]
 # ///
 
 """
-Teach visual tool calling to HuggingFaceTB/SmolVLM-Instruct with SFT + QLoRA on the
+Teach visual tool calling to HuggingFaceTB/SmolVLM-Instruct with SFT + bf16 LoRA on the
 OpenSearch-VL/Search-VL-SFT-36K dataset (multimodal search-agent trajectories).
 
 This is the VLM counterpart of `sft_tiny_aya_tool_calling.py`: SmolVLM has no native tool-calling
@@ -58,7 +57,7 @@ from datasets import Dataset, Features, Sequence, Value
 from datasets import Image as ImageFeature
 from huggingface_hub import hf_hub_download
 from peft import LoraConfig
-from transformers import AutoModelForImageTextToText, AutoProcessor, BitsAndBytesConfig
+from transformers import AutoModelForImageTextToText, AutoProcessor
 
 from trl import SFTConfig, SFTTrainer
 from trl.trainer.sft_trainer import DataCollatorForVisionLanguageModeling
@@ -198,20 +197,12 @@ def main():
     if processor.tokenizer.pad_token is None:
         processor.tokenizer.pad_token = processor.tokenizer.eos_token
 
-    # ── Model (4-bit QLoRA, LoRA on the language model only) ───────────────────
-    model = AutoModelForImageTextToText.from_pretrained(
-        MODEL_ID,
-        dtype=torch.bfloat16,
-        quantization_config=BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_compute_dtype=torch.bfloat16,
-            bnb_4bit_use_double_quant=True,
-            bnb_4bit_quant_type="nf4",
-        ),
-    )
+    # ── Model (bf16, LoRA on the language model only) ──────────────────────────
+    # SmolVLM-Instruct is ~2B params; bf16 (no 4-bit quant) fits an 80 GB A100 with room to spare and trains better.
+    model = AutoModelForImageTextToText.from_pretrained(MODEL_ID, dtype=torch.bfloat16)
     peft_config = LoraConfig(
-        r=16,
-        lora_alpha=32,
+        r=32,
+        lora_alpha=64,
         lora_dropout=0.05,
         target_modules=r"^.*language_model.*\.(q_proj|k_proj|v_proj|o_proj)$",
     )
@@ -223,19 +214,26 @@ def main():
     # ── Training ────────────────────────────────────────────────────────────────
     # Masking lives on the collator (prompt masked, completion supervised); assistant_only_loss is unsupported
     # for VLMs. skip_prepare_dataset + remove_unused_columns=False keep our prompt/completion/images rows intact.
+    # Training params mirror the aya step-1 SFT (80 GB A100 budget): bf16, fused optimizer, cosine schedule, r=32 LoRA.
+    # Images make each example far longer than the text case, so if you OOM, drop per_device_train_batch_size to 4 and
+    # raise gradient_accumulation_steps to 4 (same effective batch of 16).
     training_args = SFTConfig(
         output_dir=cli_args.output_dir,
-        per_device_train_batch_size=2,
-        gradient_accumulation_steps=4,
-        learning_rate=1e-4,
-        warmup_steps=10,
-        max_length=2048,
-        num_train_epochs=1,
-        logging_steps=10,
-        eval_strategy="steps",
-        eval_steps=100,
-        bf16=True,
+        per_device_train_batch_size=8,
+        gradient_accumulation_steps=2,
         gradient_checkpointing=True,
+        gradient_checkpointing_kwargs={"use_reentrant": False},
+        optim="adamw_torch_fused",
+        learning_rate=1e-4,
+        lr_scheduler_type="cosine",
+        warmup_ratio=0.03,
+        max_length=4096,
+        num_train_epochs=3,
+        logging_steps=10,
+        eval_strategy="epoch",
+        save_strategy="epoch",
+        save_total_limit=1,
+        bf16=True,
         remove_unused_columns=False,
         dataset_kwargs={"skip_prepare_dataset": True},
         report_to="trackio",
