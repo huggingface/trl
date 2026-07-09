@@ -30,7 +30,7 @@ import transformers
 from accelerate import PartialState
 from accelerate.logging import get_logger
 from accelerate.utils import is_peft_model
-from datasets import Dataset, IterableDataset
+from datasets import Dataset, DatasetDict, IterableDataset, IterableDatasetDict
 from packaging.version import Version
 from transformers import (
     AutoProcessor,
@@ -844,7 +844,11 @@ class SFTTrainer(_BaseTrainer):
             `completion_mask` only when `completion_only_loss=True`), or default to a copy of `input_ids`. Sequences
             are truncated to `max_length` during preparation. With `skip_prepare_dataset=True`, preparation is skipped
             and the collator is expected to handle the dataset as is.
-        eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`] or `dict[str, Dataset | IterableDataset]`):
+
+            When `train_dataset` is an [`~datasets.IterableDataset`] (e.g. a streaming dataset), `max_steps` must be
+            set in the training arguments, since its length cannot be inferred and the total number of training steps
+            is required to bound the training loop and configure the learning rate scheduler.
+        eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`], [`~datasets.DatasetDict`], [`~datasets.IterableDatasetDict`] or `dict[str, Dataset | IterableDataset]`):
             Dataset to use for evaluation. It must meet the same requirements as `train_dataset`.
         processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.ProcessorMixin`], *optional*):
             Processing class used to process the data. If `None`, the processing class is loaded from the model's name
@@ -902,7 +906,12 @@ class SFTTrainer(_BaseTrainer):
         args: SFTConfig | TrainingArguments | None = None,
         data_collator: DataCollator | None = None,
         train_dataset: Dataset | IterableDataset | None = None,
-        eval_dataset: Dataset | IterableDataset | dict[str, Dataset | IterableDataset] | None = None,
+        eval_dataset: Dataset
+        | IterableDataset
+        | DatasetDict
+        | IterableDatasetDict
+        | dict[str, Dataset | IterableDataset]
+        | None = None,
         processing_class: PreTrainedTokenizerBase | ProcessorMixin | None = None,
         compute_loss_func: Callable | None = None,
         compute_metrics: Callable[[EvalPrediction], dict] | None = None,
