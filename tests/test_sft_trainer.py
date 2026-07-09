@@ -1632,16 +1632,35 @@ class TestSFTTrainer(TrlTestCase):
         assert trainer.state.log_history[-3]["eval_data1_loss"] is not None
         assert trainer.state.log_history[-2]["eval_data2_loss"] is not None
 
-    @pytest.mark.parametrize("streaming", [False, True])
-    def test_init_with_eval_dataset_dict(self, streaming):
-        # `eval_dataset` may be a `DatasetDict` (map-style) or `IterableDatasetDict` (streaming) — e.g. the raw output
-        # of `load_dataset` without a `split` — not only a plain `dict`. Each split is prepared independently at init.
+    @pytest.mark.parametrize(
+        "eval_dataset_type",
+        [
+            "dataset",
+            "iterable_dataset",
+            "dataset_dict",
+            "iterable_dataset_dict",
+            "dict_of_dataset",
+            "dict_of_iterable_dataset",
+            "none",
+        ],
+    )
+    def test_init_with_eval_dataset(self, eval_dataset_type):
         train_dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
-        eval_split = load_dataset(
-            "trl-internal-testing/zen", "standard_language_modeling", split="test", streaming=streaming
-        )
-        dataset_dict_cls = IterableDatasetDict if streaming else DatasetDict
-        eval_dataset = dataset_dict_cls({"data1": eval_split, "data2": eval_split})
+
+        if eval_dataset_type == "none":
+            eval_dataset = None
+        else:
+            streaming = "iterable" in eval_dataset_type
+            eval_split = load_dataset(
+                "trl-internal-testing/zen", "standard_language_modeling", split="test", streaming=streaming
+            )
+            if eval_dataset_type in ("dataset", "iterable_dataset"):
+                eval_dataset = eval_split
+            elif eval_dataset_type in ("dataset_dict", "iterable_dataset_dict"):
+                dataset_dict_cls = IterableDatasetDict if streaming else DatasetDict
+                eval_dataset = dataset_dict_cls({"data1": eval_split, "data2": eval_split})
+            else:  # "dict_of_dataset" or "dict_of_iterable_dataset"
+                eval_dataset = {"data1": eval_split, "data2": eval_split}
 
         training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
         trainer = SFTTrainer(
@@ -1651,10 +1670,15 @@ class TestSFTTrainer(TrlTestCase):
             eval_dataset=eval_dataset,
         )
 
-        assert set(trainer.eval_dataset.keys()) == {"data1", "data2"}
-        # Each split was tokenized independently.
-        assert "input_ids" in next(iter(trainer.eval_dataset["data1"]))
-        assert "input_ids" in next(iter(trainer.eval_dataset["data2"]))
+        if eval_dataset_type == "none":
+            assert trainer.eval_dataset is None
+        elif isinstance(trainer.eval_dataset, dict):
+            assert set(trainer.eval_dataset.keys()) == {"data1", "data2"}
+            # Each split was tokenized independently.
+            assert "input_ids" in next(iter(trainer.eval_dataset["data1"]))
+            assert "input_ids" in next(iter(trainer.eval_dataset["data2"]))
+        else:
+            assert "input_ids" in next(iter(trainer.eval_dataset))
 
     def test_train_with_compute_metrics(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling")
