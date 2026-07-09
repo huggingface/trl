@@ -210,7 +210,7 @@ class TestRolloutStateCheckpoint(TrlTestCase):
         kwargs = dict(
             model_name="test",
             dataset=dataset,
-            reward_funcs=[],
+            reward_funcs=[dummy_reward_func],
             processing_class=MagicMock(),
             rollout_buffer=ctx.Queue(),
             model_version_value=ctx.Value("i", 0),

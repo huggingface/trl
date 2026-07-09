@@ -1000,6 +1000,9 @@ class AsyncGRPOTrainer(_BaseTrainer):
     def _inner_training_loop(self, *args, **kwargs):
         # When resuming, pass the saved prompt position to the worker before _StartRolloutWorkerCallback fires.
         # Skipped for IterableDataset since len() isn't available on streaming datasets.
+        # Always reset first so a stale value from a prior train() call is never carried over.
+        if isinstance(self.rollout_worker, AsyncRolloutWorker):
+            self.rollout_worker._loop_kwargs["dataset_start_index"] = 0
         resume_from_checkpoint = kwargs.get("resume_from_checkpoint")
         if resume_from_checkpoint is not None and isinstance(self.rollout_worker, AsyncRolloutWorker):
             rollout_state_file = os.path.join(resume_from_checkpoint, "rollout_state.json")
