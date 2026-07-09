@@ -381,6 +381,7 @@ def main():
     parser.add_argument("--lmbda", type=float, default=0.5)
     parser.add_argument("--max_conversations", type=int, default=None)
     parser.add_argument("--output_dir", type=str, default=None)
+    parser.add_argument("--run_name", type=str, default=None)
     parser.add_argument("--report_to", type=str, default="trackio")
     cli_args = parser.parse_args()
 
@@ -423,10 +424,11 @@ def main():
     # ──────────────────────────────────────────────
     student_short = student_id.split("/")[-1]
     teacher_short = teacher_id.split("/")[-1]
-    run_name = cli_args.output_dir or f"gold-{student_short}-from-{teacher_short}-{cli_args.mode}-tools"
+    run_name = cli_args.run_name or f"gold-{student_short}-from-{teacher_short}-{cli_args.mode}-tools"
+    output_dir = cli_args.output_dir or run_name
 
     args = GOLDConfig(
-        output_dir=run_name,
+        output_dir=output_dir,
         run_name=run_name,
         lmbda=cli_args.lmbda,
         beta=0.5,
