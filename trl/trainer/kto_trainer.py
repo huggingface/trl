@@ -204,6 +204,7 @@ class DataCollatorForUnpairedPreference(DataCollatorMixin):
             output["ref_logps"] = torch.tensor([example["ref_logps"] for example in examples])
         if "ref_KL_logps" in examples[0]:
             output["ref_KL_logps"] = torch.tensor([example["ref_KL_logps"] for example in examples])
+        # Must be a tensor: Accelerate cannot concatenate non-tensor fields across processes (accelerate#4111)
         output["label"] = torch.tensor([example["label"] for example in examples])
         return output
 
@@ -453,6 +454,7 @@ class DataCollatorForVisionUnpairedPreference(DataCollatorMixin):
             if "mm_token_type_ids" in processed_prompts:
                 output["KL_mm_token_type_ids"] = kl_mm_token_type_ids
 
+        # Must be a tensor: Accelerate cannot concatenate non-tensor fields across processes (accelerate#4111)
         output["label"] = torch.tensor([example["label"] for example in examples])
         return output
 
