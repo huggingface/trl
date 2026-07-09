@@ -21,6 +21,7 @@ import queue
 import threading
 import time
 import traceback
+import warnings
 from collections.abc import Awaitable, Callable, Iterator
 from dataclasses import dataclass
 from multiprocessing.queues import Queue as MPQueue
@@ -35,6 +36,7 @@ from datasets import Dataset
 from transformers import PreTrainedTokenizerBase
 
 from ...chat_template_utils import (
+    _SUPPORTS_RESPONSE_TEMPLATE,
     add_response_schema,
     get_training_chat_template,
     is_chat_template_prefix_preserving,
@@ -66,8 +68,8 @@ async def _retry_on_http_error(coro_factory: Callable[[], Awaitable], *, label: 
 
 @dataclass(slots=True)
 class RolloutGroup:
-    prompt: Messages
-    prompt_ids: list[int]
+    prompts: list[Messages]
+    prompt_ids: list[list[int]]
     reward_kwargs: dict[str, list[Any]]
     completions: list[Messages]
     completions_ids: list[list[int]]
@@ -76,6 +78,7 @@ class RolloutGroup:
     tool_call_counts: list[int]
     tool_failure_counts: list[int]
     model_version: int
+    env_rewards: list[tuple[type, float] | None]
     queued_at: float = 0.0
 
 
@@ -189,7 +192,7 @@ class _AsyncRolloutLoop:
         failed_event: MPEvent,
         exception_info_queue: MPQueue,
         tools: list[Callable] | None = None,
-        environment_factory: Callable[[], object] | None = None,
+        environment_factory: Callable[[], object] | dict[str, Callable[[], object]] | None = None,
         num_generations: int = 8,
         max_inflight_tasks: int = 128,
         queue_maxsize: int = 0,
@@ -215,7 +218,20 @@ class _AsyncRolloutLoop:
             prompt_index_value.value = dataset_start_index
         self.reward_funcs = reward_funcs
         self.reward_func_names = [f.__name__ for f in reward_funcs]
-        self.tokenizer = add_response_schema(processing_class)
+        # `add_response_schema` sets the response template (transformers >= 5.13) or legacy schema for known chat
+        # templates, so tool calls can be parsed. Skip if one is already set; warn if it's a migratable legacy schema.
+        has_template = getattr(processing_class, "response_template", None) is not None
+        has_schema = getattr(processing_class, "response_schema", None) is not None
+        if not has_template and not has_schema:
+            processing_class = add_response_schema(processing_class)
+        elif has_schema and not has_template and _SUPPORTS_RESPONSE_TEMPLATE:
+            warnings.warn(
+                "The tokenizer has a legacy `response_schema` set but no `response_template`. The installed "
+                "transformers supports the new-style `response_template`; consider migrating, as `response_schema` "
+                "support will eventually be removed. See the Transformers response-parsing docs.",
+                FutureWarning,
+            )
+        self.tokenizer = processing_class
         self.rollout_buffer = rollout_buffer  # shared mp.Queue
         self._model_version_value = model_version_value  # shared mp.Value
         self._heartbeat_value = heartbeat_value  # shared mp.Value('d'); wall-clock seconds
@@ -234,30 +250,71 @@ class _AsyncRolloutLoop:
         self.num_completions_to_print = num_completions_to_print
         self.vllm_server_url = vllm_server_url.rstrip("/")
 
-        self.environments = None
-        environment_methods = [[] for _ in range(max_inflight_tasks)]
-        if environment_factory is not None:
-            self.environments = [environment_factory() for _ in range(max_inflight_tasks)]
-            for i, environment in enumerate(self.environments):
+        tools = tools or []
+        self._standalone_tools = tools  # tools that are not bound to an environment
+        self._env_reward_types = []  # env classes that own their reward via `get_reward`; one reward column each
+
+        # Normalize `environment_factory` to a `{name: factory}` mapping. A single callable is the special case of one
+        # unnamed (`None`) environment shared by every example; a dict maps the `environment` field of each example to
+        # its factory. `_multi_environment` records which case we are in: only then is the `environment` field read.
+        self._multi_environment = isinstance(environment_factory, dict)
+        if environment_factory is None:
+            self.environment_factories = None
+        elif self._multi_environment:
+            self.environment_factories = environment_factory
+        else:
+            self.environment_factories = {None: environment_factory}
+
+        if self.environment_factories is not None:
+            # Probe one instance of each environment to validate its `reset` method and extract its tool methods, used
+            # to render the per-example tool schema in the prompt. Instances are pooled and reused (reset) across
+            # rollouts; the probe seeds the pool so it is not wasted. The pool grows only when more concurrent instances
+            # of an environment are needed than have been created so far, preserving the "construct once, reset often"
+            # contract even when rollouts mix environments.
+            self._env_tools = {}  # {environment name: tools exposed when this environment is selected}
+            self._environment_pool = {}  # {environment name: list of reusable instances}
+            # `self.tools` is the union of every environment's tools, accumulated below as each environment is probed.
+            # Used only to decide whether a training chat template is needed.
+            self.tools = list(tools)
+            for name, factory in self.environment_factories.items():
+                instance = factory()
                 has_reset = False
-                for name, member in inspect.getmembers(environment, predicate=inspect.ismethod):
-                    if name == "reset":
+                methods = []
+                for member_name, member in inspect.getmembers(instance, predicate=inspect.ismethod):
+                    if member_name == "reset":
                         has_reset = True
-                    elif not name.startswith("_"):
-                        environment_methods[i].append(member)
+                    elif member_name == "get_reward":
+                        if type(instance) not in self._env_reward_types:
+                            self._env_reward_types.append(type(instance))
+                    elif not member_name.startswith("_"):
+                        methods.append(member)
                 if not has_reset:
                     raise ValueError(
-                        "Each environment instance returned by `environment_factory` must define `reset`."
+                        "Each environment instance returned by `environment_factory` must define a callable `reset`."
                     )
+                self._env_tools[name] = tools + methods
+                self._environment_pool[name] = [instance]
+                self.tools += [method for method in methods if method not in self.tools]
+            # Each environment that owns its reward via `get_reward` becomes an extra reward source, named after the env
+            # class (its per-rollout value is scored inline in `_generate_loop` and summed in `_score_group`). One
+            # column per such class: mixing an env that owns its reward with one that does not is safe.
+            for env_type in self._env_reward_types:
+                self.reward_func_names.append(env_type.__name__)
+        else:
+            self.tools = tools
 
-        base_tools = tools or []
-        self._sync_tool_dicts = [{} for _ in range(max_inflight_tasks)]
-        for i in range(max_inflight_tasks):
-            for tool in base_tools + (environment_methods[i] if self.environments is not None else []):
-                if inspect.iscoroutinefunction(tool):
-                    raise ValueError("Asynchronous tools are not supported yet.")
-                self._sync_tool_dicts[i][tool.__name__] = tool
-        self.tools = base_tools + (environment_methods[0] if self.environments is not None else [])
+        # At least one reward source is required: either `reward_funcs`, or an environment that owns the reward via a
+        # `get_reward` method.
+        if not self.reward_funcs and not self._env_reward_types:
+            raise ValueError(
+                "No reward source provided. Pass `reward_funcs`, or an `environment_factory` whose environment "
+                "defines a `get_reward` method."
+            )
+
+        # The async worker can't await tools in its tool loop, so asynchronous tools are not supported.
+        for tool in self.tools:
+            if inspect.iscoroutinefunction(tool):
+                raise ValueError("Asynchronous tools are not supported yet.")
 
         # The chat template must be prefix-preserving in multi-turn training; if the tokenizer's
         # template isn't, swap in a training-safe one.
@@ -312,7 +369,7 @@ class _AsyncRolloutLoop:
     async def _generate_loop(self, stop_event: asyncio.Event) -> None:
         pending_groups: dict[int, RolloutGroup] = {}
         pending_completed: dict[int, int] = {}
-        inflight_tasks: dict[asyncio.Task, tuple[int, int]] = {}
+        inflight_tasks: dict[asyncio.Task, tuple[int, int, Any, object, Messages]] = {}
         free_slots = set(range(self.max_inflight_tasks))
         work_iter = self._repeat_iterator()
 
@@ -323,24 +380,66 @@ class _AsyncRolloutLoop:
                 self._heartbeat_value.value = time.time()
                 while free_slots and not stop_event.is_set():
                     group_id, row = next(work_iter)
-                    if group_id not in pending_groups:
-                        prompt = row["prompt"]
-                        prompt_ids = self.tokenizer.apply_chat_template(
-                            prompt,
-                            return_dict=False,
-                            add_generation_prompt=True,
-                            tools=self.tools or None,  # `or None`: Llama bug: renders tool boilerplate for tools=[]
-                            chat_template=self.chat_template,
-                            **self.chat_template_kwargs,
+                    slot = free_slots.pop()
+                    # The environment is selected per example via its `environment` field (multi-env); only its tools
+                    # are exposed in the example's prompt. When there are no environments, every example shares the
+                    # standalone tools.
+                    name = row.get("environment") if self._multi_environment else None
+                    if self._multi_environment and name not in self.environment_factories:
+                        raise ValueError(
+                            f"Example has `environment={name!r}`, which is not among the environments passed to "
+                            f"`environment_factory`. Expected one of: {list(self.environment_factories)}."
                         )
+                    tools = self._env_tools[name] if self.environment_factories is not None else self.tools
+                    # Draw a reusable environment instance for this rollout (creating one only if the pool is
+                    # exhausted); it is returned to the pool when the task completes. Reset it BEFORE building the
+                    # prompt and capture its initial observation (e.g. a task instruction). The reset() return was
+                    # previously discarded, so an environment_factory whose task lives in the observation (not the
+                    # dataset prompt) was generated against the bare prompt. Mirror GRPOTrainer: fold the observation
+                    # into the last prompt message. reset() may be stochastic, so this is done per generation (each
+                    # generation gets its own observation -> its own prompt and prompt_ids). `environment` is a control
+                    # field in multi-environment mode, so it is not forwarded to `reset`.
+                    environment = None
+                    observation = None
+                    if self.environment_factories is not None:
+                        pool = self._environment_pool[name]
+                        environment = pool.pop() if pool else self.environment_factories[name]()
+                        reset_kwargs = (
+                            {k: v for k, v in row.items() if k != "environment"} if self._multi_environment else row
+                        )
+                        observation = environment.reset(**reset_kwargs)
+                    prompt = row["prompt"]
+                    if observation is not None:
+                        # Rebuild the last message instead of mutating in place (as GRPOTrainer does): the
+                        # same row is reused across the group's generations and across epochs. Normalize str vs
+                        # list (multimodal) content the same way GRPOTrainer does before concatenating.
+                        last = prompt[-1]
+                        content = last["content"]
+                        if isinstance(observation, list) and isinstance(content, str):
+                            content = [{"type": "text", "text": content}]
+                        if isinstance(observation, str) and isinstance(content, list):
+                            observation = [{"type": "text", "text": observation}]
+                        prompt = prompt[:-1] + [{**last, "content": content + observation}]
+
+                    # Build this rollout's tool dict: the standalone tools plus the methods of its environment.
+                    methods = []
+                    if environment is not None:
+                        methods = [
+                            member
+                            for member_name, member in inspect.getmembers(environment, predicate=inspect.ismethod)
+                            if member_name not in ("reset", "get_reward") and not member_name.startswith("_")
+                        ]
+                    tool_dict = {tool.__name__: tool for tool in self._standalone_tools + methods}
+
+                    if group_id not in pending_groups:
                         reward_kwargs = {
                             key: [row[key]] * self.num_generations
                             for key in row
                             if key not in {"prompt", "completion", "completion_ids"}
                         }
                         pending_groups[group_id] = RolloutGroup(
-                            prompt=prompt,
-                            prompt_ids=prompt_ids,
+                            prompts=[],
+                            prompt_ids=[],
                             reward_kwargs=reward_kwargs,
                             completions=[],
                             completions_ids=[],
@@ -349,17 +448,12 @@ class _AsyncRolloutLoop:
                             tool_call_counts=[],
                             tool_failure_counts=[],
                             model_version=self.model_version,
+                            env_rewards=[],
                         )
                         pending_completed[group_id] = 0
 
-                    slot = free_slots.pop()
-                    if self.environments is not None:
-                        self.environments[slot].reset(**row)
-
-                    task = asyncio.create_task(
-                        self._generate_one(pending_groups[group_id].prompt, tool_dict=self._sync_tool_dicts[slot])
-                    )
-                    inflight_tasks[task] = (group_id, slot)
+                    task = asyncio.create_task(self._generate_one(prompt, tool_dict=tool_dict, tools=tools))
+                    inflight_tasks[task] = (group_id, slot, name, environment, prompt)
 
                 if not inflight_tasks:
                     if stop_event.is_set():
@@ -372,12 +466,13 @@ class _AsyncRolloutLoop:
                     continue
 
                 for task in done:
-                    group_id, slot = inflight_tasks.pop(task)
+                    group_id, slot, name, environment, prompt = inflight_tasks.pop(task)
                     free_slots.add(slot)
                     if task.exception() is not None:
                         raise task.exception()
 
                     (
+                        prompt_ids,
                         completion,
                         completion_ids,
                         completion_logprobs,
@@ -386,12 +481,30 @@ class _AsyncRolloutLoop:
                         tool_failure_count,
                     ) = task.result()
                     group = pending_groups[group_id]
+                    group.prompts.append(prompt)
+                    group.prompt_ids.append(prompt_ids)
                     group.completions.append(completion)
                     group.completions_ids.append(completion_ids)
                     group.completions_logprobs.append(completion_logprobs)
                     group.tool_mask.append(tool_mask)
                     group.tool_call_counts.append(tool_call_count)
                     group.tool_failure_counts.append(tool_failure_count)
+                    # The environment owns the reward: score it now, while this rollout's environment still holds its
+                    # final state and before returning it to the pool. `get_reward` may be async awaiting yields to
+                    # inflight requests instead of halting them. The env is returned to the pool only after scoring, so
+                    # a concurrent rollout can't draw and reset it during the await. Record `(env class, reward)` so
+                    # `_score_group` can place it in the matching env's reward column; rollouts whose env owns no reward
+                    # record `None` (turned into NaN and ignored) to stay aligned with the group's other per-rollout lists.
+                    if self._env_reward_types:
+                        env_type = type(environment)
+                        if env_type in self._env_reward_types:
+                            get_reward = environment.get_reward
+                            reward = await get_reward() if inspect.iscoroutinefunction(get_reward) else get_reward()
+                            group.env_rewards.append((env_type, reward))
+                        else:
+                            group.env_rewards.append(None)
+                    if environment is not None:
+                        self._environment_pool[name].append(environment)
                     self._total_completion_tokens += sum(tool_mask)
                     pending_completed[group_id] += 1
 
@@ -493,31 +606,42 @@ class _AsyncRolloutLoop:
             group_id += 1
 
     async def _generate_one(
-        self, prompt: Messages, tool_dict: dict[str, Callable]
-    ) -> tuple[list[dict[str, str]], list[int], list[float], list[int], int, int]:
+        self, prompt: Messages, tool_dict: dict[str, Callable], tools: list[Callable]
+    ) -> tuple[list[int], list[dict[str, str]], list[int], list[float], list[int], int, int]:
         completion, completion_ids, completion_logprobs, tool_mask = [], [], [], []
         tool_call_count = 0
         tool_failure_count = 0
         iteration_num = 0
         max_iterations = self.max_tool_calling_iterations
+        # Initial prompt tokens, returned so the scorer can reconstruct input_ids = prompt_ids + completion_ids.
+        # `running_ids` accumulates the turns/tool deltas fed back to the model; `prompt_ids` stays the prompt.
         prompt_ids = self.tokenizer.apply_chat_template(
             prompt,
             return_dict=False,
             add_generation_prompt=True,
-            tools=self.tools or None,
+            tools=tools or None,
             chat_template=self.chat_template,
             **self.chat_template_kwargs,
         )
+        running_ids = prompt_ids
         while True:
-            turn_ids, turn_logprobs = await self._generate_one_turn(prompt_ids)
-            assistant_message = parse_response(self.tokenizer, turn_ids)
+            turn_ids, turn_logprobs = await self._generate_one_turn(running_ids)
+            assistant_message = parse_response(self.tokenizer, turn_ids, prefix=running_ids)
             completion.append(assistant_message)
             completion_ids.extend(turn_ids)
             completion_logprobs.extend(turn_logprobs)
             tool_mask.extend([1] * len(turn_ids))
             tool_calls = assistant_message.get("tool_calls")
             if tool_calls is None or (max_iterations is not None and iteration_num >= max_iterations):
-                return completion, completion_ids, completion_logprobs, tool_mask, tool_call_count, tool_failure_count
+                return (
+                    prompt_ids,
+                    completion,
+                    completion_ids,
+                    completion_logprobs,
+                    tool_mask,
+                    tool_call_count,
+                    tool_failure_count,
+                )
 
             tool_messages, n_calls, n_failures = self._execute_tool_calls(tool_calls, tool_dict)
             tool_call_count += n_calls
@@ -527,7 +651,7 @@ class _AsyncRolloutLoop:
             completion_ids.extend(suffix_ids)
             completion_logprobs.extend([0.0] * len(suffix_ids))
             tool_mask.extend([0] * len(suffix_ids))
-            prompt_ids = prompt_ids + turn_ids + suffix_ids
+            running_ids = running_ids + turn_ids + suffix_ids
             iteration_num += 1
 
     def _get_tool_suffix_ids(self, tool_messages: list[dict[str, Any]]) -> list[int]:
@@ -605,8 +729,7 @@ class _AsyncRolloutLoop:
     async def _score_group(self, group: RolloutGroup) -> list[RolloutSample]:
         kwargs = dict(
             completions=group.completions,
-            prompt=group.prompt,
-            prompts=[group.prompt] * len(group.completions),
+            prompts=group.prompts,
             completion_ids=group.completions_ids,
             **group.reward_kwargs,
         )
@@ -618,6 +741,13 @@ class _AsyncRolloutLoop:
                 for reward_func in self.reward_funcs
             ]
         )
+        # Each environment that owns its reward contributes one reward column (named after its env class, in
+        # `_env_reward_types` order to match `reward_func_names`), summed in with weight 1 like any reward func. Scores
+        # were captured per rollout at generation time in `group.env_rewards` as `(env class, reward)`; a rollout is
+        # placed in a column only when its env is that class, so mixing reward-owning and plain envs is safe.
+        for env_type in self._env_reward_types:
+            column = [r[1] if (r is not None and r[0] is env_type) else None for r in group.env_rewards]
+            all_rewards = [*all_rewards, column]
 
         # Reward funcs may return None per-sample (unparseable gold). Convert to NaN. A completion
         # for which every func returned None is unscorable: nansum would give 0 and the row would
@@ -657,11 +787,11 @@ class _AsyncRolloutLoop:
         per_func_rewards = np.array(all_rewards, dtype=float)
         return [
             RolloutSample(
-                prompt=group.prompt,
+                prompt=prompt,
                 completion=completion,
-                input_ids=group.prompt_ids + completion_ids,
-                completion_mask=[0] * len(group.prompt_ids) + tool_mask,
-                old_log_probs=[0.0] * len(group.prompt_ids) + logprobs,
+                input_ids=prompt_ids + completion_ids,
+                completion_mask=[0] * len(prompt_ids) + tool_mask,
+                old_log_probs=[0.0] * len(prompt_ids) + logprobs,
                 advantage=advantage,
                 model_version=group.model_version,
                 metrics={
@@ -674,8 +804,20 @@ class _AsyncRolloutLoop:
                     **tm,
                 },
             )
-            for i, (completion, completion_ids, logprobs, tool_mask, advantage, reward, tm) in enumerate(
+            for i, (
+                prompt,
+                prompt_ids,
+                completion,
+                completion_ids,
+                logprobs,
+                tool_mask,
+                advantage,
+                reward,
+                tm,
+            ) in enumerate(
                 zip(
+                    group.prompts,
+                    group.prompt_ids,
                     group.completions,
                     group.completions_ids,
                     group.completions_logprobs,

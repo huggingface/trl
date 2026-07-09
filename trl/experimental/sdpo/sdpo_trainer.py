@@ -524,7 +524,7 @@ class SDPOTrainer(_BaseTrainer):
                     "The Liger fused loss reduces with a token-level mean (equivalent to `loss_type='bnpo'`); the "
                     f"configured `loss_type={args.loss_type!r}` is ignored on the Liger path."
                 )
-            self.liger_jsd_loss = LigerFusedLinearJSDLoss(
+            self.liger_loss = LigerFusedLinearJSDLoss(
                 beta=args.distillation_alpha,
                 ignore_index=-100,
                 temperature=args.temperature,
@@ -569,6 +569,7 @@ class SDPOTrainer(_BaseTrainer):
                 * args.steps_per_generation,
                 enable_sleep_mode=args.vllm_enable_sleep_mode,
                 model_impl=args.vllm_model_impl,
+                trust_remote_code=args.trust_remote_code,
                 repetition_penalty=args.repetition_penalty,
                 temperature=self.temperature,
                 top_p=args.top_p,
@@ -1578,7 +1579,7 @@ class SDPOTrainer(_BaseTrainer):
         # Per-sequence then batch mean (grpo), matching the non-Liger path: the fused kernel reduces by total tokens
         # (bnpo), so we call it per sequence and average.
         seq_losses = [
-            self.liger_jsd_loss(
+            self.liger_loss(
                 student_input=student_hidden[i],
                 student_weight=student_head.weight,
                 teacher_input=teacher_hidden[i],

@@ -15,7 +15,7 @@
 import pytest
 import torch
 import transformers
-from datasets import load_dataset
+from datasets import DatasetDict, IterableDatasetDict, load_dataset
 from packaging.version import Version
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 from transformers.testing_utils import torch_device
@@ -36,7 +36,8 @@ from .testing_utils import (
 
 
 if is_peft_available():
-    from peft import LoraConfig, get_peft_model
+    from peft import LoraConfig, PromptTuningConfig, get_peft_model
+    from peft.utils import TaskType
 
 
 class TestDataCollatorForPreference(TrlTestCase):
@@ -210,6 +211,10 @@ class TestDPOTrainer(TrlTestCase):
         trainer.train()
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # MoE models log the load-balancing auxiliary loss (on by default)
+        if trainer.aux_loss_enabled:
+            assert trainer.state.log_history[-1]["aux_loss"] is not None
 
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
@@ -789,8 +794,86 @@ class TestDPOTrainer(TrlTestCase):
 
     @require_liger_kernel
     @require_peft
-    def test_init_fails_with_peft_and_liger(self):
+    def test_train_with_liger_kernel_and_peft(self):
+        # A LoRA adapter that does not target lm_head leaves the head as a plain Linear, so Liger reads the real
+        # weight. Verify the full PEFT+Liger path actually trains (peft params change, base params stay frozen).
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
+        base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            use_liger_kernel=True,
+            report_to="none",
+        )
+        trainer = DPOTrainer(
+            model=model_id,
+            args=training_args,
+            train_dataset=dataset,
+            peft_config=LoraConfig(target_modules=["q_proj", "v_proj"]),
+        )
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+        trainer.train()
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            if n in base_param_names:
+                torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed.")
+            elif "base_layer" not in n:
+                assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @require_liger_kernel
+    @require_peft
+    def test_liger_kernel_with_peft_lm_head_raises(self):
+        # The Liger fused DPO loss reads `lm_head.weight` directly, so a LoRA adapter on `lm_head` is silently
+        # ignored and never trained. The trainer must fail fast instead of training a silently-frozen head.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        training_args = DPOConfig(output_dir=self.tmp_dir, use_liger_kernel=True, report_to="none")
+        with pytest.raises(ValueError, match="lm_head"):
+            DPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                args=training_args,
+                train_dataset=dataset,
+                peft_config=LoraConfig(target_modules=["q_proj", "v_proj", "lm_head"]),
+            )
+
+    @require_liger_kernel
+    @require_peft
+    def test_liger_kernel_with_peft_prompt_learning_raises(self):
+        # Prompt-learning methods inject virtual tokens via PeftModel.forward(), which the Liger DPO loss bypasses.
+        # The trainer must fail fast to avoid computing the loss on the wrong (truncated) sequence.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        training_args = DPOConfig(output_dir=self.tmp_dir, use_liger_kernel=True, report_to="none")
+        with pytest.raises(ValueError, match="prompt-learning"):
+            DPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                args=training_args,
+                train_dataset=dataset,
+                peft_config=PromptTuningConfig(task_type=TaskType.CAUSAL_LM, num_virtual_tokens=8),
+            )
+
+    @require_liger_kernel
+    def test_init_fails_with_moe_aux_loss_and_liger(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+
+        # The MoE auxiliary loss is on by default; it is incompatible with the Liger fused loss.
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            use_liger_kernel=True,
+            report_to="none",
+        )
+
+        with pytest.raises(ValueError, match="does not support the Mixture-of-Experts load-balancing auxiliary loss"):
+            DPOTrainer(
+                model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+                args=training_args,
+                train_dataset=dataset,
+            )
+
+    @require_liger_kernel
+    def test_init_fails_with_compute_metrics_and_liger(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
 
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
@@ -798,12 +881,45 @@ class TestDPOTrainer(TrlTestCase):
             report_to="none",
         )
 
-        with pytest.raises(NotImplementedError, match="Liger DPO loss is not implemented for PEFT models."):
+        with pytest.raises(ValueError, match="compute_metrics is not supported with the Liger kernel"):
             DPOTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
                 args=training_args,
                 train_dataset=dataset,
-                peft_config=LoraConfig(),
+                compute_metrics=lambda _: {},
+            )
+
+    @pytest.mark.parametrize("iterable_as", ["train", "eval", "eval_dict", "eval_iterable_dataset_dict"])
+    def test_precompute_ref_log_probs_raises_for_iterable_dataset(self, iterable_as):
+        # `precompute_ref_log_probs=True` caches reference log-probs by index, which requires random access and is
+        # therefore incompatible with a streaming `IterableDataset` — whether passed directly or nested in a dict or
+        # `IterableDatasetDict` as the eval dataset.
+        map_dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        iterable_dataset = load_dataset(
+            "trl-internal-testing/zen", "standard_preference", split="train", streaming=True
+        )
+
+        train_dataset, eval_dataset = map_dataset, None
+        if iterable_as == "train":
+            train_dataset = iterable_dataset
+        elif iterable_as == "eval":
+            eval_dataset = iterable_dataset
+        elif iterable_as == "eval_dict":
+            eval_dataset = {"eval": iterable_dataset}
+        elif iterable_as == "eval_iterable_dataset_dict":
+            eval_dataset = IterableDatasetDict({"eval": iterable_dataset})
+
+        # `max_steps` lets the iterable-train case reach the precompute check instead of failing earlier on the
+        # missing dataset length required by the learning-rate scheduler.
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir, max_steps=1, report_to="none", precompute_ref_log_probs=True
+        )
+        with pytest.raises(ValueError, match="precompute_ref_log_probs.*not supported with IterableDataset"):
+            DPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                args=training_args,
+                train_dataset=train_dataset,
+                eval_dataset=eval_dataset,
             )
 
     def test_train_with_iterable_dataset(self):
@@ -962,6 +1078,28 @@ class TestDPOTrainer(TrlTestCase):
 
         assert trainer.state.log_history[-3]["eval_data1_loss"] is not None
         assert trainer.state.log_history[-2]["eval_data2_loss"] is not None
+
+    @pytest.mark.parametrize("streaming", [False, True])
+    def test_init_with_eval_dataset_dict(self, streaming):
+        # `eval_dataset` may be a `DatasetDict` (map-style) or `IterableDatasetDict` (streaming) — e.g. the raw output
+        # of `load_dataset` without a `split` — not only a plain `dict`. Each split is prepared independently at init.
+        train_dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        eval_split = load_dataset("trl-internal-testing/zen", "standard_preference", split="test", streaming=streaming)
+        dataset_dict_cls = IterableDatasetDict if streaming else DatasetDict
+        eval_dataset = dataset_dict_cls({"data1": eval_split, "data2": eval_split})
+
+        training_args = DPOConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = DPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=train_dataset,
+            eval_dataset=eval_dataset,
+        )
+
+        assert set(trainer.eval_dataset.keys()) == {"data1", "data2"}
+        # Each split was tokenized independently.
+        assert "prompt_ids" in next(iter(trainer.eval_dataset["data1"]))
+        assert "prompt_ids" in next(iter(trainer.eval_dataset["data2"]))
 
     def test_train_with_compute_metrics(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference")

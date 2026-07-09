@@ -24,6 +24,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+import requests
 import torch
 from accelerate.logging import get_logger
 from datasets import Dataset, IterableDataset
@@ -189,6 +190,13 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
             }
 
 
+def _get_vllm_max_model_len(server_url: str, timeout: float) -> int:
+    """Query the vLLM server for the served model's `max_model_len` (the cap on prompt + completion tokens)."""
+    response = requests.get(f"{server_url.rstrip('/')}/v1/models", timeout=timeout)
+    response.raise_for_status()
+    return response.json()["data"][0]["max_model_len"]
+
+
 def _balance_by_squared_length(examples: list[dict[str, Any]], num_groups: int) -> list[list[dict[str, Any]]]:
     """Greedily partition `examples` into `num_groups` rows (one per DP rank), balancing each row's Σ Lᵢ².
 
@@ -250,8 +258,8 @@ class TokenBudgetBatcher(torch.utils.data.IterableDataset):
 
     Every emitted micro-batch has all `num_processes` rows non-empty (a rank forwarding zero tokens would desync
     FSDP/EP collectives): a micro-batch is only closed once every row holds at least one sample. A sample longer than
-    `token_budget` fits in no row, so it is dropped with a warning; set `token_budget` ≥ the longest sample
-    (`max_completion_length` + the longest prompt) to avoid dropping samples.
+    `token_budget` fits in no row, so it is dropped with a warning; set `token_budget` ≥ the vLLM server's
+    `max_model_len` (the cap on prompt + completion) to avoid dropping samples.
 
     Args:
         dataset ([`RolloutQueueDataset`]):
@@ -427,9 +435,10 @@ class AsyncGRPOTrainer(_BaseTrainer):
             [`~transformers.PreTrainedModel.save_pretrained`], e.g., `'./my_model_directory/'`. The model is loaded
             using [`~transformers.AutoModelForCausalLM.from_pretrained`]. The model name is also used to identify the
             model on the vLLM server used for generation.
-        reward_funcs (`RewardFunc | list[RewardFunc]`):
+        reward_funcs (`RewardFunc | list[RewardFunc]`, *optional*):
             Reward functions to be used for computing the rewards. To compute the rewards, we call all the reward
-            functions with the prompts and completions and sum the rewards. Can be either:
+            functions with the prompts and completions and sum the rewards. May be omitted when the reward is supplied
+            by the environment through `environment_factory` (see below). Can be either:
 
             - A single reward function: The function is provided with the prompts and the generated completions, plus
               any additional columns in the dataset. It should return a list of rewards. Reward functions can be either
@@ -476,15 +485,23 @@ class AsyncGRPOTrainer(_BaseTrainer):
             https://huggingface.co/docs/transformers/en/chat_extras#passing-tools. The model uses the function's name,
             type hints, and docstring to determine how to call it. Ensure that the model's chat template supports tool
             use and that it has been fine-tuned for tool calling.
-        environment_factory (`EnvironmentFactory`, *optional*):
-            A callable that creates and returns an environment instance. The environment class should define methods
-            that can be invoked as tools during generation. Each method should comply with the same requirements as the
-            `tools` described above. If `environment_factory` is provided, an instance of the environment is created
-            for each generation in the batch, allowing for parallel and independent interactions. The environment must
+        environment_factory (`EnvironmentFactory` or `dict[str, EnvironmentFactory]`, *optional*):
+            A callable that creates and returns an environment instance, or a dictionary mapping environment names to
+            such callables. The environment class should define methods that can be invoked as tools during generation.
+            Each method should comply with the same requirements as the `tools` described above. The environment must
             also implement a callable `reset` method that can be used to reset state between generations. The `reset`
             method should return either `None` or a string: when it returns a string, that string is appended to the
-            last user message before generation. This feature is experimental and may change or be removed at any time
-            without prior notice.
+            last user message before generation. The environment may also define a `get_reward` method taking no
+            argument and returning a `float`: when present, the environment owns the reward, and `get_reward` is called
+            once per completed rollout to score it from the environment's internal state. It acts as an additional
+            reward source (with weight 1, logged under the environment's class name) alongside `reward_funcs`, which
+            then becomes optional.
+
+            With a single callable, every example uses the same environment, with one instance per rollout so their
+            interactions stay isolated. With a dictionary, each example must carry an `environment` field selecting its
+            environment by name, and only that environment's tools are exposed in its prompt — letting a single run mix
+            tasks (e.g. a coding environment and a game). This feature is experimental and may change or be removed at
+            any time without prior notice.
         rollout_worker (`RolloutWorkerProtocol`, *optional*):
             Custom rollout worker implementing [`RolloutWorkerProtocol`]. If `None`, a default [`AsyncRolloutWorker`]
             is created, which spawns a CUDA-free child process and scores completions with the trainer's
@@ -510,14 +527,14 @@ class AsyncGRPOTrainer(_BaseTrainer):
     def __init__(
         self,
         model: str,
-        reward_funcs: RewardFunc | list[RewardFunc],
+        reward_funcs: RewardFunc | list[RewardFunc] | None = None,
         args: AsyncGRPOConfig | None = None,
         train_dataset: Dataset | IterableDataset | None = None,
         processing_class: PreTrainedTokenizerBase | None = None,
         callbacks: list[TrainerCallback] | None = None,
         optimizers: tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None] = (None, None),
         tools: list[Callable] | None = None,
-        environment_factory: EnvironmentFactory | None = None,
+        environment_factory: EnvironmentFactory | dict[str, EnvironmentFactory] | None = None,
         rollout_worker: RolloutWorkerProtocol | None = None,
     ):
         self.args = args or AsyncGRPOConfig()
@@ -561,7 +578,9 @@ class AsyncGRPOTrainer(_BaseTrainer):
             processing_class.pad_token = processing_class.eos_token
 
         # Reward functions
-        if not isinstance(reward_funcs, list):
+        if reward_funcs is None:
+            reward_funcs = []
+        elif not isinstance(reward_funcs, list):
             reward_funcs = [reward_funcs]
 
         # Initialize the Trainer
@@ -685,6 +704,19 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 stale_after_s=self.args.heartbeat_stale_after_s,
                 max_staleness=self.args.max_staleness,
             )
+            # Default the token budget to the vLLM server's max_model_len (the cap on prompt + completion), so no
+            # rollout sample can exceed it. Only the built-in worker manages a vLLM server (weight_transfer is set);
+            # with a custom rollout_worker there may be none to query, so require an explicit budget instead.
+            if self.args.token_budget is None:
+                if self.weight_transfer is None:
+                    raise ValueError(
+                        "Set `token_budget` explicitly when passing a custom `rollout_worker`: the default is the "
+                        "vLLM server's max_model_len, which is only queried for the built-in rollout worker."
+                    )
+                self.args.token_budget = _get_vllm_max_model_len(
+                    self.args.vllm_server_base_url, self.args.vllm_server_timeout
+                )
+                logger.info(f"token_budget unset; defaulting to vLLM max_model_len={self.args.token_budget}")
             # The planner partitions the rollout stream into Σ Lᵢ²-balanced micro-batches of `num_processes` rows.
             # TokenBudgetBatcher caps each row at `token_budget` tokens (dynamic count, bounds peak memory);
             # FixedCountBatcher uses a fixed `per_device_train_batch_size × num_processes` samples per micro-batch.
