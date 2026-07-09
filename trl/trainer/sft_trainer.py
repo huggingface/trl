@@ -844,10 +844,6 @@ class SFTTrainer(_BaseTrainer):
             `completion_mask` only when `completion_only_loss=True`), or default to a copy of `input_ids`. Sequences
             are truncated to `max_length` during preparation. With `skip_prepare_dataset=True`, preparation is skipped
             and the collator is expected to handle the dataset as is.
-
-            When `train_dataset` is an [`~datasets.IterableDataset`] (e.g. a streaming dataset), `max_steps` must be
-            set in the training arguments, since its length cannot be inferred and the total number of training steps
-            is required to bound the training loop and configure the learning rate scheduler.
         eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`], [`~datasets.DatasetDict`], [`~datasets.IterableDatasetDict`] or `dict[str, Dataset | IterableDataset]`):
             Dataset to use for evaluation. It must meet the same requirements as `train_dataset`.
         processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.ProcessorMixin`], *optional*):
