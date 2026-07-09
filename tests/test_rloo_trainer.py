@@ -232,13 +232,22 @@ class TestRLOOTrainer(TrlTestCase):
         else:
             assert trainer.eval_dataset is eval_dataset
 
-    def test_init_with_iterable_dataset_dict_raises(self):
-        # Streaming datasets are not yet supported in RLOO, including when nested in an `IterableDatasetDict` eval set.
+    @pytest.mark.parametrize(
+        "eval_dataset_type", ["iterable_dataset", "iterable_dataset_dict", "dict_of_iterable_dataset"]
+    )
+    def test_init_with_iterable_eval_dataset_raises(self, eval_dataset_type):
+        # Streaming datasets are not yet supported in RLOO
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
         iterable_dataset = load_dataset(
             "trl-internal-testing/zen", "standard_prompt_only", split="train", streaming=True
         )
-        eval_dataset = IterableDatasetDict({"data1": iterable_dataset, "data2": iterable_dataset})
+
+        if eval_dataset_type == "iterable_dataset":
+            eval_dataset = iterable_dataset
+        elif eval_dataset_type == "iterable_dataset_dict":
+            eval_dataset = IterableDatasetDict({"data1": iterable_dataset, "data2": iterable_dataset})
+        else:  # "dict_of_iterable_dataset"
+            eval_dataset = {"data1": iterable_dataset, "data2": iterable_dataset}
 
         training_args = RLOOConfig(output_dir=self.tmp_dir, report_to="none")
         with pytest.raises(NotImplementedError, match="Iterable datasets are not yet supported"):
