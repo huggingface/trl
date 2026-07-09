@@ -28,7 +28,7 @@ import transformers
 from accelerate import PartialState
 from accelerate.logging import get_logger
 from accelerate.utils import is_peft_model, tqdm
-from datasets import Dataset, IterableDataset, IterableDatasetDict, concatenate_datasets
+from datasets import Dataset, DatasetDict, IterableDataset, IterableDatasetDict, concatenate_datasets
 from datasets.fingerprint import Hasher
 from packaging.version import Version
 from torch.utils.data import DataLoader
@@ -45,7 +45,7 @@ from transformers.data.data_collator import DataCollatorMixin
 from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_peft_available
 
-from ..data_utils import apply_chat_template, extract_prompt, is_conversational, prepare_multimodal_messages
+from ..data_utils import _tokenize, apply_chat_template, extract_prompt, is_conversational, prepare_multimodal_messages
 from ..import_utils import is_liger_kernel_available
 from ..models import get_act_offloading_ctx_manager, prepare_deepspeed, prepare_fsdp
 from ..models.utils import disable_gradient_checkpointing
@@ -406,44 +406,6 @@ class DataCollatorForVisionPreference(DataCollatorMixin):
         return output
 
 
-# `_tokenize` is a module-level function rather than a trainer method so that `tokenize_fn` (the `Dataset.map`
-# callback in `_prepare_dataset`) can reference it without closing over `self`: a closure over `self` would make the
-# map function unhashable, forcing a random fingerprint that silently disables dataset caching.
-def _tokenize(
-    processing_class: PreTrainedTokenizerBase | ProcessorMixin,
-    input: str | list,
-    **kwargs,
-) -> dict[str, list]:
-    """Tokenize a single example for dataset preprocessing.
-
-    Dispatches to `apply_chat_template` for conversational input (list of message dicts) and to `__call__` for
-    non-conversational input (str). For VLMs, normalizes the batch dimension that processors emit even for single
-    examples.
-
-    Args:
-        processing_class ([`~transformers.PreTrainedTokenizerBase`] or [`~transformers.ProcessorMixin`]):
-            The tokenizer or processor to use.
-        input (`str` or `list`):
-            A string for non-conversational input, or a list of message dicts for conversational input.
-        **kwargs:
-            Forwarded to `apply_chat_template` (e.g. `add_generation_prompt`, `return_assistant_tokens_mask`).
-
-    Returns:
-        `dict` with at least an `"input_ids"` key mapping to a flat `list[int]`.
-    """
-    is_vlm = isinstance(processing_class, ProcessorMixin)
-    if isinstance(input, list):  # conversational: list of message dicts
-        if is_vlm:
-            input = prepare_multimodal_messages(input)
-        result = processing_class.apply_chat_template(input, tokenize=True, return_dict=True, **kwargs)
-    else:  # non-conversational: plain text string
-        result = processing_class(text=input)
-    # VLMs emit a batch dimension even for single examples; unwrap it
-    if is_vlm:
-        return {k: v[0] for k, v in result.items()}
-    return result
-
-
 class DPOTrainer(_BaseTrainer):
     """
     Trainer for Direct Preference Optimization (DPO) method. This algorithm was initially proposed in the paper [Direct
@@ -499,7 +461,11 @@ class DPOTrainer(_BaseTrainer):
             - [Standard](dataset_formats#standard): Each sample contains plain text.
             - [Conversational](dataset_formats#conversational): Each sample contains structured messages (e.g., role
               and content).
-        eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`] or `dict[str, Dataset | IterableDataset]`):
+
+            When `train_dataset` is an [`~datasets.IterableDataset`] (e.g. a streaming dataset), `max_steps` must be
+            set in the training arguments, since its length cannot be inferred and the total number of training steps
+            is required to bound the training loop and configure the learning rate scheduler.
+        eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`], [`~datasets.DatasetDict`], [`~datasets.IterableDatasetDict`] or `dict[str, Dataset | IterableDataset]`):
             Dataset to use for evaluation. It must meet the same requirements as `train_dataset`.
         processing_class ([`~transformers.PreTrainedTokenizerBase`] or [`~transformers.ProcessorMixin`], *optional*):
             Processing class used to process the data. The padding side must be set to "left". If `None`, the
@@ -553,7 +519,12 @@ class DPOTrainer(_BaseTrainer):
         args: DPOConfig | None = None,
         data_collator: DataCollator | None = None,
         train_dataset: Dataset | IterableDataset | None = None,
-        eval_dataset: Dataset | IterableDataset | dict[str, Dataset | IterableDataset] | None = None,
+        eval_dataset: Dataset
+        | IterableDataset
+        | DatasetDict
+        | IterableDatasetDict
+        | dict[str, Dataset | IterableDataset]
+        | None = None,
         processing_class: PreTrainedTokenizerBase | ProcessorMixin | None = None,
         compute_metrics: Callable[[EvalPrediction], dict] | None = None,
         callbacks: list[TrainerCallback] | None = None,
@@ -961,14 +932,6 @@ class DPOTrainer(_BaseTrainer):
             self.add_callback(SyncRefModelCallback(ref_model=self.ref_model, accelerator=self.accelerator))
 
         if args.precompute_ref_log_probs:
-            if isinstance(self.train_dataset, IterableDataset) or isinstance(
-                self.eval_dataset, (IterableDataset, IterableDatasetDict)
-            ):
-                raise ValueError(
-                    "`precompute_ref_log_probs=True` is not supported with IterableDataset. Please use a map-style "
-                    "Dataset or set `precompute_ref_log_probs=False`."
-                )
-
             self.train_dataset = self._precompute_ref_logps(
                 self.train_dataset,
                 "train",
@@ -1031,26 +994,24 @@ class DPOTrainer(_BaseTrainer):
             def tokenize_fn(example, processing_class):
                 tools = example.get("tools")
                 tools = json.loads(tools) if isinstance(tools, str) else tools
+                apply_chat_template_kwargs = {"tools": tools, **example.get("chat_template_kwargs", {})}
                 output = {}
                 if is_conversational(example):
                     prompt_ids = _tokenize(
                         processing_class,
                         example["prompt"],
-                        tools=tools,
                         add_generation_prompt=True,
-                        **example.get("chat_template_kwargs", {}),
+                        **apply_chat_template_kwargs,
                     )["input_ids"]
                     prompt_chosen_ids = _tokenize(
                         processing_class,
                         example["prompt"] + example["chosen"],
-                        tools=tools,
-                        **example.get("chat_template_kwargs", {}),
+                        **apply_chat_template_kwargs,
                     )["input_ids"]
                     prompt_rejected_ids = _tokenize(
                         processing_class,
                         example["prompt"] + example["rejected"],
-                        tools=tools,
-                        **example.get("chat_template_kwargs", {}),
+                        **apply_chat_template_kwargs,
                     )["input_ids"]
                 else:
                     prompt_ids = _tokenize(processing_class, example["prompt"])["input_ids"]
@@ -1111,6 +1072,11 @@ class DPOTrainer(_BaseTrainer):
                 ]
 
     def _precompute_ref_logps(self, dataset: Dataset, name: str, batch_size: int) -> Dataset:
+        if isinstance(dataset, IterableDataset):
+            raise ValueError(
+                "`precompute_ref_log_probs=True` is not supported with IterableDataset. Please use a map-style "
+                "Dataset or set `precompute_ref_log_probs=False`."
+            )
         model_hash = hash_module(self.ref_model or self.model)
         fingerprint = Hasher.hash((dataset._fingerprint, model_hash))
         cache_file = dataset._get_cache_file_path(fingerprint)
