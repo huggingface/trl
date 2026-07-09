@@ -175,9 +175,10 @@ class GRPOTrainer(_BaseTrainer):
               from the model config.
             - A [`~transformers.PreTrainedModel`] object. Only causal language models are supported.
             - A [`~peft.PeftModel`] object. Only causal language models are supported.
-        reward_funcs (`RewardFunc | list[RewardFunc]`):
+        reward_funcs (`RewardFunc | list[RewardFunc]`, *optional*):
             Reward functions to be used for computing the rewards. To compute the rewards, we call all the reward
-            functions with the prompts and completions and sum the rewards. Can be either:
+            functions with the prompts and completions and sum the rewards. May be omitted when the reward is supplied
+            by the environment through `environment_factory` (see below). Can be either:
 
             - A single reward function, such as:
                 - A string: The *model ID* of a pretrained model hosted inside a model repo on huggingface.co, or a
@@ -261,7 +262,11 @@ class GRPOTrainer(_BaseTrainer):
             Each method should comply with the same requirements as the `tools` described above. The environment must
             also implement a callable `reset` method that can be used to reset state between generations. The `reset`
             method should return either `None` or a string: when it returns a string, that string is appended to the
-            last user message before generation.
+            last user message before generation. The environment may also define a `get_reward` method taking no
+            argument and returning a `float`: when present, the environment owns the reward, and `get_reward` is called
+            once per completed rollout to score it from the environment's internal state. It acts as an additional
+            reward source (with weight 1, logged under the environment's class name) alongside `reward_funcs`, which
+            then becomes optional.
 
             With a single callable, every example uses the same environment, with one instance per rollout so their
             interactions stay isolated. With a dictionary, each example must carry an `environment` field selecting its
@@ -288,7 +293,7 @@ class GRPOTrainer(_BaseTrainer):
     def __init__(
         self,
         model: "str | PreTrainedModel | PeftModel",
-        reward_funcs: RewardFunc | list[RewardFunc],
+        reward_funcs: RewardFunc | list[RewardFunc] | None = None,
         args: GRPOConfig | None = None,
         train_dataset: Dataset | IterableDataset | None = None,
         eval_dataset: Dataset | IterableDataset | dict[str, Dataset | IterableDataset] | None = None,
@@ -464,7 +469,9 @@ class GRPOTrainer(_BaseTrainer):
                     param.data = param.data.to(torch.bfloat16)
 
         # Reward functions
-        if not isinstance(reward_funcs, list):
+        if reward_funcs is None:
+            reward_funcs = []
+        elif not isinstance(reward_funcs, list):
             reward_funcs = [reward_funcs]
         self.reward_func_names = []
         for i, reward_func in enumerate(reward_funcs):
@@ -595,13 +602,17 @@ class GRPOTrainer(_BaseTrainer):
             # Used where only the presence of a tool matters (chat template validation, async loop setup, tool metrics);
             # the per-example schema is rendered in `_tokenize_prompts`.
             self.tools = list(tools)
+            env_reward_types = []  # env classes already given a reward column (dedup: same class under two names)
             for name, factory in self.environment_factories.items():
                 instance = factory()
                 has_reset = False
+                has_reward = False
                 methods = []
                 for member_name, member in inspect.getmembers(instance, predicate=inspect.ismethod):
                     if member_name == "reset":
                         has_reset = True
+                    elif member_name == "get_reward":
+                        has_reward = True
                     elif not member_name.startswith("_"):
                         methods.append(member)
                 if not has_reset:
@@ -611,8 +622,42 @@ class GRPOTrainer(_BaseTrainer):
                 self._env_tools[name] = tools + methods
                 self._environment_pool[name] = [instance]
                 self.tools += [method for method in methods if method not in self.tools]
+
+                # If this environment owns its reward via `get_reward`, expose it as an extra reward source (named after
+                # the env class, weight 1). One column per env class that defines `get_reward` (deduplicated, since a
+                # dict factory may map several names to the same class); a rollout is scored only when its environment is
+                # exactly that class, so mixing an env that owns its reward with one that does not is safe (the latter's
+                # rollouts return `None`, turned into NaN and ignored). Exact-type match (not `isinstance`) keeps this
+                # consistent with the async worker and avoids double-counting when one registered env subclasses another.
+                # `get_reward` may be async (e.g. an LLM judge); wrap it accordingly so `_calculate_rewards` runs it on
+                # the daemon event loop like any other async reward func.
+                if has_reward and type(instance) not in env_reward_types:
+                    env_type = type(instance)
+                    env_reward_types.append(env_type)
+                    if inspect.iscoroutinefunction(instance.get_reward):
+
+                        async def get_reward(environments, _env_type=env_type, **kwargs):
+                            return [await e.get_reward() if type(e) is _env_type else None for e in environments]
+
+                    else:
+
+                        def get_reward(environments, _env_type=env_type, **kwargs):
+                            return [e.get_reward() if type(e) is _env_type else None for e in environments]
+
+                    self.reward_funcs.append(get_reward)
+                    self.reward_func_names.append(env_type.__name__)
+                    self.reward_processing_classes.append(None)
+                    self.reward_weights = torch.cat([self.reward_weights, torch.ones(1)])
         else:
             self.tools = tools
+
+        # At least one reward source is required: either `reward_funcs`, or an environment that owns the reward via a
+        # `get_reward` method.
+        if not self.reward_funcs:
+            raise ValueError(
+                "No reward source provided. Pass `reward_funcs`, or an `environment_factory` whose environment "
+                "defines a `get_reward` method."
+            )
 
         # The per-rollout environment instances and tool dicts both depend on the batch (which environment each example
         # selects), so they are built in `_generate_and_score_completions`, right before generation. Only
@@ -1432,6 +1477,10 @@ class GRPOTrainer(_BaseTrainer):
         # Allow reward functions to log additional scalar metrics.
         reward_kwargs["log_metric"] = self._log_metric
 
+        # Expose the per-completion environment instances to reward functions (both sync and async paths).
+        if self.environments is not None:
+            reward_kwargs["environments"] = self.environments
+
         async_funcs_info = []  # async custom functions for asyncio.gather
 
         for i, (reward_func, reward_processing_class, reward_func_name) in enumerate(
@@ -1458,8 +1507,6 @@ class GRPOTrainer(_BaseTrainer):
             else:
                 # Run synchronous reward function
                 with profiling_context(self, reward_func_name):
-                    if self.environments is not None:
-                        reward_kwargs["environments"] = self.environments
                     output_reward_func = reward_func(
                         prompts=prompts, completions=completions, completion_ids=completion_ids_list, **reward_kwargs
                     )
@@ -2113,7 +2160,7 @@ class GRPOTrainer(_BaseTrainer):
                     methods = [
                         member
                         for member_name, member in inspect.getmembers(self.environments[i], predicate=inspect.ismethod)
-                        if member_name != "reset" and not member_name.startswith("_")
+                        if member_name not in ("reset", "get_reward") and not member_name.startswith("_")
                     ]
                 sync_tool_dict, async_tool_dict = {}, {}
                 for tool in self._standalone_tools + methods:
