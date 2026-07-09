@@ -738,6 +738,58 @@ class RepeatSampler(Sampler):
         return (self.num_samples // self.batch_size) * self.batch_size * self.mini_repeat_count * self.repeat_count
 
 
+def repeat_iterable_dataset(dataset, mini_repeat_count: int, batch_size: int = 1, repeat_count: int = 1):
+    """
+    Streaming counterpart of [`RepeatSampler`] for [`~datasets.IterableDataset`].
+
+    An [`~datasets.IterableDataset`] cannot be indexed, so a sampler cannot be attached to it. Instead of reordering
+    indices, this generator reorders the *stream* itself, yielding records in exactly the same order that
+    [`RepeatSampler`] yields indices for a map-style dataset with the same arguments. It is meant to be wrapped with
+    [`~datasets.IterableDataset.from_generator`].
+
+    Shuffling is intentionally left out: it is handled upstream via [`~datasets.IterableDataset.shuffle`] (buffered
+    shuffling), the streaming equivalent of the full permutation done by [`RepeatSampler`].
+
+    Args:
+        dataset (`datasets.IterableDataset`):
+            Dataset to stream from.
+        mini_repeat_count (`int`):
+            Number of times to repeat each record per batch.
+        batch_size (`int`, *optional*, defaults to `1`):
+            Number of unique records per batch.
+        repeat_count (`int`, *optional*, defaults to `1`):
+            Number of times to repeat the full batch.
+
+    Yields:
+        `dict`: Records from `dataset`, repeated and reordered.
+
+    Example:
+    ```python
+    >>> from datasets import IterableDataset
+    >>> dataset = IterableDataset.from_generator(lambda: ({"x": i} for i in range(7)))
+    >>> gen = repeat_iterable_dataset(dataset, mini_repeat_count=2, batch_size=3, repeat_count=4)
+    >>> [record["x"] for record in gen]
+    [0, 0, 1, 1, 2, 2,
+     0, 0, 1, 1, 2, 2,
+     0, 0, 1, 1, 2, 2,
+     0, 0, 1, 1, 2, 2,
+     3, 3, 4, 4, 5, 5,
+     3, 3, 4, 4, 5, 5,
+     3, 3, 4, 4, 5, 5,
+     3, 3, 4, 4, 5, 5]
+    ```
+    """
+    # `batch` is a dict mapping each column to a list of `batch_size` values; transpose it back to records without
+    # materializing an intermediate `Dataset`.
+    for batch in dataset.batch(batch_size=batch_size, drop_last_batch=True):
+        keys = list(batch)
+        for _ in range(repeat_count):
+            for values in zip(*(batch[key] for key in keys), strict=True):
+                record = dict(zip(keys, values, strict=True))
+                for _ in range(mini_repeat_count):
+                    yield record
+
+
 # torch.nanstd doesn't exist, so we define it here
 def nanstd(tensor: torch.Tensor, dim: int | tuple[int, ...] | None = None, keepdim: bool = False) -> torch.Tensor:
     """
