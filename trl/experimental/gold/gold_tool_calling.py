@@ -397,7 +397,7 @@ def main():
         tools, environment_factory = build_browser_tools(), None
         use_vllm = False
         peft_config = LoraConfig(
-            r=16, lora_alpha=32, lora_dropout=0.05, target_modules=["q_proj", "k_proj", "v_proj"]
+            r=16, lora_alpha=32, lora_dropout=0.05, target_modules=["q_proj", "k_proj"]
         )
     else:
         student_id = cli_args.student_model_name or "Qwen/Qwen3-VL-2B-Instruct"
@@ -412,7 +412,7 @@ def main():
         tools, environment_factory = build_search_tools(), LayoutParsingEnv
         use_vllm = True
         peft_config = LoraConfig(
-            r=16, lora_alpha=32, lora_dropout=0.05, target_modules=r"^.*language_model.*\.(q_proj|k_proj|v_proj)$"
+            r=16, lora_alpha=32, lora_dropout=0.05, target_modules=r"^.*language_model.*\.(q_proj|k_proj)$"
         )
 
     dataset = train_dataset.train_test_split(test_size=0.05, seed=42)
@@ -431,15 +431,15 @@ def main():
         lmbda=cli_args.lmbda,
         beta=0.5,
         temperature=0.6,
-        max_completion_length=128,
+        max_completion_length=1024,
         max_grad_norm=1.0,
         teacher_model_name_or_path=teacher_id,
         num_generations=1,
         use_vllm=use_vllm,
         vllm_mode="colocate",
         vllm_gpu_memory_utilization=0.5,
-        vllm_max_model_length=1024,
-        max_length=2048,
+        vllm_max_model_length=8192,
+        max_length=8192,
         per_device_train_batch_size=2,
         gradient_accumulation_steps=4,
         max_steps=100,
