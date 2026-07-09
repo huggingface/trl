@@ -1120,6 +1120,7 @@ class DPOTrainer(_BaseTrainer):
                 batched=True,
                 remove_columns=dataset.column_names,
                 new_fingerprint=fingerprint,
+                cache_file_name=cache_file,
                 desc=f"Caching reference log probs for {name} dataset",
             )
         self.accelerator.wait_for_everyone()
