@@ -139,6 +139,8 @@ class LoRAWeightTransferClient:
         """
         if self._nccl_group is None:
             logger.warning("LoRA NCCL group not initialized, skipping send_lora_weights")
+            for _ in lora_param_iter:
+                pass
             return
 
         t0 = time.time()

@@ -1008,6 +1008,8 @@ class AsyncGRPOTrainer(_BaseTrainer):
             for _ in self._lora_param_iter():
                 pass
 
+        self.accelerator.wait_for_everyone()
+
         if self.accelerator.is_main_process:
             self.model_version += 1
             if self.rollout_worker:
