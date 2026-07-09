@@ -910,6 +910,13 @@ class GRPOTrainer(_BaseTrainer):
             def _cast_lm_head_to_fp32(target_model: PreTrainedModel):
                 """Cast lm_head to fp32 while preserving embedding output dtype if tied."""
 
+                if is_peft_available() and isinstance(target_model.lm_head, BaseTunerLayer):
+                    raise ValueError(
+                        "`cast_lm_head_to_fp32=True` is not supported when the lm_head carries a PEFT "
+                        "adapter (e.g. `target_modules` includes `lm_head`). Remove `lm_head` from the "
+                        "adapter's target modules, or set `cast_lm_head_to_fp32=False`."
+                    )
+
                 original_dtype_local = target_model.lm_head.weight.dtype
                 lm_head = target_model.lm_head.float()
                 target_model.lm_head = lm_head
