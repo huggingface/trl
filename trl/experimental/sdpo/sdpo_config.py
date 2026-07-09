@@ -490,7 +490,7 @@ class SDPOConfig(_BaseConfig):
             "help": "Weights for each reward function. Must match the number of reward functions. If `None`, all rewards are weighted equally with weight `1.0`."
         },
     )
-    scale_rewards: str | bool = field(
+    scale_rewards: str = field(
         default="group",
         metadata={
             "help": "Specifies the scaling strategy for rewards. Supported values are: `True` or `'group'` (default): rewards are scaled by the standard deviation within each group, ensuring unit variance within a group. `'batch'`: rewards are scaled by the standard deviation across the entire batch, as recommended in the PPO Lite paper. `False` or `'none'`: no scaling is applied. The Dr. GRPO paper recommends not scaling rewards, as scaling by the standard deviation introduces a question-level difficulty bias."
