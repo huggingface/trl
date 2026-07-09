@@ -481,14 +481,7 @@ class TestGRPOTrainer(TrlTestCase):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
         eval_dataset = DatasetDict({"data1": dataset["test"], "data2": dataset["test"]})
 
-        training_args = GRPOConfig(
-            output_dir=self.tmp_dir,
-            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
-            per_device_eval_batch_size=3,  # reduce the batch size to reduce memory usage
-            num_generations=3,  # reduce the number of generations to reduce memory usage
-            max_completion_length=8,  # reduce the completion length to reduce memory usage
-            report_to="none",
-        )
+        training_args = GRPOConfig(output_dir=self.tmp_dir, report_to="none")
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
@@ -507,14 +500,7 @@ class TestGRPOTrainer(TrlTestCase):
         )
         eval_dataset = IterableDatasetDict({"data1": iterable_dataset, "data2": iterable_dataset})
 
-        training_args = GRPOConfig(
-            output_dir=self.tmp_dir,
-            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
-            per_device_eval_batch_size=3,  # reduce the batch size to reduce memory usage
-            num_generations=3,  # reduce the number of generations to reduce memory usage
-            max_completion_length=8,  # reduce the completion length to reduce memory usage
-            report_to="none",
-        )
+        training_args = GRPOConfig(output_dir=self.tmp_dir, report_to="none")
         with pytest.raises(NotImplementedError, match="Iterable datasets are not yet supported"):
             GRPOTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
