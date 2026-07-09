@@ -1230,14 +1230,14 @@ training_args = DPOConfig(
 
 ## Kahneman–Tversky Optimization
 
-Papers relating to the [`experimental.kto.KTOTrainer`]
+Papers relating to the [`KTOTrainer`]
 
 ### KTO: Model Alignment as Prospect Theoretic Optimization
 
 **📜 Paper**: https://huggingface.co/papers/2402.01306
 
 KTO derives an alignment objective from prospect theory and learns directly from **binary** human feedback (liked/disliked), matching or surpassing DPO-style methods while handling imbalanced/noisy signals well.
-To reproduce the paper's setting, you can use the default configuration of [`experimental.kto.KTOTrainer`]:
+To reproduce the paper's setting, you can use the default configuration of [`KTOTrainer`]:
 
 ```python
 from trl import KTOConfig, KTOTrainer

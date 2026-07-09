@@ -499,12 +499,12 @@ class KTOTrainer(_BaseTrainer):
             - If provided, this model is used directly as the reference policy.
             - If `None`, the trainer will automatically use the initial policy corresponding to `model`, i.e. the model
               state before KTO training starts.
-        args ([`experimental.kto.KTOConfig`], *optional*):
+        args ([`KTOConfig`], *optional*):
             Configuration for this trainer. If `None`, a default configuration is used.
         data_collator ([`~transformers.DataCollator`], *optional*):
             Function to use to form a batch from a list of elements of the processed `train_dataset` or `eval_dataset`.
-            Will default to [`~experimental.kto.kto_trainer.DataCollatorForUnpairedPreference`] if the model is a
-            language model and [`~experimental.kto.kto_trainer.DataCollatorForVisionUnpairedPreference`] if the model
+            Will default to [`~trainer.kto_trainer.DataCollatorForUnpairedPreference`] if the model is a
+            language model and [`~trainer.kto_trainer.DataCollatorForVisionUnpairedPreference`] if the model
             is a vision-language model. Custom collators must truncate sequences before padding; the trainer does not
             apply post-collation truncation.
         train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):

@@ -414,7 +414,7 @@ Choosing the right dataset type depends on the task you are working on and the s
 | [`experimental.bco.BCOTrainer`] | [Unpaired preference](#unpaired-preference) or [Preference (explicit prompt recommended)](#preference) |
 | [`experimental.cpo.CPOTrainer`] | [Preference (explicit prompt recommended)](#preference) |
 | [`experimental.gkd.GKDTrainer`] | [Prompt-completion](#prompt-completion) |
-| [`experimental.kto.KTOTrainer`] | [Unpaired preference](#unpaired-preference) or [Preference (explicit prompt recommended)](#preference) |
+| [`KTOTrainer`] | [Unpaired preference](#unpaired-preference) or [Preference (explicit prompt recommended)](#preference) |
 | [`experimental.nash_md.NashMDTrainer`] | [Prompt-only](#prompt-only) |
 | [`experimental.online_dpo.OnlineDPOTrainer`] | [Prompt-only](#prompt-only) |
 | [`experimental.orpo.ORPOTrainer`] | [Preference (explicit prompt recommended)](#preference) |
