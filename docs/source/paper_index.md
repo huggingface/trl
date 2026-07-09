@@ -1723,7 +1723,7 @@ training_args = GKDConfig(
 You can also use the [`GOLDTrainer`] and [`GOLDConfig`] to perform on-policy distillation with a similar configuration:
 
 ```python
-from trl.experimental import GOLDConfig
+from trl.experimental.gold import GOLDConfig
 
 config = GOLDConfig(
     lmbda=1.0, # student produces rollouts for all batches
@@ -1741,7 +1741,7 @@ MiniLLM is the first on-policy knowledge distillation method, which minimizes th
 
 It is a generalized version of [Think Machine Lab's On-Policy Distillation](https://thinkingmachines.ai/blog/on-policy-distillation/), with the option to add distribution-level single-step distillation signals (like GKD when `beta=1`) and long-context reverse KLD signals.
 
-Alternatively, you can use the [`experimental.MiniLLMTrainer`] and [`experimental.MiniLLMConfig`] to perform MiniLLM distillation as follows:
+Alternatively, you can use the [`experimental.minillm.MiniLLMTrainer`] and [`experimental.minillm.MiniLLMConfig`] to perform MiniLLM distillation as follows:
 
 ```python
 from datasets import load_dataset
@@ -1777,7 +1777,7 @@ training_args = SDPOConfig(
     use_successful_as_teacher=True,        # Use successful rollouts as teacher
     teacher_model_kind="ema",              # Supported: "base", "live", "ema"
     teacher_update_rate=0.05,              # EMA update rate
-    include_environment_feedback=False,    # Use dataset privileged_context when available
+    include_environment_feedback=True,     # required to use the dataset's privileged_context (defaults to False)
 )
 
 trainer = SDPOTrainer(
