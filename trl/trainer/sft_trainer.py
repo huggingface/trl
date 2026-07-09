@@ -14,7 +14,6 @@
 
 import contextlib
 import json
-import math
 import os
 import types
 import warnings
@@ -123,13 +122,11 @@ def _chunk(h, w, b, lbl, logit_scale, final_logit_softcapping):
     if final_logit_softcapping is not None:
         logits = final_logit_softcapping * torch.tanh(logits / final_logit_softcapping)
     log_p = F.log_softmax(logits, dim=-1)
-    # A chunk may contain `-100` positions: `_chunked_cross_entropy_loss` packs valid tokens to the front and rounds
-    # the processed length up to a whole chunk, so the last chunk's tail is padding. `nll_loss`'s `ignore_index=-100`
-    # zeroes their loss contribution; `mask` does the same for accuracy/entropy, which don't get it for free.
+    # A chunk's tail may be `-100` padding: `ignore_index` zeroes their loss; `valid` does the same for accuracy/entropy.
     chunk_loss = F.nll_loss(log_p, lbl, ignore_index=-100, reduction="sum")
-    mask = lbl != -100
-    chunk_correct = ((logits.argmax(dim=-1) == lbl) & mask).sum().float()
-    chunk_entropy = (-(log_p.exp() * log_p).sum(dim=-1) * mask).sum()
+    valid = lbl != -100
+    chunk_correct = ((logits.argmax(dim=-1) == lbl) & valid).sum().float()
+    chunk_entropy = (-(log_p.exp() * log_p).sum(dim=-1) * valid).sum()
     return chunk_loss, chunk_correct, chunk_entropy
 
 
@@ -147,23 +144,18 @@ def _chunked_cross_entropy_loss(
     """
     Memory-efficient next-token cross-entropy over hidden states and an `lm_head` weight.
 
-    The full `lm_head` projection is never materialized. Valid (non-`-100`) tokens are packed to the front, and the
-    processed length is rounded up to a whole `chunk_size`, so masked positions form trailing chunks that are skipped.
-    Each chunk's `[chunk_size, vocab_size]` logits tensor is kept alive only during its own forward/backward pass via
-    gradient checkpointing, so peak logits-activation memory is `chunk_size * vocab_size` instead of `batch_size *
-    seq_len * vocab_size`.
+    The full `lm_head` projection is never materialized. Valid (non-`-100`) tokens are packed to the front (via
+    `argsort` on the label mask, a static-shape op) and processed in chunks of `chunk_size`, rounding the count up to a
+    whole chunk so masked positions land in a skippable tail. Each chunk's `[chunk_size, vocab_size]` logits are kept
+    alive only during its own forward/backward via gradient checkpointing, so peak logits memory is `chunk_size *
+    vocab_size` instead of `batch_size * seq_len * vocab_size`. Quantizing the chunk count to a multiple of
+    `chunk_size` keeps this XLA/Neuron-safe (at most `total / chunk_size` distinct traced shapes, not one per
+    valid-token count) while still dropping fully-masked chunks on GPU.
 
-    The packing uses `argsort` on the label mask (a static-shape op) rather than boolean indexing (a data-dependent
-    shape), and the number of processed chunks is quantized to a multiple of `chunk_size`. This keeps the function
-    XLA/Neuron-safe: across steps the traced shape takes at most `total / chunk_size` distinct values — a small,
-    one-time set of graphs — instead of recompiling on every distinct valid-token count. On GPU it recovers the speedup
-    of dropping masked tokens, wasting at most one partial chunk of compute.
-
-    At least one of `labels` or `shift_labels` must be provided. Passing `labels` alone is the standard path and
-    triggers the internal `labels[..., 1:]` / `hidden_states[..., :-1, :]` shift. Passing `shift_labels` skips the
-    shift and assumes the caller has already aligned labels with hidden states — this is the contract used under
-    context / sequence parallelism, where labels are shifted before being sharded. If both are provided, `shift_labels`
-    wins (matching [`~transformers.loss.ForCausalLMLoss`]).
+    At least one of `labels` or `shift_labels` must be provided. `labels` triggers the internal `labels[..., 1:]` /
+    `hidden_states[..., :-1, :]` shift; `shift_labels` skips it, assuming the caller already aligned labels with hidden
+    states (the contract under context / sequence parallelism). If both are given, `shift_labels` wins (matching
+    [`~transformers.loss.ForCausalLMLoss`]).
 
     Args:
         hidden_states (`torch.Tensor`):
@@ -208,8 +200,6 @@ def _chunked_cross_entropy_loss(
 
     valid = labels != -100
     n_valid_tensor = valid.sum()
-    # Host-side valid-token count. This sync also gates the number of chunks below; on XLA/Neuron it materializes a
-    # host int, which is what bounds recompilation (see below), so it is not an extra cost.
 
     correct = hidden.new_zeros((), dtype=torch.float32)
     entropy_sum = hidden.new_zeros((), dtype=torch.float32)
@@ -229,17 +219,12 @@ def _chunked_cross_entropy_loss(
     hidden = hidden[order]
     labels = labels[order]
 
-    # Process only the whole chunks covering the valid prefix. `n_process` is a multiple of `chunk_size`, so across
-    # steps it takes at most `total / chunk_size` distinct values — bounding XLA recompiles to a small one-time set,
-    # while on GPU it drops the fully-masked trailing chunks.
-    n_process = torch.clamp(
-        (n_valid_tensor / chunk_size).ceil().to(torch.int64) * chunk_size,
-        max=hidden.size(0),
-    )
+    # Process only the whole chunks covering the valid prefix: bounds XLA recompiles and drops fully-masked chunks on GPU.
+    n_padded = (n_valid_tensor / chunk_size).ceil().to(torch.int64) * chunk_size
 
     loss = hidden.new_zeros((), dtype=torch.float32)
 
-    for start in range(0, n_process, chunk_size):
+    for start in range(0, n_padded, chunk_size):
         h_chunk = hidden[start : start + chunk_size]
         lbl_chunk = labels[start : start + chunk_size]
         chunk_loss, chunk_correct, chunk_entropy = torch.utils.checkpoint.checkpoint(
