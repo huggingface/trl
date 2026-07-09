@@ -203,3 +203,15 @@ Read more in the [Experimental docs](https://huggingface.co/docs/trl/experimenta
 ## License
 
 This repository's source code is available under the [Apache-2.0 License](LICENSE).
+
+
+## Contributing
+
+We welcome contributions! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on
+how to report bugs, suggest features, and submit pull requests.
+
+By participating, you agree to our [Code of Conduct](CODE_OF_CONDUCT.md).
+
+---
+
+*[Mukller](https://github.com/Mukller)*
