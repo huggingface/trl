@@ -1,0 +1,39 @@
+model:
+  name: "Qwen/Qwen3-4B"
+  dtype: "bfloat16"
+
+lora:
+  rank: 16
+  alpha: 32
+  target_modules: ["mlp.gate_proj", "mlp.up_proj", "mlp.down_proj"]
+  adapter_dir: "/root/outputs/lora_adapter"
+  name: "sft"
+
+dataset:
+  name: "trl-lib/DeepMath-103K"
+  split: "train"
+  max_samples: 0
+
+vllm:
+  server_url: "http://127.0.0.1"
+  server_port: 8800
+  server_timeout: 600.0
+  max_model_length: 4096
+  gpu_memory_utilization: 0.9
+
+training:
+  output_dir: "outputs/grpo_lora"
+  max_steps: 500
+  per_device_train_batch_size: 16
+  gradient_accumulation_steps: 16
+  num_generations: 8
+  max_inflight_tasks: 100
+  max_completion_length: 1024
+  learning_rate: 5e-5
+  logging_steps: 1
+  save_steps: 25
+  temperature: 1.0
+  report_to: "wandb"
+  seed: 42
+  lr_scheduler_type: "cosine"
+  warmup_ratio: 0.05
