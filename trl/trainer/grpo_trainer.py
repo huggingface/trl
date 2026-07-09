@@ -914,9 +914,6 @@ class GRPOTrainer(_BaseTrainer):
                 lm_head = target_model.lm_head.float()
                 target_model.lm_head = lm_head
 
-                # Run the head's matmul in fp32. Casting only the input is not enough: under FSDP2 and
-                # DeepSpeed ZeRO-3, the mixed-precision policy re-casts the gathered lm_head weight back
-                # to the low precision at forward time, so we must cast the weight here too (see #4867).
                 def cast_forward_to_fp32(hidden_states):
                     return nn.functional.linear(
                         hidden_states.to(torch.float32),
