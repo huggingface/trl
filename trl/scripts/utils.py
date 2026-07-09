@@ -60,6 +60,12 @@ class DatasetConfig:
             Which split of the data to load.
         columns (`list[str]`, *optional*):
             List of column names to select from the dataset. If `None`, all columns are selected.
+        fraction (`float`, *optional*):
+            Target share of this dataset in the final mixture. Fractions are normalized to sum to one across all
+            datasets, and the mixture size is capped so that no dataset is oversampled: the first `round(fraction * N)`
+            rows of each dataset are kept, where `N` is the largest mixture size that avoids oversampling. Must be set
+            for either all datasets in the mixture or none of them. Not supported for streaming datasets. When unset,
+            the full datasets are concatenated.
     """
 
     path: str
@@ -68,6 +74,7 @@ class DatasetConfig:
     data_files: str | list[str] | dict[str, str] | None = None
     split: str = "train"
     columns: list[str] | None = None
+    fraction: float | None = None
 
 
 @dataclass
@@ -99,6 +106,7 @@ class DatasetMixtureConfig:
             data_files: ...
             split: ...
             columns: ...
+            fraction: ...
           - path: ...
             name: ...
             data_dir: ...
@@ -446,6 +454,24 @@ def get_dataset(mixture_config: DatasetMixtureConfig) -> "DatasetDict":
         if dataset_config.columns is not None:
             dataset = dataset.select_columns(dataset_config.columns)
         datasets_list.append(dataset)
+
+    # If `fraction` is set, treat the values as target shares of the final mixture. They are normalized to sum to one,
+    # and the mixture size is capped so that no dataset is oversampled: we keep the first `round(weight * total)` rows of
+    # each dataset, where `total` is the largest mixture size such that no dataset contributes more rows than it has.
+    fractions = [dataset_config.fraction for dataset_config in mixture_config.datasets]
+    if any(fraction is not None for fraction in fractions):
+        if any(fraction is None for fraction in fractions):
+            raise ValueError("`fraction` must be set for either all datasets in the mixture or none of them.")
+        if mixture_config.streaming:
+            raise ValueError("Using a dataset `fraction` is not supported with streaming datasets.")
+        weights = [fraction / sum(fractions) for fraction in fractions]
+        total = min(
+            len(dataset) / weight for dataset, weight in zip(datasets_list, weights, strict=False) if weight > 0
+        )
+        datasets_list = [
+            dataset.select(range(round(weight * total)))
+            for dataset, weight in zip(datasets_list, weights, strict=False)
+        ]
 
     if datasets_list:
         combined_dataset = datasets.concatenate_datasets(datasets_list)
