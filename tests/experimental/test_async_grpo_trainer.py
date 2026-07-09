@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import itertools
+import multiprocessing as mp
 import queue
 
 import numpy as np
@@ -30,7 +31,7 @@ from trl.experimental.async_grpo.async_grpo_trainer import (
     TokenBudgetBatcher,
     _balance_by_squared_length,
 )
-from trl.experimental.async_grpo.async_rollout_worker import RolloutSample
+from trl.experimental.async_grpo.async_rollout_worker import RolloutSample, _AsyncRolloutLoop
 
 from ..testing_utils import TrlTestCase, is_ampere_or_newer
 
@@ -120,6 +121,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
+            token_budget=256,  # set explicitly; the stub worker has no real vLLM server to query for max_model_len
             vllm_server_timeout=5.0,  # short timeout so test fails fast if queue runs dry
             report_to="none",
         )
@@ -141,6 +143,100 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+
+class TestAsyncRolloutWorkerEnvironments(TrlTestCase):
+    """Unit tests for the rollout worker's environment/tool wiring (no vLLM required)."""
+
+    def _make_loop(self, environment_factory, dataset=None):
+        model_id = "trl-internal-testing/tiny-Qwen3MoeForCausalLM"
+        if dataset is None:
+            dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        # `_AsyncRolloutLoop.__init__` only sets up state (no vLLM connection / generation happens here).
+        return _AsyncRolloutLoop(
+            model_name=model_id,
+            dataset=dataset,
+            reward_funcs=[dummy_reward_func],
+            processing_class=AutoTokenizer.from_pretrained(model_id),
+            rollout_buffer=mp.Queue(),
+            model_version_value=mp.Value("i", 0),
+            heartbeat_value=mp.Value("d", 0.0),
+            failed_event=mp.Event(),
+            exception_info_queue=mp.Queue(),
+            environment_factory=environment_factory,
+            num_generations=2,
+            max_inflight_tasks=4,
+        )
+
+    def test_multiple_environments_expose_only_their_own_tools(self):
+        class CounterEnvironment:
+            def reset(self, **kwargs): ...
+
+            def increment(self, step: int) -> int:
+                """Increment the counter.
+
+                Args:
+                    step: Value to add.
+
+                Returns:
+                    The updated value.
+                """
+                return step
+
+        class EchoEnvironment:
+            def reset(self, **kwargs): ...
+
+            def shout(self, text: str) -> str:
+                """Shout the text.
+
+                Args:
+                    text: Text to shout.
+
+                Returns:
+                    The text in upper case.
+                """
+                return text.upper()
+
+        loop = self._make_loop({"counter": CounterEnvironment, "echo": EchoEnvironment})
+        try:
+            assert loop._multi_environment is True
+            # Each environment exposes only its own tool, used to render that example's prompt schema.
+            assert [tool.__name__ for tool in loop._env_tools["counter"]] == ["increment"]
+            assert [tool.__name__ for tool in loop._env_tools["echo"]] == ["shout"]
+            # `self.tools` is the union, used only to decide whether a training chat template is needed.
+            assert sorted(tool.__name__ for tool in loop.tools) == ["increment", "shout"]
+            # The probe instances seed the reuse pool, so they are not wasted.
+            assert len(loop._environment_pool["counter"]) == 1
+            assert len(loop._environment_pool["echo"]) == 1
+        finally:
+            loop._loop.close()
+
+    def test_unknown_environment_raises(self):
+        # An example whose `environment` field doesn't match any configured environment should fail with a clear error
+        # rather than a bare KeyError mid-rollout. The check fires before any generation, so no vLLM is needed here.
+        class CounterEnvironment:
+            def reset(self, **kwargs): ...
+
+            def increment(self, step: int) -> int:
+                """Increment the counter.
+
+                Args:
+                    step: Value to add.
+
+                Returns:
+                    The updated value.
+                """
+                return step
+
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        dataset = dataset.map(lambda example: {"environment": "unknown"})
+
+        loop = self._make_loop({"counter": CounterEnvironment}, dataset=dataset)
+        try:
+            with pytest.raises(ValueError, match="not among the environments"):
+                loop._loop.run_until_complete(loop._generate_loop(stop_event=loop._stop_event))
+        finally:
+            loop._loop.close()
 
 
 def _rollout_sample(length: int, advantage: float = 0.0, reward: float = 0.0) -> dict:
@@ -225,20 +321,6 @@ class TestPackingAwareBatching(TrlTestCase):
             assert all(len(group) > 0 for group in groups)  # every row stays non-empty
             lengths = [len(sample["input_ids"]) for group in groups for sample in group]
             assert all(length <= 8 for length in lengths)  # the oversized sample (12) was dropped
-
-    def test_token_budget_defaults_to_per_device_bs_times_completion_length(self):
-        # Unset token_budget resolves to per_device_train_batch_size * max_completion_length = 3 * 8.
-        args = AsyncGRPOConfig(
-            output_dir=self.tmp_dir,
-            per_device_train_batch_size=3,
-            max_completion_length=8,
-            bf16=False,
-            report_to="none",
-        )
-        assert args.token_budget == 24
-        # An explicit <= 0 value is left untouched and disables budgeting (-> FixedCountBatcher).
-        args = AsyncGRPOConfig(output_dir=self.tmp_dir, token_budget=-1, bf16=False, report_to="none")
-        assert args.token_budget == -1
 
     def test_fixed_count_batcher_yields_balanced_fixed_count_micro_batches(self):
         source = (_rollout_sample(length) for length in itertools.cycle((4, 3, 2, 1)))
