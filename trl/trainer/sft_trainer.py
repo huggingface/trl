@@ -46,7 +46,7 @@ from transformers import (
 from transformers.data.data_collator import DataCollatorMixin
 from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast
 from transformers.trainer_utils import EvalPrediction
-from transformers.utils import is_peft_available, is_torch_neuron_available
+from transformers.utils import is_peft_available
 
 from ..chat_template_utils import (
     clone_chat_template,
