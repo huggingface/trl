@@ -398,7 +398,8 @@ class _AsyncRolloutLoop:
                             {k: v for k, v in row.items() if k != "environment"} if self._multi_environment else row
                         )
                         observation = environment.reset(**reset_kwargs)
-                    prompt = row["prompt"]
+                    # `prompt` is optional when the environment owns the data; `reset()` then supplies it.
+                    prompt = row["prompt"] if "prompt" in row else [{"role": "user", "content": ""}]
                     if observation is not None:
                         # Rebuild the last message instead of mutating in place (as GRPOTrainer does): the
                         # same row is reused across the group's generations and across epochs. Normalize str vs

@@ -442,13 +442,17 @@ class AsyncGRPOTrainer(_BaseTrainer):
             trainer's GPU.
         args ([`AsyncGRPOConfig`], *optional*):
             Configuration for this trainer. If `None`, a default configuration is used.
-        train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
+        train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`], *optional*):
             Dataset to use for training. It must include a column `"prompt"`. Any additional columns in the dataset are
             ignored. The format of the samples can be either:
 
             - [Standard](dataset_formats#standard): Each sample contains plain text.
             - [Conversational](dataset_formats#conversational): Each sample contains structured messages (e.g., role
               and content).
+
+            May be omitted only when an `environment_factory` is provided and the environment owns (or procedurally
+            generates) the data, returning the prompt from its `reset()` method. In that case, `max_steps` must be set
+            to define the training length.
         processing_class ([`~transformers.PreTrainedTokenizerBase`], *optional*):
             Processing class used to process the data. The padding side must be set to `"left"`. If `None`, the
             processing class is loaded from the model's name with [`~transformers.AutoTokenizer.from_pretrained`]. A
@@ -568,6 +572,21 @@ class AsyncGRPOTrainer(_BaseTrainer):
         elif not isinstance(reward_funcs, list):
             reward_funcs = [reward_funcs]
 
+        if train_dataset is None:
+            # A dataset is optional when an environment owns the data and returns the prompt from `reset()`; then
+            # `max_steps` sets the length. Build a placeholder dataset of empty prompts to feed the rollout worker,
+            # which cycles it indefinitely (so its length only needs to be non-degenerate).
+            if environment_factory is None:
+                raise ValueError("`train_dataset` is required unless an `environment_factory` is provided.")
+            if self.args.max_steps <= 0:
+                raise ValueError(
+                    "When training without a `train_dataset` (the environment owns the data and returns the prompt "
+                    "from `reset()`), `max_steps` must be set to a positive value to define the training length. Set "
+                    "it via `AsyncGRPOConfig(max_steps=...)`."
+                )
+            num_placeholder_rows = self.args.per_device_train_batch_size * self.args.gradient_accumulation_steps
+            train_dataset = Dataset.from_dict({"prompt": [[{"role": "user", "content": ""}]] * num_placeholder_rows})
+
         # Initialize the Trainer
         super().__init__(
             model=model,
@@ -609,9 +628,6 @@ class AsyncGRPOTrainer(_BaseTrainer):
         self.model_version = 0
         # Create worker and queue on rank 0
         if self.accelerator.is_main_process:
-            if self.train_dataset is None:
-                raise ValueError("train_dataset is required for AsyncGRPOTrainer")
-
             if rollout_worker is not None:
                 # Use the injected worker (e.g. a stub in tests). The queue is owned by the worker.
                 # Weight transfer is also expected to be wired by the test fixture (or left as None

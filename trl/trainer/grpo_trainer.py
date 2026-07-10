@@ -203,13 +203,17 @@ class GRPOTrainer(_BaseTrainer):
             types within the list (e.g., a string model ID and a custom reward function) is allowed.
         args ([`GRPOConfig`], *optional*):
             Configuration for this trainer. If `None`, a default configuration is used.
-        train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
+        train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`], *optional*):
             Dataset to use for training. It must include a column `"prompt"`. Any additional columns in the dataset is
             ignored. The format of the samples can be either:
 
             - [Standard](dataset_formats#standard): Each sample contains plain text.
             - [Conversational](dataset_formats#conversational): Each sample contains structured messages (e.g., role
               and content).
+
+            May be omitted only when an `environment_factory` is provided and the environment owns (or procedurally
+            generates) the data, returning the prompt from its `reset()` method. In that case, `max_steps` must be set
+            to define the training length.
         eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`], [`~datasets.DatasetDict`], [`~datasets.IterableDatasetDict`] or `dict[str, Dataset | IterableDataset]`):
             Dataset to use for evaluation. It must meet the same requirements as `train_dataset`.
         processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.ProcessorMixin`], *optional*):
@@ -808,8 +812,21 @@ class GRPOTrainer(_BaseTrainer):
         self.shuffle_dataset = args.shuffle_dataset
 
         if train_dataset is None:
-            raise ValueError("`train_dataset` is required")
-        elif (
+            # A dataset is optional when an environment owns the data and returns the prompt from `reset()`; then
+            # `max_steps` sets the length. Build a placeholder dataset of empty prompts to drive the loop — one
+            # generation round's worth of rows, cycled across steps.
+            if self.environment_factories is None:
+                raise ValueError("`train_dataset` is required unless an `environment_factory` is provided.")
+            if args.max_steps <= 0:
+                raise ValueError(
+                    "When training without a `train_dataset` (the environment owns the data and returns the prompt "
+                    "from `reset()`), `max_steps` must be set to a positive value to define the training length. Set "
+                    "it via `GRPOConfig(max_steps=...)`."
+                )
+            num_placeholder_rows = args.generation_batch_size // args.num_generations
+            train_dataset = Dataset.from_dict({"prompt": [[{"role": "user", "content": ""}]] * num_placeholder_rows})
+
+        if (
             isinstance(train_dataset, IterableDataset)
             or isinstance(eval_dataset, IterableDataset)
             or (
@@ -2130,6 +2147,12 @@ class GRPOTrainer(_BaseTrainer):
         device = self.accelerator.device
         mode = "train" if self.model.training else "eval"
 
+        # `prompt` is optional when the environment owns the data (e.g. a multi-environment routing dataset that carries
+        # only an `environment` column, or no dataset at all); each rollout's `reset()` then supplies it. Default it on
+        # the rows so every prompt-derived check downstream (conversational detection, multimodal handling) stays
+        # consistent.
+        for x in inputs:
+            x.setdefault("prompt", [{"role": "user", "content": ""}])
         prompts = [x["prompt"] for x in inputs]
 
         # Resolve each example's environment and draw one reusable instance per rollout from the pool, creating more

@@ -759,23 +759,22 @@ You can also provide tools through `environment_factory`. In this mode, [`GRPOTr
 > [!IMPORTANT]
 > `environment_factory` requires `transformers>=5.2.0`.
 
-The following is a minimal example of using `environment_factory` to define a simple environment with an `increment` method (exposed as a tool).
+When you use an `environment_factory`, the environment owns the data: there is no external `train_dataset`. On each rollout, `reset()` produces the task — self-sampling from a corpus the environment holds, or generating a state procedurally — and returns the prompt. `max_steps` sets the training length. The following is a minimal example of an environment that self-samples a target and exposes an `increment` method (exposed as a tool).
 
 ```python
-from datasets import Dataset
-from trl import GRPOConfig, GRPOTrainer
+import random
 
-instructions = [f"Increment the counter by {i}." for i in range(1, 7)]
-dataset = Dataset.from_dict({"prompt": [[{"role": "user", "content": instruction}] for instruction in instructions]})
+from trl import GRPOConfig, GRPOTrainer
 
 class IncrementEnv:
     # Reserved methods
-    def reset(self, **kwargs) -> str | None:  # required; receives sampled row fields as kwargs (e.g., `prompt`)
+    def reset(self, **kwargs) -> str | None:  # required; called at the start of each rollout
         self.counter = 0
-        return "Counter reset to 0.\n"
+        self.target = random.randint(1, 6)  # self-sample the task
+        return f"Increment the counter by {self.target}."  # returned string becomes the prompt
 
     def get_reward(self) -> float:  # optional: the environment scores itself from its own state
-        return float(self.counter)
+        return float(self.counter == self.target)
 
     # Public methods (exposed as tools)
     def increment(self, step: int) -> int:
@@ -793,8 +792,7 @@ class IncrementEnv:
 
 trainer = GRPOTrainer(
     model="Qwen/Qwen3-0.6B",
-    args=GRPOConfig(chat_template_kwargs={"enable_thinking": False}),
-    train_dataset=dataset,
+    args=GRPOConfig(max_steps=1000, chat_template_kwargs={"enable_thinking": False}),
     environment_factory=IncrementEnv,
 )
 trainer.train()
@@ -802,8 +800,47 @@ trainer.train()
 
 An environment class has two reserved methods: `reset` and `get_reward`. Unlike any other public methods, these are not exposed to the model as tools.
 
-- `reset` (required) is called when the rollout starts. It can return either `None` or a string. In GRPO, when it returns a string, that string is appended to the last user message.
+- `reset` (required) is called when the rollout starts. It can return either `None` or a string. In GRPO, when it returns a string, that string is the user prompt.
 - `get_reward` (optional, sync or async) takes no argument and returns a `float`: the environment scores the episode it just ran from its own internal state (did the game end in a win? was the word guessed?). It is called once per completed rollout and acts as a reward source.
+
+> [!NOTE]
+> Because the environment self-samples on each `reset()`, the `G` members of a GRPO group may not share the same initial state, making the group baseline slightly noisier. For identical states within a group, have `reset()` derive the state deterministically from a shared key.
+
+#### Providing an external dataset (optional)
+
+Instead of letting the environment self-sample, you can provide an external `train_dataset`. For example when your tasks already live in a dataset, or to route between [multiple environments](#multiple-environments). Per rollout, the trainer samples one row, uses its `"prompt"` column as the prompt, and passes the row's other columns to `reset()` as keyword arguments (so the environment reads the task from the dataset).
+
+```python
+from datasets import Dataset
+from trl import GRPOTrainer
+
+# Each row carries the prompt and the task data (here, the counter target to reach).
+dataset = Dataset.from_dict(
+    {
+        "prompt": [[{"role": "user", "content": f"Increment the counter to {i}."}] for i in range(1, 7)],
+        "target": list(range(1, 7)),
+    }
+)
+
+class IncrementEnv:
+    def reset(self, target, **kwargs) -> None:  # the row's `target` column arrives as a keyword argument
+        self.counter = 0
+        self.target = target
+
+    def get_reward(self) -> float:
+        return float(self.counter == self.target)
+
+    def increment(self, step: int) -> int:  # exposed as a tool (see the full docstring above)
+        self.counter += step
+        return self.counter
+
+trainer = GRPOTrainer(
+    model="Qwen/Qwen3-0.6B",
+    train_dataset=dataset,  # the dataset owns the task; the "target" column reaches reset(target=...)
+    environment_factory=IncrementEnv,
+)
+trainer.train()
+```
 
 ### Rewards
 
@@ -815,8 +852,8 @@ def format_reward(completions, **kwargs):  # trainer-owned: scores the completio
 
 trainer = GRPOTrainer(
     model="Qwen/Qwen3-0.6B",
+    args=GRPOConfig(max_steps=1000),
     reward_funcs=format_reward,          # trainer-owned: scores the completion
-    train_dataset=dataset,
     environment_factory=IncrementEnv,    # env-owned: scores its internal state via `get_reward`
 )
 ```
@@ -827,25 +864,19 @@ This works identically for [`AsyncGRPOTrainer`](async_grpo_trainer).
 
 ### Multiple environments
 
-To train on a mix of tasks in a single run (e.g. a coding task and a game), pass a dictionary mapping environment names to factories instead of a single callable. Each example then selects its environment through an `environment` field in the dataset, and **only that environment's tools are exposed in the example's prompt**. This avoids leaking irrelevant tools (the game's `move` tool to a coding example, and vice versa).
+To train on a mix of tasks in a single run (e.g. a coding task and a game), pass a dictionary mapping environment names to factories instead of a single callable. Each rollout selects its environment through an `environment` field in the dataset, and **only that environment's tools are exposed**. This avoids leaking irrelevant tools (the game's `move` tool to a coding example, and vice versa). Each environment still owns its data and returns the prompt from `reset()`, so the dataset only needs the `environment` column to route between them.
 
 ```python
+import random
+
 from datasets import Dataset
 from trl import GRPOConfig, GRPOTrainer
 
-dataset = Dataset.from_dict(
-    {
-        "prompt": [
-            [{"role": "user", "content": "Compute the 7th Fibonacci number."}],
-            [{"role": "user", "content": "Reach the goal tile."}],
-        ],
-        "environment": ["coding", "game"],  # selects the factory for each example
-    }
-)
 
 class CodingEnv:
-    def reset(self, **kwargs) -> str | None:
-        ...
+    def reset(self, **kwargs) -> str:
+        n = random.randint(1, 20)
+        return f"Compute the {n}th Fibonacci number."
 
     def run_code(self, code: str) -> str:  # exposed as a tool only for "coding" examples
         """Run the given Python code and return its stdout.
@@ -859,8 +890,8 @@ class CodingEnv:
         ...
 
 class GameEnv:
-    def reset(self, **kwargs) -> str | None:
-        ...
+    def reset(self, **kwargs) -> str:
+        return "Reach the goal tile."
 
     def move(self, action: str) -> str:  # exposed as a tool only for "game" examples
         """Apply an action to the game and return the new observation.
@@ -872,6 +903,9 @@ class GameEnv:
             The observation after the move.
         """
         ...
+
+# The dataset only routes: each row picks the environment for that rollout
+dataset = Dataset.from_dict({"environment": ["coding", "game"] * 500})
 
 trainer = GRPOTrainer(
     model="Qwen/Qwen3-0.6B",
