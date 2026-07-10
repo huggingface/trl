@@ -1741,6 +1741,56 @@ def test_generate_seq_kd_for_slices_cross_tok_round_trips_through_text(llama_tok
     assert completion_labels == expected_student_ids
 
 
+def test_generate_seq_kd_for_slices_cross_tok_restores_student_eos(llama_tokenizer, qwen_tokenizer, monkeypatch):
+    content_ids = qwen_tokenizer.encode("hello", add_special_tokens=False)
+    teacher_completion_ids = content_ids + [qwen_tokenizer.eos_token_id]
+    expected_student_ids = llama_tokenizer.encode(
+        qwen_tokenizer.decode(content_ids, skip_special_tokens=True), add_special_tokens=False
+    ) + [llama_tokenizer.eos_token_id]
+
+    class CannedTeacher:
+        def generate(self, input_ids, attention_mask, generation_config, return_dict_in_generate):
+            bs = input_ids.shape[0]
+            completions = torch.tensor([teacher_completion_ids] * bs, dtype=torch.long, device=input_ids.device)
+            return SimpleNamespace(sequences=torch.cat([input_ids, completions], dim=1))
+
+    trainer = GOLDTrainer.__new__(GOLDTrainer)
+    trainer.accelerator = SimpleNamespace(device=torch.device("cpu"), is_main_process=True)
+    trainer.processing_class = llama_tokenizer
+    trainer._tokenizer = llama_tokenizer
+    trainer.teacher_tokenizer = qwen_tokenizer
+    trainer.teacher_model = CannedTeacher()
+    trainer.use_uld_loss = True
+    trainer.uld_loss_fn = None
+    trainer.generation_config = SimpleNamespace(
+        max_new_tokens=len(expected_student_ids),
+        eos_token_id=llama_tokenizer.eos_token_id,
+        pad_token_id=llama_tokenizer.pad_token_id,
+    )
+    trainer.generation_kwargs = {}
+    trainer.args = SimpleNamespace(max_length=None)
+    trainer._buffered_inputs = [None]
+    trainer._buffered_text_logs = [None]
+
+    monkeypatch.setattr(
+        gold_trainer_module,
+        "unwrap_model_for_generation",
+        lambda model, accelerator, generation_kwargs=None: contextlib.nullcontext(model),
+    )
+
+    prompt_ids = llama_tokenizer.encode("Greeting:", add_special_tokens=False)
+    pad_id = llama_tokenizer.pad_token_id
+    prompts = torch.tensor([[pad_id] + prompt_ids], dtype=torch.long)
+    prompt_attention_mask = (prompts != pad_id).long()
+    slices = [{"prompts": prompts, "prompt_attention_mask": prompt_attention_mask}]
+
+    GOLDTrainer._generate_seq_kd_for_slices(trainer, slices, [0])
+
+    buffered = trainer._buffered_inputs[0]
+    completion_labels = buffered["labels"][0][buffered["labels"][0] != -100].tolist()
+    assert completion_labels == expected_student_ids
+
+
 def test_generate_seq_kd_for_slices_batches_single_generate_call_across_slices(monkeypatch):
     class RecordingTokenizer:
         pad_token_id = 0

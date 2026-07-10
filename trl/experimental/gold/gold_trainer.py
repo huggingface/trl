@@ -1754,9 +1754,15 @@ class GOLDTrainer(SFTTrainer):
             completion_texts_raw = self.teacher_tokenizer.batch_decode(
                 teacher_completion_ids, skip_special_tokens=True
             )
-            student_completion_ids: list[list[int]] = [
-                self.processing_class.encode(text, add_special_tokens=False) for text in completion_texts_raw
-            ]
+            student_eos_id = self.processing_class.eos_token_id
+            student_completion_ids: list[list[int]] = []
+            for row, text in zip(teacher_completion_ids, completion_texts_raw, strict=True):
+                ids = self.processing_class.encode(text, add_special_tokens=False)
+                # The decode above drops the teacher EOS (skip_special_tokens=True), so completions that
+                # terminated would lose their stop signal; restore it as the student EOS.
+                if student_eos_id is not None and (row == teacher_eos).any():
+                    ids.append(student_eos_id)
+                student_completion_ids.append(ids)
         else:
             # Same tokenizer: pass raw teacher ids straight through. The decode/re-encode round-trip
             # would silently drop EOS (skip_special_tokens=True) and shift tokens at BPE boundaries,
