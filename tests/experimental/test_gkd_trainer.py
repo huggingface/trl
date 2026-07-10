@@ -61,9 +61,7 @@ class TestGKDTrainerGenerateOnPolicy(TrlTestCase):
             temperature=0.0,
         )
 
-        outputs = GKDTrainer.generate_on_policy_outputs(
-            self.model, inputs, deterministic_generation_config, self.tokenizer.pad_token_id
-        )
+        outputs = GKDTrainer.generate_on_policy_outputs(self.model, inputs, deterministic_generation_config)
 
         new_input_ids, new_attention_mask, new_labels = outputs
 
@@ -77,9 +75,7 @@ class TestGKDTrainerGenerateOnPolicy(TrlTestCase):
             )
 
         # Run the generation twice and check if the outputs are identical
-        outputs2 = GKDTrainer.generate_on_policy_outputs(
-            self.model, inputs, deterministic_generation_config, self.tokenizer.pad_token_id
-        )
+        outputs2 = GKDTrainer.generate_on_policy_outputs(self.model, inputs, deterministic_generation_config)
 
         new_input_ids2, new_attention_mask2, new_labels2 = outputs2
 
@@ -99,9 +95,7 @@ class TestGKDTrainerGenerateOnPolicy(TrlTestCase):
             "attention_mask": tokenized_prompts["attention_mask"].to(self.device),
         }
 
-        outputs = GKDTrainer.generate_on_policy_outputs(
-            self.model, inputs, self.generation_config, self.tokenizer.pad_token_id
-        )
+        outputs = GKDTrainer.generate_on_policy_outputs(self.model, inputs, self.generation_config)
 
         # Check that outputs is a tuple of three tensors
         assert isinstance(outputs, tuple)
@@ -150,9 +144,7 @@ class TestGKDTrainerGenerateOnPolicy(TrlTestCase):
             do_sample=False,
         )
 
-        _, _, new_labels = GKDTrainer.generate_on_policy_outputs(
-            self.model, inputs, generation_config, self.tokenizer.pad_token_id
-        )
+        _, _, new_labels = GKDTrainer.generate_on_policy_outputs(self.model, inputs, generation_config)
 
         # Every prompt position (the first `prompt_width` columns) must be masked.
         assert (new_labels[:, :prompt_width] == -100).all(), "Prompt positions are not fully masked"
@@ -178,7 +170,7 @@ class TestGKDTrainerGenerateOnPolicy(TrlTestCase):
 
         inputs = {"prompts": prompts, "prompt_attention_mask": prompt_mask}
         _, new_attention_mask, new_labels = GKDTrainer.generate_on_policy_outputs(
-            DummyModel(), inputs, self.generation_config, pad_id
+            DummyModel(), inputs, self.generation_config
         )
 
         prompt_width = prompts.shape[1]
@@ -195,6 +187,58 @@ class TestGKDTrainerGenerateOnPolicy(TrlTestCase):
         assert torch.equal(new_labels[1, prompt_width:], completions[1])
         # Prompt positions never contribute to the loss
         assert torch.all(new_labels[:, :prompt_width] == -100)
+
+    def test_generate_on_policy_outputs_without_eos_id_keeps_full_completion(self):
+        # GenerationConfig defaults eos_token_id to None; torch.tensor(None) would raise, so the
+        # None guard must keep the whole completion instead of trying to find a stop token.
+        prompts = torch.tensor([[11, 12, 13], [14, 15, 16]], device=self.device)
+        prompt_mask = torch.ones_like(prompts)
+        completions = torch.tensor([[21, 22, 23, 24], [25, 26, 27, 28]], device=self.device)
+        generated_sequence = torch.cat([prompts, completions], dim=1)
+
+        class DummyModel:
+            def generate(self, input_ids, attention_mask, generation_config, return_dict_in_generate):
+                return SimpleNamespace(sequences=generated_sequence)
+
+        generation_config = SimpleNamespace(eos_token_id=None)
+        inputs = {"prompts": prompts, "prompt_attention_mask": prompt_mask}
+        _, new_attention_mask, new_labels = GKDTrainer.generate_on_policy_outputs(
+            DummyModel(), inputs, generation_config
+        )
+
+        prompt_width = prompts.shape[1]
+        # With no stop token nothing is masked in the completion region
+        assert torch.all(new_attention_mask[:, prompt_width:] == 1)
+        assert torch.all(new_labels[:, prompt_width:] != -100)
+
+    def test_generate_on_policy_outputs_masks_after_any_stop_token(self):
+        # eos_token_id can be a list of stop tokens; each row must stop on the first occurrence of
+        # any of them. A scalar == would only catch one id and miss the other row's terminator.
+        prompts = torch.tensor([[11, 12, 13], [14, 15, 16]], device=self.device)
+        prompt_mask = torch.ones_like(prompts)
+        # Row 0 terminates on 7, row 1 terminates on 9, each at a different position
+        completions = torch.tensor([[21, 7, 23, 24], [25, 26, 9, 28]], device=self.device)
+        generated_sequence = torch.cat([prompts, completions], dim=1)
+
+        class DummyModel:
+            def generate(self, input_ids, attention_mask, generation_config, return_dict_in_generate):
+                return SimpleNamespace(sequences=generated_sequence)
+
+        generation_config = SimpleNamespace(eos_token_id=[7, 9])
+        inputs = {"prompts": prompts, "prompt_attention_mask": prompt_mask}
+        _, new_attention_mask, new_labels = GKDTrainer.generate_on_policy_outputs(
+            DummyModel(), inputs, generation_config
+        )
+
+        prompt_width = prompts.shape[1]
+        completion_mask = new_attention_mask[:, prompt_width:]
+        # Row 0 stops on 7 at index 1, row 1 stops on 9 at index 2: keep up to and including it
+        assert torch.equal(completion_mask[0], torch.tensor([1, 1, 0, 0], device=self.device))
+        assert torch.equal(completion_mask[1], torch.tensor([1, 1, 1, 0], device=self.device))
+        assert new_labels[0, prompt_width + 1] == 7
+        assert new_labels[1, prompt_width + 2] == 9
+        assert torch.all(new_labels[0, prompt_width + 2 :] == -100)
+        assert torch.all(new_labels[1, prompt_width + 3 :] == -100)
 
 
 class TestGeneralizedJSDLoss(TrlTestCase):
