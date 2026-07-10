@@ -3614,6 +3614,31 @@ class TestGRPOTrainerVLM(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    def test_train_vlm_log_multimodal_false(self):
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
+
+        def reward_func(completions, **kwargs):
+            """Reward function that rewards longer completions."""
+            return [float(len(completion[0]["content"])) for completion in completions]
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,  # VLM training is memory intensive, reduce batch size to avoid OOM
+            num_generations=2,  # VLM training is memory intensive, reduce num_generations to avoid OOM
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            report_to="none",
+            log_completions=True,
+            log_multimodal=False,
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
+            reward_funcs=reward_func,
+            args=training_args,
+            train_dataset=dataset,
+        )
+        trainer.train()
+        assert len(trainer._logs["images"]) == 0
+
     @pytest.mark.xfail(
         condition=Version(transformers.__version__) < Version("5.2.0"),
         reason="Qwen3.5 models were introduced in transformers-5.2.0",
