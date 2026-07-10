@@ -91,8 +91,8 @@ VLM_SYSTEM_PROMPT = (
     "You are a visual investigation agent. Answer the user's question about the image, using the provided tools when "
     "they help. All tools return plain text, truncated to a few thousand characters:\n"
     "- `layout_parsing`: extract the structured text from a document image. Pass the image reference `img_1`.\n"
-    "- `text_search`: look up encyclopedic facts on Wikipedia and get a text summary. Use it to verify names or facts "
-    "you cannot read directly from the image.\n"
+    "- `text_search`: search the web and get a text summary of the top results. Use it to verify names or facts you "
+    "cannot read directly from the image.\n"
     "- `web_search`: a general web search returning the top results as text.\n"
     "Call one tool per turn and wait for its result before the next. A tool result may be empty or report no match — "
     "if so, reformulate once or proceed with what you have; do not repeat near-identical queries. When you have "
@@ -181,13 +181,14 @@ def build_browser_tools():
     ]
 
 
-# VLM tools: real, key-free web/wikipedia search (smolagents), wrapped as type-hinted callables for schema
-# introspection. `layout_parsing` is an environment method (see LayoutParsingEnv) so it can resolve image references.
+# VLM tools: real, key-free web search (smolagents DuckDuckGo), wrapped as type-hinted callables for schema
+# introspection. Both `web_search` and `text_search` (the two names the Search-VL dataset uses) route to DuckDuckGo;
+# Wikipedia-only lookup dead-ended on the dataset's descriptive queries. `layout_parsing` is an environment method
+# (see LayoutParsingEnv) so it can resolve image references.
 def build_search_tools():
-    from smolagents import DuckDuckGoSearchTool, WikipediaSearchTool
+    from smolagents import DuckDuckGoSearchTool
 
     _web = DuckDuckGoSearchTool()
-    _wiki = WikipediaSearchTool()
 
     def web_search(q: str, hl: str = "en") -> str:
         """
@@ -204,7 +205,7 @@ def build_search_tools():
 
     def text_search(q: str, hl: str = "en", top_k: int = 5) -> str:
         """
-        Search encyclopedic knowledge (Wikipedia) for a query and return a text summary.
+        Search the web for a query and return a text summary of the top results.
 
         Args:
             q: The search query keywords.
@@ -212,9 +213,9 @@ def build_search_tools():
             top_k: Number of passages to retrieve.
 
         Returns:
-            A text summary of the most relevant article(s).
+            A text summary of the most relevant results.
         """
-        return str(_wiki(q))[:MAX_TOOL_RESULT_CHARS]
+        return str(_web(q))[:MAX_TOOL_RESULT_CHARS]
 
     return [web_search, text_search]
 
