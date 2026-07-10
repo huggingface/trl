@@ -513,8 +513,8 @@ class DataCollatorForChatML:
     ) -> list[tuple[int, int]]:
         """Completion-relative UTF-8 byte spans of tool-result (`role == "tool"`) messages.
 
-        Locates each tool message's rendered span via incremental prefix rendering (requires a prefix-preserving
-        chat template), then rebases to completion bytes by subtracting the prompt byte length.
+        Locates each tool message's rendered span via incremental prefix rendering (requires a prefix-preserving chat
+        template), then rebases to completion bytes by subtracting the prompt byte length.
         """
         ranges: list[tuple[int, int]] = []
         prev_len = len(
