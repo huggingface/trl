@@ -1207,7 +1207,7 @@ class DPPOTrainer(GRPOTrainer):
             self._metrics[mode][name].append(global_mean)
         self._pending_metrics.clear()
 
-        if images is not None:
+        if images is not None and self.log_multimodal:
             self._logs["images"].extend(gather_object(images))
 
         output = {
