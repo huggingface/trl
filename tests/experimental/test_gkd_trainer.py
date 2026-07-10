@@ -14,6 +14,7 @@
 
 import importlib
 import os
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -157,6 +158,43 @@ class TestGKDTrainerGenerateOnPolicy(TrlTestCase):
         assert (new_labels[:, :prompt_width] == -100).all(), "Prompt positions are not fully masked"
         # The completion region must still carry signal (not entirely masked away).
         assert (new_labels[:, prompt_width:] != -100).any(), "Completion tokens were unexpectedly all masked"
+
+    def test_generate_on_policy_outputs_pad_equals_eos_keeps_eos(self):
+        # pad == eos here (the setup ties them): identity-based pad masking used to erase the
+        # terminating EOS label on every row and zero attention on pad-id tokens inside the prompt.
+        eos_id = self.tokenizer.eos_token_id
+        pad_id = self.tokenizer.pad_token_id
+        assert pad_id == eos_id
+
+        # Row 0 stops on EOS and is right-padded; row 1 runs to max_new_tokens (no padding).
+        prompts = torch.tensor([[pad_id, 11, eos_id, 13], [pad_id, 11, eos_id, 13]], device=self.device)
+        prompt_mask = torch.tensor([[0, 1, 1, 1], [0, 1, 1, 1]], device=self.device)
+        completions = torch.tensor([[21, 22, eos_id, pad_id, pad_id], [21, 22, 23, 24, 25]], device=self.device)
+        generated_sequence = torch.cat([prompts, completions], dim=1)
+
+        class DummyModel:
+            def generate(self, input_ids, attention_mask, generation_config, return_dict_in_generate):
+                return SimpleNamespace(sequences=generated_sequence)
+
+        inputs = {"prompts": prompts, "prompt_attention_mask": prompt_mask}
+        _, new_attention_mask, new_labels = GKDTrainer.generate_on_policy_outputs(
+            DummyModel(), inputs, self.generation_config, pad_id
+        )
+
+        prompt_width = prompts.shape[1]
+        eos_pos = prompt_width + 2
+        # Pad-id tokens inside the prompt keep attention, only real prompt padding is masked
+        assert torch.equal(new_attention_mask[:, :prompt_width], prompt_mask)
+        # The terminating EOS stays attended and supervised, only the padding after it is masked
+        assert new_attention_mask[0, eos_pos] == 1
+        assert new_labels[0, eos_pos] == eos_id
+        assert torch.all(new_attention_mask[0, eos_pos + 1 :] == 0)
+        assert torch.all(new_labels[0, eos_pos + 1 :] == -100)
+        # A row that hits max_new_tokens has no padding and stays fully supervised
+        assert torch.all(new_attention_mask[1, prompt_width:] == 1)
+        assert torch.equal(new_labels[1, prompt_width:], completions[1])
+        # Prompt positions never contribute to the loss
+        assert torch.all(new_labels[:, :prompt_width] == -100)
 
 
 class TestGeneralizedJSDLoss(TrlTestCase):

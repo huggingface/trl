@@ -454,19 +454,30 @@ class GKDTrainer(SFTTrainer):
 
         # Get the generated token IDs
         generated_tokens = generated_outputs.sequences
-        # Calculate new attention mask
-        new_attention_mask = torch.ones_like(generated_tokens)
-        new_labels = generated_tokens.clone()
+        device = generated_tokens.device
+        prompt_mask = inputs.get("prompt_attention_mask")
+        prompt_length = inputs["prompts"].shape[1]
+        completion_ids = generated_tokens[:, prompt_length:]
 
-        # If there's pad_token_id, set attention mask to 0 for padding tokens
-        if pad_token_id is not None:
-            new_labels[new_labels == pad_token_id] = -100
-            new_attention_mask[generated_tokens == pad_token_id] = 0
+        # Mask everything after the first EOS token
+        is_eos = torch.isin(completion_ids, torch.tensor(generation_config.eos_token_id, device=device))
+        eos_idx = torch.full((is_eos.size(0),), is_eos.size(1), dtype=torch.long, device=device)
+        eos_idx[is_eos.any(dim=1)] = is_eos.int().argmax(dim=1)[is_eos.any(dim=1)]
+        sequence_indices = torch.arange(is_eos.size(1), device=device).expand(is_eos.size(0), -1)
+        completion_mask = (sequence_indices <= eos_idx.unsqueeze(1)).int()
+
+        # Pad ids can appear inside real prompt text, so use the prompt mask instead of matching ids
+        new_attention_mask = torch.ones_like(generated_tokens)
+        new_attention_mask[:, prompt_length:] = completion_mask
+        if prompt_mask is not None:
+            new_attention_mask[:, :prompt_length] = prompt_mask
+
+        new_labels = generated_tokens.clone()
+        new_labels[new_attention_mask == 0] = -100
 
         # Mask the prompt so only the generated completion contributes to the loss. `generate` echoes
         # the prompt back as the first `prompt_length` columns, so masking them with -100 matches the
         # collator convention (`labels[:len(prompt)] = -100`) that `compute_loss` relies on.
-        prompt_length = inputs["prompts"].shape[1]
         new_labels[:, :prompt_length] = -100
 
         return generated_tokens, new_attention_mask, new_labels
