@@ -493,10 +493,8 @@ def _run(monkeypatch, *, prompt_ids, turns, assistants, fork_threshold=1024, max
     loop._generate_one_turn = _generate_one_turn
     loop._execute_tool_calls = lambda tool_calls, tool_dict: ([{"role": "tool", "name": "t", "content": "ok"}], 1, 0)
 
-    # _generate_one returns (prompt_ids, completion, completion_ids, sequences, n_calls, n_failures);
-    # drop the leading prompt_ids, which the tests below don't assert on.
-    _prompt_ids, *rest = asyncio.run(loop._generate_one([{"role": "user", "content": "hi"}], {}, []))
-    return tuple(rest)
+    # _generate_one returns (completion, completion_ids, sequences, n_calls, n_failures).
+    return asyncio.run(loop._generate_one([{"role": "user", "content": "hi"}], {}, []))
 
 
 class TestRolloutLoop(TrlTestCase):
@@ -581,7 +579,6 @@ def _group(completions_sequences, completions_ids):
     n = len(completions_sequences)
     return RolloutGroup(
         prompts=[[{"role": "user", "content": "hi"}] for _ in range(n)],
-        prompt_ids=[[1, 2, 3] for _ in range(n)],
         reward_kwargs={},
         completions=[[{"role": "assistant", "content": f"c{i}"}] for i in range(n)],
         completions_ids=completions_ids,

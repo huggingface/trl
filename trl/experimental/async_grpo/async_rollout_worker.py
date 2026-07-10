@@ -171,7 +171,6 @@ def _chain_to_sequences(turns: list[TurnRecord], rollout_id: RolloutId, fork_thr
 @dataclass(slots=True)
 class RolloutGroup:
     prompts: list[Messages]
-    prompt_ids: list[list[int]]
     reward_kwargs: dict[str, list[Any]]
     completions: list[Messages]
     completions_ids: list[list[int]]  # per conversation, its completion token stream (for reward funcs)
@@ -246,7 +245,6 @@ def _child_main(
     heartbeat_value: MPValue,
     failed_event: MPEvent,
     exception_info_queue: MPQueue,
-    loop_cls: type["_AsyncRolloutLoop"],
 ) -> None:
     _scrub_child_env()
     # `accelerate.logging.get_logger` requires `PartialState()` to have been called.
@@ -254,7 +252,7 @@ def _child_main(
 
     PartialState()
 
-    rollout_loop = loop_cls(
+    rollout_loop = _AsyncRolloutLoop(
         **loop_kwargs,
         rollout_buffer=samples_queue,
         model_version_value=model_version_value,
@@ -533,7 +531,6 @@ class _AsyncRolloutLoop:
                         }
                         pending_groups[group_id] = RolloutGroup(
                             prompts=[],
-                            prompt_ids=[],
                             reward_kwargs=reward_kwargs,
                             completions=[],
                             completions_ids=[],
@@ -565,7 +562,6 @@ class _AsyncRolloutLoop:
                         raise task.exception()
 
                     (
-                        prompt_ids,
                         completion,
                         completion_ids,
                         sequences,
@@ -574,7 +570,6 @@ class _AsyncRolloutLoop:
                     ) = task.result()
                     group = pending_groups[group_id]
                     group.prompts.append(prompt)
-                    group.prompt_ids.append(prompt_ids)
                     group.completions.append(completion)
                     group.completions_ids.append(completion_ids)
                     group.completions_sequences.append(sequences)
@@ -696,7 +691,7 @@ class _AsyncRolloutLoop:
 
     async def _generate_one(
         self, prompt: Messages, tool_dict: dict[str, Callable], tools: list[Callable]
-    ) -> tuple[list[int], list[dict[str, str]], list[int], list[TrainingSequence], int, int]:
+    ) -> tuple[list[dict[str, str]], list[int], list[TrainingSequence], int, int]:
         """Roll out one conversation, re-tokenizing the whole message list each turn and reconciling drift.
 
         Every turn renders the full conversation through the chat template, generates, records the turn, and feeds the
@@ -704,7 +699,8 @@ class _AsyncRolloutLoop:
         `_chain_to_sequences` reconciles re-tokenization drift into one or more training rows: a clean append stays one
         row, a rewrite (dropped reasoning, summarized history) forks a new row. Rebuilding `prompt_ids` from the
         message list each turn (instead of gluing tokens on the end and never looking back) is what lets the reconciler
-        catch rewrites. Returns the first turn's `prompt_ids` so the scorer can reconstruct the context.
+        catch rewrites. Returns the completion messages, their token ids, and the reconciled training rows (each row
+        carries its own `input_ids`).
         """
         messages = list(prompt)  # a MESSAGE list, not a token list
         rollout_id = uuid.uuid4().hex
@@ -739,8 +735,7 @@ class _AsyncRolloutLoop:
             messages.extend(tool_messages)  # tool result goes back as a MESSAGE, re-tokenized next turn
             iteration_num += 1
         sequences = _chain_to_sequences(turns, rollout_id, self._fork_threshold_tokens)  # >= 1 row per conversation
-        # element 0 (prompt_ids) is the first turn's prompt, matching the caller's unpacking
-        return turns[0].prompt_ids, completion, completion_ids, sequences, tool_call_count, tool_failure_count
+        return completion, completion_ids, sequences, tool_call_count, tool_failure_count
 
     def _execute_tool_calls(
         self, tool_calls: list[dict[str, Any]], tool_dict: dict[str, Callable]
@@ -911,7 +906,6 @@ class AsyncRolloutWorker:
         *,
         queue_maxsize: int = 0,
         child_ready_timeout: int = 300,
-        loop_cls: type[_AsyncRolloutLoop] = _AsyncRolloutLoop,
         **loop_kwargs: Any,
     ):
         if not is_vllm_available(min_version="0.17.1"):
@@ -932,7 +926,6 @@ class AsyncRolloutWorker:
         # forwarded — the child reads it for "rollout buffer full" log lines.
         loop_kwargs["queue_maxsize"] = queue_maxsize
         self._loop_kwargs = loop_kwargs
-        self._loop_cls = loop_cls
         self._child_ready_timeout = child_ready_timeout
         self._process: mp.Process | None = None
 
@@ -975,7 +968,6 @@ class AsyncRolloutWorker:
                 self._heartbeat_value,
                 self._failed_event,
                 self._exception_info_queue,
-                self._loop_cls,
             ),
             name="grpo-rollout-worker-child",
             daemon=True,
