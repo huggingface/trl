@@ -31,7 +31,6 @@ messages). Important configuration flags on [`GOLDConfig`] include:
   sampling ratio.
 * `num_generations`, `generation_batch_size` – control buffered rollout generation across gradient accumulation windows.
   `generation_batch_size` is the number of unique prompts per worker per optimizer step.
-* `model_revision` – controls which student model revision GOLD loads for training and generation.
 
 A minimal end-to-end example:
 
