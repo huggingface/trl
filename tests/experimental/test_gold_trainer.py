@@ -1301,9 +1301,7 @@ def test_generate_on_policy_outputs_masks_prompt(llama_tokenizer):
             assert torch.equal(attention_mask, prompt_mask)
             return SimpleNamespace(sequences=generated_sequence)
 
-    generation_config = SimpleNamespace(
-        max_completion_length=None, temperature=None, top_k=None, top_p=None, eos_token_id=llama_tokenizer.eos_token_id
-    )
+    generation_config = SimpleNamespace(max_completion_length=None, temperature=None, top_k=None, top_p=None)
     new_ids, new_mask, new_labels, prompt_texts, completion_texts = GOLDTrainer.generate_on_policy_outputs(
         trainer,
         DummyModel(),
@@ -1352,9 +1350,7 @@ def test_generate_on_policy_outputs_masks_prompt_smollm(smollm_tokenizer, openr1
             assert torch.equal(attention_mask, batch["prompt_attention_mask"])
             return SimpleNamespace(sequences=batch["input_ids"])
 
-    generation_config = SimpleNamespace(
-        max_completion_length=None, temperature=None, top_k=None, top_p=None, eos_token_id=smollm_tokenizer.eos_token_id
-    )
+    generation_config = SimpleNamespace(max_completion_length=None, temperature=None, top_k=None, top_p=None)
     pad_id = smollm_tokenizer.pad_token_id
     new_ids, new_mask, new_labels, prompt_texts, completion_texts = GOLDTrainer.generate_on_policy_outputs(
         trainer,
@@ -1368,12 +1364,11 @@ def test_generate_on_policy_outputs_masks_prompt_smollm(smollm_tokenizer, openr1
     )
 
     assert torch.equal(new_ids, batch["input_ids"])
-    prompt_width = batch["prompts"].shape[1]
-    completion = batch["input_ids"][0, prompt_width:]
-    first_eos = (completion == smollm_tokenizer.eos_token_id).nonzero()[0, 0].item()
-    expected_mask = torch.ones_like(batch["input_ids"])
-    expected_mask[0, prompt_width + first_eos + 1 :] = 0
-    assert torch.equal(new_mask, expected_mask)
+    if pad_id is not None:
+        expected_mask = (batch["input_ids"] != pad_id).long()
+        assert torch.equal(new_mask, expected_mask)
+    else:
+        assert torch.all(new_mask == 1)
 
     prompt_len = int(batch["prompt_attention_mask"].sum().item())
     tail_labels = new_labels[0, prompt_len:]
@@ -1389,61 +1384,6 @@ def test_generate_on_policy_outputs_masks_prompt_smollm(smollm_tokenizer, openr1
 
     assistant_completion = openr1_examples[0]["messages"][-1]["content"].strip()
     assert assistant_completion in completion_texts[0]
-
-
-@pytest.mark.slow
-def test_generate_on_policy_outputs_pad_equals_eos_keeps_eos(llama_tokenizer):
-    trainer = GOLDTrainer.__new__(GOLDTrainer)
-    trainer.processing_class = llama_tokenizer
-
-    # The fixture ties pad to eos: identity-based pad masking used to erase the terminating
-    # EOS label on every row and zero attention on pad-id tokens inside the prompt.
-    eos_id = llama_tokenizer.eos_token_id
-    pad_id = llama_tokenizer.pad_token_id
-    assert pad_id == eos_id
-
-    prompt_text = "<|begin_of_text|><|start_header_id|>user<|end_header_id|>\nHello?<|eot_id|>"
-    prompt_ids = llama_tokenizer(prompt_text, add_special_tokens=False)["input_ids"]
-    completion_ids = llama_tokenizer("Hi there!", add_special_tokens=False)["input_ids"]
-
-    pad_width = 3
-    prompt_tensor = torch.full((1, len(prompt_ids) + pad_width), pad_id, dtype=torch.long)
-    prompt_tensor[0, pad_width:] = torch.tensor(prompt_ids, dtype=torch.long)
-    prompt_mask = torch.ones_like(prompt_tensor)
-    prompt_mask[0, :pad_width] = 0
-
-    # generate() writes the terminating EOS into the sequence, then right-pads with pad_token_id
-    completion_tensor = torch.tensor(completion_ids + [eos_id, pad_id, pad_id], dtype=torch.long).unsqueeze(0)
-    generated_sequence = torch.cat([prompt_tensor, completion_tensor], dim=1)
-
-    class DummyModel:
-        def generate(self, input_ids, attention_mask, generation_config, return_dict_in_generate):
-            return SimpleNamespace(sequences=generated_sequence)
-
-    generation_config = SimpleNamespace(
-        max_completion_length=None, temperature=None, top_k=None, top_p=None, eos_token_id=eos_id
-    )
-    new_ids, new_mask, new_labels, prompt_texts, completion_texts = GOLDTrainer.generate_on_policy_outputs(
-        trainer,
-        DummyModel(),
-        {"prompts": prompt_tensor, "prompt_attention_mask": prompt_mask},
-        generation_config,
-        pad_id,
-    )
-
-    prompt_width = prompt_tensor.shape[1]
-    eos_pos = prompt_width + len(completion_ids)
-    # Pad-id tokens inside the prompt keep attention, only real prompt padding is masked
-    assert torch.equal(new_mask[0, :prompt_width], prompt_mask[0])
-    # The terminating EOS stays attended and supervised, only the padding after it is masked
-    assert new_mask[0, eos_pos] == 1
-    assert new_labels[0, eos_pos] == eos_id
-    assert torch.all(new_mask[0, eos_pos + 1 :] == 0)
-    assert torch.all(new_labels[0, eos_pos + 1 :] == -100)
-    # Prompt positions never contribute to the loss
-    assert torch.all(new_labels[0, :prompt_width] == -100)
-    assert torch.equal(new_labels[0, prompt_width:eos_pos], torch.tensor(completion_ids, dtype=torch.long))
-    assert completion_texts[0].endswith("<|eot_id|>")
 
 
 def test_generalized_jsd_loss_accepts_probability_inputs():
@@ -3693,7 +3633,7 @@ def test_on_policy_vlm_without_vllm_collates_only_consumed_slice(monkeypatch):
     trainer._buffered_text_logs = [None, None]
     trainer._step = 1
     trainer.generation_kwargs = {}
-    trainer.generation_config = SimpleNamespace(max_new_tokens=1, eos_token_id=9)
+    trainer.generation_config = SimpleNamespace(max_new_tokens=1)
     trainer.pad_token_id = 0
     trainer.use_uld_loss = False
     trainer.teacher_tokenizer = None
