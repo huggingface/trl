@@ -104,7 +104,7 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
                     methods = [
                         member
                         for member_name, member in inspect.getmembers(self.environments[i], predicate=inspect.ismethod)
-                        if member_name != "reset" and not member_name.startswith("_")
+                        if member_name not in ("reset", "get_reward") and not member_name.startswith("_")
                     ]
                 sync_tool_dict, async_tool_dict = {}, {}
                 for tool in self._standalone_tools + methods:

@@ -180,8 +180,8 @@ While training and evaluating, we record the following metrics:
 - `completions/min_terminated_length`: The minimum length of generated completions that terminate with EOS. When using tools, only non-tool tokens are counted.
 - `completions/max_terminated_length`: The maximum length of generated completions that terminate with EOS. When using tools, only non-tool tokens are counted.
 - `completions/clipped_ratio`: The ratio of truncated (clipped) completions.
-- `reward/{reward_func_name}/mean`: The average reward from a specific reward function.
-- `reward/{reward_func_name}/std`: The standard deviation of the reward from a specific reward function.
+- `rewards/{reward_func_name}/mean`: The average reward from a specific reward function. When an environment owns the reward via `get_reward`, `{reward_func_name}` is the environment's class name.
+- `rewards/{reward_func_name}/std`: The standard deviation of the reward from a specific reward function.
 - `reward`: The overall average reward after summing rewards across functions (weighted by `reward_weights`).
 - `reward_std`: The standard deviation of summed rewards across functions (weighted by `reward_weights`), computed over the full batch.
 - `frac_reward_zero_std`: The fraction of samples in the generation batch with a reward std of zero, implying there is little diversity for that prompt (all answers are correct or incorrect).
@@ -410,7 +410,7 @@ Reward functions can be either synchronous Python callables or asynchronous `asy
      - `trainer_state` ([`~transformers.TrainerState`]): The current state of the trainer. This can be used to implement dynamic reward functions, such as curriculum learning, where the reward is adjusted based on the training progress.
      - `log_extra`: a callable `log_extra(column: str, values: list)` to add extra columns to the completions table. See Example 6. In distributed training, it's important that all processes log the same set of keys.
      - `log_metric`: a callable `log_metric(name: str, value: float)` to log scalar metrics as plots alongside `kl`, `entropy`, etc. See Example 6. In distributed training, it's important that all processes log the same set of keys.
-     - `environments`: a list of environment instances, one per completion. Only present when `environment_factory` is provided. Use this to read state accumulated during the episode (e.g., `env.reward`).
+     - `environments`: a list of environment instances, one per completion. Only present when `environment_factory` is provided. Use this to read state accumulated during the episode (e.g., `env.counter`). For stateful environments, prefer letting the environment own the reward via a `get_reward` method instead — see [Rewards](#rewards).
      - All column names (but `prompt`) that the dataset may have. For example, if the dataset contains a column named `ground_truth`, the function will be called with `ground_truth` as a keyword argument.
 
      The easiest way to comply with this requirement is to use `**kwargs` in the function signature.
@@ -689,8 +689,16 @@ RapidFire AI is an open-source experimentation engine that sits on top of TRL an
 
 ## Agent Training
 
-GRPO supports **agent training** through the `tools` argument in [`GRPOTrainer`].
-This parameter expects a list of Python functions (sync or async) that define the tools available to the agent:
+GRPO supports **agent training**: the model calls tools during generation and learns from the outcome.
+
+- A **tool** is a plain Python function (sync or async) exposed to the model. Use `tools` for stateless calls (a calculator, a web search).
+- An **environment** is the more general form: a stateful object built fresh per rollout, whose public methods are exposed as tools, plus a `reset` lifecycle hook and an optional `get_reward` that lets it own the reward. Use `environment_factory` when you need per-rollout state, a reset hook, or environment-owned reward.
+
+They compose — you can pass standalone `tools` alongside an `environment_factory`.
+
+### Tools
+
+The `tools` argument expects a list of Python functions (sync or async) that define the tools available to the agent:
 
 ```python
 from trl import GRPOTrainer
@@ -744,20 +752,14 @@ trainer = GRPOTrainer(
 )
 ```
 
-You can also provide tools through `environment_factory`. In this mode, [`GRPOTrainer`] creates one environment instance per rollout and exposes the environment's public methods as tools. See the [OpenEnv guide](openenv) for the `environment_factory` contract.
+### Environments
 
-All environments plug into the same `environment_factory` slot, so they are interchangeable at the TRL level — pick the one whose ecosystem fits your task:
-
-| Integration | What it is | Use it when |
-|---|---|---|
-| [OpenEnv](openenv) | The open environment standard (Gymnasium-style API, served over WebSocket or containerised execution), backed by Hugging Face and the community. | You're using a ready-made OpenEnv environment from the Hub, or defining your own against the open standard (e.g. Wordle, Sudoku, Catch). |
-| [OpenReward](openreward) | An integration with ORS-speaking environments (the [openreward.ai](https://openreward.ai) catalog or your own ORS server); tasks **and** rewards are served over HTTP. | You want to train against an ORS environment: the catalog (e.g. `Eigent/SETA`), one you self-host on your own infra, or a local server you're developing. |
-| [Harbor](harbor) | An integration with Harbor task suites: each task is an instruction, a real sandbox image (`docker`, `e2b`, ...), and an in-sandbox verifier. | You want to train against a Harbor task suite: a tree of tasks, each a self-contained sandbox plus verifier (e.g. a data-analysis agent that explores files in a sandbox and writes an answer a grader checks). |
+You can also provide tools through `environment_factory`. In this mode, [`GRPOTrainer`] creates one environment instance per rollout and exposes the environment's public methods as tools.
 
 > [!IMPORTANT]
 > `environment_factory` requires `transformers>=5.2.0`.
 
-The following is a minimal example of using `environment_factory` to define a simple environment with an `increment` method, which is exposed as a tool to the agent:
+The following is a minimal example of using `environment_factory` to define a simple environment with an `increment` method (exposed as a tool).
 
 ```python
 from datasets import Dataset
@@ -766,15 +768,17 @@ from trl import GRPOConfig, GRPOTrainer
 instructions = [f"Increment the counter by {i}." for i in range(1, 7)]
 dataset = Dataset.from_dict({"prompt": [[{"role": "user", "content": instruction}] for instruction in instructions]})
 
-def reward_func(environments, **kwargs):  # dummy reward: the reward is the current value of the counter
-    return [environment.counter for environment in environments]
-
 class IncrementEnv:
+    # Reserved methods
     def reset(self, **kwargs) -> str | None:  # required; receives sampled row fields as kwargs (e.g., `prompt`)
         self.counter = 0
         return "Counter reset to 0.\n"
 
-    def increment(self, step: int) -> int:  # the other public methods of the environment are exposed as tools
+    def get_reward(self) -> float:  # optional: the environment scores itself from its own state
+        return float(self.counter)
+
+    # Public methods (exposed as tools)
+    def increment(self, step: int) -> int:
         """
         Increment the internal counter.
 
@@ -791,13 +795,35 @@ trainer = GRPOTrainer(
     model="Qwen/Qwen3-0.6B",
     args=GRPOConfig(chat_template_kwargs={"enable_thinking": False}),
     train_dataset=dataset,
-    reward_funcs=reward_func,
     environment_factory=IncrementEnv,
 )
 trainer.train()
 ```
 
-`reset` can return either `None` or a string. In GRPO, when it returns a string, that string is appended to the last user message before generation.
+An environment class has two reserved methods: `reset` and `get_reward`. Unlike any other public methods, these are not exposed to the model as tools.
+
+- `reset` (required) is called when the rollout starts. It can return either `None` or a string. In GRPO, when it returns a string, that string is appended to the last user message.
+- `get_reward` (optional, sync or async) takes no argument and returns a `float`: the environment scores the episode it just ran from its own internal state (did the game end in a win? was the word guessed?). It is called once per completed rollout and acts as a reward source.
+
+### Rewards
+
+Environment-owned and trainer-owned rewards are not exclusive. Pass `reward_funcs` for rewards that are natural to compute from the completion (e.g. a format check on the text) _and_ let the environment return its state-dependent reward through `get_reward`. All sources are summed; `reward_weights` applies to the `reward_funcs` only (the environment owns its own scale).
+
+```python
+def format_reward(completions, **kwargs):  # trainer-owned: scores the completion text
+    ...
+
+trainer = GRPOTrainer(
+    model="Qwen/Qwen3-0.6B",
+    reward_funcs=format_reward,          # trainer-owned: scores the completion
+    train_dataset=dataset,
+    environment_factory=IncrementEnv,    # env-owned: scores its internal state via `get_reward`
+)
+```
+
+A `reward_func` can also read environment state directly: when `environment_factory` is set, the trainer passes an `environments` kwarg (one instance per completion). This is occasionally useful, but for state-dependent rewards prefer `get_reward`.
+
+This works identically for [`AsyncGRPOTrainer`](async_grpo_trainer).
 
 ### Multiple environments
 
@@ -897,17 +923,15 @@ Tested with:
 > [!TIP]
 > Compatibility with all LLMs is not guaranteed. If you believe a model should be supported, feel free to open an issue on GitHub — or better yet, submit a pull request with the required changes.
 
-### Quick Start
+### Environment Integrations
 
-Use [grpo\_agent.py](https://github.com/huggingface/trl/blob/main/examples/scripts/grpo_agent.py) to fine-tune a LLM for agentic workflows.
+All environments plug into the same `environment_factory` slot, so they are interchangeable at the TRL level — pick the one whose ecosystem fits your task:
 
-```bash
-accelerate launch \
-  --config_file=examples/accelerate_configs/deepspeed_zero3.yaml \
-  examples/scripts/grpo_agent.py \
-  --model_name_or_path Qwen/Qwen3-0.6B
-  ...
-```
+| Integration | What it is | Use it when |
+|---|---|---|
+| [OpenEnv](openenv) | The open environment standard (Gymnasium-style API, served over WebSocket or containerised execution), backed by Hugging Face and the community. | You're using a ready-made OpenEnv environment from the Hub, or defining your own against the open standard (e.g. Wordle, Sudoku, Catch). |
+| [OpenReward](openreward) | An integration with ORS-speaking environments (the [openreward.ai](https://openreward.ai) catalog or your own ORS server); tasks **and** rewards are served over HTTP. | You want to train against an ORS environment: the catalog (e.g. `Eigent/SETA`), one you self-host on your own infra, or a local server you're developing. |
+| [Harbor](harbor) | An integration with Harbor task suites: each task is an instruction, a real sandbox image (`docker`, `e2b`, ...), and an in-sandbox verifier. | You want to train against a Harbor task suite: a tree of tasks, each a self-contained sandbox plus verifier (e.g. a data-analysis agent that explores files in a sandbox and writes an answer a grader checks). |
 
 ## Vision-Language Model (VLM) Training
 
