@@ -399,7 +399,6 @@ def build_vlm_dataset(domains, max_conversations=None):
                     "completion": completion,
                     "images": [PILImage.open(p).convert("RGB") for p in image_paths],
                     "tools": json.dumps(tools),
-                    "chat_template_kwargs": {"enable_thinking": False},
                 }
             )
             kept += 1
@@ -504,11 +503,13 @@ def main():
         tools=tools,
         environment_factory=environment_factory,
     )
-    # Qwen3 reasons by default; `enable_thinking=False` makes its template emit an empty `<think></think>` block so
-    # the model goes straight to the tool call. On-policy generation renders with `self.chat_template_kwargs`
+    # Text Qwen3 reasons by default; `enable_thinking=False` makes its template emit an empty `<think></think>` block
+    # so the model goes straight to the tool call. On-policy generation renders with `self.chat_template_kwargs`
     # (teacher and student share the tokenized prompt, so this covers both). For off-policy slices the collator reads
-    # a per-example `chat_template_kwargs` column instead, set in the dataset builders.
-    trainer.chat_template_kwargs = {"enable_thinking": False}
+    # a per-example `chat_template_kwargs` column instead, set in `build_browser_dataset`. Qwen3-VL-Instruct is a
+    # non-reasoning model — its template has no `enable_thinking` switch — so we pass nothing in VLM mode.
+    if cli_args.mode == "text":
+        trainer.chat_template_kwargs = {"enable_thinking": False}
     trainer.train()
     trainer.save_model(args.output_dir)
 
