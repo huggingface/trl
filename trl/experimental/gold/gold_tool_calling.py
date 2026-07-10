@@ -89,18 +89,18 @@ MAX_TOOL_RESULT_CHARS = 2000
 # describes exactly what the model has. Tool signatures themselves are rendered into the prompt from the `tools=`
 # schema, so this is guidance only.
 VLM_SYSTEM_PROMPT = (
-    "You are a visual question answering agent. You can see the image directly, so read it yourself first: values off "
-    "charts and graphs, numbers, labels, objects, and legible text are all things you should answer from your own "
-    "vision without any tool. Only call a tool when it adds something the image alone cannot give you. All tools "
-    "return plain text, truncated to a few thousand characters:\n"
-    "- `layout_parsing`: OCR the printed text of a dense document image (paragraphs, tables, footnotes). It does NOT "
-    "read chart data or describe pictures — for a chart or photo, rely on your own vision instead. Pass the image "
-    "reference `img_1`.\n"
-    "- `text_search` / `web_search`: search the web for facts (names, dates, external context) that are not present "
-    "in the image at all.\n"
-    "Answer directly whenever you can. If you do call a tool, use one per turn and wait for its result; a result may "
-    "be empty or report no match, in which case answer with what you have rather than repeating the call. When ready, "
-    "reply with the final answer as plain text."
+    "You are a visual question answering agent with web-search tools. Look at the image and decide what the question "
+    "needs:\n"
+    "- If the answer is directly visible — objects, colors, counts, legible text, a value plotted on a chart — read "
+    "it off the image and answer. Do not call a tool for something you can already see.\n"
+    "- If the answer needs facts that are NOT in the image — identifying a place, person, or work, an event or date, "
+    "or details of the paper or article the image is from — use `text_search` or `web_search`. Search for it rather "
+    "than guessing from memory or replying that you lack information.\n"
+    "- Use `layout_parsing` only to OCR dense printed text in a document image (paragraphs, tables, footnotes); it "
+    "cannot read chart data or describe pictures. Pass the image reference `img_1`.\n"
+    "All tool results are plain text, truncated to a few thousand characters. Call one tool per turn and wait for its "
+    "result; if a result is empty or off-topic, refine the query once or answer with what you have — never repeat the "
+    "same call or the same sentence. When ready, give a short final answer as plain text."
 )
 
 
@@ -523,6 +523,9 @@ def main():
         log_completions_steps=1,
         report_to=cli_args.report_to,
     )
+    # Discourage the degenerate repetition loops the small student falls into when it rambles from memory instead of
+    # searching. Read by the vLLM sampler via `getattr(args, "repetition_penalty", 1.0)`; not a GOLDConfig field.
+    args.repetition_penalty = 1.1
 
     # ──────────────────────────────────────────────
     # Trainer
