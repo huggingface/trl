@@ -1707,9 +1707,9 @@ class GOLDTrainer(SFTTrainer):
         use_cross_tok = self.use_uld_loss and self.teacher_tokenizer is not None
 
         if use_cross_tok:
-            plain_prompts_text = self.processing_class.batch_decode(prompt_ids_list, skip_special_tokens=True)
+            # Keep the student chat markers so the teacher generates from the same prompt text it is scored on in compute_loss.
             teacher_inputs = self.teacher_tokenizer(
-                plain_prompts_text,
+                prompts_text,
                 return_tensors="pt",
                 padding=True,
                 padding_side="left",
