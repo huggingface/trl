@@ -3782,3 +3782,99 @@ class TestGRPOTrainerSlow(TrlTestCase):
                 raise
 
         release_memory(trainer.model, trainer)
+
+    @require_vllm
+    def test_train_vllm_colocate_sleep_mode_weight_sync(self):
+        """
+        Regression test for https://github.com/huggingface/trl/issues/5312 (fixed by
+        https://github.com/huggingface/trl/pull/5313).
+
+        In colocate mode with `vllm_enable_sleep_mode=True`, vLLM sleeps at level 2 between generations, which discards
+        its weights. Before the fix, `generate()` woke the engine and reloaded the *original* checkpoint, silently
+        reverting the weights just synced from the training model. Every rollout was then sampled from the step-0
+        policy: the sampling/training log-prob gap grows without bound and the vLLM importance sampling ratio collapses
+        toward 0 across steps, silently breaking training.
+
+        This test asserts the sampling policy stays aligned with the training policy across steps: the importance
+        sampling ratio must stay close to 1 (it dropped to ~1e-2 and below with the bug) and the raw sampling log-prob
+        difference must stay bounded (it exploded to >8 with the bug).
+        """
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # high lr so the policy moves enough to expose stale-weight divergence
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            max_steps=5,  # a few steps are enough: the ratio collapses by step 2 when broken
+            logging_steps=1,  # log every step so we can inspect the ratio per step
+            report_to="none",
+            use_vllm=True,
+            vllm_mode="colocate",
+            vllm_enable_sleep_mode=True,
+            vllm_importance_sampling_correction=True,  # required for the sampling/* metrics to be logged
+        )
+
+        try:
+            trainer = GRPOTrainer(
+                model="Qwen/Qwen2.5-0.5B-Instruct",  # tiny models are too small for vLLM
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
+            )
+
+            trainer.train()
+
+            # Collect the per-step sampling metrics from the training logs.
+            is_ratio_means = [
+                log["sampling/importance_sampling_ratio/mean"]
+                for log in trainer.state.log_history
+                if "sampling/importance_sampling_ratio/mean" in log
+            ]
+            logp_diff_maxes = [
+                log["sampling/sampling_logp_difference/max"]
+                for log in trainer.state.log_history
+                if "sampling/sampling_logp_difference/max" in log
+            ]
+
+            assert len(is_ratio_means) >= 2, "Expected per-step sampling metrics to be logged."
+
+            # With correctly synced weights, vLLM samples from the current policy, so the importance sampling ratio
+            # stays ~1 and the log-prob difference stays small. With the bug, the ratio collapses toward 0 and the
+            # log-prob difference explodes across steps.
+            for step, ratio_mean in enumerate(is_ratio_means):
+                assert ratio_mean > 0.5, (
+                    f"importance_sampling_ratio/mean collapsed to {ratio_mean} at step {step}; vLLM weights are "
+                    f"likely not synced (see issue #5312). Full sequence: {is_ratio_means}"
+                )
+            for step, logp_diff_max in enumerate(logp_diff_maxes):
+                assert logp_diff_max < 3.0, (
+                    f"sampling_logp_difference/max diverged to {logp_diff_max} at step {step}; vLLM weights are "
+                    f"likely not synced (see issue #5312). Full sequence: {logp_diff_maxes}"
+                )
+
+        except Exception as e:
+            # If vLLM fails to initialize due to hardware constraints or other issues, that's expected
+            if any(
+                keyword in str(e).lower()
+                for keyword in [
+                    "outofmemoryerror",
+                    "cuda",
+                    "memory",
+                    "insufficient",
+                    "no such device",
+                    "free memory",
+                    "gpu memory utilization",
+                    "decrease gpu memory",
+                ]
+            ):
+                pytest.skip(f"Skipping vLLM sleep-mode test due to hardware constraints: {e}")
+            elif "KeyError" in str(e) and "RANK" in str(e):
+                pytest.skip(f"Skipping vLLM sleep-mode test due to environment setup issues: {e}")
+            elif "ValueError" in str(e) and "memory" in str(e).lower():
+                pytest.skip(f"Skipping vLLM sleep-mode test due to memory constraints: {e}")
+            else:
+                raise
+
+        release_memory(trainer.model, trainer)
