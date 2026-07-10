@@ -3049,17 +3049,20 @@ class TestGRPOTrainer(TrlTestCase):
         def format_reward(completions, **kwargs):
             return [0.0 for _ in completions]
 
+        # A dict `environment_factory` routes each example via its `environment` column, so a dataset is required.
+        dataset = Dataset.from_dict({"environment": ["scored", "scored2", "plain"]})
+
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
-            max_steps=5,  # required with environment_factory
             report_to="none",
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             reward_funcs=format_reward,
             args=training_args,
+            train_dataset=dataset,
             # `scored` and `scored2` both build `ScoredEnvironment`, so they must collapse to a single reward column.
             environment_factory={"scored": ScoredEnvironment, "scored2": ScoredEnvironment, "plain": PlainEnvironment},
         )
