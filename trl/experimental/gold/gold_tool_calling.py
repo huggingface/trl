@@ -150,7 +150,14 @@ def build_browser_tools():
         """
         return "Form is valid."
 
-    return [browser_open, form_fill, form_select, form_upload, form_submit, form_validate]
+    return [
+        browser_open,
+        form_fill,
+        form_select,
+        form_upload,
+        form_submit,
+        form_validate,
+    ]
 
 
 # VLM tools: real, key-free web/wikipedia search (smolagents), wrapped as type-hinted callables for schema
@@ -194,9 +201,9 @@ def build_search_tools():
 class LayoutParsingEnv:
     """Environment exposing docling-based `layout_parsing` as a tool.
 
-    Registered via `environment_factory`, so GOLD calls `reset(**example)` per rollout with the raw example dict
-    (which carries the prompt images). `layout_parsing` resolves the model's symbolic `"img_1"` reference to the
-    actual PIL image and runs docling's smallest document pipeline on it.
+    Registered via `environment_factory`, so GOLD calls `reset(**example)` per rollout with the raw example dict (which
+    carries the prompt images). `layout_parsing` resolves the model's symbolic `"img_1"` reference to the actual PIL
+    image and runs docling's smallest document pipeline on it.
     """
 
     def reset(self, **example):
@@ -260,18 +267,26 @@ def inline_tool_calls(messages):
                 function = tool_call["function"]
                 call = {"name": function["name"], "arguments": function["arguments"]}
                 parts.append("<tool_call>\n" + json.dumps(call) + "\n</tool_call>")
-            inlined.append({"role": "assistant", "content": "\n".join(part for part in parts if part)})
+            inlined.append(
+                {
+                    "role": "assistant",
+                    "content": "\n".join(part for part in parts if part),
+                }
+            )
         else:
             inlined.append({"role": message["role"], "content": message.get("content") or ""})
     return inlined
 
 
 def build_browser_dataset(max_conversations=None):
-    """DataCreatorAI/tool-calling-browser-agent-tasks (browser-form subset) -> GOLD `messages` + tools.
+    """DataCreatorAI/tool-calling-browser-agent-tasks (browser-form subset) -> GOLD prompt/completion + tools.
 
-    Kept to conversations whose tool calls are all `build_browser_tools`, then segmented at each user turn into
-    single-user-turn `[user, assistant, tool, ...]` records (the shape GOLD supports; a later segment drops the earlier
-    context). Tool schemas are stored as a JSON string to avoid Arrow null-padding.
+    Kept to conversations whose tool calls are all `build_browser_tools`, then split at each tool-bearing user turn:
+    the prompt is the *full* conversation history up to and including that user turn, and the completion is the
+    assistant tool-call turn (plus its tool result and follow-up) up to the next user turn. Carrying the whole prefix
+    (rather than slicing at the user turn) keeps the context a mid-conversation turn like "I'd give it a 4" refers to;
+    these conversations are short (<1.3k tokens), so length is not a concern. Tool schemas are stored as a JSON string
+    to avoid Arrow null-padding.
     """
     from huggingface_hub import hf_hub_download
 
@@ -293,13 +308,21 @@ def build_browser_dataset(max_conversations=None):
             if messages is None:
                 continue
             messages = inline_tool_calls(messages)
-            # Segment at user turns: each [user, assistant, tool, ...] slice up to the next user turn is one record.
+            # Split at each user turn: prompt = full history up to and including this user turn, completion = the
+            # assistant response (tool call + result + follow-up) up to the next user turn.
             user_indices = [i for i, m in enumerate(messages) if m["role"] == "user"]
-            for start, end in zip(user_indices, user_indices[1:] + [len(messages)], strict=True):
-                segment = messages[start:end]
-                if not any(m["role"] == "tool" for m in segment):
+            for ui, next_ui in zip(user_indices, user_indices[1:] + [len(messages)], strict=True):
+                completion = messages[ui + 1 : next_ui]
+                if not any(m["role"] == "tool" for m in completion):
                     continue  # no tool result in this turn -> nothing tool-related to distil
-                rows.append({"messages": segment, "tools": tools_schema})
+                rows.append(
+                    {
+                        "prompt": messages[: ui + 1],
+                        "completion": completion,
+                        "tools": tools_schema,
+                        "chat_template_kwargs": {"enable_thinking": False},
+                    }
+                )
             kept += 1
     return Dataset.from_list(rows)
 
@@ -338,7 +361,12 @@ def build_vlm_dataset(domains, max_conversations=None):
             tools = json.loads(tools) if isinstance(tools, str) else tools
             tools = [t for t in tools if t.get("function", t)["name"] in VLM_ALLOWED_TOOLS]
 
-            prompt = [{"role": "system", "content": [{"type": "text", "text": rec["system"].strip()}]}]
+            prompt = [
+                {
+                    "role": "system",
+                    "content": [{"type": "text", "text": rec["system"].strip()}],
+                }
+            ]
             completion, n_images = [], 0
             for m in conv:
                 if m["from"] == "human":
@@ -350,7 +378,12 @@ def build_vlm_dataset(domains, max_conversations=None):
                         blocks.append({"type": "text", "text": text})
                     prompt.append({"role": "user", "content": blocks})
                 elif m["from"] == "gpt":
-                    completion.append({"role": "assistant", "content": [{"type": "text", "text": m["value"].strip()}]})
+                    completion.append(
+                        {
+                            "role": "assistant",
+                            "content": [{"type": "text", "text": m["value"].strip()}],
+                        }
+                    )
                 elif m["from"] == "observation":
                     obs = re.sub(r"</?observation>", "", m["value"]).strip()
                     completion.append({"role": "tool", "content": [{"type": "text", "text": obs}]})
@@ -365,6 +398,7 @@ def build_vlm_dataset(domains, max_conversations=None):
                     "completion": completion,
                     "images": [PILImage.open(p).convert("RGB") for p in image_paths],
                     "tools": json.dumps(tools),
+                    "chat_template_kwargs": {"enable_thinking": False},
                 }
             )
             kept += 1
@@ -407,7 +441,10 @@ def main():
         train_dataset = build_vlm_dataset(list(SEARCH_VL_DOMAINS), cli_args.max_conversations)
         tools, environment_factory = build_search_tools(), LayoutParsingEnv
         peft_config = LoraConfig(
-            r=16, lora_alpha=32, lora_dropout=0.05, target_modules=r"^.*language_model.*\.(q_proj|k_proj)$"
+            r=16,
+            lora_alpha=32,
+            lora_dropout=0.05,
+            target_modules=r"^.*language_model.*\.(q_proj|k_proj)$",
         )
 
     dataset = train_dataset.train_test_split(test_size=0.05, seed=42)
@@ -427,11 +464,12 @@ def main():
         lmbda=cli_args.lmbda,
         beta=0.5,
         temperature=0.6,
-        max_completion_length=2048,
+        max_completion_length=2048 * 2,
         max_grad_norm=1.0,
         teacher_model_name_or_path=teacher_id,
         num_generations=1,
         use_vllm=True,
+        use_liger_kernel=True,
         vllm_mode="colocate",
         vllm_gpu_memory_utilization=0.5,
         vllm_max_model_length=8192,
@@ -447,6 +485,7 @@ def main():
         bf16=True,
         logging_steps=10,
         log_completions=True,
+        log_completions_steps=1,
         report_to=cli_args.report_to,
     )
 
@@ -464,6 +503,11 @@ def main():
         tools=tools,
         environment_factory=environment_factory,
     )
+    # Qwen3 reasons by default; `enable_thinking=False` makes its template emit an empty `<think></think>` block so
+    # the model goes straight to the tool call. On-policy generation renders with `self.chat_template_kwargs`
+    # (teacher and student share the tokenized prompt, so this covers both). For off-policy slices the collator reads
+    # a per-example `chat_template_kwargs` column instead, set in the dataset builders.
+    trainer.chat_template_kwargs = {"enable_thinking": False}
     trainer.train()
     trainer.save_model(args.output_dir)
 
