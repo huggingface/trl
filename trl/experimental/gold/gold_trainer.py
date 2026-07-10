@@ -1103,7 +1103,8 @@ class GOLDTrainer(SFTTrainer):
             for member_name, member in inspect.getmembers(instance, predicate=inspect.ismethod):
                 if member_name == "reset":
                     has_reset = True
-                elif not member_name.startswith("_"):
+                # `get_reward` is reserved by the environment protocol (GRPO's env-owned reward), never a tool
+                elif member_name != "get_reward" and not member_name.startswith("_"):
                     methods.append(member)
             if not has_reset:
                 raise ValueError(
@@ -1860,7 +1861,7 @@ class GOLDTrainer(SFTTrainer):
                 methods = [
                     member
                     for member_name, member in inspect.getmembers(self.environments[i], predicate=inspect.ismethod)
-                    if member_name != "reset" and not member_name.startswith("_")
+                    if member_name not in ("reset", "get_reward") and not member_name.startswith("_")
                 ]
             sync_tool_dict, async_tool_dict = {}, {}
             for tool in self._standalone_tools + methods:
@@ -2426,7 +2427,7 @@ class GOLDTrainer(SFTTrainer):
                     methods = [
                         member
                         for member_name, member in inspect.getmembers(self.environments[i], predicate=inspect.ismethod)
-                        if member_name != "reset" and not member_name.startswith("_")
+                        if member_name not in ("reset", "get_reward") and not member_name.startswith("_")
                     ]
                 sync_tool_dict, async_tool_dict = {}, {}
                 for tool in self._standalone_tools + methods:
