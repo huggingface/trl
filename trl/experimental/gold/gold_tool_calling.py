@@ -48,6 +48,7 @@ aligned; nothing extra is needed here.
 
 import argparse
 import json
+import logging
 import re
 import tempfile
 import zipfile
@@ -228,9 +229,13 @@ class LayoutParsingEnv:
     image and runs docling's smallest document pipeline on it.
     """
 
+    def __init__(self):
+        # Built lazily on first use and kept for the life of this (pooled, reused) instance. Rebuilding it per reset
+        # would reload docling's OCR models on every rollout — the source of constant weight-loading log spam.
+        self._converter = None
+
     def reset(self, **example):
         self._images = example.get("images") or []
-        self._converter = None
         # Per-instance scratch dir: environment instances are pooled and run concurrently within a batch, so a shared
         # fixed path (e.g. /tmp/layout_0.png) would race between rollouts resolving the same image index.
         self._tmp_dir = Path(tempfile.mkdtemp(prefix="gold_layout_"))
@@ -437,6 +442,11 @@ def main():
     parser.add_argument("--run_name", type=str, default=None)
     parser.add_argument("--report_to", type=str, default="trackio")
     cli_args = parser.parse_args()
+
+    # docling's OCR backend (RapidOCR) logs an INFO line per model on every call; quiet it to keep the training log
+    # (and the completion tables) readable.
+    for noisy in ("RapidOCR", "docling"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
 
     # ──────────────────────────────────────────────
     # Models, tools and dataset
