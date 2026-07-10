@@ -1596,13 +1596,21 @@ class GOLDTrainer(SFTTrainer):
     ):
         prompt_ids_list = []
         local_slice_indices = []
+        # Budget the prompt to max_length - max_new_tokens before generation, keeping the END of the
+        # prompt (the generation marker), so the student generates from and trains on the same context
+        # and prompt + completion fit in max_length.
+        max_completion_length = self.generation_config.max_new_tokens
+        prompt_max_length = max(1, self.args.max_length - max_completion_length) if self.args.max_length else None
         for slice_idx in on_policy_indices:
             slice_inputs = slices[slice_idx]
             prompt_attention_mask = slice_inputs.get("prompt_attention_mask")
             for prompt_idx, prompt in enumerate(slice_inputs["prompts"]):
                 if prompt_attention_mask is not None:
                     prompt = prompt[prompt_attention_mask[prompt_idx].bool()]
-                prompt_ids_list.append(prompt.tolist())
+                prompt_ids = prompt.tolist()
+                if prompt_max_length is not None and len(prompt_ids) > prompt_max_length:
+                    prompt_ids = prompt_ids[-prompt_max_length:]
+                prompt_ids_list.append(prompt_ids)
                 local_slice_indices.append(slice_idx)
 
         prompts_text = self.processing_class.batch_decode(
@@ -1644,8 +1652,21 @@ class GOLDTrainer(SFTTrainer):
             self.accelerator,
             generation_kwargs=self.generation_kwargs,
         ) as unwrapped_model:
+            max_completion_length = self.generation_config.max_new_tokens
+            prompt_max_length = (
+                max(1, self.args.max_length - max_completion_length) if self.args.max_length else None
+            )
             for slice_idx in on_policy_indices:
                 slice_inputs = slices[slice_idx]
+                if prompt_max_length is not None and slice_inputs["prompts"].shape[1] > prompt_max_length:
+                    # Prompts are left-padded, so the last columns hold the prompt end (generation marker);
+                    # keep them so prompt + completion fit in max_length, matching the vLLM path.
+                    slice_inputs = dict(slice_inputs)
+                    slice_inputs["prompts"] = slice_inputs["prompts"][:, -prompt_max_length:]
+                    if slice_inputs.get("prompt_attention_mask") is not None:
+                        slice_inputs["prompt_attention_mask"] = slice_inputs["prompt_attention_mask"][
+                            :, -prompt_max_length:
+                        ]
                 result = self.generate_on_policy_outputs(
                     unwrapped_model,
                     slice_inputs,
@@ -1865,27 +1886,23 @@ class GOLDTrainer(SFTTrainer):
             prompt_ids_for_slice = slice_prompt_ids[slice_idx]
             prompt_txts = slice_prompts[slice_idx]
 
-            prompt_max_length = max(1, self.args.max_length - max_completion_length) if self.args.max_length else None
-            truncated_prompt_ids = []
+            # Prompts are already budgeted to max_length - max_new_tokens before generation by the
+            # callers, so no truncation happens here; just build tensors and left-pad.
+            prompt_tensors = []
             prompt_attention_masks = []
-            truncation_side = getattr(self.processing_class, "truncation_side", "right")
             for prompt_ids in prompt_ids_for_slice:
-                if prompt_max_length and len(prompt_ids) > prompt_max_length:
-                    if truncation_side == "left":
-                        prompt_ids = prompt_ids[-prompt_max_length:]
-                    else:
-                        prompt_ids = prompt_ids[:prompt_max_length]
                 prompt_tensor = torch.tensor(prompt_ids, device=device, dtype=torch.long)
-                truncated_prompt_ids.append(prompt_tensor)
+                prompt_tensors.append(prompt_tensor)
                 prompt_attention_masks.append(torch.ones(len(prompt_ids), device=device, dtype=torch.long))
 
-            prompt_ids = pad(truncated_prompt_ids, padding_side="left", padding_value=pad_token_id)
+            prompt_ids = pad(prompt_tensors, padding_side="left", padding_value=pad_token_id)
             prompt_attention_mask = pad(prompt_attention_masks, padding_side="left", padding_value=0)
 
-            # Decode the truncated prompt so the teacher conditions on the same context the student saw.
-            # `clean_up_tokenization_spaces=False` matches the completion decode below so byte counts stay aligned.
+            # Decode the prompt (already budgeted by the callers) so the teacher conditions on the same
+            # context the student saw. `clean_up_tokenization_spaces=False` matches the completion decode
+            # below so byte counts stay aligned.
             prompt_txts_with_special = self.processing_class.batch_decode(
-                [ids.tolist() for ids in truncated_prompt_ids],
+                [ids.tolist() for ids in prompt_tensors],
                 skip_special_tokens=False,
                 clean_up_tokenization_spaces=False,
             )
@@ -1963,6 +1980,9 @@ class GOLDTrainer(SFTTrainer):
             updated_slice["input_ids"] = new_input_ids
             updated_slice["attention_mask"] = new_attention_mask
             updated_slice["labels"] = new_labels
+            # Update prompts to match the new padding width so prompt_length stays consistent
+            updated_slice["prompts"] = prompt_ids
+            updated_slice["prompt_attention_mask"] = prompt_attention_mask
             updated_slice["original_prompt_text"] = prompt_txts_with_special
             updated_slice["original_completion_text"] = completion_texts
             self._maybe_add_completion_byte_offsets(updated_slice)
