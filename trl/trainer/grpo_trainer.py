@@ -817,6 +817,12 @@ class GRPOTrainer(_BaseTrainer):
             # generation round's worth of rows, cycled across steps.
             if self.environment_factories is None:
                 raise ValueError("`train_dataset` is required unless an `environment_factory` is provided.")
+            if self._multi_environment:
+                raise ValueError(
+                    "A `dict` `environment_factory` (multiple environments) requires a `train_dataset` with an "
+                    "`environment` column to route each example to its environment. Provide a dataset, or pass a "
+                    "single environment factory."
+                )
             if args.max_steps <= 0:
                 raise ValueError(
                     "When training without a `train_dataset` (the environment owns the data and returns the prompt "
@@ -2147,12 +2153,13 @@ class GRPOTrainer(_BaseTrainer):
         device = self.accelerator.device
         mode = "train" if self.model.training else "eval"
 
-        # `prompt` is optional when the environment owns the data (e.g. a multi-environment routing dataset that carries
-        # only an `environment` column, or no dataset at all); each rollout's `reset()` then supplies it. Default it on
-        # the rows so every prompt-derived check downstream (conversational detection, multimodal handling) stays
-        # consistent.
-        for x in inputs:
-            x.setdefault("prompt", [{"role": "user", "content": ""}])
+        # `prompt` is optional only when an environment owns the data (e.g. a multi-environment routing dataset that
+        # carries only an `environment` column); each rollout's `reset()` then supplies it. Default it on the rows so
+        # every prompt-derived check downstream (conversational detection, multimodal handling) stays consistent.
+        # Without an environment, a missing `prompt` is a malformed dataset and must still fail fast below.
+        if self.environment_factories is not None:
+            for x in inputs:
+                x.setdefault("prompt", [{"role": "user", "content": ""}])
         prompts = [x["prompt"] for x in inputs]
 
         # Resolve each example's environment and draw one reusable instance per rollout from the pool, creating more

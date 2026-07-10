@@ -578,6 +578,12 @@ class AsyncGRPOTrainer(_BaseTrainer):
             # which cycles it indefinitely (so its length only needs to be non-degenerate).
             if environment_factory is None:
                 raise ValueError("`train_dataset` is required unless an `environment_factory` is provided.")
+            if isinstance(environment_factory, dict):
+                raise ValueError(
+                    "A `dict` `environment_factory` (multiple environments) requires a `train_dataset` with an "
+                    "`environment` column to route each example to its environment. Provide a dataset, or pass a "
+                    "single environment factory."
+                )
             if self.args.max_steps <= 0:
                 raise ValueError(
                     "When training without a `train_dataset` (the environment owns the data and returns the prompt "

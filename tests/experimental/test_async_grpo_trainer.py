@@ -171,6 +171,24 @@ class TestAsyncGRPOTrainer(TrlTestCase):
                 environment_factory=DummyEnvironment,
             )
 
+    def test_multiple_environments_without_dataset_raises(self):
+        # Multiple environments (a `dict` factory) need a `train_dataset` with an `environment` column to route each
+        # example. Without one, there is no per-rollout selector, so construction fails fast with a clear message.
+        class EnvA:
+            def reset(self, **kwargs): ...
+
+        class EnvB:
+            def reset(self, **kwargs): ...
+
+        args = AsyncGRPOConfig(output_dir=self.tmp_dir, max_steps=1, report_to="none")
+        with pytest.raises(ValueError, match="requires a `train_dataset`"):
+            AsyncGRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs=dummy_reward_func,
+                args=args,
+                environment_factory={"a": EnvA, "b": EnvB},
+            )
+
 
 class TestAsyncRolloutWorkerEnvironments(TrlTestCase):
     """Unit tests for the rollout worker's environment/tool wiring (no vLLM required)."""
