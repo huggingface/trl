@@ -1764,11 +1764,17 @@ class GOLDTrainer(SFTTrainer):
             teacher_pad_id = teacher_gen_config.pad_token_id
             if teacher_pad_id is None:
                 teacher_pad_id = self.processing_class.eos_token_id
+            eos_token_id = self.processing_class.eos_token_id
             student_completion_ids: list[list[int]] = []
             for row in teacher_completion_ids:
                 ids = row.tolist()
+                num_stripped = 0
                 while ids and ids[-1] == teacher_pad_id:
                     ids.pop()
+                    num_stripped += 1
+                # pad == eos here, so the strip above also drops the trailing EOS; add it back.
+                if num_stripped and teacher_pad_id == eos_token_id:
+                    ids.append(eos_token_id)
                 student_completion_ids.append(ids)
 
         self._process_completions_to_buffer(
