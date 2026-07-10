@@ -79,6 +79,26 @@ SEARCH_VL_DOMAINS = {
 # (`crop`, `super_resolution`, reverse-image `image_search`) are dropped.
 VLM_ALLOWED_TOOLS = {"text_search", "web_search", "layout_parsing"}
 
+# Cap each tool result so a single search/parse can't flood the context (and blow the completion budget).
+MAX_TOOL_RESULT_CHARS = 2000
+
+# Search-VL ships an elaborate system prompt advertising tools we don't provide (crop, sharpen, image_search, ...), a
+# web+LLM `text_search`, and a mandatory `<think>` protocol. None of that matches our three text-only tools or the
+# non-reasoning Qwen3-VL-Instruct, and the mismatch sends the model into retry loops. Replace it with a prompt that
+# describes exactly what the model has. Tool signatures themselves are rendered into the prompt from the `tools=`
+# schema, so this is guidance only.
+VLM_SYSTEM_PROMPT = (
+    "You are a visual investigation agent. Answer the user's question about the image, using the provided tools when "
+    "they help. All tools return plain text, truncated to a few thousand characters:\n"
+    "- `layout_parsing`: extract the structured text from a document image. Pass the image reference `img_1`.\n"
+    "- `text_search`: look up encyclopedic facts on Wikipedia and get a text summary. Use it to verify names or facts "
+    "you cannot read directly from the image.\n"
+    "- `web_search`: a general web search returning the top results as text.\n"
+    "Call one tool per turn and wait for its result before the next. A tool result may be empty or report no match — "
+    "if so, reformulate once or proceed with what you have; do not repeat near-identical queries. When you have "
+    "enough information, reply with the final answer as plain text."
+)
+
 
 # Text tools: a coherent, well-typed subset of the browser dataset's 46 tools that the on-policy student can call.
 # GOLD introspects each callable's signature + docstring to render the schema; results are masked out of the loss.
@@ -180,7 +200,7 @@ def build_search_tools():
         Returns:
             The top web results, concatenated as text.
         """
-        return str(_web(q))
+        return str(_web(q))[:MAX_TOOL_RESULT_CHARS]
 
     def text_search(q: str, hl: str = "en", top_k: int = 5) -> str:
         """
@@ -194,7 +214,7 @@ def build_search_tools():
         Returns:
             A text summary of the most relevant article(s).
         """
-        return str(_wiki(q))
+        return str(_wiki(q))[:MAX_TOOL_RESULT_CHARS]
 
     return [web_search, text_search]
 
@@ -232,7 +252,7 @@ class LayoutParsingEnv:
         self._images[idx].save(tmp)
         if self._converter is None:
             self._converter = DocumentConverter()  # TODO: configure the smallest docling pipeline for speed
-        return self._converter.convert(str(tmp)).document.export_to_markdown()
+        return self._converter.convert(str(tmp)).document.export_to_markdown()[:MAX_TOOL_RESULT_CHARS]
 
 
 def normalize_messages(messages):
@@ -365,7 +385,7 @@ def build_vlm_dataset(domains, max_conversations=None):
             prompt = [
                 {
                     "role": "system",
-                    "content": [{"type": "text", "text": rec["system"].strip()}],
+                    "content": [{"type": "text", "text": VLM_SYSTEM_PROMPT}],
                 }
             ]
             completion, n_images = [], 0
@@ -468,6 +488,7 @@ def main():
         max_grad_norm=1.0,
         teacher_model_name_or_path=teacher_id,
         num_generations=1,
+        max_tool_calling_iterations=10,
         use_vllm=True,
         use_liger_kernel=True,
         vllm_mode="colocate",
