@@ -1635,6 +1635,63 @@ def test_generate_seq_kd_for_slices_writes_canned_completion_to_buffer(monkeypat
     assert completion_labels == canned
 
 
+def test_generate_seq_kd_for_slices_budgets_prompt_before_generation(monkeypatch):
+    """The prompt is truncated to max_length - max_new_tokens (keep-end) before the teacher generates, so the teacher
+    generates from and trains on the same context and prompt + completion fit in max_length."""
+
+    class RecordingTokenizer:
+        pad_token_id = 0
+        pad_token = "<pad>"
+        eos_token_id = 1
+
+        def batch_decode(self, sequences, skip_special_tokens=False, clean_up_tokenization_spaces=False):
+            del skip_special_tokens, clean_up_tokenization_spaces
+            return [" ".join(str(int(token)) for token in sequence) for sequence in sequences]
+
+    canned = [7]
+    recorded = {}
+
+    class CannedTeacher:
+        def generate(self, input_ids, attention_mask, generation_config, return_dict_in_generate):
+            recorded["prompt_width"] = input_ids.shape[1]
+            bs = input_ids.shape[0]
+            completions = torch.tensor([canned] * bs, dtype=torch.long, device=input_ids.device)
+            return SimpleNamespace(sequences=torch.cat([input_ids, completions], dim=1))
+
+    tokenizer = RecordingTokenizer()
+    trainer = GOLDTrainer.__new__(GOLDTrainer)
+    trainer.accelerator = SimpleNamespace(device=torch.device("cpu"), is_main_process=True)
+    trainer.processing_class = tokenizer
+    trainer._tokenizer = tokenizer
+    trainer.teacher_tokenizer = None
+    trainer.teacher_model = CannedTeacher()
+    trainer.use_uld_loss = False
+    trainer.generation_config = SimpleNamespace(
+        max_new_tokens=1, eos_token_id=tokenizer.eos_token_id, pad_token_id=tokenizer.pad_token_id
+    )
+    trainer.generation_kwargs = {}
+    trainer.args = SimpleNamespace(max_length=3)
+    trainer._buffered_inputs = [None]
+    trainer._buffered_text_logs = [None]
+
+    monkeypatch.setattr(
+        gold_trainer_module,
+        "unwrap_model_for_generation",
+        lambda model, accelerator, generation_kwargs=None: contextlib.nullcontext(model),
+    )
+
+    prompts = torch.tensor([[0, 0, 5, 11, 12, 13]], dtype=torch.long)
+    prompt_attention_mask = torch.tensor([[0, 0, 1, 1, 1, 1]], dtype=torch.long)
+    slices = [{"prompts": prompts, "prompt_attention_mask": prompt_attention_mask}]
+
+    GOLDTrainer._generate_seq_kd_for_slices(trainer, slices, [0])
+
+    # prompt_max_length = max_length - max_new_tokens = 3 - 1 = 2; keep-end of [5, 11, 12, 13] keeps [12, 13].
+    assert recorded["prompt_width"] == 2
+    buffered = trainer._buffered_inputs[0]
+    assert buffered["input_ids"][0].tolist() == [12, 13, 7]
+
+
 def test_generate_seq_kd_for_slices_keeps_eos_when_pad_equals_eos(monkeypatch):
     class RecordingTokenizer:
         pad_token_id = 2

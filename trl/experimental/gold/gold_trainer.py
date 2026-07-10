@@ -1693,13 +1693,21 @@ class GOLDTrainer(SFTTrainer):
 
         prompt_ids_list: list[list[int]] = []
         local_slice_indices: list[int] = []
+        # Budget the prompt to max_length - max_new_tokens before generation, keeping the END of the
+        # prompt (the generation marker), so the teacher generates from and trains on the same context
+        # and prompt + completion fit in max_length.
+        max_completion_length = self.generation_config.max_new_tokens
+        prompt_max_length = max(1, self.args.max_length - max_completion_length) if self.args.max_length else None
         for slice_idx in seq_kd_indices:
             slice_inputs = slices[slice_idx]
             prompt_attention_mask = slice_inputs.get("prompt_attention_mask")
             for prompt_idx, prompt in enumerate(slice_inputs["prompts"]):
                 if prompt_attention_mask is not None:
                     prompt = prompt[prompt_attention_mask[prompt_idx].bool()]
-                prompt_ids_list.append(prompt.tolist())
+                prompt_ids = prompt.tolist()
+                if prompt_max_length is not None and len(prompt_ids) > prompt_max_length:
+                    prompt_ids = prompt_ids[-prompt_max_length:]
+                prompt_ids_list.append(prompt_ids)
                 local_slice_indices.append(slice_idx)
 
         prompts_text = self.processing_class.batch_decode(prompt_ids_list, skip_special_tokens=False)
