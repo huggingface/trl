@@ -1068,9 +1068,11 @@ def prepare_peft_model(
         else:
             model = get_peft_model(model, peft_config)
 
-    # Handle bf16 casting for 4-bit models
+    # Cast remaining fp32 params (LoRA adapters, norms) to bf16 for a uniform dtype, as FSDP requires.
     if args.bf16 and getattr(model, "is_loaded_in_4bit", False) and not is_sharded_qlora:
-        peft_module_casting_to_bf16(model)
+        for param in model.parameters():
+            if param.dtype == torch.float32:
+                param.data = param.data.to(torch.bfloat16)
 
     return model
 

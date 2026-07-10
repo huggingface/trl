@@ -24,7 +24,7 @@ import pytest
 import torch
 import transformers
 from accelerate.utils.memory import release_memory
-from datasets import Dataset, Image, load_dataset
+from datasets import Dataset, DatasetDict, Image, IterableDatasetDict, load_dataset
 from packaging.version import Version
 from transformers import (
     AutoModelForCausalLM,
@@ -474,6 +474,41 @@ class TestGRPOTrainer(TrlTestCase):
         )
 
         trainer.train()
+
+    def test_init_with_eval_dataset_dict(self):
+        # `eval_dataset` may be a `DatasetDict` (e.g. the raw output of `load_dataset` without a `split`), not only a
+        # plain `dict`.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
+        eval_dataset = DatasetDict({"data1": dataset["test"], "data2": dataset["test"]})
+
+        training_args = GRPOConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset["train"],
+            eval_dataset=eval_dataset,
+        )
+
+        assert set(trainer.eval_dataset.keys()) == {"data1", "data2"}
+
+    def test_init_with_iterable_dataset_dict_raises(self):
+        # Streaming datasets are not yet supported in GRPO, including when nested in an `IterableDatasetDict` eval set.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
+        iterable_dataset = load_dataset(
+            "trl-internal-testing/zen", "standard_prompt_only", split="train", streaming=True
+        )
+        eval_dataset = IterableDatasetDict({"data1": iterable_dataset, "data2": iterable_dataset})
+
+        training_args = GRPOConfig(output_dir=self.tmp_dir, report_to="none")
+        with pytest.raises(NotImplementedError, match="Iterable datasets are not yet supported"):
+            GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset["train"],
+                eval_dataset=eval_dataset,
+            )
 
     # Regression test for eval_on_start with loss_type="grpo" (one of the loss types that depends on
     # current_gradient_accumulation_steps): evaluation runs before the first training step, when that value is still
@@ -3578,6 +3613,31 @@ class TestGRPOTrainerVLM(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    def test_train_vlm_log_multimodal_false(self):
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
+
+        def reward_func(completions, **kwargs):
+            """Reward function that rewards longer completions."""
+            return [float(len(completion[0]["content"])) for completion in completions]
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,  # VLM training is memory intensive, reduce batch size to avoid OOM
+            num_generations=2,  # VLM training is memory intensive, reduce num_generations to avoid OOM
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            report_to="none",
+            log_completions=True,
+            log_multimodal=False,
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
+            reward_funcs=reward_func,
+            args=training_args,
+            train_dataset=dataset,
+        )
+        trainer.train()
+        assert len(trainer._logs["images"]) == 0
 
     @pytest.mark.xfail(
         condition=Version(transformers.__version__) < Version("5.2.0"),
