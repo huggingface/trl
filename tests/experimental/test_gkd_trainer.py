@@ -322,6 +322,7 @@ class TestGKDTrainer(TrlTestCase):
         assert trainer.generation_config.max_new_tokens == training_args.max_new_tokens
         assert trainer.generation_config.temperature == training_args.temperature
         assert trainer.generation_config.top_k == 0
+        assert trainer.generation_config.top_p == 1.0
 
     @require_liger_kernel
     def test_compute_loss_return_outputs_with_liger(self):

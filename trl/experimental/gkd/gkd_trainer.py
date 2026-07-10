@@ -216,6 +216,7 @@ class GKDTrainer(SFTTrainer):
             "temperature": args.temperature,
             "do_sample": True,
             "top_k": 0,
+            "top_p": 1.0,
             "use_cache": False if args.gradient_checkpointing else True,
             "pad_token_id": self.processing_class.pad_token_id,
         }
