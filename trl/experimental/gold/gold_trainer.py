@@ -1720,8 +1720,6 @@ class GOLDTrainer(SFTTrainer):
 
             teacher_gen_config = copy.deepcopy(self.generation_config)
             teacher_eos = self.teacher_tokenizer.eos_token_id
-            if teacher_eos is None:
-                teacher_eos = self.processing_class.eos_token_id
             teacher_gen_config.eos_token_id = teacher_eos
             teacher_gen_config.pad_token_id = (
                 self.teacher_tokenizer.pad_token_id if self.teacher_tokenizer.pad_token_id is not None else teacher_eos
@@ -1760,7 +1758,7 @@ class GOLDTrainer(SFTTrainer):
                 ids = self.processing_class.encode(text, add_special_tokens=False)
                 # The decode above drops the teacher EOS (skip_special_tokens=True), so completions that
                 # terminated would lose their stop signal; restore it as the student EOS.
-                if student_eos_id is not None and (row == teacher_eos).any():
+                if student_eos_id is not None and teacher_eos is not None and (row == teacher_eos).any():
                     ids.append(student_eos_id)
                 student_completion_ids.append(ids)
         else:
