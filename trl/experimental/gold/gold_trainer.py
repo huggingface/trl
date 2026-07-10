@@ -1294,11 +1294,9 @@ class GOLDTrainer(SFTTrainer):
                 enable_sleep_mode=args.vllm_enable_sleep_mode,
                 model_impl=args.vllm_model_impl,
                 trust_remote_code=args.trust_remote_code,
-                repetition_penalty=getattr(args, "repetition_penalty", 1.0),
                 temperature=args.temperature,
                 top_p=args.top_p,
                 top_k=args.top_k,
-                min_p=getattr(args, "min_p", 0.0),
                 max_completion_length=args.max_completion_length,
                 logprobs=None,
             )
