@@ -19,6 +19,7 @@
 #     "docling",
 #     "trackio",
 #     "vllm",
+#     "liger-kernel",
 # ]
 # ///
 
