@@ -461,6 +461,10 @@ class DPOTrainer(_BaseTrainer):
             - [Standard](dataset_formats#standard): Each sample contains plain text.
             - [Conversational](dataset_formats#conversational): Each sample contains structured messages (e.g., role
               and content).
+
+            When `train_dataset` is an [`~datasets.IterableDataset`] (e.g. a streaming dataset), `max_steps` must be
+            set in the training arguments, since its length cannot be inferred and the total number of training steps
+            is required to bound the training loop and configure the learning rate scheduler.
         eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`], [`~datasets.DatasetDict`], [`~datasets.IterableDatasetDict`] or `dict[str, Dataset | IterableDataset]`):
             Dataset to use for evaluation. It must meet the same requirements as `train_dataset`.
         processing_class ([`~transformers.PreTrainedTokenizerBase`] or [`~transformers.ProcessorMixin`], *optional*):
@@ -569,9 +573,10 @@ class DPOTrainer(_BaseTrainer):
                     "The `model_init_kwargs` will be ignored."
                 )
             if quantization_config is not None:
-                logger.warning(
-                    "You passed `quantization_config` to the trainer, but your model is already instantiated. The "
-                    "`quantization_config` will be ignored."
+                raise ValueError(
+                    "You passed `quantization_config` to the trainer, but your model is already instantiated. "
+                    "Quantization can only be applied when the model is loaded from a model identifier (`str`). "
+                    "Either pass the model as a model identifier, or omit `quantization_config`."
                 )
         # Non-quantized models do not have the `is_loaded_in_{8,4}bit` attributes, whereas quantized models do
         _is_quantized_model = getattr(model, "is_loaded_in_4bit", False) or getattr(model, "is_loaded_in_8bit", False)
@@ -1115,6 +1120,7 @@ class DPOTrainer(_BaseTrainer):
                 batched=True,
                 remove_columns=dataset.column_names,
                 new_fingerprint=fingerprint,
+                cache_file_name=cache_file,
                 desc=f"Caching reference log probs for {name} dataset",
             )
         self.accelerator.wait_for_everyone()
