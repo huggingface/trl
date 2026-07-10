@@ -2155,13 +2155,14 @@ class GRPOTrainer(_BaseTrainer):
         mode = "train" if self.model.training else "eval"
 
         # `prompt` is optional only when an environment owns the data (e.g. a multi-environment routing dataset that
-        # carries only an `environment` column); each rollout's `reset()` then supplies it. Default it on the rows so
-        # every prompt-derived check downstream (conversational detection, multimodal handling) stays consistent.
-        # Without an environment, a missing `prompt` is a malformed dataset and must still fail fast below.
+        # carries only an `environment` column); each rollout's `reset()` then supplies it. Default it here rather than
+        # writing it back onto the row, so the placeholder stays out of the `reset()` kwargs built below, while every
+        # prompt-derived check downstream (conversational detection, multimodal handling) stays consistent. Without an
+        # environment, a missing `prompt` is a malformed dataset and must still fail fast.
         if self.environment_factories is not None:
-            for x in inputs:
-                x.setdefault("prompt", [{"role": "user", "content": ""}])
-        prompts = [x["prompt"] for x in inputs]
+            prompts = [x.get("prompt", [{"role": "user", "content": ""}]) for x in inputs]
+        else:
+            prompts = [x["prompt"] for x in inputs]
 
         # Resolve each example's environment and draw one reusable instance per rollout from the pool, creating more
         # only when this batch needs more concurrent instances of an environment than exist. `_batch_environments`
