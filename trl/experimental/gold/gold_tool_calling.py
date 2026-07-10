@@ -15,8 +15,6 @@
 # /// script
 # dependencies = [
 #     "trl[peft] @ git+https://github.com/huggingface/trl.git",
-#     "smolagents[toolkit]",
-#     "docling",
 #     "trackio",
 #     "vllm",
 #     "liger-kernel",
@@ -25,44 +23,23 @@
 
 # docstyle-ignore
 """
-Direct tool-calling distillation with GOLD (no separate SFT-teacher stage): distil a small student from an
-off-the-shelf instruct teacher of the same family. Student and teacher share a tokenizer and the model's native
-tool-calling chat template, so same-family tool distillation works out of the box — no custom template and no step-1
-SFT are needed. Combined on/off-policy training (`lmbda=0.5`): off-policy slices consume the dataset's recorded tool
-trajectories, on-policy slices let the student generate and *actually execute* the tools. Requires transformers >=
-5.2.0.
-
-Both modes generate through vLLM in colocate mode, so both need a GPU + vLLM. Two modes, selected with `--mode`:
-
-  # Text (Qwen3): student Qwen/Qwen3-1.7B, teacher Qwen/Qwen3-8B, browser-agent tool dataset.
-  accelerate launch trl/experimental/gold/gold_tool_calling.py --mode text
-
-  # VLM (Qwen3-VL): student Qwen/Qwen3-VL-2B-Instruct, teacher Qwen/Qwen3-VL-8B-Instruct, Search-VL dataset. Tools
-  # are genuine web/wiki search plus docling `layout_parsing` (an environment method, so it can resolve image refs).
-  accelerate launch trl/experimental/gold/gold_tool_calling.py --mode vlm
-
-NOTE: Qwen3's chat template is not prefix-preserving (it drops historical `<think>` blocks). `GOLDTrainer` detects
-this and renders all tool-flow spans with a training-safe prefix-preserving template, so the tool-result masking stays
-aligned; nothing extra is needed here.
+# Tool-calling distillation on a browser-agent dataset (Qwen3-8B -> Qwen3-1.7B).
+# Same family: student and teacher share the tokenizer and Qwen3's native tool-calling template, so distillation
+# works directly with no custom template and no stage-1 SFT. Pure on-policy (lmbda=1.0): the student generates and
+# *actually executes* the browser tools, and the teacher scores the student's own rollouts. Runs generation through
+# vLLM (colocate), so a GPU + vLLM is required.
+accelerate launch trl/experimental/gold/gold_tool_calling.py \
+    --student_model_name Qwen/Qwen3-1.7B \
+    --teacher_model_name Qwen/Qwen3-8B
 """
 
 import argparse
 import json
-import logging
-import re
-import tempfile
-import zipfile
-from pathlib import Path
 
 import torch
 from datasets import Dataset
 from peft import LoraConfig
-from transformers import (
-    AutoModelForCausalLM,
-    AutoModelForImageTextToText,
-    AutoProcessor,
-    AutoTokenizer,
-)
+from transformers import AutoModelForCausalLM, AutoTokenizer
 from transformers.utils import get_json_schema
 
 from trl.experimental.gold import GOLDConfig, GOLDTrainer
@@ -70,42 +47,9 @@ from trl.experimental.gold import GOLDConfig, GOLDTrainer
 
 BROWSER_DATASET = "DataCreatorAI/tool-calling-browser-agent-tasks"
 
-SEARCH_VL_DATASET = "OpenSearch-VL/Search-VL-SFT-36K"
-SEARCH_VL_DOMAINS = {
-    "fvqa": "fvqa/fvqa_llama_factory_clean.json",
-    "livevqa": "livevqa/livevqa_llama_factory_filtered.json",
-    "webqa": "webqa/webqa_llama_factory_filtered.json",
-}
-# Search-VL tools whose results are text (GOLD-compatible). Conversations using image-returning tools
-# (`crop`, `super_resolution`, reverse-image `image_search`) are dropped.
-VLM_ALLOWED_TOOLS = {"text_search", "web_search", "layout_parsing"}
 
-# Cap each tool result so a single search/parse can't flood the context (and blow the completion budget).
-MAX_TOOL_RESULT_CHARS = 2000
-
-# Search-VL ships an elaborate system prompt advertising tools we don't provide (crop, sharpen, image_search, ...), a
-# web+LLM `text_search`, and a mandatory `<think>` protocol. None of that matches our three text-only tools or the
-# non-reasoning Qwen3-VL-Instruct, and the mismatch sends the model into retry loops. Replace it with a prompt that
-# describes exactly what the model has. Tool signatures themselves are rendered into the prompt from the `tools=`
-# schema, so this is guidance only.
-VLM_SYSTEM_PROMPT = (
-    "You are a visual question answering agent with web-search tools. Look at the image and decide what the question "
-    "needs:\n"
-    "- If the answer is directly visible — objects, colors, counts, legible text, a value plotted on a chart — read "
-    "it off the image and answer. Do not call a tool for something you can already see.\n"
-    "- If the answer needs facts that are NOT in the image — identifying a place, person, or work, an event or date, "
-    "or details of the paper or article the image is from — use `text_search` or `web_search`. Search for it rather "
-    "than guessing from memory or replying that you lack information.\n"
-    "- Use `layout_parsing` only to OCR dense printed text in a document image (paragraphs, tables, footnotes); it "
-    "cannot read chart data or describe pictures. Pass the image reference `img_1`.\n"
-    "All tool results are plain text, truncated to a few thousand characters. Call one tool per turn and wait for its "
-    "result; if a result is empty or off-topic, refine the query once or answer with what you have — never repeat the "
-    "same call or the same sentence. When ready, give a short final answer as plain text."
-)
-
-
-# Text tools: a coherent, well-typed subset of the browser dataset's 46 tools that the on-policy student can call.
-# GOLD introspects each callable's signature + docstring to render the schema; results are masked out of the loss.
+# The six browser-form tools the student may call. GOLD introspects each callable's type hints + docstring to build
+# the tool schema, so both are required; the tool *results* are masked out of the loss (only tool calls are trained).
 def build_browser_tools():
     def browser_open(url: str) -> str:
         """
@@ -175,98 +119,11 @@ def build_browser_tools():
         """
         return "Form is valid."
 
-    return [
-        browser_open,
-        form_fill,
-        form_select,
-        form_upload,
-        form_submit,
-        form_validate,
-    ]
-
-
-# VLM tools: real, key-free web search (smolagents DuckDuckGo), wrapped as type-hinted callables for schema
-# introspection. Both `web_search` and `text_search` (the two names the Search-VL dataset uses) route to DuckDuckGo;
-# Wikipedia-only lookup dead-ended on the dataset's descriptive queries. `layout_parsing` is an environment method
-# (see LayoutParsingEnv) so it can resolve image references.
-def build_search_tools():
-    from smolagents import DuckDuckGoSearchTool
-
-    _web = DuckDuckGoSearchTool()
-
-    def web_search(q: str, hl: str = "en") -> str:
-        """
-        Perform a web search and return the top results as text.
-
-        Args:
-            q: The search query keywords.
-            hl: Language code for the results (e.g. 'en').
-
-        Returns:
-            The top web results, concatenated as text.
-        """
-        return str(_web(q))[:MAX_TOOL_RESULT_CHARS]
-
-    def text_search(q: str, hl: str = "en", top_k: int = 5) -> str:
-        """
-        Search the web for a query and return a text summary of the top results.
-
-        Args:
-            q: The search query keywords.
-            hl: Language code for the results (e.g. 'en').
-            top_k: Number of passages to retrieve.
-
-        Returns:
-            A text summary of the most relevant results.
-        """
-        return str(_web(q))[:MAX_TOOL_RESULT_CHARS]
-
-    return [web_search, text_search]
-
-
-class LayoutParsingEnv:
-    """Environment exposing docling-based `layout_parsing` as a tool.
-
-    Registered via `environment_factory`, so GOLD calls `reset(**example)` per rollout with the raw example dict (which
-    carries the prompt images). `layout_parsing` resolves the model's symbolic `"img_1"` reference to the actual PIL
-    image and runs docling's smallest document pipeline on it.
-    """
-
-    def __init__(self):
-        # Built lazily on first use and kept for the life of this (pooled, reused) instance. Rebuilding it per reset
-        # would reload docling's OCR models on every rollout — the source of constant weight-loading log spam.
-        self._converter = None
-
-    def reset(self, **example):
-        self._images = example.get("images") or []
-        # Per-instance scratch dir: environment instances are pooled and run concurrently within a batch, so a shared
-        # fixed path (e.g. /tmp/layout_0.png) would race between rollouts resolving the same image index.
-        self._tmp_dir = Path(tempfile.mkdtemp(prefix="gold_layout_"))
-
-    def layout_parsing(self, image: str) -> str:
-        """
-        Parse document layout from an image reference and return the extracted structured text.
-
-        Args:
-            image: Image reference such as 'img_1' or 'img_2'.
-
-        Returns:
-            The extracted text (titles, paragraphs, footnotes).
-        """
-        from docling.document_converter import DocumentConverter
-
-        idx = int(re.search(r"\d+", image).group()) - 1 if re.search(r"\d+", image) else 0
-        idx = max(0, min(idx, len(self._images) - 1))
-        tmp = self._tmp_dir / f"layout_{idx}.png"
-        self._images[idx].save(tmp)
-        if self._converter is None:
-            self._converter = DocumentConverter()  # TODO: configure the smallest docling pipeline for speed
-        return self._converter.convert(str(tmp)).document.export_to_markdown()[:MAX_TOOL_RESULT_CHARS]
+    return [browser_open, form_fill, form_select, form_upload, form_submit, form_validate]
 
 
 def normalize_messages(messages):
-    """Merge consecutive assistant turns into one (contents joined, `tool_calls` concatenated); return `None` for the
-    rare `tool -> user` conversation so the caller can skip it."""
+    """Merge consecutive assistant turns into one; return `None` for the rare `tool -> user` conversation to skip it."""
     merged = []
     for message in messages:
         if message["role"] == "assistant" and merged and merged[-1]["role"] == "assistant":
@@ -286,9 +143,9 @@ def normalize_messages(messages):
 
 
 def inline_tool_calls(messages):
-    """Fold each assistant turn's structured `tool_calls` into its `content` as Qwen3's native `<tool_call>` text. The
-    all-string-`content` result renders byte-identically under Qwen3's template but avoids the Arrow null-padding a
-    heterogeneous `arguments` struct would incur in a `Dataset`."""
+    """Fold each assistant turn's structured `tool_calls` into its `content` as Qwen3's native `<tool_call>` text.
+    This renders byte-identically but keeps `content` a plain string, avoiding the Arrow null-padding a heterogeneous
+    `arguments` struct would otherwise incur when stored in a `Dataset`."""
     inlined = []
     for message in messages:
         if message["role"] == "assistant" and message.get("tool_calls"):
@@ -297,26 +154,19 @@ def inline_tool_calls(messages):
                 function = tool_call["function"]
                 call = {"name": function["name"], "arguments": function["arguments"]}
                 parts.append("<tool_call>\n" + json.dumps(call) + "\n</tool_call>")
-            inlined.append(
-                {
-                    "role": "assistant",
-                    "content": "\n".join(part for part in parts if part),
-                }
-            )
+            inlined.append({"role": "assistant", "content": "\n".join(part for part in parts if part)})
         else:
             inlined.append({"role": message["role"], "content": message.get("content") or ""})
     return inlined
 
 
 def build_browser_dataset(max_conversations=None):
-    """DataCreatorAI/tool-calling-browser-agent-tasks (browser-form subset) -> GOLD prompt/completion + tools.
+    """Browser-agent tasks -> GOLD prompt/completion + tools, kept to conversations that only use our six tools.
 
-    Kept to conversations whose tool calls are all `build_browser_tools`, then split at each tool-bearing user turn:
-    the prompt is the *full* conversation history up to and including that user turn, and the completion is the
-    assistant tool-call turn (plus its tool result and follow-up) up to the next user turn. Carrying the whole prefix
-    (rather than slicing at the user turn) keeps the context a mid-conversation turn like "I'd give it a 4" refers to;
-    these conversations are short (<1.3k tokens), so length is not a concern. Tool schemas are stored as a JSON string
-    to avoid Arrow null-padding.
+    Split at each tool-bearing user turn: the prompt is the *full* conversation history up to and including that user
+    turn (so a mid-conversation reference like "I'd give it a 4" stays resolvable), and the completion is the assistant
+    tool call plus its result and follow-up up to the next user turn. `tools` is stored as a JSON string (again to
+    avoid Arrow null-padding), and `enable_thinking=False` is stored per row for the off-policy rendering path.
     """
     from huggingface_hub import hf_hub_download
 
@@ -338,8 +188,6 @@ def build_browser_dataset(max_conversations=None):
             if messages is None:
                 continue
             messages = inline_tool_calls(messages)
-            # Split at each user turn: prompt = full history up to and including this user turn, completion = the
-            # assistant response (tool call + result + follow-up) up to the next user turn.
             user_indices = [i for i, m in enumerate(messages) if m["role"] == "user"]
             for ui, next_ui in zip(user_indices, user_indices[1:] + [len(messages)], strict=True):
                 completion = messages[ui + 1 : next_ui]
@@ -357,175 +205,74 @@ def build_browser_dataset(max_conversations=None):
     return Dataset.from_list(rows)
 
 
-def build_vlm_dataset(domains, max_conversations=None):
-    """OpenSearch-VL/Search-VL-SFT-36K (text-returning-tool subset) -> GOLD prompt/completion with images + tools.
-
-    Kept to conversations whose tools all return text (`text_search`, `web_search`, `layout_parsing`) and whose images
-    live only in the prompt. Search-VL already records its tool calls in Qwen3's native `<tool_call>` format, so no
-    reformatting is needed. Tool schemas are stored as a JSON string to avoid Arrow null-padding.
-    """
-    from huggingface_hub import hf_hub_download
-    from PIL import Image as PILImage
-
-    rows = []
-    for domain in domains:
-        json_path = hf_hub_download(SEARCH_VL_DATASET, SEARCH_VL_DOMAINS[domain], repo_type="dataset")
-        zip_path = hf_hub_download(SEARCH_VL_DATASET, f"{domain}/images.zip", repo_type="dataset")
-        extract_dir = Path(zip_path).parent / f"{domain}_images"
-        if not extract_dir.exists():
-            with zipfile.ZipFile(zip_path) as zf:
-                zf.extractall(extract_dir)
-
-        kept = 0
-        for rec in json.load(open(json_path)):
-            if max_conversations is not None and kept >= max_conversations:
-                break
-            conv = rec["conversations"]
-            names = [n for m in conv if m["from"] == "gpt" for n in re.findall(r'"name":\s*"([^"]+)"', m["value"])]
-            if not names or not set(names) <= VLM_ALLOWED_TOOLS:
-                continue
-            if any(m["from"] == "observation" and "<image>" in m["value"] for m in conv):
-                continue
-
-            tools = rec["tools"]
-            tools = json.loads(tools) if isinstance(tools, str) else tools
-            tools = [t for t in tools if t.get("function", t)["name"] in VLM_ALLOWED_TOOLS]
-
-            prompt = [
-                {
-                    "role": "system",
-                    "content": [{"type": "text", "text": VLM_SYSTEM_PROMPT}],
-                }
-            ]
-            completion, n_images = [], 0
-            for m in conv:
-                if m["from"] == "human":
-                    n = m["value"].count("<image>")
-                    n_images += n
-                    blocks = [{"type": "image"}] * n
-                    text = m["value"].replace("<image>", "").strip()
-                    if text:
-                        blocks.append({"type": "text", "text": text})
-                    prompt.append({"role": "user", "content": blocks})
-                elif m["from"] == "gpt":
-                    completion.append(
-                        {
-                            "role": "assistant",
-                            "content": [{"type": "text", "text": m["value"].strip()}],
-                        }
-                    )
-                elif m["from"] == "observation":
-                    obs = re.sub(r"</?observation>", "", m["value"]).strip()
-                    completion.append({"role": "tool", "content": [{"type": "text", "text": obs}]})
-
-            image_paths = [extract_dir / p for p in rec["images"]]
-            if len(image_paths) != n_images or not all(p.exists() for p in image_paths):
-                continue
-
-            rows.append(
-                {
-                    "prompt": prompt,
-                    "completion": completion,
-                    "images": [PILImage.open(p).convert("RGB") for p in image_paths],
-                    "tools": json.dumps(tools),
-                }
-            )
-            kept += 1
-    return Dataset.from_list(rows)
-
-
-def main():
+if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", choices=["text", "vlm"], default="text")
-    parser.add_argument("--student_model_name", type=str, default=None)
-    parser.add_argument("--teacher_model_name", type=str, default=None)
-    parser.add_argument("--lmbda", type=float, default=0.5)
+    parser.add_argument("--student_model_name", type=str, default="Qwen/Qwen3-1.7B")
+    parser.add_argument("--teacher_model_name", type=str, default="Qwen/Qwen3-8B")
+    parser.add_argument("--lmbda", type=float, default=1.0)
     parser.add_argument("--max_conversations", type=int, default=None)
-    parser.add_argument("--output_dir", type=str, default=None)
     parser.add_argument("--run_name", type=str, default=None)
     parser.add_argument("--report_to", type=str, default="trackio")
     cli_args = parser.parse_args()
 
-    # docling's OCR backend (RapidOCR) logs an INFO line per model on every call; quiet it to keep the training log
-    # (and the completion tables) readable.
-    for noisy in ("RapidOCR", "docling"):
-        logging.getLogger(noisy).setLevel(logging.WARNING)
+    # ──────────────────────────────────────────────
+    # Models
+    # ──────────────────────────────────────────────
+    tokenizer = AutoTokenizer.from_pretrained(cli_args.student_model_name, padding_side="left")
+    student_model = AutoModelForCausalLM.from_pretrained(cli_args.student_model_name, dtype=torch.bfloat16)
+    teacher_model = AutoModelForCausalLM.from_pretrained(cli_args.teacher_model_name, dtype=torch.bfloat16)
+
+    peft_config = LoraConfig(r=16, lora_alpha=32, lora_dropout=0.05, target_modules=["q_proj", "k_proj"])
 
     # ──────────────────────────────────────────────
-    # Models, tools and dataset
+    # Dataset
     # ──────────────────────────────────────────────
-    if cli_args.mode == "text":
-        student_id = cli_args.student_model_name or "Qwen/Qwen3-1.7B"
-        teacher_id = cli_args.teacher_model_name or "Qwen/Qwen3-8B"
-        processing_class = AutoTokenizer.from_pretrained(student_id, padding_side="left")
-        student_model = AutoModelForCausalLM.from_pretrained(student_id, dtype=torch.bfloat16)
-        teacher_model = AutoModelForCausalLM.from_pretrained(teacher_id, dtype=torch.bfloat16)
-        train_dataset = build_browser_dataset(cli_args.max_conversations)
-        tools, environment_factory = build_browser_tools(), None
-        peft_config = LoraConfig(r=16, lora_alpha=32, lora_dropout=0.05, target_modules=["q_proj", "k_proj"])
-    else:
-        student_id = cli_args.student_model_name or "Qwen/Qwen3-VL-2B-Instruct"
-        teacher_id = cli_args.teacher_model_name or "Qwen/Qwen3-VL-8B-Instruct"
-        processing_class = AutoProcessor.from_pretrained(student_id, padding_side="left")
-        student_model = AutoModelForImageTextToText.from_pretrained(student_id, dtype=torch.bfloat16)
-        teacher_model = AutoModelForImageTextToText.from_pretrained(teacher_id, dtype=torch.bfloat16)
-        for name, param in student_model.named_parameters():
-            if "language_model" not in name:
-                param.requires_grad = False
-        train_dataset = build_vlm_dataset(list(SEARCH_VL_DOMAINS), cli_args.max_conversations)
-        tools, environment_factory = build_search_tools(), LayoutParsingEnv
-        peft_config = LoraConfig(
-            r=16,
-            lora_alpha=32,
-            lora_dropout=0.05,
-            target_modules=r"^.*language_model.*\.(q_proj|k_proj)$",
-        )
-
-    dataset = train_dataset.train_test_split(test_size=0.05, seed=42)
+    dataset = build_browser_dataset(cli_args.max_conversations).train_test_split(test_size=0.05, seed=42)
     train_dataset, eval_dataset = dataset["train"], dataset["test"]
 
     # ──────────────────────────────────────────────
     # Training config
     # ──────────────────────────────────────────────
-    student_short = student_id.split("/")[-1]
-    teacher_short = teacher_id.split("/")[-1]
-    run_name = cli_args.run_name or f"gold-{student_short}-from-{teacher_short}-{cli_args.mode}-tools"
-    output_dir = cli_args.output_dir or run_name
+    student_short = cli_args.student_model_name.split("/")[-1]
+    teacher_short = cli_args.teacher_model_name.split("/")[-1]
+    run_name = cli_args.run_name or f"gold-{student_short}-from-{teacher_short}-tools"
 
     args = GOLDConfig(
-        output_dir=output_dir,
+        output_dir=run_name,
         run_name=run_name,
+        # GOLD-specific
         lmbda=cli_args.lmbda,
         beta=0.5,
         temperature=0.6,
-        max_completion_length=2048 * 2,
+        max_completion_length=1024,
         max_grad_norm=1.0,
-        teacher_model_name_or_path=teacher_id,
+        teacher_model_name_or_path=cli_args.teacher_model_name,
         num_generations=1,
-        max_tool_calling_iterations=10,
+        max_tool_calling_iterations=10,  # cap the on-policy tool loop so a stuck rollout can't run to the token limit
+        # vLLM + fused loss
         use_vllm=True,
-        use_liger_kernel=True,
+        use_liger_kernel=True,  # fused JSD avoids materializing full-vocab logits (Qwen3 vocab is ~150k)
         vllm_mode="colocate",
         vllm_gpu_memory_utilization=0.5,
-        vllm_max_model_length=16384,
-        max_length=16384,
+        vllm_max_model_length=8192,
+        max_length=8192,
+        # Training schedule
         per_device_train_batch_size=2,
         gradient_accumulation_steps=4,
         max_steps=100,
         learning_rate=1e-4,
         warmup_steps=10,
+        # Evaluation
         per_device_eval_batch_size=2,
         eval_strategy="steps",
         eval_steps=25,
+        # Precision / logging
         bf16=True,
         logging_steps=10,
         log_completions=True,
         log_completions_steps=1,
         report_to=cli_args.report_to,
     )
-    # Discourage the degenerate repetition loops the small student falls into when it rambles from memory instead of
-    # searching. Read by the vLLM sampler via `getattr(args, "repetition_penalty", 1.0)`; not a GOLDConfig field.
-    args.repetition_penalty = 1.1
 
     # ──────────────────────────────────────────────
     # Trainer
@@ -536,21 +283,12 @@ def main():
         args=args,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
-        processing_class=processing_class,
+        processing_class=tokenizer,
         peft_config=peft_config,
-        tools=tools,
-        environment_factory=environment_factory,
+        tools=build_browser_tools(),
     )
-    # Text Qwen3 reasons by default; `enable_thinking=False` makes its template emit an empty `<think></think>` block
-    # so the model goes straight to the tool call. On-policy generation renders with `self.chat_template_kwargs`
-    # (teacher and student share the tokenized prompt, so this covers both). For off-policy slices the collator reads
-    # a per-example `chat_template_kwargs` column instead, set in `build_browser_dataset`. Qwen3-VL-Instruct is a
-    # non-reasoning model — its template has no `enable_thinking` switch — so we pass nothing in VLM mode.
-    if cli_args.mode == "text":
-        trainer.chat_template_kwargs = {"enable_thinking": False}
+    # Qwen3 reasons by default; disable it so the model emits the tool call directly. On-policy generation reads
+    # `chat_template_kwargs` (student and teacher share the tokenized prompt); off-policy reads the per-row column.
+    trainer.chat_template_kwargs = {"enable_thinking": False}
     trainer.train()
     trainer.save_model(args.output_dir)
-
-
-if __name__ == "__main__":
-    main()
