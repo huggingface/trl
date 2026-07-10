@@ -31,15 +31,13 @@ SFT are needed. Combined on/off-policy training (`lmbda=0.5`): off-policy slices
 trajectories, on-policy slices let the student generate and *actually execute* the tools. Requires transformers >=
 5.2.0.
 
-Two modes, selected with `--mode`:
+Both modes generate through vLLM in colocate mode, so both need a GPU + vLLM. Two modes, selected with `--mode`:
 
-  # Text (Qwen3): student Qwen/Qwen3-1.7B, teacher Qwen/Qwen3-8B, browser-agent tool dataset. Generation runs
-  # through transformers (no vLLM).
+  # Text (Qwen3): student Qwen/Qwen3-1.7B, teacher Qwen/Qwen3-8B, browser-agent tool dataset.
   accelerate launch trl/experimental/gold/gold_tool_calling.py --mode text
 
   # VLM (Qwen3-VL): student Qwen/Qwen3-VL-2B-Instruct, teacher Qwen/Qwen3-VL-8B-Instruct, Search-VL dataset. Tools
   # are genuine web/wiki search plus docling `layout_parsing` (an environment method, so it can resolve image refs).
-  # The VLM tool loop generates through vLLM, so this mode needs a GPU + vLLM.
   accelerate launch trl/experimental/gold/gold_tool_calling.py --mode vlm
 
 NOTE: Qwen3's chat template is not prefix-preserving (it drops historical `<think>` blocks). `GOLDTrainer` detects
@@ -396,10 +394,7 @@ def main():
         teacher_model = AutoModelForCausalLM.from_pretrained(teacher_id, dtype=torch.bfloat16)
         train_dataset = build_browser_dataset(cli_args.max_conversations)
         tools, environment_factory = build_browser_tools(), None
-        use_vllm = False
-        peft_config = LoraConfig(
-            r=16, lora_alpha=32, lora_dropout=0.05, target_modules=["q_proj", "k_proj"]
-        )
+        peft_config = LoraConfig(r=16, lora_alpha=32, lora_dropout=0.05, target_modules=["q_proj", "k_proj"])
     else:
         student_id = cli_args.student_model_name or "Qwen/Qwen3-VL-2B-Instruct"
         teacher_id = cli_args.teacher_model_name or "Qwen/Qwen3-VL-8B-Instruct"
@@ -411,7 +406,6 @@ def main():
                 param.requires_grad = False
         train_dataset = build_vlm_dataset(list(SEARCH_VL_DOMAINS), cli_args.max_conversations)
         tools, environment_factory = build_search_tools(), LayoutParsingEnv
-        use_vllm = True
         peft_config = LoraConfig(
             r=16, lora_alpha=32, lora_dropout=0.05, target_modules=r"^.*language_model.*\.(q_proj|k_proj)$"
         )
@@ -433,11 +427,11 @@ def main():
         lmbda=cli_args.lmbda,
         beta=0.5,
         temperature=0.6,
-        max_completion_length=1024,
+        max_completion_length=2048,
         max_grad_norm=1.0,
         teacher_model_name_or_path=teacher_id,
         num_generations=1,
-        use_vllm=use_vllm,
+        use_vllm=True,
         vllm_mode="colocate",
         vllm_gpu_memory_utilization=0.5,
         vllm_max_model_length=8192,
