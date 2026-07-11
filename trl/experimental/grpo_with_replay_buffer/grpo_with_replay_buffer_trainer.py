@@ -396,7 +396,7 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
             self._logs["rewards"][name].extend(rewards_per_func[:, i].tolist())
         self._logs["advantages"].extend(all_process_advantages.tolist())
 
-        if images is not None:
+        if images is not None and self.log_multimodal:
             self._logs["images"].extend(gather_object(images))
 
         if self.use_vllm and self.vllm_importance_sampling_correction:
