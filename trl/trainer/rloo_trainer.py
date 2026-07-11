@@ -506,7 +506,7 @@ class RLOOTrainer(_BaseTrainer):
             )
         ):
             # See https://github.com/huggingface/trl/issues/3213
-            raise NotImplementedError(
+            raise ValueError(
                 "Iterable datasets are not yet supported in RLOOTrainer. Please use a standard dataset instead."
             )
 
