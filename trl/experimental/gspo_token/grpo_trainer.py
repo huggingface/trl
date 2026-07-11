@@ -14,11 +14,26 @@
 
 import torch
 
+from ...trainer.grpo_config import GRPOConfig
 from ...trainer.grpo_trainer import GRPOTrainer as _GRPOTrainer
 from ...trainer.utils import nanmax, nanmin
 
 
 class GRPOTrainer(_GRPOTrainer):
+    def __init__(self, args: GRPOConfig | None = None, **kwargs):
+        # Checked on `args.loss_type` (not `self.loss_type`) so this fails fast, before paying for the full
+        # GRPOTrainer construction (model load, accelerator/optimizer prep) that `super().__init__` below does --
+        # and before a full (expensive) generation/reward pass, since `_generate_and_score_completions` is
+        # inherited unchanged from the base trainer and would otherwise run before this class's own
+        # `_compute_loss` override discovers it has no "dapo_zv" branch.
+        if args is not None and args.loss_type == "dapo_zv":
+            raise NotImplementedError(
+                "`loss_type='dapo_zv'` is not supported by the `gspo_token` experimental `GRPOTrainer`: "
+                "`_compute_loss` here fully overrides the base trainer's loss_type dispatch and has not been "
+                "extended for `dapo_zv`. Use a different `loss_type`."
+            )
+        super().__init__(args=args, **kwargs)
+
     def _compute_loss(self, model, inputs):
         # Compute the per-token log probabilities for the model
         prompt_ids, prompt_mask = inputs["prompt_ids"], inputs["prompt_mask"]

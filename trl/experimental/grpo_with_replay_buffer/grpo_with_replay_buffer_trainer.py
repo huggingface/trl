@@ -60,6 +60,15 @@ class ReplayBuffer:
 
 class GRPOWithReplayBufferTrainer(GRPOTrainer):
     def __init__(self, args: GRPOWithReplayBufferConfig | None = None, **kwargs):
+        # Checked on `args.loss_type` (not `self.loss_type`) so this fails fast, before paying for the full
+        # GRPOTrainer construction (model load, accelerator/optimizer prep) that `super().__init__` below does.
+        if args is not None and args.loss_type == "dapo_zv":
+            raise NotImplementedError(
+                "`loss_type='dapo_zv'` is not supported by `GRPOWithReplayBufferTrainer`: this trainer fully "
+                "reimplements `_generate_and_score_completions` (it does not call the base class's version) and "
+                "never populates `num_items_in_batch_zv`, and the replay buffer's group-composition mixing has no "
+                "defined zero-variance-group semantics yet. Use a different `loss_type`."
+            )
         super().__init__(args=args, **kwargs)
         self.replay_buffer = ReplayBuffer(args.replay_buffer_size) if args.replay_buffer_size > 0 else None
 

@@ -290,3 +290,29 @@ class TestGRPOWithReplayBufferTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+
+@pytest.mark.low_priority
+class TestGRPOWithReplayBufferTrainerDapoZv(TrlTestCase):
+    def test_dapo_zv_raises_not_implemented(self):
+        """`loss_type="dapo_zv"` has no defined semantics for this trainer's replay-buffer group mixing yet, and
+        its overridden `_generate_and_score_completions` never sets `num_items_in_batch_zv`; using it must raise a
+        clear error at trainer construction time rather than a bare `KeyError` at the first training step."""
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        training_args = GRPOWithReplayBufferConfig(
+            output_dir=self.tmp_dir,
+            loss_type="dapo_zv",
+            per_device_train_batch_size=4,
+            num_generations=4,
+            max_completion_length=8,
+            replay_buffer_size=8,
+            report_to="none",
+        )
+        with pytest.raises(NotImplementedError, match="dapo_zv"):
+            GRPOWithReplayBufferTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs=lambda completions, **kwargs: [0.0] * len(completions),
+                args=training_args,
+                train_dataset=dataset,
+            )

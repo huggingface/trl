@@ -38,6 +38,16 @@ class GMPOTrainer(GRPOTrainer):
             model_name = model if isinstance(model, str) else get_config_model_id(model.config)
             args = GMPOConfig(f"{model_name.split('/')[-1]}-GMPO")
 
+        # `_compute_loss` below never reads `self.loss_type` -- it always computes the GMPO geometric-mean loss
+        # regardless of `loss_type`, so `loss_type="dapo_zv"` would silently train with plain GMPO instead of
+        # the requested zero-variance-excluding behavior, with no error or warning. Checked before the
+        # expensive `super().__init__` below, same as the other GRPOTrainer subclasses with a comparable gap.
+        if args.loss_type == "dapo_zv":
+            raise NotImplementedError(
+                "`loss_type='dapo_zv'` is not supported by `GMPOTrainer`: `_compute_loss` here always computes "
+                "the GMPO geometric-mean loss and never reads `loss_type`. Use a different `loss_type`."
+            )
+
         super().__init__(model, reward_funcs, args=args, **kwargs)
 
     def _compute_loss(self, model, inputs):

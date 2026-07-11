@@ -394,8 +394,11 @@ class TestGRPOTrainer(TrlTestCase):
         assert type(trainer.model).__name__ == "RemoteForCausalLM"
 
     @pytest.mark.parametrize("use_liger_kernel", [False, pytest.param(True, marks=require_liger_kernel)])
-    @pytest.mark.parametrize("loss_type", ["bnpo", "dr_grpo", "dapo", "cispo", "sapo", "luspo", "vespo"])
+    @pytest.mark.parametrize("loss_type", ["bnpo", "dr_grpo", "dapo", "dapo_zv", "cispo", "sapo", "luspo", "vespo"])
     def test_train_loss_types(self, loss_type, use_liger_kernel):
+        if loss_type == "dapo_zv" and use_liger_kernel:
+            pytest.skip("loss_type='dapo_zv' is not supported together with use_liger_kernel=True")
+
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         training_args = GRPOConfig(
@@ -427,6 +430,561 @@ class TestGRPOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    def test_num_items_in_batch_zv_not_computed_for_other_loss_types(self):
+        """`num_items_in_batch_zv` is only read by `loss_type="dapo_zv"`; it must not be computed (or added to the
+        `inputs` dict passed to `_compute_loss`) for any other loss type, so the extra reward-spread pass it
+        requires isn't paid unconditionally on every step regardless of `loss_type`."""
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,
+            num_generations=3,
+            max_completion_length=8,
+            loss_type="dapo",
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs=lambda prompts, completions, **kwargs: [0.0] * len(completions),
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        captured = {}
+        original_compute_loss = trainer._compute_loss
+
+        def spy_compute_loss(model, inputs):
+            captured["has_zv_key"] = "num_items_in_batch_zv" in inputs
+            return original_compute_loss(model, inputs)
+
+        trainer._compute_loss = spy_compute_loss
+        trainer.train()
+
+        assert captured["has_zv_key"] is False
+
+    def test_dapo_zv_uses_dapo_when_no_zero_variance_groups(self):
+        """`loss_type="dapo_zv"` must be bit-identical to `"dapo"` when no group in the batch is zero-variance."""
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        num_generations = 3
+
+        def reward_func(prompts, completions, **kwargs):
+            # A distinct reward per row guarantees every group of `num_generations` rows has nonzero variance.
+            return [float(i) for i in range(len(completions))]
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=6,  # 2 groups of 3, both non-zero-variance
+            num_generations=num_generations,
+            max_completion_length=8,
+            loss_type="dapo_zv",
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs=reward_func,
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        captured = {}
+        original_compute_loss = trainer._compute_loss
+
+        def spy_compute_loss(model, inputs):
+            if "loss_dapo" not in captured:
+                with torch.no_grad():
+                    trainer.loss_type = "dapo"
+                    captured["loss_dapo"] = original_compute_loss(model, inputs).clone()
+                    trainer.loss_type = "dapo_zv"
+                    captured["loss_dapo_zv"] = original_compute_loss(model, inputs).clone()
+                captured["num_items_in_batch"] = inputs["num_items_in_batch"]
+                captured["num_items_in_batch_zv"] = inputs["num_items_in_batch_zv"]
+            return original_compute_loss(model, inputs)
+
+        trainer._compute_loss = spy_compute_loss
+        trainer.train()
+
+        assert captured["num_items_in_batch_zv"] == captured["num_items_in_batch"]
+        assert captured["loss_dapo_zv"].item() == pytest.approx(captured["loss_dapo"].item(), abs=1e-8)
+
+    def test_dapo_zv_denominator_excludes_zero_variance_groups(self):
+        """With a batch that mixes a zero-variance group and a varied group, `"dapo_zv"`'s loss must equal `"dapo"`'s
+        loss rescaled by exactly `num_items_in_batch / num_items_in_batch_zv` -- i.e. the same numerator, over a
+        denominator that excludes the zero-variance group's tokens. This checks the exact arithmetic, not just that
+        the loss value changes.
+
+        Note: this builds `inputs` by hand instead of going through real generation. Advantages are mean-centered
+        *within* a group by construction, so a complete group whose rows all have the SAME active-token count always
+        sums to exactly 0 in the loss numerator regardless of loss_type or of any bug in the denominator -- real
+        generation with this tiny, untrained model never emits an early EOS, so every row ends up at the same
+        `max_completion_length`, which would make this check vacuously "0 == 0" no matter what `dapo_zv` computes.
+        Constructing the varied group's completion_mask with UNEQUAL row lengths breaks that cancellation and makes
+        the check load-bearing.
+        """
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs=lambda prompts, completions, **kwargs: [0.0] * len(completions),
+            args=GRPOConfig(
+                output_dir=self.tmp_dir,
+                loss_type="dapo_zv",
+                beta=0.0,
+                num_generations=3,
+                per_device_train_batch_size=3,
+                report_to="none",
+            ),
+            train_dataset=dataset,
+        )
+        model = trainer.model
+        device = model.device
+        torch.manual_seed(0)
+
+        # 2 groups of 3 rows: group 0 is zero-variance (advantage 0 for every row); group 1 is varied, with
+        # DELIBERATELY unequal completion lengths (6, 3, 8) so its advantage-weighted token sum doesn't cancel.
+        prompt_ids = torch.randint(0, 8, (6, 4), device=device)
+        prompt_mask = torch.ones_like(prompt_ids)
+        completion_lens = [5, 5, 5, 6, 3, 8]
+        completion_ids = torch.randint(0, 8, (6, max(completion_lens)), device=device)
+        completion_mask = torch.zeros((6, max(completion_lens)), dtype=torch.long, device=device)
+        for i, length in enumerate(completion_lens):
+            completion_mask[i, :length] = 1
+        advantages = torch.tensor([0.0, 0.0, 0.0, -1.0, 0.0, 1.0], device=device)
+
+        num_items_in_batch = torch.tensor(float(sum(completion_lens)), device=device)
+        num_items_in_batch_zv = torch.tensor(float(sum(completion_lens[3:])), device=device)  # group 1 tokens only
+        inputs = {
+            "prompt_ids": prompt_ids,
+            "prompt_mask": prompt_mask,
+            "completion_ids": completion_ids,
+            "completion_mask": completion_mask,
+            "advantages": advantages,
+            "num_items_in_batch": num_items_in_batch,
+            "num_items_in_batch_zv": num_items_in_batch_zv,
+        }
+
+        with torch.no_grad():
+            trainer.loss_type = "dapo"
+            loss_dapo = trainer._compute_loss(model, inputs).clone()
+            trainer.loss_type = "dapo_zv"
+            loss_dapo_zv = trainer._compute_loss(model, inputs).clone()
+
+        # Sanity check that the construction above actually produced a genuinely nonzero numerator (i.e. that this
+        # test isn't accidentally checking "0 == 0", as explained in the docstring).
+        assert abs(loss_dapo.item()) > 1e-6
+
+        expected_rescale = num_items_in_batch.item() / num_items_in_batch_zv.item()
+        expected_loss_dapo_zv = loss_dapo.item() * expected_rescale
+        assert loss_dapo_zv.item() == pytest.approx(expected_loss_dapo_zv, rel=1e-5)
+
+    def test_dapo_zv_all_dead_batch_with_kl_matches_dapo(self):
+        """When every group in the batch is zero-variance, `num_items_in_batch_zv` is exactly 0. If `beta != 0`,
+        the per-token loss numerator is NOT zero there -- the KL term (added to `per_token_loss` before the
+        loss_type branch runs) depends only on policy-vs-reference divergence, not on advantages, so it survives
+        even though the policy term is 0. An epsilon-clamped near-zero denominator would divide that real KL sum
+        by ~0 and explode the loss/gradients; `dapo_zv` must instead fall back to `num_items_in_batch` (dapo's own,
+        always-safe denominator), matching what "dapo" itself computes for the identical batch.
+        """
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs=lambda prompts, completions, **kwargs: [0.0] * len(completions),
+            args=GRPOConfig(
+                output_dir=self.tmp_dir,
+                loss_type="dapo_zv",
+                beta=0.1,  # KL regularization ON -- this is what makes the bug observable
+                num_generations=3,
+                per_device_train_batch_size=3,
+                report_to="none",
+            ),
+            train_dataset=dataset,
+        )
+        model = trainer.model
+        device = model.device
+        torch.manual_seed(0)
+
+        prompt_ids = torch.randint(0, 8, (3, 4), device=device)
+        prompt_mask = torch.ones_like(prompt_ids)
+        completion_ids = torch.randint(0, 8, (3, 5), device=device)
+        completion_mask = torch.ones((3, 5), dtype=torch.long, device=device)
+        advantages = torch.zeros(3, device=device)  # the whole (single) group is zero-variance
+        ref_per_token_logps = torch.randn(3, 5, device=device)  # generically nonzero KL vs the policy
+
+        inputs = {
+            "prompt_ids": prompt_ids,
+            "prompt_mask": prompt_mask,
+            "completion_ids": completion_ids,
+            "completion_mask": completion_mask,
+            "advantages": advantages,
+            "ref_per_token_logps": ref_per_token_logps,
+            "num_items_in_batch": torch.tensor(15.0, device=device),  # 3 rows * 5 tokens
+            "num_items_in_batch_zv": torch.tensor(0.0, device=device),  # every row is zero-variance
+        }
+
+        with torch.no_grad():
+            trainer.loss_type = "dapo"
+            loss_dapo = trainer._compute_loss(model, inputs).clone()
+            trainer.loss_type = "dapo_zv"
+            loss_dapo_zv = trainer._compute_loss(model, inputs).clone()
+
+        # Sanity check the KL term is actually doing something here (i.e. this isn't accidentally "0 == 0").
+        assert abs(loss_dapo.item()) > 1e-4
+        # dapo_zv's denominator falls back to num_items_in_batch in this degenerate case, so it must match dapo
+        # exactly. Note this equality is itself sufficient to prove no explosion: `loss_dapo` uses the ordinary,
+        # always-safe `num_items_in_batch` denominator (15.0, never near-zero) and so cannot explode -- an
+        # epsilon-clamped near-zero denominator (the old, buggy behavior) would instead have inflated this same
+        # numerator by a factor of roughly `num_items_in_batch / 1e-8` (~1.5e9x here), which this equality rules
+        # out directly, without needing a separate (and dataset-dependent) absolute-magnitude assertion.
+        assert loss_dapo_zv.item() == pytest.approx(loss_dapo.item(), rel=1e-5)
+
+    def test_dapo_zv_kl_term_not_inflated_by_zero_variance_exclusion(self):
+        """Even in a healthy (non-degenerate) batch with SOME but not all zero-variance groups, the KL/beta
+        contribution to the loss must be normalized by `num_items_in_batch` (like "dapo"), NOT the
+        ZV-restricted `num_items_in_batch_zv` -- otherwise the effective KL coefficient is silently inflated by
+        `num_items_in_batch / num_items_in_batch_zv` every time this loss_type excludes any dead group, i.e.
+        every time it's doing its job. Isolates the KL contribution via `loss(beta=0.1) - loss(beta=0.0)` and
+        checks it matches "dapo"'s for the identical batch.
+        """
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs=lambda prompts, completions, **kwargs: [0.0] * len(completions),
+            args=GRPOConfig(
+                output_dir=self.tmp_dir,
+                loss_type="dapo_zv",
+                beta=0.1,
+                num_generations=3,
+                per_device_train_batch_size=6,
+                report_to="none",
+            ),
+            train_dataset=dataset,
+        )
+        model = trainer.model
+        device = model.device
+        torch.manual_seed(0)
+
+        # 2 groups of 3 rows: group 0 is zero-variance (tied advantage 0); group 1 is varied.
+        prompt_ids = torch.randint(0, 8, (6, 4), device=device)
+        prompt_mask = torch.ones_like(prompt_ids)
+        completion_ids = torch.randint(0, 8, (6, 5), device=device)
+        completion_mask = torch.ones((6, 5), dtype=torch.long, device=device)
+        advantages = torch.tensor([0.0, 0.0, 0.0, -1.0, 0.0, 1.0], device=device)
+        ref_per_token_logps = torch.randn(6, 5, device=device)
+
+        inputs = {
+            "prompt_ids": prompt_ids,
+            "prompt_mask": prompt_mask,
+            "completion_ids": completion_ids,
+            "completion_mask": completion_mask,
+            "advantages": advantages,
+            "ref_per_token_logps": ref_per_token_logps,
+            "num_items_in_batch": torch.tensor(30.0, device=device),  # 6 rows * 5 tokens
+            "num_items_in_batch_zv": torch.tensor(15.0, device=device),  # group 1 tokens only
+        }
+
+        def kl_contribution(loss_type):
+            trainer.loss_type = loss_type
+            with torch.no_grad():
+                trainer.beta = 0.0
+                loss_no_kl = trainer._compute_loss(model, inputs).clone()
+                trainer.beta = 0.1
+                loss_with_kl = trainer._compute_loss(model, inputs).clone()
+            return (loss_with_kl - loss_no_kl).item()
+
+        contribution_dapo = kl_contribution("dapo")
+        contribution_dapo_zv = kl_contribution("dapo_zv")
+
+        assert abs(contribution_dapo) > 1e-6  # sanity: the KL term is actually doing something here
+        assert contribution_dapo_zv == pytest.approx(contribution_dapo, rel=1e-5)
+
+    def test_dapo_zv_raises_with_liger_kernel(self):
+        """`loss_type="dapo_zv"` has no fused-kernel equivalent yet; using it with `use_liger_kernel=True` must raise
+        a clear error at trainer construction time rather than silently mis-normalizing inside the fused kernel."""
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        def dummy_reward_func(completions, **kwargs):
+            return [0.0] * len(completions)
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            loss_type="dapo_zv",
+            use_liger_kernel=True,
+            per_device_train_batch_size=3,
+            num_generations=3,
+            max_completion_length=8,
+            report_to="none",
+        )
+        with pytest.raises(NotImplementedError, match="dapo_zv"):
+            GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs=dummy_reward_func,
+                args=training_args,
+                train_dataset=dataset,
+            )
+
+    def test_dapo_zv_entropy_bonus_uses_full_token_count(self):
+        """The entropy bonus (`entropy_coef`) is documented as the mean per-token entropy over ALL active
+        completion tokens, independent of how each loss type normalizes its policy term. For `"dapo_zv"` it must
+        therefore be scaled by `num_items_in_batch`, NOT the zero-variance-restricted `num_items_in_batch_zv` used
+        for the policy loss. Isolates the entropy contribution via `loss(no entropy) - loss(with entropy)` and
+        checks it matches `"dapo"` for an identical batch where `num_items_in_batch_zv != num_items_in_batch`
+        (i.e. a genuine zero-variance group is present).
+        """
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs=lambda prompts, completions, **kwargs: [0.0] * len(completions),
+            args=GRPOConfig(
+                output_dir=self.tmp_dir,
+                loss_type="dapo_zv",
+                beta=0.0,
+                entropy_coef=0.5,
+                num_generations=3,
+                per_device_train_batch_size=3,
+                report_to="none",
+            ),
+            train_dataset=dataset,
+        )
+        model = trainer.model
+        device = model.device
+        torch.manual_seed(0)
+
+        prompt_ids = torch.randint(0, 8, (3, 4), device=device)
+        prompt_mask = torch.ones_like(prompt_ids)
+        completion_ids = torch.randint(0, 8, (3, 5), device=device)
+        completion_mask = torch.ones((3, 5), dtype=torch.long, device=device)
+        advantages = torch.zeros(3, device=device)  # a single, entirely zero-variance group
+
+        inputs = {
+            "prompt_ids": prompt_ids,
+            "prompt_mask": prompt_mask,
+            "completion_ids": completion_ids,
+            "completion_mask": completion_mask,
+            "advantages": advantages,
+            "num_items_in_batch": torch.tensor(15.0, device=device),  # 3 rows * 5 tokens
+            "num_items_in_batch_zv": torch.tensor(0.0, device=device),  # whole group is zero-variance
+        }
+
+        def entropy_contribution(loss_type):
+            trainer.loss_type = loss_type
+            with torch.no_grad():
+                trainer._entropy_bonus_enabled = False
+                loss_no_entropy = trainer._compute_loss(model, inputs).clone()
+                trainer._entropy_bonus_enabled = True
+                loss_with_entropy = trainer._compute_loss(model, inputs).clone()
+            return (loss_no_entropy - loss_with_entropy).item()
+
+        contribution_dapo = entropy_contribution("dapo")
+        contribution_dapo_zv = entropy_contribution("dapo_zv")
+
+        assert abs(contribution_dapo) > 1e-8  # sanity: the entropy term is actually nonzero here
+        assert contribution_dapo_zv == pytest.approx(contribution_dapo, rel=1e-5)
+
+    def test_dapo_zv_denominator_is_tool_mask_aware(self):
+        """`num_items_in_batch_zv` must exclude tool-result tokens the same way `num_items_in_batch` and the
+        `_compute_loss` numerator do, so a multi-turn batch with `tool_mask` doesn't skew `"dapo_zv"`'s
+        normalization relative to `"dapo"`'s.
+        """
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        num_generations = 3
+
+        def rollout_func(prompts, trainer):
+            n = len(prompts)
+            return {
+                "prompt_ids": [[5, 6] for _ in range(n)],
+                "completion_ids": [[1, 2, 3, 4] for _ in range(n)],
+                "logprobs": [[0.0, 0.0, 0.0, 0.0] for _ in range(n)],
+                # Last two tokens of every completion are tool-result tokens (masked out of the loss).
+                "env_mask": [[1, 1, 0, 0] for _ in range(n)],
+            }
+
+        def reward_func(prompts, completions, **kwargs):
+            # Group 0 (rows 0-2) is tied -> zero-variance, excluded. Group 1 (rows 3-5) is varied -> kept.
+            return [5.0 if i < num_generations else float(i - num_generations) for i in range(len(completions))]
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=6,  # 2 groups of 3
+            num_generations=num_generations,
+            max_completion_length=8,
+            loss_type="dapo_zv",
+            beta=0.0,
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs=reward_func,
+            args=training_args,
+            train_dataset=dataset,
+            rollout_func=rollout_func,
+        )
+
+        captured = {}
+        original_compute_loss = trainer._compute_loss
+
+        def spy_compute_loss(model, inputs):
+            if "num_items_in_batch" not in captured:
+                captured["num_items_in_batch"] = inputs["num_items_in_batch"].item()
+                captured["num_items_in_batch_zv"] = inputs["num_items_in_batch_zv"].item()
+            return original_compute_loss(model, inputs)
+
+        trainer._compute_loss = spy_compute_loss
+        trainer.train()
+
+        # Every row has 4 raw completion tokens but only 2 tool_mask-active tokens (env_mask = [1, 1, 0, 0]).
+        # num_items_in_batch counts active tokens from all 6 rows: 6 * 2 = 12.
+        assert captured["num_items_in_batch"] == pytest.approx(12.0)
+        # num_items_in_batch_zv must count active tokens from only the kept group 1 rows: 3 * 2 = 6 -- NOT
+        # 3 * 4 = 12, which is what a tool_mask-blind denominator would compute instead.
+        assert captured["num_items_in_batch_zv"] == pytest.approx(6.0)
+
+    def test_dapo_zv_consistent_with_dapo_under_mask_truncated_completions(self):
+        """`num_items_in_batch_zv` must stay on the same basis as `num_items_in_batch` with respect to
+        `mask_truncated_completions`: the latter is computed in `_generate()` BEFORE truncated rows get zeroed out
+        of `completion_mask`, so if `num_items_in_batch_zv` were computed from the (already zeroed) `completion_mask`
+        instead, the two would diverge even with zero zero-variance groups, breaking "no zero-variance groups =>
+        bit-identical to dapo". Uses a very short `max_completion_length` so the untrained model reliably produces
+        truncated (non-EOS) completions, and a reward func giving every row a distinct value so no group is
+        genuinely zero-variance.
+        """
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        def reward_func(prompts, completions, **kwargs):
+            return [float(i) for i in range(len(completions))]
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=6,
+            num_generations=3,
+            max_completion_length=4,  # short enough that the untrained model won't emit EOS in time
+            mask_truncated_completions=True,
+            loss_type="dapo_zv",
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs=reward_func,
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        captured = {}
+        original_compute_loss = trainer._compute_loss
+
+        def spy_compute_loss(model, inputs):
+            if "num_items_in_batch" not in captured:
+                captured["num_items_in_batch"] = inputs["num_items_in_batch"].item()
+                captured["num_items_in_batch_zv"] = inputs["num_items_in_batch_zv"].item()
+            return original_compute_loss(model, inputs)
+
+        trainer._compute_loss = spy_compute_loss
+        trainer.train()
+
+        assert captured["num_items_in_batch_zv"] == pytest.approx(captured["num_items_in_batch"])
+
+    def test_dapo_zv_matches_dapo_when_normalizer_is_below_one(self):
+        """The `dapo_zv` normalizer clamp exists only to guard the degenerate all-zero-variance batch (denominator
+        exactly 0); it must NOT engage for a genuinely nonzero-but-small `num_items_in_batch_zv` (e.g. a tiny
+        multi-process batch), or `dapo_zv` silently diverges from `dapo` for a reason unrelated to zero-variance
+        exclusion. Directly constructs a normalizer below 1.0 (as `num_items_in_batch / num_processes` can be for a
+        small enough batch on many processes) with a genuinely varied group (no zero-variance rows), so
+        `num_items_in_batch_zv == num_items_in_batch` and `dapo_zv` must be bit-identical to `dapo`.
+        """
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs=lambda prompts, completions, **kwargs: [0.0] * len(completions),
+            args=GRPOConfig(
+                output_dir=self.tmp_dir,
+                loss_type="dapo_zv",
+                beta=0.0,
+                num_generations=3,
+                per_device_train_batch_size=3,
+                report_to="none",
+            ),
+            train_dataset=dataset,
+        )
+        model = trainer.model
+        device = model.device
+        torch.manual_seed(0)
+
+        prompt_ids = torch.randint(0, 8, (3, 4), device=device)
+        prompt_mask = torch.ones_like(prompt_ids)
+        completion_ids = torch.randint(0, 8, (3, 5), device=device)
+        completion_mask = torch.ones((3, 5), dtype=torch.long, device=device)
+        advantages = torch.tensor([-1.0, 0.0, 1.0], device=device)  # genuinely varied group, no zero-variance rows
+
+        inputs = {
+            "prompt_ids": prompt_ids,
+            "prompt_mask": prompt_mask,
+            "completion_ids": completion_ids,
+            "completion_mask": completion_mask,
+            "advantages": advantages,
+            "num_items_in_batch": torch.tensor(0.5, device=device),
+            "num_items_in_batch_zv": torch.tensor(0.5, device=device),  # equal: no rows excluded
+        }
+
+        with torch.no_grad():
+            trainer.loss_type = "dapo"
+            loss_dapo = trainer._compute_loss(model, inputs).clone()
+            trainer.loss_type = "dapo_zv"
+            loss_dapo_zv = trainer._compute_loss(model, inputs).clone()
+
+        assert loss_dapo_zv.item() == pytest.approx(loss_dapo.item(), rel=1e-5)
+
+    def test_dapo_zv_excludes_tied_rows_when_group_has_unscorable_row(self):
+        """A group with an unscorable (NaN-reward) row must still exclude its OTHER, genuinely tied members from
+        the `dapo_zv` denominator. `torch.amax`/`amin` propagate NaN, so without NaN-safe handling, one NaN row
+        anywhere in a group silently keeps the WHOLE group -- including tied, zero-numerator-contribution rows --
+        in the denominator.
+        """
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        num_generations = 3
+
+        def reward_func(prompts, completions, **kwargs):
+            n = len(completions)
+            rewards = []
+            for i in range(n):
+                if i < num_generations:
+                    # Group 0: rows 0 and 1 tied at 1.0; row 2 is unscorable (None -> NaN).
+                    rewards.append(None if i == 2 else 1.0)
+                else:
+                    # Group 1: varied -> genuinely non-zero-variance, stays fully in the denominator.
+                    rewards.append(float(i - num_generations))
+            return rewards
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=6,
+            num_generations=num_generations,
+            max_completion_length=8,
+            loss_type="dapo_zv",
+            beta=0.0,
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs=reward_func,
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        captured = {}
+        original_compute_loss = trainer._compute_loss
+
+        def spy_compute_loss(model, inputs):
+            if "completion_mask" not in captured:
+                captured["completion_mask"] = inputs["completion_mask"].clone()
+                captured["num_items_in_batch_zv"] = inputs["num_items_in_batch_zv"].item()
+            return original_compute_loss(model, inputs)
+
+        trainer._compute_loss = spy_compute_loss
+        trainer.train()
+
+        # Single-process test: local rows 3-5 are group 1. num_items_in_batch_zv must equal EXACTLY group 1's
+        # token count -- i.e. group 0's rows (0, 1, and the unscorable row 2) are all excluded, not just row 2.
+        group1_tokens = captured["completion_mask"][3:6].sum().item()
+        assert captured["num_items_in_batch_zv"] == pytest.approx(group1_tokens)
 
     def test_train_with_eval(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
@@ -1603,7 +2161,7 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    @pytest.mark.parametrize("loss_type", ["grpo", "dr_grpo", "dapo", "luspo"])
+    @pytest.mark.parametrize("loss_type", ["grpo", "dr_grpo", "dapo", "dapo_zv", "luspo"])
     def test_entropy_bonus_scale(self, loss_type):
         # Regression test: the entropy bonus is the mean per-token entropy H for every loss type (documented
         # objective L = L_policy - entropy_coef * H), so it must not inherit any loss-type-specific policy
@@ -2135,7 +2693,7 @@ class TestGRPOTrainer(TrlTestCase):
         expected_warning = "All reward functions returned None for the following kwargs:"
         assert expected_warning in caplog.text
 
-    @pytest.mark.parametrize("loss_type", ["grpo", "bnpo", "dr_grpo", "dapo", "cispo"])
+    @pytest.mark.parametrize("loss_type", ["grpo", "bnpo", "dr_grpo", "dapo", "dapo_zv", "cispo"])
     def test_warning_raised_sequence_level_with_token_summed_loss(self, caplog, loss_type):
         """Test that a warning is raised when sequence-level importance sampling is combined with a loss type that
         sums per-token contributions (length-weighting each sequence instead of following the GSPO objective)."""

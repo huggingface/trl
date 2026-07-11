@@ -195,6 +195,23 @@ class MiniLLMTrainer(GRPOTrainer):
             args.gradient_checkpointing_kwargs = args.gradient_checkpointing_kwargs or {}
             args.gradient_checkpointing_kwargs.setdefault("use_reentrant", False)
 
+        # `loss_type="dapo_zv"` + `rkl_advantage=True` (the default) is not supported: `compute_loss` below
+        # mutates `inputs["advantages"]` with a reverse-KL term AFTER the base trainer's
+        # `_generate_and_score_completions` has already computed `num_items_in_batch_zv` from the raw,
+        # pre-mutation reward-tie signal. `dapo_zv`'s denominator exclusion depends on excluded rows
+        # contributing exactly 0 to the loss numerator; the reverse-KL term (a student/teacher log-prob
+        # divergence, unrelated to reward variance) breaks that invariant, silently mis-scaling the loss.
+        # With `rkl_advantage=False`, `inputs["advantages"]` is never touched here, so `dapo_zv` behaves
+        # exactly as it does on the base trainer -- only the `True` (default) combination is blocked.
+        # Checked before the expensive `super().__init__` below, same as the other GRPOTrainer subclasses
+        # with a comparable gap.
+        if args.loss_type == "dapo_zv" and args.rkl_advantage:
+            raise NotImplementedError(
+                "`loss_type='dapo_zv'` is not supported together with `rkl_advantage=True` (the default): the "
+                "reverse-KL advantage term added in `compute_loss` breaks the invariant `dapo_zv`'s denominator "
+                "exclusion depends on. Use a different `loss_type`, or set `rkl_advantage=False`."
+            )
+
         super().__init__(
             model,
             reward_funcs,

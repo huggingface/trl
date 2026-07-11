@@ -253,6 +253,13 @@ class GRPOConfig(_BaseConfig):
             - `"dapo"` (default): Aggregates token-level losses by normalizing with the number of active token in the
               global accumulated batch. This method was introduced in the [DAPO
               paper](https://huggingface.co/papers/2503.14476) to eliminate length bias.
+            - `"dapo_zv"`: Identical to `"dapo"` except tokens belonging to a zero-variance group (every completion
+              in the group received the identical reward, so the group's advantage is exactly 0 for everyone) are
+              excluded from the loss denominator. Those tokens already contribute exactly 0 to the numerator, so
+              this only removes their diluting effect on the average; when a batch has no zero-variance groups,
+              `"dapo_zv"` is identical to `"dapo"`. Implements the loss-mask idea from the [AGPO
+              paper](https://arxiv.org/abs/2503.15952) (their adaptive, token-efficiency-shaping loss is out
+              of scope here; only the zero-advantage exclusion is implemented).
             - `"bnpo"`: Aggregates token-level losses by normalizing with the number of active token in the local
               batch. Note that normalization is performed over the local batch only, so results may slightly vary
               depending on the local batch size, despite a constant effective batch size. When using
@@ -821,6 +828,10 @@ class GRPOConfig(_BaseConfig):
             "'vespo': Variational Sequence-Level Soft Policy Optimization. Replaces hard clipping with a smooth, "
             "asymmetric Gamma weighting function applied directly to sequence-level importance weights. Introduced in "
             "the [VESPO paper](https://huggingface.co/papers/2602.10693)."
+            "'dapo_zv': Identical to 'dapo' except tokens belonging to a zero-variance group (every completion in "
+            "the group received the identical reward) are excluded from the loss denominator; identical to 'dapo' "
+            "when a batch has no zero-variance groups. Implements the loss-mask idea from the [AGPO "
+            "paper](https://arxiv.org/abs/2503.15952)."
         },
     )
     mask_truncated_completions: bool = field(

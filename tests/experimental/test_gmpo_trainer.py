@@ -116,3 +116,25 @@ class TestGMPOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    def test_dapo_zv_raises_not_implemented(self):
+        """`loss_type="dapo_zv"` has no effect on this trainer's overridden `_compute_loss` (it never reads
+        `self.loss_type`, always computing the GMPO geometric-mean loss); using it must raise a clear error at
+        construction rather than silently ignoring the requested loss_type."""
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        training_args = GMPOConfig(
+            output_dir=self.tmp_dir,
+            loss_type="dapo_zv",
+            per_device_train_batch_size=3,
+            num_generations=3,
+            max_completion_length=8,
+            report_to="none",
+        )
+        with pytest.raises(NotImplementedError, match="dapo_zv"):
+            GMPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
+            )

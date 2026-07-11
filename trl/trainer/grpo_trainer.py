@@ -833,7 +833,13 @@ class GRPOTrainer(_BaseTrainer):
                 "set to `'token'` (the default)."
             )
 
-        if args.importance_sampling_level == "sequence" and args.loss_type in ["bnpo", "dr_grpo", "dapo", "cispo"]:
+        if args.importance_sampling_level == "sequence" and args.loss_type in [
+            "bnpo",
+            "dr_grpo",
+            "dapo",
+            "dapo_zv",
+            "cispo",
+        ]:
             logger.warning(
                 f"When using `importance_sampling_level='sequence'`, the `'{args.loss_type}'` loss sums per-token "
                 "contributions, which effectively weights each sequence by its completion length instead of "
@@ -939,6 +945,12 @@ class GRPOTrainer(_BaseTrainer):
 
         # Liger loss
         if self.use_liger_kernel:
+            if self.loss_type == "dapo_zv":
+                raise NotImplementedError(
+                    "`loss_type='dapo_zv'` is not supported together with `use_liger_kernel=True`: the "
+                    "zero-variance denominator mask has no fused-kernel equivalent yet. Set `use_liger_kernel=False`, "
+                    "or use a different `loss_type`."
+                )
             if not is_liger_kernel_available():
                 raise ImportError(
                     "Liger is required to use `use_liger_kernel` as the GRPO loss. Run `pip install liger-kernel`."
@@ -1997,6 +2009,13 @@ class GRPOTrainer(_BaseTrainer):
 
         return tool_mask, completions, completion_ids, logprobs, tool_call_count, tool_failure_count, tool_images
 
+    def _completion_lengths(self, completion_ids: list, tool_mask: list | None) -> torch.Tensor:
+        # Active (non-tool-result) token count per completion. `tool_mask`, when present, marks model-generated
+        # tokens as 1 and external (tool-result) tokens as 0, so only those count.
+        if tool_mask is not None:
+            return torch.tensor([sum(mask) for mask in tool_mask], device=self.accelerator.device)
+        return torch.tensor([len(ids) for ids in completion_ids], device=self.accelerator.device)
+
     def _generate(self, prompts: list):
         device = self.accelerator.device
         mode = "train" if self.model.training else "eval"
@@ -2072,10 +2091,7 @@ class GRPOTrainer(_BaseTrainer):
 
         # Get completion length per sequence, used for logging
         prompt_lengths = torch.tensor([len(ids) for ids in prompt_ids], device=device)
-        if tool_mask is not None:  # count only model-generated tokens (tool_mask=1)
-            completion_lengths = torch.tensor([sum(mask) for mask in tool_mask], device=device)
-        else:
-            completion_lengths = torch.tensor([len(ids) for ids in completion_ids], device=device)
+        completion_lengths = self._completion_lengths(completion_ids, tool_mask)
         agg_prompt_lengths = self.accelerator.gather(prompt_lengths)
         agg_completion_lengths = self.accelerator.gather(completion_lengths)
         total_prompt_tokens = agg_prompt_lengths.sum()
@@ -2581,6 +2597,42 @@ class GRPOTrainer(_BaseTrainer):
                 "'sum_then_normalize' or 'normalize_then_sum'."
             )
 
+        # Sequences belonging to a zero-variance ("dead") group -- every completion in the group received the
+        # identical combined reward, so the group's GRPO advantage is exactly 0 for every member -- already
+        # contribute nothing to the "dapo"-family loss numerator; `loss_type="dapo_zv"` additionally excludes them
+        # from the loss denominator (see `_compute_loss`). Gated on loss_type: num_items_in_batch_zv is only read
+        # by "dapo_zv", so computing it for every other loss_type would cost an unconditional extra pass for no
+        # benefit.
+        if self.loss_type == "dapo_zv":
+            # Spread is computed NaN-safely (substitute +-inf for NaN before amax/amin) so one unscorable
+            # (NaN-reward) row in a group doesn't prevent its otherwise-tied siblings from being detected; an
+            # all-NaN group still safely resolves to spread=inf, i.e. NOT zero-variance. NOT derived from
+            # `is_std_zero` above, which is only a per-GROUP signal under `scale_rewards` "group"/"none" -- under
+            # "batch" it answers "is the WHOLE BATCH zero-variance" instead, silently degrading `dapo_zv` to plain
+            # `dapo`. Independent of `multi_objective_aggregation` too: under "normalize_then_sum", a group tied on
+            # raw `rewards` is tied at exactly 0 after its own per-function, per-group normalization (mean-
+            # centering a constant against itself is always 0), and since every function's within-group residuals
+            # are zero-mean, the final normalization step's batch-wide mean is also exactly 0 -- so the group's
+            # advantage is 0 there too, same as "sum_then_normalize"'s more direct group-mean-centering.
+            grouped_rewards = rewards.view(-1, num_generations)
+            group_max = torch.nan_to_num(grouped_rewards, nan=float("-inf")).amax(dim=1)
+            group_min = torch.nan_to_num(grouped_rewards, nan=float("inf")).amin(dim=1)
+            row_is_zero_variance = ((group_max - group_min).abs() <= 1e-6).repeat_interleave(num_generations)
+
+            # `num_items_in_batch_zv`: the "dapo_zv" analogue of `total_completion_tokens`/`num_items_in_batch`
+            # above, restricted to non-zero-variance rows. Uses `_completion_lengths` on `completion_ids_list`/
+            # `tool_mask_list` -- the RAW, pre-padding lists, unaffected by `mask_truncated_completions`'s later
+            # zeroing of the padded `completion_mask` tensor further below -- so this lands on the exact same basis
+            # as `num_items_in_batch`: tool_mask-aware like it, and matching its (separately tracked, pre-existing)
+            # behavior under `mask_truncated_completions` instead of silently diverging from it. That keeps "no
+            # zero-variance groups => num_items_in_batch_zv == num_items_in_batch, bit-identical to dapo" true
+            # exactly as documented/tested. This extra gather is paid only when `loss_type == "dapo_zv"`.
+            completion_lengths = self._completion_lengths(completion_ids_list, tool_mask_list)
+            agg_completion_lengths = self.accelerator.gather(completion_lengths)
+            num_items_in_batch_zv = (agg_completion_lengths * (~row_is_zero_variance)).sum()
+        else:
+            num_items_in_batch_zv = None
+
         # Unscorable completions (every reward func returned None) carry no learning signal: their reward is NaN here,
         # so zero their advantage to keep them from moving the policy.
         advantages = torch.nan_to_num(advantages, nan=0.0)
@@ -2676,6 +2728,8 @@ class GRPOTrainer(_BaseTrainer):
             "advantages": advantages,
             "num_items_in_batch": num_items_in_batch,
         }
+        if num_items_in_batch_zv is not None:
+            output["num_items_in_batch_zv"] = num_items_in_batch_zv
         if old_per_token_logps is not None:
             output["old_per_token_logps"] = old_per_token_logps
         if self.use_vllm and self.vllm_importance_sampling_correction:
@@ -2947,7 +3001,7 @@ class GRPOTrainer(_BaseTrainer):
         if self.loss_type == "cispo":
             clamped_ratios = torch.clamp(coef_1, max=self.epsilon_high).detach()
             per_token_loss = -clamped_ratios * advantages * per_token_logps
-        elif self.loss_type in ["grpo", "bnpo", "dr_grpo", "dapo", "luspo"]:
+        elif self.loss_type in ["grpo", "bnpo", "dr_grpo", "dapo", "dapo_zv", "luspo"]:
             coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
             # Two-sided clipping
             if self.args.delta is not None:
@@ -2984,7 +3038,7 @@ class GRPOTrainer(_BaseTrainer):
         if self.use_vllm and self.vllm_importance_sampling_correction and self.loss_type != "vespo":
             per_token_loss = per_token_loss * inputs["importance_sampling_ratio"]
 
-        if self.beta != 0.0:
+        if self.beta != 0.0 and self.loss_type != "dapo_zv":
             per_token_loss = per_token_loss + self.beta * per_token_kl
 
         mode = "train" if self.model.training else "eval"
@@ -3007,6 +3061,39 @@ class GRPOTrainer(_BaseTrainer):
             normalizer = inputs["num_items_in_batch"] / self.accelerator.num_processes
             loss = (per_token_loss * mask).sum() / normalizer
             policy_loss = loss.detach()
+        elif self.loss_type == "dapo_zv":
+            # Identical to "dapo" above (same per_token_loss, same numerator) except the denominator counts only
+            # tokens from non-zero-variance rows (`num_items_in_batch_zv`, gathered in
+            # `_generate_and_score_completions`). Zero-variance rows' contribution to the numerator is exactly 0
+            # (their advantage is 0), so restricting the denominator to non-zero-variance rows only removes their
+            # diluting effect on the average. When there are no zero-variance groups, `num_items_in_batch_zv ==
+            # num_items_in_batch` and this is bit-identical to "dapo".
+            #
+            # Degenerate case: if EVERY group in the batch is zero-variance, `num_items_in_batch_zv` is exactly 0
+            # and the (now KL-free, see below) numerator is also exactly 0 there -- `.clamp(min=1.0)` on the raw
+            # (integer-valued) count avoids a literal 0/0 NaN, giving 0/1.0 == 0 instead, matching the codebase's
+            # own idiom for this used elsewhere (e.g. `mask.sum(-1).clamp(min=1.0)` for "grpo"/"sapo"). Clamping
+            # the raw count (not the post-division normalizer) means this can only ever engage at exactly 0 --
+            # token counts have no value strictly between 0 and 1 -- so it never touches a genuinely small but
+            # nonzero normalizer, unlike clamping after the division would. A plain `== 0` branch here would work
+            # too, but forces a GPU-to-CPU sync on every step this loss_type is used; the clamp doesn't.
+            normalizer = inputs["num_items_in_batch_zv"].clamp(min=1.0) / self.accelerator.num_processes
+            loss = (per_token_loss * mask).sum() / normalizer
+            if self.beta != 0.0:
+                # The KL/beta term is intentionally NOT part of the numerator/denominator pairing above: per
+                # `entropy_coef`'s own documented rationale (the entropy bonus is independent of how the policy
+                # term is normalized -- same principle applied here), and per this PR's explicit "denominator-
+                # only, KL/beta path untouched" scoping (distinguishing it from #5588, which was declined for
+                # changing loss values under beta != 0), the KL/beta contribution must be normalized the same
+                # way "dapo" itself normalizes it: by `num_items_in_batch`, NOT `num_items_in_batch_zv`. Using
+                # the ZV-restricted denominator here would silently inflate the effective KL coefficient by
+                # `num_items_in_batch / num_items_in_batch_zv` whenever any group is zero-variance -- i.e. every
+                # time this loss_type is actually doing its job -- which is the same class of loss-value change
+                # #5588 was declined for, just reached through a different path. Mirrors how `aux_loss` below is
+                # also added with its own independent normalizer, not the policy term's.
+                kl_normalizer = inputs["num_items_in_batch"] / self.accelerator.num_processes
+                loss = loss + self.beta * (per_token_kl * mask).sum() / kl_normalizer
+            policy_loss = loss.detach()
         elif self.loss_type == "luspo":
             # Unless importance_sampling_level="token" (not recommended here), per_token_loss is expected to be (B, 1)
             loss = (per_token_loss * mask.sum(1, keepdim=True)).mean()
@@ -3027,12 +3114,23 @@ class GRPOTrainer(_BaseTrainer):
             # H does not depend on how each loss type normalizes its policy term. The term is computed so that
             # it accumulates to H over the optimizer step for every loss type and matches world_entropy below.
             # The only wrinkle is the normalizer: most loss types divide by the gradient accumulation step
-            # count, but cispo/dapo/vespo divide by a global token count.
-            if self.loss_type in ["cispo", "dapo", "vespo"]:
+            # count, but cispo/dapo/dapo_zv/vespo divide by a global token count. For "dapo_zv" specifically,
+            # that global token count must be `num_items_in_batch` (all active completion tokens), NOT the
+            # ZV-restricted `num_items_in_batch_zv` used for the policy-loss `normalizer` above: the entropy bonus
+            # is defined as the mean per-token entropy over all active completion tokens regardless of loss_type
+            # (see `entropy_coef` docs), independent of how the policy term is normalized.
+            if self.loss_type in ["cispo", "dapo", "dapo_zv", "vespo"]:
                 # normalizer is a global token count, so summing the entropies (instead of averaging them
                 # again) makes the term accumulate over the optimizer step to the global mean per-token
-                # entropy, like the other loss types.
-                entropy_loss = (entropies * effective_mask).sum() / normalizer
+                # entropy, like the other loss types. For cispo/dapo/vespo, `normalizer` (computed in the
+                # policy-loss branch above) already equals `num_items_in_batch / num_processes`, so it's reused
+                # directly; only "dapo_zv" needs a different value, since its own `normalizer` there is the
+                # ZV-restricted `num_items_in_batch_zv`.
+                if self.loss_type == "dapo_zv":
+                    entropy_normalizer = inputs["num_items_in_batch"] / self.accelerator.num_processes
+                else:
+                    entropy_normalizer = normalizer
+                entropy_loss = (entropies * effective_mask).sum() / entropy_normalizer
             else:
                 # Mean per-token entropy of active tokens, scaled for gradient accumulation.
                 entropy_loss = (entropies * effective_mask).sum() / effective_mask.sum().clamp(min=1.0) / normalizer
@@ -3103,7 +3201,7 @@ class GRPOTrainer(_BaseTrainer):
         mean_entropy = masked_batch_mean(entropies)
         self._metrics[mode]["entropy"].append(self.accelerator.gather(mean_entropy).nanmean().item())
 
-        if self.loss_type in ["grpo", "bnpo", "dr_grpo", "dapo", "luspo"]:
+        if self.loss_type in ["grpo", "bnpo", "dr_grpo", "dapo", "dapo_zv", "luspo"]:
             # Compute the clipped probability ratios
             is_low_clipped = (coef_1 < 1 - self.epsilon_low) & (advantages < 0)
             is_high_clipped = (coef_1 > 1 + self.epsilon_high) & (advantages > 0)

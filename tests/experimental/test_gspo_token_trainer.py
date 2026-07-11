@@ -13,6 +13,7 @@
 # limitations under the License.
 
 
+import pytest
 import torch
 from datasets import load_dataset
 
@@ -53,3 +54,26 @@ class TestGSPOTokenTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    def test_dapo_zv_raises_not_implemented(self):
+        """`loss_type="dapo_zv"` has no branch in this trainer's overridden `_compute_loss` (its own
+        loss_type dispatch was never extended for it); using it must raise a clear error at trainer
+        construction time rather than a generic `ValueError("Unknown loss type")` after a full,
+        potentially expensive generation/reward pass."""
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            loss_type="dapo_zv",
+            per_device_train_batch_size=3,
+            num_generations=3,
+            max_completion_length=8,
+            report_to="none",
+        )
+        with pytest.raises(NotImplementedError, match="dapo_zv"):
+            GSPOTokenTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs=lambda completions, **kwargs: [0.0] * len(completions),
+                args=training_args,
+                train_dataset=dataset,
+            )

@@ -682,6 +682,20 @@ training_args = GRPOConfig(
 ```
 
 
+### Adaptive Group Policy Optimization: Towards Stable Training and Token-Efficient Reasoning
+
+**📜 Paper**: https://arxiv.org/abs/2503.15952
+
+AGPO observes that GRPO's loss normalizes over all sampled completions, including those from zero-variance groups (every completion in the group received the identical reward, so the group's advantage is exactly 0 for everyone). Since these completions already contribute nothing to the loss numerator, including them in the denominator only dilutes the average, silently shrinking the effective learning rate in proportion to how many groups tie in a given batch. AGPO's loss mask excludes these zero-advantage samples from the mean operation. TRL implements this specific piece of AGPO (not the paper's other adaptive-loss / token-efficiency contributions) as the `"dapo_zv"` loss type: identical to `"dapo"` in every way except the denominator excludes zero-variance-group tokens.
+
+```python
+from trl import GRPOConfig
+
+training_args = GRPOConfig(
+    loss_type="dapo_zv",
+)
+```
+
 ### Rethinking the Trust Region in LLM Reinforcement Learning
 
 **📜 Paper**: https://huggingface.co/papers/2602.04879
