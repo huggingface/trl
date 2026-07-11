@@ -219,8 +219,42 @@ class TestRLOOTrainer(TrlTestCase):
 
         assert set(trainer.eval_dataset.keys()) == {"data1", "data2"}
 
-    def test_init_with_iterable_dataset_dict_raises(self):
-        # Streaming datasets are not yet supported in RLOO, including when nested in an `IterableDatasetDict` eval set.
+    def test_train_with_iterable_dataset(self):
+        # Iterable (streaming) datasets have no length, so `max_steps` is required.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train", streaming=True)
+
+        training_args = RLOOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            max_steps=4,
+            report_to="none",
+        )
+        trainer = RLOOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        # Iterable datasets force `dispatch_batches=False` so the stream can be sharded per process.
+        assert trainer.args.accelerator_config.dispatch_batches is False
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    def test_init_with_iterable_dataset_dict(self):
+        # Iterable datasets are supported, including when nested in an `IterableDatasetDict` eval set.
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
         iterable_dataset = load_dataset(
             "trl-internal-testing/zen", "standard_prompt_only", split="train", streaming=True
@@ -228,13 +262,30 @@ class TestRLOOTrainer(TrlTestCase):
         eval_dataset = IterableDatasetDict({"data1": iterable_dataset, "data2": iterable_dataset})
 
         training_args = RLOOConfig(output_dir=self.tmp_dir, report_to="none")
-        with pytest.raises(NotImplementedError, match="Iterable datasets are not yet supported"):
+        trainer = RLOOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset["train"],
+            eval_dataset=eval_dataset,
+        )
+
+        assert set(trainer.eval_dataset.keys()) == {"data1", "data2"}
+        assert trainer.args.accelerator_config.dispatch_batches is False
+
+    def test_iterable_dataset_requires_dispatch_batches_false(self):
+        # `dispatch_batches=True` is incompatible with iterable datasets (see get_train_dataloader).
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train", streaming=True)
+
+        training_args = RLOOConfig(
+            output_dir=self.tmp_dir, accelerator_config={"dispatch_batches": True}, report_to="none"
+        )
+        with pytest.raises(ValueError, match="Iterable datasets require `dispatch_batches=False`"):
             RLOOTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
                 reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
                 args=training_args,
-                train_dataset=dataset["train"],
-                eval_dataset=eval_dataset,
+                train_dataset=dataset,
             )
 
     def test_train_multiple_iterations(self):
