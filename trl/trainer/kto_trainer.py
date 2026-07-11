@@ -1062,9 +1062,7 @@ class KTOTrainer(_BaseTrainer):
             # by rotating the completions by +1 within each batch of size `per_device_train_batch_size`:
             # (x_1, y_1), ..., (x_n, y_n) --> (x_1, y_n), (x_2, y_1), ..., (x_n, y_{n-1}). For best results, the
             # mismatched outputs y' used to estimate the KL term for a batch should be the same set as the matched
-            # outputs y used to estimate the rewards in that batch, just paired with different x. Adding the
-            # `KL_completion_ids` column with a single in-place batched map (rather than building a separate dataset and
-            # concatenating it) keeps this correct and efficient for both map-style and iterable datasets.
+            # outputs y used to estimate the rewards in that batch, just paired with different x.
             if self.calculate_KL:
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Extracting KL {dataset_name} dataset"
