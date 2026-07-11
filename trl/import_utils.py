@@ -69,6 +69,13 @@ def is_harbor_available() -> bool:
     return _is_package_available("harbor")
 
 
+def is_huggingface_hub_available(min_version: str | None = None) -> bool:
+    _hub_available, _hub_version = _is_package_available("huggingface_hub", return_version=True)
+    if min_version is not None:
+        return _hub_available and Version(_hub_version) >= Version(min_version)
+    return _hub_available
+
+
 def is_jmespath_available() -> bool:
     return _is_package_available("jmespath")
 

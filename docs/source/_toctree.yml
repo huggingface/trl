@@ -91,6 +91,8 @@
     title: Callbacks
   - local: rewards
     title: Reward Functions
+  - local: environments
+    title: Environments
   title: API
 - sections:
   - local: experimental_overview
