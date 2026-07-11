@@ -322,6 +322,25 @@ class TestGKDTrainer(TrlTestCase):
         assert trainer.generation_config.max_new_tokens == training_args.max_new_tokens
         assert trainer.generation_config.temperature == training_args.temperature
         assert trainer.generation_config.top_k == 0
+        assert trainer.generation_config.top_p == 1.0
+
+    def test_init_multimodal_model(self):
+        """Multimodal configs keep vocab_size in their text_config; the vocab check must handle them."""
+        model_id = "trl-internal-testing/tiny-Gemma3ForConditionalGeneration"
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        training_args = GKDConfig(output_dir=self.tmp_dir, report_to="none")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling")
+
+        trainer = GKDTrainer(
+            model=model_id,
+            teacher_model=model_id,
+            args=training_args,
+            train_dataset=dataset["train"],
+            processing_class=tokenizer,
+        )
+
+        student_vocab_size = trainer.model.config.get_text_config().vocab_size
+        assert student_vocab_size == trainer.teacher_model.config.get_text_config().vocab_size
 
     @require_liger_kernel
     def test_compute_loss_return_outputs_with_liger(self):

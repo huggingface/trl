@@ -189,10 +189,12 @@ class GKDTrainer(SFTTrainer):
             teacher_model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
             teacher_model = AutoModelForCausalLM.from_pretrained(teacher_model, **teacher_model_init_kwargs)
 
-        if self.model.config.vocab_size != teacher_model.config.vocab_size:
+        student_vocab_size = self.model.config.get_text_config().vocab_size
+        teacher_vocab_size = teacher_model.config.get_text_config().vocab_size
+        if student_vocab_size != teacher_vocab_size:
             raise ValueError(
-                f"The student model has vocab_size {self.model.config.vocab_size} but the teacher model has "
-                f"vocab_size {teacher_model.config.vocab_size}. GKD compares the teacher's full next-token "
+                f"The student model has vocab_size {student_vocab_size} but the teacher model has "
+                f"vocab_size {teacher_vocab_size}. GKD compares the teacher's full next-token "
                 f"distribution, which requires a shared vocabulary. Use a teacher with the same vocab_size, or "
                 f"GOLD for cross-tokenizer distillation."
             )
@@ -216,6 +218,7 @@ class GKDTrainer(SFTTrainer):
             "temperature": args.temperature,
             "do_sample": True,
             "top_k": 0,
+            "top_p": 1.0,
             "use_cache": False if args.gradient_checkpointing else True,
             "pad_token_id": self.processing_class.pad_token_id,
         }
