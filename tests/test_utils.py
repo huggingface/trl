@@ -27,6 +27,8 @@ from transformers import AutoConfig, AutoModelForCausalLM
 from transformers.testing_utils import torch_device
 from transformers.utils import is_peft_available
 
+from datasets import IterableDataset
+
 from trl import ModelConfig
 from trl.trainer.utils import (
     RepeatSampler,
@@ -43,6 +45,7 @@ from trl.trainer.utils import (
     pad,
     patch_chunked_lm_head,
     print_prompt_completions_sample,
+    repeat_iterable_dataset,
     selective_log_softmax,
     shuffle_sequence_dict,
     split_pixel_values_by_grid,
@@ -500,6 +503,58 @@ class TestRepeatRandomSampler(TrlTestCase):
         assert sampled[0:4] == sampled[4:8] == sampled[8:12]
         assert sampled[12:16] == sampled[16:20] == sampled[20:24]
         assert sampled[24:28] == sampled[28:32] == sampled[32:36]
+
+
+class TestRepeatIterableDataset(TrlTestCase):
+    @staticmethod
+    def _make_dataset(n):
+        return IterableDataset.from_generator(lambda: ({"x": i} for i in range(n)))
+
+    def test_matches_repeat_sampler(self):
+        # The streaming transform must yield records in exactly the same order as RepeatSampler yields indices for a
+        # map-style dataset (unshuffled), across a representative range of arguments.
+        for mini_repeat_count, batch_size, repeat_count in [(1, 1, 1), (2, 3, 4), (3, 2, 2), (2, 2, 3)]:
+            n = 12
+            expected = list(
+                RepeatSampler(
+                    list(range(n)),
+                    mini_repeat_count=mini_repeat_count,
+                    batch_size=batch_size,
+                    repeat_count=repeat_count,
+                    shuffle=False,
+                )
+            )
+            actual = [
+                record["x"]
+                for record in repeat_iterable_dataset(
+                    self._make_dataset(n),
+                    mini_repeat_count=mini_repeat_count,
+                    batch_size=batch_size,
+                    repeat_count=repeat_count,
+                )
+            ]
+            assert actual == expected
+
+    def test_default_arguments(self):
+        dataset = self._make_dataset(4)
+        sampled = [record["x"] for record in repeat_iterable_dataset(dataset, mini_repeat_count=2)]
+        assert sampled == [0, 0, 1, 1, 2, 2, 3, 3]
+
+    def test_drops_incomplete_batch(self):
+        dataset = self._make_dataset(7)
+        sampled = [record["x"] for record in repeat_iterable_dataset(dataset, mini_repeat_count=1, batch_size=2)]
+        # The last element is dropped because it can't form a full batch of size 2.
+        assert sampled == [0, 1, 2, 3, 4, 5]
+
+    def test_preserves_all_columns(self):
+        dataset = IterableDataset.from_generator(lambda: ({"x": i, "answer": str(i)} for i in range(2)))
+        sampled = list(repeat_iterable_dataset(dataset, mini_repeat_count=2))
+        assert sampled == [
+            {"x": 0, "answer": "0"},
+            {"x": 0, "answer": "0"},
+            {"x": 1, "answer": "1"},
+            {"x": 1, "answer": "1"},
+        ]
 
 
 class TestEntropyFromLogits(TrlTestCase):
