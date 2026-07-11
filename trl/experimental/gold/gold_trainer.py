@@ -1656,17 +1656,37 @@ class GOLDTrainer(SFTTrainer):
             prompt_max_length = (
                 max(1, self.args.max_length - max_completion_length) if self.args.max_length else None
             )
+            pad_token_id = self.processing_class.pad_token_id if self.processing_class.pad_token_id is not None else 0
             for slice_idx in on_policy_indices:
                 slice_inputs = slices[slice_idx]
-                if prompt_max_length is not None and slice_inputs["prompts"].shape[1] > prompt_max_length:
-                    # Prompts are left-padded, so the last columns hold the prompt end (generation marker);
-                    # keep them so prompt + completion fit in max_length, matching the vLLM path.
-                    slice_inputs = dict(slice_inputs)
-                    slice_inputs["prompts"] = slice_inputs["prompts"][:, -prompt_max_length:]
-                    if slice_inputs.get("prompt_attention_mask") is not None:
-                        slice_inputs["prompt_attention_mask"] = slice_inputs["prompt_attention_mask"][
-                            :, -prompt_max_length:
-                        ]
+                if prompt_max_length is not None:
+                    # Budget per real token (keep-end), mirroring the vLLM path so both keep the same tokens.
+                    # Trigger on the real-token count, not the padded width, and rebuild only when a row
+                    # overflows, so no pad columns are carried into the budgeted prompt.
+                    prompts = slice_inputs["prompts"]
+                    prompt_attention_mask = slice_inputs.get("prompt_attention_mask")
+                    budgeted_rows = []
+                    needs_budget = False
+                    for row_idx, prompt in enumerate(prompts):
+                        real_ids = (
+                            prompt[prompt_attention_mask[row_idx].bool()]
+                            if prompt_attention_mask is not None
+                            else prompt
+                        )
+                        if real_ids.shape[0] > prompt_max_length:
+                            real_ids = real_ids[-prompt_max_length:]
+                            needs_budget = True
+                        budgeted_rows.append(real_ids)
+                    if needs_budget:
+                        slice_inputs = dict(slice_inputs)
+                        slice_inputs["prompts"] = pad(
+                            budgeted_rows, padding_side="left", padding_value=pad_token_id
+                        )
+                        slice_inputs["prompt_attention_mask"] = pad(
+                            [torch.ones(row.shape[0], dtype=torch.long, device=row.device) for row in budgeted_rows],
+                            padding_side="left",
+                            padding_value=0,
+                        )
                 result = self.generate_on_policy_outputs(
                     unwrapped_model,
                     slice_inputs,
