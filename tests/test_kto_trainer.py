@@ -349,6 +349,27 @@ class TestKTOTrainer(TrlTestCase):
         metrics = trainer.evaluate(eval_dataset=dataset)
         assert metrics["eval_loss"] is not None
 
+    @pytest.mark.parametrize("streaming", [False, True])
+    def test_evaluate_with_eval_dataset_dict(self, streaming):
+        # `evaluate` should accept a `DatasetDict` (map-style) or `IterableDatasetDict` (streaming) passed directly —
+        # e.g. the raw output of `load_dataset` without a `split` — not only a plain `dict`. Each split is prepared
+        # independently. `apo_zero_unpaired` avoids KTO's KL term, which is incompatible with streaming datasets.
+        train_dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
+        eval_split = load_dataset(
+            "trl-internal-testing/zen", "standard_unpaired_preference", split="test", streaming=streaming
+        )
+        dataset_dict_cls = IterableDatasetDict if streaming else DatasetDict
+        eval_dataset = dataset_dict_cls({"data1": eval_split, "data2": eval_split})
+
+        training_args = KTOConfig(output_dir=self.tmp_dir, loss_type="apo_zero_unpaired", report_to="none")
+        trainer = KTOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=train_dataset
+        )
+
+        metrics = trainer.evaluate(eval_dataset=eval_dataset)
+        assert metrics["eval_data1_loss"] is not None
+        assert metrics["eval_data2_loss"] is not None
+
     def test_trust_remote_code(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
         model_id = "trl-internal-testing/tiny-RemoteForCausalLM"
