@@ -526,6 +526,18 @@ class SDFTConfig(_BaseConfig):
                 "`distillation_kl_clip` is only supported for `distillation_mode` in {'full_logits', 'topk_logits'}, "
                 f"got `distillation_mode={self.distillation_mode!r}` with `distillation_kl_clip` set."
             )
+        if (
+            self.use_teacher_server
+            and self.distillation_mode == "topk_logits"
+            and self.distillation_topk_support != "teacher"
+        ):
+            raise ValueError(
+                "`use_teacher_server=True` with `distillation_mode='topk_logits'` only supports "
+                "`distillation_topk_support='teacher'`, because the vLLM teacher server returns only the "
+                "teacher's top-k logprobs (the student's full logit distribution is not available server-side "
+                "to project onto). Got "
+                f"`distillation_topk_support={self.distillation_topk_support!r}`."
+            )
         num_processes = self.world_size
         if self.generation_batch_size is None and self.steps_per_generation is None:
             self.steps_per_generation = self.gradient_accumulation_steps
