@@ -555,6 +555,16 @@ class TestRepeatIterableDataset(TrlTestCase):
             {"x": 1, "answer": "1"},
         ]
 
+    def test_repeats_are_independent_objects(self):
+        # Repeated records must be independent objects (like the map-style path, where the dataset re-materializes a
+        # fresh object per access), so an in-place edit to one repeat doesn't corrupt the others.
+        dataset = IterableDataset.from_generator(lambda: ({"prompt": [{"content": "hi"}]} for _ in range(1)))
+        sampled = list(repeat_iterable_dataset(dataset, mini_repeat_count=2))
+        assert sampled[0] is not sampled[1]
+        assert sampled[0]["prompt"] is not sampled[1]["prompt"]
+        sampled[0]["prompt"][-1]["content"] += " there"
+        assert sampled[1]["prompt"][-1]["content"] == "hi"
+
 
 class TestEntropyFromLogits(TrlTestCase):
     @pytest.mark.parametrize("shape", [(768,), (32, 768), (8, 16, 768), (2, 4, 8, 768)])
