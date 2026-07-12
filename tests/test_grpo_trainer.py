@@ -566,9 +566,7 @@ class TestGRPOTrainer(TrlTestCase):
         # `dataloader_num_workers` is forced to 0 for iterable datasets.
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train", streaming=True)
 
-        training_args = GRPOConfig(
-            output_dir=self.tmp_dir, dataloader_num_workers=4, max_steps=1, report_to="none"
-        )
+        training_args = GRPOConfig(output_dir=self.tmp_dir, dataloader_num_workers=4, max_steps=1, report_to="none")
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
