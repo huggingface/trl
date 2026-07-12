@@ -228,7 +228,7 @@ class TestRLOOTrainer(TrlTestCase):
         eval_dataset = IterableDatasetDict({"data1": iterable_dataset, "data2": iterable_dataset})
 
         training_args = RLOOConfig(output_dir=self.tmp_dir, report_to="none")
-        with pytest.raises(NotImplementedError, match="Iterable datasets are not yet supported"):
+        with pytest.raises(ValueError, match="Iterable datasets are not yet supported"):
             RLOOTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
                 reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
