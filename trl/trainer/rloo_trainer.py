@@ -509,7 +509,9 @@ class RLOOTrainer(_BaseTrainer):
         uses_iterable_dataset = (
             isinstance(train_dataset, IterableDataset)
             or isinstance(eval_dataset, IterableDataset)
-            or (isinstance(eval_dataset, dict) and any(isinstance(ds, IterableDataset) for ds in eval_dataset.values()))
+            or (
+                isinstance(eval_dataset, dict) and any(isinstance(ds, IterableDataset) for ds in eval_dataset.values())
+            )
         )
         if uses_iterable_dataset:
             if args.accelerator_config.dispatch_batches:

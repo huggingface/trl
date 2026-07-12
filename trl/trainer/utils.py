@@ -766,6 +766,7 @@ def repeat_iterable_dataset(dataset, mini_repeat_count: int, batch_size: int = 1
     Example:
     ```python
     >>> from datasets import IterableDataset
+
     >>> dataset = IterableDataset.from_generator(lambda: ({"x": i} for i in range(7)))
     >>> gen = repeat_iterable_dataset(dataset, mini_repeat_count=2, batch_size=3, repeat_count=4)
     >>> [record["x"] for record in gen]

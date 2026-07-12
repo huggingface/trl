@@ -22,12 +22,11 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import transformers
+from datasets import IterableDataset
 from packaging.version import Version
 from transformers import AutoConfig, AutoModelForCausalLM
 from transformers.testing_utils import torch_device
 from transformers.utils import is_peft_available
-
-from datasets import IterableDataset
 
 from trl import ModelConfig
 from trl.trainer.utils import (
