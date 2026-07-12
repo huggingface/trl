@@ -1227,8 +1227,8 @@ class GRPOTrainer(_BaseTrainer):
 
     # This method overrides `Trainer.get_eval_dataloader` to wrap iterable eval datasets, reproducing the
     # RepeatSampler ordering that can't be attached to them (see `get_train_dataloader`). Map-style datasets keep the
-    # default path via `_get_eval_sampler`. Unlike training, evaluation uses no generation reuse and is left
-    # unshuffled for determinism.
+    # default path via `_get_eval_sampler`, which shuffles with `seed`, so the iterable wrap shuffles too (buffered)
+    # to walk prompts in a matching order.
     # Maintenance note: this method is a copy-paste of the original `Trainer.get_eval_dataloader`, with the iterable
     # wrapping as the only addition.
     def get_eval_dataloader(self, eval_dataset: str | Dataset | IterableDataset | None = None) -> DataLoader:
@@ -1254,6 +1254,7 @@ class GRPOTrainer(_BaseTrainer):
         )
 
         if isinstance(eval_dataset, IterableDataset):
+            eval_dataset = eval_dataset.shuffle(seed=self.args.seed)
             eval_dataset = IterableDataset.from_generator(
                 repeat_iterable_dataset,
                 gen_kwargs={"dataset": eval_dataset, "mini_repeat_count": self.num_generations_eval},
