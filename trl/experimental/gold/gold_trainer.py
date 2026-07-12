@@ -1944,25 +1944,7 @@ class GOLDTrainer(SFTTrainer):
             tool_masks=tool_mask,
         )
 
-    def _unexpanded_prompt_ids(self, prompts):
-        """Tokenizer-only (unexpanded) prompt IDs for vLLM (issue #6294).
-
-        Render the prompts to text (which keeps a single `<image>` placeholder per image), then tokenize *without* the
-        image processor. vLLM applies its own image-token expansion for token-ID prompts, so it must receive these
-        unexpanded IDs; the processor-expanded IDs (with the image block already blown up to hundreds of tokens) would
-        be expanded a second time and desync from the image features.
-        """
-        texts = self.processing_class.apply_chat_template(
-            conversation=prompts,
-            tools=self.tools or None,  # `or None`: Llama bug: it renders tool boilerplate for tools=[]
-            chat_template=self.chat_template,
-            add_generation_prompt=True,
-            tokenize=False,
-            **self.chat_template_kwargs,
-        )
-        return self.processing_class.tokenizer(texts, add_special_tokens=False)["input_ids"]
-
-    def _generate_single_turn(self, prompt_ids, images, multimodal_fields, vllm_prompt_ids=None):
+    def _generate_single_turn(self, prompt_ids, images, multimodal_fields):
         device = self.accelerator.device
 
         # Generate completions using either vLLM or regular generation
@@ -1975,12 +1957,9 @@ class GOLDTrainer(SFTTrainer):
                 self.vllm_generation.sync_weights()
                 self._last_vllm_sync_step = self.state.global_step
 
-            # Generate using vLLM with raw token IDs. For VLMs, feed the *unexpanded* (tokenizer-only, single
-            # `<image>`) prompt IDs when available: vLLM re-expands image placeholders in token-ID prompts, so passing
-            # the processor-expanded IDs would double-expand and corrupt the sequence (issue #6294). The expanded
-            # `prompt_ids` remain the source of truth for the training forward pass and all length bookkeeping.
+            # Generate using vLLM with raw token IDs
             _, completion_ids, _, _ = self.vllm_generation.generate(
-                prompts=vllm_prompt_ids if vllm_prompt_ids is not None else prompt_ids,
+                prompts=prompt_ids,
                 images=images,
                 num_generations=self.num_generations,
             )
@@ -2083,20 +2062,7 @@ class GOLDTrainer(SFTTrainer):
             raise ValueError("Unexpected tokenization: the EOS-trimmed prefix IDs are not a prefix of the full IDs.")
         return full_ids[len(prefix_ids) :]
 
-    def _tool_call_loop(
-        self,
-        prompts,
-        prompt_ids,
-        completion_ids,
-        completions,
-        logprobs,
-        images,
-        multimodal_fields,
-        vllm_prompt_ids=None,
-    ):
-        # `vllm_prompt_ids` (issue #6294): the unexpanded (tokenizer-only) prompt IDs used only for the vLLM generate
-        # calls in VLM mode. `prompt_ids` (processor-expanded) stays the source of truth for all length bookkeeping and
-        # the training forward pass. `None` for text models, where the two are identical.
+    def _tool_call_loop(self, prompts, prompt_ids, completion_ids, completions, logprobs, images, multimodal_fields):
         # Tool execution loop: execute tools, then regenerate completions with tool results appended to the prompt
         tool_calls = [completion[0].get("tool_calls") for completion in completions]
         idxs_with_tool = [idx for idx, tool_call in enumerate(tool_calls) if tool_call]
@@ -2179,10 +2145,8 @@ class GOLDTrainer(SFTTrainer):
                     prompt_completion_tool.append(tool_message)
                     completions[idx_with_tool].append(tool_message)
 
-            # Build token IDs by concatenation: prompt + completion + tool_suffix. The unexpanded variant (issue #6294)
-            # reuses the same completion + suffix (model/tool text has no image tokens) with the unexpanded prompt.
+            # Build token IDs by concatenation: prompt + completion + tool_suffix.
             prompt_completion_tool_ids = []
-            vllm_prompt_completion_tool_ids = [] if vllm_prompt_ids is not None else None
             for idx in range(len(idxs_with_tool)):
                 idx_with_tool = idxs_with_tool[idx]
                 # Extract trailing tool messages from completions
@@ -2196,10 +2160,6 @@ class GOLDTrainer(SFTTrainer):
                 prompt_completion_tool_ids.append(
                     prompt_ids[idx_with_tool] + completion_ids[idx_with_tool] + suffix_ids
                 )
-                if vllm_prompt_ids is not None:
-                    vllm_prompt_completion_tool_ids.append(
-                        vllm_prompt_ids[idx_with_tool] + completion_ids[idx_with_tool] + suffix_ids
-                    )
 
             # Drop tool results whose addition would push the sequence past max_completion_length (the completion
             # budget) or past the backend context ceiling (vLLM and transformers will error out on inputs longer than
@@ -2226,10 +2186,6 @@ class GOLDTrainer(SFTTrainer):
             prompt_completion_tool_ids = [
                 pct for pct, o in zip(prompt_completion_tool_ids, overlong, strict=True) if not o
             ]
-            if vllm_prompt_ids is not None:
-                vllm_prompt_completion_tool_ids = [
-                    pct for pct, o in zip(vllm_prompt_completion_tool_ids, overlong, strict=True) if not o
-                ]
             if not idxs_with_tool:
                 break  # all overlong, exit tool loop
 
@@ -2260,10 +2216,7 @@ class GOLDTrainer(SFTTrainer):
 
             # Generate new completions after tool execution (using concatenated IDs, no re-tokenization)
             post_tool_ids, post_tool_logprobs = self._generate_single_turn(
-                prompt_completion_tool_ids,
-                loop_images,
-                loop_multimodal_fields,
-                vllm_prompt_ids=vllm_prompt_completion_tool_ids,
+                prompt_completion_tool_ids, loop_images, loop_multimodal_fields
             )
 
             # Truncate so that pct[len(prompt_ids[idx]) :] + post_tool does not exceed max_completion_length.
@@ -2495,13 +2448,8 @@ class GOLDTrainer(SFTTrainer):
             generate_images = all_images
         else:
             generate_images = None
-        # Issue #6294: vLLM re-expands image placeholders in token-ID prompts, so it must receive the *unexpanded*
-        # (tokenizer-only, single-`<image>`) IDs. `all_prompt_ids` (processor-expanded) stays the source of truth for
-        # length bookkeeping, `parse_response` prefixes, and the tool loop. This method only runs for VLMs (dispatched
-        # via `_vlm_collator`), so un-expansion always applies.
-        vllm_all_prompt_ids = self._unexpanded_prompt_ids(all_prompts)
         _, completion_ids, _, _ = self.vllm_generation.generate(
-            prompts=vllm_all_prompt_ids,
+            prompts=all_prompt_ids,
             images=generate_images,
             num_generations=self.num_generations,
         )
@@ -2522,16 +2470,7 @@ class GOLDTrainer(SFTTrainer):
                 tool_call_count,
                 tool_failure_count,
                 tool_images,
-            ) = self._tool_call_loop(
-                all_prompts,
-                all_prompt_ids,
-                completion_ids,
-                completions,
-                None,
-                all_images,
-                {},
-                vllm_prompt_ids=vllm_all_prompt_ids,
-            )
+            ) = self._tool_call_loop(all_prompts, all_prompt_ids, completion_ids, completions, None, all_images, {})
             if any(imgs for imgs in tool_images):
                 raise NotImplementedError(
                     "Multimodal tool responses (tools returning images) are not supported by GOLDTrainer."

@@ -2745,18 +2745,10 @@ def test_on_policy_vlm_vllm_does_not_duplicate_repeated_sampler_batch(monkeypatc
     class StubProcessor:
         @staticmethod
         def apply_chat_template(conversation, add_generation_prompt=True, tokenize=True, return_dict=False, **kwargs):
-            if not tokenize:
-                # Text render used by `_unexpanded_prompt_ids` (issue #6294 un-expansion).
-                return [f"text_{i}" for i in range(len(conversation))]
             return {
-                "input_ids": [[1, 2, 3, 4, 5] for _ in conversation],  # processor-*expanded* image tokens
+                "input_ids": [[1, 2, 3, 4, 5] for _ in conversation],
                 "attention_mask": [[1, 1, 1, 1, 1] for _ in conversation],
             }
-
-        @staticmethod
-        def tokenizer(texts, add_special_tokens=False):
-            # Tokenizer-only path: fewer tokens (unexpanded single-<image>). vLLM must receive *these*, not [1,2,3,4,5].
-            return {"input_ids": [[7, 7] for _ in texts]}
 
         @staticmethod
         def batch_decode(ids, skip_special_tokens):
@@ -2839,8 +2831,7 @@ def test_on_policy_vlm_vllm_does_not_duplicate_repeated_sampler_batch(monkeypatc
     total_sampled_prompts = num_slices * unique_prompts_per_slice * num_generations
     assert received["n_prompts"] == total_sampled_prompts
     assert received["n_images"] == total_sampled_prompts
-    # Issue #6294: vLLM receives the *unexpanded* tokenizer-only IDs ([7, 7]), not the processor-expanded [1,2,3,4,5].
-    assert all(prompt == [7, 7] for prompt in received["prompts"])
+    assert all(prompt == [1, 2, 3, 4, 5] for prompt in received["prompts"])
 
     # Synthetic VLM examples are stored lazily and are not collated until their slice is consumed.
     assert len(collated_per_call) == 0
