@@ -831,6 +831,15 @@ class GRPOTrainer(_BaseTrainer):
                     "`accelerator_config`. Please set it to `False`."
                 )
             args.accelerator_config.dispatch_batches = False
+            # Prompt repetitions are baked into the stream, so it must be consumed in order by a single worker.
+            # Multiple workers would shard and interleave the stream, splitting the num_generations groups. The wrapped
+            # dataset is single-shard anyway, so extra workers bring no speedup.
+            if args.dataloader_num_workers != 0:
+                logger.warning(
+                    f"Iterable datasets require `dataloader_num_workers=0` to preserve prompt grouping; overriding the "
+                    f"provided value ({args.dataloader_num_workers})."
+                )
+                args.dataloader_num_workers = 0
 
         if args.loss_type == "luspo" and args.importance_sampling_level != "sequence":
             logger.warning(
