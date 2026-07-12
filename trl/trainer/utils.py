@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import asyncio
+import copy
 import hashlib
 import importlib.resources as pkg_resources
 import os
@@ -780,15 +781,16 @@ def repeat_iterable_dataset(dataset, mini_repeat_count: int, batch_size: int = 1
      3, 3, 4, 4, 5, 5]
     ```
     """
-    # `batch` is a dict mapping each column to a list of `batch_size` values; transpose it back to records without
-    # materializing an intermediate `Dataset`.
+    # `batch` maps each column to a list of `batch_size` values; transpose it back to records. Records are deep-copied
+    # at every yield so repeats stay independent, matching the map-style path where the dataset re-materializes a fresh
+    # object per access.
     for batch in dataset.batch(batch_size=batch_size, drop_last_batch=True):
         keys = list(batch)
         for _ in range(repeat_count):
             for values in zip(*(batch[key] for key in keys), strict=True):
                 record = dict(zip(keys, values, strict=True))
                 for _ in range(mini_repeat_count):
-                    yield record
+                    yield copy.deepcopy(record)
 
 
 # torch.nanstd doesn't exist, so we define it here
