@@ -797,7 +797,7 @@ class KTOTrainer(_BaseTrainer):
                 )
             if self.loss_type in ["apo_zero_unpaired"]:
                 raise ValueError(
-                    "You cannot set `loss_type='apo_zero_unpaired'` with liger-kernel."
+                    "You cannot set `loss_type='apo_zero_unpaired'` with liger-kernel. "
                     "Only KTO loss is supported with liger-kernel."
                 )
             if compute_metrics is not None:
