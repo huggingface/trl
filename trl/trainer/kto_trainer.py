@@ -28,12 +28,13 @@ import transformers
 from accelerate import PartialState
 from accelerate.logging import get_logger
 from accelerate.utils import is_peft_model, tqdm
-from datasets import Dataset, IterableDataset, concatenate_datasets
+from datasets import Dataset, DatasetDict, IterableDataset, IterableDatasetDict, concatenate_datasets
 from datasets.fingerprint import Hasher
 from packaging.version import Version
 from torch.utils.data import DataLoader, Sampler, SequentialSampler
 from transformers import (
     AutoProcessor,
+    BitsAndBytesConfig,
     DataCollator,
     PreTrainedModel,
     PreTrainedTokenizerBase,
@@ -48,7 +49,6 @@ from ..data_utils import (
     _tokenize,
     apply_chat_template,
     extract_prompt,
-    get_dataset_column_names,
     is_conversational,
     prepare_multimodal_messages,
     unpair_preference_dataset,
@@ -101,7 +101,7 @@ class DataCollatorForUnpairedPreference(DataCollatorMixin):
     When `"KL_completion_ids"` is present, the same three tensors are returned for the (mismatched) KL sequence under
     the `"KL_input_ids"`, `"KL_attention_mask"` and `"KL_completion_mask"` keys.
 
-    The returned dictionary also contains a `"label"` key with the list of labels. Optionally, the examples can contain
+    The returned dictionary also contains a `"label"` key with a tensor of labels. Optionally, the examples can contain
     `"ref_logps"` and `"ref_KL_logps"` keys, in which case the returned dictionary will also contain these keys with
     the corresponding tensors.
 
@@ -132,7 +132,7 @@ class DataCollatorForUnpairedPreference(DataCollatorMixin):
                                [1, 1, 1, 0, 0]]),
      'completion_mask': tensor([[0, 0, 0, 1, 1],
                                 [0, 0, 1, 0, 0]]),
-     'label': [True, False]}
+     'label': tensor([ True, False])}
 
     >>> # With KL completions
     >>> examples = [
@@ -152,7 +152,7 @@ class DataCollatorForUnpairedPreference(DataCollatorMixin):
                                   [1, 1, 1, 1]]),
      'KL_completion_mask': tensor([[0, 0, 0, 1],
                                    [0, 0, 1, 1]]),
-     'label': [True, False]}
+     'label': tensor([ True, False])}
     ```
     """
 
@@ -204,7 +204,8 @@ class DataCollatorForUnpairedPreference(DataCollatorMixin):
             output["ref_logps"] = torch.tensor([example["ref_logps"] for example in examples])
         if "ref_KL_logps" in examples[0]:
             output["ref_KL_logps"] = torch.tensor([example["ref_KL_logps"] for example in examples])
-        output["label"] = [example["label"] for example in examples]
+        # Must be a tensor: Accelerate cannot concatenate non-tensor fields across processes (accelerate#4111)
+        output["label"] = torch.tensor([example["label"] for example in examples])
         return output
 
 
@@ -230,7 +231,7 @@ class DataCollatorForVisionUnpairedPreference(DataCollatorMixin):
     - `"attention_mask"`: Tensor indicating attention mask.
     - `"pixel_values"`: Tensor representing image pixel values.
     - `"completion_mask"`: Tensor indicating which tokens correspond to completions.
-    - `"label"`: List of booleans indicating whether each completion is desirable.
+    - `"label"`: Tensor of booleans indicating whether each completion is desirable.
     - When `calculate_kl` is `True`: `"KL_input_ids"`, `"KL_attention_mask"` and `"KL_completion_mask"` for the cycled
       KL sequences.
 
@@ -293,7 +294,7 @@ class DataCollatorForVisionUnpairedPreference(DataCollatorMixin):
                                   [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]]),
      'KL_completion_mask': tensor([[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0],
                                    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1]]),
-     'label': [True, False]}
+     'label': tensor([ True, False])}
     ```
     """
 
@@ -453,7 +454,8 @@ class DataCollatorForVisionUnpairedPreference(DataCollatorMixin):
             if "mm_token_type_ids" in processed_prompts:
                 output["KL_mm_token_type_ids"] = kl_mm_token_type_ids
 
-        output["label"] = [example["label"] for example in examples]
+        # Must be a tensor: Accelerate cannot concatenate non-tensor fields across processes (accelerate#4111)
+        output["label"] = torch.tensor([example["label"] for example in examples])
         return output
 
 
@@ -498,14 +500,14 @@ class KTOTrainer(_BaseTrainer):
             - If provided, this model is used directly as the reference policy.
             - If `None`, the trainer will automatically use the initial policy corresponding to `model`, i.e. the model
               state before KTO training starts.
-        args ([`experimental.kto.KTOConfig`], *optional*):
+        args ([`KTOConfig`], *optional*):
             Configuration for this trainer. If `None`, a default configuration is used.
         data_collator ([`~transformers.DataCollator`], *optional*):
             Function to use to form a batch from a list of elements of the processed `train_dataset` or `eval_dataset`.
-            Will default to [`~experimental.kto.kto_trainer.DataCollatorForUnpairedPreference`] if the model is a
-            language model and [`~experimental.kto.kto_trainer.DataCollatorForVisionUnpairedPreference`] if the model
-            is a vision-language model. Custom collators must truncate sequences before padding; the trainer does not
-            apply post-collation truncation.
+            Will default to [`~trainer.kto_trainer.DataCollatorForUnpairedPreference`] if the model is a language model
+            and [`~trainer.kto_trainer.DataCollatorForVisionUnpairedPreference`] if the model is a vision-language
+            model. Custom collators must truncate sequences before padding; the trainer does not apply post-collation
+            truncation.
         train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
             Dataset to use for training. This trainer supports [unpaired preference](#unpaired-preference) type. The
             format of the samples can be either:
@@ -513,7 +515,11 @@ class KTOTrainer(_BaseTrainer):
             - [Standard](dataset_formats#standard): Each sample contains plain text.
             - [Conversational](dataset_formats#conversational): Each sample contains structured messages (e.g., role
               and content).
-        eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`] or `dict[str, Dataset | IterableDataset]`):
+
+            When `train_dataset` is an [`~datasets.IterableDataset`] (e.g. a streaming dataset), `max_steps` must be
+            set in the training arguments, since its length cannot be inferred and the total number of training steps
+            is required to bound the training loop and configure the learning rate scheduler.
+        eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`], [`~datasets.DatasetDict`], [`~datasets.IterableDatasetDict`] or `dict[str, Dataset | IterableDataset]`):
             Dataset to use for evaluation. It must meet the same requirements as `train_dataset`.
         processing_class ([`~transformers.PreTrainedTokenizerBase`] or [`~transformers.ProcessorMixin`], *optional*):
             Processing class used to process the data. The padding side must be set to "left". If `None`, the
@@ -536,6 +542,9 @@ class KTOTrainer(_BaseTrainer):
         optimizers (`tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None]`, *optional*, defaults to `(None, None)`):
             A tuple containing the optimizer and the scheduler to use. Will default to an instance of `AdamW` on your
             model and a scheduler given by [`~transformers.get_linear_schedule_with_warmup`] controlled by `args`.
+        quantization_config ([`~transformers.BitsAndBytesConfig`], *optional*):
+            Quantization configuration used when loading the model from a model identifier. Combine with `peft_config`
+            for QLoRA training. Ignored if the model is already instantiated.
         peft_config ([`~peft.PeftConfig`], *optional*):
             PEFT configuration used to wrap the model. If `None`, the model is not wrapped.
     """
@@ -562,11 +571,17 @@ class KTOTrainer(_BaseTrainer):
         args: KTOConfig | None = None,
         data_collator: DataCollator | None = None,
         train_dataset: Dataset | IterableDataset | None = None,
-        eval_dataset: Dataset | IterableDataset | dict[str, Dataset | IterableDataset] | None = None,
+        eval_dataset: Dataset
+        | IterableDataset
+        | DatasetDict
+        | IterableDatasetDict
+        | dict[str, Dataset | IterableDataset]
+        | None = None,
         processing_class: PreTrainedTokenizerBase | ProcessorMixin | None = None,
         compute_metrics: Callable[[EvalPrediction], dict] | None = None,
         callbacks: list[TrainerCallback] | None = None,
         optimizers: tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None] = (None, None),
+        quantization_config: "BitsAndBytesConfig | None" = None,
         peft_config: "PeftConfig | None" = None,
     ):
         # Args
@@ -590,7 +605,14 @@ class KTOTrainer(_BaseTrainer):
 
         # Model
         if isinstance(model, str):
-            model_init_kwargs = args.model_init_kwargs or {}
+            model_init_kwargs = dict(args.model_init_kwargs or {})  # copy to avoid mutating model_init_kwargs
+            if quantization_config is not None:
+                if "quantization_config" in model_init_kwargs:
+                    raise ValueError(
+                        "You set `quantization_config` both as a trainer argument and in `args.model_init_kwargs`. "
+                        "Please set it in only one place, preferably as a trainer argument."
+                    )
+                model_init_kwargs["quantization_config"] = quantization_config
             # Distributed training requires device_map=None ("auto" fails)
             if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 model_init_kwargs["device_map"] = None
@@ -599,8 +621,14 @@ class KTOTrainer(_BaseTrainer):
         else:
             if args.model_init_kwargs is not None:
                 logger.warning(
-                    "You passed `model_init_kwargs` to the KTOConfig, but your model is already instantiated. "
+                    "You passed `model_init_kwargs` to the `KTOConfig`, but your model is already instantiated. "
                     "The `model_init_kwargs` will be ignored."
+                )
+            if quantization_config is not None:
+                raise ValueError(
+                    "You passed `quantization_config` to the trainer, but your model is already instantiated. "
+                    "Quantization can only be applied when the model is loaded from a model identifier (`str`). "
+                    "Either pass the model as a model identifier, or omit `quantization_config`."
                 )
         # Non-quantized models do not have the `is_loaded_in_{8,4}bit` attributes, whereas quantized models do
         _is_quantized_model = getattr(model, "is_loaded_in_4bit", False) or getattr(model, "is_loaded_in_8bit", False)
@@ -868,7 +896,9 @@ class KTOTrainer(_BaseTrainer):
                 # memory during training.
                 self.ref_model = None
             else:
-                ref_model_init_kwargs = args.model_init_kwargs or {}
+                ref_model_init_kwargs = dict(args.model_init_kwargs or {})  # copy to avoid mutating model_init_kwargs
+                if quantization_config is not None:
+                    ref_model_init_kwargs["quantization_config"] = quantization_config
                 # Distributed training requires device_map=None ("auto" fails)
                 if self.args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                     ref_model_init_kwargs["device_map"] = None
@@ -947,56 +977,6 @@ class KTOTrainer(_BaseTrainer):
                         "eval",
                         self.args.precompute_ref_batch_size or self.args.per_device_eval_batch_size,
                     )
-
-    def _get_kl_dataset(
-        self,
-        dataset: Dataset | IterableDataset,
-        dataset_name: str,
-        args: KTOConfig,
-    ) -> Dataset | IterableDataset:
-        """
-        Creates the KL dataset by creating mismatched (prompt, completion) pairs for KL divergence estimation.
-
-        Args:
-            dataset (`Dataset` or `IterableDataset`):
-                Tokenized dataset with `prompt_ids` and `completion_ids` columns.
-            dataset_name (`str`):
-                Name used in progress bar descriptions.
-            args ([`KTOConfig`]):
-                Training arguments providing `per_device_train_batch_size` and `dataset_num_proc`.
-
-        Returns:
-            `Dataset` or `IterableDataset` with a single `KL_completion_ids` column.
-        """
-
-        def get_kl_completion_ids(examples):
-            # Create mismatched pairs of prompts and completions for the KL dataset by adding a +1 offset to the order
-            # of completions. For best results, the mismatched outputs y' used to estimate the KL term for a batch
-            # should be the same set as the matched outputs y used to estimate the rewards in that batch, just paired
-            # with different x.
-            examples["completion_ids"] = [examples["completion_ids"][-1]] + examples["completion_ids"][:-1]
-            return examples
-
-        map_kwargs = {}
-        if isinstance(dataset, Dataset):  # IterableDataset does not support num_proc or desc
-            map_kwargs["num_proc"] = args.dataset_num_proc
-            map_kwargs["desc"] = f"Extracting KL {dataset_name} dataset"
-        kl_dataset = dataset.map(
-            get_kl_completion_ids, batched=True, batch_size=args.per_device_train_batch_size, **map_kwargs
-        )
-
-        def rename_kl_fn(example):
-            return {"KL_completion_ids": example["completion_ids"]}
-
-        if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
-            map_kwargs["desc"] = f"Assembling KL {dataset_name} dataset"
-        column_names = get_dataset_column_names(dataset)
-        kl_dataset = kl_dataset.map(
-            rename_kl_fn,
-            remove_columns=[c for c in get_dataset_column_names(kl_dataset) if c in column_names],
-            **map_kwargs,
-        )
-        return kl_dataset
 
     def _prepare_dataset(
         self,
@@ -1080,12 +1060,22 @@ class KTOTrainer(_BaseTrainer):
 
             dataset = dataset.map(tokenize_fn, fn_kwargs={"processing_class": processing_class}, **map_kwargs)
 
-            # Get KL datasets if needed
+            # Add KL completions if needed. The KL term is estimated from mismatched (prompt, completion) pairs, built
+            # by rotating the completions by +1 within each batch of size `per_device_train_batch_size`:
+            # (x_1, y_1), ..., (x_n, y_n) --> (x_1, y_n), (x_2, y_1), ..., (x_n, y_{n-1}). For best results, the
+            # mismatched outputs y' used to estimate the KL term for a batch should be the same set as the matched
+            # outputs y used to estimate the rewards in that batch, just paired with different x.
             if self.calculate_KL:
-                # create pairs for estimating the KL term by flipping the matched pairs in each batch of size total_batch_size
-                # i.e., (x_1, y_1), ..., (x_n, y_n) --> (x_1, y_n), ..., (x_n, y_1) = (x'_1, y'_1), ..., (x'_n, y'_n)
-                kl_dataset = self._get_kl_dataset(dataset, dataset_name, args)
-                dataset = concatenate_datasets([dataset, kl_dataset], axis=1)
+                if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
+                    map_kwargs["desc"] = f"Extracting KL {dataset_name} dataset"
+
+                def add_kl_completion_ids(examples):
+                    examples["KL_completion_ids"] = [examples["completion_ids"][-1]] + examples["completion_ids"][:-1]
+                    return examples
+
+                dataset = dataset.map(
+                    add_kl_completion_ids, batched=True, batch_size=args.per_device_train_batch_size, **map_kwargs
+                )
 
             # Calculate dataset desirability balance
             if dataset_name == "train" and isinstance(dataset, Dataset):  # IterableDataset does not support len
@@ -1199,6 +1189,7 @@ class KTOTrainer(_BaseTrainer):
                 batched=True,
                 remove_columns=dataset.column_names,
                 new_fingerprint=fingerprint,
+                cache_file_name=cache_file,
                 desc=f"Caching reference log probs for {name} dataset",
             )
         self.accelerator.wait_for_everyone()
@@ -1613,7 +1604,12 @@ class KTOTrainer(_BaseTrainer):
 
     def evaluate(
         self,
-        eval_dataset: Dataset | dict[str, Dataset] | None = None,
+        eval_dataset: Dataset
+        | IterableDataset
+        | DatasetDict
+        | IterableDatasetDict
+        | dict[str, Dataset | IterableDataset]
+        | None = None,
         ignore_keys: list[str] | None = None,
         metric_key_prefix: str = "eval",
     ) -> dict[str, float]:
