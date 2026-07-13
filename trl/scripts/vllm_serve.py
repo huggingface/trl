@@ -195,6 +195,9 @@ class ScriptArguments:
         enable_prefix_caching (`bool`, *optional*):
             Whether to enable prefix caching in vLLM. If set to `True`, ensure that the model and the hardware support
             this feature.
+        enable_expert_parallel (`bool`, *optional*):
+            Whether to enable expert parallelism in vLLM for MoE models. If set to `True`, experts will be distributed
+            across tensor parallel workers.
         enforce_eager (`bool`, *optional*, defaults to `False`):
             Whether to enforce eager execution. If set to `True`, we will disable CUDA graph and always execute the
             model in eager mode. If `False` (default behavior), we will use CUDA graph and eager execution in hybrid.
@@ -207,6 +210,12 @@ class ScriptArguments:
         trust_remote_code (`bool`, *optional*, defaults to `False`):
             Whether to trust remote code when loading models. Set to `True` to allow executing code from model
             repositories. This is required for some custom models but introduces security risks.
+        language_model_only (`bool`, *optional*, defaults to `False`):
+            Whether to force vLLM to load the model in language-model-only mode. Disables all multimodal inputs by
+            setting every modality limit to 0, so a multimodal checkpoint serves as a text-only model.
+        limit_mm_per_prompt (`str`, *optional*):
+            Limits on multimodal items per prompt, as comma-separated key=value pairs (e.g., `"image=0,video=0"`).
+            Passed through to vLLM's EngineArgs to restrict the number of multimodal inputs.
         log_level (`str`, *optional*, defaults to `"info"`):
             Log level for uvicorn. Possible choices: `"critical"`, `"error"`, `"warning"`, `"info"`, `"debug"`,
             `"trace"`.
@@ -276,6 +285,13 @@ class ScriptArguments:
             "hardware support this feature."
         },
     )
+    enable_expert_parallel: bool | None = field(
+        default=None,
+        metadata={
+            "help": "Whether to enable expert parallelism in vLLM for MoE models. If set to `True`, experts will "
+            "be distributed across tensor parallel workers."
+        },
+    )
     enforce_eager: bool | None = field(
         default=False,
         metadata={
@@ -295,6 +311,20 @@ class ScriptArguments:
         metadata={
             "help": "Whether to trust remote code when loading models. Set to True to allow executing code from model "
             "repositories. This is required for some custom models but introduces security risks."
+        },
+    )
+    language_model_only: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to force vLLM to load the model in language-model-only mode. Disables all multimodal "
+            "inputs by setting every modality limit to 0, so a multimodal checkpoint serves as a text-only model."
+        },
+    )
+    limit_mm_per_prompt: str | None = field(
+        default=None,
+        metadata={
+            "help": "Limits on multimodal items per prompt, as comma-separated key=value pairs "
+            "(e.g., 'image=0,video=0'). Passed through to vLLM's EngineArgs."
         },
     )
     log_level: str = field(
@@ -340,6 +370,20 @@ def llm_worker(
     os.environ["VLLM_DP_SIZE"] = str(script_args.data_parallel_size)
     os.environ["VLLM_DP_MASTER_PORT"] = str(master_port)
 
+    # Optional engine args: only forward when explicitly set, so vLLM's config validation never
+    # sees `None` where it expects a bool/dict and engine defaults are preserved otherwise.
+    optional_engine_kwargs = {}
+    if script_args.enable_expert_parallel is not None:
+        optional_engine_kwargs["enable_expert_parallel"] = script_args.enable_expert_parallel
+    if script_args.language_model_only:
+        optional_engine_kwargs["language_model_only"] = True
+    if script_args.limit_mm_per_prompt:
+        limit_mm_per_prompt = {}
+        for item in script_args.limit_mm_per_prompt.split(","):
+            key, value = item.split("=")
+            limit_mm_per_prompt[key.strip()] = int(value.strip())
+        optional_engine_kwargs["limit_mm_per_prompt"] = limit_mm_per_prompt
+
     llm = LLM(
         model=script_args.model,
         revision=script_args.revision,
@@ -360,6 +404,7 @@ def llm_worker(
         # Important so temperature scaling/logit tweaking affects the TIS log probs
         logprobs_mode="processed_logprobs",
         speculative_config=json.loads(script_args.speculative_config) if script_args.speculative_config else None,
+        **optional_engine_kwargs,
     )
 
     # Send ready signal to parent process
