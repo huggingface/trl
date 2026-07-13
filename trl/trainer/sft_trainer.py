@@ -191,7 +191,7 @@ def _chunked_cross_entropy_loss(
         # Whole micro-batch masked (e.g. completion-only loss + truncation). Keep the loss connected
         # to the autograd graph through every trainable parameter so `.backward()` succeeds and DDP /
         # FSDP gradient sync doesn't hang on a missing param.
-        with _maybe_gather_lm_head_ctx(lm_head_weight, lm_head_bias):
+        with maybe_gather_lm_head_ctx(lm_head_weight, lm_head_bias):
             loss = (hidden_states.float().sum() + lm_head_weight.float().sum()) * 0.0
             if lm_head_bias is not None:
                 loss = loss + lm_head_bias.float().sum() * 0.0
