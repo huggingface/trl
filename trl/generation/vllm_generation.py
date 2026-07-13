@@ -108,6 +108,56 @@ if is_bitsandbytes_available():
     import bitsandbytes as bnb
 
 
+# vLLM loads these checkpoints by their top-level `architectures` entry as the full
+# conditional-generation (multimodal) wrapper, which nests the text decoder under a
+# `language_model` attribute. When the trainer instead holds the text-only inner model loaded
+# from the same checkpoint, every weight name from the trainer must be prefixed during sync
+# (`model.*` -> `language_model.model.*`, `lm_head.*` -> `language_model.lm_head.*`). Only
+# architectures listed here are remapped; unknown wrappers pass through unchanged.
+VLLM_LANGUAGE_MODEL_PREFIXED_ARCHITECTURES = {
+    "Qwen3_5MoeForConditionalGeneration": "language_model.",
+    "Qwen3_5ForConditionalGeneration": "language_model.",
+    "Qwen3VLForConditionalGeneration": "language_model.",
+    "Qwen3VLMoeForConditionalGeneration": "language_model.",
+}
+
+
+def get_vllm_param_prefix(model) -> str:
+    """Determine the weight-name prefix required when syncing trainer weights into vLLM.
+
+    Returns the `language_model.` prefix when the checkpoint's top-level architecture is a known
+    conditional-generation wrapper (see `VLLM_LANGUAGE_MODEL_PREFIXED_ARCHITECTURES`) while the
+    trainer holds a different (text-only) class, and `""` otherwise (non-VLM models, unknown
+    wrappers, or a trainer that already holds the wrapper class).
+    """
+    unwrapped = model.base_model.model if is_peft_model(model) else model
+    config = getattr(unwrapped, "config", None)
+    if config is None:
+        return ""
+    archs = getattr(config, "architectures", None) or []
+    if not archs:
+        # model.config may be a sub-config (e.g. text_config for VLM checkpoints) that lacks
+        # architectures. Re-fetch the full checkpoint config to see what vLLM will load.
+        model_id = getattr(unwrapped, "name_or_path", None) or getattr(config, "_name_or_path", None)
+        if model_id:
+            from transformers import AutoConfig
+
+            try:
+                full_config = AutoConfig.from_pretrained(model_id)
+                archs = getattr(full_config, "architectures", None) or []
+            except Exception:
+                pass
+    vllm_arch = archs[0] if archs else ""
+    prefix = VLLM_LANGUAGE_MODEL_PREFIXED_ARCHITECTURES.get(vllm_arch, "")
+    if prefix and type(unwrapped).__name__ != vllm_arch:
+        logger.info(
+            f"VLM architecture mismatch: trainer={type(unwrapped).__name__}, vLLM will load {vllm_arch}. "
+            f"Prepending '{prefix}' to weight names during sync."
+        )
+        return prefix
+    return ""
+
+
 class VLLMGeneration:
     """Handles vLLM-based generation for trainers.
 
@@ -288,6 +338,10 @@ class VLLMGeneration:
         self.logprobs = logprobs
         self.generation_kwargs = generation_kwargs or {}
 
+        # Weight-name prefix for checkpoints that vLLM loads as a conditional-generation wrapper
+        # while the trainer holds the text-only inner model (e.g. Qwen3.5 / Qwen3-VL).
+        self._vllm_param_prefix = get_vllm_param_prefix(model)
+
         self._init_vllm()
 
     def _init_vllm(self):
@@ -382,6 +436,8 @@ class VLLMGeneration:
         prefixes = ["_checkpoint_wrapped_module."] + extra_prefixes
         for prefix in prefixes:
             name = name.replace(prefix, "")
+        if self._vllm_param_prefix:
+            name = self._vllm_param_prefix + name
         return name
 
     def _push_param_to_vllm(self, name: str, param) -> None:

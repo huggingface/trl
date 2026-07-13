@@ -51,6 +51,7 @@ from transformers.utils import is_peft_available, is_sagemaker_mp_enabled
 from ...data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
 from ...extras.profiling import profiling_context
 from ...generation.vllm_client import VLLMClient
+from ...generation.vllm_generation import get_vllm_param_prefix
 from ...import_utils import is_vllm_available
 from ...models.utils import prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
 from ...trainer.base_trainer import _BaseTrainer
@@ -416,6 +417,10 @@ class OnlineDPOTrainer(_BaseTrainer):
             self.model.add_model_tags(self._tag_names)
 
         self._beta = args.beta
+
+        # Weight-name prefix for checkpoints that vLLM loads as a conditional-generation wrapper
+        # while the trainer holds the text-only inner model (e.g. Qwen3.5 / Qwen3-VL).
+        self._vllm_param_prefix = get_vllm_param_prefix(model)
 
         # Set up generation configuration and vLLM after super().__init__
         if self.use_vllm:
@@ -871,6 +876,8 @@ class OnlineDPOTrainer(_BaseTrainer):
         prefixes = ["_checkpoint_wrapped_module."] + extra_prefixes
         for prefix in prefixes:
             name = name.replace(prefix, "")
+        if self._vllm_param_prefix:
+            name = self._vllm_param_prefix + name
         return name
 
     def process_vision_row(
