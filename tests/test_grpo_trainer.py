@@ -838,6 +838,79 @@ class TestGRPOTrainer(TrlTestCase):
         # 3 * 4 = 12, which is what a tool_mask-blind denominator would compute instead.
         assert captured["num_items_in_batch_zv"] == pytest.approx(6.0)
 
+    def test_dapo_zv_zero_variance_detection_correct_under_normalize_then_sum(self):
+        """Under `multi_objective_aggregation="normalize_then_sum"`, the zero-variance predicate is computed
+        from the per-row combined reward, which is itself per-group-per-function centered before being summed
+        and again globally centered when advantages are computed. A group tied on every reward function is
+        forced to a combined reward of exactly 0 by the first centering step, and the batch-wide mean subtracted
+        by the second is therefore also exactly 0 (it averages every group's already-zero group-sum) -- so the
+        group's advantage must land at 0 too, not merely have equal max/min combined reward for an unrelated
+        reason. This checks that directly: if a tied group's *advantage* ever came out nonzero here, its tokens
+        would still be (correctly) excluded from `num_items_in_batch_zv` while (incorrectly) still contributing
+        a nonzero term to the loss numerator, silently mis-scaling the loss.
+        """
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        num_generations = 3
+
+        def rollout_func(prompts, trainer):
+            n = len(prompts)
+            return {
+                "prompt_ids": [[5, 6] for _ in range(n)],
+                "completion_ids": [[1, 2, 3, 4] for _ in range(n)],
+                "logprobs": [[0.0, 0.0, 0.0, 0.0] for _ in range(n)],
+            }
+
+        def reward_func1(prompts, completions, **kwargs):
+            # Group 0 (rows 0-2) tied at 5.0; group 1 (rows 3-5) varied.
+            return [5.0 if i < num_generations else float(i - num_generations) for i in range(len(completions))]
+
+        def reward_func2(prompts, completions, **kwargs):
+            # Group 0 tied at a different constant (still tied group-wide, on this function too); group 1
+            # varied with the opposite ordering, so the two functions don't cancel degenerately for group 1.
+            return [
+                3.0 if i < num_generations else float(num_generations - 1 - (i - num_generations))
+                for i in range(len(completions))
+            ]
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=6,  # 2 groups of 3
+            num_generations=num_generations,
+            max_completion_length=8,
+            loss_type="dapo_zv",
+            beta=0.0,
+            reward_weights=[0.7, 0.3],
+            multi_objective_aggregation="normalize_then_sum",
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs=[reward_func1, reward_func2],
+            args=training_args,
+            train_dataset=dataset,
+            rollout_func=rollout_func,
+        )
+
+        # Call the scoring step directly with a hand-built, single-generation-call input instead of going
+        # through trainer.train(): the RepeatSampler/dataloader reorders rows across the accumulation pipeline,
+        # which would decouple "row i" from "group 0 vs group 1" and make the indexing below meaningless.
+        prompt = dataset[0]["prompt"]
+        inputs = [{"prompt": prompt} for _ in range(6)]
+        out = trainer._generate_and_score_completions(inputs)
+
+        # Every row has 4 completion tokens, all active. Group 0 is excluded: only group 1's 3 rows * 4 tokens
+        # are counted in num_items_in_batch_zv.
+        assert out["num_items_in_batch"].item() == pytest.approx(24.0)
+        assert out["num_items_in_batch_zv"].item() == pytest.approx(12.0)
+
+        group0_advantages = out["advantages"][:num_generations]
+        group1_advantages = out["advantages"][num_generations:]
+        # Load-bearing check: group 0 is genuinely tied on BOTH reward functions, so its advantage must be ~0
+        # even after normalize_then_sum's additional batch-wide centering step.
+        assert group0_advantages.abs().max().item() < 1e-4
+        # Sanity: group 1 actually has spread, so the check above isn't vacuously true for a degenerate batch.
+        assert group1_advantages.std().item() > 1e-3
+
     def test_dapo_zv_consistent_with_dapo_under_mask_truncated_completions(self):
         """`num_items_in_batch_zv` must stay on the same basis as `num_items_in_batch` with respect to
         `mask_truncated_completions`: the latter is computed in `_generate()` BEFORE truncated rows get zeroed out
