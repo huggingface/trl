@@ -210,10 +210,12 @@ def maybe_gather_lm_head_ctx(*params: torch.nn.Parameter):
     import deepspeed
     from deepspeed.runtime.zero.partition_parameters import ZeroParamStatus
 
-    to_gather = [p for p in params if p is not None and p.ds_status != ZeroParamStatus.AVAILABLE]
+    # Deduplicate by identity: with a shared reference (e.g. PEFT with no separate `ref_model`, or tied embeddings)
+    # the same parameter is passed more than once, and ZeRO-3 mishandles duplicate entries in the gather list.
+    to_gather = {id(p): p for p in params if p is not None and p.ds_status != ZeroParamStatus.AVAILABLE}
     if not to_gather:
         return nullcontext()
-    return deepspeed.zero.GatheredParameters(to_gather)
+    return deepspeed.zero.GatheredParameters(list(to_gather.values()))
 
 
 def get_quantization_config(model_args: ModelConfig) -> BitsAndBytesConfig | None:

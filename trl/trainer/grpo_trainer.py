@@ -26,7 +26,6 @@ import time
 import warnings
 from collections import defaultdict, deque
 from collections.abc import Callable
-from contextlib import nullcontext
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -83,6 +82,7 @@ from .utils import (
     entropy_from_logits,
     get_config_model_id,
     identity,
+    maybe_gather_lm_head_ctx,
     nanmax,
     nanmin,
     nanstd,
@@ -2734,21 +2734,10 @@ class GRPOTrainer(_BaseTrainer):
         loss_mask = completion_mask if "tool_mask" not in inputs else completion_mask * inputs["tool_mask"]
         lm_head_weight = unwrapped_model.lm_head.weight
         lm_head_bias = unwrapped_model.lm_head.bias
-        # Liger reads `lm_head` directly instead of through `model.forward()`, so its ZeRO-3 gather hook never fires
-        # and the fused matmul gets an empty shard. Gather the weight/bias ourselves for the call (the weight grad is
-        # computed during this forward, so it isn't needed in the backward). Skip it when already gathered: with tied
-        # embeddings `embed_tokens` keeps the weight `AVAILABLE`, and re-partitioning on exit breaks its tracking.
-        deepspeed_plugin = self.accelerator.state.deepspeed_plugin
-        gather_ctx = nullcontext()
-        if deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3:
-            from deepspeed.runtime.zero.partition_parameters import ZeroParamStatus
-
-            params = [lm_head_weight] if lm_head_bias is None else [lm_head_weight, lm_head_bias]
-            if any(p.ds_status != ZeroParamStatus.AVAILABLE for p in params):
-                import deepspeed
-
-                gather_ctx = deepspeed.zero.GatheredParameters(params, modifier_rank=None)
-        with gather_ctx:
+        # Liger reads `lm_head` directly instead of through `model.forward()`, so its ZeRO-3 gather hook never fires and
+        # the fused matmul gets an empty shard. Gather the weight/bias ourselves for the call (the weight grad is
+        # computed during this forward, so it isn't needed in the backward).
+        with maybe_gather_lm_head_ctx(lm_head_weight, lm_head_bias):
             loss, metrics = self.liger_loss(
                 _input=last_hidden_state,
                 lin_weight=lm_head_weight,
