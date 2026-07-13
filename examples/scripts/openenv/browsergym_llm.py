@@ -17,7 +17,7 @@
 #     "trl[vllm,peft]",
 #     "trackio",
 #     "kernels",
-#     "openenv-browsergym @ git+https://huggingface.co/spaces/openenv/browsergym_env",
+#     "openenv-browsergym-env @ git+https://huggingface.co/spaces/openenv/browsergym_env",
 # ]
 # ///
 
@@ -38,7 +38,7 @@ uv pip install git+https://huggingface.co/spaces/openenv/browsergym_env
 Setup (for development, clone the repo):
 
 ```sh
-git clone https://github.com/meta-pytorch/OpenEnv.git
+git clone https://github.com/huggingface/OpenEnv.git
 cd OpenEnv/envs/browsergym_env
 uv pip install -e .
 ```
@@ -315,7 +315,7 @@ def main() -> None:
             self._done = False
             self._step_count = 0
             self._ensure_large_max_size()
-            result = self.client.reset()
+            result = self.client.reset(task_name=args.task_name)
             self._done = result.done
             return self._format_observation(result.observation)
 

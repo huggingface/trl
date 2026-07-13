@@ -35,7 +35,7 @@ uv pip install git+https://huggingface.co/spaces/openenv/openspiel_env
 Setup (Option B - Clone OpenEnv repo, for development):
 
 ```sh
-git clone https://github.com/meta-pytorch/OpenEnv.git
+git clone https://github.com/huggingface/OpenEnv.git
 cd OpenEnv/envs/openspiel_env
 uv pip install -e .
 ```
@@ -79,6 +79,7 @@ from pathlib import Path
 
 import requests
 from datasets import Dataset
+from openenv.core.containers.runtime import LocalDockerProvider
 from openspiel_env import OpenSpielEnv
 from openspiel_env.models import OpenSpielAction
 
@@ -93,9 +94,9 @@ def parse_args():
     parser.add_argument("--env-port", type=int, default=8001, help="Port for the environment server.")
     parser.add_argument(
         "--env-mode",
-        choices=["local", "docker-local", "docker-image", "docker-hub", "space"],
+        choices=["local", "docker-local", "docker-image", "space"],
         default="docker-image",
-        help="Where to run the environment: 'local' to launch it, 'docker-local' if already running locally, 'docker-image' to run from a Docker image, 'docker-hub' to run from Docker Hub, or 'space' to use a remote Space URL.",
+        help="Where to run the environment: 'local' to launch it, 'docker-local' if already running locally, 'docker-image' to run from a Docker image, or 'space' to use a remote Space URL.",
     )
     # --- Generation and model config ---
     parser.add_argument(
@@ -214,15 +215,11 @@ def main():
         server_process = None
         print(f"🌍 Using existing OpenSpiel Environment (Docker) at: {env_url}")
     elif args.env_mode == "docker-image":
-        _bootstrap = OpenSpielEnv.from_docker_image(args.env_image)
-        env_url = _bootstrap.base_url
+        provider = LocalDockerProvider()
+        env_url = provider.start_container(args.env_image)
+        provider.wait_for_ready(env_url)
         server_process = None
         print("🌍 Using OpenSpiel Environment (Docker) from local Image")
-    elif args.env_mode == "docker-hub":
-        _bootstrap = OpenSpielEnv.from_hub(args.env_image)
-        env_url = _bootstrap.base_url
-        server_process = None
-        print("🌍 Using existing OpenSpiel Environment (Docker) from Hub Image")
     elif args.env_mode == "space":
         env_url = args.env_host
         server_process = None

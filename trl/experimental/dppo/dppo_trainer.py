@@ -14,6 +14,7 @@
 
 import asyncio
 import copy
+import inspect
 import math
 import textwrap
 from collections.abc import Callable
@@ -38,27 +39,18 @@ from transformers import (
 from transformers.utils import is_peft_available
 
 from ...chat_template_utils import parse_response
-from ...data_utils import (
-    apply_chat_template,
-    is_conversational,
-    prepare_multimodal_messages,
-)
+from ...data_utils import apply_chat_template, is_conversational, prepare_multimodal_messages
 from ...extras.profiling import profiling_context, profiling_decorator
 from ...models import unwrap_model_for_generation
 from ...models.utils import disable_gradient_checkpointing
 from ...trainer.grpo_trainer import EnvironmentFactory, GRPOTrainer, RewardFunc, RolloutFunc
-from ...trainer.utils import (
-    entropy_from_logits,
-    nanstd,
-    pad,
-    selective_log_softmax,
-    use_adapter,
-)
+from ...trainer.utils import entropy_from_logits, nanstd, pad, selective_log_softmax, use_adapter
 from .dppo_config import DPPOConfig
 
 
 if is_peft_available():
     from peft import PeftConfig, PeftModel
+
 
 SAFETY_CLAMP_MAX = 20
 
@@ -95,9 +87,10 @@ class DPPOTrainer(GRPOTrainer):
               config) with the keyword arguments in `args.model_init_kwargs`.
             - A [`~transformers.PreTrainedModel`] object. Only causal language models are supported.
             - A [`~peft.PeftModel`] object. Only causal language models are supported.
-        reward_funcs (`RewardFunc | list[RewardFunc]`):
+        reward_funcs (`RewardFunc | list[RewardFunc]`, *optional*):
             Reward functions to be used for computing the rewards. To compute the rewards, we call all the reward
-            functions with the prompts and completions and sum the rewards. Can be either:
+            functions with the prompts and completions and sum the rewards. May be omitted when the reward is supplied
+            by the environment through `environment_factory` (see below). Can be either:
 
             - A single reward function, such as:
                 - A string: The *model ID* of a pretrained model hosted inside a model repo on huggingface.co, or a
@@ -169,6 +162,19 @@ class DPPOTrainer(GRPOTrainer):
             process and the trainer instance. It must return a dict with `"prompt_ids"`, `"completion_ids"`, and
             `"logprobs"` fields. Any other fields are forwarded to the reward functions. This feature is experimental
             and may change or be removed at any time without prior notice.
+        environment_factory (`EnvironmentFactory`, *optional*):
+            A callable that creates and returns an environment instance. The environment class should define methods
+            that can be invoked as tools during generation. Each method should comply with the same requirements as the
+            `tools` described above. If `environment_factory` is provided, an instance of the environment is created
+            for each generation in the batch, allowing for parallel and independent interactions. The environment must
+            also implement a callable `reset` method that can be used to reset state between generations. The `reset`
+            method should return either `None` or a string: when it returns a string, that string is appended to the
+            last user message before generation. The environment may also define a `get_reward` method taking no
+            argument and returning a `float`: when present, the environment owns the reward, and `get_reward` is called
+            once per completed rollout to score it from the environment's internal state. It acts as an additional
+            reward source (with weight 1, logged under the environment's class name) alongside `reward_funcs`, which
+            then becomes optional. This feature is experimental and may change or be removed at any time without prior
+            notice.
     """
 
     _tag_names = ["trl", "dppo"]
@@ -189,7 +195,7 @@ class DPPOTrainer(GRPOTrainer):
     def __init__(
         self,
         model: "str | PreTrainedModel | PeftModel",
-        reward_funcs: RewardFunc | list[RewardFunc],
+        reward_funcs: RewardFunc | list[RewardFunc] | None = None,
         args: DPPOConfig | None = None,
         train_dataset: Dataset | IterableDataset | None = None,
         eval_dataset: Dataset | IterableDataset | dict[str, Dataset | IterableDataset] | None = None,
@@ -592,7 +598,10 @@ class DPPOTrainer(GRPOTrainer):
                 completion_ids[idx_with_tool] = pct[prompt_length:] + post_tool_ids[idx]
 
             # Decode post-tool completions
-            post_tool_completions = [parse_response(self._tokenizer, ids) if ids else {} for ids in post_tool_ids]
+            post_tool_completions = [
+                parse_response(self._tokenizer, ids, prefix=prompt_completion_tool_ids[idx]) if ids else {}
+                for idx, ids in enumerate(post_tool_ids)
+            ]
 
             for idx in range(len(idxs_with_tool)):
                 idx_with_tool = idxs_with_tool[idx]
@@ -666,12 +675,14 @@ class DPPOTrainer(GRPOTrainer):
 
         # Decode completions. It's important to use `parse_response` when possible, because it handles tool calls.
         if is_conversational({"prompt": prompts[0]}):
-            if (
-                Version(transformers.__version__) >= Version("5.0.0")  # parse_response added in v5
-                and hasattr(self._tokenizer, "response_schema")  # attribute not set by default for now
-                and self._tokenizer.response_schema is not None  # only works if the tokenizer has a schema
+            if Version(transformers.__version__) >= Version("5.0.0") and (  # parse_response added in v5
+                getattr(self._tokenizer, "response_template", None) is not None  # new-style
+                or getattr(self._tokenizer, "response_schema", None) is not None  # old-style
             ):
-                completions = [[parse_response(self._tokenizer, ids)] for ids in completion_ids]
+                completions = [
+                    [parse_response(self._tokenizer, ids, prefix=prompt_ids[i])]
+                    for i, ids in enumerate(completion_ids)
+                ]
             else:
                 contents = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
                 completions = [[{"role": "assistant", "content": content}] for content in contents]
@@ -845,11 +856,61 @@ class DPPOTrainer(GRPOTrainer):
 
         prompts = [x["prompt"] for x in inputs]
 
+        # Resolve each example's environment and draw one reusable instance per rollout from the pool, creating more
+        # only when this batch needs more concurrent instances of an environment than exist. `_batch_environments`
+        # records each example's environment so `_tokenize_prompts` can render the matching tool schema.
+        if self.environment_factories is not None:
+            self._batch_environments = [x.get("environment") if self._multi_environment else None for x in inputs]
+            if self._multi_environment:
+                for name in set(self._batch_environments):
+                    if name not in self.environment_factories:
+                        raise ValueError(
+                            f"Example has `environment={name!r}`, which is not among the environments passed to "
+                            f"`environment_factory`. Expected one of: {list(self.environment_factories)}."
+                        )
+            self.environments = []
+            pool_cursor = {}  # how many instances of each environment have been handed out so far this batch
+            for name in self._batch_environments:
+                pool = self._environment_pool[name]
+                index = pool_cursor.get(name, 0)
+                if index == len(pool):
+                    pool.append(self.environment_factories[name]())
+                pool_cursor[name] = index + 1
+                self.environments.append(pool[index])
+
+        # Build the per-rollout tool dicts for this batch: the standalone tools plus, for each rollout, the methods of
+        # its environment. Done here (not at init) because the environment instances are drawn at batch time.
+        if self.tools:
+            self._sync_tool_dicts = []
+            self._async_tool_dicts = []
+            for i in range(len(inputs)):
+                methods = []
+                if self.environments:
+                    methods = [
+                        member
+                        for member_name, member in inspect.getmembers(self.environments[i], predicate=inspect.ismethod)
+                        if member_name not in ("reset", "get_reward") and not member_name.startswith("_")
+                    ]
+                sync_tool_dict, async_tool_dict = {}, {}
+                for tool in self._standalone_tools + methods:
+                    if inspect.iscoroutinefunction(tool):
+                        async_tool_dict[tool.__name__] = tool
+                    else:
+                        sync_tool_dict[tool.__name__] = tool
+                self._sync_tool_dicts.append(sync_tool_dict)
+                self._async_tool_dicts.append(async_tool_dict)
+
         if self.environments:
-            for prompt, environment, reset_kwargs in zip(prompts, self.environments, inputs, strict=True):
+            for prompt, environment, x in zip(prompts, self.environments, inputs, strict=True):
+                # `environment` is a control field in multi-environment mode, so it is not forwarded to `reset`.
+                reset_kwargs = {k: v for k, v in x.items() if k != "environment"} if self._multi_environment else x
                 observation = environment.reset(**reset_kwargs)
                 if observation is None:
                     continue
+                if isinstance(observation, list) and isinstance(prompt[-1]["content"], str):
+                    prompt[-1]["content"] = [{"type": "text", "text": prompt[-1]["content"]}]
+                if isinstance(observation, str) and isinstance(prompt[-1]["content"], list):
+                    observation = [{"type": "text", "text": observation}]
                 prompt[-1]["content"] += observation
 
         if "images" in inputs[0]:
@@ -1012,7 +1073,7 @@ class DPPOTrainer(GRPOTrainer):
             # Compute the per-token log probabilities for the reference model
             if self.beta != 0.0:
                 if self.ref_model is not None:
-                    ref_per_token_logps, _ = self._get_per_token_logps_and_entropies(
+                    ref_per_token_logps, _, _ = self._get_per_token_logps_and_entropies(
                         self.ref_model,
                         prompt_completion_ids,
                         attention_mask,
@@ -1027,7 +1088,7 @@ class DPPOTrainer(GRPOTrainer):
                     # - Re-training an existing adapter: an initial copy is loaded under the name "ref".
                     model = self.accelerator.unwrap_model(self.model)
                     with use_adapter(model, adapter_name="ref" if "ref" in model.peft_config else None):
-                        ref_per_token_logps, _ = self._get_per_token_logps_and_entropies(
+                        ref_per_token_logps, _, _ = self._get_per_token_logps_and_entropies(
                             self.model,
                             prompt_completion_ids,
                             attention_mask,
@@ -1146,7 +1207,7 @@ class DPPOTrainer(GRPOTrainer):
             self._metrics[mode][name].append(global_mean)
         self._pending_metrics.clear()
 
-        if images is not None:
+        if images is not None and self.log_multimodal:
             self._logs["images"].extend(gather_object(images))
 
         output = {
@@ -1297,7 +1358,7 @@ class DPPOTrainer(GRPOTrainer):
                 **forward_kwargs,
             )
         else:
-            per_token_logps, entropies = self._get_per_token_logps_and_entropies(
+            per_token_logps, entropies, _ = self._get_per_token_logps_and_entropies(
                 model,
                 input_ids,
                 attention_mask,

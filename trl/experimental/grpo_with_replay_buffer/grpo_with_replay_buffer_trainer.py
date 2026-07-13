@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import heapq
+import inspect
 from typing import Any
 
 import torch
@@ -69,6 +70,50 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
         mode = "train" if self.model.training else "eval"
 
         prompts = [x["prompt"] for x in inputs]
+
+        # Resolve each example's environment and draw one reusable instance per rollout from the pool, creating more
+        # only when this batch needs more concurrent instances of an environment than exist. `_batch_environments`
+        # records each example's environment so `_tokenize_prompts` can render the matching tool schema.
+        if self.environment_factories is not None:
+            self._batch_environments = [x.get("environment") if self._multi_environment else None for x in inputs]
+            if self._multi_environment:
+                for name in set(self._batch_environments):
+                    if name not in self.environment_factories:
+                        raise ValueError(
+                            f"Example has `environment={name!r}`, which is not among the environments passed to "
+                            f"`environment_factory`. Expected one of: {list(self.environment_factories)}."
+                        )
+            self.environments = []
+            pool_cursor = {}  # how many instances of each environment have been handed out so far this batch
+            for name in self._batch_environments:
+                pool = self._environment_pool[name]
+                index = pool_cursor.get(name, 0)
+                if index == len(pool):
+                    pool.append(self.environment_factories[name]())
+                pool_cursor[name] = index + 1
+                self.environments.append(pool[index])
+
+        # Build the per-rollout tool dicts for this batch: the standalone tools plus, for each rollout, the methods of
+        # its environment. Done here (not at init) because the environment instances are drawn at batch time.
+        if self.tools:
+            self._sync_tool_dicts = []
+            self._async_tool_dicts = []
+            for i in range(len(inputs)):
+                methods = []
+                if self.environments:
+                    methods = [
+                        member
+                        for member_name, member in inspect.getmembers(self.environments[i], predicate=inspect.ismethod)
+                        if member_name not in ("reset", "get_reward") and not member_name.startswith("_")
+                    ]
+                sync_tool_dict, async_tool_dict = {}, {}
+                for tool in self._standalone_tools + methods:
+                    if inspect.iscoroutinefunction(tool):
+                        async_tool_dict[tool.__name__] = tool
+                    else:
+                        sync_tool_dict[tool.__name__] = tool
+                self._sync_tool_dicts.append(sync_tool_dict)
+                self._async_tool_dicts.append(async_tool_dict)
 
         if "images" in inputs[0]:
             images = [example.get("images") for example in inputs]
@@ -231,7 +276,7 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
             if self.args.gradient_accumulation_steps % generate_every != 0 or (
                 self.use_vllm and self.vllm_importance_sampling_correction
             ):
-                old_per_token_logps, _ = self._get_per_token_logps_and_entropies(
+                old_per_token_logps, _, _ = self._get_per_token_logps_and_entropies(
                     self.model,
                     prompt_completion_ids,
                     attention_mask,
@@ -247,13 +292,15 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
             if self.use_vllm and self.vllm_importance_sampling_correction:
                 importance_sampling_ratio = torch.exp(old_per_token_logps - sampling_per_token_logps)
                 importance_sampling_ratio = torch.clamp(
-                    importance_sampling_ratio, max=self.vllm_importance_sampling_cap
+                    importance_sampling_ratio,
+                    min=self.vllm_importance_sampling_clip_min,
+                    max=self.vllm_importance_sampling_clip_max,
                 )
 
             # Compute the per-token log probabilities for the reference model
             if self.beta != 0.0:
                 if self.ref_model is not None:
-                    ref_per_token_logps, _ = self._get_per_token_logps_and_entropies(
+                    ref_per_token_logps, _, _ = self._get_per_token_logps_and_entropies(
                         self.ref_model,
                         prompt_completion_ids,
                         attention_mask,
@@ -264,7 +311,7 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
                     )
                 else:
                     with self.accelerator.unwrap_model(self.model).disable_adapter():
-                        ref_per_token_logps, _ = self._get_per_token_logps_and_entropies(
+                        ref_per_token_logps, _, _ = self._get_per_token_logps_and_entropies(
                             self.model,
                             prompt_completion_ids,
                             attention_mask,
@@ -349,7 +396,7 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
             self._logs["rewards"][name].extend(rewards_per_func[:, i].tolist())
         self._logs["advantages"].extend(all_process_advantages.tolist())
 
-        if images is not None:
+        if images is not None and self.log_multimodal:
             self._logs["images"].extend(gather_object(images))
 
         if self.use_vllm and self.vllm_importance_sampling_correction:
@@ -473,7 +520,7 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
         Args:
             groups_with_variance: Boolean tensor indicating which groups have reward variance
             group_advantages: Tensor of shape (num_groups, num_generations) containing advantage values
-            std_rewards: Tensor of shape (num_groups, num_generations) containing std of rewards per group
+            group_std_rewards: Tensor of shape (num_groups, num_generations) containing std of rewards per group
             prompt_ids: Tensor containing prompt token IDs
             prompt_mask: Tensor containing prompt attention masks
             completion_ids: Tensor containing completion token IDs
@@ -599,7 +646,7 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
 
         Args:
             group_advantages: Tensor of shape (num_groups, num_generations) containing advantage values
-            std_rewards: Tensor of shape (num_groups, num_generations) containing std of rewards per group
+            group_std_rewards: Tensor of shape (num_groups, num_generations) containing std of rewards per group
             prompt_ids: Tensor containing prompt token IDs
             prompt_mask: Tensor containing prompt attention masks
             completion_ids: Tensor containing completion token IDs

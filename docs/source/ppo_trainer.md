@@ -38,7 +38,7 @@ The logged metrics are as follows. Here is an example [tracked run at Weights an
 
 - `eps`: Tracks the number of episodes per second.
 - `objective/kl`: The mean Kullback-Leibler (KL) divergence between the current policy and reference policy.
-- `objective/entropy`: The mean entropy of the policy, indicating the randomness of the actions chosen by the policy.
+- `objective/entropy`: The mean token-level entropy proxy on sampled rollouts, computed as `(-logprobs).sum(1).mean()` before PPO optimization.
 - `objective/non_score_reward`: The mean reward from non-score-related sources, basically `beta * kl.sum(1)`, where `beta` is the KL penalty coefficient and `kl` is the per-token KL divergence.
 - `objective/rlhf_reward`: The mean RLHF reward, which is `score - non_score_reward`.
 - `objective/scores`: The mean scores returned by the reward model / environment.
@@ -47,12 +47,17 @@ The logged metrics are as follows. Here is an example [tracked run at Weights an
 - `loss/policy_avg`: The average policy loss, indicating how well the policy is performing.
 - `loss/value_avg`: The average value loss, indicating the difference between the predicted value and the actual reward.
 - `val/clipfrac_avg`: The average fraction of value function updates that are clipped, similar to policy/clipfrac_avg but for the value function.
-- `policy/entropy_avg`: The average entropy of the policy during training, indicating how diverse the policy's actions are.
+- `policy/entropy_avg`: The average categorical entropy of the current policy during PPO optimization, computed from `logits` each minibatch and averaged across PPO epochs/minibatches.
 - `val/ratio`: The mean ratio of the current policy probability to the old policy probability, providing a measure of how much the policy has changed.
 - `val/ratio_var`: The variance of the `val/ratio`, indicating the variability in policy changes.
 - `val/num_eos_tokens`: The number of end-of-sequence (EOS) tokens generated, which can indicate the number of complete responses.
 - `lr`: lr: The current learning rate used by the optimizer.
 - `episode`: episode: The current episode count in the training process.
+
+`objective/entropy` and `policy/entropy_avg` are intentionally different signals:
+
+- `objective/entropy` is measured on the sampled behavior-policy rollouts used to build PPO advantages for the current update.
+- `policy/entropy_avg` is measured during PPO optimization on the evolving policy (after gradient steps), so it can diverge from `objective/entropy`.
 
 ## Cookbook
 

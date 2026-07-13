@@ -17,7 +17,7 @@ This directory contains a collection of Jupyter notebooks that demonstrate how t
 
 ## OpenEnv Notebooks
 
-These notebooks demonstrate GRPO training with [OpenEnv](https://github.com/meta-pytorch/OpenEnv) environments using `environment_factory`.
+These notebooks demonstrate GRPO training with [OpenEnv](https://github.com/huggingface/OpenEnv) environments using `environment_factory`.
 
 | Notebook | Description | Open in Colab |
 | --- | --- | --- |

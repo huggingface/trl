@@ -15,9 +15,8 @@
 import pytest
 import torch
 import transformers
-from datasets import load_dataset
+from datasets import DatasetDict, IterableDatasetDict, load_dataset
 from packaging.version import Version
-from packaging.version import parse as parse_version
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 from transformers.testing_utils import torch_device
 from transformers.utils import is_peft_available
@@ -37,7 +36,8 @@ from .testing_utils import (
 
 
 if is_peft_available():
-    from peft import LoraConfig, get_peft_model
+    from peft import LoraConfig, PromptTuningConfig, get_peft_model
+    from peft.utils import TaskType
 
 
 class TestDataCollatorForPreference(TrlTestCase):
@@ -169,9 +169,31 @@ class TestDPOTrainer(TrlTestCase):
     @pytest.mark.parametrize(
         "model_id",
         [
+            "trl-internal-testing/tiny-Cohere2ForCausalLM",
+            pytest.param(
+                "trl-internal-testing/tiny-Glm4MoeForCausalLM",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.0.0"),
+                    reason="GLM4 tokenizer requires transformers>=5.0.0",
+                ),
+            ),
+            "trl-internal-testing/tiny-GptOssForCausalLM",
             "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
-            "trl-internal-testing/tiny-GptOssForCausalLM",
+            pytest.param(
+                "trl-internal-testing/tiny-NemotronHForCausalLM-nano",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.7.0"),
+                    reason="Nemotron 3 gradient checkpointing requires transformers>=5.7.0 (see transformers#45625)",
+                ),
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Olmo3ForCausalLM",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("4.57.0"),
+                    reason="Olmo 3 requires transformers>=4.57.0",
+                ),
+            ),
         ],
     )
     def test_train(self, model_id):
@@ -183,6 +205,96 @@ class TestDPOTrainer(TrlTestCase):
             report_to="none",
         )
         trainer = DPOTrainer(model=model_id, args=training_args, train_dataset=dataset)
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # MoE models log the load-balancing auxiliary loss (on by default)
+        if trainer.aux_loss_enabled:
+            assert trainer.state.log_history[-1]["aux_loss"] is not None
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @pytest.mark.parametrize("precompute_ref_log_probs", [False, True])
+    def test_evaluate_with_raw_dataset(self, precompute_ref_log_probs):
+        # `evaluate` should accept the same (unprocessed) dataset types as the trainer, e.g. a held-out test set
+        # passed directly to `evaluate`. With `precompute_ref_log_probs=True`, the reference log-probs must also be
+        # precomputed for the freshly-passed dataset. See https://github.com/huggingface/trl/issues/6115.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir, precompute_ref_log_probs=precompute_ref_log_probs, report_to="none"
+        )
+        trainer = DPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
+
+        metrics = trainer.evaluate(eval_dataset=dataset)
+        assert metrics["eval_loss"] is not None
+
+    @pytest.mark.parametrize("streaming", [False, True])
+    def test_evaluate_with_eval_dataset_dict(self, streaming):
+        # `evaluate` should accept a `DatasetDict` (map-style) or `IterableDatasetDict` (streaming) passed directly —
+        # e.g. the raw output of `load_dataset` without a `split` — not only a plain `dict`. Each split is prepared
+        # independently.
+        train_dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        eval_split = load_dataset("trl-internal-testing/zen", "standard_preference", split="test", streaming=streaming)
+        dataset_dict_cls = IterableDatasetDict if streaming else DatasetDict
+        eval_dataset = dataset_dict_cls({"data1": eval_split, "data2": eval_split})
+
+        training_args = DPOConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = DPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=train_dataset
+        )
+
+        metrics = trainer.evaluate(eval_dataset=eval_dataset)
+        assert metrics["eval_data1_loss"] is not None
+        assert metrics["eval_data2_loss"] is not None
+
+    def test_trust_remote_code(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        model_id = "trl-internal-testing/tiny-RemoteForCausalLM"
+
+        with pytest.raises(ValueError, match="custom code"):
+            DPOTrainer(
+                model=model_id,
+                args=DPOConfig(output_dir=self.tmp_dir, report_to="none"),
+                train_dataset=dataset,
+            )
+
+        trainer = DPOTrainer(
+            model=model_id,
+            args=DPOConfig(output_dir=self.tmp_dir, report_to="none", trust_remote_code=True),
+            train_dataset=dataset,
+        )
+        assert type(trainer.model).__name__ == "RemoteForCausalLM"
+
+    @pytest.mark.parametrize(
+        "config_name",
+        [
+            "standard_preference",
+            "conversational_preference",
+            "standard_implicit_prompt_preference",
+            "conversational_implicit_prompt_preference",
+        ],
+    )
+    def test_train_dataset_format(self, config_name):
+        dataset = load_dataset("trl-internal-testing/zen", config_name, split="train")
+
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            report_to="none",
+        )
+        trainer = DPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
 
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
@@ -598,6 +710,43 @@ class TestDPOTrainer(TrlTestCase):
             elif "base_layer" not in n and "ref" not in n:  # and the peft params to be different (except base and ref)
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @require_peft
+    def test_train_moe_peft_model(self):
+        # Regression test for https://github.com/huggingface/trl/issues/5222. PEFT only supports one adapter per model
+        # when the LoRA config uses `target_parameters` (see peft#3340), so no "ref" adapter can be created and the
+        # reference log probs are computed with adapters disabled instead.
+        model_id = "trl-internal-testing/tiny-GptOssForCausalLM"
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
+        base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
+
+        lora_config = LoraConfig(target_parameters=["mlp.experts.down_proj", "mlp.experts.gate_up_proj"])
+        model = get_peft_model(model, lora_config)
+
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            report_to="none",
+        )
+        trainer = DPOTrainer(model=model, args=training_args, train_dataset=dataset)
+
+        assert "ref" not in trainer.model.peft_config
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the peft params have changed and the base model params have not changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            if n in base_param_names:  # We expect the base model params to be the same
+                torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed.")
+            elif "base_layer" not in n:  # We expect the peft params to be different (except for the base layer)
+                assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
     # In practice, this test is the same as `test_train_dense_with_peft_config_lora`, since gradient checkpointing is
     # enabled by default in `DPOTrainer`. We keep it as a regression guard: if the default ever changes, we still
     # explicitly test PEFT + gradient checkpointing, which has caused issues in the past.
@@ -664,8 +813,86 @@ class TestDPOTrainer(TrlTestCase):
 
     @require_liger_kernel
     @require_peft
-    def test_init_fails_with_peft_and_liger(self):
+    def test_train_with_liger_kernel_and_peft(self):
+        # A LoRA adapter that does not target lm_head leaves the head as a plain Linear, so Liger reads the real
+        # weight. Verify the full PEFT+Liger path actually trains (peft params change, base params stay frozen).
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
+        base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            use_liger_kernel=True,
+            report_to="none",
+        )
+        trainer = DPOTrainer(
+            model=model_id,
+            args=training_args,
+            train_dataset=dataset,
+            peft_config=LoraConfig(target_modules=["q_proj", "v_proj"]),
+        )
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+        trainer.train()
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            if n in base_param_names:
+                torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed.")
+            elif "base_layer" not in n:
+                assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @require_liger_kernel
+    @require_peft
+    def test_liger_kernel_with_peft_lm_head_raises(self):
+        # The Liger fused DPO loss reads `lm_head.weight` directly, so a LoRA adapter on `lm_head` is silently
+        # ignored and never trained. The trainer must fail fast instead of training a silently-frozen head.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        training_args = DPOConfig(output_dir=self.tmp_dir, use_liger_kernel=True, report_to="none")
+        with pytest.raises(ValueError, match="lm_head"):
+            DPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                args=training_args,
+                train_dataset=dataset,
+                peft_config=LoraConfig(target_modules=["q_proj", "v_proj", "lm_head"]),
+            )
+
+    @require_liger_kernel
+    @require_peft
+    def test_liger_kernel_with_peft_prompt_learning_raises(self):
+        # Prompt-learning methods inject virtual tokens via PeftModel.forward(), which the Liger DPO loss bypasses.
+        # The trainer must fail fast to avoid computing the loss on the wrong (truncated) sequence.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        training_args = DPOConfig(output_dir=self.tmp_dir, use_liger_kernel=True, report_to="none")
+        with pytest.raises(ValueError, match="prompt-learning"):
+            DPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                args=training_args,
+                train_dataset=dataset,
+                peft_config=PromptTuningConfig(task_type=TaskType.CAUSAL_LM, num_virtual_tokens=8),
+            )
+
+    @require_liger_kernel
+    def test_init_fails_with_moe_aux_loss_and_liger(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+
+        # The MoE auxiliary loss is on by default; it is incompatible with the Liger fused loss.
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            use_liger_kernel=True,
+            report_to="none",
+        )
+
+        with pytest.raises(ValueError, match="does not support the Mixture-of-Experts load-balancing auxiliary loss"):
+            DPOTrainer(
+                model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+                args=training_args,
+                train_dataset=dataset,
+            )
+
+    @require_liger_kernel
+    def test_init_fails_with_compute_metrics_and_liger(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
 
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
@@ -673,12 +900,45 @@ class TestDPOTrainer(TrlTestCase):
             report_to="none",
         )
 
-        with pytest.raises(NotImplementedError, match="Liger DPO loss is not implemented for PEFT models."):
+        with pytest.raises(ValueError, match="compute_metrics is not supported with the Liger kernel"):
             DPOTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
                 args=training_args,
                 train_dataset=dataset,
-                peft_config=LoraConfig(),
+                compute_metrics=lambda _: {},
+            )
+
+    @pytest.mark.parametrize("iterable_as", ["train", "eval", "eval_dict", "eval_iterable_dataset_dict"])
+    def test_precompute_ref_log_probs_raises_for_iterable_dataset(self, iterable_as):
+        # `precompute_ref_log_probs=True` caches reference log-probs by index, which requires random access and is
+        # therefore incompatible with a streaming `IterableDataset` — whether passed directly or nested in a dict or
+        # `IterableDatasetDict` as the eval dataset.
+        map_dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        iterable_dataset = load_dataset(
+            "trl-internal-testing/zen", "standard_preference", split="train", streaming=True
+        )
+
+        train_dataset, eval_dataset = map_dataset, None
+        if iterable_as == "train":
+            train_dataset = iterable_dataset
+        elif iterable_as == "eval":
+            eval_dataset = iterable_dataset
+        elif iterable_as == "eval_dict":
+            eval_dataset = {"eval": iterable_dataset}
+        elif iterable_as == "eval_iterable_dataset_dict":
+            eval_dataset = IterableDatasetDict({"eval": iterable_dataset})
+
+        # `max_steps` lets the iterable-train case reach the precompute check instead of failing earlier on the
+        # missing dataset length required by the learning-rate scheduler.
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir, max_steps=1, report_to="none", precompute_ref_log_probs=True
+        )
+        with pytest.raises(ValueError, match="precompute_ref_log_probs.*not supported with IterableDataset"):
+            DPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                args=training_args,
+                train_dataset=train_dataset,
+                eval_dataset=eval_dataset,
             )
 
     def test_train_with_iterable_dataset(self):
@@ -838,6 +1098,28 @@ class TestDPOTrainer(TrlTestCase):
         assert trainer.state.log_history[-3]["eval_data1_loss"] is not None
         assert trainer.state.log_history[-2]["eval_data2_loss"] is not None
 
+    @pytest.mark.parametrize("streaming", [False, True])
+    def test_init_with_eval_dataset_dict(self, streaming):
+        # `eval_dataset` may be a `DatasetDict` (map-style) or `IterableDatasetDict` (streaming) — e.g. the raw output
+        # of `load_dataset` without a `split` — not only a plain `dict`. Each split is prepared independently at init.
+        train_dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        eval_split = load_dataset("trl-internal-testing/zen", "standard_preference", split="test", streaming=streaming)
+        dataset_dict_cls = IterableDatasetDict if streaming else DatasetDict
+        eval_dataset = dataset_dict_cls({"data1": eval_split, "data2": eval_split})
+
+        training_args = DPOConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = DPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=train_dataset,
+            eval_dataset=eval_dataset,
+        )
+
+        assert set(trainer.eval_dataset.keys()) == {"data1", "data2"}
+        # Each split was tokenized independently.
+        assert "prompt_ids" in next(iter(trainer.eval_dataset["data1"]))
+        assert "prompt_ids" in next(iter(trainer.eval_dataset["data2"]))
+
     def test_train_with_compute_metrics(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
 
@@ -913,207 +1195,6 @@ class TestDPOTrainer(TrlTestCase):
         for tag in ["dpo", "trl"]:
             assert tag in trainer.model.model_tags
 
-    @pytest.mark.parametrize(
-        "model_id",
-        [
-            "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
-            pytest.param(
-                "trl-internal-testing/tiny-Gemma4ForConditionalGeneration",
-                marks=pytest.mark.skipif(
-                    Version(transformers.__version__) < Version("5.5.0"),
-                    reason="Gemma4 models were introduced in transformers-5.5.0",
-                ),
-            ),
-            # "trl-internal-testing/tiny-Idefics2ForConditionalGeneration",  high memory peak, skipped for now
-            # "trl-internal-testing/tiny-Idefics3ForConditionalGeneration",  high memory peak, skipped for now
-            "trl-internal-testing/tiny-LlavaForConditionalGeneration",
-            "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
-            "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",
-            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
-            # "trl-internal-testing/tiny-SmolVLMForConditionalGeneration", seems not to support bf16 properly
-            pytest.param(
-                "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration",
-                marks=[
-                    pytest.mark.skipif(
-                        Version(transformers.__version__) < Version("4.57.0"),
-                        reason="Qwen3-VL series were introduced in transformers-4.57.0",
-                    ),
-                ],
-            ),
-            pytest.param(
-                "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
-                marks=pytest.mark.skipif(
-                    Version(transformers.__version__) < Version("5.2.0"),
-                    reason="Qwen3.5 models were introduced in transformers-5.2.0",
-                ),
-            ),
-            pytest.param(
-                "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
-                marks=pytest.mark.skipif(
-                    Version(transformers.__version__) < Version("5.2.0"),
-                    reason="Qwen3.5 models were introduced in transformers-5.2.0",
-                ),
-            ),
-        ],
-    )
-    @require_vision
-    def test_train_vlm(self, model_id):
-        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_preference", split="train")
-
-        training_args = DPOConfig(
-            output_dir=self.tmp_dir,
-            max_length=None,  # for VLMs, truncating can remove image tokens, leading to errors
-            per_device_train_batch_size=2,  # VLM training is memory intensive, reduce batch size to avoid OOM
-            report_to="none",
-        )
-        trainer = DPOTrainer(model=model_id, args=training_args, train_dataset=dataset)
-
-        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
-
-        trainer.train()
-
-        assert trainer.state.log_history[-1]["train_loss"] is not None
-
-        # Check that the params have changed
-        for n, param in previous_trainable_params.items():
-            new_param = trainer.model.get_parameter(n)
-            # LLaVA & LLaVA-Next: vision_feature_layer=-2 leaves the last encoder layer (layers.1) and
-            # post_layernorm (pooler-only path) without gradient by design. Assert they stay frozen — if they
-            # ever start training, the feature-selection plumbing has likely regressed.
-            if model_id in (
-                "trl-internal-testing/tiny-LlavaForConditionalGeneration",
-                "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
-            ) and ("encoder.layers.1" in n or "post_layernorm" in n):
-                assert torch.equal(param, new_param), f"Param {n} expected frozen by LLaVA design, but changed"
-            else:
-                assert not torch.equal(param, new_param), f"Param {n} is not updated"
-
-    @pytest.mark.parametrize(
-        "model_id",
-        [
-            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
-        ],
-    )
-    @pytest.mark.xfail(
-        parse_version(transformers.__version__) < parse_version("4.57.0"),
-        reason="Mixing text-only and image+text examples is only supported in transformers >= 4.57.0",
-        strict=False,
-    )
-    @require_vision
-    def test_train_vlm_multi_image(self, model_id):
-        dataset = load_dataset("trl-internal-testing/zen-multi-image", "conversational_preference", split="train")
-
-        training_args = DPOConfig(
-            output_dir=self.tmp_dir,
-            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
-            max_length=None,  # for VLMs, truncating can remove image tokens, leading to errors
-            per_device_train_batch_size=1,  # VLM training is memory intensive, reduce batch size to avoid OOM
-            report_to="none",
-        )
-        trainer = DPOTrainer(
-            model=model_id,
-            args=training_args,
-            train_dataset=dataset,
-        )
-
-        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
-
-        trainer.train()
-
-        assert trainer.state.log_history[-1]["train_loss"] is not None
-
-        # Check that the params have changed
-        for n, param in previous_trainable_params.items():
-            new_param = trainer.model.get_parameter(n)
-            assert not torch.equal(param, new_param), f"Param {n} is not updated"
-
-    # Gemma 3n uses a timm encoder, making it difficult to create a smaller variant for testing.
-    # To ensure coverage, we run tests on the full model but mark them as slow to exclude from default runs.
-    @pytest.mark.slow
-    @require_vision
-    @pytest.mark.skip(reason="Model google/gemma-3n-E2B-it is gated and requires HF token")
-    def test_train_vlm_gemma_3n(self):
-        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_preference", split="train")
-
-        training_args = DPOConfig(
-            output_dir=self.tmp_dir,
-            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
-            max_length=None,  # for VLMs, truncating can remove image tokens, leading to errors
-            per_device_train_batch_size=1,  # VLM training is memory intensive, reduce batch size to avoid OOM
-            model_init_kwargs={"dtype": "bfloat16"},
-            report_to="none",
-        )
-        trainer = DPOTrainer(model="google/gemma-3n-E2B-it", args=training_args, train_dataset=dataset)
-
-        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
-
-        trainer.train()
-
-        assert trainer.state.log_history[-1]["train_loss"] is not None
-
-        # Check that the params have changed
-        for n, param in previous_trainable_params.items():
-            new_param = trainer.model.get_parameter(n)
-            if "model.audio_tower" in n or "model.embed_audio" in n:
-                # The audio embedding parameters are not updated because this dataset contains no audio data
-                continue
-            assert not torch.equal(param, new_param), f"Param {n} is not updated"
-
-    @pytest.mark.parametrize(
-        "model_id",
-        [
-            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
-        ],
-    )
-    @pytest.mark.parametrize(
-        "dataset_config",
-        ["conversational_preference", "standard_preference"],
-    )
-    @require_vision
-    def test_train_vlm_text_only_data(self, model_id, dataset_config):
-        dataset = load_dataset("trl-internal-testing/zen", dataset_config, split="train")
-
-        training_args = DPOConfig(output_dir=self.tmp_dir, report_to="none")
-        trainer = DPOTrainer(
-            model=model_id,
-            args=training_args,
-            train_dataset=dataset,
-        )
-
-        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
-
-        trainer.train()
-
-        assert trainer.state.log_history[-1]["train_loss"] is not None
-
-        # Check that the params have changed
-        for n, param in previous_trainable_params.items():
-            new_param = trainer.model.get_parameter(n)
-            if n.startswith("model.visual"):
-                torch.testing.assert_close(param, new_param, rtol=1e-12, atol=1e-12, msg=f"Param {n} is updated")
-            else:
-                assert not torch.equal(param, new_param), f"Param {n} is not updated"
-
-    @require_vision
-    def test_train_vlm_with_max_length(self):
-        # Regression test for #5283: mm_token_type_ids must be truncated alongside input_ids when max_length is set,
-        # otherwise a shape mismatch crashes the model forward pass.
-        # max_length=37 truncates 1 completion token (total_len=38) while keeping all image tokens (prompt_len=34) safe.
-        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_preference", split="train")
-        training_args = DPOConfig(
-            output_dir=self.tmp_dir,
-            max_length=37,  # total_len=38, prompt_len=34 — truncates completion, not image tokens
-            per_device_train_batch_size=2,
-            report_to="none",
-        )
-        trainer = DPOTrainer(
-            model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
-            args=training_args,
-            train_dataset=dataset,
-        )
-        trainer.train()
-        assert trainer.state.log_history[-1]["train_loss"] is not None
-
     @require_peft
     @require_bitsandbytes
     def test_peft_with_quantization(self):
@@ -1166,7 +1247,174 @@ class TestDPOTrainer(TrlTestCase):
             else:
                 raise ValueError(f"Unexpected parameter {n} in model: {trainer.model}")
 
-    @require_vision
+
+@require_vision
+class TestDPOTrainerVLM(TrlTestCase):
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
+            pytest.param(
+                "trl-internal-testing/tiny-Gemma4ForConditionalGeneration",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.5.0"),
+                    reason="Gemma4 models were introduced in transformers-5.5.0",
+                ),
+            ),
+            # "trl-internal-testing/tiny-Idefics2ForConditionalGeneration",  high memory peak, skipped for now
+            # "trl-internal-testing/tiny-Idefics3ForConditionalGeneration",  high memory peak, skipped for now
+            "trl-internal-testing/tiny-LlavaForConditionalGeneration",
+            "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
+            "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",
+            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            # "trl-internal-testing/tiny-SmolVLMForConditionalGeneration", seems not to support bf16 properly
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration",
+                marks=[
+                    pytest.mark.skipif(
+                        Version(transformers.__version__) < Version("4.57.0"),
+                        reason="Qwen3-VL series were introduced in transformers-4.57.0",
+                    ),
+                ],
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.2.0"),
+                    reason="Qwen3.5 models were introduced in transformers-5.2.0",
+                ),
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.2.0"),
+                    reason="Qwen3.5 models were introduced in transformers-5.2.0",
+                ),
+            ),
+        ],
+    )
+    def test_train_vlm(self, model_id):
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_preference", split="train")
+
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            max_length=None,  # for VLMs, truncating can remove image tokens, leading to errors
+            per_device_train_batch_size=2,  # VLM training is memory intensive, reduce batch size to avoid OOM
+            report_to="none",
+        )
+        trainer = DPOTrainer(model=model_id, args=training_args, train_dataset=dataset)
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            # LLaVA & LLaVA-Next: vision_feature_layer=-2 leaves the last encoder layer (layers.1) and
+            # post_layernorm (pooler-only path) without gradient by design. Assert they stay frozen — if they
+            # ever start training, the feature-selection plumbing has likely regressed.
+            if model_id in (
+                "trl-internal-testing/tiny-LlavaForConditionalGeneration",
+                "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
+            ) and ("encoder.layers.1" in n or "post_layernorm" in n):
+                assert torch.equal(param, new_param), f"Param {n} expected frozen by LLaVA design, but changed"
+            else:
+                assert not torch.equal(param, new_param), f"Param {n} is not updated"
+
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+        ],
+    )
+    @pytest.mark.xfail(
+        Version(transformers.__version__) < Version("4.57.0"),
+        reason="Mixing text-only and image+text examples is only supported in transformers >= 4.57.0",
+        strict=False,
+    )
+    def test_train_vlm_multi_image(self, model_id):
+        dataset = load_dataset("trl-internal-testing/zen-multi-image", "conversational_preference", split="train")
+
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            max_length=None,  # for VLMs, truncating can remove image tokens, leading to errors
+            per_device_train_batch_size=1,  # VLM training is memory intensive, reduce batch size to avoid OOM
+            report_to="none",
+        )
+        trainer = DPOTrainer(
+            model=model_id,
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Param {n} is not updated"
+
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+        ],
+    )
+    @pytest.mark.parametrize(
+        "dataset_config",
+        ["conversational_preference", "standard_preference"],
+    )
+    def test_train_vlm_text_only_data(self, model_id, dataset_config):
+        dataset = load_dataset("trl-internal-testing/zen", dataset_config, split="train")
+
+        training_args = DPOConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = DPOTrainer(
+            model=model_id,
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            if n.startswith("model.visual"):
+                torch.testing.assert_close(param, new_param, rtol=1e-12, atol=1e-12, msg=f"Param {n} is updated")
+            else:
+                assert not torch.equal(param, new_param), f"Param {n} is not updated"
+
+    def test_train_vlm_with_max_length(self):
+        # Regression test for #5283: mm_token_type_ids must be truncated alongside input_ids when max_length is set,
+        # otherwise a shape mismatch crashes the model forward pass.
+        # max_length=37 truncates 1 completion token (total_len=38) while keeping all image tokens (prompt_len=34) safe.
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_preference", split="train")
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            max_length=37,  # total_len=38, prompt_len=34 — truncates completion, not image tokens
+            per_device_train_batch_size=2,
+            report_to="none",
+        )
+        trainer = DPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            args=training_args,
+            train_dataset=dataset,
+        )
+        trainer.train()
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
     def test_train_vlm_keep_end_raises(self):
         # Regression test for #5285: keep_end with a VLM must raise at init time, not silently corrupt training.
         # Image tokens live at the start of the sequence (in the prompt); keep_end would drop them.
@@ -1185,7 +1433,16 @@ class TestDPOTrainer(TrlTestCase):
                 train_dataset=dataset,
             )
 
-    @require_vision
+    def test_vision_dataset_with_text_model_raises(self):
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_preference", split="train")
+        training_args = DPOConfig(output_dir=self.tmp_dir, report_to="none")
+        with pytest.raises(ValueError, match="vision-related.*vision-language model"):
+            DPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                args=training_args,
+                train_dataset=dataset,
+            )
+
     def test_precompute_ref_log_probs_raises_for_vision(self):
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_preference", split="train")
         training_args = DPOConfig(output_dir=self.tmp_dir, report_to="none", precompute_ref_log_probs=True)
@@ -1195,3 +1452,63 @@ class TestDPOTrainer(TrlTestCase):
                 args=training_args,
                 train_dataset=dataset,
             )
+
+    @require_liger_kernel
+    def test_train_vlm_liger(self):
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_preference", split="train")
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            max_length=None,  # for VLMs, truncating can remove image tokens, leading to errors
+            per_device_train_batch_size=2,  # VLM training is memory intensive, reduce batch size to avoid OOM
+            use_liger_kernel=True,
+            report_to="none",
+        )
+        trainer = DPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Param {n} is not updated"
+
+
+@pytest.mark.slow
+class TestDPOTrainerSlow(TrlTestCase):
+    # Gemma 3n uses a timm encoder, making it difficult to create a smaller variant for testing.
+    # To ensure coverage, we run tests on the full model but mark them as slow to exclude from default runs.
+    @pytest.mark.skip(reason="Model google/gemma-3n-E2B-it is gated and requires HF token")
+    @require_vision
+    def test_train_vlm_gemma_3n(self):
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_preference", split="train")
+
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            max_length=None,  # for VLMs, truncating can remove image tokens, leading to errors
+            per_device_train_batch_size=1,  # VLM training is memory intensive, reduce batch size to avoid OOM
+            model_init_kwargs={"dtype": "bfloat16"},
+            report_to="none",
+        )
+        trainer = DPOTrainer(model="google/gemma-3n-E2B-it", args=training_args, train_dataset=dataset)
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            if "model.audio_tower" in n or "model.embed_audio" in n:
+                # The audio embedding parameters are not updated because this dataset contains no audio data
+                continue
+            assert not torch.equal(param, new_param), f"Param {n} is not updated"

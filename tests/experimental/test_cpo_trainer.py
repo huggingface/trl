@@ -34,6 +34,27 @@ class TestCPOTrainer(TrlTestCase):
         self.t5_model = AutoModelForSeq2SeqLM.from_pretrained(model_id, dtype="float32")
         self.t5_tokenizer = AutoTokenizer.from_pretrained(model_id)
 
+    def test_trust_remote_code(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        model_id = "trl-internal-testing/tiny-RemoteForCausalLM"
+        tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
+
+        with pytest.raises(ValueError, match="custom code"):
+            CPOTrainer(
+                model=model_id,
+                args=CPOConfig(output_dir=self.tmp_dir, report_to="none"),
+                processing_class=tokenizer,
+                train_dataset=dataset,
+            )
+
+        trainer = CPOTrainer(
+            model=model_id,
+            args=CPOConfig(output_dir=self.tmp_dir, report_to="none", trust_remote_code=True),
+            processing_class=tokenizer,
+            train_dataset=dataset,
+        )
+        assert type(trainer.model).__name__ == "RemoteForCausalLM"
+
     @pytest.mark.parametrize(
         "name, loss_type, config_name",
         [
@@ -89,6 +110,26 @@ class TestCPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             if param.sum() != 0:  # ignore 0 biases
                 assert not torch.equal(param, new_param)
+
+    def test_cpo_trainer_processing_class_autoloaded(self):
+        # processing_class is documented as optional: when omitted it should be
+        # auto-loaded from the model, consistent with DPOTrainer / RewardTrainer.
+        training_args = CPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            max_steps=3,
+            remove_unused_columns=False,
+            report_to="none",
+        )
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
+        trainer = CPOTrainer(
+            model=self.model,
+            args=training_args,
+            train_dataset=dataset["train"],
+        )
+        assert trainer.processing_class is not None
+        trainer.train()
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
     @pytest.mark.parametrize(
         "config_name",
