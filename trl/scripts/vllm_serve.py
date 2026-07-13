@@ -198,6 +198,11 @@ class ScriptArguments:
         enable_expert_parallel (`bool`, *optional*):
             Whether to enable expert parallelism in vLLM for MoE models. If set to `True`, experts will be distributed
             across tensor parallel workers.
+        moe_backend (`str`, *optional*):
+            MoE kernel backend override, forwarded to vLLM's `--moe-backend` engine arg (e.g. `"triton"`,
+            `"flashinfer_trtllm"`). When unset, vLLM selects a backend automatically. RL weight sync requires a
+            backend that keeps expert weights in the standard layout (e.g. `"triton"`): backends that re-lay-out
+            expert weights into kernel block formats after loading crash on incremental expert-weight updates.
         enforce_eager (`bool`, *optional*, defaults to `False`):
             Whether to enforce eager execution. If set to `True`, we will disable CUDA graph and always execute the
             model in eager mode. If `False` (default behavior), we will use CUDA graph and eager execution in hybrid.
@@ -292,6 +297,14 @@ class ScriptArguments:
             "be distributed across tensor parallel workers."
         },
     )
+    moe_backend: str | None = field(
+        default=None,
+        metadata={
+            "help": "MoE kernel backend override, forwarded to vLLM's `--moe-backend` engine arg (e.g. 'triton', "
+            "'flashinfer_trtllm'). When unset, vLLM selects a backend automatically. RL weight sync requires a "
+            "backend that keeps expert weights in the standard layout (e.g. 'triton')."
+        },
+    )
     enforce_eager: bool | None = field(
         default=False,
         metadata={
@@ -375,6 +388,8 @@ def llm_worker(
     optional_engine_kwargs = {}
     if script_args.enable_expert_parallel is not None:
         optional_engine_kwargs["enable_expert_parallel"] = script_args.enable_expert_parallel
+    if script_args.moe_backend is not None:
+        optional_engine_kwargs["moe_backend"] = script_args.moe_backend
     if script_args.language_model_only:
         optional_engine_kwargs["language_model_only"] = True
     if script_args.limit_mm_per_prompt:
