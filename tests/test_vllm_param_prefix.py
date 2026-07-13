@@ -17,16 +17,22 @@
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import torch.nn as nn
+
 from trl.generation.vllm_generation import VLLMGeneration, get_vllm_param_prefix
 
 
 def make_model(class_name: str, architectures=None, name_or_path=None, config=None):
-    """Build a minimal model stand-in whose class name and config drive the prefix detection."""
+    """Build a minimal model stand-in whose class name and config drive the prefix detection.
+
+    Must be a real `nn.Module`: `get_vllm_param_prefix` runs the model through accelerate's
+    `is_peft_model`, which walks module internals.
+    """
     if config is None:
         config = SimpleNamespace()
         if architectures is not None:
             config.architectures = architectures
-    cls = type(class_name, (), {})
+    cls = type(class_name, (nn.Module,), {})
     model = cls()
     model.config = config
     if name_or_path is not None:
@@ -66,7 +72,7 @@ class TestGetVllmParamPrefix:
         assert get_vllm_param_prefix(model) == ""
 
     def test_missing_config_is_passthrough(self):
-        cls = type("SomeModel", (), {})
+        cls = type("SomeModel", (nn.Module,), {})
         model = cls()
         assert get_vllm_param_prefix(model) == ""
 

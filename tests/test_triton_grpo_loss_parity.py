@@ -30,7 +30,7 @@ from trl import GRPOConfig, GRPOTrainer
 from .testing_utils import TrlTestCase, require_liger_kernel, require_torch_accelerator
 
 
-def make_trainer(tmp_dir, loss_type="dapo", **config_kwargs):
+def make_trainer(tmp_dir, loss_type="dapo", model=None, processing_class=None, **config_kwargs):
     dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
     training_args = GRPOConfig(
         output_dir=tmp_dir,
@@ -43,11 +43,32 @@ def make_trainer(tmp_dir, loss_type="dapo", **config_kwargs):
         **config_kwargs,
     )
     return GRPOTrainer(
-        model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        model=model if model is not None else "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
         reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
         args=training_args,
         train_dataset=dataset,
+        processing_class=processing_class,
     )
+
+
+def make_wide_model_and_tokenizer():
+    """Random-init tiny Qwen2 with hidden size 128: the chunked fused-linear kernel requires the
+    hidden dimension to be a multiple of its 64-wide K-blocking (production models satisfy this;
+    the hub tiny test model's hidden size of 8 does not)."""
+    from transformers import AutoTokenizer, Qwen2Config, Qwen2ForCausalLM
+
+    tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
+    config = Qwen2Config(
+        vocab_size=len(tokenizer),
+        hidden_size=128,
+        intermediate_size=256,
+        num_hidden_layers=2,
+        num_attention_heads=4,
+        num_key_value_heads=2,
+        max_position_embeddings=512,
+    )
+    torch.manual_seed(0)
+    return Qwen2ForCausalLM(config), tokenizer
 
 
 def make_loss_inputs(trainer, device, seed=0):
@@ -104,12 +125,22 @@ class TestTritonGRPOLossParity(TrlTestCase):
 
     def test_chunked_loss_matches_non_chunked(self):
         device = torch.accelerator.current_accelerator()
-        base_trainer = make_trainer(self.tmp_dir, use_liger_kernel=True)
+        base_model, tokenizer = make_wide_model_and_tokenizer()
+        base_trainer = make_trainer(
+            self.tmp_dir, model=base_model, processing_class=tokenizer, use_liger_kernel=True
+        )
         base_trainer.model.to(device)
         inputs = make_loss_inputs(base_trainer, device)
         base_loss, base_grad = compute_loss_and_grad(base_trainer, inputs)
 
-        chunked_trainer = make_trainer(self.tmp_dir, use_liger_kernel=True, use_liger_chunked_loss=True)
+        chunked_model, _ = make_wide_model_and_tokenizer()
+        chunked_trainer = make_trainer(
+            self.tmp_dir,
+            model=chunked_model,
+            processing_class=tokenizer,
+            use_liger_kernel=True,
+            use_liger_chunked_loss=True,
+        )
         chunked_trainer.model.load_state_dict(base_trainer.model.state_dict())
         chunked_trainer.model.to(device)
         chunked_loss, chunked_grad = compute_loss_and_grad(chunked_trainer, inputs)
