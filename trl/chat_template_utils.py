@@ -324,41 +324,6 @@ qwen3_5_schema = {
 }
 
 
-functiongemma_chat_template = (_CHAT_TEMPLATES_DIR / "functiongemma.jinja").read_text(encoding="utf-8")
-
-functiongemma_schema = {
-    "x-regex": r"^(?P<content>(?:(?!<start_function_call>)[\s\S])*?)(?P<tool_calls>(?:<start_function_call>[\s\S]+?<end_function_call>\s*)+)?$",
-    "type": "object",
-    "properties": {
-        "role": {"const": "assistant"},
-        "content": {"type": "string"},
-        "tool_calls": {
-            "type": "array",
-            "x-regex-iterator": r"<start_function_call>(call:\w+\{[\s\S]*?\})<end_function_call>",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "type": {"const": "function"},
-                    "function": {
-                        "type": "object",
-                        "x-regex": r"call:(?P<name>\w+)\{(?P<arguments>[\s\S]*?)\}$",
-                        "properties": {
-                            "name": {"type": "string"},
-                            "arguments": {
-                                "type": "object",
-                                "x-regex-key-value": r"(?P<key>\w+):<escape>(?P<value>[^<]*)<escape>",
-                                "default": {},
-                                "additionalProperties": {"type": "string"},
-                            },
-                        },
-                    },
-                },
-            },
-        },
-    },
-}
-
-
 # New-style response templates (transformers >= 5.13 with PR huggingface/transformers#45847). These coexist with the
 # legacy `*_schema` dicts above; `add_response_schema` sets the template on transformers >= 5.13 and the schema on
 # older versions.
@@ -610,11 +575,6 @@ def add_response_schema(processing_class: ProcessingClassT) -> ProcessingClassT:
         tokenizer = processing_class.tokenizer
     else:
         tokenizer = processing_class
-    if chat_template == functiongemma_chat_template:
-        # FunctionGemma only has a legacy `response_schema` (no new-style `response_template` yet), so set it directly
-        # regardless of the installed transformers version.
-        tokenizer.response_schema = functiongemma_schema
-        return processing_class
     if chat_template == glm4moe_chat_template:
         schema, template = glm4moe_schema, glm4moe_template
     elif chat_template == gptoss_chat_template:

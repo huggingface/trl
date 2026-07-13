@@ -68,11 +68,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--task-name", default="click-test", help="BrowserGym task name to pass to reset().")
     parser.add_argument("--dataset-prompt", default="Complete the web task successfully.")
     parser.add_argument("--dataset-size", type=int, default=1000)
-    parser.add_argument("--max-steps", type=int, default=10, help="Max steps per episode.")
+    parser.add_argument("--max-steps", type=int, default=10)
     parser.add_argument("--max-completion-length", type=int, default=1024)
     parser.add_argument("--image-size", type=int, default=512, help="Resize screenshots to this size. 0 to disable.")
     parser.add_argument("--num-generations", type=int, default=4)
-    parser.add_argument("--gradient-accumulation-steps", type=int, default=1)
+    parser.add_argument("--gradient-accumulation-steps", type=int, default=32)
     parser.add_argument("--learning-rate", type=float, default=5e-6)
     parser.add_argument("--num-epochs", type=int, default=1)
     parser.add_argument("--logging-steps", type=int, default=1)
@@ -109,11 +109,6 @@ def reward_completion(completions, environments, **kwargs) -> list[float]:
     return [env.reward for env in environments]
 
 
-def reward_efficiency(completions, environments, **kwargs) -> list[float]:
-    """Penalize extra tool calls beyond the first: -0.1 per extra call."""
-    return [-0.1 * max(0, env._step_count - 1) for env in environments]
-
-
 def main() -> None:
     args = parse_args()
 
@@ -135,44 +130,15 @@ def main() -> None:
 
     class BrowserGymVLMEnv:
         def __init__(self):
-            self.client = BrowserGymEnv(base_url=space_url).sync()
+            self.client = BrowserGymEnv(base_url=space_url)
             self.reward = 0.0
             self.done = False
             self._step_count = 0
-
-        def _ensure_large_max_size(self):
-            """Raise WebSocket max message size for large observations (screenshots + axtree).
-
-            openenv-core<=0.2.1 does not pass max_size to ws_connect, so the websockets library
-            defaults to 1MB. We force a connection and patch it to 100MB before any messages are sent.
-            """
-            import websockets
-
-            self.client.connect()
-            ws = self.client._ws
-            if ws is not None and ws.protocol is not None:
-                proto = ws.protocol
-                # websockets renamed max_size to max_message_size in version 16
-                if int(websockets.__version__.split(".")[0]) >= 16:
-                    if proto.max_message_size == 2**20:
-                        proto.max_message_size = 100 * 1024 * 1024
-                else:
-                    if proto.max_size == 2**20:
-                        proto.max_size = 100 * 1024 * 1024
-
-        @staticmethod
-        def _normalize_bid(bid) -> str:
-            """Normalize bid to a plain string (handles int, '[13]', or '13' formats)."""
-            bid = str(bid).strip()
-            if bid.startswith("[") and bid.endswith("]"):
-                bid = bid[1:-1].strip()
-            return bid
 
         def reset(self, **kwargs) -> str | None:
             self.reward = 0.0
             self.done = False
             self._step_count = 0
-            self._ensure_large_max_size()
             result = self.client.reset(task_name=args.task_name)
             self.done = result.done
             return self._format_observation(result.observation)
@@ -186,7 +152,7 @@ def main() -> None:
             Returns:
                 The updated page observation with screenshot.
             """
-            return self._do_action(f"click({self._normalize_bid(bid)!r})")
+            return self._do_action(f"click('{bid}')")
 
         def fill(self, bid: str, text: str) -> list:
             """Fill an input field with text.
@@ -198,7 +164,7 @@ def main() -> None:
             Returns:
                 The updated page observation with screenshot.
             """
-            return self._do_action(f"fill({self._normalize_bid(bid)!r}, {text!r})")
+            return self._do_action(f"fill('{bid}', '{text}')")
 
         def send_keys(self, text: str) -> list:
             """Send keyboard input to the page.
@@ -209,7 +175,7 @@ def main() -> None:
             Returns:
                 The updated page observation with screenshot.
             """
-            return self._do_action(f"send_keys({text!r})")
+            return self._do_action(f"send_keys('{text}')")
 
         def scroll(self, direction: str) -> list:
             """Scroll the page.
@@ -220,7 +186,7 @@ def main() -> None:
             Returns:
                 The updated page observation with screenshot.
             """
-            return self._do_action(f"scroll({direction!r})")
+            return self._do_action(f"scroll('{direction}')")
 
         def noop(self) -> list:
             """Do nothing and observe the current page state.
@@ -232,7 +198,7 @@ def main() -> None:
 
         def _do_action(self, action_str: str) -> list:
             if self.done:
-                return [{"type": "text", "text": "Episode is done. No further actions needed."}]
+                raise ValueError("Episode is done.")
 
             self._step_count += 1
             result = self.client.step(BrowserGymAction(action_str=action_str))
@@ -298,7 +264,7 @@ def main() -> None:
 
     trainer = GRPOTrainer(
         model=args.model_id,
-        reward_funcs=[reward_completion, reward_efficiency],
+        reward_funcs=reward_completion,
         train_dataset=dataset,
         args=GRPOConfig(
             use_vllm=args.use_vllm,
