@@ -957,8 +957,8 @@ class KTOTrainer(_BaseTrainer):
         # The Liger loss is built here, because it needs `self.ref_model`
         if self.use_liger_kernel:
             self.liger_loss = LigerFusedLinearKTOLoss(beta=self.beta, use_ref_model=(self.ref_model is not None))
-            # Redirect the model.module forward to the model forward to ensure pre-forward hooks are called, so
-            # that under ZeRO-3 the parameter coordinator gathers/reduces `lm_head.weight` around the fused loss.
+            # Redirect the model.module forward to the model forward to ensure pre-forward hooks are called, so that
+            # under ZeRO-3 the parameter coordinator gathers/reduces `lm_head.weight` around the fused loss.
             self._forward_redirection = _ForwardRedirection()
 
         if self.precompute_ref_logps:
@@ -1286,15 +1286,15 @@ class KTOTrainer(_BaseTrainer):
                     # gathered `lm_head` weight so `lm_head` is only ever touched directly, never as a module.
                     inner = model.base_model.model if is_peft_model(model) else model
                     if self._is_vlm and Version(transformers.__version__) < Version("5.0.0"):
-                        kl_backbone = inner.model
+                        backbone = inner.model
                     else:
-                        kl_backbone = inner.base_model
-                    kl_lm_head = inner.get_output_embeddings()
-                    kl_hidden = kl_backbone(**KL_model_kwargs).last_hidden_state
-                    with maybe_gather_lm_head_ctx(kl_lm_head.weight, kl_lm_head.bias):
-                        KL_logits = kl_hidden @ kl_lm_head.weight.t()
-                        if kl_lm_head.bias is not None:
-                            KL_logits = KL_logits + kl_lm_head.bias
+                        backbone = inner.base_model
+                    lm_head = inner.get_output_embeddings()
+                    KL_hidden_states = backbone(**KL_model_kwargs).last_hidden_state
+                    with maybe_gather_lm_head_ctx(lm_head.weight, lm_head.bias):
+                        KL_logits = KL_hidden_states @ lm_head.weight.t()
+                        if lm_head.bias is not None:
+                            KL_logits = KL_logits + lm_head.bias
                 else:
                     KL_logits = model(**KL_model_kwargs).logits
 
@@ -1310,6 +1310,7 @@ class KTOTrainer(_BaseTrainer):
                 "return_outputs=True is not supported with the Liger KTO loss. The Liger loss computes the loss "
                 "without materializing logits, so outputs cannot be returned."
             )
+
         mode = "train" if self.model.training else "eval"
         batch = {k: (v.to(self.accelerator.device) if isinstance(v, torch.Tensor) else v) for k, v in inputs.items()}
 
@@ -1668,8 +1669,7 @@ class KTOTrainer(_BaseTrainer):
             if self.use_liger_kernel:
                 # Under ZeRO-3, `lm_head.weight` is sharded and the fused loss reads it directly (bypassing the
                 # module), so run the loss inside the engine's forward via `_forward_redirection` to arm the parameter
-                # coordinator's gather/reduce hooks. For other backends this is unnecessary and harmful: it would wrap
-                # the Liger preference loss' `torch.func` call inside `DDP.forward`, which errors — so call directly.
+                # coordinator's gather/reduce hooks.
                 deepspeed_plugin = self.accelerator.state.deepspeed_plugin
                 is_zero3 = deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3
                 unwrapped_model = self.accelerator.unwrap_model(model)
