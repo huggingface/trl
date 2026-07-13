@@ -805,8 +805,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 entropy[valid_mask].sum() if valid_mask.any() else torch.zeros((), device=completion_mask.device)
             )
 
-            # Compute the clipped probability ratios. A token is counted as clipped only when clipping is binding in a
-            # policy-relevant direction: low clip when the advantage is negative, high clip when it is positive.
+            # Compute the clipped probability ratios
             is_low_clipped = (coef_1 < 1 - self.epsilon_low) & (advantages < 0)
             is_high_clipped = (coef_1 > 1 + self.epsilon_high) & (advantages > 0)
             is_region_clipped = is_low_clipped | is_high_clipped
