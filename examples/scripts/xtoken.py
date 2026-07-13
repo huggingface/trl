@@ -26,15 +26,7 @@ python examples/scripts/xtoken.py \
     --teacher-model Qwen/Qwen3-4B \
     --projection-matrix cross_tokenizer_data/projection_map_..._top_4_sorted.pt \
     --loss-type p_kl \
-    --max-steps 100
-
-# With Nemotron text corpus (matches the NeMo-RL reference run):
-python examples/scripts/xtoken.py \
-    --student-model meta-llama/Llama-3.2-1B-Instruct \
-    --teacher-model Qwen/Qwen3-4B \
-    --projection-matrix cross_tokenizer_data/projection_map_..._top_4_sorted.pt \
-    --dataset nemotron \
-    --max-length 512
+    --max-steps 5000
 
 Build the projection matrix first with the scripts in trl/experimental/gold/scripts/xtoken/. See
 https://huggingface.co/papers/2605.21699.
@@ -49,7 +41,7 @@ from trl.experimental.gold import GOLDConfig, GOLDTrainer
 
 
 # ~4 chars/token; keep samples comfortably within max_length
-_NEMOTRON_CHARS_PER_SAMPLE = 1800
+_NEMOTRON_CHARS_PER_SAMPLE = 16384
 
 
 def build_chatbot_arena_dataset(split="train", num_samples=2000):
@@ -80,11 +72,11 @@ def parse_args():
     p.add_argument("--num-samples", type=int, default=2000)
     p.add_argument("--loss-type", default="p_kl", choices=["p_kl", "h_kl"])
     p.add_argument("--max-steps", type=int, default=100)
-    p.add_argument("--max-length", type=int, default=512)
-    p.add_argument("--max-completion-length", type=int, default=256)
+    p.add_argument("--max-length", type=int, default=2048)
+    p.add_argument("--max-completion-length", type=int, default=512)
     p.add_argument("--per-device-batch-size", type=int, default=2)
     p.add_argument("--gradient-accumulation-steps", type=int, default=4)
-    p.add_argument("--learning-rate", type=float, default=2e-5)
+    p.add_argument("--learning-rate", type=float, default=5e-5)
     p.add_argument("--beta", type=float, default=1.0)
     p.add_argument("--temperature", type=float, default=1.0)
     p.add_argument("--xtoken-temperature", type=float, default=1.0)
