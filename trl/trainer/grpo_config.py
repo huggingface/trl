@@ -323,6 +323,13 @@ class GRPOConfig(_BaseConfig):
             collapse); set it close to the entropy you observe early in training (logged as the `entropy`
             metric) so the bonus engages before the policy collapses (and account for the token subset when
             using `top_entropy_quantile`).
+        use_liger_chunked_loss (`bool`, *optional*, defaults to `False`):
+            Only used when `use_liger_kernel` is `True`. If `True`, use Liger's chunked Triton GRPO loss, which
+            fuses the lm_head projection into the loss so the (B, L, vocab) logits tensor is never materialized
+            (flat loss-stage memory at any context length). If `False` (default), use Liger's non-chunked Triton
+            loss on materialized logits (faster, O(logits) memory — preferable while completion lengths keep the
+            logits tensor small relative to the model's activation footprint). The chunked path requires a Liger
+            build with `liger_kernel.transformers.chunked_grpo_loss` and a model whose lm_head has no bias.
         max_tool_calling_iterations (`int`, *optional*):
             Maximum number of tool-calling turns when training an agent. If `None`, there is no limit and generation
             stops when the model generates a response turn with no tool calls or when the total response length reaches
@@ -899,6 +906,17 @@ class GRPOConfig(_BaseConfig):
             "Typical language models have per-token entropies of 2–10 nats, so the default of 0.2 almost never "
             "triggers regularization (only on near-complete collapse); set it close to the entropy observed "
             "early in training and tune from there."
+        },
+    )
+    use_liger_chunked_loss: bool = field(
+        default=False,
+        metadata={
+            "help": "Only used when `use_liger_kernel` is `True`. If `True`, use Liger's chunked Triton GRPO "
+            "loss, which fuses the lm_head projection into the loss so the (B, L, vocab) logits tensor is never "
+            "materialized (flat loss-stage memory at any context length). If `False` (default), use "
+            "Liger's non-chunked Triton loss on materialized logits (faster, O(logits) memory). The chunked path "
+            "requires a Liger build with `liger_kernel.transformers.chunked_grpo_loss` and a model whose lm_head "
+            "has no bias."
         },
     )
     max_tool_calling_iterations: int | None = field(
