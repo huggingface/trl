@@ -98,8 +98,10 @@ class StepIntervalCallback(TrainerCallback):
             self.fn()
 
 
-class _InitialWeightSyncCallback(TrainerCallback):
-    """Idempotent: NCCL group setup + cold weight sync to vLLM on train begin."""
+class _TrainBeginCallback(TrainerCallback):
+    """Idempotent train-begin setup: NCCL group setup + cold weight sync to vLLM, then start the rollout worker.
+    The weight sync must complete before the worker starts, which the ordering here guarantees.
+    """
 
     def __init__(self, trainer: "AsyncGRPOTrainer"):
         self._trainer = trainer
@@ -112,19 +114,6 @@ class _InitialWeightSyncCallback(TrainerCallback):
         if self._trainer.accelerator.is_main_process and self._trainer.weight_transfer is not None:
             self._trainer.weight_transfer.init_weight_transfer()
         self._trainer._sync_weight()
-
-
-class _StartRolloutWorkerCallback(TrainerCallback):
-    """Idempotent: starts the rollout worker. Must be registered AFTER `_InitialWeightSyncCallback`."""
-
-    def __init__(self, trainer: "AsyncGRPOTrainer"):
-        self._trainer = trainer
-        self._fired = False
-
-    def on_train_begin(self, _args, _state, _control, **_kwargs):
-        if self._fired:
-            return
-        self._fired = True
         if self._trainer.accelerator.is_main_process and self._trainer.rollout_worker is not None:
             self._trainer.rollout_worker.start()
 
@@ -665,9 +654,8 @@ class AsyncGRPOTrainer(_BaseTrainer):
             self.rollout_worker = None
             self.weight_transfer = None
 
-        # Add callbacks. Registration order matters: weight sync first, then worker start.
-        self.add_callback(_InitialWeightSyncCallback(self))
-        self.add_callback(_StartRolloutWorkerCallback(self))
+        # Add callbacks. Cold weight sync + worker start on train begin, then periodic weight syncs.
+        self.add_callback(_TrainBeginCallback(self))
         self.add_callback(StepIntervalCallback(self._sync_weight, self.args.weight_sync_steps))
 
     def get_train_dataloader(self) -> DataLoader:
@@ -791,40 +779,20 @@ class AsyncGRPOTrainer(_BaseTrainer):
             valid_mask = completion_mask > 0
             local_count = valid_mask.sum().float()
 
-            local_ratio_sum = (
-                coef_1[valid_mask].sum() if valid_mask.any() else torch.zeros((), device=completion_mask.device)
-            )
+            # Empty masked selections sum to a 0 scalar on the right device, so no valid_mask.any() guard is needed.
+            local_ratio_sum = coef_1[valid_mask].sum()
             # Approx KL: http://joschu.net/blog/kl-approx.html
-            local_kl_sum = (
-                ((coef_1[valid_mask] - 1) - log_ratio[valid_mask]).sum()
-                if valid_mask.any()
-                else torch.zeros((), device=completion_mask.device)
-            )
-
-            local_entropy_sum = (
-                entropy[valid_mask].sum() if valid_mask.any() else torch.zeros((), device=completion_mask.device)
-            )
+            local_kl_sum = ((coef_1[valid_mask] - 1) - log_ratio[valid_mask]).sum()
+            local_entropy_sum = entropy[valid_mask].sum()
 
             # Compute the clipped probability ratios. A token is counted as clipped only when clipping is binding in a
             # policy-relevant direction: low clip when the advantage is negative, high clip when it is positive.
             is_low_clipped = (coef_1 < 1 - self.epsilon_low) & (advantages < 0)
             is_high_clipped = (coef_1 > 1 + self.epsilon_high) & (advantages > 0)
             is_region_clipped = is_low_clipped | is_high_clipped
-            local_low_clip_sum = (
-                is_low_clipped[valid_mask].float().sum()
-                if valid_mask.any()
-                else torch.zeros((), device=completion_mask.device)
-            )
-            local_high_clip_sum = (
-                is_high_clipped[valid_mask].float().sum()
-                if valid_mask.any()
-                else torch.zeros((), device=completion_mask.device)
-            )
-            local_region_clip_sum = (
-                is_region_clipped[valid_mask].float().sum()
-                if valid_mask.any()
-                else torch.zeros((), device=completion_mask.device)
-            )
+            local_low_clip_sum = is_low_clipped[valid_mask].float().sum()
+            local_high_clip_sum = is_high_clipped[valid_mask].float().sum()
+            local_region_clip_sum = is_region_clipped[valid_mask].float().sum()
 
             # Per-rank clip fractions, gathered below to report the cross-rank saturation extrema.
             local_low_clip_mean = local_low_clip_sum / local_count.clamp(min=1.0)
