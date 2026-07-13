@@ -524,7 +524,6 @@ class AsyncGRPOTrainer(_BaseTrainer):
     ):
         # Args
         if args is None:
-            model_name = model
             model_name = model.split("/")[-1]
             args = AsyncGRPOConfig(f"{model_name}-AsyncGRPO")
 
