@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import contextlib
+import inspect
 import json
 import os
 import types
@@ -122,9 +123,11 @@ def _chunk(h, w, b, lbl, logit_scale, final_logit_softcapping):
     if final_logit_softcapping is not None:
         logits = final_logit_softcapping * torch.tanh(logits / final_logit_softcapping)
     log_p = F.log_softmax(logits, dim=-1)
-    chunk_loss = F.nll_loss(log_p, lbl, reduction="sum")
-    chunk_correct = (logits.argmax(dim=-1) == lbl).sum().float()
-    chunk_entropy = -(log_p.exp() * log_p).sum(dim=-1).sum()
+    # A chunk's tail may be `-100` padding: `ignore_index` zeroes their loss; `valid` does the same for accuracy/entropy.
+    chunk_loss = F.nll_loss(log_p, lbl, ignore_index=-100, reduction="sum")
+    valid = lbl != -100
+    chunk_correct = ((logits.argmax(dim=-1) == lbl) & valid).sum().float()
+    chunk_entropy = (-(log_p.exp() * log_p).sum(dim=-1) * valid).sum()
     return chunk_loss, chunk_correct, chunk_entropy
 
 
@@ -142,16 +145,18 @@ def _chunked_cross_entropy_loss(
     """
     Memory-efficient next-token cross-entropy over hidden states and an `lm_head` weight.
 
-    The full `lm_head` projection is never materialized. Positions where labels equal `-100` are dropped before the
-    matmul, and the remaining tokens are processed in chunks of `chunk_size`. Each chunk's `[chunk_size, vocab_size]`
-    logits tensor is kept alive only during its own forward/backward pass via gradient checkpointing, so peak
-    logits-activation memory is `chunk_size * vocab_size` instead of `batch_size * seq_len * vocab_size`.
+    The full `lm_head` projection is never materialized. Valid (non-`-100`) tokens are packed to the front (via
+    `argsort` on the label mask, a static-shape op) and processed in chunks of `chunk_size`, rounding the count up to a
+    whole chunk so masked positions land in a skippable tail. Each chunk's `[chunk_size, vocab_size]` logits are kept
+    alive only during its own forward/backward via gradient checkpointing, so peak logits memory is `chunk_size *
+    vocab_size` instead of `batch_size * seq_len * vocab_size`. Quantizing the chunk count to a multiple of
+    `chunk_size` keeps this XLA/Neuron-safe (at most `total / chunk_size` distinct traced shapes, not one per
+    valid-token count) while still dropping fully-masked chunks on GPU.
 
-    At least one of `labels` or `shift_labels` must be provided. Passing `labels` alone is the standard path and
-    triggers the internal `labels[..., 1:]` / `hidden_states[..., :-1, :]` shift. Passing `shift_labels` skips the
-    shift and assumes the caller has already aligned labels with hidden states — this is the contract used under
-    context / sequence parallelism, where labels are shifted before being sharded. If both are provided, `shift_labels`
-    wins (matching [`~transformers.loss.ForCausalLMLoss`]).
+    At least one of `labels` or `shift_labels` must be provided. `labels` triggers the internal `labels[..., 1:]` /
+    `hidden_states[..., :-1, :]` shift; `shift_labels` skips it, assuming the caller already aligned labels with hidden
+    states (the contract under context / sequence parallelism). If both are given, `shift_labels` wins (matching
+    [`~transformers.loss.ForCausalLMLoss`]).
 
     Args:
         hidden_states (`torch.Tensor`):
@@ -195,14 +200,11 @@ def _chunked_cross_entropy_loss(
         labels = labels[..., 1:].reshape(-1)
 
     valid = labels != -100
-    hidden = hidden[valid]
-    labels = labels[valid]
-    n_valid = hidden.size(0)
+    n_valid_tensor = valid.sum()
 
     correct = hidden.new_zeros((), dtype=torch.float32)
     entropy_sum = hidden.new_zeros((), dtype=torch.float32)
-    n_valid_tensor = torch.tensor(n_valid, device=hidden.device, dtype=torch.long)
-    if n_valid == 0:
+    if n_valid_tensor == 0:
         # Whole micro-batch masked (e.g. completion-only loss + truncation). Keep the loss connected
         # to the autograd graph through every trainable parameter so `.backward()` succeeds and DDP /
         # FSDP gradient sync doesn't hang on a missing param.
@@ -212,9 +214,18 @@ def _chunked_cross_entropy_loss(
                 loss = loss + lm_head_bias.float().sum() * 0.0
         return loss, correct, entropy_sum, n_valid_tensor
 
+    # Pack valid tokens to the front so masked positions form whole trailing chunks. `argsort` on the boolean mask is
+    # a static-shape op (unlike `hidden[valid]`, whose output shape is data-dependent and poisons XLA compilation).
+    order = valid.to(torch.int8).argsort(descending=True, stable=True)
+    hidden = hidden[order]
+    labels = labels[order]
+
+    # Process only the whole chunks covering the valid prefix: bounds XLA recompiles and drops fully-masked chunks on GPU.
+    n_padded = (n_valid_tensor / chunk_size).ceil().to(torch.int64) * chunk_size
+
     loss = hidden.new_zeros((), dtype=torch.float32)
 
-    for start in range(0, n_valid, chunk_size):
+    for start in range(0, n_padded, chunk_size):
         h_chunk = hidden[start : start + chunk_size]
         lbl_chunk = labels[start : start + chunk_size]
         chunk_loss, chunk_correct, chunk_entropy = torch.utils.checkpoint.checkpoint(
@@ -232,7 +243,7 @@ def _chunked_cross_entropy_loss(
         entropy_sum = entropy_sum + chunk_entropy
 
     if num_items_in_batch is None:
-        loss = loss / n_valid
+        loss = loss / n_valid_tensor
     else:
         if isinstance(num_items_in_batch, torch.Tensor):
             num_items_in_batch = num_items_in_batch.to(loss.device)
@@ -377,6 +388,10 @@ def _patch_chunked_ce_lm_head(model: torch.nn.Module, chunk_size: int, is_vlm: b
             aux_loss=aux_loss,
         )
 
+    # Keep the original forward signature so `generate`'s `_validate_model_kwargs` still sees the
+    # model's real inputs (e.g. VLM `pixel_values`, `spatial_shapes`) and doesn't reject them. The
+    # unbound `__func__` signature makes `MethodType`'s `self`-stripping land correctly.
+    _chunked_ce_forward.__signature__ = inspect.signature(original_forward.__func__)
     model.forward = types.MethodType(_chunked_ce_forward, model)
 
 
@@ -1651,7 +1666,12 @@ class SFTTrainer(_BaseTrainer):
 
     def evaluate(
         self,
-        eval_dataset: Dataset | dict[str, Dataset] | None = None,
+        eval_dataset: Dataset
+        | IterableDataset
+        | DatasetDict
+        | IterableDatasetDict
+        | dict[str, Dataset | IterableDataset]
+        | None = None,
         ignore_keys: list[str] | None = None,
         metric_key_prefix: str = "eval",
     ) -> dict[str, float]:

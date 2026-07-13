@@ -817,7 +817,7 @@ class GRPOTrainer(_BaseTrainer):
             )
         ):
             # See https://github.com/huggingface/trl/issues/3213
-            raise NotImplementedError(
+            raise ValueError(
                 "Iterable datasets are not yet supported in GRPOTrainer. Please use a standard dataset instead."
             )
 
@@ -970,6 +970,7 @@ class GRPOTrainer(_BaseTrainer):
         self._total_train_tokens = 0
         self._current_train_step_time = 0.0
         self.log_completions = args.log_completions
+        self.log_multimodal = args.log_multimodal
         self.log_unique_prompts = args.log_unique_prompts
         self.num_completions_to_print = args.num_completions_to_print
         # Keep logs sized to the generation batch to record only outputs from the latest model update.
@@ -2628,7 +2629,7 @@ class GRPOTrainer(_BaseTrainer):
             self._metrics[mode][name].append(global_mean)
         self._pending_metrics.clear()
 
-        if images is not None:
+        if images is not None and self.log_multimodal:
             self._logs["images"].extend(gather_object(images))
 
         if self.use_vllm and self.vllm_importance_sampling_correction:

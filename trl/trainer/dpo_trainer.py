@@ -573,9 +573,10 @@ class DPOTrainer(_BaseTrainer):
                     "The `model_init_kwargs` will be ignored."
                 )
             if quantization_config is not None:
-                logger.warning(
-                    "You passed `quantization_config` to the trainer, but your model is already instantiated. The "
-                    "`quantization_config` will be ignored."
+                raise ValueError(
+                    "You passed `quantization_config` to the trainer, but your model is already instantiated. "
+                    "Quantization can only be applied when the model is loaded from a model identifier (`str`). "
+                    "Either pass the model as a model identifier, or omit `quantization_config`."
                 )
         # Non-quantized models do not have the `is_loaded_in_{8,4}bit` attributes, whereas quantized models do
         _is_quantized_model = getattr(model, "is_loaded_in_4bit", False) or getattr(model, "is_loaded_in_8bit", False)
@@ -1119,6 +1120,7 @@ class DPOTrainer(_BaseTrainer):
                 batched=True,
                 remove_columns=dataset.column_names,
                 new_fingerprint=fingerprint,
+                cache_file_name=cache_file,
                 desc=f"Caching reference log probs for {name} dataset",
             )
         self.accelerator.wait_for_everyone()
@@ -1604,7 +1606,12 @@ class DPOTrainer(_BaseTrainer):
 
     def evaluate(
         self,
-        eval_dataset: Dataset | dict[str, Dataset] | None = None,
+        eval_dataset: Dataset
+        | IterableDataset
+        | DatasetDict
+        | IterableDatasetDict
+        | dict[str, Dataset | IterableDataset]
+        | None = None,
         ignore_keys: list[str] | None = None,
         metric_key_prefix: str = "eval",
     ) -> dict[str, float]:
