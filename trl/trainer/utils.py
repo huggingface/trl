@@ -21,7 +21,7 @@ import socket
 import threading
 import types
 from collections.abc import Mapping, Sequence, Sized
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from importlib.metadata import version
 from itertools import accumulate
 from typing import TypeVar
@@ -180,6 +180,38 @@ def disable_dropout_in_model(model: torch.nn.Module) -> None:
     for module in model.modules():
         if isinstance(module, torch.nn.Dropout):
             module.p = 0
+
+
+def maybe_gather_lm_head_ctx(*params: torch.nn.Parameter):
+    """
+    Context manager that allgathers ZeRO-3 partitioned `lm_head` weight/bias for a fused loss.
+
+    Fused losses (e.g. Liger) read `lm_head.weight` directly and hand it to the kernel without ever calling the
+    `lm_head` module. Under DeepSpeed ZeRO-3 every parameter is sharded to `numel 0` and only re-materialized inside
+    its owning module's forward hook, so the head's gather hook never fires and the kernel receives an empty weight.
+    This gathers the given parameters for the duration of the call. The weight gradient is computed during this forward
+    (the fused function stashes it), so the parameters don't need to stay gathered for the backward.
+
+    Returns a null context when ZeRO-3 is not enabled, or when the parameters are already gathered — with tied
+    embeddings `embed_tokens` keeps the weight `AVAILABLE`, and re-partitioning it on exit would collide with
+    `embed_tokens`' active-submodule tracking.
+
+    Args:
+        *params (`torch.nn.Parameter`):
+            Parameters to gather (e.g. `lm_head.weight` and `lm_head.bias`). `None` values are ignored.
+    """
+    from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
+
+    if not is_deepspeed_zero3_enabled():
+        return nullcontext()
+
+    import deepspeed
+    from deepspeed.runtime.zero.partition_parameters import ZeroParamStatus
+
+    to_gather = [p for p in params if p is not None and p.ds_status != ZeroParamStatus.AVAILABLE]
+    if not to_gather:
+        return nullcontext()
+    return deepspeed.zero.GatheredParameters(to_gather)
 
 
 def get_quantization_config(model_args: ModelConfig) -> BitsAndBytesConfig | None:

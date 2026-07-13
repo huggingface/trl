@@ -48,7 +48,7 @@ from transformers.utils import is_peft_available
 from ..data_utils import _tokenize, apply_chat_template, extract_prompt, is_conversational, prepare_multimodal_messages
 from ..import_utils import is_liger_kernel_available
 from ..models import get_act_offloading_ctx_manager, prepare_deepspeed, prepare_fsdp
-from ..models.utils import disable_gradient_checkpointing
+from ..models.utils import _ForwardRedirection, disable_gradient_checkpointing
 from .base_trainer import _BaseTrainer
 from .callbacks import SyncRefModelCallback
 from .dpo_config import DPOConfig
@@ -59,6 +59,7 @@ from .utils import (
     flush_left,
     get_config_model_id,
     hash_module,
+    maybe_gather_lm_head_ctx,
     pad,
     selective_log_softmax,
     use_adapter,
@@ -812,6 +813,9 @@ class DPOTrainer(_BaseTrainer):
                         "`use_liger_kernel=False`."
                     )
             self.liger_loss = LigerFusedLinearDPOLoss(beta=args.beta, loss_type=self.loss_types[0])
+            # Redirect the model.module forward to the model forward to ensure pre-forward hooks are called, so that
+            # under ZeRO-3 the parameter coordinator gathers/reduces `lm_head.weight` around the fused loss.
+            self._forward_redirection = _ForwardRedirection()
 
         # Dataset
         # Skip dataset preparation if it's a VLM, where preprocessing (e.g., image-to-pixel conversion) is too costly
@@ -1236,7 +1240,10 @@ class DPOTrainer(_BaseTrainer):
         labels = input_ids[:, 1:].clone()
         labels[shift_completion_mask == 0] = -100
 
-        loss, metrics = self.liger_loss(weight, hidden_states, labels, bias, ref_hidden_states, ref_weight, ref_bias)
+        with maybe_gather_lm_head_ctx(weight, bias, ref_weight, ref_bias):
+            loss, metrics = self.liger_loss(
+                weight, hidden_states, labels, bias, ref_hidden_states, ref_weight, ref_bias
+            )
 
         (
             chosen_logps,
@@ -1645,7 +1652,10 @@ class DPOTrainer(_BaseTrainer):
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         try:
             if self.use_liger_kernel:
-                return self._compute_loss_liger(model, inputs, return_outputs)
+                unwrapped_model = self.accelerator.unwrap_model(model)
+                return self._forward_redirection(
+                    model, unwrapped_model, self._compute_loss_liger, unwrapped_model, inputs, return_outputs
+                )
             return self._compute_loss(model, inputs, return_outputs)
         except ValueError as e:
             if "Image features and image tokens do not match" in str(e) and self.args.max_length is not None:
