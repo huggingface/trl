@@ -1654,8 +1654,7 @@ class DPOTrainer(_BaseTrainer):
             if self.use_liger_kernel:
                 # Under ZeRO-3, `lm_head.weight` is sharded and the fused loss reads it directly (bypassing the
                 # module), so run the loss inside the engine's forward via `_forward_redirection` to arm the parameter
-                # coordinator's gather/reduce hooks. For other backends this is unnecessary and harmful: it would wrap
-                # the Liger preference loss' `torch.func` call inside `DDP.forward`, which errors — so call directly.
+                # coordinator's gather/reduce hooks.
                 deepspeed_plugin = self.accelerator.state.deepspeed_plugin
                 is_zero3 = deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3
                 unwrapped_model = self.accelerator.unwrap_model(model)
