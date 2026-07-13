@@ -72,6 +72,7 @@ from .utils import (
     entropy_from_logits,
     flush_left,
     get_config_model_id,
+    maybe_gather_lm_head_ctx,
     pad,
     selective_log_softmax,
 )
@@ -95,26 +96,8 @@ class _ChunkedCELMHeadOutput(CausalLMOutputWithPast):
     aux_loss: torch.Tensor | None = None
 
 
-def _maybe_gather_lm_head_ctx(w, b):
-    # Allgather ZeRO-3 partitioned `lm_head` weight/bias for the chunked matmul. No-op if not ZeRO-3, or if the
-    # param is already gathered (tied embeddings: `embed_tokens` shares the weight and keeps it `AVAILABLE`, so
-    # partitioning on our exit would collide with its active-submodule tracking).
-    from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
-
-    if not is_deepspeed_zero3_enabled():
-        return contextlib.nullcontext()
-
-    import deepspeed
-    from deepspeed.runtime.zero.partition_parameters import ZeroParamStatus
-
-    params = [w] if b is None else [w, b]
-    if all(p.ds_status == ZeroParamStatus.AVAILABLE for p in params):
-        return contextlib.nullcontext()
-    return deepspeed.zero.GatheredParameters(params)
-
-
 def _chunk(h, w, b, lbl, logit_scale, final_logit_softcapping):
-    with _maybe_gather_lm_head_ctx(w, b):
+    with maybe_gather_lm_head_ctx(w, b):
         logits = h.float() @ w.float().t()
         if b is not None:
             logits = logits + b.float()

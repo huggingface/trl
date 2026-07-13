@@ -189,8 +189,10 @@ def maybe_gather_lm_head_ctx(*params: torch.nn.Parameter):
     Fused losses (e.g. Liger) read `lm_head.weight` directly and hand it to the kernel without ever calling the
     `lm_head` module. Under DeepSpeed ZeRO-3 every parameter is sharded to `numel 0` and only re-materialized inside
     its owning module's forward hook, so the head's gather hook never fires and the kernel receives an empty weight.
-    This gathers the given parameters for the duration of the call. The weight gradient is computed during this forward
-    (the fused function stashes it), so the parameters don't need to stay gathered for the backward.
+    This gathers the given parameters for the duration of the forward, so the fused matmul sees the full weight. The
+    weight gradient is computed and stashed during this forward, so the parameters need not stay gathered for the
+    backward — but the backward's gradient reduction relies on the ZeRO-3 pre-forward hooks being armed, so the caller
+    must run the fused loss inside the model's forward (e.g. via `_ForwardRedirection`).
 
     Returns a null context when ZeRO-3 is not enabled, or when the parameters are already gathered — with tied
     embeddings `embed_tokens` keeps the weight `AVAILABLE`, and re-partitioning it on exit would collide with
