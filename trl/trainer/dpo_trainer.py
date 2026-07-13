@@ -1657,12 +1657,13 @@ class DPOTrainer(_BaseTrainer):
                 # coordinator's gather/reduce hooks. For other backends this is unnecessary and harmful: it would wrap
                 # the Liger preference loss' `torch.func` call inside `DDP.forward`, which errors — so call directly.
                 deepspeed_plugin = self.accelerator.state.deepspeed_plugin
-                if deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3:
-                    unwrapped_model = self.accelerator.unwrap_model(model)
+                is_zero3 = deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3
+                unwrapped_model = self.accelerator.unwrap_model(model)
+                if is_zero3 or self.is_fsdp_enabled:
                     return self._forward_redirection(
                         model, unwrapped_model, self._compute_loss_liger, unwrapped_model, inputs, return_outputs
                     )
-                return self._compute_loss_liger(model, inputs, return_outputs)
+                return self._compute_loss_liger(unwrapped_model, inputs, return_outputs)
             return self._compute_loss(model, inputs, return_outputs)
         except ValueError as e:
             if "Image features and image tokens do not match" in str(e) and self.args.max_length is not None:

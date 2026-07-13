@@ -943,7 +943,8 @@ class GRPOTrainer(_BaseTrainer):
                 raise ImportError(
                     "Liger is required to use `use_liger_kernel` as the GRPO loss. Run `pip install liger-kernel`."
                 )
-            # redirect the model.module forward to the model forward to ensure pre-forward hooks are called
+            # Redirect the model.module forward to the model forward to ensure pre-forward hooks are called, so that
+            # under ZeRO-3 the parameter coordinator gathers/reduces `lm_head.weight` around the fused loss.
             self._forward_redirection = _ForwardRedirection()
 
             self.liger_loss = LigerFusedLinearGRPOLoss(
