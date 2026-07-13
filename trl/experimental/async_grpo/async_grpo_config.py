@@ -56,6 +56,14 @@ class AsyncGRPOConfig(_BaseConfig):
             Maximum number of tool-calling turns when training an agent. If `None`, there is no limit and generation
             stops when the model generates a response turn with no tool calls or when the total response length reaches
             `max_completion_length`.
+        fork_threshold_tokens (`int`, *optional*, defaults to `1024`):
+            A multi-turn conversation is turned into training rows by re-tokenizing the whole conversation every turn
+            and reconciling the result against the tokens held so far: a clean append stays one row, a rewrite (dropped
+            reasoning, summarized history) forks a new row. When a turn's re-tokenized prompt drifts inside the last
+            generated answer, the decision is made on the **drift size** — how many previously-trained tokens the
+            realign would mask to context. A drift smaller than this many tokens is treated as a re-tokenization
+            wobble (realigned as context); a larger drift — e.g. a long reasoning block dropped by the template —
+            forks a new row so those trained tokens keep their training signal instead of being silently masked.
 
         > Parameters that control the vLLM server
 
@@ -181,6 +189,15 @@ class AsyncGRPOConfig(_BaseConfig):
             "help": "Maximum number of tool-calling turns when training an agent. If `None`, there is no limit and "
             "generation stops when the model generates a response turn with no tool calls or when the total response "
             "length reaches `max_completion_length`."
+        },
+    )
+    fork_threshold_tokens: int = field(
+        default=1024,
+        metadata={
+            "help": "A multi-turn conversation is reconciled into training rows by re-tokenizing the whole "
+            "conversation every turn: a clean append stays one row, a rewrite forks a new row. A re-tokenization "
+            "drift inside the last answer smaller than this many tokens (measured as the number of previously-trained "
+            "tokens the realign would mask) is realigned as context; a larger drift forks a new row."
         },
     )
 

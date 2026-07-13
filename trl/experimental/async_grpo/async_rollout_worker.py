@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import asyncio
+import enum
 import inspect
 import multiprocessing as mp
 import os
@@ -21,9 +22,10 @@ import queue
 import threading
 import time
 import traceback
+import uuid
 import warnings
 from collections.abc import Awaitable, Callable, Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from multiprocessing.queues import Queue as MPQueue
 from multiprocessing.sharedctypes import Synchronized as MPValue
 from multiprocessing.synchronize import Event as MPEvent
@@ -49,6 +51,7 @@ from ...trainer.utils import print_prompt_completions_sample
 logger = get_logger(__name__)
 
 Messages: TypeAlias = list[dict[str, str]]
+RolloutId: TypeAlias = str
 
 _RETRYABLE_HTTP_ERRORS = (aiohttp.ClientError, asyncio.TimeoutError, TimeoutError, ConnectionResetError)
 
@@ -66,15 +69,112 @@ async def _retry_on_http_error(coro_factory: Callable[[], Awaitable], *, label: 
             await asyncio.sleep(sleep)
 
 
+@dataclass(frozen=True)
+class TurnRecord:
+    """One generation call: the whole prompt this turn, the tokens the model produced, their logprobs."""
+
+    prompt_ids: list[int]
+    output_ids: list[int]
+    output_log_probs: list[float] = field(default_factory=list)
+
+
+@dataclass
+class TrainingSequence:
+    """One training row. Maps 1:1 onto the list fields of `RolloutSample`."""
+
+    input_ids: list[int]  # full tokens (prompt included)
+    completion_mask: list[int]  # 1 = train this token, 0 = context
+    old_log_probs: list[float]  # generator logprobs, 0.0 where mask is 0
+    rollout_id: RolloutId  # which conversation this row came from
+
+
+def _common_prefix_len(a: list[int], b: list[int], chunk: int = 4096) -> int:
+    """How many tokens at the start are identical in `a` and `b`."""
+    limit = min(len(a), len(b))
+    matched = 0
+    while matched < limit:
+        end = min(matched + chunk, limit)
+        if a[matched:end] == b[matched:end]:
+            matched = end
+        else:
+            while matched < end and a[matched] == b[matched]:
+                matched += 1
+            return matched
+    return matched
+
+
+class DriftKind(enum.Enum):
+    CLEAN = "clean"  # new prompt starts exactly with held tokens -> append the new part
+    REALIGN = "realign"  # small change in the last answer -> overwrite it as context
+    FORK = "fork"  # bigger change -> start a new row
+
+
+class _SampleBuilder:
+    def __init__(self, fork_threshold: int):
+        self._fork_threshold = fork_threshold
+        self.tokens: list[int] = []
+        self.loss_mask: list[int] = []
+        self.logprobs: list[float] = []
+        self.last_response_start_idx: int | None = None
+
+    def classify_token_drift(self, turn: TurnRecord) -> DriftKind:
+        matched = _common_prefix_len(self.tokens, turn.prompt_ids)
+        drift = len(self.tokens) - matched
+        if drift == 0:
+            return DriftKind.CLEAN
+        start = self.last_response_start_idx
+        if start is not None and matched >= start and drift < self._fork_threshold:
+            return DriftKind.REALIGN
+        return DriftKind.FORK
+
+    def append_turn(self, turn: TurnRecord, kind: DriftKind, *, trained: bool = True) -> None:
+        assert kind is not DriftKind.FORK
+        if kind is DriftKind.REALIGN:
+            self._align_to_prompt(turn.prompt_ids)  # overwrite drifted tail as context
+        else:  # CLEAN: held tokens are a prefix of the new prompt; append the tail as context
+            self._append(turn.prompt_ids[len(self.tokens) :], mask=0)
+        self.last_response_start_idx = len(self.tokens)
+        self._append(turn.output_ids, mask=int(trained), logprobs=turn.output_log_probs if trained else None)
+
+    def _align_to_prompt(self, prompt_ids: list[int]) -> None:
+        matched = _common_prefix_len(self.tokens, prompt_ids)
+        tail = prompt_ids[matched:]
+        self.tokens[matched:] = tail
+        self.loss_mask[matched:] = [0] * len(tail)
+        self.logprobs[matched:] = [0.0] * len(tail)
+
+    def _append(self, ids: list[int], *, mask: int, logprobs: list[float] | None = None) -> None:
+        self.tokens.extend(ids)
+        self.loss_mask.extend([mask] * len(ids))
+        self.logprobs.extend(logprobs if logprobs else [0.0] * len(ids))
+
+    def has_trained_token(self) -> bool:
+        return any(self.loss_mask)
+
+    def to_training_sequence(self, rollout_id: RolloutId) -> TrainingSequence:
+        return TrainingSequence(list(self.tokens), list(self.loss_mask), list(self.logprobs), rollout_id)
+
+
+def _chain_to_sequences(turns: list[TurnRecord], rollout_id: RolloutId, fork_threshold: int) -> list[TrainingSequence]:
+    """Reconcile one conversation's turns (in order) into training rows; fork when re-tokenization drifts."""
+    builders: list[_SampleBuilder] = []
+    for turn in turns:
+        if not builders or (kind := builders[-1].classify_token_drift(turn)) is DriftKind.FORK:
+            builder = _SampleBuilder(fork_threshold)
+            builder.append_turn(turn, DriftKind.CLEAN)
+            builders.append(builder)
+        else:
+            builders[-1].append_turn(turn, kind)
+    return [b.to_training_sequence(rollout_id) for b in builders if b.has_trained_token()]
+
+
 @dataclass(slots=True)
 class RolloutGroup:
     prompts: list[Messages]
-    prompt_ids: list[list[int]]
     reward_kwargs: dict[str, list[Any]]
     completions: list[Messages]
-    completions_ids: list[list[int]]
-    completions_logprobs: list[list[float]]
-    tool_mask: list[list[int]]
+    completions_ids: list[list[int]]  # per conversation, its completion token stream (for reward funcs)
+    completions_sequences: list[list[TrainingSequence]]  # per conversation, its 1+ training rows
     tool_call_counts: list[int]
     tool_failure_counts: list[int]
     model_version: int
@@ -202,6 +302,7 @@ class _AsyncRolloutLoop:
         max_tool_calling_iterations: int | None = None,
         log_completions: bool = False,
         num_completions_to_print: int | None = None,
+        fork_threshold_tokens: int = 1024,
     ):
         self.model_name = model_name
         self.dataset = dataset
@@ -238,6 +339,7 @@ class _AsyncRolloutLoop:
         self.max_tool_calling_iterations = max_tool_calling_iterations
         self.log_completions = log_completions
         self.num_completions_to_print = num_completions_to_print
+        self._fork_threshold_tokens = fork_threshold_tokens  # reconciler fork/realign threshold
         self.vllm_server_url = vllm_server_url.rstrip("/")
 
         tools = tools or []
@@ -429,12 +531,10 @@ class _AsyncRolloutLoop:
                         }
                         pending_groups[group_id] = RolloutGroup(
                             prompts=[],
-                            prompt_ids=[],
                             reward_kwargs=reward_kwargs,
                             completions=[],
                             completions_ids=[],
-                            completions_logprobs=[],
-                            tool_mask=[],
+                            completions_sequences=[],
                             tool_call_counts=[],
                             tool_failure_counts=[],
                             model_version=self.model_version,
@@ -462,21 +562,17 @@ class _AsyncRolloutLoop:
                         raise task.exception()
 
                     (
-                        prompt_ids,
                         completion,
                         completion_ids,
-                        completion_logprobs,
-                        tool_mask,
+                        sequences,
                         tool_call_count,
                         tool_failure_count,
                     ) = task.result()
                     group = pending_groups[group_id]
                     group.prompts.append(prompt)
-                    group.prompt_ids.append(prompt_ids)
                     group.completions.append(completion)
                     group.completions_ids.append(completion_ids)
-                    group.completions_logprobs.append(completion_logprobs)
-                    group.tool_mask.append(tool_mask)
+                    group.completions_sequences.append(sequences)
                     group.tool_call_counts.append(tool_call_count)
                     group.tool_failure_counts.append(tool_failure_count)
                     # The environment owns the reward: score it now, while this rollout's environment still holds its
@@ -495,7 +591,7 @@ class _AsyncRolloutLoop:
                             group.env_rewards.append(None)
                     if environment is not None:
                         self._environment_pool[name].append(environment)
-                    self._total_completion_tokens += sum(tool_mask)
+                    self._total_completion_tokens += sum(sum(s.completion_mask) for s in sequences)
                     pending_completed[group_id] += 1
 
                     if pending_completed[group_id] == self.num_generations:
@@ -595,87 +691,51 @@ class _AsyncRolloutLoop:
 
     async def _generate_one(
         self, prompt: Messages, tool_dict: dict[str, Callable], tools: list[Callable]
-    ) -> tuple[list[int], list[dict[str, str]], list[int], list[float], list[int], int, int]:
-        completion, completion_ids, completion_logprobs, tool_mask = [], [], [], []
+    ) -> tuple[list[dict[str, str]], list[int], list[TrainingSequence], int, int]:
+        """Roll out one conversation, re-tokenizing the whole message list each turn and reconciling drift.
+
+        Every turn renders the full conversation through the chat template, generates, records the turn, and feeds the
+        tool result back as a message (re-tokenized on the next whole-conversation pass). At the end,
+        `_chain_to_sequences` reconciles re-tokenization drift into one or more training rows: a clean append stays one
+        row, a rewrite (dropped reasoning, summarized history) forks a new row. Rebuilding `prompt_ids` from the
+        message list each turn (instead of gluing tokens on the end and never looking back) is what lets the reconciler
+        catch rewrites. Returns the completion messages, their token ids, and the reconciled training rows (each row
+        carries its own `input_ids`).
+        """
+        messages = list(prompt)  # a MESSAGE list, not a token list
+        rollout_id = uuid.uuid4().hex
+        turns: list[TurnRecord] = []
+        completion, completion_ids = [], []
         tool_call_count = 0
         tool_failure_count = 0
         iteration_num = 0
         max_iterations = self.max_tool_calling_iterations
-        # Initial prompt tokens, returned so the scorer can reconstruct input_ids = prompt_ids + completion_ids.
-        # `running_ids` accumulates the turns/tool deltas fed back to the model; `prompt_ids` stays the prompt.
-        prompt_ids = self.tokenizer.apply_chat_template(
-            prompt,
-            return_dict=False,
-            add_generation_prompt=True,
-            tools=tools or None,
-            chat_template=self.chat_template,
-            **self.chat_template_kwargs,
-        )
-        running_ids = prompt_ids
         while True:
-            turn_ids, turn_logprobs = await self._generate_one_turn(running_ids)
-            assistant_message = parse_response(self.tokenizer, turn_ids, prefix=running_ids)
+            prompt_ids = self.tokenizer.apply_chat_template(  # re-tokenize the WHOLE conversation
+                messages,
+                return_dict=False,
+                add_generation_prompt=True,
+                tools=tools or None,
+                chat_template=self.chat_template,
+                **self.chat_template_kwargs,
+            )
+            turn_ids, turn_logprobs = await self._generate_one_turn(prompt_ids)
+            assistant_message = parse_response(self.tokenizer, turn_ids, prefix=prompt_ids)
             completion.append(assistant_message)
             completion_ids.extend(turn_ids)
-            completion_logprobs.extend(turn_logprobs)
-            tool_mask.extend([1] * len(turn_ids))
+            messages.append(assistant_message)
+            turns.append(TurnRecord(prompt_ids, turn_ids, turn_logprobs))
             tool_calls = assistant_message.get("tool_calls")
             if tool_calls is None or (max_iterations is not None and iteration_num >= max_iterations):
-                return (
-                    prompt_ids,
-                    completion,
-                    completion_ids,
-                    completion_logprobs,
-                    tool_mask,
-                    tool_call_count,
-                    tool_failure_count,
-                )
-
+                break
             tool_messages, n_calls, n_failures = self._execute_tool_calls(tool_calls, tool_dict)
             tool_call_count += n_calls
             tool_failure_count += n_failures
             completion.extend(tool_messages)
-            suffix_ids = self._get_tool_suffix_ids(tool_messages)
-            completion_ids.extend(suffix_ids)
-            completion_logprobs.extend([0.0] * len(suffix_ids))
-            tool_mask.extend([0] * len(suffix_ids))
-            running_ids = running_ids + turn_ids + suffix_ids
+            messages.extend(tool_messages)  # tool result goes back as a MESSAGE, re-tokenized next turn
             iteration_num += 1
-
-    def _get_tool_suffix_ids(self, tool_messages: list[dict[str, Any]]) -> list[int]:
-        # Use the real tool name: some templates (e.g. GPT-OSS) derive the tool response header from
-        # the assistant's tool call name.
-        dummy_tool_calls = [{"type": "function", "function": {"name": tool_messages[0]["name"], "arguments": {}}}]
-        dummy_messages = [
-            {"role": "user", "content": "dummy"},
-            # `content: ""` is required: VLM processors crash on tokenize=True without it
-            # (KeyError in processing_utils.py, see huggingface/transformers#45290).
-            {"role": "assistant", "content": "", "tool_calls": dummy_tool_calls},
-        ]
-        prefix_ids = self.tokenizer.apply_chat_template(
-            dummy_messages,
-            add_generation_prompt=False,
-            tokenize=True,
-            chat_template=self.chat_template,
-            return_dict=False,
-            **self.chat_template_kwargs,
-        )
-        full_ids = self.tokenizer.apply_chat_template(
-            dummy_messages + tool_messages,
-            add_generation_prompt=True,
-            tokenize=True,
-            chat_template=self.chat_template,
-            return_dict=False,
-            **self.chat_template_kwargs,
-        )
-        # Some chat templates (Qwen3/Qwen3.5) render "...<|im_end|>\n" after assistant/tool blocks.
-        # Align the slicing boundary to EOS, not EOS + newline.
-        eos_positions = [i for i, tok_id in enumerate(prefix_ids) if tok_id == self.tokenizer.eos_token_id]
-        if eos_positions:
-            prefix_ids = prefix_ids[: eos_positions[-1] + 1]
-        if full_ids[: len(prefix_ids)] != prefix_ids:
-            raise ValueError("Unexpected tokenization: the EOS-trimmed prefix IDs are not a prefix of the full IDs.")
-        return full_ids[len(prefix_ids) :]
+        sequences = _chain_to_sequences(turns, rollout_id, self._fork_threshold_tokens)  # >= 1 row per conversation
+        return completion, completion_ids, sequences, tool_call_count, tool_failure_count
 
     def _execute_tool_calls(
         self, tool_calls: list[dict[str, Any]], tool_dict: dict[str, Callable]
@@ -773,50 +833,44 @@ class _AsyncRolloutLoop:
         )
 
         per_func_rewards = np.array(all_rewards, dtype=float)
-        return [
-            RolloutSample(
-                prompt=prompt,
-                completion=completion,
-                input_ids=prompt_ids + completion_ids,
-                completion_mask=[0] * len(prompt_ids) + tool_mask,
-                old_log_probs=[0.0] * len(prompt_ids) + logprobs,
-                advantage=advantage,
-                model_version=group.model_version,
-                metrics={
-                    "reward": float(reward),
-                    "reward_std": reward_std,
-                    **{
-                        f"rewards/{name}": float(func_reward)
-                        for name, func_reward in zip(self.reward_func_names, per_func_rewards[:, i], strict=True)
-                    },
-                    **tm,
+        # Option 3 advantage: one advantage per conversation, stamped on every training row it produced.
+        # Under TRL's global token-mean loss a fork is invisible to the loss (see slime_research.md B.5),
+        # so we do not split the reward or the advantage across a conversation's rows.
+        samples = []
+        for i, (prompt, completion, sequences, advantage, reward, tm) in enumerate(
+            zip(
+                group.prompts,
+                group.completions,
+                group.completions_sequences,
+                advantages,
+                rewards,
+                tool_metrics,
+                strict=True,
+            )
+        ):
+            metrics = {
+                "reward": float(reward),
+                "reward_std": reward_std,
+                **{
+                    f"rewards/{name}": float(func_reward)
+                    for name, func_reward in zip(self.reward_func_names, per_func_rewards[:, i], strict=True)
                 },
-            )
-            for i, (
-                prompt,
-                prompt_ids,
-                completion,
-                completion_ids,
-                logprobs,
-                tool_mask,
-                advantage,
-                reward,
-                tm,
-            ) in enumerate(
-                zip(
-                    group.prompts,
-                    group.prompt_ids,
-                    group.completions,
-                    group.completions_ids,
-                    group.completions_logprobs,
-                    group.tool_mask,
-                    advantages,
-                    rewards,
-                    tool_metrics,
-                    strict=True,
+                **tm,
+            }
+            for seq in sequences:
+                samples.append(
+                    RolloutSample(
+                        prompt=prompt,
+                        completion=completion,
+                        input_ids=seq.input_ids,
+                        completion_mask=seq.completion_mask,
+                        old_log_probs=seq.old_log_probs,
+                        advantage=float(advantage),
+                        model_version=group.model_version,
+                        metrics=dict(metrics),  # own copy per row; _compute_rollout_metrics mutates it
+                    )
                 )
-            )
-        ]
+        return samples
 
     async def _post(self, path: str, payload: dict, timeout: float, max_retries: int = 3) -> dict:
         client_timeout = aiohttp.ClientTimeout(total=timeout)
