@@ -79,6 +79,8 @@ We *will* treat as a vulnerability anything that breaks one of these protections
 
 **Conversion, CLI, and developer utilities are operator tools.** Scripts you run yourself against inputs you chose (format converters, training/utility CLIs, dev helpers) are not a library API attack surface. Behaviors such as a script deserializing a file you pointed it at are within the operator's trust.
 
+**Sandboxed execution environments run model-produced actions; isolation is the backend's responsibility.** Some training features let the model under training execute actions inside a sandboxed execution environment you configure. Executing those actions is the purpose of the environment; keeping them isolated from your host and other workloads is the configured sandbox backend's responsibility. Running such a feature without a real sandbox backend, or via a local non-isolating path, is not a security boundary and is out of scope. A genuine escape from a properly configured sandbox backend is in scope.
+
 ## In scope
 
 We treat as vulnerabilities issues in the **published package code** — the library's own API surface — that an attacker can trigger without the victim having opted into a documented risk. For example:
@@ -94,8 +96,9 @@ We treat as vulnerabilities issues in the **published package code** — the lib
 The following are **not** treated as vulnerabilities. If your finding touches one of these, the report must explain why it is nonetheless a violation of a guarantee we make — otherwise it will be closed.
 
 - Issues that require loading an untrusted artifact and amount to the documented load-time risk above (code execution / file access on load of a malicious model, dataset, config, or pickle).
-- Findings in `examples/`, documentation, tests, or other non-packaged reference material.
+- Findings in `examples/`, documentation, tests, or other non-packaged reference material. These are out of scope for private security advisories (GHSA/CVE), but valid security issues should still be reported through the normal issue/PR process.
 - Local denial-of-service from feeding pathological input to a function on your own machine (high memory, slow parse, panic), absent a multi-tenant or remote-service impact.
+- The generation / weight-sync server you run for online training (`trl vllm-serve`) is training-cluster infrastructure you deploy and network-isolate yourself, not a hardened public service. Its reachability or availability on a network you chose to expose is a deployment concern, not a library vulnerability — absent a genuine cross-tenant or isolation break.
 - Model behavior: jailbreaks, alignment failures, prompt injection, or harmful generations. Model weights are authored by their uploaders; report these to the model owner.
 - Vulnerabilities in third-party dependencies we do not vendor — report upstream (we'll bump once fixed).
 - Theoretical issues without a working proof of concept, and reports auto-generated from scanners or LLMs without a verified, reproducible chain.
