@@ -191,9 +191,9 @@ While training and evaluating, we record the following metrics:
 - `kl`: The average KL divergence between the model and the reference model, calculated over generated completions. Logged only if `beta` is nonzero.
 - `clip_ratio/region_mean`: The ratio of token (or sequence, if `importance_sampling_level="sequence"`) probabilities where the GRPO objective is clipped to stay within the trust region:  \\( \text{clip}\left( r_{i,t}(\theta), 1 - \epsilon_\mathrm{low}, 1 + \epsilon_\mathrm{high} \right)\,, \quad r_{i,t}(\theta) = \frac{\pi_\theta(o_{i,t} \mid q, o_{i,< t})}{\pi_{\theta_{\text{old}}}(o_{i,t} \mid q, o_{i,< t})} \\). A higher value means more tokens are clipped, which constrains how much the policy $\pi_\theta$ can change.
 - `clip_ratio/low_mean`: The average ratio of token (or sequence, if `importance_sampling_level="sequence"`) probabilities that were clipped on the lower bound of the trust region:  \\(r_{i,t}(\theta) < 1 - \epsilon_\mathrm{low}\\).
-- `clip_ratio/low_min`: The minimum ratio of token (or sequence, if `importance_sampling_level="sequence"`) probabilities that were clipped on the lower bound of the trust region:  \\(r_{i,t}(\theta) < 1 - \epsilon_\mathrm{low}\\).
+- `clip_ratio/low_min`: The smallest per-completion fraction of tokens (or the sequence itself, if `importance_sampling_level="sequence"`) clipped on the lower bound of the trust region:  \\(r_{i,t}(\theta) < 1 - \epsilon_\mathrm{low}\\).
 - `clip_ratio/high_mean`: The average ratio of token (or sequence, if `importance_sampling_level="sequence"`) probabilities that were clipped on the upper bound of the trust region:  \\(r_{i,t}(\theta) > 1 + \epsilon_\mathrm{high}\\).
-- `clip_ratio/high_max`: The maximum ratio of token (or sequence, if `importance_sampling_level="sequence"`) probabilities that were clipped on the upper bound of the trust region:  \\(r_{i,t}(\theta) > 1 + \epsilon_\mathrm{high}\\).
+- `clip_ratio/high_max`: The largest per-completion fraction of tokens (or the sequence itself, if `importance_sampling_level="sequence"`) clipped on the upper bound of the trust region:  \\(r_{i,t}(\theta) > 1 + \epsilon_\mathrm{high}\\).
 
 ## Customization
 
