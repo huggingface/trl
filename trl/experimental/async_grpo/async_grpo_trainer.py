@@ -522,17 +522,20 @@ class AsyncGRPOTrainer(_BaseTrainer):
         environment_factory: EnvironmentFactory | dict[str, EnvironmentFactory] | None = None,
         rollout_worker: RolloutWorkerProtocol | None = None,
     ):
-        self.args = args or AsyncGRPOConfig()
+        # Args
+        if args is None:
+            model_name = model
+            model_name = model.split("/")[-1]
+            args = AsyncGRPOConfig(f"{model_name}-AsyncGRPO")
 
         # Training arguments
-        self.epsilon_low = self.args.epsilon
-        self.epsilon_high = self.args.epsilon_high if self.args.epsilon_high is not None else self.args.epsilon
-        self.temperature = self.args.temperature
+        self.epsilon_low = args.epsilon
+        self.epsilon_high = args.epsilon_high if args.epsilon_high is not None else args.epsilon
+        self.temperature = args.temperature
 
         # Model
-        model_name = model
-        model_init_kwargs = self.args.model_init_kwargs or {}
-        model_init_kwargs.setdefault("trust_remote_code", self.args.trust_remote_code)
+        model_init_kwargs = args.model_init_kwargs or {}
+        model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
         # FlashAttention is required: training runs in padding-free mode, where sequences are concatenated into a
         # single row and `cu_seq_lens` are derived from `position_ids` resets. SDPA/eager can't handle this.
         model = AutoModelForCausalLM.from_pretrained(
@@ -543,14 +546,14 @@ class AsyncGRPOTrainer(_BaseTrainer):
             **model_init_kwargs,
         )
 
-        if self.args.use_liger_kernel:
+        if args.use_liger_kernel:
             raise NotImplementedError("`use_liger_kernel` is not supported yet.")
 
         # MoE load-balancing auxiliary loss, applied to Mixture-of-Experts models (no effect otherwise)
         text_config = model.config.get_text_config()
         is_moe = getattr(text_config, "output_router_logits", None) is not None
-        self.aux_loss_enabled = is_moe and self.args.router_aux_loss_coef != 0.0
-        self.router_aux_loss_coef = self.args.router_aux_loss_coef
+        self.aux_loss_enabled = is_moe and args.router_aux_loss_coef != 0.0
+        self.router_aux_loss_coef = args.router_aux_loss_coef
 
         patch_chunked_lm_head(
             model, chunk_size=8192, temperature=self.temperature, output_router_logits=self.aux_loss_enabled
@@ -558,7 +561,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
 
         # Processing class
         if processing_class is None:
-            processing_class = AutoTokenizer.from_pretrained(model_name, trust_remote_code=self.args.trust_remote_code)
+            processing_class = AutoTokenizer.from_pretrained(model_name, trust_remote_code=args.trust_remote_code)
         if processing_class.pad_token is None:
             processing_class.pad_token = processing_class.eos_token
 
@@ -571,7 +574,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
         # Initialize the Trainer
         super().__init__(
             model=model,
-            args=self.args,
+            args=args,
             train_dataset=train_dataset,
             processing_class=processing_class,
             callbacks=callbacks,
