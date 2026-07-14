@@ -288,7 +288,10 @@ def smollm_tokenizer():
 
 @pytest.fixture(scope="session")
 def gemma4_tokenizer():
-    return AutoTokenizer.from_pretrained("google/gemma-4-E4B-it")
+    tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Gemma4ForConditionalGeneration")
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    return tokenizer
 
 
 @pytest.fixture(scope="session")
