@@ -340,8 +340,7 @@ class DataCollatorForRollout(DataCollatorMixin):
     pad_token_id: int
     num_processes: int = 1
     return_tensors: str = "pt"
-    # Distinct prompt-group ids seen by this collator (shared with the trainer). This runs on the main process just
-    # before the model forward, so it counts exactly the prompt-groups that get trained; the epoch stop reads it.
+    # Distinct prompt-group ids, it counts exactly the prompt-groups that get trained
     groups_trained: set[int] = field(default_factory=set)
 
     def torch_call(self, examples: list[Any]) -> dict[str, Any]:
@@ -610,9 +609,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
         self.model_accepts_loss_kwargs = False
 
         # Epoch handling: stop after num_train_epochs full passes over the PROMPT dataset, counted as distinct
-        # prompt-groups trained (fork-independent). See AsyncGRPOConfig for how num_train_epochs / max_steps /
-        # lr_scheduler_type interact under message-mode forks; here max_steps is only a safety ceiling. Must run
-        # after super().__init__() so self.accelerator.num_processes is available.
+        # prompt-groups trained (fork-independent).
         self._trained_groups: set[int] = set()
         self._epoch_stop_groups: int | None = None
         samples_per_step = (
