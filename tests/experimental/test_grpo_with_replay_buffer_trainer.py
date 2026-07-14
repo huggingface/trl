@@ -12,9 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
+from unittest.mock import patch
+
 import pytest
 import torch
+import transformers
 from datasets import load_dataset
+from packaging.version import Version
 
 from trl.experimental.grpo_with_replay_buffer import (
     GRPOWithReplayBufferConfig,
@@ -22,7 +27,7 @@ from trl.experimental.grpo_with_replay_buffer import (
     ReplayBuffer,
 )
 
-from ..testing_utils import TrlTestCase
+from ..testing_utils import TrlTestCase, require_jmespath
 
 
 @pytest.mark.low_priority
@@ -290,3 +295,62 @@ class TestGRPOWithReplayBufferTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+
+class _StopAfterGenerate(Exception):
+    """Raised from a patched `_generate` to stop `_generate_and_score_completions` right after it builds prompts,
+    before the (irrelevant here) logp/reward/replay-buffer pipeline runs."""
+
+
+@pytest.mark.xfail(
+    condition=Version(transformers.__version__) < Version("5.2.0"),
+    reason="Environment factory support is not available in transformers versions below 5.2.0",
+    strict=True,
+)
+@require_jmespath
+@pytest.mark.low_priority
+class TestGRPOWithReplayBufferTrainerEnvironment(TrlTestCase):
+    @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
+    def test_environment_reset_observation_reaches_prompt(self):
+        # `GRPOWithReplayBufferTrainer` builds `self.environments` using the same pooling logic as `GRPOTrainer`, but
+        # unlike `GRPOTrainer` it never called `environment.reset(...)` nor injected the returned observation into the
+        # prompt. This silently dropped any task instructions returned by `reset` and let pooled environment
+        # instances carry over stale state from an unrelated prior rollout. Regression test for that gap: a fake
+        # environment's `reset` returns a distinguishing marker, which must reach the prompt handed to generation.
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+
+        reset_calls = []
+
+        class MarkerEnvironment:
+            def reset(self, **kwargs):
+                reset_calls.append(kwargs)
+                return "[OBSERVATION]"
+
+        training_args = GRPOWithReplayBufferConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            num_generations=2,
+            replay_buffer_size=4,
+            report_to="none",
+        )
+        trainer = GRPOWithReplayBufferTrainer(
+            model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+            environment_factory=MarkerEnvironment,
+        )
+
+        captured = {}
+
+        def fake_generate(prompts):
+            captured["prompts"] = prompts
+            raise _StopAfterGenerate()
+
+        trainer._generate = fake_generate
+
+        with pytest.raises(_StopAfterGenerate):
+            trainer._generate_and_score_completions([dataset[0], dataset[1]])
+
+        assert len(reset_calls) == 2  # one reset() per example
+        assert all("[OBSERVATION]" in prompt[-1]["content"] for prompt in captured["prompts"])
