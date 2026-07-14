@@ -637,6 +637,11 @@ class GOLDConfig(SFTConfig):
         if self.xtoken_loss_type not in _valid_xtoken_types:
             raise ValueError(f"xtoken_loss_type must be one of {_valid_xtoken_types}, got '{self.xtoken_loss_type}'.")
         if self.xtoken_loss_type != "none":
+            if self.lmbda != 0.0:
+                raise ValueError(
+                    "X-Token KD is off-policy only: set lmbda=0.0 when xtoken_loss_type != 'none'. "
+                    f"Got lmbda={self.lmbda}."
+                )
             if self.xtoken_projection_matrix_path is None:
                 raise ValueError("xtoken_projection_matrix_path must be set when xtoken_loss_type != 'none'.")
             if self.xtoken_temperature <= 0.0:

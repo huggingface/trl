@@ -835,7 +835,7 @@ def _load_sparse_projection_matrix(path, device, *, student_vocab_size, teacher_
         col = top_idx.reshape(-1)
         vals = likelihoods.reshape(-1)
         indices = torch.stack([row, col], dim=0)
-    elif isinstance(data, dict) and all(isinstance(k, tuple) and len(k) == 2 for k in data.keys()):
+    elif isinstance(data, dict) and data and all(isinstance(k, tuple) and len(k) == 2 for k in data.keys()):
         pairs = list(data.keys())
         row = torch.tensor([k[0] for k in pairs], dtype=torch.long)
         col = torch.tensor([k[1] for k in pairs], dtype=torch.long)
@@ -1087,8 +1087,9 @@ class XTokenLoss(nn.Module):
         self.last_proj_accuracy_den = proj_acc_den
 
         if self.dynamic_scaling:
+            # loss = sg(ce/kd) * kd + ce; kl_weight and ce_scale are intentionally ignored in this branch.
             scale = (ce.detach() / kd.detach().clamp(min=1e-8)).clamp(0.01, 100.0)
-            return scale * kd + self.ce_scale * ce
+            return scale * kd + ce
         return self.kl_weight * kd + self.ce_scale * ce
 
     @staticmethod
@@ -3117,6 +3118,12 @@ class GOLDTrainer(SFTTrainer):
                 student_byte_offsets=xtoken_student_byte_offsets,
                 teacher_byte_offsets=teacher_completion_byte_offsets,
             )
+
+            if num_items_in_batch is not None:
+                num_valid_local = (xtoken_student_labels != -100).sum().clamp_min(1)
+                if isinstance(num_items_in_batch, torch.Tensor):
+                    num_items_in_batch = num_items_in_batch.to(loss.device)
+                loss = loss * num_valid_local / num_items_in_batch
 
             mode = "train" if self.model.training else "eval"
             dev = self.accelerator.device
