@@ -19,6 +19,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 from datasets import Dataset, load_dataset
+from examples.scripts.gold import split_text_for_gold
 from transformers import AutoModelForCausalLM, AutoModelForImageTextToText, AutoProcessor, AutoTokenizer
 
 from trl.experimental.gold import GOLDConfig
@@ -970,6 +971,68 @@ def test_prepare_dataset_messages_uses_last_assistant_turn(qwen_tokenizer):
         completion_ids, skip_special_tokens=False, clean_up_tokenization_spaces=False
     )
     assert decoded_completion == row["original_completion_text"]
+
+
+def test_split_text_for_gold_preserves_source_text(gemma4_tokenizer):
+    text = "Socrates is a man. All men are mortal."
+    encoding = gemma4_tokenizer(text, add_special_tokens=False, return_offsets_mapping=True)
+
+    split = split_text_for_gold({"text": text}, gemma4_tokenizer, max_length=None)
+
+    assert split["completion"].startswith(" ")
+    assert split["prompt"] + split["completion"] == text
+    assert (
+        gemma4_tokenizer(split["prompt"] + split["completion"], add_special_tokens=False)["input_ids"]
+        == encoding["input_ids"]
+    )
+
+    max_length = 4
+    split = split_text_for_gold({"text": text}, gemma4_tokenizer, max_length=max_length)
+    kept_offsets = encoding["offset_mapping"][-max_length:]
+    assert split["prompt"] + split["completion"] == text[kept_offsets[0][0] : kept_offsets[-1][1]]
+
+
+def test_prepare_dataset_extended_uld_keeps_seam_token(qwen_tokenizer):
+    dataset = Dataset.from_dict({"prompt": ["Question: "], "completion": ["Answer."]})
+    args = SimpleNamespace(
+        dataset_num_proc=None,
+        dataset_text_field="text",
+        max_length=64,
+        packing_strategy="bfd",
+        use_liger_kernel=False,
+        use_extended_uld=True,
+    )
+    trainer = GOLDTrainer.__new__(GOLDTrainer)
+
+    row = trainer._prepare_dataset_with_original_text(
+        dataset,
+        qwen_tokenizer,
+        args,
+        packing=False,
+        formatting_func=None,
+        dataset_name="train",
+    )[0]
+
+    completion_ids = [
+        token_id for token_id, mask in zip(row["input_ids"], row["completion_mask"], strict=True) if mask == 1
+    ]
+    completion_offsets = [
+        offset for offset, mask in zip(row["byte_offsets"], row["completion_mask"], strict=True) if mask == 1
+    ]
+    assert row["original_completion_text"] == "Answer."
+    assert qwen_tokenizer.decode(completion_ids[:-1]).lstrip() == row["original_completion_text"]
+    assert completion_ids.count(qwen_tokenizer.eos_token_id) == 1
+    assert completion_offsets[0] == [0, len(b"Answer")]
+    assert completion_offsets[-1] == [len(b"Answer."), len(b"Answer.")]
+
+    teacher_input_ids, teacher_labels, _, _ = build_teacher_inputs_from_texts(
+        qwen_tokenizer,
+        [row["original_prompt_text"]],
+        [row["original_completion_text"]],
+        use_extended_uld=True,
+    )
+    teacher_completion_ids = teacher_input_ids[0][teacher_labels[0] != -100].tolist()
+    assert teacher_completion_ids.count(qwen_tokenizer.eos_token_id) == 1
 
 
 def test_prepare_dataset_positional_uld_supports_sentencepiece(gemma4_tokenizer, qwen_tokenizer):
