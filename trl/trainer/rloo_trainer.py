@@ -31,7 +31,7 @@ import torch.utils.data
 import transformers
 from accelerate.logging import get_logger
 from accelerate.utils import gather, gather_object, is_peft_model, set_seed
-from datasets import Dataset, IterableDataset
+from datasets import Dataset, DatasetDict, IterableDataset, IterableDatasetDict
 from packaging.version import Version
 from torch import nn
 from torch.utils.data import Sampler
@@ -64,6 +64,7 @@ from .utils import (
     create_model_from_path,
     disable_dropout_in_model,
     entropy_from_logits,
+    get_callable_name,
     get_config_model_id,
     identity,
     nanmax,
@@ -175,7 +176,7 @@ class RLOOTrainer(_BaseTrainer):
             - [Standard](dataset_formats#standard): Each sample contains plain text.
             - [Conversational](dataset_formats#conversational): Each sample contains structured messages (e.g., role
               and content).
-        eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`] or `dict[str, Dataset | IterableDataset]`):
+        eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`], [`~datasets.DatasetDict`], [`~datasets.IterableDatasetDict`] or `dict[str, Dataset | IterableDataset]`):
             Dataset to use for evaluation. It must meet the same requirements as `train_dataset`.
         processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.ProcessorMixin`], *optional*):
             Processing class used to process the data. The padding side must be set to "left". If `None`, the
@@ -232,7 +233,12 @@ class RLOOTrainer(_BaseTrainer):
         reward_funcs: RewardFunc | list[RewardFunc],
         args: RLOOConfig | None = None,
         train_dataset: Dataset | IterableDataset | None = None,
-        eval_dataset: Dataset | IterableDataset | dict[str, Dataset | IterableDataset] | None = None,
+        eval_dataset: Dataset
+        | IterableDataset
+        | DatasetDict
+        | IterableDatasetDict
+        | dict[str, Dataset | IterableDataset]
+        | None = None,
         processing_class: PreTrainedTokenizerBase | ProcessorMixin | None = None,
         reward_processing_classes: PreTrainedTokenizerBase | list[PreTrainedTokenizerBase] | None = None,
         callbacks: list[TrainerCallback] | None = None,
@@ -402,7 +408,7 @@ class RLOOTrainer(_BaseTrainer):
             if isinstance(reward_funcs[i], nn.Module):  # Use Module over PretrainedModel for compat w/ compiled models
                 self.reward_func_names.append(get_config_model_id(reward_funcs[i].config).split("/")[-1])
             else:
-                self.reward_func_names.append(reward_funcs[i].__name__)
+                self.reward_func_names.append(get_callable_name(reward_funcs[i]))
         self.reward_funcs = reward_funcs
 
         self._has_async_funcs = any(inspect.iscoroutinefunction(func) for func in self.reward_funcs)
@@ -501,7 +507,7 @@ class RLOOTrainer(_BaseTrainer):
             )
         ):
             # See https://github.com/huggingface/trl/issues/3213
-            raise NotImplementedError(
+            raise ValueError(
                 "Iterable datasets are not yet supported in RLOOTrainer. Please use a standard dataset instead."
             )
 
@@ -571,6 +577,7 @@ class RLOOTrainer(_BaseTrainer):
         self._total_train_tokens = 0
         self._current_train_step_time = 0.0
         self.log_completions = args.log_completions
+        self.log_multimodal = args.log_multimodal
         self.log_unique_prompts = args.log_unique_prompts
         self.num_completions_to_print = args.num_completions_to_print
         # Keep logs sized to the generation batch to record only outputs from the latest model update.
@@ -1498,7 +1505,7 @@ class RLOOTrainer(_BaseTrainer):
             self._metrics[mode][name].append(global_mean)
         self._pending_metrics.clear()
 
-        if images is not None:
+        if images is not None and self.log_multimodal:
             self._logs["images"].extend(gather_object(images))
 
         output = {

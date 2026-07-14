@@ -24,7 +24,7 @@ import torch
 import torch.nn.functional as F
 import transformers
 from accelerate.utils.memory import release_memory
-from datasets import Dataset, load_dataset
+from datasets import Dataset, DatasetDict, IterableDatasetDict, load_dataset
 from packaging.version import Version
 from transformers import (
     AutoModelForCausalLM,
@@ -1244,19 +1244,22 @@ class TestSFTTrainer(TrlTestCase):
             assert any(label != -100 for label in labels)  # assistant tokens contribute to the loss
             assert any(label == -100 for label in labels)  # non-assistant tokens are masked
 
-    def test_labels_all_masked_after_truncation(self):
-        """Regression test for #3927. When the assistant turn lies entirely beyond `max_length`, truncation keeps only
-        prompt tokens, which are all -100."""
-        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
-
-        # `max_length` is small enough that the kept prefix is entirely prompt tokens (the assistant turn comes later).
-        training_args = SFTConfig(output_dir=self.tmp_dir, assistant_only_loss=True, max_length=4, report_to="none")
-        trainer = SFTTrainer(
-            model="trl-internal-testing/tiny-Qwen3ForCausalLM", args=training_args, train_dataset=dataset
+    def test_fully_masked_examples_dropped_after_truncation(self):
+        # Example 0's assistant tokens all lie beyond `max_length=3`, so keep_start truncation leaves it fully masked;
+        # example 1 keeps a trainable token and survives.
+        dataset = Dataset.from_list(
+            [
+                {"input_ids": [1, 2, 3, 4, 5], "assistant_masks": [0, 0, 0, 1, 1]},
+                {"input_ids": [6, 7, 8], "assistant_masks": [1, 1, 1]},
+            ]
         )
 
-        labels = trainer.train_dataset[0]["labels"]
-        assert all(token_id == -100 for token_id in labels)
+        training_args = SFTConfig(output_dir=self.tmp_dir, max_length=3, report_to="none")
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
+
+        assert trainer.train_dataset[:]["labels"] == [[6, 7, 8]]
 
     def test_dataset_truncated_to_max_length(self):
         """Dataset preparation truncates every example to `max_length`."""
@@ -1596,6 +1599,27 @@ class TestSFTTrainer(TrlTestCase):
         assert metrics["eval_data1_loss"] is not None
         assert metrics["eval_data2_loss"] is not None
 
+    @pytest.mark.parametrize("streaming", [False, True])
+    def test_evaluate_with_eval_dataset_dict(self, streaming):
+        # `evaluate` should accept a `DatasetDict` (map-style) or `IterableDatasetDict` (streaming) passed directly —
+        # e.g. the raw output of `load_dataset` without a `split` — not only a plain `dict`. Each split is prepared
+        # independently.
+        train_dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        eval_split = load_dataset(
+            "trl-internal-testing/zen", "standard_language_modeling", split="test", streaming=streaming
+        )
+        dataset_dict_cls = IterableDatasetDict if streaming else DatasetDict
+        eval_dataset = dataset_dict_cls({"data1": eval_split, "data2": eval_split})
+
+        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=train_dataset
+        )
+
+        metrics = trainer.evaluate(eval_dataset=eval_dataset)
+        assert metrics["eval_data1_loss"] is not None
+        assert metrics["eval_data2_loss"] is not None
+
     def test_train_with_metric_for_best_model(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling")
 
@@ -1631,6 +1655,30 @@ class TestSFTTrainer(TrlTestCase):
 
         assert trainer.state.log_history[-3]["eval_data1_loss"] is not None
         assert trainer.state.log_history[-2]["eval_data2_loss"] is not None
+
+    @pytest.mark.parametrize("streaming", [False, True])
+    def test_init_with_eval_dataset_dict(self, streaming):
+        # `eval_dataset` may be a `DatasetDict` (map-style) or `IterableDatasetDict` (streaming) — e.g. the raw output
+        # of `load_dataset` without a `split` — not only a plain `dict`. Each split is prepared independently at init.
+        train_dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        eval_split = load_dataset(
+            "trl-internal-testing/zen", "standard_language_modeling", split="test", streaming=streaming
+        )
+        dataset_dict_cls = IterableDatasetDict if streaming else DatasetDict
+        eval_dataset = dataset_dict_cls({"data1": eval_split, "data2": eval_split})
+
+        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=train_dataset,
+            eval_dataset=eval_dataset,
+        )
+
+        assert set(trainer.eval_dataset.keys()) == {"data1", "data2"}
+        # Each split was tokenized independently.
+        assert "input_ids" in next(iter(trainer.eval_dataset["data1"]))
+        assert "input_ids" in next(iter(trainer.eval_dataset["data2"]))
 
     def test_train_with_compute_metrics(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling")

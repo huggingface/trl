@@ -420,9 +420,10 @@ class AsyncGRPOTrainer(_BaseTrainer):
             [`~transformers.PreTrainedModel.save_pretrained`], e.g., `'./my_model_directory/'`. The model is loaded
             using [`~transformers.AutoModelForCausalLM.from_pretrained`]. The model name is also used to identify the
             model on the vLLM server used for generation.
-        reward_funcs (`RewardFunc | list[RewardFunc]`):
+        reward_funcs (`RewardFunc | list[RewardFunc]`, *optional*):
             Reward functions to be used for computing the rewards. To compute the rewards, we call all the reward
-            functions with the prompts and completions and sum the rewards. Can be either:
+            functions with the prompts and completions and sum the rewards. May be omitted when the reward is supplied
+            by the environment through `environment_factory` (see below). Can be either:
 
             - A single reward function: The function is provided with the prompts and the generated completions, plus
               any additional columns in the dataset. It should return a list of rewards. Reward functions can be either
@@ -475,7 +476,11 @@ class AsyncGRPOTrainer(_BaseTrainer):
             Each method should comply with the same requirements as the `tools` described above. The environment must
             also implement a callable `reset` method that can be used to reset state between generations. The `reset`
             method should return either `None` or a string: when it returns a string, that string is appended to the
-            last user message before generation.
+            last user message before generation. The environment may also define a `get_reward` method taking no
+            argument and returning a `float`: when present, the environment owns the reward, and `get_reward` is called
+            once per completed rollout to score it from the environment's internal state. It acts as an additional
+            reward source (with weight 1, logged under the environment's class name) alongside `reward_funcs`, which
+            then becomes optional.
 
             With a single callable, every example uses the same environment, with one instance per rollout so their
             interactions stay isolated. With a dictionary, each example must carry an `environment` field selecting its
@@ -507,7 +512,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
     def __init__(
         self,
         model: str,
-        reward_funcs: RewardFunc | list[RewardFunc],
+        reward_funcs: RewardFunc | list[RewardFunc] | None = None,
         args: AsyncGRPOConfig | None = None,
         train_dataset: Dataset | IterableDataset | None = None,
         processing_class: PreTrainedTokenizerBase | None = None,
@@ -558,7 +563,9 @@ class AsyncGRPOTrainer(_BaseTrainer):
             processing_class.pad_token = processing_class.eos_token
 
         # Reward functions
-        if not isinstance(reward_funcs, list):
+        if reward_funcs is None:
+            reward_funcs = []
+        elif not isinstance(reward_funcs, list):
             reward_funcs = [reward_funcs]
 
         # Initialize the Trainer
@@ -649,6 +656,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
                     max_tool_calling_iterations=self.args.max_tool_calling_iterations,
                     log_completions=self.args.log_completions,
                     num_completions_to_print=self.args.num_completions_to_print,
+                    fork_threshold_tokens=self.args.fork_threshold_tokens,
                 )
             # TODO(@aminediro): decide if this is returned by the worker or common API that is passed to the worker later.
             self.rollout_queue = self.rollout_worker.rollout_buffer
