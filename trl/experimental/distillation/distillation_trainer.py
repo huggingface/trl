@@ -1709,7 +1709,7 @@ class DistillationTrainer(_BaseTrainer):
                     self._on_policy_step_equiv,
                     self._off_policy_step_equiv,
                 ],
-                dtype=torch.float64,
+                dtype=torch.float32,
                 device=device,
             )
 

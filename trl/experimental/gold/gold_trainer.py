@@ -2805,7 +2805,7 @@ class GOLDTrainer(SFTTrainer):
                     self._matched_step_eq,
                     self._unmatched_step_eq,
                 ],
-                dtype=torch.float64,
+                dtype=torch.float32,
                 device=device,
             )
 
