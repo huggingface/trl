@@ -22,27 +22,36 @@
 
 # docstyle-ignore
 """
-# Full training:
+# Recommended small student: LFM2.5-1.2B
 python examples/scripts/gold.py \
-    --model_name_or_path meta-llama/Llama-3.2-1B-Instruct \
-    --teacher_model_name_or_path Qwen/Qwen2-1.5B-Instruct \
-    --dataset_name trl-lib/chatbot_arena_completions \
+    --model_name_or_path LiquidAI/LFM2.5-1.2B-Instruct \
+    --teacher_model_name_or_path Qwen/Qwen3-4B \
+    --dataset_name nvidia/Nemotron-Pretraining-Specialized-v1.1 \
+    --dataset_config Nemotron-Pretraining-Formal-Logic \
+    --use_uld_loss \
+    --lmbda 0.0 \
     --learning_rate 2e-5 \
     --per_device_train_batch_size 4 \
     --gradient_accumulation_steps 8 \
-    --output_dir gold-model \
+    --output_dir gold-lfm2.5-1.2b \
     --num_train_epochs 1 \
     --push_to_hub
 
-# LoRA:
+# Recommended Gemma 4 student. Gemma 4 uses SentencePiece, so cross-tokenizer
+# ULD requires the positional alignment path (`use_extended_uld=False`). This
+# script uses Gemma 4 in text-only mode; use gold_vlm.py for multimodal training.
 python examples/scripts/gold.py \
-    --model_name_or_path meta-llama/Llama-3.2-1B-Instruct \
-    --teacher_model_name_or_path Qwen/Qwen2-1.5B-Instruct \
-    --dataset_name trl-lib/chatbot_arena_completions \
+    --model_name_or_path google/gemma-4-E4B-it \
+    --teacher_model_name_or_path Qwen/Qwen3-4B \
+    --dataset_name nvidia/Nemotron-Pretraining-Specialized-v1.1 \
+    --dataset_config Nemotron-Pretraining-Formal-Logic \
+    --use_uld_loss \
+    --no_use_extended_uld \
+    --lmbda 0.0 \
     --learning_rate 2e-4 \
     --per_device_train_batch_size 4 \
     --gradient_accumulation_steps 8 \
-    --output_dir gold-model \
+    --output_dir gold-gemma-4-e4b \
     --num_train_epochs 1 \
     --push_to_hub \
     --use_peft \
@@ -68,6 +77,18 @@ from trl.experimental.gold.gold_trainer import GOLDTrainer
 
 
 logger = logging.getLogger(__name__)
+
+
+def split_text_for_gold(example, tokenizer, max_length):
+    """Split a raw language-modeling example into a 75% prompt and 25% completion."""
+    input_ids = tokenizer(example["text"], add_special_tokens=False)["input_ids"]
+    if max_length is not None:
+        input_ids = input_ids[-max_length:]
+    split_idx = max(1, int(len(input_ids) * 0.75))
+    return {
+        "prompt": tokenizer.decode(input_ids[:split_idx]),
+        "completion": tokenizer.decode(input_ids[split_idx:]),
+    }
 
 
 if __name__ == "__main__":
@@ -111,6 +132,19 @@ if __name__ == "__main__":
     # Dataset
     ################
     dataset = load_dataset(script_args.dataset_name, name=script_args.dataset_config)
+    dataset_sample = next(iter(dataset[script_args.dataset_train_split]))
+    if "text" in dataset_sample and "prompt" not in dataset_sample and "messages" not in dataset_sample:
+        dataset = dataset.map(
+            split_text_for_gold,
+            fn_kwargs={"tokenizer": tokenizer, "max_length": training_args.max_length},
+            num_proc=training_args.dataset_num_proc,
+            desc="Splitting raw text into GOLD prompts and completions",
+        )
+        dataset = dataset.filter(
+            lambda example: bool(example["prompt"] and example["completion"]),
+            num_proc=training_args.dataset_num_proc,
+            desc="Removing examples that are too short for GOLD",
+        )
 
     ################
     # Training
