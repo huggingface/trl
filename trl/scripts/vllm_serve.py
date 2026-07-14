@@ -437,7 +437,7 @@ def main(script_args: ScriptArguments):
         raise ImportError("vLLM is required to run the vLLM serve script. Please install it using `pip install vllm`.")
 
     import uvicorn
-    from fastapi import FastAPI, HTTPException
+    from fastapi import FastAPI
     from pydantic import BaseModel
     from vllm import SamplingParams
     from vllm.sampling_params import StructuredOutputsParams
@@ -1187,73 +1187,6 @@ def main(script_args: ScriptArguments):
         all_outputs = [connection.recv() for connection in connections]
         success = all(output for output in all_outputs)
         return {"message": "Request received, resetting prefix cache status: " + str(success)}
-
-    class WeightTransferInitRequest(BaseModel):
-        init_info: dict
-
-    @app.post("/init_weight_transfer_engine/")
-    async def init_weight_transfer_engine(request: WeightTransferInitRequest):
-        """
-        Initializes vLLM's native weight transfer engine (https://docs.vllm.ai/en/stable/training/weight_transfer/).
-        The client process must join the transfer group concurrently, e.g. via `NCCLWeightTransferEngine.trainer_init`,
-        so this request only returns once the rendezvous completes.
-
-        Args:
-            request (`WeightTransferInitRequest`):
-                - `init_info` (`dict`): Backend-specific initialization info (master address/port, world size, ...).
-        """
-        if script_args.data_parallel_size > 1:
-            raise HTTPException(status_code=400, detail="The weight transfer engine requires data_parallel_size=1.")
-        kwargs = {"request": {"init_info": request.init_info}}
-        for connection in connections:
-            connection.send({"type": "call", "method": "init_weight_transfer_engine", "kwargs": kwargs})
-        for connection in connections:
-            connection.recv()
-        return {"message": "Weight transfer engine initialized"}
-
-    @app.post("/start_weight_update/")
-    async def start_weight_update():
-        """
-        Prepares the workers for a weight update through the weight transfer engine. Must be called before
-        `/update_weights/`.
-        """
-        for connection in connections:
-            connection.send({"type": "call", "method": "start_weight_update"})
-        for connection in connections:
-            connection.recv()
-        return {"message": "Weight update started"}
-
-    class WeightTransferUpdateRequest(BaseModel):
-        update_info: dict
-
-    @app.post("/update_weights/")
-    async def update_weights(request: WeightTransferUpdateRequest):
-        """
-        Receives a full set of updated weights through the weight transfer engine. This call drives the workers'
-        blocking receive, so the client must broadcast the weights concurrently (e.g. via
-        `NCCLWeightTransferEngine.trainer_send_weights`) and only await the response afterwards.
-
-        Args:
-            request (`WeightTransferUpdateRequest`):
-                - `update_info` (`dict`): Backend-specific update info (tensor names, dtypes, shapes, packed flag).
-        """
-        kwargs = {"request": {"update_info": request.update_info}}
-        for connection in connections:
-            connection.send({"type": "call", "method": "update_weights", "kwargs": kwargs})
-        for connection in connections:
-            connection.recv()
-        return {"message": "Weights updated"}
-
-    @app.post("/finish_weight_update/")
-    async def finish_weight_update():
-        """
-        Finalizes the current weight update in the weight transfer engine.
-        """
-        for connection in connections:
-            connection.send({"type": "call", "method": "finish_weight_update"})
-        for connection in connections:
-            connection.recv()
-        return {"message": "Weight update finished"}
 
     @app.post("/close_communicator/")
     async def close_communicator():
