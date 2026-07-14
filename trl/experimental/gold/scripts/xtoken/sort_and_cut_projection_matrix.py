@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+# docstyle-ignore
 """Step 3 of the X-Token projection-matrix pipeline.
 
 Sorts each row of a dense top-k projection matrix by descending weight, trims to a new (smaller) top-k, applies
@@ -20,11 +21,13 @@ Run this after ``build_projection_matrix.py`` (Step 1) and optionally ``reapply_
 
 Usage:
 
-    python sort_and_cut_projection_matrix.py \\
-        --initial-projection-path cross_tokenizer_data/projection_map_...pt \\ --top_k 4
+    python trl/experimental/gold/scripts/xtoken/sort_and_cut_projection_matrix.py \\
+        --initial-projection-path cross_tokenizer_data/projection_map_...pt \\
+        --top_k 4
 
 Output is saved as ``<input>_top_<k>_sorted.pt`` unless ``--output_path`` is given. When the input matrix was built
-with ``--enable-scale-trick``, the last column is preserved in its original slot even after sorting.
+with ``--enable-scale-trick``, the last column is preserved in its original slot even after sorting (the filename then
+gets a ``_preservelast`` suffix).
 
 See https://huggingface.co/papers/2605.21699 Section 3.2.
 """

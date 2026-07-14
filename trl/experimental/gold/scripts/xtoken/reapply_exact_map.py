@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+# docstyle-ignore
 """Step 2 (optional) of the X-Token projection-matrix pipeline.
 
 Overwrites exact-match rows of a dense top-k projection matrix so that each student token that maps exactly to a
@@ -22,9 +23,10 @@ normalisation or the top-k trim.
 
 Usage:
 
-    python reapply_exact_map.py \\
-        --student-model meta-llama/Llama-3.2-1B \\ --teacher-model Qwen/Qwen3-4B \\ --initial-projection-path
-        cross_tokenizer_data/projection_map_...pt
+    python trl/experimental/gold/scripts/xtoken/reapply_exact_map.py \\
+        --student-model meta-llama/Llama-3.2-1B \\
+        --teacher-model Qwen/Qwen3-4B \\
+        --initial-projection-path cross_tokenizer_data/projection_map_...pt
 
 Output is saved as ``<input>_exact_map_remapped.pt``.
 

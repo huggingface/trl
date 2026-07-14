@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+# docstyle-ignore
 """Step 1 of the X-Token projection-matrix pipeline.
 
 Re-tokenizes every student-vocab token with the teacher tokenizer to build a weighted mapping matrix W ∈ R^{V_s × V_t}.
@@ -19,12 +20,15 @@ The output is a dense top-k ``.pt`` file (dict with ``"indices"`` and ``"likelih
 
 Typical usage (Llama-3.2-1B student → Qwen3-4B teacher, runtime top-4):
 
-    python build_projection_matrix.py \\
-        --student-model meta-llama/Llama-3.2-1B \\ --teacher-model Qwen/Qwen3-4B \\ --runtime-top-k 4 \\ --output-dir
-        cross_tokenizer_data
+    python trl/experimental/gold/scripts/xtoken/build_projection_matrix.py \\
+        --student-model meta-llama/Llama-3.2-1B \\
+        --teacher-model Qwen/Qwen3-4B \\
+        --runtime-top-k 4 \\
+        --output-dir cross_tokenizer_data
 
 Then optionally run ``reapply_exact_map.py`` (Step 2) and ``sort_and_cut_projection_matrix.py`` (Step 3) on the output,
-or pass the ``--runtime-top-k`` flag here to perform the trim in-place.
+or pass the ``--runtime-top-k`` flag here to perform the trim in-place. Train with the resulting file via
+``examples/scripts/xtoken.py --projection-matrix <output>.pt``.
 
 See https://huggingface.co/papers/2605.21699 for the algorithm details.
 """
