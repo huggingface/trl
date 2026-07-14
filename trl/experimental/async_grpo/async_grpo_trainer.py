@@ -678,6 +678,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
                     max_tool_calling_iterations=self.args.max_tool_calling_iterations,
                     log_completions=self.args.log_completions,
                     num_completions_to_print=self.args.num_completions_to_print,
+                    fork_threshold_tokens=self.args.fork_threshold_tokens,
                 )
             # TODO(@aminediro): decide if this is returned by the worker or common API that is passed to the worker later.
             self.rollout_queue = self.rollout_worker.rollout_buffer
