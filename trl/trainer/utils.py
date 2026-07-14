@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import asyncio
+import functools
 import hashlib
 import importlib.resources as pkg_resources
 import os
@@ -20,8 +21,8 @@ import random
 import socket
 import threading
 import types
-from collections.abc import Mapping, Sequence, Sized
-from contextlib import contextmanager
+from collections.abc import Callable, Mapping, Sequence, Sized
+from contextlib import contextmanager, nullcontext
 from importlib.metadata import version
 from itertools import accumulate
 from typing import TypeVar
@@ -180,6 +181,53 @@ def disable_dropout_in_model(model: torch.nn.Module) -> None:
     for module in model.modules():
         if isinstance(module, torch.nn.Dropout):
             module.p = 0
+
+
+def maybe_gather_lm_head_ctx(*params: torch.nn.Parameter):
+    """
+    Context manager that allgathers ZeRO-3 partitioned `lm_head` weight/bias for a fused loss.
+
+    Fused losses (e.g. Liger) read `lm_head.weight` directly and hand it to the kernel without ever calling the
+    `lm_head` module. Under DeepSpeed ZeRO-3 every parameter is sharded to `numel 0` and only re-materialized inside
+    its owning module's forward hook, so the head's gather hook never fires and the kernel receives an empty weight.
+    This gathers the given parameters for the duration of the forward, so the fused matmul sees the full weight. The
+    weight gradient is computed and stashed during this forward, so the parameters need not stay gathered for the
+    backward — but the backward's gradient reduction relies on the ZeRO-3 pre-forward hooks being armed, so the caller
+    must run the fused loss inside the model's forward (e.g. via `_ForwardRedirection`).
+
+    Returns a null context when ZeRO-3 is not enabled, or when the parameters are already gathered — with tied
+    embeddings `embed_tokens` keeps the weight `AVAILABLE`, and re-partitioning it on exit would collide with
+    `embed_tokens`' active-submodule tracking.
+
+    Args:
+        *params (`torch.nn.Parameter`):
+            Parameters to gather (e.g. `lm_head.weight` and `lm_head.bias`). `None` values are ignored.
+    """
+    from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
+
+    if not is_deepspeed_zero3_enabled():
+        return nullcontext()
+
+    import deepspeed
+    from deepspeed.runtime.zero.partition_parameters import ZeroParamStatus
+
+    # Deduplicate by identity: with a shared reference (e.g. PEFT with no separate `ref_model`, or tied embeddings)
+    # the same parameter is passed more than once, and ZeRO-3 mishandles duplicate entries in the gather list.
+    to_gather = {id(p): p for p in params if p is not None and p.ds_status != ZeroParamStatus.AVAILABLE}
+    if not to_gather:
+        return nullcontext()
+    return deepspeed.zero.GatheredParameters(list(to_gather.values()))
+
+
+def get_callable_name(func: Callable) -> str:
+    """
+    Return a display name for a callable, supporting the picklable reward forms: module-level functions,
+    [`functools.partial`](https://docs.python.org/3/library/functools.html#functools.partial) (unwrapped to the wrapped
+    function's name), and callable class instances (which fall back to their class name).
+    """
+    while isinstance(func, functools.partial):
+        func = func.func
+    return getattr(func, "__name__", type(func).__name__)
 
 
 def get_quantization_config(model_args: ModelConfig) -> BitsAndBytesConfig | None:
