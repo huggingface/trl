@@ -475,37 +475,6 @@ $$
 
 TRL exposes the Importance Sampling granularity level through the `vllm_importance_sampling_mode` configuration parameter where `"sequence_*"` modes implement a sequence-level importance sampling ratio and `"token_*"` a per-token ratio.
 
-### Sample More to Think Less: Group Filtered Policy Optimization for Concise Reasoning
-
-**📜 Paper**: https://huggingface.co/papers/2508.09726
-
-See [Experimental - GFPO](gfpo).
-
-### Perception-Aware Policy Optimization for Multimodal Reasoning
-
-**📜 Paper**: https://huggingface.co/papers/2507.06448
-
-A novel policy gradient algorithm that encourages VLMs to learn to perceive while learning to reason. This is a TRL adaptation. The TRL implementation is not the official one provided by the authors.
-This is a TRL adaptation of PAPO. Note that this is not the official implementation. The official code can be found in [MikeWangWZHL/PAPO](https://github.com/MikeWangWZHL/PAPO).
-
-```python
-from trl.experimental.papo import PAPOConfig, PAPOTrainer
-
-training_args = PAPOConfig(
-    # PAPO-specific params
-    perception_loss_weight=0.01,  # Weight for perception loss
-    mask_ratio=0.6,  # 40% of image will be masked
-    mask_type="random",  # Use patch masking (recommended)
-    der_loss_weight1=0.02,
-    der_loss_weight2=0.02,
-    # ...other GRPO params...
-)
-trainer = PAPOTrainer(
-    args=training_args,
-    ...
-)
-```
-
 ### The Art of Scaling Reinforcement Learning
 
 **📜 Paper**: https://huggingface.co/papers/2510.13786
@@ -1261,14 +1230,14 @@ training_args = DPOConfig(
 
 ## Kahneman–Tversky Optimization
 
-Papers relating to the [`experimental.kto.KTOTrainer`]
+Papers relating to the [`KTOTrainer`]
 
 ### KTO: Model Alignment as Prospect Theoretic Optimization
 
 **📜 Paper**: https://huggingface.co/papers/2402.01306
 
 KTO derives an alignment objective from prospect theory and learns directly from **binary** human feedback (liked/disliked), matching or surpassing DPO-style methods while handling imbalanced/noisy signals well.
-To reproduce the paper's setting, you can use the default configuration of [`experimental.kto.KTOTrainer`]:
+To reproduce the paper's setting, you can use the default configuration of [`KTOTrainer`]:
 
 ```python
 from trl import KTOConfig, KTOTrainer
@@ -1754,7 +1723,7 @@ training_args = GKDConfig(
 You can also use the [`GOLDTrainer`] and [`GOLDConfig`] to perform on-policy distillation with a similar configuration. See also [Unlocking On-Policy Distillation for Any Model Family](https://huggingface.co/spaces/HuggingFaceH4/on-policy-distillation):
 
 ```python
-from trl.experimental import GOLDConfig
+from trl.experimental.gold import GOLDConfig
 
 config = GOLDConfig(
     lmbda=1.0, # student produces rollouts for all batches
@@ -1798,7 +1767,7 @@ MiniLLM is the first on-policy knowledge distillation method, which minimizes th
 
 It is a generalized version of [Think Machine Lab's On-Policy Distillation](https://thinkingmachines.ai/blog/on-policy-distillation/), with the option to add distribution-level single-step distillation signals (like GKD when `beta=1`) and long-context reverse KLD signals.
 
-Alternatively, you can use the [`experimental.MiniLLMTrainer`] and [`experimental.MiniLLMConfig`] to perform MiniLLM distillation as follows:
+Alternatively, you can use the [`experimental.minillm.MiniLLMTrainer`] and [`experimental.minillm.MiniLLMConfig`] to perform MiniLLM distillation as follows:
 
 ```python
 from datasets import load_dataset
@@ -1834,7 +1803,7 @@ training_args = SDPOConfig(
     use_successful_as_teacher=True,        # Use successful rollouts as teacher
     teacher_model_kind="ema",              # Supported: "base", "live", "ema"
     teacher_update_rate=0.05,              # EMA update rate
-    include_environment_feedback=False,    # Use dataset privileged_context when available
+    include_environment_feedback=True,     # required to use the dataset's privileged_context (defaults to False)
 )
 
 trainer = SDPOTrainer(

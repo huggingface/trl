@@ -377,6 +377,13 @@ class DataCollatorForChatML:
                     current_prompt_ids = tokenized_prompt["input_ids"][: len(sample_ids)]
                 byte_offsets.append(example.get("byte_offsets", [(0, 0)] * len(sample_ids)))
 
+            if len(current_prompt_ids) == 0:
+                raise ValueError(
+                    f"An example has no prompt tokens left after truncation to max_length={self.max_length}. This "
+                    "happens when the completion alone fills the whole window, so the prompt is entirely dropped, "
+                    "leaving nothing to generate from. Increase `max_length`."
+                )
+
             prompts_input_ids.append(current_prompt_ids)
             prompt_attention_mask.append([1] * len(current_prompt_ids))
 
@@ -900,9 +907,11 @@ def prepare_peft_model(
         else:
             model = get_peft_model(model, peft_config)
 
-    # Handle bf16 casting for 4-bit models
+    # Cast remaining fp32 params (LoRA adapters, norms) to bf16 for a uniform dtype, as FSDP requires.
     if args.bf16 and getattr(model, "is_loaded_in_4bit", False) and not is_sharded_qlora:
-        peft_module_casting_to_bf16(model)
+        for param in model.parameters():
+            if param.dtype == torch.float32:
+                param.data = param.data.to(torch.bfloat16)
 
     return model
 

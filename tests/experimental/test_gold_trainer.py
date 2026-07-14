@@ -901,6 +901,25 @@ class TestGOLDTrainerDataset(TrlTestCase):
         assert "Four." in row5["original_completion_text"]
         assert 1 in row5["completion_mask"]
 
+    def test_chatml_collator_raises_when_completion_fills_window(self, llama_tokenizer):
+        """When the completion alone fills the whole window, the prompt is entirely dropped, leaving nothing to
+        generate from. The collator must reject this rather than emit an all-padding prompt row."""
+        long_user = "Please summarize:\n" + ("very long context. " * 200)
+        long_assistant = "summary content goes here. " * 60
+        examples = [
+            {
+                "messages": [
+                    {"role": "user", "content": long_user},
+                    {"role": "assistant", "content": long_assistant},
+                ]
+            }
+        ]
+
+        max_length = 256  # smaller than the completion, so no prompt tokens survive
+        collator = DataCollatorForChatML(tokenizer=llama_tokenizer, max_length=max_length)
+        with pytest.raises(ValueError, match="no prompt tokens left after truncation"):
+            collator(examples)
+
     def test_chatml_collator_truncates_keeping_completion_end(self, llama_tokenizer):
         """When the rendered chat-template message exceeds max_length, the collator must
         keep the LAST max_length tokens (the model's recent context), not the first. Also verifies byte_offsets are
@@ -916,7 +935,7 @@ class TestGOLDTrainerDataset(TrlTestCase):
             }
         ]
 
-        max_length = 256
+        max_length = 512  # large enough to keep prompt tokens after the completion
         collator = DataCollatorForChatML(tokenizer=llama_tokenizer, max_length=max_length)
         batch = collator(examples)
 
@@ -2343,6 +2362,7 @@ def test_gold_trainer_init_rejects_non_vlm_teacher(monkeypatch):
         max_length=128,
         truncation_mode="keep_start",
         use_liger_kernel=False,
+        trust_remote_code=False,
         teacher_model_init_kwargs=None,
         use_uld_loss=False,
         teacher_tokenizer_name_or_path=None,
@@ -2538,6 +2558,7 @@ def test_gold_trainer_vlm_vllm_init_uses_identity_collator(monkeypatch):
         max_length=128,
         truncation_mode="keep_start",
         use_liger_kernel=False,
+        trust_remote_code=False,
         teacher_model_init_kwargs=None,
         use_uld_loss=False,
         teacher_tokenizer_name_or_path=None,
