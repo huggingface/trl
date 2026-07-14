@@ -437,7 +437,7 @@ def main(script_args: ScriptArguments):
         raise ImportError("vLLM is required to run the vLLM serve script. Please install it using `pip install vllm`.")
 
     import uvicorn
-    from fastapi import FastAPI
+    from fastapi import FastAPI, HTTPException
     from pydantic import BaseModel
     from vllm import SamplingParams
     from vllm.sampling_params import StructuredOutputsParams
@@ -924,47 +924,56 @@ def main(script_args: ScriptArguments):
                 `actual_logprobs_b64`, `actual_token_ids_b64`, plus `shape` (`list[int]`, `[batch_size,
                 max_completion_len, top_k]`) and `completion_lengths` (`list[int]`).
         """
-        if len(request.sequences) != len(request.prompt_lengths):
-            raise ValueError("sequences and prompt_lengths must have the same length.")
+        try:
+            if len(request.sequences) != len(request.prompt_lengths):
+                raise ValueError("sequences and prompt_lengths must have the same length.")
 
-        for i, (seq, pl) in enumerate(zip(request.sequences, request.prompt_lengths, strict=True)):
-            if pl < 0 or pl > len(seq):
-                raise ValueError(
-                    f"Sequence {i} has prompt_length={pl} which is out of range [0, {len(seq)}]. "
-                    f"prompt_length must be between 0 and the sequence length inclusive."
-                )
-
-        # Validate sequence lengths against max_model_len to prevent worker OOM crashes
-        if _max_model_len:
-            for i, seq in enumerate(request.sequences):
-                if len(seq) > _max_model_len:
+            for i, (seq, pl) in enumerate(zip(request.sequences, request.prompt_lengths, strict=True)):
+                if pl < 0 or pl > len(seq):
                     raise ValueError(
-                        f"Sequence {i} has length {len(seq)} which exceeds max_model_len={_max_model_len}. "
-                        f"Truncate sequences or increase --max-model-len."
+                        f"Sequence {i} has prompt_length={pl} which is out of range [0, {len(seq)}]. "
+                        f"prompt_length must be between 0 and the sequence length inclusive."
                     )
 
-        prompts = [{"prompt_token_ids": seq} for seq in request.sequences]
+            # Validate sequence lengths against max_model_len to prevent worker OOM crashes
+            if _max_model_len:
+                for i, seq in enumerate(request.sequences):
+                    if len(seq) > _max_model_len:
+                        raise ValueError(
+                            f"Sequence {i} has length {len(seq)} which exceeds max_model_len={_max_model_len}. "
+                            f"Truncate sequences or increase --max-model-len."
+                        )
 
-        # Submit to the batching queue and await result
-        loop = asyncio.get_running_loop()
-        future = loop.create_future()
-        await _logprob_queue.put(
-            (
-                prompts,
-                list(request.prompt_lengths),
-                request.top_logprobs,
-                request.temperature,
-                request.response_format,
-                future,
+            prompts = [{"prompt_token_ids": seq} for seq in request.sequences]
+
+            # Submit to the batching queue and await result
+            loop = asyncio.get_running_loop()
+            future = loop.create_future()
+            await _logprob_queue.put(
+                (
+                    prompts,
+                    list(request.prompt_lengths),
+                    request.top_logprobs,
+                    request.temperature,
+                    request.response_format,
+                    future,
+                )
             )
-        )
 
-        # Wait for the batcher to process our request
-        all_outputs, prompt_lengths, top_k, response_format = await future
+            # Wait for the batcher to process our request
+            all_outputs, prompt_lengths, top_k, response_format = await future
 
-        return await loop.run_in_executor(
-            None, _format_logprob_response, all_outputs, prompt_lengths, top_k, response_format
-        )
+            return await loop.run_in_executor(
+                None, _format_logprob_response, all_outputs, prompt_lengths, top_k, response_format
+            )
+        except ValueError as e:
+            # Surface the intentional, caller-facing validation errors above (mismatched lengths, an
+            # out-of-range prompt_length, a sequence longer than max_model_len) — and equivalent ones raised by
+            # _format_logprob_response when formatting the result — as a 400 with the actual diagnostic message.
+            # Without this, FastAPI's default handling turns any uncaught ValueError into a content-free 500,
+            # so VLLMClient.get_sequence_logprobs() callers only ever see "Request failed: 500, Internal Server
+            # Error" with none of the detail the code above already computed.
+            raise HTTPException(status_code=400, detail=str(e)) from e
 
     class ChatRequest(BaseModel):
         messages: list[list[dict]]

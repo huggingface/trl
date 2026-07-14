@@ -12,9 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import importlib.machinery
 import os
 import subprocess
+import sys
+import types
 from types import SimpleNamespace
+from unittest import mock
 
 import pytest
 from packaging.version import Version
@@ -23,13 +27,14 @@ from transformers.testing_utils import torch_device
 
 from trl.generation.vllm_client import VLLMClient
 from trl.generation.vllm_generation import extract_logprobs
-from trl.import_utils import is_vllm_available
+from trl.import_utils import is_fastapi_available, is_vllm_available
 from trl.scripts.vllm_serve import chunk_list
 
 from .testing_utils import (
     TrlTestCase,
     kill_process,
     require_3_accelerators,
+    require_fastapi,
     require_torch_multi_accelerator,
     require_vision,
     require_vllm,
@@ -43,6 +48,9 @@ if is_vllm_available():
     _is_vllm_ge_014 = Version(vllm.__version__) >= Version("0.14.0")
 else:
     _is_vllm_ge_014 = False
+
+if is_fastapi_available():
+    from fastapi.testclient import TestClient
 
 
 class TestChunkList(TrlTestCase):
@@ -122,6 +130,137 @@ class TestExtractLogprobs(TrlTestCase):
 
         assert all_logprobs is None
         assert all_token_ids is None
+
+
+def _fake_module(name: str, **attrs):
+    """A minimal `types.ModuleType` with a real `__spec__`, installable directly into `sys.modules`."""
+    module = types.ModuleType(name)
+    module.__spec__ = importlib.machinery.ModuleSpec(name, loader=None)
+    for key, value in attrs.items():
+        setattr(module, key, value)
+    return module
+
+
+@require_fastapi
+class TestGetSequenceLogprobsErrorHandling(TrlTestCase):
+    """
+    Regression tests for `/get_sequence_logprobs/` error handling.
+
+    `TestVLLMClientServer` below exercises the full stack against a live, multi-accelerator vLLM
+    server, which isn't available here. Instead, these tests drive the real `main()`
+    app-construction path — so the actual, unmodified `get_sequence_logprobs` /
+    `_format_logprob_response` closures are exercised through a real FastAPI `TestClient` — while
+    faking out only the pieces that need a real vLLM engine: the DP worker process/pipe and the
+    uvicorn server loop.
+    """
+
+    @staticmethod
+    def _build_app(max_model_len=8192):
+        import trl.scripts.vllm_serve as vllm_serve_mod
+        from trl.scripts.vllm_serve import ScriptArguments
+
+        class _FakeOutput:
+            def __init__(self, prompt_token_ids):
+                self.prompt_token_ids = prompt_token_ids
+                self.prompt_logprobs = None  # reproduces _format_logprob_response's ValueError trigger
+
+        class _FakeConnection:
+            """Stands in for the parent side of the DP worker Pipe."""
+
+            def __init__(self):
+                self._ready_sent = False
+                self._last_msg = None
+
+            def send(self, msg):
+                self._last_msg = msg
+
+            def recv(self):
+                if not self._ready_sent:
+                    self._ready_sent = True
+                    return {"status": "ready"}  # satisfies lifespan()'s worker ready-handshake
+                prompts = self._last_msg["kwargs"]["prompts"]
+                return [_FakeOutput(p["prompt_token_ids"]) for p in prompts]
+
+        class _FakeProcess:
+            def __init__(self, target=None, args=(), **kwargs):
+                pass
+
+            def start(self):
+                pass
+
+            def join(self, timeout=None):
+                pass
+
+            def is_alive(self):
+                return False
+
+        fake_vllm = _fake_module(
+            # __version__ must be a valid, in-range (0.16.0-0.24.0) PEP 440 version: it's parsed by
+            # trl.import_utils.is_vllm_available(), which main()'s `if not is_vllm_available(): raise
+            # ImportError` gate calls.
+            "vllm",
+            __path__=[],
+            __version__="0.20.0",
+            SamplingParams=lambda **kwargs: SimpleNamespace(**kwargs),
+        )
+        fake_sampling_params_mod = _fake_module(
+            "vllm.sampling_params", StructuredOutputsParams=lambda *args, **kwargs: None
+        )
+        fake_utils_mod = _fake_module("vllm.utils", __path__=[])
+        fake_network_utils_mod = _fake_module("vllm.utils.network_utils", get_open_port=lambda: 0)
+
+        captured = {}
+        with (
+            mock.patch.dict(
+                sys.modules,
+                {
+                    "vllm": fake_vllm,
+                    "vllm.sampling_params": fake_sampling_params_mod,
+                    "vllm.utils": fake_utils_mod,
+                    "vllm.utils.network_utils": fake_network_utils_mod,
+                },
+            ),
+            mock.patch.object(vllm_serve_mod, "Process", _FakeProcess),
+            mock.patch.object(vllm_serve_mod, "Pipe", lambda: (_FakeConnection(), object())),
+            mock.patch("uvicorn.run", lambda app, **kwargs: captured.update(app=app)),
+        ):
+            vllm_serve_mod.main(ScriptArguments(model="fake-model", data_parallel_size=1, max_model_len=max_model_len))
+        return captured["app"]
+
+    def test_mismatched_lengths_returns_400(self):
+        # Real raise site: `raise ValueError("sequences and prompt_lengths must have the same length.")`
+        app = self._build_app()
+        with TestClient(app, raise_server_exceptions=False) as client:
+            response = client.post(
+                "/get_sequence_logprobs/", json={"sequences": [[1, 2, 3]], "prompt_lengths": [0, 1]}
+            )
+
+        assert response.status_code == 400
+        assert "must have the same length" in response.text
+
+    def test_sequence_exceeds_max_model_len_returns_400(self):
+        # Real raise site: `raise ValueError(f"Sequence {i} has length {len(seq)} which exceeds max_model_len=...")`
+        app = self._build_app(max_model_len=8192)
+        with TestClient(app, raise_server_exceptions=False) as client:
+            response = client.post(
+                "/get_sequence_logprobs/", json={"sequences": [list(range(9000))], "prompt_lengths": [0]}
+            )
+
+        assert response.status_code == 400
+        assert "exceeds max_model_len" in response.text
+
+    def test_format_logprob_response_none_returns_400(self):
+        # Real raise site: `_format_logprob_response`'s `raise ValueError("prompt_logprobs is None.")`, reached
+        # through the batching queue and `loop.run_in_executor(...)`, not directly in the endpoint's own frame.
+        app = self._build_app()
+        with TestClient(app, raise_server_exceptions=False) as client:
+            response = client.post(
+                "/get_sequence_logprobs/",
+                json={"sequences": [[1, 2, 3, 4]], "prompt_lengths": [2], "response_format": "json"},
+            )
+
+        assert response.status_code == 400
+        assert "prompt_logprobs is None" in response.text
 
 
 @pytest.mark.slow
