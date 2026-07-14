@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import copy
+import functools
 import textwrap
 from io import StringIO
 from unittest.mock import patch
@@ -37,6 +38,7 @@ from trl.trainer.utils import (
     entropy_from_logits,
     flush_left,
     generate_model_card,
+    get_callable_name,
     get_peft_config,
     hash_module,
     nanstd,
@@ -277,6 +279,36 @@ class TestGetPEFTConfig(TrlTestCase):
                 arg = arg[len("lora_") :] if arg.startswith("lora_") else arg
 
             assert getattr(peft_config, arg) == value
+
+
+class TestGetCallableName(TrlTestCase):
+    def test_function(self):
+        def accuracy_reward(completions):
+            return [0.0] * len(completions)
+
+        assert get_callable_name(accuracy_reward) == "accuracy_reward"
+
+    def test_partial(self):
+        def reward(completions, threshold):
+            return [0.0] * len(completions)
+
+        assert get_callable_name(functools.partial(reward, threshold=0.5)) == "reward"
+
+    def test_nested_partial(self):
+        def reward(completions, threshold):
+            return [0.0] * len(completions)
+
+        assert get_callable_name(functools.partial(functools.partial(reward), threshold=0.5)) == "reward"
+
+    def test_callable_instance(self):
+        class LengthReward:
+            def __call__(self, completions):
+                return [0.0] * len(completions)
+
+        assert get_callable_name(LengthReward()) == "LengthReward"
+
+    def test_lambda(self):
+        assert get_callable_name(lambda completions: [0.0] * len(completions)) == "<lambda>"
 
 
 class TestNanStd(TrlTestCase):

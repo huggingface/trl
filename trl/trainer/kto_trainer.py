@@ -55,7 +55,7 @@ from ..data_utils import (
 )
 from ..import_utils import is_liger_kernel_available
 from ..models import get_act_offloading_ctx_manager, prepare_deepspeed, prepare_fsdp
-from ..models.utils import disable_gradient_checkpointing
+from ..models.utils import _ForwardRedirection, disable_gradient_checkpointing
 from .base_trainer import _BaseTrainer
 from .callbacks import SyncRefModelCallback
 from .kto_config import KTOConfig
@@ -66,6 +66,7 @@ from .utils import (
     flush_left,
     get_config_model_id,
     hash_module,
+    maybe_gather_lm_head_ctx,
     pad,
     selective_log_softmax,
     use_adapter,
@@ -956,6 +957,9 @@ class KTOTrainer(_BaseTrainer):
         # The Liger loss is built here, because it needs `self.ref_model`
         if self.use_liger_kernel:
             self.liger_loss = LigerFusedLinearKTOLoss(beta=self.beta, use_ref_model=(self.ref_model is not None))
+            # Redirect the model.module forward to the model forward to ensure pre-forward hooks are called, so that
+            # under ZeRO-3 the parameter coordinator gathers/reduces `lm_head.weight` around the fused loss.
+            self._forward_redirection = _ForwardRedirection()
 
         if self.precompute_ref_logps:
             self.train_dataset = self._precompute_ref_logps(
@@ -1145,6 +1149,9 @@ class KTOTrainer(_BaseTrainer):
                 "`precompute_ref_log_probs=True` is not supported with IterableDataset. Please use a map-style "
                 "Dataset or set `precompute_ref_log_probs=False`."
             )
+        # Idempotent skip: dataset already has ref log-probs precomputed.
+        if "ref_logps" in dataset.column_names:
+            return dataset
         model_hash = hash_module(self.ref_model or self.model)
         fingerprint = Hasher.hash((dataset._fingerprint, model_hash, self.calculate_KL))
         cache_file = dataset._get_cache_file_path(fingerprint)
@@ -1274,7 +1281,25 @@ class KTOTrainer(_BaseTrainer):
                 KL_model_kwargs["mm_token_type_ids"] = batch["KL_mm_token_type_ids"]
 
             with torch.no_grad():
-                KL_logits = model(**KL_model_kwargs).logits
+                if self.use_liger_kernel:
+                    # Running the full model would call `lm_head` as a module. Under ZeRO-3 that registers
+                    # `lm_head.weight` in the parameter coordinator's forward trace, which then conflicts with the
+                    # dense weight gradient the fused loss produces for the same parameter (the fused backward fails
+                    # with a shape mismatch). Mirror the fused path instead: run the backbone and matmul with the
+                    # gathered `lm_head` weight so `lm_head` is only ever touched directly, never as a module.
+                    inner = model.base_model.model if is_peft_model(model) else model
+                    if self._is_vlm and Version(transformers.__version__) < Version("5.0.0"):
+                        backbone = inner.model
+                    else:
+                        backbone = inner.base_model
+                    lm_head = inner.get_output_embeddings()
+                    KL_hidden_states = backbone(**KL_model_kwargs).last_hidden_state
+                    with maybe_gather_lm_head_ctx(lm_head.weight, lm_head.bias):
+                        KL_logits = KL_hidden_states @ lm_head.weight.t()
+                        if lm_head.bias is not None:
+                            KL_logits = KL_logits + lm_head.bias
+                else:
+                    KL_logits = model(**KL_model_kwargs).logits
 
             shift_KL_logits = KL_logits[:, :-1, :]
             KL_per_token_logps = selective_log_softmax(shift_KL_logits, batch["KL_input_ids"][:, 1:])
@@ -1288,6 +1313,7 @@ class KTOTrainer(_BaseTrainer):
                 "return_outputs=True is not supported with the Liger KTO loss. The Liger loss computes the loss "
                 "without materializing logits, so outputs cannot be returned."
             )
+
         mode = "train" if self.model.training else "eval"
         batch = {k: (v.to(self.accelerator.device) if isinstance(v, torch.Tensor) else v) for k, v in inputs.items()}
 
@@ -1364,27 +1390,28 @@ class KTOTrainer(_BaseTrainer):
         target = batch["input_ids"][:, 1:].clone()
         target[shift_completion_mask == 0] = -100
 
-        (
-            loss,
+        with maybe_gather_lm_head_ctx(lm_head.weight, lm_head.bias, ref_lm_head.weight, ref_lm_head.bias):
             (
-                chosen_logps_sum,
-                rejected_logps_sum,
-                chosen_logits_sum,
-                rejected_logits_sum,
-                chosen_rewards_sum,
-                rejected_rewards_sum,
-            ),
-        ) = self.liger_loss(
-            _input=outputs.last_hidden_state[:, :-1],
-            lin_weight=lm_head.weight,
-            target=target,
-            bias=lm_head.bias if hasattr(lm_head, "bias") else None,
-            preference_labels=torch.tensor(batch["label"], dtype=torch.bool).to(self.accelerator.device),
-            ref_input=ref_outputs.last_hidden_state[:, :-1],
-            ref_weight=ref_lm_head.weight,
-            ref_bias=ref_lm_head.bias if hasattr(lm_head, "bias") else None,
-            kl=kl,
-        )
+                loss,
+                (
+                    chosen_logps_sum,
+                    rejected_logps_sum,
+                    chosen_logits_sum,
+                    rejected_logits_sum,
+                    chosen_rewards_sum,
+                    rejected_rewards_sum,
+                ),
+            ) = self.liger_loss(
+                _input=outputs.last_hidden_state[:, :-1],
+                lin_weight=lm_head.weight,
+                target=target,
+                bias=lm_head.bias if hasattr(lm_head, "bias") else None,
+                preference_labels=torch.tensor(batch["label"], dtype=torch.bool).to(self.accelerator.device),
+                ref_input=ref_outputs.last_hidden_state[:, :-1],
+                ref_weight=ref_lm_head.weight,
+                ref_bias=ref_lm_head.bias if hasattr(lm_head, "bias") else None,
+                kl=kl,
+            )
 
         self._metrics[mode]["kl"].append(kl.item())
 
@@ -1643,7 +1670,17 @@ class KTOTrainer(_BaseTrainer):
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         try:
             if self.use_liger_kernel:
-                return self._compute_loss_liger(model, inputs, return_outputs)
+                # Under ZeRO-3, `lm_head.weight` is sharded and the fused loss reads it directly (bypassing the
+                # module), so run the loss inside the engine's forward via `_forward_redirection` to arm the parameter
+                # coordinator's gather/reduce hooks.
+                deepspeed_plugin = self.accelerator.state.deepspeed_plugin
+                is_zero3 = deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3
+                unwrapped_model = self.accelerator.unwrap_model(model)
+                if is_zero3 or self.is_fsdp_enabled:
+                    return self._forward_redirection(
+                        model, unwrapped_model, self._compute_loss_liger, unwrapped_model, inputs, return_outputs
+                    )
+                return self._compute_loss_liger(unwrapped_model, inputs, return_outputs)
             return self._compute_loss(model, inputs, return_outputs)
         except ValueError as e:
             if "Image features and image tokens do not match" in str(e) and self.args.max_length is not None:
