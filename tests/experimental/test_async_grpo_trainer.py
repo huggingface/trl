@@ -26,6 +26,7 @@ from datasets import load_dataset
 from transformers import AutoTokenizer
 from transformers.testing_utils import torch_device
 
+import trl.experimental.async_grpo.async_grpo_trainer as async_grpo_trainer_module
 import trl.experimental.async_grpo.async_rollout_worker as worker
 from trl.experimental.async_grpo import AsyncGRPOConfig, AsyncGRPOTrainer
 from trl.experimental.async_grpo.async_grpo_trainer import (
@@ -156,6 +157,86 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    def test_sampling_args_passed_to_rollout_worker(self, monkeypatch):
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
+        captured_kwargs = {}
+
+        class _CapturingRolloutWorker:
+            def __init__(self, **kwargs):
+                captured_kwargs.update(kwargs)
+                self.rollout_buffer = queue.Queue()
+
+            def start(self):
+                pass
+
+            def stop(self):
+                pass
+
+            def pause(self):
+                pass
+
+            def resume(self):
+                pass
+
+            def send_weights(self, iterator):
+                pass
+
+            def update_model_version(self, version):
+                pass
+
+        monkeypatch.setattr(async_grpo_trainer_module, "AsyncRolloutWorker", _CapturingRolloutWorker)
+
+        training_args = AsyncGRPOConfig(
+            output_dir=self.tmp_dir,
+            top_p=0.9,
+            top_k=50,
+            min_p=0.05,
+            repetition_penalty=1.1,
+            report_to="none",
+        )
+
+        AsyncGRPOTrainer(
+            model=model_id,
+            reward_funcs=dummy_reward_func,
+            args=training_args,
+            train_dataset=dataset,
+            processing_class=AutoTokenizer.from_pretrained(model_id),
+        )
+
+        assert captured_kwargs["top_p"] == 0.9
+        assert captured_kwargs["top_k"] == 50
+        assert captured_kwargs["min_p"] == 0.05
+        assert captured_kwargs["repetition_penalty"] == 1.1
+
+    def test_rollout_worker_includes_sampling_args_in_payload(self):
+        loop = object.__new__(_AsyncRolloutLoop)  # skip the heavy __init__; set only what _generate_one_turn reads
+        loop.model_name = "dummy-model"
+        loop.max_tokens = 16
+        loop.temperature = 0.7
+        loop.top_p = 0.92
+        loop.top_k = 42
+        loop.min_p = 0.06
+        loop.repetition_penalty = 1.15
+        loop.request_timeout = 3
+
+        observed_payload = {}
+
+        async def fake_post(_path, payload, _timeout):
+            observed_payload.update(payload)
+            return {"choices": [{"token_ids": [11, 12], "logprobs": {"token_logprobs": [-0.1, -0.2]}}]}
+
+        loop._post = fake_post
+
+        completion_ids, completion_logprobs = asyncio.run(loop._generate_one_turn([1, 2, 3]))
+
+        assert completion_ids == [11, 12]
+        assert completion_logprobs == [-0.1, -0.2]
+        assert observed_payload["top_p"] == 0.92
+        assert observed_payload["top_k"] == 42
+        assert observed_payload["min_p"] == 0.06
+        assert observed_payload["repetition_penalty"] == 1.15
 
 
 class TestAsyncRolloutWorkerEnvironments(TrlTestCase):
