@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import random
 import textwrap
 import warnings
@@ -817,8 +818,6 @@ def _load_sparse_projection_matrix(path, device, *, student_vocab_size, teacher_
     Both are normalised to a coalesced float32 sparse COO tensor of shape ``(V_s, V_t)``. See Algorithm 2 in
     https://huggingface.co/papers/2605.21699.
     """
-    import os
-
     key = (str(path), str(device), int(student_vocab_size), int(teacher_vocab_size))
     if key in _SPARSE_PROJ_CACHE:
         return _SPARSE_PROJ_CACHE[key]
@@ -861,18 +860,14 @@ def _load_sparse_projection_matrix(path, device, *, student_vocab_size, teacher_
     return sparse
 
 
-def _load_exact_token_map(path, device, *, xtoken_loss, teacher_vocab_size):
+def _load_exact_token_map(path, device, *, teacher_vocab_size):
     """Build and cache the common/uncommon vocab partition for H-KL.
 
-    Derives the common set using:
-    - Strict (``xtoken_loss=False``): top-1 weight == 1.0, no second mapping.
-    - Relaxed (``xtoken_loss=True``): top-1 weight >= 0.6.
-
+    A student token joins the common set when its top-1 projection weight is >= 0.6 (relaxed threshold, hardcoded to
+    match the reference implementation). Collisions on the same teacher token keep the student with the highest weight.
     See https://huggingface.co/papers/2605.21699 Section 3.2.
     """
-    import os
-
-    key = (str(path), str(device), bool(xtoken_loss), int(teacher_vocab_size))
+    key = (str(path), str(device), int(teacher_vocab_size))
     if key in _EXACT_MAP_CACHE:
         return _EXACT_MAP_CACHE[key]
 
@@ -888,10 +883,7 @@ def _load_exact_token_map(path, device, *, xtoken_loss, teacher_vocab_size):
     v_t = int(teacher_vocab_size)
 
     sorted_vals, sorted_pos = torch.sort(top_likelihoods, dim=-1, descending=True)
-    if xtoken_loss:
-        has_map = sorted_vals[:, 0] >= 0.6
-    else:
-        has_map = (sorted_vals[:, 0] == 1.0) & (top_indices[:, 1] == -1)
+    has_map = sorted_vals[:, 0] >= 0.6
 
     s_candidates = torch.where(has_map)[0]
     empty = torch.empty(0, dtype=torch.long, device=device)
@@ -913,13 +905,10 @@ def _load_exact_token_map(path, device, *, xtoken_loss, teacher_vocab_size):
     t_vec = t_candidates[in_bounds]
     prob_vec = prob_candidates[in_bounds]
 
-    if xtoken_loss:
-        # Per teacher token keep the student with the highest projection weight.
-        max_prob_per_t = torch.full((v_t,), float("-inf"), device=device, dtype=prob_vec.dtype)
-        max_prob_per_t.scatter_reduce_(0, t_vec, prob_vec, reduce="amax", include_self=True)
-        eligible = prob_vec >= max_prob_per_t[t_vec]
-    else:
-        eligible = torch.ones_like(t_vec, dtype=torch.bool)
+    # Per teacher token keep the student with the highest projection weight.
+    max_prob_per_t = torch.full((v_t,), float("-inf"), device=device, dtype=prob_vec.dtype)
+    max_prob_per_t.scatter_reduce_(0, t_vec, prob_vec, reduce="amax", include_self=True)
+    eligible = prob_vec >= max_prob_per_t[t_vec]
 
     sentinel = v_s
     eligible_s = torch.where(eligible, s_vec, s_vec.new_full(s_vec.shape, sentinel))
@@ -989,12 +978,7 @@ class XTokenLoss(nn.Module):
         )
 
     def _exact_map(self, device):
-        return _load_exact_token_map(
-            self.projection_path,
-            device,
-            xtoken_loss=(self.loss_type == "h_kl"),
-            teacher_vocab_size=self.teacher_vocab_size,
-        )
+        return _load_exact_token_map(self.projection_path, device, teacher_vocab_size=self.teacher_vocab_size)
 
     def forward(
         self,
@@ -1219,7 +1203,7 @@ class GOLDTrainer(SFTTrainer):
                 title        = {{Unlocking On-Policy Distillation for Any Model Family}},
                 author       = {Carlos Miguel Patiño and Kashif Rasul and Quentin Gallouédec and Ben Burtenshaw and Sergio Paniego and Vaibhav Srivastav and Thibaud Frere and Ed Beeching and Lewis Tunstall and Leandro von Werra and Thomas Wolf},
                 year         = 2025,
-                url          = {https://huggingface.co/spaces/HuggingFaceH4/general-on-policy-logit-distillation},
+                url          = {https://huggingface.co/spaces/HuggingFaceH4/on-policy-distillation},
             }"""
         ),
     }
