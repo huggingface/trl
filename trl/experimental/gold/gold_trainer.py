@@ -182,13 +182,15 @@ def build_teacher_inputs_from_texts(
     tokenizer: PreTrainedTokenizerBase,
     prompt_texts: list[str],
     completion_texts: list[str],
+    use_extended_uld: bool = True,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """Tokenize teacher prompts/completions and produce tensors ready for GOLD loss.
 
     Returns ``(input_ids, labels, attention_mask, byte_offsets)``. ``byte_offsets`` is a ``[batch, seq, 2]`` tensor of
     UTF-8 byte ``(start, end)`` for each token: prompt and padding positions are filled with ``(0, 0)``; completion
     tokens carry offsets relative to the corresponding ``completion_text``; the appended EOS gets ``(content_len,
-    content_len)``. Byte offsets are derived from the fast tokenizer's char offsets via ``encode_with_byte_offsets``.
+    content_len)``. Byte offsets are derived from the fast tokenizer's char offsets via ``encode_with_byte_offsets``
+    when extended ULD is enabled. Positional ULD returns zero offsets because it does not consume them.
     """
 
     pad_token_id = tokenizer.pad_token_id
@@ -196,7 +198,11 @@ def build_teacher_inputs_from_texts(
     backend = tokenizer.backend_tokenizer
 
     prompt_token_ids = tokenizer(prompt_texts, add_special_tokens=True)["input_ids"]
-    completion_encs = encode_with_byte_offsets(backend, completion_texts, add_special_tokens=False)
+    if use_extended_uld:
+        completion_encs = encode_with_byte_offsets(backend, completion_texts, add_special_tokens=False)
+    else:
+        completion_ids = tokenizer(completion_texts, add_special_tokens=False)["input_ids"]
+        completion_encs = [(ids, [(0, 0)] * len(ids)) for ids in completion_ids]
 
     sequences: list[torch.Tensor] = []
     attention_masks: list[torch.Tensor] = []
@@ -218,7 +224,7 @@ def build_teacher_inputs_from_texts(
         offsets = [(0, 0)] * len(prompt_ids) + completion_offs
         if eos_token_id is not None:
             sequence.append(eos_token_id)
-            offsets.append((content_len, content_len))
+            offsets.append((content_len, content_len) if use_extended_uld else (0, 0))
 
         seq_tensor = torch.tensor(sequence, dtype=torch.long)
         sequences.append(seq_tensor)
@@ -2039,26 +2045,6 @@ class GOLDTrainer(SFTTrainer):
                 **map_kwargs,
             )
 
-            # Add EOS token if needed: non-conversational only
-            first_example = next(iter(dataset))
-            if not is_conversational(first_example):
-                if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
-                    map_kwargs["desc"] = f"Adding EOS to {dataset_name} dataset"
-
-                def add_eos(example, eos_token):
-                    if "text" in example and not example["text"].endswith(eos_token):  # language modeling case
-                        example["text"] = example["text"] + eos_token
-                    elif "completion" in example and not example["completion"].endswith(eos_token):
-                        example["completion"] = example["completion"] + eos_token
-                    return example
-
-                dataset = dataset.map(
-                    add_eos,
-                    fn_kwargs={"eos_token": processing_class.eos_token},
-                    remove_columns=("messages" if "messages" in column_names else None),  # renamed to "text"
-                    **map_kwargs,
-                )
-
             # Tokenize the dataset while preserving original text
             if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                 map_kwargs["desc"] = f"Tokenizing {dataset_name} dataset (preserving original text)"
@@ -2153,20 +2139,35 @@ class GOLDTrainer(SFTTrainer):
                     [(input_ids, full_offs)] = encode_with_byte_offsets(backend, [full_text], add_special_tokens=False)
                     prompt_byte_len = len(prompt_text.encode("utf-8"))
                     completion_start = next(
-                        (idx for idx, (s, _) in enumerate(full_offs) if s >= prompt_byte_len),
+                        (idx for idx, (_, e) in enumerate(full_offs) if e > prompt_byte_len),
                         len(input_ids),
                     )
                     # Completion-relative: prompt positions zeroed, completion offsets shifted to
                     # the assistant content's first byte (matches build_teacher_inputs_from_texts).
                     byte_offsets = [(0, 0)] * completion_start + [
-                        (s - prompt_byte_len, e - prompt_byte_len) for s, e in full_offs[completion_start:]
+                        (max(0, s - prompt_byte_len), e - prompt_byte_len) for s, e in full_offs[completion_start:]
                     ]
                 else:
-                    input_ids = processing_class(full_text, add_special_tokens=False)["input_ids"]
-                    completion_start = min(
-                        len(processing_class(prompt_text, add_special_tokens=False)["input_ids"]), len(input_ids)
+                    encoding = processing_class(full_text, add_special_tokens=False, return_offsets_mapping=True)
+                    input_ids = encoding["input_ids"]
+                    completion_start = next(
+                        (idx for idx, (_, end) in enumerate(encoding["offset_mapping"]) if end > len(prompt_text)),
+                        len(input_ids),
                     )
                     byte_offsets = [(0, 0)] * len(input_ids)
+
+                append_eos = (
+                    not is_conversational(example)
+                    and processing_class.eos_token_id is not None
+                    and (not input_ids or input_ids[-1] != processing_class.eos_token_id)
+                )
+                if append_eos:
+                    input_ids.append(processing_class.eos_token_id)
+                    if use_extended_uld:
+                        completion_byte_len = len(completion_text.encode("utf-8"))
+                        byte_offsets.append((completion_byte_len, completion_byte_len))
+                    else:
+                        byte_offsets.append((0, 0))
 
                 # Keep the last `max_length` tokens (the completion end). `completion_mask` tracks the
                 # boundary so it survives truncation without re-tokenizing the prompt.
@@ -2190,7 +2191,10 @@ class GOLDTrainer(SFTTrainer):
                         clean_up_tokenization_spaces=False,
                     )
                     result["original_prompt_text"] = decode(input_ids[:completion_start])
-                    result["original_completion_text"] = decode(input_ids[completion_start:])
+                    completion_ids = input_ids[completion_start:]
+                    if append_eos:
+                        completion_ids = completion_ids[:-1]
+                    result["original_completion_text"] = decode(completion_ids)
 
                 result["input_ids"] = input_ids
                 result["attention_mask"] = [1] * len(input_ids)
@@ -2476,7 +2480,12 @@ class GOLDTrainer(SFTTrainer):
                     teacher_labels,
                     teacher_attention_mask,
                     teacher_completion_byte_offsets,
-                ) = build_teacher_inputs_from_texts(self.teacher_tokenizer, prompt_texts, completion_texts)
+                ) = build_teacher_inputs_from_texts(
+                    self.teacher_tokenizer,
+                    prompt_texts,
+                    completion_texts,
+                    use_extended_uld=self.uld_loss_fn.use_extended_uld,
+                )
 
             teacher_input_ids = teacher_input_ids.to(self.accelerator.device)
             teacher_labels = teacher_labels.to(self.accelerator.device)
