@@ -705,6 +705,7 @@ class TestGOLDTrainerInit(TrlTestCase):
             model_init_kwargs=None,
             max_length=128,
             use_liger_kernel=False,
+            trust_remote_code=False,
             teacher_model_init_kwargs=None,
             use_uld_loss=False,
             xtoken_loss_type="none",
@@ -768,7 +769,7 @@ class TestGOLDTrainerDataset(TrlTestCase):
             }
         ]
 
-        max_length = 256
+        max_length = 512  # large enough to keep prompt tokens after the completion
         collator = DataCollatorForChatML(tokenizer=llama_tokenizer, max_length=max_length)
         batch = collator(examples)
 
@@ -2365,6 +2366,7 @@ def test_gold_trainer_init_rejects_non_vlm_teacher(monkeypatch):
         trust_remote_code=False,
         teacher_model_init_kwargs=None,
         use_uld_loss=False,
+        xtoken_loss_type="none",
         teacher_tokenizer_name_or_path=None,
         teacher_model_revision=None,
         disable_dropout=False,
@@ -2561,6 +2563,7 @@ def test_gold_trainer_vlm_vllm_init_uses_identity_collator(monkeypatch):
         trust_remote_code=False,
         teacher_model_init_kwargs=None,
         use_uld_loss=False,
+        xtoken_loss_type="none",
         teacher_tokenizer_name_or_path=None,
         teacher_model_revision=None,
         disable_dropout=False,
@@ -2653,6 +2656,7 @@ def _make_vlm_trainer_args(use_vllm=False):
         trust_remote_code=False,
         teacher_model_init_kwargs=None,
         use_uld_loss=False,
+        xtoken_loss_type="none",
         teacher_tokenizer_name_or_path=None,
         teacher_model_revision=None,
         disable_dropout=False,
