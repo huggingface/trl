@@ -3111,13 +3111,9 @@ class GRPOTrainer(_BaseTrainer):
             is_low_clipped = (coef_1 < 1 - self.epsilon_low) & (advantages < 0)
             is_high_clipped = (coef_1 > 1 + self.epsilon_high) & (advantages > 0)
             is_region_clipped = is_low_clipped | is_high_clipped
-
             self._metrics[mode]["clip_ratio/low_mean"].append(global_masked_mean(is_low_clipped.float()))
             self._metrics[mode]["clip_ratio/high_mean"].append(global_masked_mean(is_high_clipped.float()))
             self._metrics[mode]["clip_ratio/region_mean"].append(global_masked_mean(is_region_clipped.float()))
-
-            # Global per-completion saturation extrema: the smallest low-clip and largest high-clip fraction over
-            # all completions (gathered across ranks), independent of the data-parallel layout.
             gathered_low_clip = self.accelerator.gather(masked_seq_mean(is_low_clipped.float()))
             self._metrics[mode]["clip_ratio/low_min"].append(nanmin(gathered_low_clip).item())
             gathered_high_clip = self.accelerator.gather(masked_seq_mean(is_high_clipped.float()))
