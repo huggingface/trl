@@ -920,9 +920,9 @@ class TestKTOTrainer(TrlTestCase):
         elif iterable_as == "eval_iterable_dataset_dict":
             eval_dataset = IterableDatasetDict({"eval": iterable_dataset})
 
-        # `apo_zero_unpaired` avoids KTO's KL term, which (like precompute) is incompatible with streaming datasets,
-        # so the precompute error is what surfaces. `max_steps` lets the iterable-train case reach the precompute
-        # check instead of failing earlier on the missing dataset length required by the learning-rate scheduler.
+        # `apo_zero_unpaired` keeps the trainer setup minimal (no KL-term constraints), so the precompute error is what
+        # surfaces. `max_steps` lets the iterable-train case reach the precompute check instead of failing earlier on
+        # the missing dataset length required by the learning-rate scheduler.
         training_args = KTOConfig(
             output_dir=self.tmp_dir,
             loss_type="apo_zero_unpaired",
@@ -938,9 +938,11 @@ class TestKTOTrainer(TrlTestCase):
                 eval_dataset=eval_dataset,
             )
 
-    def test_train_with_iterable_dataset(self):
-        # KTO's default `kto` loss estimates the KL term from neighboring examples in a fixed-order batch, which is not
-        # possible with a streaming dataset; use `apo_zero_unpaired` which does not require the KL term.
+    @pytest.mark.parametrize("loss_type", ["kto", "apo_zero_unpaired"])
+    def test_train_with_iterable_dataset(self, loss_type):
+        # Streaming `IterableDataset` is supported for all loss types. Loss types that estimate the KL term (all except
+        # `apo_zero_unpaired`) build the mismatched KL pairs from neighboring examples within each fixed-order batch,
+        # which streaming preserves because it is consumed sequentially.
         dataset = load_dataset(
             "trl-internal-testing/zen", "standard_unpaired_preference", split="train", streaming=True
         )
@@ -948,7 +950,8 @@ class TestKTOTrainer(TrlTestCase):
         training_args = KTOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
-            loss_type="apo_zero_unpaired",
+            loss_type=loss_type,
+            per_device_train_batch_size=2,  # KL-term loss types require a per-device train batch size greater than 1
             max_steps=3,
             report_to="none",
         )
