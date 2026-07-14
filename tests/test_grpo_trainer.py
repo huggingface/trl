@@ -532,6 +532,34 @@ class TestGRPOTrainer(TrlTestCase):
                 eval_dataset=eval_dataset,
             )
 
+    @pytest.mark.parametrize("eval_dataset_type", ["dataset", "dataset_dict", "dict_of_dataset"])
+    def test_evaluate_with_eval_dataset(self, eval_dataset_type):
+        # `evaluate` accepts a dataset passed directly, not only an `eval_dataset` set at init. Streaming datasets
+        # are not supported in GRPO, so only map-style types are covered here.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
+
+        if eval_dataset_type == "dataset":
+            eval_dataset = dataset["test"]
+        elif eval_dataset_type == "dataset_dict":
+            eval_dataset = DatasetDict({"data1": dataset["test"], "data2": dataset["test"]})
+        else:  # "dict_of_dataset"
+            eval_dataset = {"data1": dataset["test"], "data2": dataset["test"]}
+
+        training_args = GRPOConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset["train"],
+        )
+
+        metrics = trainer.evaluate(eval_dataset=eval_dataset)
+        if eval_dataset_type == "dataset":
+            assert metrics["eval_loss"] is not None
+        else:
+            assert metrics["eval_data1_loss"] is not None
+            assert metrics["eval_data2_loss"] is not None
+
     # Regression test for eval_on_start with loss_type="grpo" (one of the loss types that depends on
     # current_gradient_accumulation_steps): evaluation runs before the first training step, when that value is still
     # unset. Previously this caused the initial eval to crash.
