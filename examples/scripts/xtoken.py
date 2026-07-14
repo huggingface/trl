@@ -40,15 +40,11 @@ from transformers import AutoTokenizer
 from trl.experimental.gold import GOLDConfig, GOLDTrainer
 
 
-# ~4 chars/token; keep samples comfortably within max_length
-_NEMOTRON_CHARS_PER_SAMPLE = 16384
-
-
 def build_chatbot_arena_dataset(split="train", num_samples=2000):
     return load_dataset("trl-lib/chatbot_arena_completions", split=f"{split}[:{num_samples}]")
 
 
-def build_nemotron_dataset(num_samples=2000):
+def build_nemotron_dataset(num_samples=2000, max_length=2048):
     ds = load_dataset(
         "parquet",
         data_files="hf://datasets/nvidia/Nemotron-Pretraining-Specialized-v1.1/Nemotron-Pretraining-Formal-Logic/*.parquet",
@@ -56,8 +52,12 @@ def build_nemotron_dataset(num_samples=2000):
     )
     ds = ds.select(range(min(num_samples, len(ds))))
 
+    # ~4 chars/token; cap at 3 chars per window token so the completion never fills the whole window (the collator
+    # rejects examples whose truncation would drop all prompt tokens).
+    max_chars = 3 * max_length
+
     def to_messages(example):
-        text = example["text"][:_NEMOTRON_CHARS_PER_SAMPLE]
+        text = example["text"][:max_chars]
         return {"messages": [{"role": "user", "content": "Continue:"}, {"role": "assistant", "content": text}]}
 
     return ds.map(to_messages, remove_columns=ds.column_names)
@@ -100,7 +100,7 @@ def main():
     tokenizer.padding_side = "right"
 
     if args.dataset == "nemotron":
-        train_dataset = build_nemotron_dataset(num_samples=args.num_samples)
+        train_dataset = build_nemotron_dataset(num_samples=args.num_samples, max_length=args.max_length)
     else:
         train_dataset = build_chatbot_arena_dataset(num_samples=args.num_samples)
 
