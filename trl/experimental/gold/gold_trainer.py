@@ -1263,7 +1263,6 @@ class GOLDTrainer(SFTTrainer):
                 unwrapped_model,
                 collated,
                 self.generation_config,
-                self.pad_token_id,
             )
 
         updated_slice = dict(collated)
@@ -1627,7 +1626,6 @@ class GOLDTrainer(SFTTrainer):
                     unwrapped_model,
                     slice_inputs,
                     self.generation_config,
-                    self.processing_class.pad_token_id,
                 )
                 (
                     new_input_ids,
@@ -2596,7 +2594,7 @@ class GOLDTrainer(SFTTrainer):
 
         return (loss, outputs_student) if return_outputs else loss
 
-    def generate_on_policy_outputs(self, model, inputs, generation_config, pad_token_id=None):
+    def generate_on_policy_outputs(self, model, inputs, generation_config):
         # Generate output with respect to the prompt only
         # Drop sequence-aligned multimodal keys (token_type_ids, mm_token_type_ids): generate recomputes them from
         # `input_ids` as it extends the sequence, and some models (e.g. Qwen3-VL) reject them as unknown
@@ -2604,7 +2602,7 @@ class GOLDTrainer(SFTTrainer):
         generate_kwargs = self._get_model_forward_kwargs(inputs, exclude=self._SEQUENCE_KEYS)
         generated_outputs = model.generate(
             input_ids=inputs["prompts"],
-            attention_mask=inputs.get("prompt_attention_mask", None),
+            attention_mask=inputs["prompt_attention_mask"],
             generation_config=generation_config,
             return_dict_in_generate=True,
             **generate_kwargs,
@@ -2615,8 +2613,7 @@ class GOLDTrainer(SFTTrainer):
         batch_size = generated_tokens.size(0)
         device = generated_tokens.device
 
-        prompt_mask = inputs.get("prompt_attention_mask")
-        pad_token_id = pad_token_id if pad_token_id is not None else self.processing_class.pad_token_id
+        prompt_mask = inputs["prompt_attention_mask"]
 
         # model.generate() returns full sequences (prompt + completion), so completions start
         # after the full padded prompt width.
@@ -2638,8 +2635,7 @@ class GOLDTrainer(SFTTrainer):
         # Pad ids can appear inside real prompt text, so use the prompt mask instead of matching ids
         new_attention_mask = torch.ones_like(generated_tokens)
         new_attention_mask[:, prompt_length:] = completion_mask
-        if prompt_mask is not None:
-            new_attention_mask[:, :prompt_length] = prompt_mask
+        new_attention_mask[:, :prompt_length] = prompt_mask
 
         new_input_ids = generated_tokens
         new_attention_mask, new_labels = self._build_sequence_batch(
@@ -2651,10 +2647,7 @@ class GOLDTrainer(SFTTrainer):
         for idx in range(batch_size):
             length = int(prompt_lengths[idx].item())
             prompt_tokens = inputs["prompts"][idx]
-            if prompt_mask is not None:
-                prompt_tokens = prompt_tokens[prompt_mask[idx].bool()]
-            elif pad_token_id is not None:
-                prompt_tokens = prompt_tokens[prompt_tokens != pad_token_id]
+            prompt_tokens = prompt_tokens[prompt_mask[idx].bool()]
             prompt_texts.append(
                 self.processing_class.decode(
                     prompt_tokens.tolist(),

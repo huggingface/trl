@@ -1273,7 +1273,6 @@ def test_generate_on_policy_outputs_masks_prompt(llama_tokenizer):
         DummyModel(),
         {"prompts": prompt_tensor, "prompt_attention_mask": prompt_mask},
         generation_config,
-        pad_id,
     )
 
     assert torch.equal(new_ids, generated_sequence)
@@ -1329,7 +1328,7 @@ def test_generate_on_policy_outputs_pad_equals_eos_keeps_eos():
     generation_config = SimpleNamespace(eos_token_id=eos_id)
     inputs = {"prompts": prompts, "prompt_attention_mask": prompt_mask}
     _, new_attention_mask, new_labels, _, _ = trainer.generate_on_policy_outputs(
-        DummyModel(), inputs, generation_config, pad_id
+        DummyModel(), inputs, generation_config
     )
 
     prompt_width = prompts.shape[1]
@@ -1367,7 +1366,7 @@ def test_generate_on_policy_outputs_without_eos_id_keeps_full_completion():
     generation_config = SimpleNamespace(eos_token_id=None)
     inputs = {"prompts": prompts, "prompt_attention_mask": prompt_mask}
     _, new_attention_mask, new_labels, _, _ = trainer.generate_on_policy_outputs(
-        DummyModel(), inputs, generation_config, pad_id
+        DummyModel(), inputs, generation_config
     )
 
     prompt_width = prompts.shape[1]
@@ -1435,7 +1434,6 @@ def test_generate_on_policy_outputs_masks_prompt_smollm(smollm_tokenizer, openr1
     generation_config = SimpleNamespace(
         max_completion_length=None, temperature=None, top_k=None, top_p=None, eos_token_id=None
     )
-    pad_id = smollm_tokenizer.pad_token_id
     new_ids, new_mask, new_labels, prompt_texts, completion_texts = GOLDTrainer.generate_on_policy_outputs(
         trainer,
         DummyModel(),
@@ -1444,7 +1442,6 @@ def test_generate_on_policy_outputs_masks_prompt_smollm(smollm_tokenizer, openr1
             "prompt_attention_mask": batch["prompt_attention_mask"],
         },
         generation_config,
-        pad_id,
     )
 
     assert torch.equal(new_ids, batch["input_ids"])

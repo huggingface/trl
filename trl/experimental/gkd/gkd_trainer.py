@@ -450,7 +450,7 @@ class GKDTrainer(SFTTrainer):
         # Generate output with respect to the prompt-only
         generated_outputs = model.generate(
             input_ids=inputs["prompts"],
-            attention_mask=inputs.get("prompt_attention_mask", None),
+            attention_mask=inputs["prompt_attention_mask"],
             generation_config=generation_config,
             return_dict_in_generate=True,
         )
@@ -458,7 +458,7 @@ class GKDTrainer(SFTTrainer):
         # Get the generated token IDs
         generated_tokens = generated_outputs.sequences
         device = generated_tokens.device
-        prompt_mask = inputs.get("prompt_attention_mask")
+        prompt_mask = inputs["prompt_attention_mask"]
         prompt_length = inputs["prompts"].shape[1]
         completion_ids = generated_tokens[:, prompt_length:]
 
@@ -476,8 +476,7 @@ class GKDTrainer(SFTTrainer):
         # Pad ids can appear inside real prompt text, so use the prompt mask instead of matching ids
         new_attention_mask = torch.ones_like(generated_tokens)
         new_attention_mask[:, prompt_length:] = completion_mask
-        if prompt_mask is not None:
-            new_attention_mask[:, :prompt_length] = prompt_mask
+        new_attention_mask[:, :prompt_length] = prompt_mask
 
         new_labels = generated_tokens.clone()
         new_labels[new_attention_mask == 0] = -100

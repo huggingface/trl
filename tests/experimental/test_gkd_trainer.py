@@ -92,7 +92,7 @@ class TestGKDTrainerGenerateOnPolicy(TrlTestCase):
 
         inputs = {
             "prompts": tokenized_prompts["input_ids"].to(self.device),
-            "attention_mask": tokenized_prompts["attention_mask"].to(self.device),
+            "prompt_attention_mask": tokenized_prompts["attention_mask"].to(self.device),
         }
 
         outputs = GKDTrainer.generate_on_policy_outputs(self.model, inputs, self.generation_config)
