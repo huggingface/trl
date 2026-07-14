@@ -972,8 +972,8 @@ def test_prepare_dataset_messages_uses_last_assistant_turn(qwen_tokenizer):
     assert decoded_completion == row["original_completion_text"]
 
 
-def test_prepare_dataset_positional_uld_supports_sentencepiece(gemma4_tokenizer):
-    dataset = Dataset.from_dict({"prompt": ["Question: "], "completion": ["Answer."]})
+def test_prepare_dataset_positional_uld_supports_sentencepiece(gemma4_tokenizer, qwen_tokenizer):
+    dataset = Dataset.from_dict({"text": ["Question: Answer."], "prompt": ["Question: "], "completion": ["Answer."]})
     args = SimpleNamespace(
         dataset_num_proc=None,
         dataset_text_field="text",
@@ -994,8 +994,36 @@ def test_prepare_dataset_positional_uld_supports_sentencepiece(gemma4_tokenizer)
     )
     row = prepared[0]
 
-    assert 1 in row["completion_mask"]
+    completion_ids = [
+        token_id for token_id, mask in zip(row["input_ids"], row["completion_mask"], strict=True) if mask == 1
+    ]
+    assert row["original_completion_text"] == "Answer."
+    assert completion_ids[-1] == gemma4_tokenizer.eos_token_id
+    assert gemma4_tokenizer.decode(completion_ids[:-1]).lstrip() == row["original_completion_text"]
     assert row["byte_offsets"] == [[0, 0]] * len(row["input_ids"])
+
+    teacher_input_ids, teacher_labels, _, _ = build_teacher_inputs_from_texts(
+        qwen_tokenizer,
+        [row["original_prompt_text"]],
+        [row["original_completion_text"]],
+        use_extended_uld=False,
+    )
+    teacher_completion_ids = teacher_input_ids[0][teacher_labels[0] != -100].tolist()
+    assert qwen_tokenizer.decode(teacher_completion_ids) == "Answer." + qwen_tokenizer.eos_token
+
+
+def test_build_teacher_inputs_positional_uld_supports_sentencepiece(gemma4_tokenizer):
+    input_ids, labels, _, byte_offsets = build_teacher_inputs_from_texts(
+        gemma4_tokenizer,
+        ["Question: "],
+        ["Answer."],
+        use_extended_uld=False,
+    )
+
+    completion_ids = input_ids[0][labels[0] != -100].tolist()
+    assert completion_ids.count(gemma4_tokenizer.eos_token_id) == 1
+    assert gemma4_tokenizer.decode(completion_ids) == "Answer." + gemma4_tokenizer.eos_token
+    assert byte_offsets.tolist() == [[[0, 0]] * input_ids.shape[1]]
 
 
 def test_alignment_groups_cover_all_tokens(llama_tokenizer, qwen_tokenizer):
