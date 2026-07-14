@@ -1653,6 +1653,57 @@ class TestXTokenLoss(TrlTestCase):
             )
             assert torch.isfinite(loss), f"{loss_type} produced non-finite loss"
 
+    def test_xtoken_loss_identity_projection_zero_kd(self):
+        """Identical logits through an identity projection must give kd ~ 0 and perfect projection accuracy.
+
+        Runs with the shipped defaults (`xtoken_dynamic_scaling=True`, `uld_skip_*_eos=True`), so the dynamic-scaling
+        branch (`sg(ce/kd) * kd + ce`) is exercised end to end.
+        """
+        V = 6
+        proj_path = Path(self.tmp_dir) / "identity_proj.pt"
+        torch.save(
+            {
+                "indices": torch.arange(V, dtype=torch.long).unsqueeze(1),
+                "likelihoods": torch.ones(V, 1),
+            },
+            proj_path,
+        )
+
+        def _make_config(loss_type):
+            return SimpleNamespace(
+                xtoken_loss_type=loss_type,
+                xtoken_projection_matrix_path=str(proj_path),
+                xtoken_temperature=1.0,
+                xtoken_dynamic_scaling=True,
+                xtoken_uncommon_topk=0,
+                xtoken_vocab_topk=0,
+                xtoken_kl_weight=1.0,
+                xtoken_ce_scale=0.1,
+                uld_skip_student_eos=True,
+                uld_skip_teacher_eos=True,
+            )
+
+        T = 4  # 1 prompt token + 3 completion tokens (skip_eos drops the last)
+        logits = torch.randn(1, T, V)
+        labels = torch.tensor([[-100, 1, 2, 3]])
+        byte_offsets = torch.tensor([[[0, 0], [0, 2], [2, 4], [4, 6]]])
+
+        for loss_type in ("p_kl", "h_kl"):
+            loss_fn = XTokenLoss(_make_config(loss_type), student_vocab_size=V, teacher_vocab_size=V)
+            loss = loss_fn(
+                student_logits=logits.clone(),
+                teacher_logits=logits.clone(),
+                student_labels=labels,
+                teacher_labels=labels,
+                student_byte_offsets=byte_offsets,
+                teacher_byte_offsets=byte_offsets,
+            )
+            assert torch.isfinite(loss), f"{loss_type} produced non-finite loss"
+            assert loss_fn.last_kl_loss.abs().item() < 1e-5, f"{loss_type} kd should be ~0 for identical logits"
+            if loss_type == "p_kl":
+                assert loss_fn.last_proj_accuracy_den > 0
+                assert loss_fn.last_proj_accuracy_num == loss_fn.last_proj_accuracy_den
+
 
 class TestGOLDTrainerSlow(TrlTestCase):
     @pytest.mark.slow
@@ -3578,6 +3629,71 @@ def test_jsd_liger_text_train_step_smoke(tmp_path):
         use_vllm=False,
         use_uld_loss=False,
         use_liger_kernel=True,
+        log_completions=False,
+        save_strategy="no",
+        eval_strategy="no",
+        logging_strategy="no",
+        dataloader_drop_last=True,
+    )
+
+    trainer = GOLDTrainer(
+        model=student,
+        teacher_model=teacher,
+        args=args,
+        train_dataset=dataset,
+        processing_class=tokenizer,
+    )
+    train_output = trainer.train()
+    assert torch.isfinite(torch.tensor(train_output.training_loss))
+
+
+@pytest.mark.slow
+def test_xtoken_p_kl_train_step_smoke(tmp_path):
+    """X-Token off-policy training runs one step end to end through the default config path.
+
+    Uses tiny Llama for both student and teacher with an identity projection matrix, exercising dataset prep with
+    original text and byte offsets, the teacher forward, `XTokenLoss` with the shipped defaults
+    (`xtoken_dynamic_scaling=True`), the grad-accum normalization, and the `xtoken/*` metric gathering.
+    """
+    from datasets import load_dataset
+
+    try:
+        student = AutoModelForCausalLM.from_pretrained(_TINY_LLAMA, dtype=torch.bfloat16)
+        teacher = AutoModelForCausalLM.from_pretrained(_TINY_LLAMA, dtype=torch.bfloat16)
+        tokenizer = AutoTokenizer.from_pretrained(_TINY_LLAMA)
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train[:4]")
+    except Exception as exc:  # pragma: no cover - network/environment dependent
+        pytest.skip(f"tiny Llama / zen assets unavailable: {exc}")
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+    # Identity projection: student and teacher share the tokenizer, so token i maps to token i with weight 1.0.
+    vocab_size = student.config.vocab_size
+    proj_path = tmp_path / "identity_proj.pt"
+    torch.save(
+        {
+            "indices": torch.arange(vocab_size, dtype=torch.long).unsqueeze(1),
+            "likelihoods": torch.ones(vocab_size, 1),
+        },
+        proj_path,
+    )
+
+    args = GOLDConfig(
+        output_dir=str(tmp_path),
+        report_to="none",
+        bf16=True,
+        max_steps=1,
+        per_device_train_batch_size=1,
+        gradient_accumulation_steps=2,
+        max_completion_length=8,
+        max_length=512,
+        lmbda=0.0,
+        temperature=1.0,
+        num_generations=1,
+        use_vllm=False,
+        xtoken_loss_type="p_kl",
+        xtoken_projection_matrix_path=str(proj_path),
+        teacher_tokenizer_name_or_path=_TINY_LLAMA,
         log_completions=False,
         save_strategy="no",
         eval_strategy="no",
