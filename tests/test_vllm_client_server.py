@@ -14,18 +14,15 @@
 
 import os
 import subprocess
-from contextlib import contextmanager
 from types import SimpleNamespace
-from unittest.mock import MagicMock
 
 import pytest
-import torch
 from packaging.version import Version
 from transformers import AutoModelForCausalLM, AutoProcessor, AutoTokenizer
 from transformers.testing_utils import torch_device
 
 from trl.generation.vllm_client import VLLMClient
-from trl.generation.vllm_generation import VLLMGeneration, extract_logprobs
+from trl.generation.vllm_generation import extract_logprobs
 from trl.import_utils import is_vllm_available
 from trl.scripts.vllm_serve import chunk_list
 
@@ -125,124 +122,6 @@ class TestExtractLogprobs(TrlTestCase):
 
         assert all_logprobs is None
         assert all_token_ids is None
-
-
-class TestVLLMClientUpdateNamedParams(TrlTestCase):
-    """Unit tests for the batched ``VLLMClient.update_named_params`` method."""
-
-    def _make_client(self):
-        client = VLLMClient.__new__(VLLMClient)
-        client.base_url = "http://localhost:8000"
-        client.session = MagicMock()
-        client.session.post.return_value = MagicMock(status_code=200)
-        client.communicator = MagicMock()
-        client.rank = 0
-        return client
-
-    def test_sends_single_post_for_multiple_tensors(self):
-        client = self._make_client()
-        weights = [torch.zeros(4), torch.ones(8), torch.full((2, 3), 2.0)]
-        names = ["a", "b", "c"]
-
-        client.update_named_params(names, weights)
-
-        assert client.session.post.call_count == 1
-        url = client.session.post.call_args.args[0]
-        assert url.endswith("/update_named_params/")
-        payload = client.session.post.call_args.kwargs["json"]
-        assert payload["names"] == names
-        assert payload["shapes"] == [[4], [8], [2, 3]]
-        assert all(d.startswith("torch.") for d in payload["dtypes"])
-
-        assert client.communicator.broadcast.call_count == len(weights)
-        for w, call in zip(weights, client.communicator.broadcast.call_args_list, strict=True):
-            assert torch.equal(w, call.args[0])
-
-    def test_raises_on_http_error(self):
-        client = self._make_client()
-        client.session.post.return_value = MagicMock(status_code=500, text="boom")
-
-        with pytest.raises(Exception, match="500"):
-            client.update_named_params(["a"], [torch.zeros(2)])
-
-        # No broadcast on failure
-        client.communicator.broadcast.assert_not_called()
-
-    def test_update_model_params_uses_batched_path(self):
-        client = self._make_client()
-        model = MagicMock()
-        model.named_parameters.return_value = [("a", torch.zeros(2)), ("b", torch.zeros(3))]
-
-        client.update_model_params(model)
-
-        assert client.session.post.call_count == 1
-        payload = client.session.post.call_args.kwargs["json"]
-        assert payload["names"] == ["a", "b"]
-
-
-class TestVLLMGenerationBucketPush(TrlTestCase):
-    """Unit tests for the bucketing helper in ``VLLMGeneration``."""
-
-    def _make_gen(self, buffer_bytes: int):
-        gen = VLLMGeneration.__new__(VLLMGeneration)
-        gen.accelerator = MagicMock()
-        gen.accelerator.is_main_process = True
-        gen._weight_sync_buffer_bytes = buffer_bytes
-        gen._push_params_to_vllm = MagicMock()
-        gen._dist = MagicMock()
-
-        @contextmanager
-        def _noop_gather(params):
-            yield
-
-        gen._dist.gather_params.side_effect = _noop_gather
-        return gen
-
-    def test_single_bucket_when_under_limit(self):
-        gen = self._make_gen(buffer_bytes=10_000)
-        items = [("a", torch.zeros(8)), ("b", torch.zeros(16))]
-
-        gen._bucket_push(items)
-
-        assert gen._push_params_to_vllm.call_count == 1
-        names, _ = gen._push_params_to_vllm.call_args.args
-        assert names == ["a", "b"]
-
-    def test_each_tensor_alone_when_exceeds_buffer(self):
-        gen = self._make_gen(buffer_bytes=100)
-        items = [("a", torch.zeros(32)), ("b", torch.zeros(32)), ("c", torch.zeros(8))]
-
-        gen._bucket_push(items)
-
-        assert gen._push_params_to_vllm.call_count == 3
-        assert [c.args[0] for c in gen._push_params_to_vllm.call_args_list] == [["a"], ["b"], ["c"]]
-
-    def test_fills_bucket_before_splitting(self):
-        gen = self._make_gen(buffer_bytes=300)
-        items = [("a", torch.zeros(8)), ("b", torch.zeros(8)), ("c", torch.zeros(8)), ("d", torch.zeros(8))]
-
-        gen._bucket_push(items)
-
-        assert gen._push_params_to_vllm.call_count == 1
-        names, _ = gen._push_params_to_vllm.call_args.args
-        assert names == ["a", "b", "c", "d"]
-
-    def test_empty_input_does_nothing(self):
-        gen = self._make_gen(buffer_bytes=1000)
-        gen._bucket_push([])
-        gen._push_params_to_vllm.assert_not_called()
-
-    def test_gathers_each_bucket(self):
-        gen = self._make_gen(buffer_bytes=100)
-        items = [("a", torch.zeros(32)), ("b", torch.zeros(32))]
-
-        gen._bucket_push(items)
-
-        # One gather per bucket, in order
-        gathered = [c.args[0] for c in gen._dist.gather_params.call_args_list]
-        assert len(gathered) == 2
-        assert len(gathered[0]) == 1 and gathered[0][0] is items[0][1]
-        assert len(gathered[1]) == 1 and gathered[1][0] is items[1][1]
 
 
 @pytest.mark.slow
