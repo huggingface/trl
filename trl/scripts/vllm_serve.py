@@ -334,11 +334,22 @@ def llm_worker(
 ) -> None:
     from vllm import LLM
 
+    from trl.import_utils import is_vllm_available
+
     # Set required environment variables for DP to work with vLLM
     os.environ["VLLM_DP_RANK"] = str(data_parallel_rank)
     os.environ["VLLM_DP_RANK_LOCAL"] = str(data_parallel_rank)
     os.environ["VLLM_DP_SIZE"] = str(script_args.data_parallel_size)
     os.environ["VLLM_DP_MASTER_PORT"] = str(master_port)
+
+    # vLLM >= 0.22 ships a native weight transfer engine; workers reject `/init_weight_transfer_engine/` requests
+    # unless the backend is configured at construction time.
+    if is_vllm_available(min_version="0.22.0"):
+        from vllm.config import WeightTransferConfig
+
+        weight_transfer_kwargs = {"weight_transfer_config": WeightTransferConfig(backend="nccl")}
+    else:
+        weight_transfer_kwargs = {}
 
     llm = LLM(
         model=script_args.model,
@@ -360,6 +371,7 @@ def llm_worker(
         # Important so temperature scaling/logit tweaking affects the TIS log probs
         logprobs_mode="processed_logprobs",
         speculative_config=json.loads(script_args.speculative_config) if script_args.speculative_config else None,
+        **weight_transfer_kwargs,
     )
 
     # Send ready signal to parent process

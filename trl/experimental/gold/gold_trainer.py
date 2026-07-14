@@ -1132,7 +1132,7 @@ class GOLDTrainer(SFTTrainer):
             # In server mode, sync weights through vLLM's native weight transfer engine (packed NCCL broadcasts,
             # see https://docs.vllm.ai/en/stable/training/weight_transfer/). PEFT and ZeRO-3 models go through
             # `VLLMGeneration.sync_weights` instead: their parameters need merging/gathering that the streaming
-            # iterator does not perform.
+            # iterator does not perform. FSDP1 is not supported; TRL supports FSDP2 and DeepSpeed ZeRO 1/2/3.
             self._use_weight_transfer = False
             self.weight_transfer = None
             if args.vllm_mode == "server" and is_vllm_available(min_version="0.22.0"):
