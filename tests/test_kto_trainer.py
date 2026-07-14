@@ -349,11 +349,12 @@ class TestKTOTrainer(TrlTestCase):
         metrics = trainer.evaluate(eval_dataset=dataset)
         assert metrics["eval_loss"] is not None
 
+    @pytest.mark.parametrize("precompute_ref_log_probs", [False, True])
     @pytest.mark.parametrize("streaming", [False, True])
-    def test_evaluate_with_eval_dataset_dict(self, streaming):
-        # `evaluate` should accept a `DatasetDict` (map-style) or `IterableDatasetDict` (streaming) passed directly —
-        # e.g. the raw output of `load_dataset` without a `split` — not only a plain `dict`. Each split is prepared
-        # independently. `apo_zero_unpaired` avoids KTO's KL term, which is incompatible with streaming datasets.
+    def test_evaluate_with_eval_dataset_dict(self, streaming, precompute_ref_log_probs):
+        # `evaluate` should accept a `DatasetDict` (map-style) or `IterableDatasetDict` (streaming) passed directly,
+        # not only a plain `dict`. Each split is prepared (and, if enabled, ref-logp-precomputed) independently.
+        # `apo_zero_unpaired` avoids KTO's KL term, which is incompatible with streaming datasets.
         train_dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
         eval_split = load_dataset(
             "trl-internal-testing/zen", "standard_unpaired_preference", split="test", streaming=streaming
@@ -361,10 +362,20 @@ class TestKTOTrainer(TrlTestCase):
         dataset_dict_cls = IterableDatasetDict if streaming else DatasetDict
         eval_dataset = dataset_dict_cls({"data1": eval_split, "data2": eval_split})
 
-        training_args = KTOConfig(output_dir=self.tmp_dir, loss_type="apo_zero_unpaired", report_to="none")
+        training_args = KTOConfig(
+            output_dir=self.tmp_dir,
+            loss_type="apo_zero_unpaired",
+            precompute_ref_log_probs=precompute_ref_log_probs,
+            report_to="none",
+        )
         trainer = KTOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=train_dataset
         )
+
+        if streaming and precompute_ref_log_probs:
+            with pytest.raises(ValueError, match="precompute_ref_log_probs.*not supported with IterableDataset"):
+                trainer.evaluate(eval_dataset=eval_dataset)
+            return
 
         metrics = trainer.evaluate(eval_dataset=eval_dataset)
         assert metrics["eval_data1_loss"] is not None
@@ -906,9 +917,9 @@ class TestKTOTrainer(TrlTestCase):
         elif iterable_as == "eval_iterable_dataset_dict":
             eval_dataset = IterableDatasetDict({"eval": iterable_dataset})
 
-        # `apo_zero_unpaired` avoids KTO's KL term, which (like precompute) is incompatible with streaming datasets,
-        # so the precompute error is what surfaces. `max_steps` lets the iterable-train case reach the precompute
-        # check instead of failing earlier on the missing dataset length required by the learning-rate scheduler.
+        # `apo_zero_unpaired` keeps the trainer setup minimal (no KL-term constraints), so the precompute error is what
+        # surfaces. `max_steps` lets the iterable-train case reach the precompute check instead of failing earlier on
+        # the missing dataset length required by the learning-rate scheduler.
         training_args = KTOConfig(
             output_dir=self.tmp_dir,
             loss_type="apo_zero_unpaired",
@@ -924,9 +935,11 @@ class TestKTOTrainer(TrlTestCase):
                 eval_dataset=eval_dataset,
             )
 
-    def test_train_with_iterable_dataset(self):
-        # KTO's default `kto` loss estimates the KL term from neighboring examples in a fixed-order batch, which is not
-        # possible with a streaming dataset; use `apo_zero_unpaired` which does not require the KL term.
+    @pytest.mark.parametrize("loss_type", ["kto", "apo_zero_unpaired"])
+    def test_train_with_iterable_dataset(self, loss_type):
+        # Streaming `IterableDataset` is supported for all loss types. Loss types that estimate the KL term (all except
+        # `apo_zero_unpaired`) build the mismatched KL pairs from neighboring examples within each fixed-order batch,
+        # which streaming preserves because it is consumed sequentially.
         dataset = load_dataset(
             "trl-internal-testing/zen", "standard_unpaired_preference", split="train", streaming=True
         )
@@ -934,7 +947,8 @@ class TestKTOTrainer(TrlTestCase):
         training_args = KTOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
-            loss_type="apo_zero_unpaired",
+            loss_type=loss_type,
+            per_device_train_batch_size=2,  # KL-term loss types require a per-device train batch size greater than 1
             max_steps=3,
             report_to="none",
         )

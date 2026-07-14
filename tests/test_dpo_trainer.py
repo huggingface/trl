@@ -238,20 +238,27 @@ class TestDPOTrainer(TrlTestCase):
         metrics = trainer.evaluate(eval_dataset=dataset)
         assert metrics["eval_loss"] is not None
 
+    @pytest.mark.parametrize("precompute_ref_log_probs", [False, True])
     @pytest.mark.parametrize("streaming", [False, True])
-    def test_evaluate_with_eval_dataset_dict(self, streaming):
-        # `evaluate` should accept a `DatasetDict` (map-style) or `IterableDatasetDict` (streaming) passed directly —
-        # e.g. the raw output of `load_dataset` without a `split` — not only a plain `dict`. Each split is prepared
-        # independently.
+    def test_evaluate_with_eval_dataset_dict(self, streaming, precompute_ref_log_probs):
+        # `evaluate` should accept a `DatasetDict` (map-style) or `IterableDatasetDict` (streaming) passed directly,
+        # not only a plain `dict`. Each split is prepared (and, if enabled, ref-logp-precomputed) independently.
         train_dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
         eval_split = load_dataset("trl-internal-testing/zen", "standard_preference", split="test", streaming=streaming)
         dataset_dict_cls = IterableDatasetDict if streaming else DatasetDict
         eval_dataset = dataset_dict_cls({"data1": eval_split, "data2": eval_split})
 
-        training_args = DPOConfig(output_dir=self.tmp_dir, report_to="none")
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir, precompute_ref_log_probs=precompute_ref_log_probs, report_to="none"
+        )
         trainer = DPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=train_dataset
         )
+
+        if streaming and precompute_ref_log_probs:
+            with pytest.raises(ValueError, match="precompute_ref_log_probs.*not supported with IterableDataset"):
+                trainer.evaluate(eval_dataset=eval_dataset)
+            return
 
         metrics = trainer.evaluate(eval_dataset=eval_dataset)
         assert metrics["eval_data1_loss"] is not None

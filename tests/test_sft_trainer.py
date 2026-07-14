@@ -1244,19 +1244,22 @@ class TestSFTTrainer(TrlTestCase):
             assert any(label != -100 for label in labels)  # assistant tokens contribute to the loss
             assert any(label == -100 for label in labels)  # non-assistant tokens are masked
 
-    def test_labels_all_masked_after_truncation(self):
-        """Regression test for #3927. When the assistant turn lies entirely beyond `max_length`, truncation keeps only
-        prompt tokens, which are all -100."""
-        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
-
-        # `max_length` is small enough that the kept prefix is entirely prompt tokens (the assistant turn comes later).
-        training_args = SFTConfig(output_dir=self.tmp_dir, assistant_only_loss=True, max_length=4, report_to="none")
-        trainer = SFTTrainer(
-            model="trl-internal-testing/tiny-Qwen3ForCausalLM", args=training_args, train_dataset=dataset
+    def test_fully_masked_examples_dropped_after_truncation(self):
+        # Example 0's assistant tokens all lie beyond `max_length=3`, so keep_start truncation leaves it fully masked;
+        # example 1 keeps a trainable token and survives.
+        dataset = Dataset.from_list(
+            [
+                {"input_ids": [1, 2, 3, 4, 5], "assistant_masks": [0, 0, 0, 1, 1]},
+                {"input_ids": [6, 7, 8], "assistant_masks": [1, 1, 1]},
+            ]
         )
 
-        labels = trainer.train_dataset[0]["labels"]
-        assert all(token_id == -100 for token_id in labels)
+        training_args = SFTConfig(output_dir=self.tmp_dir, max_length=3, report_to="none")
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
+
+        assert trainer.train_dataset[:]["labels"] == [[6, 7, 8]]
 
     def test_dataset_truncated_to_max_length(self):
         """Dataset preparation truncates every example to `max_length`."""
