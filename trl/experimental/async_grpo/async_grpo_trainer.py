@@ -31,11 +31,11 @@ from torch.utils.data import DataLoader
 from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenizerBase, TrainerCallback
 from transformers.data.data_collator import DataCollatorMixin
 
+from ...generation.weight_transfer import WeightTransferClient
 from ...trainer.base_trainer import _BaseTrainer
 from ...trainer.utils import nanmax, nanmin, pad, patch_chunked_lm_head
 from .async_grpo_config import AsyncGRPOConfig
 from .async_rollout_worker import AsyncRolloutWorker
-from .weight_transfer import WeightTransferClient
 
 
 logger = get_logger(__name__)
