@@ -81,13 +81,22 @@ logger = logging.getLogger(__name__)
 
 def split_text_for_gold(example, tokenizer, max_length):
     """Split a raw language-modeling example into a 75% prompt and 25% completion."""
-    input_ids = tokenizer(example["text"], add_special_tokens=False)["input_ids"]
+    text = example["text"]
+    encoding = tokenizer(text, add_special_tokens=False, return_offsets_mapping=True)
+    input_ids = encoding["input_ids"]
+    offsets = encoding["offset_mapping"]
     if max_length is not None:
         input_ids = input_ids[-max_length:]
+        offsets = offsets[-max_length:]
+    if not input_ids:
+        return {"prompt": "", "completion": ""}
     split_idx = max(1, int(len(input_ids) * 0.75))
+    text_start = offsets[0][0]
+    text_end = offsets[-1][1]
+    split_offset = offsets[split_idx][0] if split_idx < len(offsets) else text_end
     return {
-        "prompt": tokenizer.decode(input_ids[:split_idx]),
-        "completion": tokenizer.decode(input_ids[split_idx:]),
+        "prompt": text[text_start:split_offset],
+        "completion": text[split_offset:text_end],
     }
 
 
@@ -137,6 +146,7 @@ if __name__ == "__main__":
         dataset = dataset.map(
             split_text_for_gold,
             fn_kwargs={"tokenizer": tokenizer, "max_length": training_args.max_length},
+            remove_columns=["text"],
             num_proc=training_args.dataset_num_proc,
             desc="Splitting raw text into GOLD prompts and completions",
         )
