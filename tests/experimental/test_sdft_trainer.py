@@ -191,6 +191,59 @@ class TestSDFTTrainer(TrlTestCase):
             atol=1e-6,
         )
 
+    def test_prediction_step_gathers_liger_zero3_lm_head_like_training_step(self, monkeypatch):
+        """`training_step` wraps `super().training_step(...)` in `_get_liger_zero3_lm_head_gather_ctx` because the
+        fused Liger JSD loss reads `student_head.weight`/`teacher_head.weight` directly, bypassing the module forward
+        that would otherwise gather them under DeepSpeed ZeRO-3. `prediction_step` computes the same loss (via
+        `compute_loss`) and must enter the same gather context.
+
+        This doesn't require `use_liger_kernel` or DeepSpeed to be installed/enabled: the helper is a no-op in that
+        case, but it must still be *called* on every `compute_loss` path, exactly like `training_step` calls it.
+        """
+        dataset = Dataset.from_dict(
+            {
+                "prompt": ["Solve 2+2.", "Name the capital of France."],
+                "privileged_context": ["Example answer: 4.", "Example answer: Paris."],
+            }
+        )
+
+        training_args = SDFTConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=1,
+            per_device_eval_batch_size=2,
+            max_completion_length=8,
+            max_steps=1,
+            num_generations=1,
+            report_to="none",
+        )
+        trainer = SDFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset,
+            eval_dataset=dataset,
+        )
+
+        # Count calls instead of inspecting `model.training`: `training_step` enters the gather context *before*
+        # `super().training_step(...)` flips the model into train mode, so the flag isn't a reliable phase marker at
+        # the point this helper is called. Splitting the count across separate `train()` / `evaluate()` invocations
+        # is unambiguous instead.
+        call_count = 0
+        original_gather_ctx = trainer._get_liger_zero3_lm_head_gather_ctx
+
+        def counting_gather_ctx(model):
+            nonlocal call_count
+            call_count += 1
+            return original_gather_ctx(model)
+
+        monkeypatch.setattr(trainer, "_get_liger_zero3_lm_head_gather_ctx", counting_gather_ctx)
+
+        trainer.train()
+        assert call_count > 0  # sanity check: training_step already does this today
+
+        call_count = 0
+        trainer.evaluate()
+        assert call_count > 0, "prediction_step must gather lm_head weights just like training_step does"
+
     def test_train_rejects_none_privileged_context(self):
         dataset = Dataset.from_dict(
             {
