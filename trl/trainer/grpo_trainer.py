@@ -26,7 +26,6 @@ import time
 import warnings
 from collections import defaultdict, deque
 from collections.abc import Callable
-from contextlib import nullcontext
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -84,6 +83,7 @@ from .utils import (
     get_callable_name,
     get_config_model_id,
     identity,
+    maybe_gather_lm_head_ctx,
     nanmax,
     nanmin,
     nanstd,
@@ -954,7 +954,8 @@ class GRPOTrainer(_BaseTrainer):
                 raise ImportError(
                     "Liger is required to use `use_liger_kernel` as the GRPO loss. Run `pip install liger-kernel`."
                 )
-            # redirect the model.module forward to the model forward to ensure pre-forward hooks are called
+            # Redirect the model.module forward to the model forward to ensure pre-forward hooks are called, so that
+            # under ZeRO-3 the parameter coordinator gathers/reduces `lm_head.weight` around the fused loss.
             self._forward_redirection = _ForwardRedirection()
 
             self.liger_loss = LigerFusedLinearGRPOLoss(
@@ -2189,17 +2190,19 @@ class GRPOTrainer(_BaseTrainer):
                 self._async_tool_dicts.append(async_tool_dict)
 
         if self.environments:
-            for prompt, environment, x in zip(prompts, self.environments, inputs, strict=True):
+            for i, (prompt, environment, x) in enumerate(zip(prompts, self.environments, inputs, strict=True)):
                 # `environment` is a control field in multi-environment mode, so it is not forwarded to `reset`.
                 reset_kwargs = {k: v for k, v in x.items() if k != "environment"} if self._multi_environment else x
                 observation = environment.reset(**reset_kwargs)
                 if observation is None:
                     continue
-                if isinstance(observation, list) and isinstance(prompt[-1]["content"], str):
-                    prompt[-1]["content"] = [{"type": "text", "text": prompt[-1]["content"]}]
-                if isinstance(observation, str) and isinstance(prompt[-1]["content"], list):
+                content = prompt[-1]["content"]
+                if isinstance(observation, list) and isinstance(content, str):
+                    content = [{"type": "text", "text": content}]
+                if isinstance(observation, str) and isinstance(content, list):
                     observation = [{"type": "text", "text": observation}]
-                prompt[-1]["content"] += observation
+                # Rebuild the last message rather than mutating it in place, so the input example is left untouched.
+                prompts[i] = prompt[:-1] + [{**prompt[-1], "content": content + observation}]
 
         if "images" in inputs[0]:
             images = [example.get("images") for example in inputs]
@@ -2745,21 +2748,10 @@ class GRPOTrainer(_BaseTrainer):
         loss_mask = completion_mask if "tool_mask" not in inputs else completion_mask * inputs["tool_mask"]
         lm_head_weight = unwrapped_model.lm_head.weight
         lm_head_bias = unwrapped_model.lm_head.bias
-        # Liger reads `lm_head` directly instead of through `model.forward()`, so its ZeRO-3 gather hook never fires
-        # and the fused matmul gets an empty shard. Gather the weight/bias ourselves for the call (the weight grad is
-        # computed during this forward, so it isn't needed in the backward). Skip it when already gathered: with tied
-        # embeddings `embed_tokens` keeps the weight `AVAILABLE`, and re-partitioning on exit breaks its tracking.
-        deepspeed_plugin = self.accelerator.state.deepspeed_plugin
-        gather_ctx = nullcontext()
-        if deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3:
-            from deepspeed.runtime.zero.partition_parameters import ZeroParamStatus
-
-            params = [lm_head_weight] if lm_head_bias is None else [lm_head_weight, lm_head_bias]
-            if any(p.ds_status != ZeroParamStatus.AVAILABLE for p in params):
-                import deepspeed
-
-                gather_ctx = deepspeed.zero.GatheredParameters(params, modifier_rank=None)
-        with gather_ctx:
+        # Liger reads `lm_head` directly instead of through `model.forward()`, so its ZeRO-3 gather hook never fires and
+        # the fused matmul gets an empty shard. Gather the weight/bias ourselves for the call (the weight grad is
+        # computed during this forward, so it isn't needed in the backward).
+        with maybe_gather_lm_head_ctx(lm_head_weight, lm_head_bias):
             loss, metrics = self.liger_loss(
                 _input=last_hidden_state,
                 lin_weight=lm_head_weight,
