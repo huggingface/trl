@@ -36,6 +36,7 @@ from accelerate.utils import (
 )
 from datasets import Dataset, IterableDataset
 from packaging.version import Version
+from torch.distributed._tensor import DTensor
 from torch.utils.data import DataLoader
 from transformers import AutoConfig, AutoProcessor, AutoTokenizer, TrainerCallback
 from transformers.data.data_collator import DataCollator
@@ -62,6 +63,7 @@ from ...data_utils import (
 )
 from ...extras.profiling import profiling_decorator
 from ...generation.vllm_generation import VLLMGeneration
+from ...generation.weight_transfer import WeightTransferClient
 from ...import_utils import is_vllm_available
 from ...models import prepare_deepspeed
 from ...models.utils import _ForwardRedirection, unwrap_model_for_generation
@@ -1210,6 +1212,9 @@ class GOLDTrainer(SFTTrainer):
 
     _tag_names = ["trl", "gold"]
     _name = "GOLD"
+    # Native weight transfer engine state; set in __init__ when vLLM server mode is active.
+    _use_weight_transfer = False
+    weight_transfer = None
     _paper = {
         "title": "Unlocking On-Policy Distillation for Any Model Family",
         # docstyle-ignore
@@ -1581,6 +1586,64 @@ class GOLDTrainer(SFTTrainer):
             )
             self.vllm_sync_frequency = args.vllm_sync_frequency
             self._last_vllm_sync_step = -self.vllm_sync_frequency
+
+            # In server mode, sync weights through vLLM's native weight transfer engine (packed NCCL broadcasts,
+            # see https://docs.vllm.ai/en/stable/training/weight_transfer/). PEFT and ZeRO-3 models go through
+            # `VLLMGeneration.sync_weights` instead: their parameters need merging/gathering that the streaming
+            # iterator does not perform.
+            self._use_weight_transfer = False
+            self.weight_transfer = None
+            if args.vllm_mode == "server" and is_vllm_available(min_version="0.22.0"):
+                deepspeed_plugin = self.accelerator.state.deepspeed_plugin
+                zero_stage_3 = deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3
+                self._use_weight_transfer = not is_peft_model(self.model) and not zero_stage_3
+            if self._use_weight_transfer and self.accelerator.is_main_process:
+                # Collect weight metadata once — names/dtypes/shapes are fixed for the lifetime of training.
+                # DTensor.shape returns the global shape without triggering any all-gather.
+                weight_names, weight_dtype_names, weight_shapes = [], [], []
+                for name, param in self.model.named_parameters():
+                    # DDP/FSDP1 wrapping, avoids vllm module not exist error
+                    name = name.removeprefix("module.")
+                    weight_names.append(name)
+                    weight_dtype_names.append(str(param.dtype).split(".")[-1])
+                    weight_shapes.append(list(param.shape))
+                base_url = args.vllm_server_base_url or f"http://{args.vllm_server_host}:{args.vllm_server_port}"
+                self.weight_transfer = WeightTransferClient(
+                    vllm_server_url=base_url,
+                    server_timeout=args.vllm_server_timeout,
+                    weight_update_info={
+                        "names": weight_names,
+                        "dtype_names": weight_dtype_names,
+                        "shapes": weight_shapes,
+                        "packed": True,
+                    },
+                )
+                self.weight_transfer.init_weight_transfer()
+
+    def _streaming_iter(self):
+        # Iterate parameters one at a time. For FSDP2 (DTensor), full_tensor() all-gathers just this parameter across
+        # FSDP ranks, then frees it once the generator advances — avoiding materializing the full model in memory.
+        device = self.accelerator.device
+        for name, param in self.model.named_parameters():
+            name = name.removeprefix("module.")  # DDP/FSDP1 wrapping
+            full = param.full_tensor() if isinstance(param, DTensor) else param.detach()
+            if full.device != device:
+                full = full.to(device)
+            yield name, full
+
+    def _sync_weights_to_vllm(self):
+        if self._use_weight_transfer:
+            if self.accelerator.is_main_process:
+                self.weight_transfer.send_weights(self._streaming_iter())
+            else:
+                # Non-rank-0 processes must still participate in full_tensor() collectives for FSDP2.
+                for _ in self._streaming_iter():
+                    pass
+            self.accelerator.wait_for_everyone()
+            if self.accelerator.is_main_process:
+                self.vllm_generation.vllm_client.reset_prefix_cache()
+        else:
+            self.vllm_generation.sync_weights()
 
     def _set_signature_columns_if_needed(self):
         super()._set_signature_columns_if_needed()
@@ -2088,7 +2151,7 @@ class GOLDTrainer(SFTTrainer):
             self.state.global_step != self._last_vllm_sync_step
             and self.state.global_step >= self._last_vllm_sync_step + self.vllm_sync_frequency
         ):
-            self.vllm_generation.sync_weights()
+            self._sync_weights_to_vllm()
             self._last_vllm_sync_step = self.state.global_step
 
         _, completion_ids, _, _ = self.vllm_generation.generate(
@@ -2231,7 +2294,7 @@ class GOLDTrainer(SFTTrainer):
             self.state.global_step != self._last_vllm_sync_step
             and self.state.global_step >= self._last_vllm_sync_step + self.vllm_sync_frequency
         ):
-            self.vllm_generation.sync_weights()
+            self._sync_weights_to_vllm()
             self._last_vllm_sync_step = self.state.global_step
 
         if any(img is not None for img in all_images):
