@@ -127,9 +127,9 @@ class GOLDConfig(SFTConfig):
         xtoken_uncommon_topk (`int`, *optional*, defaults to `8192`):
             H-KL: cap sorted-L1 uncommon comparison to the top-k tokens per side.
         xtoken_vocab_topk (`int`, *optional*, defaults to `8192`):
-            P-KL: restrict KL to the global top-k teacher tokens by max logit. Should not exceed the
-            `--top-k` value used when building the projection matrix, since the matrix bounds how many
-            teacher tokens any student token can reach.
+            P-KL: restrict KL to the global top-k teacher tokens by max logit. Interacts with the projection
+            matrix `--top-k`: teacher tokens outside the matrix's reach get near-zero projected student mass
+            and dominate the KL, so smaller values concentrate the loss on tokens the student can match.
         xtoken_kl_weight (`float`, *optional*, defaults to `1.0`):
             Weight for the X-Token KD term when `xtoken_dynamic_scaling=False`.
         xtoken_ce_scale (`float`, *optional*, defaults to `0.1`):
@@ -438,8 +438,9 @@ class GOLDConfig(SFTConfig):
             "help": (
                 "P-KL only: after projecting student probs to teacher vocab, compute forward KL only over "
                 "the global top-k teacher tokens (by max logit across the chunk batch). 0 means full vocab. "
-                "Should not exceed the --top-k used when building the projection matrix, since the matrix "
-                "bounds how many teacher tokens any student token can reach."
+                "Interacts with the projection matrix --top-k: teacher tokens outside the matrix's reach get "
+                "near-zero projected student mass and dominate the KL, so smaller values concentrate the loss "
+                "on tokens the student can match."
             )
         },
     )

@@ -1746,7 +1746,27 @@ Two loss formulations are provided:
 | P-KL | `"p_kl"` | Projects the full student distribution into teacher vocab via W and computes forward KL on a global top-k subset. Implements Eq. (2) of the paper. |
 | H-KL | `"h_kl"` | Hybrid: forward KL on a relaxed common set (top-1 projection weight ≥ 0.6) and sorted-L1 on uncommon tokens. Implements Eq. (3–4). |
 
-Build the projection matrix with the prep scripts in `trl/experimental/gold/scripts/xtoken/`, then pass the path to `GOLDConfig`:
+First build the projection matrix with the prep scripts in `trl/experimental/gold/scripts/xtoken/`. Step 1 re-tokenizes the student vocab with the teacher tokenizer; the optional `--runtime-top-k` flag then sorts and trims the matrix in one go (equivalent to running `sort_and_cut_projection_matrix.py` afterwards):
+
+```bash
+python trl/experimental/gold/scripts/xtoken/build_projection_matrix.py \
+    --student-model meta-llama/Llama-3.2-1B-Instruct \
+    --teacher-model Qwen/Qwen3-4B \
+    --runtime-top-k 4 \
+    --output-dir cross_tokenizer_data
+```
+
+Then train with the example script (off-policy, no vLLM needed):
+
+```bash
+python examples/scripts/xtoken.py \
+    --student-model meta-llama/Llama-3.2-1B-Instruct \
+    --teacher-model Qwen/Qwen3-4B \
+    --projection-matrix cross_tokenizer_data/projection_map_..._top_4_sorted.pt \
+    --loss-type p_kl
+```
+
+or pass the path to `GOLDConfig` directly:
 
 ```python
 from trl.experimental.gold import GOLDConfig

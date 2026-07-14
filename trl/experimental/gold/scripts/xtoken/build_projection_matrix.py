@@ -37,6 +37,7 @@ import argparse
 import difflib
 import os
 import re
+import sys
 from collections import defaultdict
 
 import torch
@@ -307,13 +308,21 @@ def parse_args():
         "--top-k",
         type=int,
         default=32,
-        help="Top-k teacher tokens to keep per student token. Sets an upper bound on xtoken_vocab_topk at training time.",
+        help="Top-k teacher tokens to keep per student token. Bounds how many teacher tokens the projected student "
+        "distribution can reach at training time.",
     )
     p.add_argument(
         "--runtime-top-k", type=int, default=None, help="If set, also run sort_and_cut to this k after building"
     )
     p.add_argument("--tokens-to-cut", type=int, default=4, help="Max target tokens for multi-token re-encoding")
-    p.add_argument("--enable-scale-trick", action=argparse.BooleanOptionalAction, default=True)
+    p.add_argument(
+        "--enable-scale-trick",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Reserve the last top-k column as a 0.2 sentinel weight and renormalize. Note: H-KL's common/uncommon "
+        "partition thresholds the renormalized weights (top-1 >= 0.6, matching the reference), so this flag also "
+        "shifts which tokens land in the common set.",
+    )
     p.add_argument("--enable-reverse-pass", action=argparse.BooleanOptionalAction, default=True)
     p.add_argument("--enable-special-token-mapping", action=argparse.BooleanOptionalAction, default=True)
     p.add_argument("--use-raw-tokens", action="store_true", default=False)
@@ -329,8 +338,11 @@ if __name__ == "__main__":
     args = parse_args()
     out = build_projection_matrix(args)
     if args.runtime_top_k is not None:
+        # The pipeline scripts are standalone files, not a package; make the sibling import work from any CWD.
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
         from sort_and_cut_projection_matrix import sort_and_cut
 
         trimmed = out.replace(".pt", f"_top{args.runtime_top_k}.pt")
-        sort_and_cut(out, trimmed, args.runtime_top_k)
+        # Match the standalone script, which auto-enables preserve_last for scale-trick matrices.
+        sort_and_cut(out, trimmed, args.runtime_top_k, preserve_last=args.enable_scale_trick)
         print(f"Trimmed matrix → {trimmed}")  # noqa: T201
