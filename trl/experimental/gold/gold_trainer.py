@@ -1653,9 +1653,7 @@ class GOLDTrainer(SFTTrainer):
             generation_kwargs=self.generation_kwargs,
         ) as unwrapped_model:
             max_completion_length = self.generation_config.max_new_tokens
-            prompt_max_length = (
-                max(1, self.args.max_length - max_completion_length) if self.args.max_length else None
-            )
+            prompt_max_length = max(1, self.args.max_length - max_completion_length) if self.args.max_length else None
             pad_token_id = self.processing_class.pad_token_id if self.processing_class.pad_token_id is not None else 0
             for slice_idx in on_policy_indices:
                 slice_inputs = slices[slice_idx]
@@ -1679,9 +1677,7 @@ class GOLDTrainer(SFTTrainer):
                         budgeted_rows.append(real_ids)
                     if needs_budget:
                         slice_inputs = dict(slice_inputs)
-                        slice_inputs["prompts"] = pad(
-                            budgeted_rows, padding_side="left", padding_value=pad_token_id
-                        )
+                        slice_inputs["prompts"] = pad(budgeted_rows, padding_side="left", padding_value=pad_token_id)
                         slice_inputs["prompt_attention_mask"] = pad(
                             [torch.ones(row.shape[0], dtype=torch.long, device=row.device) for row in budgeted_rows],
                             padding_side="left",

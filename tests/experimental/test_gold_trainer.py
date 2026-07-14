@@ -650,7 +650,6 @@ def test_on_policy_prompt_text_reflects_truncated_prompt():
     buffered_inputs = trainer._buffered_inputs[0]
     assert torch.equal(buffered_inputs["input_ids"], torch.tensor([[13, 6, 42]], dtype=torch.long))
     assert buffered_inputs["original_prompt_text"] == ["<special> B"]
-    # F8: prompts/prompt_attention_mask written back at the new padding width
     assert torch.equal(buffered_inputs["prompts"], torch.tensor([[13, 6]], dtype=torch.long))
     assert torch.equal(buffered_inputs["prompt_attention_mask"], torch.tensor([[1, 1]], dtype=torch.long))
 
@@ -661,7 +660,6 @@ def test_non_vllm_on_policy_budgets_prompt_before_generation(monkeypatch):
 
     class DummyModel:
         def generate(self, input_ids, attention_mask, generation_config, return_dict_in_generate):
-            # Edit 5: generate must receive the budgeted prompt (last 2 columns), not the full width-4 prompt.
             assert input_ids.shape[1] == 2
             assert torch.equal(input_ids, torch.tensor([[13, 6]], dtype=torch.long))
             assert torch.equal(attention_mask, torch.tensor([[1, 1]], dtype=torch.long))
@@ -717,8 +715,8 @@ def test_non_vllm_on_policy_budgets_prompt_before_generation(monkeypatch):
 
 def test_non_vllm_on_policy_does_not_trim_padded_width_when_real_prompt_fits(monkeypatch):
     """Fallback budgets on the REAL token count, not the padded width (vLLM parity). A left-padded prompt
-    whose real tokens already fit max_length - max_new_tokens is passed through unchanged, not trimmed to
-    the last `budget` columns (which would carry a pad column into generation)."""
+    whose real tokens already fit max_length - max_new_tokens is passed through unchanged, not trimmed to the last
+    `budget` columns (which would carry a pad column into generation)."""
 
     class DummyModel:
         def generate(self, input_ids, attention_mask, generation_config, return_dict_in_generate):
