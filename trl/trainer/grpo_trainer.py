@@ -916,15 +916,25 @@ class GRPOTrainer(_BaseTrainer):
             def _cast_lm_head_to_fp32(target_model: PreTrainedModel):
                 """Cast lm_head to fp32 while preserving embedding output dtype if tied."""
 
-                def cast_inputs_to_fp32(module, inputs):
-                    # Preserve other positional args and kwargs untouched
-                    if not inputs:
-                        return inputs
-                    return (inputs[0].to(torch.float32),) + inputs[1:]
+                if is_peft_available() and isinstance(target_model.lm_head, BaseTunerLayer):
+                    raise ValueError(
+                        "`cast_lm_head_to_fp32=True` is not supported when the lm_head carries a PEFT "
+                        "adapter (e.g. `target_modules` includes `lm_head`). Remove `lm_head` from the "
+                        "adapter's target modules, or set `cast_lm_head_to_fp32=False`."
+                    )
 
                 original_dtype_local = target_model.lm_head.weight.dtype
-                target_model.lm_head = target_model.lm_head.float()
-                target_model.lm_head.register_forward_pre_hook(cast_inputs_to_fp32)
+                lm_head = target_model.lm_head.float()
+                target_model.lm_head = lm_head
+
+                def cast_forward_to_fp32(hidden_states):
+                    return nn.functional.linear(
+                        hidden_states.to(torch.float32),
+                        lm_head.weight.to(torch.float32),
+                        None if lm_head.bias is None else lm_head.bias.to(torch.float32),
+                    )
+
+                lm_head.forward = cast_forward_to_fp32
 
                 if target_model.config.tie_word_embeddings:
 
