@@ -2063,9 +2063,11 @@ class GOLDTrainer(SFTTrainer):
             if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                 map_kwargs["desc"] = f"Tokenizing {dataset_name} dataset (preserving original text)"
 
-            def tokenize_with_original_text(example, processing_class, dataset_text_field, max_length):
+            def tokenize_with_original_text(
+                example, processing_class, dataset_text_field, max_length, use_extended_uld
+            ):
                 """Emit input_ids, attention_mask, byte_offsets, completion_mask, and the original prompt/completion
-                text. Byte offsets and input_ids come from a single ``encode_with_byte_offsets`` call.
+                text.
                 """
                 backend = processing_class.backend_tokenizer
                 result = {}
@@ -2145,19 +2147,26 @@ class GOLDTrainer(SFTTrainer):
                     result["original_prompt_text"] = ""
                     result["original_completion_text"] = text
 
-                # Single backend call: ids and char-derived byte offsets from the same encoding,
-                # so input_ids[i] is described by full_offs[i] without any boundary slop.
-                [(input_ids, full_offs)] = encode_with_byte_offsets(backend, [full_text], add_special_tokens=False)
-                prompt_byte_len = len(prompt_text.encode("utf-8"))
-                completion_start = next(
-                    (idx for idx, (s, _) in enumerate(full_offs) if s >= prompt_byte_len),
-                    len(input_ids),
-                )
-                # Completion-relative: prompt positions zeroed, completion offsets shifted to
-                # the assistant content's first byte (matches build_teacher_inputs_from_texts).
-                byte_offsets = [(0, 0)] * completion_start + [
-                    (s - prompt_byte_len, e - prompt_byte_len) for s, e in full_offs[completion_start:]
-                ]
+                if use_extended_uld:
+                    # Single backend call: ids and char-derived byte offsets from the same encoding,
+                    # so input_ids[i] is described by full_offs[i] without any boundary slop.
+                    [(input_ids, full_offs)] = encode_with_byte_offsets(backend, [full_text], add_special_tokens=False)
+                    prompt_byte_len = len(prompt_text.encode("utf-8"))
+                    completion_start = next(
+                        (idx for idx, (s, _) in enumerate(full_offs) if s >= prompt_byte_len),
+                        len(input_ids),
+                    )
+                    # Completion-relative: prompt positions zeroed, completion offsets shifted to
+                    # the assistant content's first byte (matches build_teacher_inputs_from_texts).
+                    byte_offsets = [(0, 0)] * completion_start + [
+                        (s - prompt_byte_len, e - prompt_byte_len) for s, e in full_offs[completion_start:]
+                    ]
+                else:
+                    input_ids = processing_class(full_text, add_special_tokens=False)["input_ids"]
+                    completion_start = min(
+                        len(processing_class(prompt_text, add_special_tokens=False)["input_ids"]), len(input_ids)
+                    )
+                    byte_offsets = [(0, 0)] * len(input_ids)
 
                 # Keep the last `max_length` tokens (the completion end). `completion_mask` tracks the
                 # boundary so it survives truncation without re-tokenizing the prompt.
@@ -2195,6 +2204,7 @@ class GOLDTrainer(SFTTrainer):
                     "processing_class": processing_class,
                     "dataset_text_field": args.dataset_text_field,
                     "max_length": args.max_length,
+                    "use_extended_uld": args.use_extended_uld,
                 },
                 **map_kwargs,
             )

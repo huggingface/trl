@@ -287,6 +287,11 @@ def smollm_tokenizer():
 
 
 @pytest.fixture(scope="session")
+def gemma4_tokenizer():
+    return AutoTokenizer.from_pretrained("google/gemma-4-E4B-it")
+
+
+@pytest.fixture(scope="session")
 def smolvlm_processor():
     processor = AutoProcessor.from_pretrained("HuggingFaceTB/SmolVLM-256M-Instruct")
     if processor.tokenizer.pad_token is None:
@@ -845,6 +850,7 @@ def test_prepared_tokenized_rows_keep_completion_after_truncation(llama_tokenize
         max_length=max_length,
         packing_strategy="bfd",
         use_liger_kernel=False,
+        use_extended_uld=True,
     )
     trainer = GOLDTrainer.__new__(GOLDTrainer)
     prepared = trainer._prepare_dataset_with_original_text(
@@ -899,6 +905,7 @@ def test_prepared_tokenized_rows_rebase_byte_offsets_when_truncation_eats_into_c
         max_length=max_length,
         packing_strategy="bfd",
         use_liger_kernel=False,
+        use_extended_uld=True,
     )
     trainer = GOLDTrainer.__new__(GOLDTrainer)
     prepared = trainer._prepare_dataset_with_original_text(
@@ -934,6 +941,7 @@ def test_prepare_dataset_messages_uses_last_assistant_turn(qwen_tokenizer):
         max_length=512,
         packing_strategy="bfd",
         use_liger_kernel=False,
+        use_extended_uld=True,
     )
     trainer = GOLDTrainer.__new__(GOLDTrainer)
 
@@ -959,6 +967,32 @@ def test_prepare_dataset_messages_uses_last_assistant_turn(qwen_tokenizer):
         completion_ids, skip_special_tokens=False, clean_up_tokenization_spaces=False
     )
     assert decoded_completion == row["original_completion_text"]
+
+
+def test_prepare_dataset_positional_uld_supports_sentencepiece(gemma4_tokenizer):
+    dataset = Dataset.from_dict({"prompt": ["Question: "], "completion": ["Answer."]})
+    args = SimpleNamespace(
+        dataset_num_proc=None,
+        dataset_text_field="text",
+        max_length=64,
+        packing_strategy="bfd",
+        use_liger_kernel=False,
+        use_extended_uld=False,
+    )
+    trainer = GOLDTrainer.__new__(GOLDTrainer)
+
+    prepared = trainer._prepare_dataset_with_original_text(
+        dataset,
+        gemma4_tokenizer,
+        args,
+        packing=False,
+        formatting_func=None,
+        dataset_name="train",
+    )
+    row = prepared[0]
+
+    assert 1 in row["completion_mask"]
+    assert row["byte_offsets"] == [[0, 0]] * len(row["input_ids"])
 
 
 def test_alignment_groups_cover_all_tokens(llama_tokenizer, qwen_tokenizer):
