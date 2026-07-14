@@ -1054,7 +1054,12 @@ class TestDPOTrainer(TrlTestCase):
             }
         )
 
-        training_args = DPOConfig(output_dir=self.tmp_dir, max_length=6, truncation_mode="keep_start", report_to="none")
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            max_length=6,
+            truncation_mode="keep_start",
+            report_to="none",
+        )
         trainer = DPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
         )
