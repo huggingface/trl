@@ -56,14 +56,17 @@ def dummy_reward_func(completions, **kwargs):
 class _StubRolloutWorker:
     """Minimal rollout worker stub for testing the trainer in isolation."""
 
-    def __init__(self, tokenizer, dataset, num_generations: int = 8, samples_per_weight_sync: int = 10):
+    def __init__(
+        self, tokenizer, dataset, num_generations: int = 8, samples_per_weight_sync: int = 10, fork_k: int = 1
+    ):
         self.rollout_buffer = queue.Queue()
         self._samples_per_weight_sync = samples_per_weight_sync
         self._model_version = 0
+        self._fork_k = fork_k
         self._sample_iter = self._make_sample_iter(tokenizer, dataset, num_generations)
 
     def _make_sample_iter(self, tokenizer, dataset, num_generations):
-        for row in itertools.cycle(dataset):
+        for group_id, row in enumerate(itertools.cycle(dataset)):
             completions = [
                 [{"role": "assistant", "content": f"{row['completion'][0]['content']} {idx}"}]
                 for idx in range(num_generations)
@@ -79,7 +82,7 @@ class _StubRolloutWorker:
             advantages = (rewards - rewards.mean()) / rewards.std()
             for idx in range(num_generations):
                 completion_ids = prompt_completion_ids[idx][len(prompt_ids) :]
-                yield RolloutSample(
+                sample = RolloutSample(
                     prompt=row["prompt"],
                     completion=completions[idx],
                     input_ids=prompt_ids + completion_ids,
@@ -87,8 +90,14 @@ class _StubRolloutWorker:
                     old_log_probs=[0.0] * len(prompt_ids) + [-0.5] * len(completion_ids),
                     advantage=float(advantages[idx]),
                     model_version=self._model_version,
+                    group_id=group_id,
                     metrics={"reward": float(rewards[idx]), "reward_std": float(rewards.std())},
                 )
+                # fork_k rows per generation, all sharing this group_id: mimics message-mode forking a
+                # conversation into several training rows. Only the shared group_id matters for the epoch
+                # count, so identical duplicates are enough here (row shapes are covered by the reconciler tests).
+                for _ in range(self._fork_k):
+                    yield sample
 
     def _fill_queue(self):
         for _ in range(self._samples_per_weight_sync):
@@ -259,6 +268,7 @@ def _rollout_sample(length: int, advantage: float = 0.0, reward: float = 0.0) ->
         "completion_mask": [0] + [1] * (length - 1),
         "old_log_probs": [0.0] * length,
         "advantage": advantage,
+        "group_id": 0,
         "metrics": {"reward": reward},
     }
 
@@ -586,6 +596,7 @@ def _group(completions_sequences, completions_ids):
         tool_call_counts=[0] * n,
         tool_failure_counts=[0] * n,
         model_version=7,
+        group_id=0,
         env_rewards=[None] * n,
     )
 
@@ -655,3 +666,53 @@ class TestScoreGroupOptionThree(TrlTestCase):
         assert math.isnan(samples[0].metrics["reward"])
         assert samples[1].advantage == 0.0  # only one scorable row -> zero-centered
         assert samples[1].metrics["reward"] == 2.0
+
+
+@pytest.mark.skipif(
+    not is_ampere_or_newer() and torch_device != "xpu",
+    reason="Flash Attention 2 requires Ampere or newer GPU, or XPU",
+)
+class TestEpochStop(TrlTestCase):
+    """`num_train_epochs` stops after N full passes over the PROMPTS, counted as distinct group_ids.
+
+    The point of the fix is that this is fork-independent: a conversation that message-mode forks into several training
+    rows still counts as one prompt-group, so the number of epochs does not depend on the fork rate (only the number of
+    optimizer steps does). Driven end-to-end through the real trainer (stub worker + real forward/backward), which is
+    what actually regresses if the wiring breaks.
+    """
+
+    def _train(self, fork_k, num_train_epochs=2):
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
+        args = AsyncGRPOConfig(
+            output_dir=self.tmp_dir,
+            num_train_epochs=num_train_epochs,  # epoch-driven: no explicit max_steps
+            per_device_train_batch_size=3,
+            num_generations=3,
+            max_completion_length=8,
+            token_budget=-1,  # FixedCountBatcher: deterministic samples/step, so groups accrue predictably
+            vllm_server_timeout=5.0,
+            report_to="none",
+        )
+        worker = _StubRolloutWorker(AutoTokenizer.from_pretrained(model_id), dataset, num_generations=3, fork_k=fork_k)
+        trainer = AsyncGRPOTrainer(
+            model=model_id, reward_funcs=dummy_reward_func, args=args, train_dataset=dataset, rollout_worker=worker
+        )
+        trainer.train()
+        return trainer, len(dataset)
+
+    def test_epoch_stop_is_fork_independent(self):
+        no_fork, num_prompts = self._train(fork_k=1)
+        forked, _ = self._train(fork_k=3)
+
+        # Both stop after num_train_epochs=2 full passes over the prompts, i.e. ~2 x num_prompts distinct
+        # groups, plus at most one micro-batch of overshoot — regardless of the fork rate. (HF's own
+        # state.epoch is meaningless here: it's global_step/max_steps over an infinite IterableDataset,
+        # so we judge epochs by distinct prompt-groups trained, which is what the callback targets.)
+        for trainer in (no_fork, forked):
+            assert 2 * num_prompts <= len(trainer._trained_groups) < 3 * num_prompts
+
+        # Forks add rows, hence fixed-size optimizer steps: 3x rows per conversation must take strictly more
+        # steps for the same 2 epochs. If forks leaked into the epoch count, the forked run would instead
+        # stop in FEWER prompt-passes (the pre-fix bug).
+        assert forked.state.global_step > no_fork.state.global_step
