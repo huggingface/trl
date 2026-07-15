@@ -3890,6 +3890,45 @@ def test_gold_tools_lmbda_below_one_accepts_tool_data(tmp_path):
     strict=True,
 )
 @require_jmespath
+def test_gold_tools_lmbda_below_one_rejects_pretokenized_without_tool_mask(tmp_path):
+    # A pretokenized dataset (input_ids present) skips GOLD's own tokenization, which is what emits `tool_mask`;
+    # without that column the collator would silently supervise tool-result tokens, so it must be rejected up front.
+    dataset = Dataset.from_dict(
+        {
+            "messages": [
+                [
+                    {"role": "user", "content": "What is 3 times 4?"},
+                    {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [
+                            {"type": "function", "function": {"name": "multiply", "arguments": {"a": 3, "b": 4}}}
+                        ],
+                    },
+                    {"role": "tool", "name": "multiply", "content": "12"},
+                    {"role": "assistant", "content": "The answer is 12."},
+                ],
+            ],
+            "tools": [_MULTIPLY_TOOL_SCHEMA],
+            "input_ids": [[1, 2, 3]],
+        }
+    )
+    with pytest.raises(ValueError, match="tool_mask"):
+        GOLDTrainer(
+            model=_TINY_QWEN3,
+            teacher_model=_TINY_QWEN3,
+            args=_gold_tool_config(tmp_path, lmbda=0.5),
+            train_dataset=dataset,
+            tools=[multiply],
+        )
+
+
+@pytest.mark.xfail(
+    condition=Version(transformers.__version__) < Version("5.0.0"),
+    reason="Tool parsing is not supported in transformers versions below 5.0.0",
+    strict=True,
+)
+@require_jmespath
 def test_gold_tools_reject_seq_kd(tmp_path):
     with pytest.raises(ValueError, match="seq_kd"):
         GOLDTrainer(

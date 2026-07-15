@@ -1072,6 +1072,14 @@ class GOLDTrainer(SFTTrainer):
                         "purely on-policy (student-generated tool calls), which does not require tool data in the "
                         "dataset."
                     )
+                # A pretokenized dataset skips GOLD's own tokenization (`tokenize_with_original_text`), which is what
+                # emits `tool_mask` — without it, the collator would silently supervise tool-result tokens.
+                if "input_ids" in dataset_sample and "tool_mask" not in dataset_sample:
+                    raise ValueError(
+                        "When training with `tools` and `lmbda < 1.0`, a pretokenized dataset (containing "
+                        "`input_ids`) must also carry a `tool_mask` column so tool-result tokens can be masked out "
+                        "of the loss. Pass the raw conversational dataset instead and let GOLD tokenize it."
+                    )
 
         # Set up the environment and extract its methods to be used as tools.
         tools = tools or []
