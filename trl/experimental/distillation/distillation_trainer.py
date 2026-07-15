@@ -36,7 +36,7 @@ from transformers.modeling_utils import PreTrainedModel
 from transformers.processing_utils import ProcessorMixin
 from transformers.tokenization_utils_base import PreTrainedTokenizerBase
 from transformers.trainer_utils import EvalPrediction, seed_worker
-from transformers.utils import is_liger_kernel_available, is_peft_available, is_rich_available
+from transformers.utils import ModelOutput, is_liger_kernel_available, is_peft_available, is_rich_available
 
 from ...extras.profiling import profiling_decorator
 from ...generation.vllm_generation import VLLMGeneration
@@ -993,8 +993,9 @@ class DistillationTrainer(_BaseTrainer):
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         if self.use_liger_loss:
-            loss = self._compute_liger_loss(model, inputs, num_items_in_batch=num_items_in_batch)
-            return (loss, None) if return_outputs else loss
+            return self._compute_liger_loss(
+                model, inputs, num_items_in_batch=num_items_in_batch, return_outputs=return_outputs
+            )
 
         # Student forward pass
         student_outputs = model(
@@ -1031,7 +1032,7 @@ class DistillationTrainer(_BaseTrainer):
             use_cache=False,
         )
 
-    def _compute_liger_loss(self, model, inputs, num_items_in_batch=None):
+    def _compute_liger_loss(self, model, inputs, num_items_in_batch=None, return_outputs=False):
         """Memory-efficient JSD using Liger kernel (operates on hidden states, not full logits)."""
         # Route through the DDP/FSDP wrapper via _forward_redirection so that
         # DDP.forward() is called and prepare_for_backward() fires correctly.
@@ -1057,7 +1058,8 @@ class DistillationTrainer(_BaseTrainer):
 
         student_hidden = student_outputs.last_hidden_state[:, :-1]
         teacher_hidden = teacher_outputs.last_hidden_state[:, :-1]
-        del student_outputs, teacher_outputs
+        # Release teacher outputs; keep student_outputs for return_outputs
+        del teacher_outputs
 
         student_hidden = student_hidden.reshape(-1, student_hidden.shape[-1])
         teacher_hidden = teacher_hidden.reshape(-1, teacher_hidden.shape[-1])
@@ -1088,6 +1090,8 @@ class DistillationTrainer(_BaseTrainer):
             loss = loss * num_valid_local / num_items_in_batch
 
         del student_hidden, teacher_hidden, true_labels
+        if return_outputs:
+            return loss, ModelOutput(logits=None, last_hidden_state=student_outputs.last_hidden_state)
         return loss
 
     def _get_liger_zero3_lm_head_gather_ctx(self, model: nn.Module):
