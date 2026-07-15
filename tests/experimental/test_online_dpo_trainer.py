@@ -115,6 +115,54 @@ class TestOnlineDPOTrainer(TrlTestCase):
 
         assert "train_loss" in trainer.state.log_history[-1]
 
+    def test_train_processing_class_autoloaded(self):
+        # processing_class is documented as optional: when omitted it should be auto-loaded from the model,
+        # consistent with CPO/ORPO/BCO trainers.
+        training_args = OnlineDPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            max_steps=3,
+            learning_rate=5.0e-7,
+            report_to="none",
+        )
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        trainer = OnlineDPOTrainer(
+            model=self.model,
+            reward_funcs=self.reward_model,
+            args=training_args,
+            train_dataset=dataset,
+            reward_processing_classes=self.reward_tokenizer,
+        )
+        assert trainer.processing_class is not None
+        trainer.train()
+
+        assert "train_loss" in trainer.state.log_history[-1]
+
+    def test_train_model_str_processing_class_autoloaded(self):
+        # Same as above, but with `model` passed as a string id. The auto-load must happen after `model` is
+        # resolved from a string to an instantiated model, otherwise `model.config` would not yet be available.
+        training_args = OnlineDPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            max_steps=3,
+            learning_rate=5.0e-7,
+            report_to="none",
+        )
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        trainer = OnlineDPOTrainer(
+            model=self.model_id,
+            reward_funcs=self.reward_model,
+            args=training_args,
+            train_dataset=dataset,
+            reward_processing_classes=self.reward_tokenizer,
+        )
+        assert trainer.processing_class is not None
+        trainer.train()
+
+        assert "train_loss" in trainer.state.log_history[-1]
+
     def test_train_with_ref_model(self):
         training_args = OnlineDPOConfig(
             output_dir=self.tmp_dir,

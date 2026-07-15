@@ -112,6 +112,33 @@ class TestNashMDTrainer(TrlTestCase):
 
         assert "train_loss" in trainer.state.log_history[-1]
 
+    def test_nash_md_trainer_training_processing_class_autoloaded(self):
+        # processing_class is documented as optional: when omitted it should be auto-loaded from the model,
+        # consistent with OnlineDPOTrainer (which NashMDTrainer subclasses) and CPO/ORPO/BCO trainers.
+        training_args = NashMDConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            max_steps=3,
+            remove_unused_columns=False,
+            gradient_accumulation_steps=1,
+            learning_rate=9e-1,
+            report_to="none",
+        )
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        trainer = NashMDTrainer(
+            model=self.model,
+            ref_model=self.ref_model,
+            reward_funcs=self.reward_model,
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        assert trainer.processing_class is not None
+        trainer.train()
+
+        assert "train_loss" in trainer.state.log_history[-1]
+
     @require_peft
     def test_train_with_peft(self):
         lora_config = LoraConfig(r=16, lora_alpha=32, lora_dropout=0.05, bias="none", task_type="CAUSAL_LM")

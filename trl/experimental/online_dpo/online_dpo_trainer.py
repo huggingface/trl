@@ -256,10 +256,6 @@ class OnlineDPOTrainer(_BaseTrainer):
         if args is None:
             raise ValueError("`args` must be provided.")
 
-        # Check that the processing_class is provided
-        if processing_class is None:
-            raise ValueError("`processing_class` must be provided.")
-
         model_init_kwargs = args.model_init_kwargs or {}
         if isinstance(model, str):
             model_id = model
@@ -288,6 +284,14 @@ class OnlineDPOTrainer(_BaseTrainer):
                 )
         self.is_encoder_decoder = model.config.is_encoder_decoder
         self.is_vision_model = model.config.model_type in MODEL_FOR_IMAGE_TEXT_TO_TEXT_MAPPING_NAMES.keys()
+
+        # Handle the processing_class: load the tokenizer from the model if not provided. This is done here, after
+        # `model` has been resolved from a string to an instantiated model above, so that `model.config` is always
+        # available regardless of whether `model` was originally passed as a string or an instance.
+        if processing_class is None:
+            processing_class = AutoTokenizer.from_pretrained(
+                get_config_model_id(model.config), trust_remote_code=args.trust_remote_code
+            )
 
         # PEFT
         if peft_config is not None:
