@@ -1064,6 +1064,14 @@ class KTOTrainer(_BaseTrainer):
 
             dataset = dataset.map(tokenize_fn, fn_kwargs={"processing_class": processing_class}, **map_kwargs)
 
+            # Drop examples whose prompt alone fills `max_length`: with `keep_start` truncation the collator would
+            # remove every completion token, leaving no learning signal. `keep_end` keeps the completion end, so
+            # nothing is dropped there.
+            if args.max_length is not None:
+                if isinstance(dataset, Dataset):  # `IterableDataset.filter` does not support `desc`
+                    map_kwargs["desc"] = f"Dropping fully truncated examples from {dataset_name} dataset"
+                dataset = dataset.filter(lambda example: len(example["prompt_ids"]) < args.max_length, **map_kwargs)
+
             # Add KL completions if needed. The KL term is estimated from mismatched (prompt, completion) pairs, built
             # by rotating the completions by +1 within each batch of size `per_device_train_batch_size`:
             # (x_1, y_1), ..., (x_n, y_n) --> (x_1, y_n), (x_2, y_1), ..., (x_n, y_{n-1}). For best results, the
