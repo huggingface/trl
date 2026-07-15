@@ -509,26 +509,42 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    @pytest.mark.parametrize("eval_dataset_type", ["dataset", "dataset_dict", "dict_of_dataset", "none"])
+    @pytest.mark.parametrize(
+        "eval_dataset_type",
+        [
+            "dataset",
+            "iterable_dataset",
+            "dataset_dict",
+            "iterable_dataset_dict",
+            "dict_of_dataset",
+            "dict_of_iterable_dataset",
+            "none",
+        ],
+    )
     def test_init_with_eval_dataset(self, eval_dataset_type):
-        # Streaming datasets are not yet supported in GRPO
-        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
+        train_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         if eval_dataset_type == "none":
             eval_dataset = None
-        elif eval_dataset_type == "dataset":
-            eval_dataset = dataset["test"]
-        elif eval_dataset_type == "dataset_dict":
-            eval_dataset = DatasetDict({"data1": dataset["test"], "data2": dataset["test"]})
-        else:  # "dict_of_dataset"
-            eval_dataset = {"data1": dataset["test"], "data2": dataset["test"]}
+        else:
+            streaming = "iterable" in eval_dataset_type
+            eval_split = load_dataset(
+                "trl-internal-testing/zen", "standard_prompt_only", split="test", streaming=streaming
+            )
+            if eval_dataset_type in ("dataset", "iterable_dataset"):
+                eval_dataset = eval_split
+            elif eval_dataset_type in ("dataset_dict", "iterable_dataset_dict"):
+                dataset_dict_cls = IterableDatasetDict if streaming else DatasetDict
+                eval_dataset = dataset_dict_cls({"data1": eval_split, "data2": eval_split})
+            else:  # "dict_of_dataset" or "dict_of_iterable_dataset"
+                eval_dataset = {"data1": eval_split, "data2": eval_split}
 
         training_args = GRPOConfig(output_dir=self.tmp_dir, report_to="none")
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
             args=training_args,
-            train_dataset=dataset["train"],
+            train_dataset=train_dataset,
             eval_dataset=eval_dataset,
         )
 
@@ -538,35 +554,6 @@ class TestGRPOTrainer(TrlTestCase):
             assert set(trainer.eval_dataset.keys()) == {"data1", "data2"}
         else:
             assert trainer.eval_dataset is eval_dataset
-
-    @pytest.mark.parametrize(
-        "eval_dataset_type", ["iterable_dataset", "iterable_dataset_dict", "dict_of_iterable_dataset"]
-    )
-    def test_init_with_iterable_eval_dataset_raises(self, eval_dataset_type):
-        # Streaming datasets are not yet supported in GRPO
-        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
-        iterable_dataset = load_dataset(
-            "trl-internal-testing/zen", "standard_prompt_only", split="train", streaming=True
-        )
-
-        if eval_dataset_type == "iterable_dataset":
-            eval_dataset = iterable_dataset
-        elif eval_dataset_type == "iterable_dataset_dict":
-            eval_dataset = IterableDatasetDict({"data1": iterable_dataset, "data2": iterable_dataset})
-        else:  # "dict_of_iterable_dataset"
-            eval_dataset = {"data1": iterable_dataset, "data2": iterable_dataset}
-
-        training_args = GRPOConfig(output_dir=self.tmp_dir, report_to="none")
-        trainer = GRPOTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
-            args=training_args,
-            train_dataset=dataset["train"],
-            eval_dataset=eval_dataset,
-        )
-
-        assert set(trainer.eval_dataset.keys()) == {"data1", "data2"}
-        assert trainer.args.accelerator_config.dispatch_batches is False
 
     def test_iterable_dataset_requires_dispatch_batches_false(self):
         # `dispatch_batches=True` is incompatible with iterable datasets (see get_train_dataloader).
