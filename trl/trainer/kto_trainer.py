@@ -1157,6 +1157,9 @@ class KTOTrainer(_BaseTrainer):
                 "`precompute_ref_log_probs=True` is not supported with IterableDataset. Please use a map-style "
                 "Dataset or set `precompute_ref_log_probs=False`."
             )
+        # Idempotent skip: dataset already has ref log-probs precomputed.
+        if "ref_logps" in dataset.column_names:
+            return dataset
         model_hash = hash_module(self.ref_model or self.model)
         fingerprint = Hasher.hash((dataset._fingerprint, model_hash, self.calculate_KL))
         cache_file = dataset._get_cache_file_path(fingerprint)
