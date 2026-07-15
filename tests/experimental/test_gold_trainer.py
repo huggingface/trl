@@ -1906,14 +1906,15 @@ class TestGOLDTrainerSlow(TrlTestCase):
 
         trainer = GOLDTrainer.__new__(GOLDTrainer)
         trainer.processing_class = llama_tokenizer
-        generation_config = SimpleNamespace(max_completion_length=None, temperature=None, top_k=None, top_p=None)
+        generation_config = SimpleNamespace(
+            max_completion_length=None, temperature=None, top_k=None, top_p=None, eos_token_id=None
+        )
 
         new_ids, new_mask, new_labels, prompt_texts, completion_texts = GOLDTrainer.generate_on_policy_outputs(
             trainer,
             _DummyModelLlama(),
             {"prompts": prompt_tensor, "prompt_attention_mask": prompt_mask},
             generation_config,
-            pad_id,
         )
 
         assert torch.equal(new_ids, generated_sequence)
@@ -1947,22 +1948,23 @@ class TestGOLDTrainerSlow(TrlTestCase):
 
         trainer2 = GOLDTrainer.__new__(GOLDTrainer)
         trainer2.processing_class = smollm_tokenizer
-        pad_id2 = smollm_tokenizer.pad_token_id
-        generation_config2 = SimpleNamespace(max_completion_length=None, temperature=None, top_k=None, top_p=None)
+        generation_config2 = SimpleNamespace(
+            max_completion_length=None, temperature=None, top_k=None, top_p=None, eos_token_id=None
+        )
 
         new_ids2, new_mask2, new_labels2, prompt_texts2, completion_texts2 = GOLDTrainer.generate_on_policy_outputs(
             trainer2,
             _DummyModelSmolLM(),
             {"prompts": batch["prompts"], "prompt_attention_mask": batch["prompt_attention_mask"]},
             generation_config2,
-            pad_id2,
         )
 
         assert torch.equal(new_ids2, batch["input_ids"])
-        if pad_id2 is not None:
-            assert torch.equal(new_mask2, (batch["input_ids"] != pad_id2).long())
-        else:
-            assert torch.all(new_mask2 == 1)
+        # With eos_token_id=None the whole completion is kept, so only real prompt padding is masked
+        prompt_len_cols = batch["prompts"].shape[1]
+        expected_mask2 = torch.ones_like(batch["input_ids"])
+        expected_mask2[:, :prompt_len_cols] = batch["prompt_attention_mask"]
+        assert torch.equal(new_mask2, expected_mask2)
 
         prompt_len = int(batch["prompt_attention_mask"].sum().item())
         tail_labels = new_labels2[0, prompt_len:]
