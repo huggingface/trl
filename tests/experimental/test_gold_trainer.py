@@ -463,7 +463,7 @@ def test_generate_on_policy_for_slices_uses_prompt_attention_mask_for_vllm_promp
 
     trainer = GOLDTrainer.__new__(GOLDTrainer)
     trainer.accelerator = SimpleNamespace(is_main_process=True)
-    trainer.args = SimpleNamespace(report_to=[])
+    trainer.args = SimpleNamespace(max_length=None, report_to=[])
     trainer.processing_class = RecordingTokenizer()
     trainer._tokenizer = RecordingTokenizer()
     trainer.use_vllm = True
@@ -600,9 +600,6 @@ def test_on_policy_prompt_text_reflects_truncated_prompt():
         pad_token_id = 0
         pad_token = "<pad>"
 
-        def __init__(self):
-            self.truncation_side = "right"
-
         def batch_decode(
             self,
             sequences,
@@ -646,10 +643,132 @@ def test_on_policy_prompt_text_reflects_truncated_prompt():
 
     GOLDTrainer._generate_on_policy_for_slices(trainer, slices, [0])
 
+    # prompt_max_length = max_length - max_new_tokens = 3 - 1 = 2; budgeted BEFORE generation, keeping the
+    # END of the prompt (the generation marker), so [5, 13, 6] -> [13, 6] and the student generates from it.
+    assert trainer.vllm_generation.prompts == [[13, 6]]
+
     buffered_inputs = trainer._buffered_inputs[0]
-    # prompt_max_length = max_length - max_completion_length = 3 - 1 = 2; right-truncation keeps [5, 13].
-    assert torch.equal(buffered_inputs["input_ids"], torch.tensor([[5, 13, 42]], dtype=torch.long))
-    assert buffered_inputs["original_prompt_text"] == ["A <special>"]
+    assert torch.equal(buffered_inputs["input_ids"], torch.tensor([[13, 6, 42]], dtype=torch.long))
+    assert buffered_inputs["original_prompt_text"] == ["<special> B"]
+    assert torch.equal(buffered_inputs["prompts"], torch.tensor([[13, 6]], dtype=torch.long))
+    assert torch.equal(buffered_inputs["prompt_attention_mask"], torch.tensor([[1, 1]], dtype=torch.long))
+
+
+def test_non_vllm_on_policy_budgets_prompt_before_generation(monkeypatch):
+    """Non-vLLM path budgets the prompt to max_length - max_new_tokens (keep-end) before model.generate,
+    matching the vLLM path, so the student generates from and trains on the same in-budget context."""
+
+    class DummyModel:
+        def generate(self, input_ids, attention_mask, generation_config, return_dict_in_generate):
+            assert input_ids.shape[1] == 2
+            assert torch.equal(input_ids, torch.tensor([[13, 6]], dtype=torch.long))
+            assert torch.equal(attention_mask, torch.tensor([[1, 1]], dtype=torch.long))
+            completion = torch.tensor([[42]], dtype=torch.long)
+            return SimpleNamespace(sequences=torch.cat([input_ids, completion], dim=1))
+
+    class RecordingTokenizer:
+        pad_token_id = 0
+
+        def decode(self, ids, skip_special_tokens=False, clean_up_tokenization_spaces=False):
+            token_map = {0: "<pad>", 5: "A", 6: "B", 13: "<special>", 42: "C"}
+            return " ".join(token_map[int(t)] for t in ids)
+
+    class FakeUnwrap:
+        def __init__(self, model, accelerator, generation_kwargs=None):
+            self.model = model
+
+        def __enter__(self):
+            return self.model
+
+        def __exit__(self, *args):
+            return False
+
+    monkeypatch.setattr(gold_trainer_module, "unwrap_model_for_generation", FakeUnwrap)
+
+    trainer = GOLDTrainer.__new__(GOLDTrainer)
+    trainer.accelerator = SimpleNamespace(device=torch.device("cpu"), is_main_process=True)
+    trainer.processing_class = RecordingTokenizer()
+    trainer.args = SimpleNamespace(max_length=3, report_to=[])
+    trainer.model = DummyModel()
+    trainer.generation_kwargs = {}
+    trainer.use_uld_loss = False
+    trainer.teacher_tokenizer = None
+    trainer.uld_loss_fn = None
+    trainer.generation_config = SimpleNamespace(max_new_tokens=1)
+    trainer._buffered_inputs = [None]
+    trainer._buffered_text_logs = [None]
+
+    slices = [
+        {
+            "prompts": torch.tensor([[0, 5, 13, 6]], dtype=torch.long),
+            "prompt_attention_mask": torch.tensor([[0, 1, 1, 1]], dtype=torch.long),
+        }
+    ]
+
+    GOLDTrainer._generate_non_vllm_for_slices(trainer, slices, [0])
+
+    buffered_inputs = trainer._buffered_inputs[0]
+    # prompt_max_length = 3 - 1 = 2; keep-end of the width-4 prompt -> [13, 6], then generate one token.
+    assert torch.equal(buffered_inputs["input_ids"], torch.tensor([[13, 6, 42]], dtype=torch.long))
+    assert torch.equal(buffered_inputs["prompts"], torch.tensor([[13, 6]], dtype=torch.long))
+
+
+def test_non_vllm_on_policy_does_not_trim_padded_width_when_real_prompt_fits(monkeypatch):
+    """Fallback budgets on the REAL token count, not the padded width (vLLM parity). A left-padded prompt
+    whose real tokens already fit max_length - max_new_tokens is passed through unchanged, not trimmed to the last
+    `budget` columns (which would carry a pad column into generation)."""
+
+    class DummyModel:
+        def generate(self, input_ids, attention_mask, generation_config, return_dict_in_generate):
+            assert torch.equal(input_ids, torch.tensor([[0, 0, 7]], dtype=torch.long))
+            assert torch.equal(attention_mask, torch.tensor([[0, 0, 1]], dtype=torch.long))
+            completion = torch.tensor([[42]], dtype=torch.long)
+            return SimpleNamespace(sequences=torch.cat([input_ids, completion], dim=1))
+
+    class RecordingTokenizer:
+        pad_token_id = 0
+
+        def decode(self, ids, skip_special_tokens=False, clean_up_tokenization_spaces=False):
+            token_map = {0: "<pad>", 7: "Q", 42: "C"}
+            return " ".join(token_map[int(t)] for t in ids)
+
+    class FakeUnwrap:
+        def __init__(self, model, accelerator, generation_kwargs=None):
+            self.model = model
+
+        def __enter__(self):
+            return self.model
+
+        def __exit__(self, *args):
+            return False
+
+    monkeypatch.setattr(gold_trainer_module, "unwrap_model_for_generation", FakeUnwrap)
+
+    trainer = GOLDTrainer.__new__(GOLDTrainer)
+    trainer.accelerator = SimpleNamespace(device=torch.device("cpu"), is_main_process=True)
+    trainer.processing_class = RecordingTokenizer()
+    trainer.args = SimpleNamespace(max_length=3, report_to=[])
+    trainer.model = DummyModel()
+    trainer.generation_kwargs = {}
+    trainer.use_uld_loss = False
+    trainer.teacher_tokenizer = None
+    trainer.uld_loss_fn = None
+    trainer.generation_config = SimpleNamespace(max_new_tokens=1)
+    trainer._buffered_inputs = [None]
+    trainer._buffered_text_logs = [None]
+
+    slices = [
+        {
+            "prompts": torch.tensor([[0, 0, 7]], dtype=torch.long),
+            "prompt_attention_mask": torch.tensor([[0, 0, 1]], dtype=torch.long),
+        }
+    ]
+
+    GOLDTrainer._generate_non_vllm_for_slices(trainer, slices, [0])
+
+    buffered_inputs = trainer._buffered_inputs[0]
+    assert torch.equal(buffered_inputs["prompts"], torch.tensor([[0, 0, 7]], dtype=torch.long))
+    assert torch.equal(buffered_inputs["input_ids"], torch.tensor([[0, 0, 7, 42]], dtype=torch.long))
 
 
 def test_gold_trainer_init_defaults_vllm_max_model_length_to_max_length(monkeypatch):
