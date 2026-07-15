@@ -694,7 +694,7 @@ def test_non_vllm_on_policy_budgets_prompt_before_generation(monkeypatch):
     trainer.use_uld_loss = False
     trainer.teacher_tokenizer = None
     trainer.uld_loss_fn = None
-    trainer.generation_config = SimpleNamespace(max_new_tokens=1)
+    trainer.generation_config = SimpleNamespace(max_new_tokens=1, eos_token_id=None)
     trainer._buffered_inputs = [None]
     trainer._buffered_text_logs = [None]
 
@@ -753,7 +753,7 @@ def test_non_vllm_on_policy_does_not_trim_padded_width_when_real_prompt_fits(mon
     trainer.use_uld_loss = False
     trainer.teacher_tokenizer = None
     trainer.uld_loss_fn = None
-    trainer.generation_config = SimpleNamespace(max_new_tokens=1)
+    trainer.generation_config = SimpleNamespace(max_new_tokens=1, eos_token_id=None)
     trainer._buffered_inputs = [None]
     trainer._buffered_text_logs = [None]
 
