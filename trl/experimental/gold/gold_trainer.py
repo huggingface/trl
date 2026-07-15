@@ -2129,6 +2129,7 @@ class GOLDTrainer(SFTTrainer):
                 else:
                     text = example.get(dataset_text_field, example.get("text", ""))
                     prompt_text = ""
+                    completion_text = text
                     full_text = text
                     result["original_prompt_text"] = ""
                     result["original_completion_text"] = text
@@ -2370,7 +2371,11 @@ class GOLDTrainer(SFTTrainer):
             padding=True,
             return_tensors="pt",
         )
-        completion_encs = encode_with_byte_offsets(backend, completion_texts, add_special_tokens=False)
+        if self.uld_loss_fn.use_extended_uld:
+            completion_encs = encode_with_byte_offsets(backend, completion_texts, add_special_tokens=False)
+        else:
+            completion_ids = self.teacher_tokenizer(completion_texts, add_special_tokens=False)["input_ids"]
+            completion_encs = [(ids, [(0, 0)] * len(ids)) for ids in completion_ids]
 
         sequences: list[torch.Tensor] = []
         attention_masks: list[torch.Tensor] = []
@@ -2395,7 +2400,7 @@ class GOLDTrainer(SFTTrainer):
             offsets = [(0, 0)] * len(prompt_ids) + completion_offs
             if eos_token_id is not None:
                 sequence.append(eos_token_id)
-                offsets.append((content_len, content_len))
+                offsets.append((content_len, content_len) if self.uld_loss_fn.use_extended_uld else (0, 0))
 
             seq_tensor = torch.tensor(sequence, dtype=torch.long)
             sequences.append(seq_tensor)

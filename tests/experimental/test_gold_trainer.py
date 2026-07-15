@@ -1673,6 +1673,7 @@ def test_build_teacher_vlm_inputs_feeds_images_and_completion_byte_offsets(qwen3
     trainer = GOLDTrainer.__new__(GOLDTrainer)
     trainer._teacher_processor = qwen3_vl_processor
     trainer.teacher_tokenizer = qwen3_vl_processor.tokenizer
+    trainer.uld_loss_fn = SimpleNamespace(use_extended_uld=True)
     trainer.accelerator = SimpleNamespace(device=torch.device("cpu"))
 
     images, prompts = trainer._extract_images_and_prompts(vlm_examples)
