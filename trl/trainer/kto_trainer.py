@@ -1246,27 +1246,15 @@ class KTOTrainer(_BaseTrainer):
                 with use_adapter(
                     unwrapped_model, adapter_name="ref" if "ref" in unwrapped_model.peft_config else None
                 ):
-                    completion_logits = model(
-                        inputs["input_ids"],
-                        attention_mask=inputs["attention_mask"],
-                    ).logits
+                    completion_logits = model(inputs["input_ids"], attention_mask=inputs["attention_mask"]).logits
 
                     if self.calculate_KL:
-                        KL_logits = model(
-                            inputs["KL_input_ids"],
-                            attention_mask=inputs["KL_attention_mask"],
-                        ).logits
+                        KL_logits = model(inputs["KL_input_ids"], attention_mask=inputs["KL_attention_mask"]).logits
             else:
-                completion_logits = model(
-                    inputs["input_ids"],
-                    attention_mask=inputs["attention_mask"],
-                ).logits
+                completion_logits = model(inputs["input_ids"], attention_mask=inputs["attention_mask"]).logits
 
                 if self.calculate_KL:
-                    KL_logits = model(
-                        inputs["KL_input_ids"],
-                        attention_mask=inputs["KL_attention_mask"],
-                    ).logits
+                    KL_logits = model(inputs["KL_input_ids"], attention_mask=inputs["KL_attention_mask"]).logits
 
         shift_logits = completion_logits[:, :-1, :]
         per_token_logps = selective_log_softmax(shift_logits, inputs["input_ids"][:, 1:])
