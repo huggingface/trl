@@ -44,7 +44,6 @@ _TELEMETRY_TRAINERS = {
     "BCOTrainer",
     "CPOTrainer",
     "DistillationTrainer",
-    "DPPOTrainer",
     "GKDTrainer",
     "GOLDTrainer",
     "GRPOWithReplayBufferTrainer",
