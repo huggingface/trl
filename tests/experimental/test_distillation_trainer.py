@@ -685,6 +685,49 @@ class TestDistillationTrainer(TrlTestCase):
         expected = -current_student_logprob * expected_advantage_sum / 2
         torch.testing.assert_close(loss, expected)
 
+        # Buffer layout: with mixed prompt lengths, prompt_length (shortest real prompt) is smaller than the
+        # padded prompt width, so rollout logprobs must be stored at full sequence width to survive the
+        # labels-style slice in compute_loss.
+        class _Tok:
+            pad_token_id = 0
+
+            @staticmethod
+            def batch_decode(sequences, skip_special_tokens=False, clean_up_tokenization_spaces=False):
+                return [" ".join(str(int(t)) for t in seq) for seq in sequences]
+
+        trainer = DistillationTrainer.__new__(DistillationTrainer)
+        trainer.accelerator = SimpleNamespace(device=torch.device("cpu"))
+        trainer.processing_class = _Tok()
+        trainer.generation_config = SimpleNamespace(max_new_tokens=3)
+        trainer._buffered_inputs = [None]
+        trainer._buffered_text_logs = [None]
+
+        trainer._store_completions_in_buffer(
+            slices=[{}],
+            on_policy_indices=[0],
+            local_slice_indices=[0, 0],
+            local_prompts=[torch.tensor([5]), torch.tensor([6, 7])],
+            completion_ids=[[11, 12, 13], [14]],
+            logprobs=[[[-0.1], [-0.2], [-0.3]], [[-0.4]]],
+            logprob_token_ids=[[[11], [12], [13]], [[14]]],
+        )
+
+        buffered = trainer._buffered_inputs[0]
+        labels = buffered["labels"]
+        rollout_logprobs = buffered["rollout_logprobs"]
+        assert rollout_logprobs.shape == labels.shape
+
+        prompt_length = trainer._compute_prompt_length(buffered)
+        assert prompt_length == 1
+        sliced_labels = labels[:, prompt_length:]
+        sliced_rollout = rollout_logprobs[:, prompt_length:]
+        expected = {(0, 11): -0.1, (0, 12): -0.2, (0, 13): -0.3, (1, 14): -0.4}
+        valid = sliced_labels != -100
+        assert valid.sum() == 4
+        for row, col in valid.nonzero().tolist():
+            token = int(sliced_labels[row, col])
+            torch.testing.assert_close(sliced_rollout[row, col].item(), expected[(row, token)])
+
     def test_iw_opd_train_runs_with_local_teacher(self):
         trainer = self._make_local_trainer(
             distillation_objective="iw_opd",

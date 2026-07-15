@@ -1056,7 +1056,8 @@ class DistillationTrainer(_BaseTrainer):
             updated["prompts"] = prompt_ids
             updated["prompt_attention_mask"] = prompt_attention_mask
             if logprobs is not None:
-                updated["rollout_logprobs"] = torch.stack(rollout_logprob_tensors)
+                # Full sequence width (zeros over the prompt) so compute_loss can slice it like labels
+                updated["rollout_logprobs"] = F.pad(torch.stack(rollout_logprob_tensors), (prompt_width, 0), value=0.0)
 
             self._buffered_inputs[slice_idx] = updated
             self._buffered_text_logs[slice_idx] = (prompt_texts, completion_texts)
@@ -1582,6 +1583,10 @@ class DistillationTrainer(_BaseTrainer):
         prompt_length = self._compute_prompt_length(inputs)
         labels = inputs["labels"][:, prompt_length:]
         completion_tokens = inputs["input_ids"][:, prompt_length:]
+        # Cached rollout logprobs are stored at full sequence width, so this slice keeps them aligned with labels
+        rollout_logprobs = inputs.get("rollout_logprobs")
+        if rollout_logprobs is not None:
+            rollout_logprobs = rollout_logprobs[:, prompt_length:]
 
         if self.use_teacher_server:
             # Server path: token-level divergence using teacher logprobs.
@@ -1599,9 +1604,11 @@ class DistillationTrainer(_BaseTrainer):
             trimmed_labels = labels[:, :comp_len]
 
             if self.distillation_objective == "iw_opd":
-                rollout_logprobs = inputs.get("rollout_logprobs")
                 if rollout_logprobs is not None:
                     rollout_logprobs = rollout_logprobs[:, :comp_len]
+                # Like the other server-path losses, normalize locally rather than by num_items_in_batch: the
+                # teacher window may not cover every student completion token (see
+                # _compute_server_sparse_top_1_divergence_loss).
                 loss = self._compute_iw_opd_loss(
                     student_logits=student_logits[:, :comp_len, :],
                     completion_tokens=completion_tokens,
@@ -1637,7 +1644,7 @@ class DistillationTrainer(_BaseTrainer):
                     completion_tokens=completion_tokens,
                     labels=labels,
                     teacher_actual_logprobs=teacher_actual_logprobs,
-                    rollout_logprobs=inputs.get("rollout_logprobs"),
+                    rollout_logprobs=rollout_logprobs,
                     num_items_in_batch=num_items_in_batch,
                 )
             elif self.beta > 0 and self.loss_top_k == 1:
