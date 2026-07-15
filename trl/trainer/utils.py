@@ -794,8 +794,8 @@ def repeat_iterable_dataset(dataset, mini_repeat_count: int, batch_size: int = 1
     An [`~datasets.IterableDataset`] cannot be indexed, so a sampler cannot be attached to it. Instead of reordering
     indices, this reorders the *stream* itself with [`~datasets.IterableDataset.map`], producing records in exactly the
     same order that [`RepeatSampler`] yields indices for a map-style dataset with the same arguments. Because the
-    transform stays chained to `dataset`, `set_epoch` propagates to an upstream [`~datasets.IterableDataset.shuffle`] and
-    the order is reshuffled every epoch, as [`RepeatSampler`] does.
+    transform stays chained to `dataset`, `set_epoch` propagates to an upstream [`~datasets.IterableDataset.shuffle`]
+    and the order is reshuffled every epoch, as [`RepeatSampler`] does.
 
     Shuffling is intentionally left out: it is handled upstream via [`~datasets.IterableDataset.shuffle`] (buffered
     shuffling), the streaming equivalent of the full permutation done by [`RepeatSampler`].
