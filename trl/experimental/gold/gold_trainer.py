@@ -1812,7 +1812,7 @@ class GOLDTrainer(SFTTrainer):
         """On-policy generation with tool calling: re-render prompts from messages with tool schemas (and environment
         observations), generate, then run the multi-turn tool-execution loop."""
         # Collect the raw prompt message lists forwarded by the collator. Copy to avoid mutating the batch: the
-        # environment reset and the tool loop both append messages to the prompts.
+        # tool loop appends messages to the prompts.
         prompts = []
         local_slice_indices = []
         reset_kwargs_list = []
@@ -1857,15 +1857,19 @@ class GOLDTrainer(SFTTrainer):
         if self.environments:
             # `DataCollatorForChatML(forward_prompt_messages=True)` forwards the raw example dicts as `reset_kwargs`,
             # so `reset` receives the same per-rollout kwargs as the VLM path and GRPO.
-            for prompt, environment, reset_kwargs in zip(prompts, self.environments, reset_kwargs_list, strict=True):
+            for i, (prompt, environment, reset_kwargs) in enumerate(
+                zip(prompts, self.environments, reset_kwargs_list, strict=True)
+            ):
                 observation = environment.reset(**reset_kwargs)
                 if observation is None:
                     continue
-                if isinstance(observation, list) and isinstance(prompt[-1]["content"], str):
-                    prompt[-1]["content"] = [{"type": "text", "text": prompt[-1]["content"]}]
-                if isinstance(observation, str) and isinstance(prompt[-1]["content"], list):
+                content = prompt[-1]["content"]
+                if isinstance(observation, list) and isinstance(content, str):
+                    content = [{"type": "text", "text": content}]
+                if isinstance(observation, str) and isinstance(content, list):
                     observation = [{"type": "text", "text": observation}]
-                prompt[-1]["content"] += observation
+                # Rebuild the last message rather than mutating it in place, so the input example is left untouched.
+                prompts[i] = prompt[:-1] + [{**prompt[-1], "content": content + observation}]
 
         # Render the prompts with the tool schemas so the model knows how to call them
         tokenized = self.processing_class.apply_chat_template(
@@ -1878,6 +1882,13 @@ class GOLDTrainer(SFTTrainer):
             **self.chat_template_kwargs,
         )
         prompt_ids_list = tokenized["input_ids"]
+        # Budget the prompt to max_length - max_new_tokens before generation, keeping the END of the
+        # prompt (the generation marker), so the student generates from and trains on the same context
+        # and prompt + completion fit in max_length.
+        max_completion_length = self.generation_config.max_new_tokens
+        prompt_max_length = max(1, self.args.max_length - max_completion_length) if self.args.max_length else None
+        if prompt_max_length is not None:
+            prompt_ids_list = [ids[-prompt_max_length:] for ids in prompt_ids_list]
 
         prompts_text = self.processing_class.batch_decode(
             prompt_ids_list,
@@ -2402,17 +2413,19 @@ class GOLDTrainer(SFTTrainer):
                 self._async_tool_dicts.append(async_tool_dict)
 
             if self.environments:
-                for prompt, environment, reset_kwargs in zip(
-                    all_prompts, self.environments, all_raw_examples, strict=True
+                for i, (prompt, environment, reset_kwargs) in enumerate(
+                    zip(all_prompts, self.environments, all_raw_examples, strict=True)
                 ):
                     observation = environment.reset(**reset_kwargs)
                     if observation is None:
                         continue
-                    if isinstance(observation, list) and isinstance(prompt[-1]["content"], str):
-                        prompt[-1]["content"] = [{"type": "text", "text": prompt[-1]["content"]}]
-                    if isinstance(observation, str) and isinstance(prompt[-1]["content"], list):
+                    content = prompt[-1]["content"]
+                    if isinstance(observation, list) and isinstance(content, str):
+                        content = [{"type": "text", "text": content}]
+                    if isinstance(observation, str) and isinstance(content, list):
                         observation = [{"type": "text", "text": observation}]
-                    prompt[-1]["content"] += observation
+                    # Rebuild the last message rather than mutating it in place, so the input example is left untouched.
+                    all_prompts[i] = prompt[:-1] + [{**prompt[-1], "content": content + observation}]
 
         # Workaround for a bug in transformers 5.3.0 where some processors (e.g. Qwen2.5-VL) crash on
         # batched unpadded input (transformers#44514).
