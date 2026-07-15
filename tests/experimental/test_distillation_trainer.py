@@ -654,6 +654,16 @@ class TestDistillationTrainer(TrlTestCase):
         assert trainer._metrics["train"]["iw_opd/max_weight"] == [1.5]
         assert trainer._metrics["train"]["iw_opd/min_weight"] == [1.25]
 
+        # Under gradient accumulation the sum is divided by the global token count instead of the local one
+        loss_ga = trainer._compute_iw_opd_loss(
+            student_logits=student_logits,
+            completion_tokens=completion_tokens,
+            labels=labels,
+            teacher_actual_logprobs=teacher_actual_logprobs,
+            num_items_in_batch=8,
+        )
+        torch.testing.assert_close(loss_ga, expected * 4 / 8)
+
         loss.backward()
         assert student_logits.grad is not None
         assert torch.isfinite(student_logits.grad).all()

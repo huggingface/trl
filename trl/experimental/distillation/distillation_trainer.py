@@ -1606,15 +1606,21 @@ class DistillationTrainer(_BaseTrainer):
             if self.distillation_objective == "iw_opd":
                 if rollout_logprobs is not None:
                     rollout_logprobs = rollout_logprobs[:, :comp_len]
-                # Like the other server-path losses, normalize locally rather than by num_items_in_batch: the
-                # teacher window may not cover every student completion token (see
-                # _compute_server_sparse_top_1_divergence_loss).
+                # Unlike the JSD server losses, IW-OPD raises on missing teacher coverage instead of skipping
+                # positions, so once the window is verified to cover every valid token, num_items_in_batch is
+                # the correct gradient-accumulation denominator here too.
+                if (labels[:, comp_len:] != -100).any():
+                    raise ValueError(
+                        "Teacher server returned fewer completion logprobs than the student completion length; "
+                        "IW-OPD requires teacher logprobs for every completion token."
+                    )
                 loss = self._compute_iw_opd_loss(
                     student_logits=student_logits[:, :comp_len, :],
                     completion_tokens=completion_tokens,
                     labels=trimmed_labels,
                     teacher_actual_logprobs=teacher_result["actual_logprobs"],
                     rollout_logprobs=rollout_logprobs,
+                    num_items_in_batch=num_items_in_batch,
                 )
             elif self.beta > 0:
                 loss = self._compute_server_sparse_top_1_divergence_loss(
