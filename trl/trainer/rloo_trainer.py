@@ -64,6 +64,7 @@ from .utils import (
     create_model_from_path,
     disable_dropout_in_model,
     entropy_from_logits,
+    get_callable_name,
     get_config_model_id,
     identity,
     nanmax,
@@ -425,7 +426,7 @@ class RLOOTrainer(_BaseTrainer):
             if isinstance(reward_funcs[i], nn.Module):  # Use Module over PretrainedModel for compat w/ compiled models
                 self.reward_func_names.append(get_config_model_id(reward_funcs[i].config).split("/")[-1])
             else:
-                self.reward_func_names.append(reward_funcs[i].__name__)
+                self.reward_func_names.append(get_callable_name(reward_funcs[i]))
         self.reward_funcs = reward_funcs
 
         self._has_async_funcs = any(inspect.iscoroutinefunction(func) for func in self.reward_funcs)
@@ -524,7 +525,7 @@ class RLOOTrainer(_BaseTrainer):
             )
         ):
             # See https://github.com/huggingface/trl/issues/3213
-            raise NotImplementedError(
+            raise ValueError(
                 "Iterable datasets are not yet supported in RLOOTrainer. Please use a standard dataset instead."
             )
 

@@ -463,7 +463,7 @@ def test_generate_on_policy_for_slices_uses_prompt_attention_mask_for_vllm_promp
 
     trainer = GOLDTrainer.__new__(GOLDTrainer)
     trainer.accelerator = SimpleNamespace(is_main_process=True)
-    trainer.args = SimpleNamespace(report_to=[])
+    trainer.args = SimpleNamespace(max_length=None, report_to=[])
     trainer.processing_class = RecordingTokenizer()
     trainer._tokenizer = RecordingTokenizer()
     trainer.use_vllm = True
@@ -600,9 +600,6 @@ def test_on_policy_prompt_text_reflects_truncated_prompt():
         pad_token_id = 0
         pad_token = "<pad>"
 
-        def __init__(self):
-            self.truncation_side = "right"
-
         def batch_decode(
             self,
             sequences,
@@ -646,10 +643,132 @@ def test_on_policy_prompt_text_reflects_truncated_prompt():
 
     GOLDTrainer._generate_on_policy_for_slices(trainer, slices, [0])
 
+    # prompt_max_length = max_length - max_new_tokens = 3 - 1 = 2; budgeted BEFORE generation, keeping the
+    # END of the prompt (the generation marker), so [5, 13, 6] -> [13, 6] and the student generates from it.
+    assert trainer.vllm_generation.prompts == [[13, 6]]
+
     buffered_inputs = trainer._buffered_inputs[0]
-    # prompt_max_length = max_length - max_completion_length = 3 - 1 = 2; right-truncation keeps [5, 13].
-    assert torch.equal(buffered_inputs["input_ids"], torch.tensor([[5, 13, 42]], dtype=torch.long))
-    assert buffered_inputs["original_prompt_text"] == ["A <special>"]
+    assert torch.equal(buffered_inputs["input_ids"], torch.tensor([[13, 6, 42]], dtype=torch.long))
+    assert buffered_inputs["original_prompt_text"] == ["<special> B"]
+    assert torch.equal(buffered_inputs["prompts"], torch.tensor([[13, 6]], dtype=torch.long))
+    assert torch.equal(buffered_inputs["prompt_attention_mask"], torch.tensor([[1, 1]], dtype=torch.long))
+
+
+def test_non_vllm_on_policy_budgets_prompt_before_generation(monkeypatch):
+    """Non-vLLM path budgets the prompt to max_length - max_new_tokens (keep-end) before model.generate,
+    matching the vLLM path, so the student generates from and trains on the same in-budget context."""
+
+    class DummyModel:
+        def generate(self, input_ids, attention_mask, generation_config, return_dict_in_generate):
+            assert input_ids.shape[1] == 2
+            assert torch.equal(input_ids, torch.tensor([[13, 6]], dtype=torch.long))
+            assert torch.equal(attention_mask, torch.tensor([[1, 1]], dtype=torch.long))
+            completion = torch.tensor([[42]], dtype=torch.long)
+            return SimpleNamespace(sequences=torch.cat([input_ids, completion], dim=1))
+
+    class RecordingTokenizer:
+        pad_token_id = 0
+
+        def decode(self, ids, skip_special_tokens=False, clean_up_tokenization_spaces=False):
+            token_map = {0: "<pad>", 5: "A", 6: "B", 13: "<special>", 42: "C"}
+            return " ".join(token_map[int(t)] for t in ids)
+
+    class FakeUnwrap:
+        def __init__(self, model, accelerator, generation_kwargs=None):
+            self.model = model
+
+        def __enter__(self):
+            return self.model
+
+        def __exit__(self, *args):
+            return False
+
+    monkeypatch.setattr(gold_trainer_module, "unwrap_model_for_generation", FakeUnwrap)
+
+    trainer = GOLDTrainer.__new__(GOLDTrainer)
+    trainer.accelerator = SimpleNamespace(device=torch.device("cpu"), is_main_process=True)
+    trainer.processing_class = RecordingTokenizer()
+    trainer.args = SimpleNamespace(max_length=3, report_to=[])
+    trainer.model = DummyModel()
+    trainer.generation_kwargs = {}
+    trainer.use_uld_loss = False
+    trainer.teacher_tokenizer = None
+    trainer.uld_loss_fn = None
+    trainer.generation_config = SimpleNamespace(max_new_tokens=1, eos_token_id=None)
+    trainer._buffered_inputs = [None]
+    trainer._buffered_text_logs = [None]
+
+    slices = [
+        {
+            "prompts": torch.tensor([[0, 5, 13, 6]], dtype=torch.long),
+            "prompt_attention_mask": torch.tensor([[0, 1, 1, 1]], dtype=torch.long),
+        }
+    ]
+
+    GOLDTrainer._generate_non_vllm_for_slices(trainer, slices, [0])
+
+    buffered_inputs = trainer._buffered_inputs[0]
+    # prompt_max_length = 3 - 1 = 2; keep-end of the width-4 prompt -> [13, 6], then generate one token.
+    assert torch.equal(buffered_inputs["input_ids"], torch.tensor([[13, 6, 42]], dtype=torch.long))
+    assert torch.equal(buffered_inputs["prompts"], torch.tensor([[13, 6]], dtype=torch.long))
+
+
+def test_non_vllm_on_policy_does_not_trim_padded_width_when_real_prompt_fits(monkeypatch):
+    """Fallback budgets on the REAL token count, not the padded width (vLLM parity). A left-padded prompt
+    whose real tokens already fit max_length - max_new_tokens is passed through unchanged, not trimmed to the last
+    `budget` columns (which would carry a pad column into generation)."""
+
+    class DummyModel:
+        def generate(self, input_ids, attention_mask, generation_config, return_dict_in_generate):
+            assert torch.equal(input_ids, torch.tensor([[0, 0, 7]], dtype=torch.long))
+            assert torch.equal(attention_mask, torch.tensor([[0, 0, 1]], dtype=torch.long))
+            completion = torch.tensor([[42]], dtype=torch.long)
+            return SimpleNamespace(sequences=torch.cat([input_ids, completion], dim=1))
+
+    class RecordingTokenizer:
+        pad_token_id = 0
+
+        def decode(self, ids, skip_special_tokens=False, clean_up_tokenization_spaces=False):
+            token_map = {0: "<pad>", 7: "Q", 42: "C"}
+            return " ".join(token_map[int(t)] for t in ids)
+
+    class FakeUnwrap:
+        def __init__(self, model, accelerator, generation_kwargs=None):
+            self.model = model
+
+        def __enter__(self):
+            return self.model
+
+        def __exit__(self, *args):
+            return False
+
+    monkeypatch.setattr(gold_trainer_module, "unwrap_model_for_generation", FakeUnwrap)
+
+    trainer = GOLDTrainer.__new__(GOLDTrainer)
+    trainer.accelerator = SimpleNamespace(device=torch.device("cpu"), is_main_process=True)
+    trainer.processing_class = RecordingTokenizer()
+    trainer.args = SimpleNamespace(max_length=3, report_to=[])
+    trainer.model = DummyModel()
+    trainer.generation_kwargs = {}
+    trainer.use_uld_loss = False
+    trainer.teacher_tokenizer = None
+    trainer.uld_loss_fn = None
+    trainer.generation_config = SimpleNamespace(max_new_tokens=1, eos_token_id=None)
+    trainer._buffered_inputs = [None]
+    trainer._buffered_text_logs = [None]
+
+    slices = [
+        {
+            "prompts": torch.tensor([[0, 0, 7]], dtype=torch.long),
+            "prompt_attention_mask": torch.tensor([[0, 0, 1]], dtype=torch.long),
+        }
+    ]
+
+    GOLDTrainer._generate_non_vllm_for_slices(trainer, slices, [0])
+
+    buffered_inputs = trainer._buffered_inputs[0]
+    assert torch.equal(buffered_inputs["prompts"], torch.tensor([[0, 0, 7]], dtype=torch.long))
+    assert torch.equal(buffered_inputs["input_ids"], torch.tensor([[0, 0, 7, 42]], dtype=torch.long))
 
 
 def test_gold_trainer_init_defaults_vllm_max_model_length_to_max_length(monkeypatch):
@@ -1265,13 +1384,14 @@ def test_generate_on_policy_outputs_masks_prompt(llama_tokenizer):
             assert torch.equal(attention_mask, prompt_mask)
             return SimpleNamespace(sequences=generated_sequence)
 
-    generation_config = SimpleNamespace(max_completion_length=None, temperature=None, top_k=None, top_p=None)
+    generation_config = SimpleNamespace(
+        max_completion_length=None, temperature=None, top_k=None, top_p=None, eos_token_id=None
+    )
     new_ids, new_mask, new_labels, prompt_texts, completion_texts = GOLDTrainer.generate_on_policy_outputs(
         trainer,
         DummyModel(),
         {"prompts": prompt_tensor, "prompt_attention_mask": prompt_mask},
         generation_config,
-        pad_id,
     )
 
     assert torch.equal(new_ids, generated_sequence)
@@ -1299,6 +1419,122 @@ def test_generate_on_policy_outputs_masks_prompt(llama_tokenizer):
     )
 
 
+class _DummyDecodeTokenizer:
+    def __init__(self, pad_token_id):
+        self.pad_token_id = pad_token_id
+
+    def decode(self, ids, skip_special_tokens=False, clean_up_tokenization_spaces=False):
+        return " ".join(str(i) for i in ids)
+
+
+def test_generate_on_policy_outputs_pad_equals_eos_keeps_eos():
+    # pad == eos here: identity-based pad masking used to erase the terminating EOS label on every
+    # row and zero attention on pad-id tokens inside the prompt.
+    pad_id = eos_id = 2
+    trainer = GOLDTrainer.__new__(GOLDTrainer)
+    trainer.processing_class = _DummyDecodeTokenizer(pad_id)
+
+    # Row 0 stops on EOS and is right-padded; row 1 runs to max_new_tokens (no padding).
+    prompts = torch.tensor([[pad_id, 11, eos_id, 13], [pad_id, 11, eos_id, 13]])
+    prompt_mask = torch.tensor([[0, 1, 1, 1], [0, 1, 1, 1]])
+    completions = torch.tensor([[21, 22, eos_id, pad_id, pad_id], [21, 22, 23, 24, 25]])
+    generated_sequence = torch.cat([prompts, completions], dim=1)
+
+    class DummyModel:
+        def generate(self, input_ids, attention_mask, generation_config, return_dict_in_generate):
+            return SimpleNamespace(sequences=generated_sequence)
+
+    generation_config = SimpleNamespace(eos_token_id=eos_id)
+    inputs = {"prompts": prompts, "prompt_attention_mask": prompt_mask}
+    _, new_attention_mask, new_labels, _, _ = trainer.generate_on_policy_outputs(
+        DummyModel(), inputs, generation_config
+    )
+
+    prompt_width = prompts.shape[1]
+    eos_pos = prompt_width + 2
+    # Pad-id tokens inside the prompt keep attention, only real prompt padding is masked
+    assert torch.equal(new_attention_mask[:, :prompt_width], prompt_mask)
+    # The terminating EOS stays attended and supervised, only the padding after it is masked
+    assert new_attention_mask[0, eos_pos] == 1
+    assert new_labels[0, eos_pos] == eos_id
+    assert torch.all(new_attention_mask[0, eos_pos + 1 :] == 0)
+    assert torch.all(new_labels[0, eos_pos + 1 :] == -100)
+    # A row that hits max_new_tokens has no padding and stays fully supervised
+    assert torch.all(new_attention_mask[1, prompt_width:] == 1)
+    assert torch.equal(new_labels[1, prompt_width:], completions[1])
+    # Prompt positions never contribute to the loss
+    assert torch.all(new_labels[:, :prompt_width] == -100)
+
+
+def test_generate_on_policy_outputs_without_eos_id_keeps_full_completion():
+    # GenerationConfig defaults eos_token_id to None; torch.tensor(None) would raise, so the
+    # None guard must keep the whole completion instead of trying to find a stop token.
+    pad_id = 0
+    trainer = GOLDTrainer.__new__(GOLDTrainer)
+    trainer.processing_class = _DummyDecodeTokenizer(pad_id)
+
+    prompts = torch.tensor([[11, 12, 13], [14, 15, 16]])
+    prompt_mask = torch.ones_like(prompts)
+    completions = torch.tensor([[21, 22, 23, 24], [25, 26, 27, 28]])
+    generated_sequence = torch.cat([prompts, completions], dim=1)
+
+    class DummyModel:
+        def generate(self, input_ids, attention_mask, generation_config, return_dict_in_generate):
+            return SimpleNamespace(sequences=generated_sequence)
+
+    generation_config = SimpleNamespace(eos_token_id=None)
+    inputs = {"prompts": prompts, "prompt_attention_mask": prompt_mask}
+    _, new_attention_mask, new_labels, _, _ = trainer.generate_on_policy_outputs(
+        DummyModel(), inputs, generation_config
+    )
+
+    prompt_width = prompts.shape[1]
+    # With no stop token nothing is masked in the completion region
+    assert torch.all(new_attention_mask[:, prompt_width:] == 1)
+    assert torch.all(new_labels[:, prompt_width:] != -100)
+
+
+def test_build_teacher_inputs_pad_equals_eos_keeps_terminating_eos(llama_tokenizer):
+    # A teacher tokenizer with no pad token ties pad to eos; the old pad-id label strip and attention
+    # loop then dropped the appended terminating EOS from both supervision and attention.
+    tokenizer = copy.deepcopy(llama_tokenizer)
+    tokenizer.pad_token = tokenizer.eos_token
+    assert tokenizer.pad_token_id == tokenizer.eos_token_id
+
+    # Different-length completions so one row is right-padded past its terminating EOS.
+    teacher_input_ids, teacher_labels, teacher_attention_mask, _ = build_teacher_inputs_from_texts(
+        tokenizer, ["Hi?", "Explain gravity in detail please"], ["Hello there!", "OK"]
+    )
+    eos_id = tokenizer.eos_token_id
+    for row in range(teacher_input_ids.size(0)):
+        supervised = (teacher_labels[row] != -100).nonzero(as_tuple=True)[0]
+        last = supervised[-1]
+        # The appended terminating EOS is the last supervised token and stays attended
+        assert teacher_input_ids[row, last] == eos_id
+        assert teacher_labels[row, last] == eos_id
+        assert teacher_attention_mask[row, last]
+
+
+def test_decode_completion_texts_from_labels_keeps_eos_when_pad_equals_eos():
+    # pad == eos: the old pad-id filter dropped the terminating EOS from the reconstructed completion.
+    pad_id = eos_id = 2
+    captured = {}
+
+    class DummyProcessor:
+        @staticmethod
+        def batch_decode(token_id_lists, skip_special_tokens=False, clean_up_tokenization_spaces=False):
+            captured["ids"] = [list(ids) for ids in token_id_lists]
+            return [" ".join(str(t) for t in ids) for ids in token_id_lists]
+
+    trainer = GOLDTrainer.__new__(GOLDTrainer)
+    trainer.pad_token_id = pad_id
+    trainer.processing_class = DummyProcessor()
+
+    labels = torch.tensor([[-100, -100, 21, 22, eos_id]])
+    trainer._decode_completion_texts_from_labels({"labels": labels})
+    assert captured["ids"] == [[21, 22, eos_id]]
+
+
 @pytest.mark.slow
 def test_generate_on_policy_outputs_masks_prompt_smollm(smollm_tokenizer, openr1_examples):
     trainer = GOLDTrainer.__new__(GOLDTrainer)
@@ -1314,8 +1550,9 @@ def test_generate_on_policy_outputs_masks_prompt_smollm(smollm_tokenizer, openr1
             assert torch.equal(attention_mask, batch["prompt_attention_mask"])
             return SimpleNamespace(sequences=batch["input_ids"])
 
-    generation_config = SimpleNamespace(max_completion_length=None, temperature=None, top_k=None, top_p=None)
-    pad_id = smollm_tokenizer.pad_token_id
+    generation_config = SimpleNamespace(
+        max_completion_length=None, temperature=None, top_k=None, top_p=None, eos_token_id=None
+    )
     new_ids, new_mask, new_labels, prompt_texts, completion_texts = GOLDTrainer.generate_on_policy_outputs(
         trainer,
         DummyModel(),
@@ -1324,15 +1561,14 @@ def test_generate_on_policy_outputs_masks_prompt_smollm(smollm_tokenizer, openr1
             "prompt_attention_mask": batch["prompt_attention_mask"],
         },
         generation_config,
-        pad_id,
     )
 
     assert torch.equal(new_ids, batch["input_ids"])
-    if pad_id is not None:
-        expected_mask = (batch["input_ids"] != pad_id).long()
-        assert torch.equal(new_mask, expected_mask)
-    else:
-        assert torch.all(new_mask == 1)
+    # With eos_token_id=None the whole completion is kept, so only real prompt padding is masked
+    prompt_len_cols = batch["prompts"].shape[1]
+    expected_mask = torch.ones_like(batch["input_ids"])
+    expected_mask[:, :prompt_len_cols] = batch["prompt_attention_mask"]
+    assert torch.equal(new_mask, expected_mask)
 
     prompt_len = int(batch["prompt_attention_mask"].sum().item())
     tail_labels = new_labels[0, prompt_len:]
@@ -2972,7 +3208,7 @@ def test_on_policy_vlm_without_vllm_collates_only_consumed_slice(monkeypatch):
     trainer._buffered_text_logs = [None, None]
     trainer._step = 1
     trainer.generation_kwargs = {}
-    trainer.generation_config = SimpleNamespace(max_new_tokens=1)
+    trainer.generation_config = SimpleNamespace(max_new_tokens=1, eos_token_id=None)
     trainer.pad_token_id = 0
     trainer.use_uld_loss = False
     trainer.teacher_tokenizer = None
