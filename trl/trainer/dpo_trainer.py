@@ -1127,10 +1127,18 @@ class DPOTrainer(_BaseTrainer):
             shuffle=False,
         )
         data_loader = self.accelerator.prepare(dataloader)
+
+        # This runs before the parent class prepares the model in `train`, so with DeepSpeed the parameters are still
+        # on CPU (ZeRO-1/2) and sharded (ZeRO-3). Wrap the model in an inference engine to place and gather them.
+        if self.ref_model is None and self.is_deepspeed_enabled:
+            model = prepare_deepspeed(self.model, self.accelerator)
+        else:
+            model = self.ref_model or self.model
+
         ref_chosen_logps = []
         ref_rejected_logps = []
         for padded_batch in tqdm(iterable=data_loader, desc=f"Computing reference log probs for {name} dataset"):
-            ref_chosen_logp, ref_rejected_logp = self.compute_ref_log_probs(padded_batch)
+            ref_chosen_logp, ref_rejected_logp = self.compute_ref_log_probs(model, padded_batch)
             ref_chosen_logp, ref_rejected_logp = self.accelerator.gather_for_metrics(
                 (ref_chosen_logp, ref_rejected_logp)
             )
@@ -1161,7 +1169,7 @@ class DPOTrainer(_BaseTrainer):
 
         return concatenate_datasets([dataset, Dataset.from_file(cache_file)], axis=1)
 
-    def compute_ref_log_probs(self, inputs):
+    def compute_ref_log_probs(self, model, inputs):
         """Computes reference log probabilities for a single padded batch."""
         device = self.accelerator.device
 
@@ -1170,15 +1178,14 @@ class DPOTrainer(_BaseTrainer):
         model_kwargs["use_cache"] = False
 
         with torch.no_grad(), disable_gradient_checkpointing(self.model, self.args.gradient_checkpointing_kwargs):
-            if self.ref_model is None:
-                if is_peft_model(self.model):
-                    model = self.accelerator.unwrap_model(self.model)
-                    with use_adapter(model, adapter_name="ref" if "ref" in model.peft_config else None):
-                        ref_outputs = self.model(**model_kwargs)
-                else:
-                    ref_outputs = self.model(**model_kwargs)
+            if self.ref_model is None and is_peft_model(self.model):
+                unwrapped_model = self.accelerator.unwrap_model(self.model)
+                with use_adapter(
+                    unwrapped_model, adapter_name="ref" if "ref" in unwrapped_model.peft_config else None
+                ):
+                    ref_outputs = model(**model_kwargs)
             else:
-                ref_outputs = self.ref_model(**model_kwargs)
+                ref_outputs = model(**model_kwargs)
 
         input_ids = inputs["input_ids"]
         completion_mask = inputs["completion_mask"]
