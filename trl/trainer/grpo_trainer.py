@@ -1162,14 +1162,11 @@ class GRPOTrainer(_BaseTrainer):
             # RepeatSampler becomes a buffered shuffle here.
             if self.shuffle_dataset:
                 dataset = dataset.shuffle(seed=self.args.seed)
-            dataset = IterableDataset.from_generator(
-                repeat_iterable_dataset,
-                gen_kwargs={
-                    "dataset": dataset,
-                    "mini_repeat_count": self.num_generations,
-                    "batch_size": self.args.generation_batch_size // self.num_generations,
-                    "repeat_count": self.num_iterations * self.args.steps_per_generation,
-                },
+            dataset = repeat_iterable_dataset(
+                dataset,
+                mini_repeat_count=self.num_generations,
+                batch_size=self.args.generation_batch_size // self.num_generations,
+                repeat_count=self.num_iterations * self.args.steps_per_generation,
             )
         return self._get_dataloader(
             dataset=dataset,
@@ -1255,10 +1252,7 @@ class GRPOTrainer(_BaseTrainer):
 
         if isinstance(eval_dataset, IterableDataset):
             eval_dataset = eval_dataset.shuffle(seed=self.args.seed)
-            eval_dataset = IterableDataset.from_generator(
-                repeat_iterable_dataset,
-                gen_kwargs={"dataset": eval_dataset, "mini_repeat_count": self.num_generations_eval},
-            )
+            eval_dataset = repeat_iterable_dataset(eval_dataset, mini_repeat_count=self.num_generations_eval)
 
         return self._get_dataloader(
             dataset=eval_dataset,
