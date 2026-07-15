@@ -475,23 +475,6 @@ class TestGRPOTrainer(TrlTestCase):
 
         trainer.train()
 
-    def test_init_with_eval_dataset_dict(self):
-        # `eval_dataset` may be a `DatasetDict` (e.g. the raw output of `load_dataset` without a `split`), not only a
-        # plain `dict`.
-        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
-        eval_dataset = DatasetDict({"data1": dataset["test"], "data2": dataset["test"]})
-
-        training_args = GRPOConfig(output_dir=self.tmp_dir, report_to="none")
-        trainer = GRPOTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
-            args=training_args,
-            train_dataset=dataset["train"],
-            eval_dataset=eval_dataset,
-        )
-
-        assert set(trainer.eval_dataset.keys()) == {"data1", "data2"}
-
     def test_train_with_iterable_dataset(self):
         # Iterable (streaming) datasets have no length, so `max_steps` is required.
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train", streaming=True)
@@ -526,13 +509,52 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    def test_init_with_iterable_dataset_dict(self):
-        # Iterable datasets are supported, including when nested in an `IterableDatasetDict` eval set.
+    @pytest.mark.parametrize("eval_dataset_type", ["dataset", "dataset_dict", "dict_of_dataset", "none"])
+    def test_init_with_eval_dataset(self, eval_dataset_type):
+        # Streaming datasets are not yet supported in GRPO
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
+
+        if eval_dataset_type == "none":
+            eval_dataset = None
+        elif eval_dataset_type == "dataset":
+            eval_dataset = dataset["test"]
+        elif eval_dataset_type == "dataset_dict":
+            eval_dataset = DatasetDict({"data1": dataset["test"], "data2": dataset["test"]})
+        else:  # "dict_of_dataset"
+            eval_dataset = {"data1": dataset["test"], "data2": dataset["test"]}
+
+        training_args = GRPOConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset["train"],
+            eval_dataset=eval_dataset,
+        )
+
+        if eval_dataset_type == "none":
+            assert trainer.eval_dataset is None
+        elif isinstance(trainer.eval_dataset, dict):
+            assert set(trainer.eval_dataset.keys()) == {"data1", "data2"}
+        else:
+            assert trainer.eval_dataset is eval_dataset
+
+    @pytest.mark.parametrize(
+        "eval_dataset_type", ["iterable_dataset", "iterable_dataset_dict", "dict_of_iterable_dataset"]
+    )
+    def test_init_with_iterable_eval_dataset_raises(self, eval_dataset_type):
+        # Streaming datasets are not yet supported in GRPO
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
         iterable_dataset = load_dataset(
             "trl-internal-testing/zen", "standard_prompt_only", split="train", streaming=True
         )
-        eval_dataset = IterableDatasetDict({"data1": iterable_dataset, "data2": iterable_dataset})
+
+        if eval_dataset_type == "iterable_dataset":
+            eval_dataset = iterable_dataset
+        elif eval_dataset_type == "iterable_dataset_dict":
+            eval_dataset = IterableDatasetDict({"data1": iterable_dataset, "data2": iterable_dataset})
+        else:  # "dict_of_iterable_dataset"
+            eval_dataset = {"data1": iterable_dataset, "data2": iterable_dataset}
 
         training_args = GRPOConfig(output_dir=self.tmp_dir, report_to="none")
         trainer = GRPOTrainer(
@@ -575,6 +597,34 @@ class TestGRPOTrainer(TrlTestCase):
         )
 
         assert trainer.args.dataloader_num_workers == 0
+
+    @pytest.mark.parametrize("eval_dataset_type", ["dataset", "dataset_dict", "dict_of_dataset"])
+    def test_evaluate_with_eval_dataset(self, eval_dataset_type):
+        # `evaluate` accepts a dataset passed directly, not only an `eval_dataset` set at init. Streaming datasets
+        # are not supported in GRPO, so only map-style types are covered here.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
+
+        if eval_dataset_type == "dataset":
+            eval_dataset = dataset["test"]
+        elif eval_dataset_type == "dataset_dict":
+            eval_dataset = DatasetDict({"data1": dataset["test"], "data2": dataset["test"]})
+        else:  # "dict_of_dataset"
+            eval_dataset = {"data1": dataset["test"], "data2": dataset["test"]}
+
+        training_args = GRPOConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset["train"],
+        )
+
+        metrics = trainer.evaluate(eval_dataset=eval_dataset)
+        if eval_dataset_type == "dataset":
+            assert metrics["eval_loss"] is not None
+        else:
+            assert metrics["eval_data1_loss"] is not None
+            assert metrics["eval_data2_loss"] is not None
 
     # Regression test for eval_on_start with loss_type="grpo" (one of the loss types that depends on
     # current_gradient_accumulation_steps): evaluation runs before the first training step, when that value is still
