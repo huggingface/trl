@@ -12,8 +12,37 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .distillation_config import DistillationConfig
-from .distillation_trainer import DistillationTrainer
+import warnings
+from dataclasses import dataclass
+
+from ...trainer import DistillationConfig as _DistillationConfig
+from ...trainer import DistillationTrainer as _DistillationTrainer
 
 
 __all__ = ["DistillationConfig", "DistillationTrainer"]
+
+
+@dataclass
+class DistillationConfig(_DistillationConfig):
+    def __post_init__(self):
+        warnings.warn(
+            "This import path is deprecated and will be removed in v2.0.0. "
+            "The `DistillationConfig` has been promoted to the stable API. "
+            "Update your imports to `from trl import DistillationConfig`.",
+            FutureWarning,
+            stacklevel=3,
+        )
+        super().__post_init__()
+
+
+@dataclass
+class DistillationTrainer(_DistillationTrainer):
+    def __init__(self, *args, **kwargs):
+        warnings.warn(
+            "This import path is deprecated and will be removed in v2.0.0. "
+            "The `DistillationTrainer` has been promoted to the stable API. "
+            "Update your imports to `from trl import DistillationTrainer`.",
+            FutureWarning,
+            stacklevel=2,
+        )
+        super().__init__(*args, **kwargs)

@@ -12,42 +12,37 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# /// script
+# dependencies = [
+#     "trl",
+#     "peft",
+#     "trackio",
+#     "kernels",
+# ]
+# ///
+
 """
-On-policy knowledge distillation: the student generates completions, the teacher scores them, and the student is
-trained to match the teacher's next-token distribution on its own samples.
+Run the on-policy distillation training script with the commands below.
 
-# Reverse KL (the default, `beta=1.0`):
+# Full training:
 ```bash
-python examples/scripts/distillation.py \
+python trl/scripts/distillation.py \
     --model_name_or_path Qwen/Qwen2.5-0.5B-Instruct \
-    --teacher_model_name_or_path Qwen/Qwen2.5-1.5B-Instruct \
+    --teacher_model_name_or_path Qwen/Qwen2.5-7B-Instruct \
     --dataset_name trl-lib/DeepMath-103K \
     --learning_rate 1e-5 \
     --per_device_train_batch_size 4 \
     --output_dir Qwen2.5-0.5B-Distill
 ```
 
-# Forward KL (`beta=0.0`):
+# LoRA:
 ```bash
-python examples/scripts/distillation.py \
+python trl/scripts/distillation.py \
     --model_name_or_path Qwen/Qwen2.5-0.5B-Instruct \
-    --teacher_model_name_or_path Qwen/Qwen2.5-1.5B-Instruct \
-    --dataset_name trl-lib/DeepMath-103K \
-    --beta 0.0 \
-    --learning_rate 1e-5 \
-    --per_device_train_batch_size 4 \
-    --output_dir Qwen2.5-0.5B-Distill
-```
-
-# LoRA, with vLLM for generation:
-```bash
-python examples/scripts/distillation.py \
-    --model_name_or_path Qwen/Qwen2.5-0.5B-Instruct \
-    --teacher_model_name_or_path Qwen/Qwen2.5-1.5B-Instruct \
+    --teacher_model_name_or_path Qwen/Qwen2.5-7B-Instruct \
     --dataset_name trl-lib/DeepMath-103K \
     --learning_rate 1e-4 \
     --per_device_train_batch_size 4 \
-    --use_vllm \
     --output_dir Qwen2.5-0.5B-Distill-LoRA \
     --use_peft \
     --lora_r 32 \
@@ -58,31 +53,33 @@ python examples/scripts/distillation.py \
 import argparse
 from dataclasses import dataclass, field
 
-from datasets import load_dataset
-
-from trl import (
-    DistillationConfig,
-    DistillationTrainer,
-    ModelConfig,
-    ScriptArguments,
-    TrlParser,
-    get_peft_config,
-    get_quantization_config,
-)
+from trl import ScriptArguments
 
 
 @dataclass
 class DistillationScriptArguments(ScriptArguments):
+    """
+    Script arguments for the distillation training script.
+
+    Args:
+        teacher_model_name_or_path (`str`, *optional*):
+            Model checkpoint for the teacher model.
+    """
+
     teacher_model_name_or_path: str | None = field(
         default=None,
         metadata={"help": "Model checkpoint for the teacher model."},
     )
 
 
-def main(script_args, training_args, model_args):
-    ################
-    # Model init kwargs
-    ################
+def main(script_args, training_args, model_args, dataset_args):
+    from accelerate.logging import get_logger
+    from datasets import load_dataset
+
+    from trl import DistillationTrainer, get_dataset, get_peft_config, get_quantization_config
+
+    logger = get_logger(__name__)
+
     training_args.model_init_kwargs = dict(
         revision=model_args.model_revision,
         trust_remote_code=training_args.trust_remote_code,
@@ -95,14 +92,23 @@ def main(script_args, training_args, model_args):
         dtype=model_args.dtype,
     )
 
-    ################
-    # Dataset
-    ################
-    dataset = load_dataset(script_args.dataset_name, name=script_args.dataset_config)
+    # Load the dataset
+    if dataset_args.datasets and script_args.dataset_name:
+        logger.warning(
+            "Both `datasets` and `dataset_name` are provided. The `datasets` argument will be used to load the "
+            "dataset and `dataset_name` will be ignored."
+        )
+        dataset = get_dataset(dataset_args)
+    elif dataset_args.datasets and not script_args.dataset_name:
+        dataset = get_dataset(dataset_args)
+    elif not dataset_args.datasets and script_args.dataset_name:
+        dataset = load_dataset(
+            script_args.dataset_name, name=script_args.dataset_config, streaming=script_args.dataset_streaming
+        )
+    else:
+        raise ValueError("Either `datasets` or `dataset_name` must be provided.")
 
-    ################
-    # Training
-    ################
+    # Initialize the distillation trainer
     trainer = DistillationTrainer(
         model=model_args.model_name_or_path,
         teacher_model=script_args.teacher_model_name_or_path,
@@ -113,18 +119,25 @@ def main(script_args, training_args, model_args):
         peft_config=get_peft_config(model_args),
     )
 
+    # Train the model
     trainer.train()
 
-    ################
+    # Log training complete
+    trainer.accelerator.print("✅ Training completed.")
+
     # Save and push to Hub
-    ################
     trainer.save_model(training_args.output_dir)
+    trainer.accelerator.print(f"💾 Model saved to {training_args.output_dir}.")
+
     if training_args.push_to_hub:
         trainer.push_to_hub(dataset_name=script_args.dataset_name)
+        trainer.accelerator.print(f"🤗 Model pushed to the Hub in https://huggingface.co/{trainer.hub_model_id}.")
 
 
 def make_parser(subparsers: argparse._SubParsersAction | None = None, prog: str | None = None):
-    dataclass_types = (DistillationScriptArguments, DistillationConfig, ModelConfig)
+    from trl import DatasetMixtureConfig, DistillationConfig, ModelConfig, TrlParser
+
+    dataclass_types = (DistillationScriptArguments, DistillationConfig, ModelConfig, DatasetMixtureConfig)
     if subparsers is not None:
         parser = subparsers.add_parser(
             "distillation", help="Run the distillation training script", dataclass_types=dataclass_types
@@ -136,5 +149,5 @@ def make_parser(subparsers: argparse._SubParsersAction | None = None, prog: str 
 
 if __name__ == "__main__":
     parser = make_parser()
-    script_args, training_args, model_args = parser.parse_args_and_config()
-    main(script_args, training_args, model_args)
+    script_args, training_args, model_args, dataset_args = parser.parse_args_and_config(fail_with_unknown_args=False)
+    main(script_args, training_args, model_args, dataset_args)

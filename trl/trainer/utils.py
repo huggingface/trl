@@ -562,7 +562,7 @@ def print_prompt_completions_sample(
     prompts: list,
     completions: list,
     rewards: dict[str, list[float]],
-    advantages: list[float],
+    advantages: list[float] | None,
     step: int,
     num_samples: int = None,
     extra: dict[str, list] | None = None,
@@ -580,8 +580,8 @@ def print_prompt_completions_sample(
             List of completions corresponding to the prompts. Can be either strings or lists of messages.
         rewards (`dict[str, list[float]]`):
             Dictionary where keys are reward names and values are lists of rewards.
-        advantages (`list[float]`):
-            List of advantages corresponding to the prompts and completions.
+        advantages (`list[float]` or `None`):
+            List of advantages corresponding to the prompts and completions. If `None`, no advantage column is shown.
         step (`int`):
             Current training step number, used in the output title.
         num_samples (`int`, *optional*):
@@ -627,7 +627,8 @@ def print_prompt_completions_sample(
     table.add_column("Completion", style="bright_green")
     for reward_name in rewards.keys():
         table.add_column(reward_name, style="bold cyan", justify="right")
-    table.add_column("Advantage", style="bold magenta", justify="right")
+    if advantages is not None:
+        table.add_column("Advantage", style="bold magenta", justify="right")
     for extra_name in extra.keys():
         table.add_column(extra_name, style="bright_white")
 
@@ -671,17 +672,18 @@ def print_prompt_completions_sample(
         prompts = [prompts[i] for i in indices]
         completions = [completions[i] for i in indices]
         rewards = {key: [val[i] for i in indices] for key, val in rewards.items()}
-        advantages = [advantages[i] for i in indices]
+        advantages = [advantages[i] for i in indices] if advantages is not None else None
         extra = {key: [val[i] for i in indices] for key, val in extra.items()}
 
     for i in range(len(prompts)):
         reward_values = [f"{rewards[key][i]:.2f}" for key in rewards.keys()]  # 2 decimals
+        advantage_values = [f"{advantages[i]:.2f}"] if advantages is not None else []
         extra_values = [format_entry(extra[key][i]) for key in extra.keys()]
         table.add_row(
             format_entry(prompts[i]),
             format_entry(completions[i]),
             *reward_values,
-            f"{advantages[i]:.2f}",
+            *advantage_values,
             *extra_values,
         )
         table.add_section()  # Adds a separator between rows

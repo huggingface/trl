@@ -8,6 +8,7 @@ Currently supported commands are:
 
 ### Training Commands
 
+- `trl distillation`: distill a teacher LLM into a student
 - `trl dpo`: fine-tune a LLM with DPO
 - `trl grpo`: fine-tune a LLM with GRPO
 - `trl kto`: fine-tune a LLM with KTO
