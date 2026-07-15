@@ -16,7 +16,7 @@ import multiprocess
 import pytest
 import torch
 import transformers
-from datasets import DatasetDict, IterableDatasetDict, load_dataset
+from datasets import Dataset, DatasetDict, IterableDatasetDict, load_dataset
 from packaging.version import Version
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 from transformers.utils import is_peft_available
@@ -332,35 +332,53 @@ class TestKTOTrainer(TrlTestCase):
             if param.sum() != 0:  # ignore 0 biases
                 assert not torch.equal(param, new_param)
 
-    @pytest.mark.parametrize("precompute_ref_log_probs", [False, True])
-    def test_evaluate_with_raw_dataset(self, precompute_ref_log_probs):
-        # `evaluate` should accept the same (unprocessed) dataset types as the trainer, e.g. a held-out test set
-        # passed directly to `evaluate`. With `precompute_ref_log_probs=True`, the reference log-probs must also be
-        # precomputed for the freshly-passed dataset. See https://github.com/huggingface/trl/issues/6115.
-        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
-
-        training_args = KTOConfig(
-            output_dir=self.tmp_dir, precompute_ref_log_probs=precompute_ref_log_probs, report_to="none"
-        )
-        trainer = KTOTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+    def test_fully_truncated_completion_examples_dropped(self):
+        """The collator truncates with `keep_start`, so an example whose prompt alone fills `max_length` loses every
+        completion token; it's dropped during dataset preparation."""
+        dataset = Dataset.from_dict(
+            {
+                "prompt": ["Hi", "This is a very long prompt that fills up the whole max_length budget on its own"],
+                "completion": [" there", " yes"],
+                "label": [True, False],
+            }
         )
 
-        metrics = trainer.evaluate(eval_dataset=dataset)
-        assert metrics["eval_loss"] is not None
+        training_args = KTOConfig(output_dir=self.tmp_dir, max_length=6, report_to="none")
+        trainer = KTOTrainer(model=self.model_id, args=training_args, train_dataset=dataset)
+
+        # Only the short-prompt example survives.
+        assert len(trainer.train_dataset) == 1
+        assert trainer.train_dataset[0]["prompt_ids"] == trainer.processing_class("Hi")["input_ids"]
 
     @pytest.mark.parametrize("precompute_ref_log_probs", [False, True])
-    @pytest.mark.parametrize("streaming", [False, True])
-    def test_evaluate_with_eval_dataset_dict(self, streaming, precompute_ref_log_probs):
-        # `evaluate` should accept a `DatasetDict` (map-style) or `IterableDatasetDict` (streaming) passed directly,
-        # not only a plain `dict`. Each split is prepared (and, if enabled, ref-logp-precomputed) independently.
-        # `apo_zero_unpaired` avoids KTO's KL term, which is incompatible with streaming datasets.
+    @pytest.mark.parametrize(
+        "eval_dataset_type",
+        [
+            "dataset",
+            "iterable_dataset",
+            "dataset_dict",
+            "iterable_dataset_dict",
+            "dict_of_dataset",
+            "dict_of_iterable_dataset",
+        ],
+    )
+    def test_evaluate_with_eval_dataset(self, eval_dataset_type, precompute_ref_log_probs):
+        # `evaluate` accepts a raw (unprepared) dataset passed directly, not only a preprocessed `eval_dataset` set
+        # at init. See https://github.com/huggingface/trl/issues/6115. Also a regression test: Accelerate's dispatch
+        # for `IterableDataset` requires every batch field to be a tensor, which previously broke streaming
+        # evaluation. `apo_zero_unpaired` avoids KTO's KL term, which is incompatible with streaming datasets.
         train_dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
+        streaming = "iterable" in eval_dataset_type
         eval_split = load_dataset(
             "trl-internal-testing/zen", "standard_unpaired_preference", split="test", streaming=streaming
         )
-        dataset_dict_cls = IterableDatasetDict if streaming else DatasetDict
-        eval_dataset = dataset_dict_cls({"data1": eval_split, "data2": eval_split})
+        if eval_dataset_type in ("dataset", "iterable_dataset"):
+            eval_dataset = eval_split
+        elif eval_dataset_type in ("dataset_dict", "iterable_dataset_dict"):
+            dataset_dict_cls = IterableDatasetDict if streaming else DatasetDict
+            eval_dataset = dataset_dict_cls({"data1": eval_split, "data2": eval_split})
+        else:  # "dict_of_dataset" or "dict_of_iterable_dataset"
+            eval_dataset = {"data1": eval_split, "data2": eval_split}
 
         training_args = KTOConfig(
             output_dir=self.tmp_dir,
@@ -378,8 +396,11 @@ class TestKTOTrainer(TrlTestCase):
             return
 
         metrics = trainer.evaluate(eval_dataset=eval_dataset)
-        assert metrics["eval_data1_loss"] is not None
-        assert metrics["eval_data2_loss"] is not None
+        if eval_dataset_type in ("dataset", "iterable_dataset"):
+            assert metrics["eval_loss"] is not None
+        else:
+            assert metrics["eval_data1_loss"] is not None
+            assert metrics["eval_data2_loss"] is not None
 
     def test_trust_remote_code(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
@@ -967,24 +988,6 @@ class TestKTOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    def test_evaluate_with_iterable_dataset(self):
-        # Regression test: Accelerate's dispatch for `IterableDataset` requires every batch field to be a tensor, so
-        # the collator must not leave `"label"` as a plain list of booleans, which broke streaming evaluation with
-        # `TypeError: Can only concatenate tensors but got <class 'bool'>`.
-        train_dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
-        eval_dataset = load_dataset(
-            "trl-internal-testing/zen", "standard_unpaired_preference", split="test", streaming=True
-        )
-
-        # `apo_zero_unpaired` avoids KTO's KL term, which is not possible with a streaming dataset.
-        training_args = KTOConfig(output_dir=self.tmp_dir, loss_type="apo_zero_unpaired", report_to="none")
-        trainer = KTOTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=train_dataset
-        )
-
-        metrics = trainer.evaluate(eval_dataset=eval_dataset)
-        assert metrics["eval_loss"] is not None
-
     def test_train_with_chat_template_kwargs(self):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
 
@@ -1089,17 +1092,36 @@ class TestKTOTrainer(TrlTestCase):
         assert trainer.state.log_history[-3]["eval_data1_loss"] is not None
         assert trainer.state.log_history[-2]["eval_data2_loss"] is not None
 
-    @pytest.mark.parametrize("streaming", [False, True])
-    def test_init_with_eval_dataset_dict(self, streaming):
-        # `eval_dataset` may be a `DatasetDict` (map-style) or `IterableDatasetDict` (streaming) — e.g. the raw output
-        # of `load_dataset` without a `split` — not only a plain `dict`. Each split is prepared independently at init.
+    @pytest.mark.parametrize(
+        "eval_dataset_type",
+        [
+            "dataset",
+            "iterable_dataset",
+            "dataset_dict",
+            "iterable_dataset_dict",
+            "dict_of_dataset",
+            "dict_of_iterable_dataset",
+            "none",
+        ],
+    )
+    def test_init_with_eval_dataset(self, eval_dataset_type):
         # `apo_zero_unpaired` avoids KTO's KL term, which is incompatible with streaming datasets.
         train_dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
-        eval_split = load_dataset(
-            "trl-internal-testing/zen", "standard_unpaired_preference", split="test", streaming=streaming
-        )
-        dataset_dict_cls = IterableDatasetDict if streaming else DatasetDict
-        eval_dataset = dataset_dict_cls({"data1": eval_split, "data2": eval_split})
+
+        if eval_dataset_type == "none":
+            eval_dataset = None
+        else:
+            streaming = "iterable" in eval_dataset_type
+            eval_split = load_dataset(
+                "trl-internal-testing/zen", "standard_unpaired_preference", split="test", streaming=streaming
+            )
+            if eval_dataset_type in ("dataset", "iterable_dataset"):
+                eval_dataset = eval_split
+            elif eval_dataset_type in ("dataset_dict", "iterable_dataset_dict"):
+                dataset_dict_cls = IterableDatasetDict if streaming else DatasetDict
+                eval_dataset = dataset_dict_cls({"data1": eval_split, "data2": eval_split})
+            else:  # "dict_of_dataset" or "dict_of_iterable_dataset"
+                eval_dataset = {"data1": eval_split, "data2": eval_split}
 
         training_args = KTOConfig(output_dir=self.tmp_dir, loss_type="apo_zero_unpaired", report_to="none")
         trainer = KTOTrainer(
@@ -1109,10 +1131,15 @@ class TestKTOTrainer(TrlTestCase):
             eval_dataset=eval_dataset,
         )
 
-        assert set(trainer.eval_dataset.keys()) == {"data1", "data2"}
-        # Each split was tokenized independently.
-        assert "prompt_ids" in next(iter(trainer.eval_dataset["data1"]))
-        assert "prompt_ids" in next(iter(trainer.eval_dataset["data2"]))
+        if eval_dataset_type == "none":
+            assert trainer.eval_dataset is None
+        elif isinstance(trainer.eval_dataset, dict):
+            assert set(trainer.eval_dataset.keys()) == {"data1", "data2"}
+            # Each split was tokenized independently.
+            assert "prompt_ids" in next(iter(trainer.eval_dataset["data1"]))
+            assert "prompt_ids" in next(iter(trainer.eval_dataset["data2"]))
+        else:
+            assert "prompt_ids" in next(iter(trainer.eval_dataset))
 
     # In practice, this test is the same as `test_kto_trainer`, since gradient checkpointing is enabled by default in
     # `KTOTrainer`. We keep it as a regression guard: if the default ever changes, we still explicitly test gradient

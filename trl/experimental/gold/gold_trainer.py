@@ -228,8 +228,6 @@ def build_teacher_inputs_from_texts(
 
         labels = seq_tensor.clone()
         labels[: len(prompt_ids)] = -100
-        if pad_token_id is not None:
-            labels[labels == pad_token_id] = -100
         labels_list.append(labels)
 
     teacher_input_ids = pad(
@@ -239,17 +237,6 @@ def build_teacher_inputs_from_texts(
     )
     teacher_attention_mask = pad(attention_masks, padding_side="right", padding_value=0).bool()
     teacher_labels = pad(labels_list, padding_side="right", padding_value=-100)
-
-    if eos_token_id is not None:
-        for row in range(teacher_attention_mask.size(0)):
-            valid = (
-                teacher_input_ids[row] != pad_token_id
-                if pad_token_id is not None
-                else teacher_attention_mask[row].bool()
-            )
-            if valid.any():
-                last_idx = valid.nonzero(as_tuple=True)[0][-1]
-                teacher_attention_mask[row, last_idx + 1 :] = False
 
     target_len = teacher_input_ids.size(1)
     teacher_byte_offsets = torch.stack(
@@ -1718,7 +1705,6 @@ class GOLDTrainer(SFTTrainer):
                 unwrapped_model,
                 collated,
                 self.generation_config,
-                self.pad_token_id,
             )
 
         updated_slice = dict(collated)
@@ -1777,27 +1763,19 @@ class GOLDTrainer(SFTTrainer):
     def _build_sequence_batch(
         new_input_ids: torch.Tensor,
         prompt_lengths: torch.Tensor,
-        pad_token_id: int | None,
-        attention_mask: torch.Tensor | None = None,
+        attention_mask: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Build attention mask and labels from full sequences and prompt lengths."""
         prompt_lengths = prompt_lengths.to(device=new_input_ids.device, dtype=torch.long)
         positions = torch.arange(new_input_ids.shape[1], device=new_input_ids.device).unsqueeze(0)
         completion_mask = positions >= prompt_lengths.unsqueeze(1)
 
-        if attention_mask is not None:
-            new_attention_mask = attention_mask.to(device=new_input_ids.device, dtype=new_input_ids.dtype)
-        else:
-            new_attention_mask = torch.ones_like(new_input_ids)
-            if pad_token_id is not None:
-                new_attention_mask[new_input_ids == pad_token_id] = 0
+        new_attention_mask = attention_mask.to(device=new_input_ids.device, dtype=new_input_ids.dtype)
 
         new_labels = torch.full_like(new_input_ids, -100)
         new_labels[completion_mask & new_attention_mask.bool()] = new_input_ids[
             completion_mask & new_attention_mask.bool()
         ]
-        if attention_mask is None and pad_token_id is not None:
-            new_labels[new_input_ids == pad_token_id] = -100
 
         return new_attention_mask, new_labels
 
@@ -1835,8 +1813,6 @@ class GOLDTrainer(SFTTrainer):
         decoded_completion_tokens: list[list[int]] = []
         for row in labels_cpu:
             token_ids = row[row != -100].tolist()
-            if self.pad_token_id is not None:
-                token_ids = [tok for tok in token_ids if tok != self.pad_token_id]
             decoded_completion_tokens.append(token_ids)
 
         return self.processing_class.batch_decode(
@@ -2050,13 +2026,21 @@ class GOLDTrainer(SFTTrainer):
     ):
         prompt_ids_list = []
         local_slice_indices = []
+        # Budget the prompt to max_length - max_new_tokens before generation, keeping the END of the
+        # prompt (the generation marker), so the student generates from and trains on the same context
+        # and prompt + completion fit in max_length.
+        max_completion_length = self.generation_config.max_new_tokens
+        prompt_max_length = max(1, self.args.max_length - max_completion_length) if self.args.max_length else None
         for slice_idx in on_policy_indices:
             slice_inputs = slices[slice_idx]
             prompt_attention_mask = slice_inputs.get("prompt_attention_mask")
             for prompt_idx, prompt in enumerate(slice_inputs["prompts"]):
                 if prompt_attention_mask is not None:
                     prompt = prompt[prompt_attention_mask[prompt_idx].bool()]
-                prompt_ids_list.append(prompt.tolist())
+                prompt_ids = prompt.tolist()
+                if prompt_max_length is not None and len(prompt_ids) > prompt_max_length:
+                    prompt_ids = prompt_ids[-prompt_max_length:]
+                prompt_ids_list.append(prompt_ids)
                 local_slice_indices.append(slice_idx)
 
         prompts_text = self.processing_class.batch_decode(
@@ -2098,13 +2082,41 @@ class GOLDTrainer(SFTTrainer):
             self.accelerator,
             generation_kwargs=self.generation_kwargs,
         ) as unwrapped_model:
+            max_completion_length = self.generation_config.max_new_tokens
+            prompt_max_length = max(1, self.args.max_length - max_completion_length) if self.args.max_length else None
+            pad_token_id = self.processing_class.pad_token_id if self.processing_class.pad_token_id is not None else 0
             for slice_idx in on_policy_indices:
                 slice_inputs = slices[slice_idx]
+                if prompt_max_length is not None:
+                    # Budget per real token (keep-end), mirroring the vLLM path so both keep the same tokens.
+                    # Trigger on the real-token count, not the padded width, and rebuild only when a row
+                    # overflows, so no pad columns are carried into the budgeted prompt.
+                    prompts = slice_inputs["prompts"]
+                    prompt_attention_mask = slice_inputs.get("prompt_attention_mask")
+                    budgeted_rows = []
+                    needs_budget = False
+                    for row_idx, prompt in enumerate(prompts):
+                        real_ids = (
+                            prompt[prompt_attention_mask[row_idx].bool()]
+                            if prompt_attention_mask is not None
+                            else prompt
+                        )
+                        if real_ids.shape[0] > prompt_max_length:
+                            real_ids = real_ids[-prompt_max_length:]
+                            needs_budget = True
+                        budgeted_rows.append(real_ids)
+                    if needs_budget:
+                        slice_inputs = dict(slice_inputs)
+                        slice_inputs["prompts"] = pad(budgeted_rows, padding_side="left", padding_value=pad_token_id)
+                        slice_inputs["prompt_attention_mask"] = pad(
+                            [torch.ones(row.shape[0], dtype=torch.long, device=row.device) for row in budgeted_rows],
+                            padding_side="left",
+                            padding_value=0,
+                        )
                 result = self.generate_on_policy_outputs(
                     unwrapped_model,
                     slice_inputs,
                     self.generation_config,
-                    self.processing_class.pad_token_id,
                 )
                 (
                     new_input_ids,
@@ -2319,27 +2331,23 @@ class GOLDTrainer(SFTTrainer):
             prompt_ids_for_slice = slice_prompt_ids[slice_idx]
             prompt_txts = slice_prompts[slice_idx]
 
-            prompt_max_length = max(1, self.args.max_length - max_completion_length) if self.args.max_length else None
-            truncated_prompt_ids = []
+            # Prompts are already budgeted to max_length - max_new_tokens before generation by the
+            # callers, so no truncation happens here; just build tensors and left-pad.
+            prompt_tensors = []
             prompt_attention_masks = []
-            truncation_side = getattr(self.processing_class, "truncation_side", "right")
             for prompt_ids in prompt_ids_for_slice:
-                if prompt_max_length and len(prompt_ids) > prompt_max_length:
-                    if truncation_side == "left":
-                        prompt_ids = prompt_ids[-prompt_max_length:]
-                    else:
-                        prompt_ids = prompt_ids[:prompt_max_length]
                 prompt_tensor = torch.tensor(prompt_ids, device=device, dtype=torch.long)
-                truncated_prompt_ids.append(prompt_tensor)
+                prompt_tensors.append(prompt_tensor)
                 prompt_attention_masks.append(torch.ones(len(prompt_ids), device=device, dtype=torch.long))
 
-            prompt_ids = pad(truncated_prompt_ids, padding_side="left", padding_value=pad_token_id)
+            prompt_ids = pad(prompt_tensors, padding_side="left", padding_value=pad_token_id)
             prompt_attention_mask = pad(prompt_attention_masks, padding_side="left", padding_value=0)
 
-            # Decode the truncated prompt so the teacher conditions on the same context the student saw.
-            # `clean_up_tokenization_spaces=False` matches the completion decode below so byte counts stay aligned.
+            # Decode the prompt (already budgeted by the callers) so the teacher conditions on the same
+            # context the student saw. `clean_up_tokenization_spaces=False` matches the completion decode
+            # below so byte counts stay aligned.
             prompt_txts_with_special = self.processing_class.batch_decode(
-                [ids.tolist() for ids in truncated_prompt_ids],
+                [ids.tolist() for ids in prompt_tensors],
                 skip_special_tokens=False,
                 clean_up_tokenization_spaces=False,
             )
@@ -2403,7 +2411,6 @@ class GOLDTrainer(SFTTrainer):
             new_attention_mask, new_labels = self._build_sequence_batch(
                 new_input_ids,
                 prompt_lengths,
-                pad_token_id,
                 attention_mask=new_attention_mask,
             )
 
@@ -2417,6 +2424,9 @@ class GOLDTrainer(SFTTrainer):
             updated_slice["input_ids"] = new_input_ids
             updated_slice["attention_mask"] = new_attention_mask
             updated_slice["labels"] = new_labels
+            # Update prompts to match the new padding width so prompt_length stays consistent
+            updated_slice["prompts"] = prompt_ids
+            updated_slice["prompt_attention_mask"] = prompt_attention_mask
             updated_slice["original_prompt_text"] = prompt_txts_with_special
             updated_slice["original_completion_text"] = completion_texts
             self._maybe_add_completion_byte_offsets(updated_slice)
@@ -2849,8 +2859,6 @@ class GOLDTrainer(SFTTrainer):
 
             labels = seq_tensor.clone()
             labels[: len(prompt_ids)] = -100
-            if pad_token_id is not None:
-                labels[labels == pad_token_id] = -100
             labels_list.append(labels)
 
             # Sequence-aligned multimodal keys (e.g. token_type_ids for Gemma): keep the prompt values
@@ -3042,11 +3050,7 @@ class GOLDTrainer(SFTTrainer):
                 )
 
         if self.use_uld_loss and self.teacher_tokenizer is not None:
-            student_labels = inputs["labels"].clone()
-            if self.pad_token_id is not None:
-                student_labels[student_labels == self.pad_token_id] = -100
-            if self.teacher_tokenizer.pad_token_id is not None:
-                teacher_labels[teacher_labels == self.teacher_tokenizer.pad_token_id] = -100
+            student_labels = inputs["labels"]
 
             student_byte_offsets = inputs.get("byte_offsets")
             if self.uld_loss_fn.use_extended_uld and student_byte_offsets is None:
@@ -3144,7 +3148,7 @@ class GOLDTrainer(SFTTrainer):
 
         return (loss, outputs_student) if return_outputs else loss
 
-    def generate_on_policy_outputs(self, model, inputs, generation_config, pad_token_id=None):
+    def generate_on_policy_outputs(self, model, inputs, generation_config):
         # Generate output with respect to the prompt only
         # Drop sequence-aligned multimodal keys (token_type_ids, mm_token_type_ids): generate recomputes them from
         # `input_ids` as it extends the sequence, and some models (e.g. Qwen3-VL) reject them as unknown
@@ -3152,7 +3156,7 @@ class GOLDTrainer(SFTTrainer):
         generate_kwargs = self._get_model_forward_kwargs(inputs, exclude=self._SEQUENCE_KEYS)
         generated_outputs = model.generate(
             input_ids=inputs["prompts"],
-            attention_mask=inputs.get("prompt_attention_mask", None),
+            attention_mask=inputs["prompt_attention_mask"],
             generation_config=generation_config,
             return_dict_in_generate=True,
             **generate_kwargs,
@@ -3163,25 +3167,41 @@ class GOLDTrainer(SFTTrainer):
         batch_size = generated_tokens.size(0)
         device = generated_tokens.device
 
-        prompt_mask = inputs.get("prompt_attention_mask")
-        pad_token_id = pad_token_id if pad_token_id is not None else self.processing_class.pad_token_id
+        prompt_mask = inputs["prompt_attention_mask"]
 
         # model.generate() returns full sequences (prompt + completion), so completions start
         # after the full padded prompt width.
-        prompt_lengths = torch.full((batch_size,), inputs["prompts"].shape[1], dtype=torch.long, device=device)
+        prompt_length = inputs["prompts"].shape[1]
+        prompt_lengths = torch.full((batch_size,), prompt_length, dtype=torch.long, device=device)
+        completion_ids = generated_tokens[:, prompt_length:]
+
+        # Mask everything after the first EOS token. eos_token_id can be a list of stop tokens (Llama 3),
+        # so match with torch.isin; with no eos id nothing stops early, so keep the whole completion.
+        if generation_config.eos_token_id is None:
+            completion_mask = torch.ones_like(completion_ids)
+        else:
+            is_eos = torch.isin(completion_ids, torch.tensor(generation_config.eos_token_id, device=device))
+            eos_idx = torch.full((is_eos.size(0),), is_eos.size(1), dtype=torch.long, device=device)
+            eos_idx[is_eos.any(dim=1)] = is_eos.int().argmax(dim=1)[is_eos.any(dim=1)]
+            sequence_indices = torch.arange(is_eos.size(1), device=device).expand(is_eos.size(0), -1)
+            completion_mask = (sequence_indices <= eos_idx.unsqueeze(1)).int()
+
+        # Pad ids can appear inside real prompt text, so use the prompt mask instead of matching ids
+        new_attention_mask = torch.ones_like(generated_tokens)
+        new_attention_mask[:, prompt_length:] = completion_mask
+        new_attention_mask[:, :prompt_length] = prompt_mask
 
         new_input_ids = generated_tokens
-        new_attention_mask, new_labels = self._build_sequence_batch(new_input_ids, prompt_lengths, pad_token_id)
+        new_attention_mask, new_labels = self._build_sequence_batch(
+            new_input_ids, prompt_lengths, attention_mask=new_attention_mask
+        )
 
         prompt_texts = []
         completion_texts = []
         for idx in range(batch_size):
             length = int(prompt_lengths[idx].item())
             prompt_tokens = inputs["prompts"][idx]
-            if prompt_mask is not None:
-                prompt_tokens = prompt_tokens[prompt_mask[idx].bool()]
-            elif pad_token_id is not None:
-                prompt_tokens = prompt_tokens[prompt_tokens != pad_token_id]
+            prompt_tokens = prompt_tokens[prompt_mask[idx].bool()]
             prompt_texts.append(
                 self.processing_class.decode(
                     prompt_tokens.tolist(),
