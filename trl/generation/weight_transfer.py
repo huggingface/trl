@@ -18,7 +18,7 @@ import time
 import requests
 from accelerate.logging import get_logger
 
-from ...import_utils import is_vllm_available
+from ..import_utils import is_vllm_available
 
 
 if is_vllm_available(min_version="0.22.0"):
@@ -103,12 +103,9 @@ class WeightTransferClient:
         if self.model_update_group is None:
             return
         t0 = time.time()
-        # Prepare the workers for the reload; must complete before any weights are sent.
-        requests.post(
-            f"{self.vllm_server_url}/start_weight_update",
-            json={"is_checkpoint_format": True},
-            timeout=1800,
-        )
+        # Prepare the workers for the reload; must complete before any weights are sent. The native transfer
+        # engine always expects checkpoint-format weights, so the endpoint takes no body.
+        requests.post(f"{self.vllm_server_url}/start_weight_update", timeout=1800)
         # The /update_weights POST drives the workers' blocking NCCL recv, so it runs on a thread
         # concurrently with the trainer-side broadcast.
         t_update = threading.Thread(
