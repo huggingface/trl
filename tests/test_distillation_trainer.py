@@ -209,7 +209,7 @@ class TestChunkedDivergenceLoss(TrlTestCase):
 
 class TestDistillationTrainer(TrlTestCase):
     def test_train(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
 
         training_args = DistillationConfig(
@@ -268,7 +268,7 @@ class TestDistillationTrainer(TrlTestCase):
 
     @pytest.mark.parametrize("beta", [0.0, 0.5, 1.0])
     def test_train_beta(self, beta):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
 
         training_args = DistillationConfig(
@@ -297,7 +297,7 @@ class TestDistillationTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_train_teacher_from_model_id(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
 
         training_args = DistillationConfig(
@@ -316,7 +316,7 @@ class TestDistillationTrainer(TrlTestCase):
 
     def test_identical_teacher_gives_zero_loss(self):
         # A student distilling from itself has nothing to learn: the divergence is exactly zero.
-        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
 
         training_args = DistillationConfig(
@@ -336,7 +336,7 @@ class TestDistillationTrainer(TrlTestCase):
         assert losses[0] == pytest.approx(0.0, abs=1e-6)
 
     def test_teacher_vocab_size_mismatch_raises(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
         training_args = DistillationConfig(output_dir=self.tmp_dir, report_to="none")
         with pytest.raises(ValueError, match="vocab_size"):
             DistillationTrainer(
@@ -347,7 +347,7 @@ class TestDistillationTrainer(TrlTestCase):
             )
 
     def test_teacher_model_init_kwargs_with_instantiated_teacher_raises(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         training_args = DistillationConfig(
             output_dir=self.tmp_dir, teacher_model_init_kwargs={"dtype": "float32"}, report_to="none"
@@ -362,7 +362,7 @@ class TestDistillationTrainer(TrlTestCase):
 
     @require_peft
     def test_train_peft(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
 
         training_args = DistillationConfig(
