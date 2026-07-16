@@ -71,8 +71,15 @@ def _outcome_only_reward_func(environments, **_):
 
     Suitable for sparse-outcome envs (e.g. SETA, where only `submit_solution` returns a non-null reward). Override by
     passing a different callable to ``reward_funcs=``.
+
+    Returns ``None`` for rollouts that never received a reward signal (no tool returned a non-null
+    ``out.reward``). This prevents the default ``self.reward = 0.0`` from being treated as a real
+    reward: in a GRPO group, a sibling that does nothing would otherwise get ``reward=0.0`` — a
+    spurious positive advantage over siblings that tried and got negative rewards. The trainer's
+    ``unscorable_mask`` (GRPO) or ``nan_to_num`` (SDPO) then zeroes the advantage, ensuring
+    unrewarded rollouts carry no gradient.
     """
-    return [env.reward for env in environments]
+    return [env.reward if env.has_reward else None for env in environments]
 
 
 class OpenRewardSpec:

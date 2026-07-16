@@ -168,7 +168,25 @@ class TestOpenRewardSpec(TrlTestCase):
         out = env.echo(text="goodbye")
         assert "no match" in out
         assert env.reward == 0.0
+        assert env.has_reward is True  # wrong answer → server returned 0.0 (a real score)
         assert env.finished is False
+        env._close()
+
+    def test_unrewarded_rollout_returns_none_not_zero(self, echo_env_url):
+        """A rollout that never triggers a rewarding tool must return None, not 0.0.
+
+        Without this, the default ``self.reward = 0.0`` would be treated as a real reward in GRPO's
+        advantage computation: a sibling that does nothing gets ``reward=0.0``, a spurious positive
+        advantage over siblings that tried and got negative rewards. Returning None lets the trainer's
+        unscorable_mask zero the advantage, carrying no gradient.
+        """
+        spec = OpenRewardSpec(echo_env_url, env_name="echoenvironment", num_tasks=1)
+        env = spec.environment_factory()
+        env.reset(**spec.train_dataset[0])
+        # Don't call echo at all — simulate a rollout where the model never submitted
+        assert env.has_reward is False
+        rewards = spec.reward_funcs(environments=[env])
+        assert rewards == [None]  # unrewarded → None, not 0.0
         env._close()
 
     def test_reward_func_reads_last_non_null_per_environment(self, echo_env_url):
