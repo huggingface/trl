@@ -238,6 +238,7 @@ def _spawn_stop_watcher(rollout_loop: "_AsyncRolloutLoop", stop_event: MPEvent) 
 
 
 def _child_main(
+    loop_cls: "type[_AsyncRolloutLoop]",
     loop_kwargs: dict[str, Any],
     samples_queue: MPQueue,
     model_version_value: MPValue,
@@ -253,7 +254,7 @@ def _child_main(
 
     PartialState()
 
-    rollout_loop = _AsyncRolloutLoop(
+    rollout_loop = loop_cls(
         **loop_kwargs,
         rollout_buffer=samples_queue,
         model_version_value=model_version_value,
@@ -914,6 +915,8 @@ class AsyncRolloutWorker:
     execute on CPU.
     """
 
+    _loop_cls: "type[_AsyncRolloutLoop]" = _AsyncRolloutLoop
+
     def __init__(
         self,
         *,
@@ -955,11 +958,6 @@ class AsyncRolloutWorker:
     def update_model_version(self, model_version: int) -> None:
         self.model_version = model_version
 
-    def _child_entry(self):
-        """The spawned child's entry function (builds the loop and runs it). Subclasses override to run a different
-        loop class without duplicating `start()`. Must be a module-level, picklable function."""
-        return _child_main
-
     def start(self) -> None:
         if self._process is not None:
             logger.warning("AsyncRolloutWorker.start() called but child process is already running; ignoring.")
@@ -976,8 +974,9 @@ class AsyncRolloutWorker:
                 "module-level function, functools.partial, or a callable class instance instead."
             ) from e
         self._process = self._mp_ctx.Process(
-            target=self._child_entry(),
+            target=_child_main,
             args=(
+                self._loop_cls,
                 self._loop_kwargs,
                 self.rollout_buffer,
                 self._model_version_value,

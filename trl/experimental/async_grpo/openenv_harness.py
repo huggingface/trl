@@ -18,7 +18,6 @@ import asyncio
 import functools
 import hashlib
 import json
-import traceback
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
@@ -32,8 +31,6 @@ from .async_rollout_worker import (
     TurnRecord,
     _AsyncRolloutLoop,
     _chain_to_sequences,
-    _scrub_child_env,
-    _spawn_stop_watcher,
 )
 
 
@@ -185,40 +182,6 @@ def _messages_from_trace(trace: list[dict]) -> list[Message]:
     return list(last["request"]["messages"]) + [{"role": "assistant", "content": content}]
 
 
-def _harness_child_main(
-    loop_kwargs,
-    samples_queue,
-    model_version_value,
-    stop_event,
-    child_ready_event,
-    heartbeat_value,
-    failed_event,
-    exception_info_queue,
-):
-    """Child entrypoint: build a `_HarnessRolloutLoop` and run it. Copy of `_child_main` with the loop class
-    swapped, so `async_rollout_worker.py` stays free of any OpenEnv reference."""
-    _scrub_child_env()
-    from accelerate.state import PartialState
-
-    PartialState()
-
-    rollout_loop = _HarnessRolloutLoop(
-        **loop_kwargs,
-        rollout_buffer=samples_queue,
-        model_version_value=model_version_value,
-        heartbeat_value=heartbeat_value,
-        failed_event=failed_event,
-        exception_info_queue=exception_info_queue,
-    )
-    child_ready_event.set()
-    _spawn_stop_watcher(rollout_loop, stop_event)
-    try:
-        rollout_loop.run()
-    except Exception:
-        traceback.print_exc()
-        raise
-
-
 class HarnessRolloutWorker(AsyncRolloutWorker):
     """AsyncGRPO rollout worker that drives an OpenEnv `ResourceSessionFactory`.
 
@@ -227,5 +190,4 @@ class HarnessRolloutWorker(AsyncRolloutWorker):
     differs.
     """
 
-    def _child_entry(self):
-        return _harness_child_main
+    _loop_cls = _HarnessRolloutLoop
