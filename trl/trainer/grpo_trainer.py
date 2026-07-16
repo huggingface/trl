@@ -17,6 +17,7 @@ import atexit
 import copy
 import importlib.resources as pkg_resources
 import inspect
+import json
 import math
 import os
 import sys
@@ -25,7 +26,6 @@ import time
 import warnings
 from collections import defaultdict, deque
 from collections.abc import Callable
-from contextlib import nullcontext
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -36,7 +36,7 @@ import torch.utils.data
 import transformers
 from accelerate.logging import get_logger
 from accelerate.utils import gather, gather_object, is_peft_model, set_seed
-from datasets import Dataset, IterableDataset
+from datasets import Dataset, DatasetDict, IterableDataset, IterableDatasetDict
 from huggingface_hub import CommitScheduler, DatasetCard, DatasetCardData, create_repo
 from packaging.version import Version
 from torch import nn
@@ -45,6 +45,7 @@ from transformers import (
     AutoModelForSequenceClassification,
     AutoProcessor,
     AutoTokenizer,
+    BitsAndBytesConfig,
     GenerationConfig,
     PreTrainedModel,
     PreTrainedTokenizerBase,
@@ -53,6 +54,7 @@ from transformers import (
     is_trackio_available,
     is_wandb_available,
 )
+from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR
 from transformers.utils import is_peft_available, is_rich_available
 
 from ..chat_template_utils import (
@@ -78,8 +80,10 @@ from .utils import (
     create_model_from_path,
     disable_dropout_in_model,
     entropy_from_logits,
+    get_callable_name,
     get_config_model_id,
     identity,
+    maybe_gather_lm_head_ctx,
     nanmax,
     nanmin,
     nanstd,
@@ -102,7 +106,7 @@ if is_liger_kernel_available():
 
 if is_peft_available():
     import peft
-    from peft import LoraConfig, PeftConfig, PeftModel, get_peft_model
+    from peft import LoraConfig, PeftConfig, PeftModel, PromptLearningConfig, get_peft_model
     from peft.tuners.tuners_utils import BaseTunerLayer
 
 
@@ -172,9 +176,10 @@ class GRPOTrainer(_BaseTrainer):
               from the model config.
             - A [`~transformers.PreTrainedModel`] object. Only causal language models are supported.
             - A [`~peft.PeftModel`] object. Only causal language models are supported.
-        reward_funcs (`RewardFunc | list[RewardFunc]`):
+        reward_funcs (`RewardFunc | list[RewardFunc]`, *optional*):
             Reward functions to be used for computing the rewards. To compute the rewards, we call all the reward
-            functions with the prompts and completions and sum the rewards. Can be either:
+            functions with the prompts and completions and sum the rewards. May be omitted when the reward is supplied
+            by the environment through `environment_factory` (see below). Can be either:
 
             - A single reward function, such as:
                 - A string: The *model ID* of a pretrained model hosted inside a model repo on huggingface.co, or a
@@ -206,7 +211,7 @@ class GRPOTrainer(_BaseTrainer):
             - [Standard](dataset_formats#standard): Each sample contains plain text.
             - [Conversational](dataset_formats#conversational): Each sample contains structured messages (e.g., role
               and content).
-        eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`] or `dict[str, Dataset | IterableDataset]`):
+        eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`], [`~datasets.DatasetDict`], [`~datasets.IterableDatasetDict`] or `dict[str, Dataset | IterableDataset]`):
             Dataset to use for evaluation. It must meet the same requirements as `train_dataset`.
         processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.ProcessorMixin`], *optional*):
             Processing class used to process the data. The padding side must be set to "left". If `None`, the
@@ -232,6 +237,9 @@ class GRPOTrainer(_BaseTrainer):
         optimizers (`tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None]`, *optional*, defaults to `(None, None)`):
             A tuple containing the optimizer and the scheduler to use. Will default to an instance of `AdamW` on your
             model and a scheduler given by [`~transformers.get_linear_schedule_with_warmup`] controlled by `args`.
+        quantization_config ([`~transformers.BitsAndBytesConfig`], *optional*):
+            Quantization configuration used when loading the model from a model identifier. Combine with `peft_config`
+            for QLoRA training. Ignored if the model is already instantiated.
         peft_config ([`~peft.PeftConfig`], *optional*):
             PEFT configuration used to wrap the model. If `None`, the model is not wrapped.
         tools (list of `Callable`, *optional*):
@@ -249,15 +257,23 @@ class GRPOTrainer(_BaseTrainer):
             with no duplication; it is responsible for returning the correct number of completions per prompt (see
             `num_generations` / `num_generations_eval` on the trainer). This feature is experimental and may change or
             be removed at any time without prior notice.
-        environment_factory (`EnvironmentFactory`, *optional*):
-            A callable that creates and returns an environment instance. The environment class should define methods
-            that can be invoked as tools during generation. Each method should comply with the same requirements as the
-            `tools` described above. If `environment_factory` is provided, an instance of the environment is created
-            for each generation in the batch, allowing for parallel and independent interactions. The environment must
+        environment_factory (`EnvironmentFactory` or `dict[str, EnvironmentFactory]`, *optional*):
+            A callable that creates and returns an environment instance, or a dictionary mapping environment names to
+            such callables. The environment class should define methods that can be invoked as tools during generation.
+            Each method should comply with the same requirements as the `tools` described above. The environment must
             also implement a callable `reset` method that can be used to reset state between generations. The `reset`
             method should return either `None` or a string: when it returns a string, that string is appended to the
-            last user message before generation. This feature is experimental and may change or be removed at any time
-            without prior notice.
+            last user message before generation. The environment may also define a `get_reward` method taking no
+            argument and returning a `float`: when present, the environment owns the reward, and `get_reward` is called
+            once per completed rollout to score it from the environment's internal state. It acts as an additional
+            reward source (with weight 1, logged under the environment's class name) alongside `reward_funcs`, which
+            then becomes optional.
+
+            With a single callable, every example uses the same environment, with one instance per rollout so their
+            interactions stay isolated. With a dictionary, each example must carry an `environment` field selecting its
+            environment by name, and only that environment's tools are exposed in its prompt — letting a single run mix
+            tasks (e.g. a coding environment and a game). This feature is experimental and may change or be removed at
+            any time without prior notice.
     """
 
     _tag_names = ["trl", "grpo"]
@@ -278,18 +294,24 @@ class GRPOTrainer(_BaseTrainer):
     def __init__(
         self,
         model: "str | PreTrainedModel | PeftModel",
-        reward_funcs: RewardFunc | list[RewardFunc],
+        reward_funcs: RewardFunc | list[RewardFunc] | None = None,
         args: GRPOConfig | None = None,
         train_dataset: Dataset | IterableDataset | None = None,
-        eval_dataset: Dataset | IterableDataset | dict[str, Dataset | IterableDataset] | None = None,
+        eval_dataset: Dataset
+        | IterableDataset
+        | DatasetDict
+        | IterableDatasetDict
+        | dict[str, Dataset | IterableDataset]
+        | None = None,
         processing_class: PreTrainedTokenizerBase | ProcessorMixin | None = None,
         reward_processing_classes: PreTrainedTokenizerBase | list[PreTrainedTokenizerBase] | None = None,
         callbacks: list[TrainerCallback] | None = None,
         optimizers: tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None] = (None, None),
+        quantization_config: "BitsAndBytesConfig | None" = None,
         peft_config: "PeftConfig | None" = None,
         tools: list[Callable] | None = None,
         rollout_func: RolloutFunc | None = None,
-        environment_factory: EnvironmentFactory | None = None,
+        environment_factory: EnvironmentFactory | dict[str, EnvironmentFactory] | None = None,
     ):
         # Args
         if args is None:
@@ -299,7 +321,14 @@ class GRPOTrainer(_BaseTrainer):
 
         # Model
         if isinstance(model, str):
-            model_init_kwargs = args.model_init_kwargs or {}
+            model_init_kwargs = dict(args.model_init_kwargs or {})  # copy to avoid mutating model_init_kwargs
+            if quantization_config is not None:
+                if "quantization_config" in model_init_kwargs:
+                    raise ValueError(
+                        "You set `quantization_config` both as a trainer argument and in `args.model_init_kwargs`. "
+                        "Please set it in only one place, preferably as a trainer argument."
+                    )
+                model_init_kwargs["quantization_config"] = quantization_config
             # Distributed training requires device_map=None ("auto" fails)
             if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 model_init_kwargs["device_map"] = None
@@ -310,6 +339,11 @@ class GRPOTrainer(_BaseTrainer):
                 logger.warning(
                     "You passed `model_init_kwargs` to the `GRPOConfig`, but your model is already instantiated. "
                     "The `model_init_kwargs` will be ignored."
+                )
+            if quantization_config is not None:
+                logger.warning(
+                    "You passed `quantization_config` to the trainer, but your model is already instantiated. The "
+                    "`quantization_config` will be ignored."
                 )
         # Non-quantized models do not have the `is_loaded_in_{8,4}bit` attributes, whereas quantized models do
         _is_quantized_model = getattr(model, "is_loaded_in_4bit", False) or getattr(model, "is_loaded_in_8bit", False)
@@ -426,6 +460,25 @@ class GRPOTrainer(_BaseTrainer):
                         ref_param = model.get_parameter(ref_name)
                         ref_param.data.copy_(param.data)
 
+        # PEFT + DeepSpeed ZeRO-3 requires reentrant checkpointing. For more details, see
+        # https://github.com/huggingface/trl/issues/2514#issuecomment-2692152703.
+        # Can be removed once https://github.com/deepspeedai/DeepSpeed/pull/8130 is merged and released.
+        if (
+            is_peft_model(model)
+            and args.deepspeed_plugin is not None
+            and args.deepspeed_plugin.zero_stage == 3
+            and args.gradient_checkpointing
+        ):
+            args.gradient_checkpointing_kwargs = args.gradient_checkpointing_kwargs or {}
+            use_reentrant = args.gradient_checkpointing_kwargs.get("use_reentrant")
+            if use_reentrant is False:
+                logger.warning(
+                    "You are using PEFT with DeepSpeed ZeRO-3 and gradient checkpointing with `use_reentrant=False`. "
+                    "`use_reentrant` is forced to `True` in this configuration to ensure correct training. To remove "
+                    "this warning, unset `use_reentrant` in `gradient_checkpointing_kwargs` or set it to `True`."
+                )
+            args.gradient_checkpointing_kwargs["use_reentrant"] = True
+
         # When using gradient checkpointing with PEFT, we need to enable input gradients. transformers.Trainer normally
         # handles this, but a bug currently prevents it; see https://github.com/huggingface/transformers/issues/42489
         if is_peft_model(model) and args.gradient_checkpointing:
@@ -441,7 +494,9 @@ class GRPOTrainer(_BaseTrainer):
                     param.data = param.data.to(torch.bfloat16)
 
         # Reward functions
-        if not isinstance(reward_funcs, list):
+        if reward_funcs is None:
+            reward_funcs = []
+        elif not isinstance(reward_funcs, list):
             reward_funcs = [reward_funcs]
         self.reward_func_names = []
         for i, reward_func in enumerate(reward_funcs):
@@ -457,7 +512,7 @@ class GRPOTrainer(_BaseTrainer):
             if isinstance(reward_funcs[i], nn.Module):  # Use Module over PretrainedModel for compat w/ compiled models
                 self.reward_func_names.append(get_config_model_id(reward_funcs[i].config).split("/")[-1])
             else:
-                self.reward_func_names.append(reward_funcs[i].__name__)
+                self.reward_func_names.append(get_callable_name(reward_funcs[i]))
         self.reward_funcs = reward_funcs
 
         # Reward weights
@@ -544,39 +599,96 @@ class GRPOTrainer(_BaseTrainer):
                     "full tool-calling conversation (user -> assistant with tool_calls -> tool)."
                 )
 
-        # Set up the environment and extract its methods to be used as tools.
+        # Set up the environments and extract their methods to be used as tools.
         tools = tools or []
-        self._standalone_tools = tools  # tools that are not bound to the environment
+        self._standalone_tools = tools  # tools that are not bound to an environment
 
-        if environment_factory is not None:
-            # The environment instances used by a batch are only known at batch time. Here we just probe one instance to
-            # validate its `reset` method and extract its tool methods, used to render the tool schema in the prompt.
-            # Instances are pooled and reused (reset) across batches; the probe seeds the pool so it is not wasted. The
-            # pool grows only when a batch needs more concurrent instances than have been created so far, preserving the
-            # "construct once, reset often" contract.
-            self.environment_factory = environment_factory
-            instance = environment_factory()
-            has_reset = False
-            methods = []
-            for member_name, member in inspect.getmembers(instance, predicate=inspect.ismethod):
-                if member_name == "reset":
-                    has_reset = True
-                elif not member_name.startswith("_"):
-                    methods.append(member)
-            if not has_reset:
-                raise ValueError(
-                    "Each environment instance returned by `environment_factory` must define a callable `reset`."
-                )
-            self._environment_pool = [instance]  # reusable environment instances
-            self.tools = tools + methods
+        # Normalize `environment_factory` to a `{name: factory}` mapping. A single callable is the special case of one
+        # unnamed (`None`) environment shared by every example; a dict maps the `environment` field of each example to
+        # its factory. `_multi_environment` records which case we are in: only then is the `environment` field read.
+        self._multi_environment = isinstance(environment_factory, dict)
+        if environment_factory is None:
+            self.environment_factories = None
+        elif self._multi_environment:
+            self.environment_factories = environment_factory
         else:
-            self.environment_factory = None
+            self.environment_factories = {None: environment_factory}
+
+        if self.environment_factories is not None:
+            # The environment an example uses is only known at batch time (it depends on the data). Here we just probe
+            # one instance of each environment to validate its `reset` method and extract its tool methods, used to
+            # render the per-example tool schema in the prompt. Instances are pooled and reused (reset) across batches;
+            # the probe seeds the pool so it is not wasted. The pool grows only when a batch needs more concurrent
+            # instances of an environment than have been created so far, preserving the "construct once, reset often"
+            # contract even when batches mix environments.
+            self._env_tools = {}  # {environment name: tools exposed when this environment is selected}
+            self._environment_pool = {}  # {environment name: list of reusable instances}
+            # `self.tools` is the union of every environment's tools, accumulated below as each environment is probed.
+            # Used where only the presence of a tool matters (chat template validation, async loop setup, tool metrics);
+            # the per-example schema is rendered in `_tokenize_prompts`.
+            self.tools = list(tools)
+            env_reward_types = []  # env classes already given a reward column (dedup: same class under two names)
+            for name, factory in self.environment_factories.items():
+                instance = factory()
+                has_reset = False
+                has_reward = False
+                methods = []
+                for member_name, member in inspect.getmembers(instance, predicate=inspect.ismethod):
+                    if member_name == "reset":
+                        has_reset = True
+                    elif member_name == "get_reward":
+                        has_reward = True
+                    elif not member_name.startswith("_"):
+                        methods.append(member)
+                if not has_reset:
+                    raise ValueError(
+                        "Each environment instance returned by `environment_factory` must define a callable `reset`."
+                    )
+                self._env_tools[name] = tools + methods
+                self._environment_pool[name] = [instance]
+                self.tools += [method for method in methods if method not in self.tools]
+
+                # If this environment owns its reward via `get_reward`, expose it as an extra reward source (named after
+                # the env class, weight 1). One column per env class that defines `get_reward` (deduplicated, since a
+                # dict factory may map several names to the same class); a rollout is scored only when its environment is
+                # exactly that class, so mixing an env that owns its reward with one that does not is safe (the latter's
+                # rollouts return `None`, turned into NaN and ignored). Exact-type match (not `isinstance`) keeps this
+                # consistent with the async worker and avoids double-counting when one registered env subclasses another.
+                # `get_reward` may be async (e.g. an LLM judge); wrap it accordingly so `_calculate_rewards` runs it on
+                # the daemon event loop like any other async reward func.
+                if has_reward and type(instance) not in env_reward_types:
+                    env_type = type(instance)
+                    env_reward_types.append(env_type)
+                    if inspect.iscoroutinefunction(instance.get_reward):
+
+                        async def get_reward(environments, _env_type=env_type, **kwargs):
+                            return [await e.get_reward() if type(e) is _env_type else None for e in environments]
+
+                    else:
+
+                        def get_reward(environments, _env_type=env_type, **kwargs):
+                            return [e.get_reward() if type(e) is _env_type else None for e in environments]
+
+                    self.reward_funcs.append(get_reward)
+                    self.reward_func_names.append(env_type.__name__)
+                    self.reward_processing_classes.append(None)
+                    self.reward_weights = torch.cat([self.reward_weights, torch.ones(1)])
+        else:
             self.tools = tools
 
-        # The per-rollout environment instances and tool dicts both depend on the batch, so they are built in
-        # `_generate_and_score_completions`, right before generation. Only `self.environments` needs a default here,
-        # because `_calculate_rewards` reads it for every batch (including batches with no environments); the tool dicts
-        # are only read in the tool-calling loop, which runs after they have been (re)built.
+        # At least one reward source is required: either `reward_funcs`, or an environment that owns the reward via a
+        # `get_reward` method.
+        if not self.reward_funcs:
+            raise ValueError(
+                "No reward source provided. Pass `reward_funcs`, or an `environment_factory` whose environment "
+                "defines a `get_reward` method."
+            )
+
+        # The per-rollout environment instances and tool dicts both depend on the batch (which environment each example
+        # selects), so they are built in `_generate_and_score_completions`, right before generation. Only
+        # `self.environments` needs a default here, because `_calculate_rewards` reads it for every batch (including
+        # batches with no environments); the tool dicts are only read in the tool-calling loop, which runs after they
+        # have been (re)built.
         self.environments = None
 
         # Check for async functions to start an event loop on a daemon thread
@@ -674,6 +786,18 @@ class GRPOTrainer(_BaseTrainer):
                     "fused GRPO loss reads `lm_head.weight` directly, so the adapter on the head is ignored and never "
                     "trained. Either remove `'lm_head'` from your `target_modules`, or set `use_liger_kernel=False`."
                 )
+            # Prompt-learning methods (PromptTuning, PrefixTuning, P-Tuning) inject virtual tokens via
+            # `PeftModel.forward()`. The Liger GRPO loss bypasses `PeftModel.forward()` by calling the backbone
+            # directly, so virtual tokens are never prepended and the loss is computed on the wrong sequence.
+            # Fail loudly rather than train on a silently corrupted input.
+            if any(isinstance(cfg, PromptLearningConfig) for cfg in model.peft_config.values()):
+                raise ValueError(
+                    "`use_liger_kernel=True` is incompatible with prompt-learning PEFT methods (PromptTuning, "
+                    "PrefixTuning, P-Tuning). The Liger GRPO loss bypasses `PeftModel.forward()` by calling the "
+                    "backbone directly, so virtual tokens are never prepended and the loss is computed on the "
+                    "wrong sequence. Use a weight-based adapter such as LoRA instead, or set "
+                    "`use_liger_kernel=False`."
+                )
         self.mask_truncated_completions = args.mask_truncated_completions
         self.top_entropy_quantile = args.top_entropy_quantile
         if self.use_liger_kernel and self.top_entropy_quantile < 1.0:
@@ -685,6 +809,20 @@ class GRPOTrainer(_BaseTrainer):
                 f"Unknown importance sampling level: {self.importance_sampling_level}. "
                 "Possible values are 'token' and 'sequence'."
             )
+        self.entropy_coef = args.entropy_coef
+        self.use_adaptive_entropy = args.use_adaptive_entropy
+        # Whether the entropy bonus is active. Constant for the run: entropy_coef only mutates in adaptive
+        # mode, where this is True regardless of its value (so the bonus can recover after being decremented).
+        self._entropy_bonus_enabled = self.entropy_coef != 0.0 or self.use_adaptive_entropy
+        # Cached entropy from the last optimizer step; inf so the first accumulation window
+        # applies no bonus until a real measurement arrives (conservative default).
+        self._last_world_entropy = float("inf")
+        # Running [entropy_sum, active_token_count] accumulated across the micro-batches of the current
+        # accumulation window, so the adaptive controller sees the exact window-global entropy (not just the
+        # last micro-batch). Reset to None at each optimizer step.
+        self._entropy_window_stats = None
+        if self.use_liger_kernel and self._entropy_bonus_enabled:
+            raise NotImplementedError("Entropy bonus is not supported with Liger kernel.")
 
         # Datasets
         self.shuffle_dataset = args.shuffle_dataset
@@ -699,7 +837,7 @@ class GRPOTrainer(_BaseTrainer):
             )
         ):
             # See https://github.com/huggingface/trl/issues/3213
-            raise NotImplementedError(
+            raise ValueError(
                 "Iterable datasets are not yet supported in GRPOTrainer. Please use a standard dataset instead."
             )
 
@@ -776,7 +914,9 @@ class GRPOTrainer(_BaseTrainer):
             self.ref_model = None
         else:
             # For deepspeed, fsdp or non-distributed models, create a reference model from scratch
-            model_init_kwargs = args.model_init_kwargs or {}
+            model_init_kwargs = dict(args.model_init_kwargs or {})  # copy to avoid mutating model_init_kwargs
+            if quantization_config is not None:
+                model_init_kwargs["quantization_config"] = quantization_config
             # Distributed training requires device_map=None ("auto" fails)
             if self.args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 model_init_kwargs["device_map"] = None
@@ -795,15 +935,25 @@ class GRPOTrainer(_BaseTrainer):
             def _cast_lm_head_to_fp32(target_model: PreTrainedModel):
                 """Cast lm_head to fp32 while preserving embedding output dtype if tied."""
 
-                def cast_inputs_to_fp32(module, inputs):
-                    # Preserve other positional args and kwargs untouched
-                    if not inputs:
-                        return inputs
-                    return (inputs[0].to(torch.float32),) + inputs[1:]
+                if is_peft_available() and isinstance(target_model.lm_head, BaseTunerLayer):
+                    raise ValueError(
+                        "`cast_lm_head_to_fp32=True` is not supported when the lm_head carries a PEFT "
+                        "adapter (e.g. `target_modules` includes `lm_head`). Remove `lm_head` from the "
+                        "adapter's target modules, or set `cast_lm_head_to_fp32=False`."
+                    )
 
                 original_dtype_local = target_model.lm_head.weight.dtype
-                target_model.lm_head = target_model.lm_head.float()
-                target_model.lm_head.register_forward_pre_hook(cast_inputs_to_fp32)
+                lm_head = target_model.lm_head.float()
+                target_model.lm_head = lm_head
+
+                def cast_forward_to_fp32(hidden_states):
+                    return nn.functional.linear(
+                        hidden_states.to(torch.float32),
+                        lm_head.weight.to(torch.float32),
+                        None if lm_head.bias is None else lm_head.bias.to(torch.float32),
+                    )
+
+                lm_head.forward = cast_forward_to_fp32
 
                 if target_model.config.tie_word_embeddings:
 
@@ -823,7 +973,8 @@ class GRPOTrainer(_BaseTrainer):
                 raise ImportError(
                     "Liger is required to use `use_liger_kernel` as the GRPO loss. Run `pip install liger-kernel`."
                 )
-            # redirect the model.module forward to the model forward to ensure pre-forward hooks are called
+            # Redirect the model.module forward to the model forward to ensure pre-forward hooks are called, so that
+            # under ZeRO-3 the parameter coordinator gathers/reduces `lm_head.weight` around the fused loss.
             self._forward_redirection = _ForwardRedirection()
 
             self.liger_loss = LigerFusedLinearGRPOLoss(
@@ -850,6 +1001,7 @@ class GRPOTrainer(_BaseTrainer):
         self._total_train_tokens = 0
         self._current_train_step_time = 0.0
         self.log_completions = args.log_completions
+        self.log_multimodal = args.log_multimodal
         self.log_unique_prompts = args.log_unique_prompts
         self.num_completions_to_print = args.num_completions_to_print
         # Keep logs sized to the generation batch to record only outputs from the latest model update.
@@ -894,6 +1046,7 @@ class GRPOTrainer(_BaseTrainer):
                 * args.steps_per_generation,
                 enable_sleep_mode=args.vllm_enable_sleep_mode,
                 model_impl=args.vllm_model_impl,
+                trust_remote_code=args.trust_remote_code,
                 # Generation configuration
                 repetition_penalty=self.repetition_penalty,
                 temperature=self.temperature,
@@ -1257,8 +1410,14 @@ class GRPOTrainer(_BaseTrainer):
             all_logps.append(logps)
 
             if compute_entropy:
-                with torch.no_grad():
+                # The entropy bonus is a differentiable loss term, so entropies must carry grad when it is
+                # active. Otherwise they only feed logging and the top_entropy_quantile mask (neither
+                # differentiable), so we skip grad to avoid retaining the memory-heavy full-vocab softmax.
+                if self._entropy_bonus_enabled:
                     entropies = entropy_from_logits(logits)
+                else:
+                    with torch.no_grad():
+                        entropies = entropy_from_logits(logits)
                 all_entropies.append(entropies)
 
             if compute_aux_loss:
@@ -1355,6 +1514,10 @@ class GRPOTrainer(_BaseTrainer):
         # Allow reward functions to log additional scalar metrics.
         reward_kwargs["log_metric"] = self._log_metric
 
+        # Expose the per-completion environment instances to reward functions (both sync and async paths).
+        if self.environments is not None:
+            reward_kwargs["environments"] = self.environments
+
         async_funcs_info = []  # async custom functions for asyncio.gather
 
         for i, (reward_func, reward_processing_class, reward_func_name) in enumerate(
@@ -1381,8 +1544,6 @@ class GRPOTrainer(_BaseTrainer):
             else:
                 # Run synchronous reward function
                 with profiling_context(self, reward_func_name):
-                    if self.environments is not None:
-                        reward_kwargs["environments"] = self.environments
                     output_reward_func = reward_func(
                         prompts=prompts, completions=completions, completion_ids=completion_ids_list, **reward_kwargs
                     )
@@ -1449,6 +1610,34 @@ class GRPOTrainer(_BaseTrainer):
                                 has_images = True
                 images.append(prompt_images if prompt_images else None)
             images = images if has_images else None
+
+            if self.environment_factories is not None:
+                # Tools differ per example across environments, so render each prompt with its own tool schema.
+                prompt_ids = []
+                multimodal_fields = {}
+                for prompt, name in zip(prompts, self._batch_environments, strict=True):
+                    tokenized = self.processing_class.apply_chat_template(
+                        conversation=[prompt],
+                        tools=self._env_tools[name] or None,  # `or None`: Llama bug: tool boilerplate for tools=[]
+                        chat_template=self.chat_template,
+                        add_generation_prompt=True,
+                        tokenize=True,
+                        return_dict=True,
+                        **self.chat_template_kwargs,
+                    )
+                    prompt_ids.append(tokenized["input_ids"][0])
+                    # For VLMs, the processor returns extra multimodal fields (pixel_values, image_grid_thw, etc.)
+                    for k, v in tokenized.items():
+                        if k not in ("input_ids", "attention_mask"):
+                            multimodal_fields.setdefault(k, []).append(v)
+                # Merge the per-prompt fields so the result matches the single batched `apply_chat_template` call used
+                # when there are no environments: image fields (pixel_values, image_grid_thw, ...) are flattened over
+                # patches/images and concatenated; per-token fields (e.g. token_type_ids) stay batched per prompt.
+                multimodal_fields = {
+                    k: torch.cat(v) if isinstance(v[0], torch.Tensor) else [row for prompt_v in v for row in prompt_v]
+                    for k, v in multimodal_fields.items()
+                }
+                return prompt_ids, images, multimodal_fields
 
             # Workaround for a bug in transformers 5.3.0 where some processors (e.g. Qwen2.5-VL) crash on
             # batched unpadded input (transformers#44514).
@@ -1975,17 +2164,30 @@ class GRPOTrainer(_BaseTrainer):
 
         prompts = [x["prompt"] for x in inputs]
 
-        # Draw one reusable instance per rollout from the pool, creating more only when this batch needs more concurrent
-        # instances than exist.
-        if self.environment_factory is not None:
+        # Resolve each example's environment and draw one reusable instance per rollout from the pool, creating more
+        # only when this batch needs more concurrent instances of an environment than exist. `_batch_environments`
+        # records each example's environment so `_tokenize_prompts` can render the matching tool schema.
+        if self.environment_factories is not None:
+            self._batch_environments = [x.get("environment") if self._multi_environment else None for x in inputs]
+            if self._multi_environment:
+                for name in set(self._batch_environments):
+                    if name not in self.environment_factories:
+                        raise ValueError(
+                            f"Example has `environment={name!r}`, which is not among the environments passed to "
+                            f"`environment_factory`. Expected one of: {list(self.environment_factories)}."
+                        )
             self.environments = []
-            for i in range(len(inputs)):
-                if i == len(self._environment_pool):
-                    self._environment_pool.append(self.environment_factory())
-                self.environments.append(self._environment_pool[i])
+            pool_cursor = {}  # how many instances of each environment have been handed out so far this batch
+            for name in self._batch_environments:
+                pool = self._environment_pool[name]
+                index = pool_cursor.get(name, 0)
+                if index == len(pool):
+                    pool.append(self.environment_factories[name]())
+                pool_cursor[name] = index + 1
+                self.environments.append(pool[index])
 
         # Build the per-rollout tool dicts for this batch: the standalone tools plus, for each rollout, the methods of
-        # its environment. Done here (not at init) because the environment instances are drawn at batch time.
+        # its environment. Done here (not at init) because each example's environment, hence its tools, is data-dependent.
         if self.tools:
             self._sync_tool_dicts = []
             self._async_tool_dicts = []
@@ -1995,7 +2197,7 @@ class GRPOTrainer(_BaseTrainer):
                     methods = [
                         member
                         for member_name, member in inspect.getmembers(self.environments[i], predicate=inspect.ismethod)
-                        if member_name != "reset" and not member_name.startswith("_")
+                        if member_name not in ("reset", "get_reward") and not member_name.startswith("_")
                     ]
                 sync_tool_dict, async_tool_dict = {}, {}
                 for tool in self._standalone_tools + methods:
@@ -2007,15 +2209,19 @@ class GRPOTrainer(_BaseTrainer):
                 self._async_tool_dicts.append(async_tool_dict)
 
         if self.environments:
-            for prompt, environment, reset_kwargs in zip(prompts, self.environments, inputs, strict=True):
+            for i, (prompt, environment, x) in enumerate(zip(prompts, self.environments, inputs, strict=True)):
+                # `environment` is a control field in multi-environment mode, so it is not forwarded to `reset`.
+                reset_kwargs = {k: v for k, v in x.items() if k != "environment"} if self._multi_environment else x
                 observation = environment.reset(**reset_kwargs)
                 if observation is None:
                     continue
-                if isinstance(observation, list) and isinstance(prompt[-1]["content"], str):
-                    prompt[-1]["content"] = [{"type": "text", "text": prompt[-1]["content"]}]
-                if isinstance(observation, str) and isinstance(prompt[-1]["content"], list):
+                content = prompt[-1]["content"]
+                if isinstance(observation, list) and isinstance(content, str):
+                    content = [{"type": "text", "text": content}]
+                if isinstance(observation, str) and isinstance(content, list):
                     observation = [{"type": "text", "text": observation}]
-                prompt[-1]["content"] += observation
+                # Rebuild the last message rather than mutating it in place, so the input example is left untouched.
+                prompts[i] = prompt[:-1] + [{**prompt[-1], "content": content + observation}]
 
         if "images" in inputs[0]:
             images = [example.get("images") for example in inputs]
@@ -2128,11 +2334,15 @@ class GRPOTrainer(_BaseTrainer):
             image_inputs = super()._prepare_inputs(image_inputs)
             forward_kwargs = dict(image_inputs)
         elif images is not None:
+            if self.environment_factories is not None:
+                per_prompt_tools = [self._env_tools[name] for name in self._batch_environments]
+            else:
+                per_prompt_tools = [self.tools] * len(prompts)
             prompts_text = [
                 apply_chat_template(
-                    {"prompt": prompt}, self.processing_class, tools=self.tools, **self.chat_template_kwargs
+                    {"prompt": prompt}, self.processing_class, tools=tools, **self.chat_template_kwargs
                 )["prompt"]
-                for prompt in prompts
+                for prompt, tools in zip(prompts, per_prompt_tools, strict=True)
             ]
             prompt_inputs = self.processing_class(images=images, text=prompts_text, padding=True, return_tensors="pt")
             prompt_inputs = super()._prepare_inputs(prompt_inputs)
@@ -2452,7 +2662,7 @@ class GRPOTrainer(_BaseTrainer):
             self._metrics[mode][name].append(global_mean)
         self._pending_metrics.clear()
 
-        if images is not None:
+        if images is not None and self.log_multimodal:
             self._logs["images"].extend(gather_object(images))
 
         if self.use_vllm and self.vllm_importance_sampling_correction:
@@ -2557,21 +2767,10 @@ class GRPOTrainer(_BaseTrainer):
         loss_mask = completion_mask if "tool_mask" not in inputs else completion_mask * inputs["tool_mask"]
         lm_head_weight = unwrapped_model.lm_head.weight
         lm_head_bias = unwrapped_model.lm_head.bias
-        # Liger reads `lm_head` directly instead of through `model.forward()`, so its ZeRO-3 gather hook never fires
-        # and the fused matmul gets an empty shard. Gather the weight/bias ourselves for the call (the weight grad is
-        # computed during this forward, so it isn't needed in the backward). Skip it when already gathered: with tied
-        # embeddings `embed_tokens` keeps the weight `AVAILABLE`, and re-partitioning on exit breaks its tracking.
-        deepspeed_plugin = self.accelerator.state.deepspeed_plugin
-        gather_ctx = nullcontext()
-        if deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3:
-            from deepspeed.runtime.zero.partition_parameters import ZeroParamStatus
-
-            params = [lm_head_weight] if lm_head_bias is None else [lm_head_weight, lm_head_bias]
-            if any(p.ds_status != ZeroParamStatus.AVAILABLE for p in params):
-                import deepspeed
-
-                gather_ctx = deepspeed.zero.GatheredParameters(params, modifier_rank=None)
-        with gather_ctx:
+        # Liger reads `lm_head` directly instead of through `model.forward()`, so its ZeRO-3 gather hook never fires and
+        # the fused matmul gets an empty shard. Gather the weight/bias ourselves for the call (the weight grad is
+        # computed during this forward, so it isn't needed in the backward).
+        with maybe_gather_lm_head_ctx(lm_head_weight, lm_head_bias):
             loss, metrics = self.liger_loss(
                 _input=last_hidden_state,
                 lin_weight=lm_head_weight,
@@ -2814,25 +3013,95 @@ class GRPOTrainer(_BaseTrainer):
         if self.loss_type in ["grpo", "sapo"]:
             loss = ((per_token_loss * mask).sum(-1) / mask.sum(-1).clamp(min=1.0)).mean()
             normalizer = self.current_gradient_accumulation_steps if mode == "train" else 1.0  # no accum in eval
+            policy_loss = loss.detach()
             loss = loss / normalizer
         elif self.loss_type == "bnpo":
             loss = (per_token_loss * mask).sum() / mask.sum().clamp(min=1.0)
             normalizer = self.current_gradient_accumulation_steps if mode == "train" else 1.0  # no accum in eval
+            policy_loss = loss.detach()
             loss = loss / normalizer
         elif self.loss_type == "dr_grpo":
             loss = (per_token_loss * mask).sum() / (per_token_loss.size(0) * self.max_completion_length)
             normalizer = self.current_gradient_accumulation_steps if mode == "train" else 1.0  # no accum in eval
+            policy_loss = loss.detach()
             loss = loss / normalizer
         elif self.loss_type in ["cispo", "dapo", "vespo"]:
             normalizer = inputs["num_items_in_batch"] / self.accelerator.num_processes
             loss = (per_token_loss * mask).sum() / normalizer
+            policy_loss = loss.detach()
         elif self.loss_type == "luspo":
             # Unless importance_sampling_level="token" (not recommended here), per_token_loss is expected to be (B, 1)
             loss = (per_token_loss * mask.sum(1, keepdim=True)).mean()
             normalizer = self.current_gradient_accumulation_steps if mode == "train" else 1.0
+            policy_loss = loss.detach()
             loss = loss / normalizer
         else:
             raise ValueError(f"Unknown loss type: {self.loss_type}")
+
+        # Entropy bonus: add entropy regularization to encourage exploration. _entropy_bonus_enabled is set
+        # whenever a non-zero static coef is set OR adaptive mode is enabled (adaptive stays enabled even when
+        # entropy_coef has been decremented to entropy_coef_min so it can recover once entropy drops again).
+        if self._entropy_bonus_enabled:
+            # When top_entropy_quantile < 1.0, entropy_mask restricts policy gradients to high-entropy
+            # tokens. Use the same effective mask for the entropy bonus so it acts on the same tokens.
+            effective_mask = mask if entropy_mask is None else mask * entropy_mask
+            # Entropy bonus = mean per-token entropy H (the documented objective L = L_policy - coef * H), so
+            # H does not depend on how each loss type normalizes its policy term. The term is computed so that
+            # it accumulates to H over the optimizer step for every loss type and matches world_entropy below.
+            # The only wrinkle is the normalizer: most loss types divide by the gradient accumulation step
+            # count, but cispo/dapo/vespo divide by a global token count.
+            if self.loss_type in ["cispo", "dapo", "vespo"]:
+                # normalizer is a global token count, so summing the entropies (instead of averaging them
+                # again) makes the term accumulate over the optimizer step to the global mean per-token
+                # entropy, like the other loss types.
+                entropy_loss = (entropies * effective_mask).sum() / normalizer
+            else:
+                # Mean per-token entropy of active tokens, scaled for gradient accumulation.
+                entropy_loss = (entropies * effective_mask).sum() / effective_mask.sum().clamp(min=1.0) / normalizer
+
+            # Apply the coefficient and gating from the end of the previous optimizer step, so that every
+            # micro-batch in the current accumulation window applies the same entropy bonus. The adaptive
+            # update below only takes effect on the next step.
+            if self.use_adaptive_entropy:
+                apply_coef = self.entropy_coef if self._last_world_entropy <= self.args.entropy_target else 0.0
+            else:
+                apply_coef = self.entropy_coef
+
+            loss = loss - apply_coef * entropy_loss
+
+            self._metrics[mode]["policy_loss"].append(self.accelerator.gather(policy_loss).nanmean().item())
+
+            # Adaptive update. Gated on train mode so evaluation cannot mutate the entropy controller state.
+            if self.use_adaptive_entropy and mode == "train":
+                # Accumulate the entropy sum and active-token count of every micro-batch into a running window
+                # buffer, so the controller measures the exact window-global entropy rather than just the last
+                # micro-batch (which would be a 1 / gradient_accumulation_steps subsample).
+                stats = torch.stack([(entropies * effective_mask).sum(), effective_mask.sum()]).detach()
+                if self._entropy_window_stats is None:
+                    self._entropy_window_stats = stats
+                else:
+                    self._entropy_window_stats = self._entropy_window_stats + stats
+                # At the optimizer-step boundary, reduce the window totals across ranks (sum and token count
+                # jointly, for a true global mean unbiased when ranks have different completion lengths),
+                # update the coefficient for the next step, then reset the window buffer.
+                if self.accelerator.sync_gradients:
+                    window_stats = self.accelerator.reduce(self._entropy_window_stats, reduction="sum")
+                    world_entropy = (window_stats[0] / window_stats[1].clamp(min=1.0)).item()
+                    if world_entropy <= self.args.entropy_target:
+                        self.entropy_coef = min(
+                            self.entropy_coef + self.args.entropy_coef_delta, self.args.entropy_coef_max
+                        )
+                    else:
+                        self.entropy_coef = max(
+                            self.entropy_coef - self.args.entropy_coef_delta, self.args.entropy_coef_min
+                        )
+                    self._last_world_entropy = world_entropy
+                    self._entropy_window_stats = None
+
+            # Log entropy_coef on train optimizer-step boundaries (constant for static control; updated just
+            # above for adaptive control). sync_gradients is always True in eval (no accumulation context).
+            if mode == "train" and self.accelerator.sync_gradients:
+                self._metrics[mode]["entropy_coef"].append(self.entropy_coef)
 
         # The policy loss above is scaled for gradient accumulation (HF auto-scaling is off here), so scale aux too
         if self.aux_loss_enabled:
@@ -2983,3 +3252,18 @@ class GRPOTrainer(_BaseTrainer):
             model_name = self.args.hub_model_id.split("/")[-1]
         self.create_model_card(model_name=model_name)
         super()._save_checkpoint(model, trial)
+        if self.use_adaptive_entropy and self.args.should_save:
+            checkpoint_folder = f"{PREFIX_CHECKPOINT_DIR}-{self.state.global_step}"
+            output_dir = os.path.join(self._get_output_dir(trial=trial), checkpoint_folder)
+            with open(os.path.join(output_dir, "entropy_ctrl_state.json"), "w") as f:
+                json.dump({"entropy_coef": self.entropy_coef, "last_world_entropy": self._last_world_entropy}, f)
+
+    def _load_optimizer_and_scheduler(self, checkpoint):
+        super()._load_optimizer_and_scheduler(checkpoint)
+        if self.use_adaptive_entropy and checkpoint is not None:
+            path = os.path.join(checkpoint, "entropy_ctrl_state.json")
+            if os.path.exists(path):
+                with open(path) as f:
+                    state = json.load(f)
+                self.entropy_coef = state["entropy_coef"]
+                self._last_world_entropy = state["last_world_entropy"]
