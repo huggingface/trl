@@ -14,12 +14,14 @@
 
 import math
 import os
+from collections import defaultdict
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
 import torch
 import torch.nn.functional as F
-from datasets import Dataset, load_dataset
+from datasets import Dataset, DatasetDict, IterableDatasetDict, load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from trl.experimental.distillation import DistillationConfig, DistillationTrainer
@@ -149,6 +151,50 @@ def test_distillation_config_rejects_liger_with_teacher_server(tmp_path):
 def test_distillation_config_rejects_invalid_reverse_kl_top_1_mode(tmp_path):
     with pytest.raises(ValueError, match="reverse_kl_top_1_mode must be one of"):
         DistillationConfig(**_make_distillation_config_kwargs(tmp_path), reverse_kl_top_1_mode="invalid")
+
+
+def test_distillation_config_rejects_invalid_distillation_objective(tmp_path):
+    with pytest.raises(ValueError, match="distillation_objective must be one of"):
+        DistillationConfig(**_make_distillation_config_kwargs(tmp_path), distillation_objective="invalid")
+
+
+def test_distillation_config_rejects_invalid_iw_opd_gamma(tmp_path):
+    with pytest.raises(ValueError, match="iw_opd_gamma must be non-negative"):
+        DistillationConfig(**_make_distillation_config_kwargs(tmp_path), iw_opd_gamma=-0.1)
+
+
+def test_distillation_config_rejects_invalid_iw_opd_epsilon(tmp_path):
+    with pytest.raises(ValueError, match="iw_opd_epsilon must be positive"):
+        DistillationConfig(**_make_distillation_config_kwargs(tmp_path), iw_opd_epsilon=0.0)
+
+
+def test_distillation_config_rejects_iw_opd_with_liger(tmp_path):
+    with pytest.raises(
+        ValueError, match="use_liger_kernel=True is not supported with distillation_objective='iw_opd'"
+    ):
+        DistillationConfig(
+            **_make_distillation_config_kwargs(tmp_path),
+            distillation_objective="iw_opd",
+            use_liger_kernel=True,
+        )
+
+
+def test_distillation_config_rejects_iw_opd_when_not_fully_on_policy(tmp_path):
+    with pytest.raises(ValueError, match="distillation_objective='iw_opd' requires lmbda=1.0"):
+        DistillationConfig(
+            **_make_distillation_config_kwargs(tmp_path),
+            distillation_objective="iw_opd",
+            lmbda=0.5,
+        )
+
+
+def test_distillation_config_rejects_iw_opd_with_argmax_top_1_mode(tmp_path):
+    with pytest.raises(ValueError, match="distillation_objective='iw_opd' requires reverse_kl_top_1_mode='sampled'"):
+        DistillationConfig(
+            **_make_distillation_config_kwargs(tmp_path),
+            distillation_objective="iw_opd",
+            reverse_kl_top_1_mode="argmax",
+        )
 
 
 def test_distillation_config_rejects_teacher_server_with_reverse_kl_argmax(tmp_path):
@@ -481,6 +527,54 @@ class TestDistillationTrainer(TrlTestCase):
         assert train_result.metrics["train_loss"] >= 0.0
         assert "model.safetensors" in os.listdir(self.tmp_dir + "/checkpoint-2")
 
+    @pytest.mark.parametrize(
+        "eval_dataset_type",
+        [
+            "dataset",
+            "iterable_dataset",
+            "dataset_dict",
+            "iterable_dataset_dict",
+            "dict_of_dataset",
+            "dict_of_iterable_dataset",
+            "none",
+        ],
+    )
+    def test_init_with_eval_dataset(self, eval_dataset_type):
+        train_dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
+
+        if eval_dataset_type == "none":
+            eval_dataset = None
+        else:
+            streaming = "iterable" in eval_dataset_type
+            eval_split = load_dataset(
+                "trl-internal-testing/zen", "conversational_language_modeling", split="test", streaming=streaming
+            )
+            if eval_dataset_type in ("dataset", "iterable_dataset"):
+                eval_dataset = eval_split
+            elif eval_dataset_type in ("dataset_dict", "iterable_dataset_dict"):
+                dataset_dict_cls = IterableDatasetDict if streaming else DatasetDict
+                eval_dataset = dataset_dict_cls({"data1": eval_split, "data2": eval_split})
+            else:  # "dict_of_dataset" or "dict_of_iterable_dataset"
+                eval_dataset = {"data1": eval_split, "data2": eval_split}
+
+        training_args = DistillationConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = DistillationTrainer(
+            model=self.model_id,
+            teacher_model=self.model_id,
+            args=training_args,
+            train_dataset=train_dataset,
+            eval_dataset=eval_dataset,
+            processing_class=self.tokenizer,
+        )
+
+        # The distillation collator consumes raw examples, so eval datasets are stored as-is (not tokenized).
+        if eval_dataset_type == "none":
+            assert trainer.eval_dataset is None
+        elif isinstance(trainer.eval_dataset, dict):
+            assert set(trainer.eval_dataset.keys()) == {"data1", "data2"}
+        else:
+            assert trainer.eval_dataset is eval_dataset
+
     @pytest.mark.parametrize("loss_top_k", [0, 1])
     def test_loss_normalizes_by_num_items_in_batch(self, loss_top_k):
         # When `num_items_in_batch` is passed (as under gradient accumulation), the divergence loss must be reduced as
@@ -573,6 +667,162 @@ class TestDistillationTrainer(TrlTestCase):
         assert teacher_client.calls[0]["prompt_lengths"] == expected_prompt_lengths
         assert teacher_client.calls[0]["top_logprobs"] == 1
         torch.testing.assert_close(local_loss, server_loss)
+
+    def test_iw_opd_prefix_weights_and_loss(self):
+        trainer = DistillationTrainer.__new__(DistillationTrainer)
+        trainer.temperature = 1.0
+        trainer.iw_opd_gamma = 0.5
+        trainer.iw_opd_epsilon = 1e-8
+        trainer._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
+        trainer.model = SimpleNamespace(training=True)
+
+        student_logits = torch.zeros(2, 3, 4, requires_grad=True)
+        completion_tokens = torch.tensor([[0, 1, 2], [1, 2, 3]])
+        labels = torch.tensor([[0, 1, 2], [1, -100, -100]])
+        student_logprob = -math.log(4)
+        teacher_actual_logprobs = torch.tensor(
+            [
+                [student_logprob + 0.2, student_logprob - 0.3, student_logprob + 0.5],
+                [student_logprob + 0.4, float("-inf"), float("-inf")],
+            ]
+        )
+
+        loss = trainer._compute_iw_opd_loss(
+            student_logits=student_logits,
+            completion_tokens=completion_tokens,
+            labels=labels,
+            teacher_actual_logprobs=teacher_actual_logprobs,
+        )
+
+        advantages = torch.tensor([[0.2, -0.3, 0.5], [0.4, 0.0, 0.0]])
+        weights = torch.tensor([[1.5, 1.4, 1.25], [1.5, 1.0, 1.0]])
+        expected = -student_logprob * (weights * advantages).sum() / 4
+
+        torch.testing.assert_close(loss, expected)
+        assert trainer._metrics["train"]["iw_opd/max_weight"] == [1.5]
+        assert trainer._metrics["train"]["iw_opd/min_weight"] == [1.25]
+
+        # Under gradient accumulation the sum is divided by the global token count instead of the local one
+        loss_ga = trainer._compute_iw_opd_loss(
+            student_logits=student_logits,
+            completion_tokens=completion_tokens,
+            labels=labels,
+            teacher_actual_logprobs=teacher_actual_logprobs,
+            num_items_in_batch=8,
+        )
+        torch.testing.assert_close(loss_ga, expected * 4 / 8)
+
+        loss.backward()
+        assert student_logits.grad is not None
+        assert torch.isfinite(student_logits.grad).all()
+
+    def test_iw_opd_uses_cached_rollout_logprobs(self):
+        trainer = DistillationTrainer.__new__(DistillationTrainer)
+        trainer.temperature = 1.0
+        trainer.iw_opd_gamma = 0.0
+        trainer.iw_opd_epsilon = 1e-8
+        trainer._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
+        trainer.model = SimpleNamespace(training=True)
+
+        student_logits = torch.zeros(1, 2, 4, requires_grad=True)
+        completion_tokens = torch.tensor([[0, 1]])
+        labels = torch.tensor([[0, 1]])
+        current_student_logprob = -math.log(4)
+        rollout_logprobs = torch.tensor([[-0.5, -0.25]])
+        teacher_actual_logprobs = torch.tensor([[-0.2, -0.05]])
+
+        loss = trainer._compute_iw_opd_loss(
+            student_logits=student_logits,
+            completion_tokens=completion_tokens,
+            labels=labels,
+            teacher_actual_logprobs=teacher_actual_logprobs,
+            rollout_logprobs=rollout_logprobs,
+        )
+
+        expected_advantage_sum = (teacher_actual_logprobs - rollout_logprobs).sum()
+        expected = -current_student_logprob * expected_advantage_sum / 2
+        torch.testing.assert_close(loss, expected)
+
+        # Buffer layout: with mixed prompt lengths, prompt_length (shortest real prompt) is smaller than the
+        # padded prompt width, so rollout logprobs must be stored at full sequence width to survive the
+        # labels-style slice in compute_loss.
+        class _Tok:
+            pad_token_id = 0
+
+            @staticmethod
+            def batch_decode(sequences, skip_special_tokens=False, clean_up_tokenization_spaces=False):
+                return [" ".join(str(int(t)) for t in seq) for seq in sequences]
+
+        trainer = DistillationTrainer.__new__(DistillationTrainer)
+        trainer.accelerator = SimpleNamespace(device=torch.device("cpu"))
+        trainer.processing_class = _Tok()
+        trainer.generation_config = SimpleNamespace(max_new_tokens=3)
+        trainer._buffered_inputs = [None]
+        trainer._buffered_text_logs = [None]
+
+        trainer._store_completions_in_buffer(
+            slices=[{}],
+            on_policy_indices=[0],
+            local_slice_indices=[0, 0],
+            local_prompts=[torch.tensor([5]), torch.tensor([6, 7])],
+            completion_ids=[[11, 12, 13], [14]],
+            logprobs=[[[-0.1], [-0.2], [-0.3]], [[-0.4]]],
+            logprob_token_ids=[[[11], [12], [13]], [[14]]],
+        )
+
+        buffered = trainer._buffered_inputs[0]
+        labels = buffered["labels"]
+        rollout_logprobs = buffered["rollout_logprobs"]
+        assert rollout_logprobs.shape == labels.shape
+
+        prompt_length = trainer._compute_prompt_length(buffered)
+        assert prompt_length == 1
+        sliced_labels = labels[:, prompt_length:]
+        sliced_rollout = rollout_logprobs[:, prompt_length:]
+        expected = {(0, 11): -0.1, (0, 12): -0.2, (0, 13): -0.3, (1, 14): -0.4}
+        valid = sliced_labels != -100
+        assert valid.sum() == 4
+        for row, col in valid.nonzero().tolist():
+            token = int(sliced_labels[row, col])
+            torch.testing.assert_close(sliced_rollout[row, col].item(), expected[(row, token)])
+
+    def test_iw_opd_train_runs_with_local_teacher(self):
+        trainer = self._make_local_trainer(
+            distillation_objective="iw_opd",
+            lmbda=1.0,
+            max_completion_length=8,
+        )
+
+        train_result = trainer.train()
+
+        assert train_result.metrics["train_loss"] is not None
+        assert math.isfinite(train_result.metrics["train_loss"])
+        assert any("iw_opd/mean_weight" in record for record in trainer.state.log_history)
+
+    def test_iw_opd_server_path_uses_actual_logprobs(self, monkeypatch):
+        import trl.generation.vllm_client as vllm_client_module
+
+        teacher_client = RecordingTeacherClient()
+        monkeypatch.setattr(vllm_client_module, "VLLMClient", lambda *args, **kwargs: teacher_client)
+
+        trainer = self._make_server_trainer(distillation_objective="iw_opd", lmbda=1.0)
+        inputs = self._move_batch_to_device(self._make_batch(trainer), trainer.accelerator.device)
+        sequences, prompt_lengths, _ = build_teacher_request_inputs(
+            inputs["input_ids"],
+            inputs["attention_mask"],
+            prompt_attention_mask=inputs["prompt_attention_mask"],
+            labels=inputs["labels"],
+        )
+        teacher_client.result = _canned_teacher_logprobs(
+            sequences=sequences,
+            prompt_lengths=prompt_lengths,
+            top_logprobs=1,
+        )
+
+        loss = trainer.compute_loss(trainer.model, inputs)
+
+        assert torch.isfinite(loss)
+        assert teacher_client.calls[0]["top_logprobs"] == 1
 
 
 class TestDistillationTrainerServerPath(TrlTestCase):

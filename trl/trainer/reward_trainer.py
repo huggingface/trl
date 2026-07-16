@@ -31,11 +31,12 @@ import transformers
 from accelerate import PartialState
 from accelerate.logging import get_logger
 from accelerate.utils import is_peft_model
-from datasets import Dataset, IterableDataset
+from datasets import Dataset, DatasetDict, IterableDataset, IterableDatasetDict
 from packaging.version import Version
 from transformers import (
     AutoModelForSequenceClassification,
     AutoTokenizer,
+    BitsAndBytesConfig,
     DataCollator,
     PreTrainedModel,
     PreTrainedTokenizerBase,
@@ -48,7 +49,7 @@ from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_peft_available
 
 from ..chat_template_utils import clone_chat_template
-from ..data_utils import is_conversational
+from ..data_utils import _tokenize, get_dataset_column_names, is_conversational
 from ..models import get_act_offloading_ctx_manager
 from .base_trainer import _BaseTrainer
 from .reward_config import RewardConfig
@@ -130,10 +131,6 @@ def suppress_seqcls_warning():
         transformers_logger = logging.getLogger("transformers.modeling_utils")
         with _suppress_seqcls_cross_arch_keys(transformers_logger):
             yield
-
-
-def get_dataset_column_names(dataset: Dataset | IterableDataset) -> list[str]:
-    return list(next(iter(dataset)).keys()) if dataset.column_names is None else dataset.column_names
 
 
 @dataclass
@@ -236,16 +233,16 @@ class RewardTrainer(_BaseTrainer):
     Example:
 
     ```python
-    from trl import RewardTrainer
-    from datasets import load_dataset
+    >>> from trl import RewardTrainer
+    >>> from datasets import load_dataset
 
-    dataset = load_dataset("trl-lib/ultrafeedback_binarized", split="train")
+    >>> dataset = load_dataset("trl-lib/ultrafeedback_binarized", split="train")
 
-    trainer = RewardTrainer(
-        model="Qwen/Qwen2.5-0.5B-Instruct",
-        train_dataset=dataset,
-    )
-    trainer.train()
+    >>> trainer = RewardTrainer(
+    ...     model="Qwen/Qwen2.5-0.5B-Instruct",
+    ...     train_dataset=dataset,
+    ... )
+    >>> trainer.train()
     ```
 
     Args:
@@ -256,7 +253,9 @@ class RewardTrainer(_BaseTrainer):
               path to a *directory* containing model weights saved using
               [`~transformers.PreTrainedModel.save_pretrained`], e.g., `'./my_model_directory/'`. The model is loaded
               using `AutoModelForSequenceClassification.from_pretrained` with the keyword arguments in
-              `args.model_init_kwargs`.
+              `args.model_init_kwargs`. If `dtype` is not specified in `args.model_init_kwargs`, it defaults to
+              `float32`. This differs from [`~transformers.PreTrainedModel.from_pretrained`], where (since Transformers
+              v5) the dtype is inferred from the model config.
             - A sequence classification [`~transformers.PreTrainedModel`] object.
             - A sequence classification [`~peft.PeftModel`] object.
         args ([`RewardConfig`], *optional*):
@@ -274,7 +273,11 @@ class RewardTrainer(_BaseTrainer):
 
             The trainer also supports processed datasets (tokenized) as long as they contain `chosen_ids` and
             `rejected_ids` fields.
-        eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`] or `dict[str, Dataset | IterableDataset]`):
+
+            When `train_dataset` is an [`~datasets.IterableDataset`] (e.g. a streaming dataset), `max_steps` must be
+            set in the training arguments, since its length cannot be inferred and the total number of training steps
+            is required to bound the training loop and configure the learning rate scheduler.
+        eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`], [`~datasets.DatasetDict`], [`~datasets.IterableDatasetDict`] or `dict[str, Dataset | IterableDataset]`):
             Dataset to use for evaluation. It must meet the same requirements as `train_dataset`.
         processing_class ([`~transformers.PreTrainedTokenizerBase`], *optional*):
             Tokenizer used to process the data. If `None`, the tokenizer is loaded from the model's name with
@@ -309,6 +312,10 @@ class RewardTrainer(_BaseTrainer):
             by this function will be reflected in the predictions received by `compute_metrics`.
 
             Note that the labels (second parameter) will be `None` if the dataset does not have them.
+        quantization_config ([`~transformers.BitsAndBytesConfig`], *optional*):
+            Quantization configuration used when loading the model from a model identifier. Combine with `peft_config`
+            for QLoRA training. Ignored if the model is already instantiated, or if `quantization_config` is also set
+            in `args.model_init_kwargs`.
         peft_config ([`~peft.PeftConfig`], *optional*):
             PEFT configuration used to wrap the model. If `None`, the model is not wrapped. Note that if the loaded
             model is a causal LM, it's highly recommended to set `modules_to_save=["score"]` in the PEFT configuration
@@ -325,13 +332,19 @@ class RewardTrainer(_BaseTrainer):
         args: RewardConfig | None = None,
         data_collator: DataCollator | None = None,
         train_dataset: Dataset | IterableDataset | None = None,
-        eval_dataset: Dataset | IterableDataset | dict[str, Dataset | IterableDataset] | None = None,
+        eval_dataset: Dataset
+        | IterableDataset
+        | DatasetDict
+        | IterableDatasetDict
+        | dict[str, Dataset | IterableDataset]
+        | None = None,
         processing_class: PreTrainedTokenizerBase | None = None,
         compute_metrics: Callable[[EvalPrediction], dict] | None = None,
         callbacks: list[TrainerCallback] | None = None,
         optimizers: tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None] = (None, None),
         optimizer_cls_and_kwargs: tuple[type[torch.optim.Optimizer], dict[str, Any]] | None = None,
         preprocess_logits_for_metrics: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] | None = None,
+        quantization_config: "BitsAndBytesConfig | None" = None,
         peft_config: "PeftConfig | None" = None,
     ):
         # Args
@@ -358,7 +371,14 @@ class RewardTrainer(_BaseTrainer):
         # be done before loading the model to ensure reproducibility.
         set_seed(args.seed)
         if isinstance(model, str):
-            model_init_kwargs = args.model_init_kwargs or {}
+            model_init_kwargs = dict(args.model_init_kwargs or {})  # copy to avoid mutating model_init_kwargs
+            if quantization_config is not None:
+                if "quantization_config" in model_init_kwargs:
+                    raise ValueError(
+                        "You set `quantization_config` both as a trainer argument and in `args.model_init_kwargs`. "
+                        "Please set it in only one place, preferably as a trainer argument."
+                    )
+                model_init_kwargs["quantization_config"] = quantization_config
             # Distributed training requires device_map=None ("auto" fails)
             if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 model_init_kwargs["device_map"] = None
@@ -371,6 +391,11 @@ class RewardTrainer(_BaseTrainer):
                 logger.warning(
                     "You passed `model_init_kwargs` to the `RewardConfig`, but your model is already instantiated. "
                     "The `model_init_kwargs` will be ignored."
+                )
+            if quantization_config is not None:
+                logger.warning(
+                    "You passed `quantization_config` to the trainer, but your model is already instantiated. The "
+                    "`quantization_config` will be ignored."
                 )
             # Validate that the model has num_labels = 1 (required for reward models)
             if getattr(model.config, "num_labels", None) != 1:
@@ -470,6 +495,25 @@ class RewardTrainer(_BaseTrainer):
             ):
                 get_peft_model_kwargs["autocast_adapter_dtype"] = False
             model = get_peft_model(model, peft_config, **get_peft_model_kwargs)
+
+        # PEFT + DeepSpeed ZeRO-3 requires reentrant checkpointing. For more details, see
+        # https://github.com/huggingface/trl/issues/2514#issuecomment-2692152703.
+        # Can be removed once https://github.com/deepspeedai/DeepSpeed/pull/8130 is merged and released.
+        if (
+            is_peft_model(model)
+            and args.deepspeed_plugin is not None
+            and args.deepspeed_plugin.zero_stage == 3
+            and args.gradient_checkpointing
+        ):
+            args.gradient_checkpointing_kwargs = args.gradient_checkpointing_kwargs or {}
+            use_reentrant = args.gradient_checkpointing_kwargs.get("use_reentrant")
+            if use_reentrant is False:
+                logger.warning(
+                    "You are using PEFT with DeepSpeed ZeRO-3 and gradient checkpointing with `use_reentrant=False`. "
+                    "`use_reentrant` is forced to `True` in this configuration to ensure correct training. To remove "
+                    "this warning, unset `use_reentrant` in `gradient_checkpointing_kwargs` or set it to `True`."
+                )
+            args.gradient_checkpointing_kwargs["use_reentrant"] = True
 
         # When using gradient checkpointing with PEFT, we need to enable input gradients. transformers.Trainer normally
         # handles this, but a bug currently prevents it; see https://github.com/huggingface/transformers/issues/42489
@@ -620,28 +664,27 @@ class RewardTrainer(_BaseTrainer):
                 def tokenize_fn(example, processing_class):
                     tools = example.get("tools")
                     tools = json.loads(tools) if isinstance(tools, str) else tools
+                    apply_chat_template_kwargs = {"tools": tools, **example.get("chat_template_kwargs", {})}
                     if "prompt" in example:  # explicit prompt case
                         example["chosen"] = example["prompt"] + example["chosen"]
                         example["rejected"] = example["prompt"] + example["rejected"]
 
                     if is_conversational(example):
-                        chosen_ids = processing_class.apply_chat_template(
+                        chosen_ids = _tokenize(
+                            processing_class,
                             example["chosen"],
-                            tools=tools,
-                            return_dict=True,
-                            **example.get("chat_template_kwargs", {}),
+                            **apply_chat_template_kwargs,
                         )["input_ids"]
-                        rejected_ids = processing_class.apply_chat_template(
+                        rejected_ids = _tokenize(
+                            processing_class,
                             example["rejected"],
-                            tools=tools,
-                            return_dict=True,
-                            **example.get("chat_template_kwargs", {}),
+                            **apply_chat_template_kwargs,
                         )["input_ids"]
                         output = {"chosen_ids": chosen_ids, "rejected_ids": rejected_ids}
                     else:
                         output = {
-                            "chosen_ids": processing_class(text=example["chosen"])["input_ids"],
-                            "rejected_ids": processing_class(text=example["rejected"])["input_ids"],
+                            "chosen_ids": _tokenize(processing_class, example["chosen"])["input_ids"],
+                            "rejected_ids": _tokenize(processing_class, example["rejected"])["input_ids"],
                         }
                     return output
 
@@ -668,7 +711,12 @@ class RewardTrainer(_BaseTrainer):
 
     def evaluate(
         self,
-        eval_dataset: Dataset | dict[str, Dataset] | None = None,
+        eval_dataset: Dataset
+        | IterableDataset
+        | DatasetDict
+        | IterableDatasetDict
+        | dict[str, Dataset | IterableDataset]
+        | None = None,
         ignore_keys: list[str] | None = None,
         metric_key_prefix: str = "eval",
     ) -> dict[str, float]:

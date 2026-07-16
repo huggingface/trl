@@ -48,7 +48,7 @@ python examples/scripts/sdft.py \
     --max_completion_length 512 \
     --teacher_model_kind ema \
     --teacher_sync_steps 1 \
-    --teacher_update_rate 0.01 \
+    --teacher_update_rate 0.05 \
     --eval_strategy steps \
     --eval_steps 50 \
     --report_to wandb
@@ -71,7 +71,6 @@ from trl import (
     ModelConfig,
     ScriptArguments,
     TrlParser,
-    get_kbit_device_map,
     get_peft_config,
     get_quantization_config,
 )
@@ -331,7 +330,6 @@ if __name__ == "__main__":
     )
     quantization_config = get_quantization_config(model_args)
     if quantization_config is not None:
-        model_kwargs["device_map"] = get_kbit_device_map()
         model_kwargs["quantization_config"] = quantization_config
 
     training_args.model_init_kwargs = model_kwargs

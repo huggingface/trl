@@ -12,8 +12,37 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .kto_config import KTOConfig
-from .kto_trainer import KTOTrainer
+import warnings
+from dataclasses import dataclass
+
+from ...trainer import KTOConfig as _KTOConfig
+from ...trainer import KTOTrainer as _KTOTrainer
 
 
 __all__ = ["KTOConfig", "KTOTrainer"]
+
+
+@dataclass
+class KTOConfig(_KTOConfig):
+    def __post_init__(self):
+        warnings.warn(
+            "This import path is deprecated and will be removed in v2.0.0. "
+            "The `KTOConfig` has been promoted to the stable API. "
+            "Update your imports to `from trl import KTOConfig`.",
+            FutureWarning,
+            stacklevel=3,
+        )
+        super().__post_init__()
+
+
+@dataclass
+class KTOTrainer(_KTOTrainer):
+    def __init__(self, *args, **kwargs):
+        warnings.warn(
+            "This import path is deprecated and will be removed in v2.0.0. "
+            "The `KTOTrainer` has been promoted to the stable API. "
+            "Update your imports to `from trl import KTOTrainer`.",
+            FutureWarning,
+            stacklevel=2,
+        )
+        super().__init__(*args, **kwargs)

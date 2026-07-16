@@ -178,6 +178,8 @@ class VLLMGeneration:
             - "vllm" will use the vLLM model implementation.
             - "transformers" will use the Transformers model implementation.
             - "terratorch" will use the TerraTorch model implementation.
+        trust_remote_code (`bool`, *optional*, defaults to `False`):
+            Trust remote code (e.g., from HuggingFace) when downloading the model and tokenizer.
 
         > Parameters for generation:
 
@@ -240,6 +242,7 @@ class VLLMGeneration:
         max_num_seqs: int | None = None,
         enable_sleep_mode: bool = False,
         model_impl: str = "auto",
+        trust_remote_code: bool = False,
         # Generation configuration
         repetition_penalty: float = 1.0,
         temperature: float = 1.0,
@@ -273,6 +276,7 @@ class VLLMGeneration:
         self.max_num_seqs = max_num_seqs
         self.enable_sleep_mode = enable_sleep_mode
         self.model_impl = model_impl
+        self.trust_remote_code = trust_remote_code
 
         # Generation configuration
         self.repetition_penalty = repetition_penalty
@@ -360,6 +364,7 @@ class VLLMGeneration:
                 # Important so temperature scaling/logit tweaking affects the TIS log probs
                 logprobs_mode="processed_logprobs",
                 quantization=quantization,
+                trust_remote_code=self.trust_remote_code,
             )
             if self.enable_sleep_mode:
                 self.llm.sleep(level=2)
@@ -660,6 +665,16 @@ class VLLMGeneration:
                     vllm_prompts.append(row)
             else:
                 vllm_prompts = [{"prompt_token_ids": ids} for ids in all_prompts]
+
+            # When PEFT is used, DDP gradient all-reduce only covers the small LoRA parameters, so
+            # NCCL operations complete very quickly. On non-NVLink hardware (e.g. A40/A100), vLLM's
+            # TP NCCL collective can race with NCCL's internal P2P/SHM channel cleanup from that
+            # all-reduce, causing llm.generate() to hang. A barrier on the default process group
+            # forces NCCL to fully drain before vLLM's TP communication starts. We pass device_ids
+            # so NCCL uses this rank's device rather than guessing, which itself risks a hang.
+            # See https://github.com/huggingface/trl/issues/3671
+            if is_peft_model(self.model) and self.tensor_parallel_size > 1:
+                torch.distributed.barrier(device_ids=[accelerator.local_process_index])
 
             with profiler:
                 all_outputs = self.llm.generate(vllm_prompts, sampling_params=sampling_params, use_tqdm=False)

@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import asyncio
+import functools
 import hashlib
 import importlib.resources as pkg_resources
 import os
@@ -20,8 +21,8 @@ import random
 import socket
 import threading
 import types
-from collections.abc import Mapping, Sequence, Sized
-from contextlib import contextmanager
+from collections.abc import Callable, Mapping, Sequence, Sized
+from contextlib import contextmanager, nullcontext
 from importlib.metadata import version
 from itertools import accumulate
 from typing import TypeVar
@@ -31,7 +32,6 @@ import pandas as pd
 import torch
 import torch.nn.functional as F
 import transformers
-from accelerate import PartialState
 from accelerate.logging import get_logger
 from huggingface_hub import ModelCard, ModelCardData
 from packaging.version import Version
@@ -47,13 +47,17 @@ from transformers import (
     is_trackio_available,
 )
 from transformers.models.auto.auto_factory import _BaseAutoModelClass
-from transformers.utils import (
-    is_peft_available,
-    is_rich_available,
-    is_torch_xpu_available,
-)
+from transformers.utils import is_peft_available, is_rich_available
 
 from ..trainer.model_config import ModelConfig
+
+
+if is_comet_available():
+    import comet_ml
+
+
+if is_peft_available():
+    from peft import LoraConfig, PeftConfig, PeftModel
 
 
 if is_rich_available():
@@ -61,12 +65,6 @@ if is_rich_available():
     from rich.panel import Panel
     from rich.table import Table
     from rich.text import Text
-
-if is_comet_available():
-    import comet_ml
-
-if is_peft_available():
-    from peft import LoraConfig, PeftConfig, PeftModel
 
 
 logger = get_logger(__name__)
@@ -185,6 +183,53 @@ def disable_dropout_in_model(model: torch.nn.Module) -> None:
             module.p = 0
 
 
+def maybe_gather_lm_head_ctx(*params: torch.nn.Parameter):
+    """
+    Context manager that allgathers ZeRO-3 partitioned `lm_head` weight/bias for a fused loss.
+
+    Fused losses (e.g. Liger) read `lm_head.weight` directly and hand it to the kernel without ever calling the
+    `lm_head` module. Under DeepSpeed ZeRO-3 every parameter is sharded to `numel 0` and only re-materialized inside
+    its owning module's forward hook, so the head's gather hook never fires and the kernel receives an empty weight.
+    This gathers the given parameters for the duration of the forward, so the fused matmul sees the full weight. The
+    weight gradient is computed and stashed during this forward, so the parameters need not stay gathered for the
+    backward — but the backward's gradient reduction relies on the ZeRO-3 pre-forward hooks being armed, so the caller
+    must run the fused loss inside the model's forward (e.g. via `_ForwardRedirection`).
+
+    Returns a null context when ZeRO-3 is not enabled, or when the parameters are already gathered — with tied
+    embeddings `embed_tokens` keeps the weight `AVAILABLE`, and re-partitioning it on exit would collide with
+    `embed_tokens`' active-submodule tracking.
+
+    Args:
+        *params (`torch.nn.Parameter`):
+            Parameters to gather (e.g. `lm_head.weight` and `lm_head.bias`). `None` values are ignored.
+    """
+    from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
+
+    if not is_deepspeed_zero3_enabled():
+        return nullcontext()
+
+    import deepspeed
+    from deepspeed.runtime.zero.partition_parameters import ZeroParamStatus
+
+    # Deduplicate by identity: with a shared reference (e.g. PEFT with no separate `ref_model`, or tied embeddings)
+    # the same parameter is passed more than once, and ZeRO-3 mishandles duplicate entries in the gather list.
+    to_gather = {id(p): p for p in params if p is not None and p.ds_status != ZeroParamStatus.AVAILABLE}
+    if not to_gather:
+        return nullcontext()
+    return deepspeed.zero.GatheredParameters(list(to_gather.values()))
+
+
+def get_callable_name(func: Callable) -> str:
+    """
+    Return a display name for a callable, supporting the picklable reward forms: module-level functions,
+    [`functools.partial`](https://docs.python.org/3/library/functools.html#functools.partial) (unwrapped to the wrapped
+    function's name), and callable class instances (which fall back to their class name).
+    """
+    while isinstance(func, functools.partial):
+        func = func.func
+    return getattr(func, "__name__", type(func).__name__)
+
+
 def get_quantization_config(model_args: ModelConfig) -> BitsAndBytesConfig | None:
     if model_args.load_in_4bit:
         quantization_config = BitsAndBytesConfig(
@@ -202,13 +247,6 @@ def get_quantization_config(model_args: ModelConfig) -> BitsAndBytesConfig | Non
         quantization_config = None
 
     return quantization_config
-
-
-def get_kbit_device_map() -> dict[str, int] | None:
-    if torch.cuda.is_available() or is_torch_xpu_available():
-        return {"": PartialState().local_process_index}
-    else:
-        return None
 
 
 def get_peft_config(model_args: ModelConfig) -> "PeftConfig | None":
@@ -893,7 +931,7 @@ def split_pixel_values_by_grid(batch: dict[str, torch.Tensor]) -> dict[str, torc
 
     For models with `image_grid_thw` (e.g. Qwen), the grid dimensions determine how many rows of `pixel_values` belong
     to each image. For models with `image_position_ids` instead (e.g. Gemma), `pixel_values` is indexed directly by
-    image count.
+    image count. For models with `spatial_shapes` (e.g. LFM2-VL), tile-indexed tensors are split using `num_tiles`.
     """
     if "pixel_values" not in batch or "num_images" not in batch:
         return batch
@@ -921,6 +959,20 @@ def split_pixel_values_by_grid(batch: dict[str, torch.Tensor]) -> dict[str, torc
         split_image_position_ids = list(torch.split(image_position_ids, num_images, dim=0))
         return {**batch, "pixel_values": split_pixel_values, "image_position_ids": split_image_position_ids}
 
+    if "spatial_shapes" in batch:
+        num_tiles = batch["num_tiles"]
+        pixel_attention_mask = batch["pixel_attention_mask"]
+        spatial_shapes = batch["spatial_shapes"]
+        split_pixel_values = list(torch.split(pixel_values, num_tiles, dim=0))
+        split_pixel_attention_mask = list(torch.split(pixel_attention_mask, num_tiles, dim=0))
+        split_spatial_shapes = list(torch.split(spatial_shapes, num_tiles, dim=0))
+        return {
+            **batch,
+            "pixel_values": split_pixel_values,
+            "pixel_attention_mask": split_pixel_attention_mask,
+            "spatial_shapes": split_spatial_shapes,
+        }
+
     return batch
 
 
@@ -943,6 +995,16 @@ def unsplit_pixel_values_by_grid(batch: dict[str, torch.Tensor | list[torch.Tens
     if isinstance(image_position_ids, list):
         merged = torch.cat(image_position_ids, dim=0)
         batch = {**batch, "image_position_ids": merged}
+
+    pixel_attention_mask = batch.get("pixel_attention_mask")
+    if isinstance(pixel_attention_mask, list):
+        merged = torch.cat(pixel_attention_mask, dim=0)
+        batch = {**batch, "pixel_attention_mask": merged}
+
+    spatial_shapes = batch.get("spatial_shapes")
+    if isinstance(spatial_shapes, list):
+        merged = torch.cat(spatial_shapes, dim=0)
+        batch = {**batch, "spatial_shapes": merged}
 
     return batch
 

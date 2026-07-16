@@ -12,11 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import importlib
 import logging
 
 import pytest
 import torch
-from datasets import Dataset, load_dataset
+from datasets import Dataset, DatasetDict, load_dataset
 from transformers import TrainerCallback
 
 from trl.experimental.sdpo import SDPOConfig, SDPOTrainer
@@ -73,6 +74,10 @@ class RecordingTeacherClient:
 
 
 class TestSDPOTrainer(TrlTestCase):
+    def teardown_method(self):
+        if hasattr(self, "_liger_module"):
+            importlib.reload(importlib.import_module(self._liger_module))
+
     def test_trust_remote_code(self):
         dataset = Dataset.from_dict(
             {
@@ -169,6 +174,35 @@ class TestSDPOTrainer(TrlTestCase):
             if param.sum() != 0:
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @pytest.mark.parametrize("eval_dataset_type", ["dataset", "dataset_dict", "dict_of_dataset", "none"])
+    def test_init_with_eval_dataset(self, eval_dataset_type):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
+
+        if eval_dataset_type == "none":
+            eval_dataset = None
+        elif eval_dataset_type == "dataset":
+            eval_dataset = dataset["test"]
+        elif eval_dataset_type == "dataset_dict":
+            eval_dataset = DatasetDict({"data1": dataset["test"], "data2": dataset["test"]})
+        else:  # "dict_of_dataset"
+            eval_dataset = {"data1": dataset["test"], "data2": dataset["test"]}
+
+        training_args = SDPOConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = SDPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset["train"],
+            eval_dataset=eval_dataset,
+        )
+
+        if eval_dataset_type == "none":
+            assert trainer.eval_dataset is None
+        elif isinstance(trainer.eval_dataset, dict):
+            assert set(trainer.eval_dataset.keys()) == {"data1", "data2"}
+        else:
+            assert trainer.eval_dataset is eval_dataset
+
     @require_liger_kernel
     @require_torch_accelerator
     def test_liger_loss_matches_non_liger_loss(self):
@@ -197,6 +231,7 @@ class TestSDPOTrainer(TrlTestCase):
             args=SDPOConfig(use_liger_kernel=True, **common),
             train_dataset=dataset,
         )
+        self._liger_module = liger_trainer.model.__module__
 
         liger_trainer.model.load_state_dict(ref_trainer.model.state_dict())
         torch.manual_seed(0)

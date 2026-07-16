@@ -17,7 +17,7 @@ from unittest.mock import patch
 import pytest
 import torch
 import transformers
-from datasets import load_dataset
+from datasets import DatasetDict, IterableDatasetDict, load_dataset
 from packaging.version import Version
 from transformers import (
     AutoModelForCausalLM,
@@ -201,6 +201,91 @@ class TestRLOOTrainer(TrlTestCase):
         )
 
         trainer.train()
+
+    @pytest.mark.parametrize("eval_dataset_type", ["dataset", "dataset_dict", "dict_of_dataset", "none"])
+    def test_init_with_eval_dataset(self, eval_dataset_type):
+        # Streaming datasets are not yet supported in RLOO
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
+
+        if eval_dataset_type == "none":
+            eval_dataset = None
+        elif eval_dataset_type == "dataset":
+            eval_dataset = dataset["test"]
+        elif eval_dataset_type == "dataset_dict":
+            eval_dataset = DatasetDict({"data1": dataset["test"], "data2": dataset["test"]})
+        else:  # "dict_of_dataset"
+            eval_dataset = {"data1": dataset["test"], "data2": dataset["test"]}
+
+        training_args = RLOOConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = RLOOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset["train"],
+            eval_dataset=eval_dataset,
+        )
+
+        if eval_dataset_type == "none":
+            assert trainer.eval_dataset is None
+        elif isinstance(trainer.eval_dataset, dict):
+            assert set(trainer.eval_dataset.keys()) == {"data1", "data2"}
+        else:
+            assert trainer.eval_dataset is eval_dataset
+
+    @pytest.mark.parametrize(
+        "eval_dataset_type", ["iterable_dataset", "iterable_dataset_dict", "dict_of_iterable_dataset"]
+    )
+    def test_init_with_iterable_eval_dataset_raises(self, eval_dataset_type):
+        # Streaming datasets are not yet supported in RLOO
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
+        iterable_dataset = load_dataset(
+            "trl-internal-testing/zen", "standard_prompt_only", split="train", streaming=True
+        )
+
+        if eval_dataset_type == "iterable_dataset":
+            eval_dataset = iterable_dataset
+        elif eval_dataset_type == "iterable_dataset_dict":
+            eval_dataset = IterableDatasetDict({"data1": iterable_dataset, "data2": iterable_dataset})
+        else:  # "dict_of_iterable_dataset"
+            eval_dataset = {"data1": iterable_dataset, "data2": iterable_dataset}
+
+        training_args = RLOOConfig(output_dir=self.tmp_dir, report_to="none")
+        with pytest.raises(ValueError, match="Iterable datasets are not yet supported"):
+            RLOOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset["train"],
+                eval_dataset=eval_dataset,
+            )
+
+    @pytest.mark.parametrize("eval_dataset_type", ["dataset", "dataset_dict", "dict_of_dataset"])
+    def test_evaluate_with_eval_dataset(self, eval_dataset_type):
+        # `evaluate` accepts a dataset passed directly, not only an `eval_dataset` set at init. Streaming datasets
+        # are not supported in RLOO, so only map-style types are covered here.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
+
+        if eval_dataset_type == "dataset":
+            eval_dataset = dataset["test"]
+        elif eval_dataset_type == "dataset_dict":
+            eval_dataset = DatasetDict({"data1": dataset["test"], "data2": dataset["test"]})
+        else:  # "dict_of_dataset"
+            eval_dataset = {"data1": dataset["test"], "data2": dataset["test"]}
+
+        training_args = RLOOConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = RLOOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset["train"],
+        )
+
+        metrics = trainer.evaluate(eval_dataset=eval_dataset)
+        if eval_dataset_type == "dataset":
+            assert metrics["eval_loss"] is not None
+        else:
+            assert metrics["eval_data1_loss"] is not None
+            assert metrics["eval_data2_loss"] is not None
 
     def test_train_multiple_iterations(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
@@ -1834,3 +1919,28 @@ class TestRLOOTrainerVLM(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    def test_train_vlm_log_multimodal_false(self):
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
+
+        def reward_func(completions, **kwargs):
+            """Reward function that rewards longer completions."""
+            return [float(len(completion[0]["content"])) for completion in completions]
+
+        training_args = RLOOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,  # VLM training is memory intensive, reduce batch size to avoid OOM
+            num_generations=2,  # VLM training is memory intensive, reduce num_generations to avoid OOM
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            report_to="none",
+            log_completions=True,
+            log_multimodal=False,
+        )
+        trainer = RLOOTrainer(
+            model="trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
+            reward_funcs=reward_func,
+            args=training_args,
+            train_dataset=dataset,
+        )
+        trainer.train()
+        assert len(trainer._logs["images"]) == 0

@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import copy
+import functools
 import textwrap
 from io import StringIO
 from unittest.mock import patch
@@ -37,6 +38,7 @@ from trl.trainer.utils import (
     entropy_from_logits,
     flush_left,
     generate_model_card,
+    get_callable_name,
     get_peft_config,
     hash_module,
     nanstd,
@@ -277,6 +279,36 @@ class TestGetPEFTConfig(TrlTestCase):
                 arg = arg[len("lora_") :] if arg.startswith("lora_") else arg
 
             assert getattr(peft_config, arg) == value
+
+
+class TestGetCallableName(TrlTestCase):
+    def test_function(self):
+        def accuracy_reward(completions):
+            return [0.0] * len(completions)
+
+        assert get_callable_name(accuracy_reward) == "accuracy_reward"
+
+    def test_partial(self):
+        def reward(completions, threshold):
+            return [0.0] * len(completions)
+
+        assert get_callable_name(functools.partial(reward, threshold=0.5)) == "reward"
+
+    def test_nested_partial(self):
+        def reward(completions, threshold):
+            return [0.0] * len(completions)
+
+        assert get_callable_name(functools.partial(functools.partial(reward), threshold=0.5)) == "reward"
+
+    def test_callable_instance(self):
+        class LengthReward:
+            def __call__(self, completions):
+                return [0.0] * len(completions)
+
+        assert get_callable_name(LengthReward()) == "LengthReward"
+
+    def test_lambda(self):
+        assert get_callable_name(lambda completions: [0.0] * len(completions)) == "<lambda>"
 
 
 class TestNanStd(TrlTestCase):
@@ -980,6 +1012,26 @@ class TestSplitPixelValuesByGrid(TrlTestCase):
         assert torch.equal(result["image_position_ids"][0], batch["image_position_ids"][:1])
         assert torch.equal(result["image_position_ids"][1], batch["image_position_ids"][1:])
 
+    def test_split_by_spatial_shapes(self):
+        batch = {
+            "num_images": [2, 1],
+            "num_tiles": [3, 2],
+            "pixel_values": torch.arange(5 * 4).reshape(5, 4),
+            "pixel_attention_mask": torch.arange(5 * 6).reshape(5, 6),
+            "spatial_shapes": torch.arange(5 * 2).reshape(5, 2),
+        }
+        result = split_pixel_values_by_grid(batch)
+        assert isinstance(result["pixel_values"], list)
+        assert len(result["pixel_values"]) == 2
+        assert torch.equal(result["pixel_values"][0], batch["pixel_values"][:3])
+        assert torch.equal(result["pixel_values"][1], batch["pixel_values"][3:])
+        assert isinstance(result["pixel_attention_mask"], list)
+        assert torch.equal(result["pixel_attention_mask"][0], batch["pixel_attention_mask"][:3])
+        assert torch.equal(result["pixel_attention_mask"][1], batch["pixel_attention_mask"][3:])
+        assert isinstance(result["spatial_shapes"], list)
+        assert torch.equal(result["spatial_shapes"][0], batch["spatial_shapes"][:3])
+        assert torch.equal(result["spatial_shapes"][1], batch["spatial_shapes"][3:])
+
 
 class TestUnsplitPixelValuesByGrid(TrlTestCase):
     def test_unsplit_correctly(self):
@@ -1003,6 +1055,23 @@ class TestUnsplitPixelValuesByGrid(TrlTestCase):
         result = unsplit_pixel_values_by_grid(batch)
         assert isinstance(result["image_position_ids"], torch.Tensor)
         assert torch.equal(result["image_position_ids"], image_position_ids_merged)
+
+    def test_unsplit_spatial_shapes(self):
+        pixel_values = [torch.randn(3, 4), torch.randn(2, 4)]
+        pixel_attention_mask = [torch.randn(3, 6), torch.randn(2, 6)]
+        spatial_shapes = [torch.tensor([[1, 2], [3, 4], [5, 6]]), torch.tensor([[7, 8], [9, 10]])]
+        batch = {
+            "pixel_values": pixel_values,
+            "pixel_attention_mask": pixel_attention_mask,
+            "spatial_shapes": spatial_shapes,
+        }
+        result = unsplit_pixel_values_by_grid(batch)
+        assert isinstance(result["pixel_values"], torch.Tensor)
+        torch.testing.assert_close(result["pixel_values"], torch.cat(pixel_values, dim=0))
+        assert isinstance(result["pixel_attention_mask"], torch.Tensor)
+        torch.testing.assert_close(result["pixel_attention_mask"], torch.cat(pixel_attention_mask, dim=0))
+        assert isinstance(result["spatial_shapes"], torch.Tensor)
+        assert torch.equal(result["spatial_shapes"], torch.cat(spatial_shapes, dim=0))
 
     def test_no_op_if_not_list(self):
         original = torch.randn(5, 3)
