@@ -1432,11 +1432,11 @@ class KTOTrainer(_BaseTrainer):
                 _input=outputs.last_hidden_state[:, :-1],
                 lin_weight=lm_head.weight,
                 target=target,
-                bias=lm_head.bias if hasattr(lm_head, "bias") else None,
+                bias=lm_head.bias,
                 preference_labels=torch.tensor(batch["label"], dtype=torch.bool).to(self.accelerator.device),
                 ref_input=ref_outputs.last_hidden_state[:, :-1],
                 ref_weight=ref_lm_head.weight,
-                ref_bias=ref_lm_head.bias if hasattr(lm_head, "bias") else None,
+                ref_bias=ref_lm_head.bias,
                 kl=kl,
             )
 
