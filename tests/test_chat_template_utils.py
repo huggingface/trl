@@ -135,6 +135,14 @@ class TestAddResponseSchema:
                     strict=True,
                 ),
             ),
+            pytest.param(
+                "trl-internal-testing/tiny-Lfm2ForCausalLM-2.5",
+                id="lfm2-2.5",
+                marks=pytest.mark.skipif(
+                    not _SUPPORTS_RESPONSE_TEMPLATE,
+                    reason="LFM2.5 only ships a new-style response template, which requires transformers>=5.13",
+                ),
+            ),
             pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3.1", id="llama3.1"),
             pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3.2", id="llama3.2"),
             pytest.param(
@@ -253,6 +261,14 @@ class TestSupportsToolCalling:
                 ),
             ),
             pytest.param("trl-internal-testing/tiny-GptOssForCausalLM", id="gptoss"),
+            pytest.param(
+                "trl-internal-testing/tiny-Lfm2ForCausalLM-2.5",
+                id="lfm2-2.5",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.0.0"),
+                    reason="LFM2.5 tokenizer requires transformers>=5.0.0",
+                ),
+            ),
             pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3.1", id="llama3.1"),
             pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3.2", id="llama3.2"),
             pytest.param(
@@ -361,6 +377,10 @@ class TestSupportsToolCalling:
             pytest.param("trl-internal-testing/tiny-Phi3ForCausalLM-3", id="phi3"),
             pytest.param("trl-internal-testing/tiny-Phi3ForCausalLM-3.5", id="phi3.5"),
             # Renders tool message content as plain text but drops assistant tool_calls
+            # LFM2 renders `tools` into the system prompt and wraps tool message content in
+            # <|tool_response_start|> / <|tool_response_end|>, but never reads `tool_calls`: the model is trained to
+            # emit <|tool_call_start|> / <|tool_call_end|> as plain text inside `content`.
+            pytest.param("trl-internal-testing/tiny-Lfm2ForCausalLM", id="lfm2"),
             pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3", id="llama3"),
             pytest.param("trl-internal-testing/tiny-Qwen2VLForConditionalGeneration", id="qwen2_vl"),
             pytest.param("trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration", id="qwen2.5_vl"),
@@ -597,6 +617,7 @@ class TestIsChatTemplateStopTokenTrained:
         pytest.param(
             "trl-internal-testing/tiny-Idefics3ForConditionalGeneration", id="idefics3", marks=require_vision
         ),
+        pytest.param("trl-internal-testing/tiny-Lfm2ForCausalLM", id="lfm2"),
         pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3", id="llama3"),
         pytest.param("trl-internal-testing/tiny-LlavaForConditionalGeneration", id="llava", marks=require_vision),
         pytest.param(
@@ -978,6 +999,14 @@ class TestGetTrainingChatTemplate:
     [
         pytest.param("trl-internal-testing/tiny-Glm4MoeForCausalLM", id="glm4moe"),
         pytest.param("trl-internal-testing/tiny-GptOssForCausalLM", id="gptoss"),
+        pytest.param(
+            "trl-internal-testing/tiny-Lfm2ForCausalLM-2.5",
+            id="lfm2-2.5",
+            marks=pytest.mark.skipif(
+                not _SUPPORTS_RESPONSE_TEMPLATE,
+                reason="LFM2.5 only ships a new-style response template, which requires transformers>=5.13",
+            ),
+        ),
         pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3.1", id="llama3.1"),
         pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3.2", id="llama3.2"),
         pytest.param(
@@ -1083,10 +1112,13 @@ class TestParseResponse:
             pytest.skip("gpt-oss thinking/content separation requires the response_template parser (>= 5.13).")
 
         processing_class = self._load(model_name)
-        # gpt-oss uses the `thinking` field name (matching its harmony chat template) rather
-        # than the `reasoning_content` convention used by other models.
+        # gpt-oss and LFM2.5 use the `thinking` field name (matching their own chat templates, which read it back off
+        # the message) rather than the `reasoning_content` convention used by other models.
         reasoning_field = (
-            "thinking" if model_name == "trl-internal-testing/tiny-GptOssForCausalLM" else "reasoning_content"
+            "thinking"
+            if model_name
+            in ("trl-internal-testing/tiny-GptOssForCausalLM", "trl-internal-testing/tiny-Lfm2ForCausalLM-2.5")
+            else "reasoning_content"
         )
         messages = [
             {"role": "user", "content": "What is 3*4?"},
