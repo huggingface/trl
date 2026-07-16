@@ -1147,6 +1147,17 @@ class DistillationTrainer(_BaseTrainer):
 
         return loss
 
+    def prediction_step(
+        self,
+        model: nn.Module,
+        inputs: dict[str, torch.Tensor | Any],
+        prediction_loss_only: bool,
+        ignore_keys: list[str] | None = None,
+    ) -> tuple[torch.Tensor | None, torch.Tensor | None, torch.Tensor | None]:
+        # Gather spans the forward only: evaluation never calls backward.
+        with self._get_liger_zero3_lm_head_gather_ctx(model):
+            return super().prediction_step(model, inputs, prediction_loss_only, ignore_keys=ignore_keys)
+
     def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
         mode = "train" if self.model.training else "eval"
         metrics = {key: sum(val) / len(val) for key, val in self._metrics[mode].items()}

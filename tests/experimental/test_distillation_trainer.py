@@ -413,6 +413,53 @@ class TestDistillationTrainer(TrlTestCase):
         finally:
             importlib.reload(importlib.import_module(trainer.model.__module__))
 
+    def test_prediction_step_gathers_liger_zero3_lm_head_like_training_step(self, monkeypatch):
+        """`training_step` wraps `super().training_step(...)` in `_get_liger_zero3_lm_head_gather_ctx` because the
+        fused Liger JSD loss (the `use_liger_loss` branch of `compute_loss`) reads `student_head.weight` /
+        `teacher_head.weight` directly, bypassing the module forward that would otherwise gather them under
+        DeepSpeed ZeRO-3 (see `_get_liger_zero3_lm_head_gather_ctx`'s own docstring). `DistillationTrainer` has no
+        `prediction_step` override, so `evaluate()` ran the base `transformers.Trainer.prediction_step`, which
+        computes the same loss via `compute_loss` but never entered the same gather context.
+
+        This doesn't require `use_liger_kernel` or DeepSpeed to be installed/enabled: the helper is a no-op in that
+        case, but it must still be *called* on every `compute_loss` path, exactly like `training_step` calls it.
+        Same technique used for the sibling SDPO/SDFT (#6384) and GOLD (#6391) fixes.
+        """
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling")
+        training_args = self._make_args(
+            eval_strategy="no",
+            per_device_eval_batch_size=2,
+        )
+        trainer = DistillationTrainer(
+            model=self.model_id,
+            teacher_model=self.model_id,
+            args=training_args,
+            train_dataset=dataset["train"],
+            eval_dataset=dataset["test"],
+            processing_class=self.tokenizer,
+        )
+
+        # Count calls instead of inspecting `model.training`: `training_step` enters the gather context *before*
+        # `super().training_step(...)` flips the model into train mode, so the flag isn't a reliable phase marker at
+        # the point this helper is called. Splitting the count across separate `train()` / `evaluate()` invocations
+        # is unambiguous instead.
+        call_count = 0
+        original_gather_ctx = trainer._get_liger_zero3_lm_head_gather_ctx
+
+        def counting_gather_ctx(model):
+            nonlocal call_count
+            call_count += 1
+            return original_gather_ctx(model)
+
+        monkeypatch.setattr(trainer, "_get_liger_zero3_lm_head_gather_ctx", counting_gather_ctx)
+
+        trainer.train()
+        assert call_count > 0  # sanity check: training_step already does this today
+
+        call_count = 0
+        trainer.evaluate()
+        assert call_count > 0, "prediction_step must gather lm_head weights just like training_step does"
+
     def test_teacher_vocab_size_mismatch_raises(self):
         # The local-teacher loss compares full next-token distributions, so student and teacher must share a
         # vocabulary. A teacher with a different vocab_size is rejected (use GOLD for cross-tokenizer distillation).
