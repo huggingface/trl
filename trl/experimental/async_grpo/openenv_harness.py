@@ -74,58 +74,48 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
     _provides_rollout_reward = True
 
     def __init__(self, *, harness_session_factory, harness_adapter=None, **loop_kwargs):
-        super().__init__(**loop_kwargs)  # ALL base setup, unchanged
-        self._factory = harness_session_factory  # an OpenEnv ResourceSessionFactory
-        # An OpenEnv HarnessAdapter (e.g. MCPHarnessAdapter) selects white-box: TRL samples each turn and the
-        # adapter runs the tool loop. `None` selects loop-owning: the agent runs its own loop and we read its
-        # proxy trace. No default coercion, so `None` genuinely reaches the loop-owning branch in `_run_session`.
+        super().__init__(**loop_kwargs)
+        self._factory = harness_session_factory
+        # An adapter (e.g. MCPHarnessAdapter) selects white-box (TRL samples each turn); `None` selects loop-owning
+        # (the agent runs its own loop and we read its proxy trace).
         self._adapter = harness_adapter
         self._limits = HarnessRunLimits(
             max_turns=self.max_tool_calling_iterations if self.max_tool_calling_iterations is not None else 8,
             sampling={"temperature": self.temperature, "max_tokens": self.max_tokens},
         )
-        # One bounded pool, sized to max_inflight (the base loop never has more than that many `_generate_one`
-        # tasks outstanding), so sessions run concurrently with no queuing and no per-rollout thread churn.
+        # Sized to max_inflight so sessions run concurrently without queuing or per-rollout thread churn.
         self._session_pool = ThreadPoolExecutor(
             max_workers=max(1, self.max_inflight_tasks), thread_name_prefix="harness-session"
         )
-        self.reward_func_names.append("harness_reward")  # keep per-func metrics aligned with the reward column
+        self.reward_func_names.append("harness_reward")
 
     async def _generate_one(self, prompt, tool_dict, tools):
-        # OpenEnv's harness layer is synchronous (SyncEnvClient facade), so run the whole session on the pool.
+        # OpenEnv's harness layer is synchronous, so run the whole session on the pool.
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(self._session_pool, self._run_session, prompt)
 
     def _run_session(self, prompt):
-        """Drive one OpenEnv session to completion and return the base `_generate_one` tuple + the verify reward."""
+        """Drive one OpenEnv session to completion and return the `_generate_one` tuple + the verify reward."""
         rollout_id = uuid.uuid4().hex
-        # Stable per-group seed: all `num_generations` rollouts of one prompt share the same `prompt` object, so
-        # factories that generate the task from a seed (e.g. reasoning_gym `env.reset(seed=...)`) hand the whole
-        # group the SAME question -> a valid group-relative advantage. Factories that ignore `seed` (e.g. the calc
-        # harness, whose task is fully in the prompt) are unaffected.
+        # Stable per-group seed so seed-driven factories hand every generation of a prompt the same task.
         seed = int(hashlib.sha256(repr(prompt).encode()).hexdigest(), 16) % (2**31)
         session = self._factory.create(prompt, seed=seed, episode_id=rollout_id)
         try:
             if self._adapter is not None:
-                # white-box: OpenEnv's adapter runs the tool loop, calling `_sample_turn` (a ModelStep) each turn.
-                # `turns` is bound per session (sessions run concurrently on the pool, so it can't live on self).
+                # white-box: the adapter runs the tool loop, calling `_sample_turn` each turn.
                 turns: list[TurnRecord] = []
                 result = self._adapter.run_white_box(
                     functools.partial(self._sample_turn, turns), session, self._limits
                 )
                 completion = result.messages
                 tool_call_count = int(result.metrics.get("tool_calls", len(result.tool_trace)))
-                # A tool call "failed" when its ToolResult carries an error (e.g. the calc tool rejecting a
-                # malformed expression). run_white_box keeps each call's result in tool_trace.
                 tool_failure_count = sum(1 for entry in result.tool_trace if entry.result.error is not None)
             else:
-                # loop-owning: the agent hits vLLM through its own in-sandbox proxy; read the per-turn trace.
-                # Tools run inside the agent's sandbox, not visible to TRL, so we don't count them here.
+                # loop-owning: the agent hits vLLM through its own proxy; read the per-turn trace.
                 session.wait_for_completion()
                 trace = session.fetch_proxy_trace()
                 turns = _turns_from_trace(trace, self.tokenizer)
                 completion = _messages_from_trace(trace)
-                # TODO(@aminediro): find a way to extract more info from the trace
                 tool_call_count = tool_failure_count = 0
             verify = session.verify(completion)
             reward = float(verify.env_reward) if verify.env_reward is not None else None
@@ -136,8 +126,7 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
             session.close()
 
     def _sample_turn(self, turns: list[TurnRecord], messages, tools, sampling) -> ModelStepResult:
-        """OpenEnv `ModelStep`: sample one assistant turn against the trainer's vLLM and record a `TurnRecord`
-        into `turns` (the calling session's capture list, bound via `functools.partial`)."""
+        """OpenEnv `ModelStep`: sample one assistant turn against vLLM and record a `TurnRecord` into `turns`."""
         prompt_ids = self.tokenizer.apply_chat_template(
             messages,
             tools=_tools_to_schema(tools),
@@ -147,7 +136,7 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
             chat_template=self.chat_template,
             **self.chat_template_kwargs,
         )
-        # ModelStep is sync and runs on the pool thread; bridge the async vLLM POST onto the loop's event loop.
+        # ModelStep is sync on a pool thread; bridge the async vLLM POST onto the loop's event loop.
         turn_ids, logprobs = asyncio.run_coroutine_threadsafe(self._generate_one_turn(prompt_ids), self._loop).result()
         turns.append(TurnRecord(prompt_ids, turn_ids, logprobs))
         message = parse_response(self.tokenizer, turn_ids, prefix=prompt_ids)
@@ -157,12 +146,11 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
 
 
 def _trace_output_ids(entry: dict) -> list[int]:
-    """The generated token ids for one proxy-trace turn.
+    """Generated token ids for one proxy-trace turn.
 
-    Prefer the proxy's `completion_token_ids` (populated when the upstream returns a `token_id` per logprob). If it is
-    empty, recover them from `completion_tokens`, which vLLM renders as `"token_id:{id}"` strings when the server is
-    launched with `--return-tokens-as-token-ids`. This keeps the exact generated ids (aligned to `per_token_logps`)
-    without re-encoding the decoded text (which could split differently)."""
+    Prefer `completion_token_ids`; if empty, recover them from `completion_tokens`, which vLLM renders as
+    `"token_id:{id}"` when launched with `--return-tokens-as-token-ids`, avoiding a re-encode of the decoded text.
+    """
     ids = entry.get("completion_token_ids") or []
     if ids:
         return list(ids)
@@ -172,11 +160,8 @@ def _trace_output_ids(entry: dict) -> list[int]:
 
 
 def _turns_from_trace(trace: list[dict], tokenizer) -> list[TurnRecord]:
-    """Loop-owning path: rebuild per-turn `TurnRecord`s from an in-sandbox proxy trace. Recover `prompt_ids` by
-    re-tokenizing each captured request's messages (same as message-mode), passing the request's `tools` through so the
-    reconstructed prompt matches what the upstream actually rendered (agents like opencode put the tool schema in the
-    request, not the messages); the generated token ids + per-token logprobs come from the proxy capture (see
-    `_trace_output_ids`)."""
+    """Loop-owning path: rebuild per-turn `TurnRecord`s from a proxy trace. Re-tokenize each request's messages
+    (passing its `tools` so the prompt matches what the upstream rendered); ids + logprobs come from the capture."""
     turns = []
     for entry in trace:
         request = entry["request"]
@@ -210,8 +195,8 @@ def _harness_child_main(
     failed_event,
     exception_info_queue,
 ):
-    """Child entrypoint: build a `_HarnessRolloutLoop` and run it. Near-verbatim copy of `_child_main` with the
-    loop class swapped, so `async_rollout_worker.py` stays free of any OpenEnv reference."""
+    """Child entrypoint: build a `_HarnessRolloutLoop` and run it. Copy of `_child_main` with the loop class
+    swapped, so `async_rollout_worker.py` stays free of any OpenEnv reference."""
     _scrub_child_env()
     from accelerate.state import PartialState
 
@@ -238,8 +223,8 @@ class HarnessRolloutWorker(AsyncRolloutWorker):
     """AsyncGRPO rollout worker that drives an OpenEnv `ResourceSessionFactory`.
 
     Construct it with the usual `AsyncRolloutWorker` kwargs plus `harness_session_factory` (and optionally
-    `harness_adapter`), then inject it via `AsyncGRPOTrainer(rollout_worker=...)`. Inherits all lifecycle machinery;
-    only the spawned child's loop class differs.
+    `harness_adapter`), then inject it via `AsyncGRPOTrainer(rollout_worker=...)`. Only the spawned child's loop class
+    differs.
     """
 
     def _child_entry(self):
