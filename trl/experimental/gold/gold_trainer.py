@@ -1436,6 +1436,8 @@ class GOLDTrainer(SFTTrainer):
                 else ""
             )
             generation_examples.append(generation_example)
+        # Sync at collation time (not init) so post-construction `trainer.chat_template_kwargs = ...` is honored.
+        self._vlm_collator.chat_template_kwargs = self.chat_template_kwargs
         collated = self._vlm_collator(generation_examples)
         collated = {
             k: (v.to(self.accelerator.device) if isinstance(v, torch.Tensor) else v) for k, v in collated.items()
@@ -1488,6 +1490,8 @@ class GOLDTrainer(SFTTrainer):
 
     def _materialize_vlm_slice(self, pending_slice: dict[str, Any]) -> dict[str, torch.Tensor | Any]:
         """Collate one pending VLM slice immediately before it is consumed."""
+        # Sync at collation time (not init) so post-construction `trainer.chat_template_kwargs = ...` is honored.
+        self._vlm_collator.chat_template_kwargs = self.chat_template_kwargs
         slice_inputs = self._vlm_collator([dict(example) for example in pending_slice["_gold_vlm_lazy_examples"]])
         slice_inputs = {
             k: (v.to(self.accelerator.device) if isinstance(v, torch.Tensor) else v) for k, v in slice_inputs.items()
@@ -2437,6 +2441,11 @@ class GOLDTrainer(SFTTrainer):
                     # Rebuild the last message rather than mutating it in place, so the input example is left untouched.
                     all_prompts[i] = prompt[:-1] + [{**prompt[-1], "content": content + observation}]
 
+        # Snapshot the post-reset prompts before `_tool_call_loop` appends generated turns onto the `all_prompts`
+        # entries: the lazy training examples must condition on exactly the prompt (including any reset observation)
+        # the model generated from.
+        reset_prompts = [list(prompt) for prompt in all_prompts] if self.tools else all_prompts
+
         # Workaround for a bug in transformers 5.3.0 where some processors (e.g. Qwen2.5-VL) crash on
         # batched unpadded input (transformers#44514).
         # Fixed in transformers 5.4.0 (transformers#44563).
@@ -2448,6 +2457,7 @@ class GOLDTrainer(SFTTrainer):
             add_generation_prompt=True,
             tokenize=True,
             return_dict=True,
+            **self.chat_template_kwargs,
             **({"padding": True} if needs_padding_workaround else {}),
         )
         if needs_padding_workaround:
@@ -2548,7 +2558,7 @@ class GOLDTrainer(SFTTrainer):
             slice_completions[slice_idx].append(all_completion_texts[i])
             slice_raw[slice_idx].append(all_raw_examples[i])
             slice_images[slice_idx].append(all_images[i])
-            slice_prompts[slice_idx].append(all_prompts[i])
+            slice_prompts[slice_idx].append(reset_prompts[i])
             slice_prompts_text[slice_idx].append(all_prompts_text[i])
             if self.tools:
                 slice_structured[slice_idx].append(completions[i])
@@ -2567,6 +2577,9 @@ class GOLDTrainer(SFTTrainer):
                     # Keep the structured multi-turn messages (assistant -> tool -> assistant ...) so the VLM
                     # collator can re-render them and mask the tool-result spans out of the labels.
                     synthetic["completion"] = slice_structured[slice_idx][i]
+                    # Use the post-reset prompt (not the raw dataset row) so the loss conditions on the same
+                    # context — including any environment reset observation — the model generated from.
+                    synthetic["prompt"] = prompts_for_slice[i]
                 else:
                     # Wrap as content blocks so VLM chat templates (e.g. SmolVLM) that index
                     # `message.content[0]` can render the synthetic assistant turn.

@@ -584,6 +584,9 @@ class DataCollatorForVisionLanguageChatML(DataCollatorMixin):
     # template when training with tools and the processor's own template is not prefix-preserving (which would shift
     # the incremental tool-span scan in `_tool_token_ranges`).
     chat_template: str | None = None
+    # Extra kwargs for every render in this collator. Synced from `GOLDTrainer.chat_template_kwargs` at collation
+    # time so the loss is computed on the same rendering the generation paths use.
+    chat_template_kwargs: dict | None = None
 
     def torch_call(self, examples: list[dict[str, Any]]) -> dict[str, Any]:
         if "prompt" not in examples[0] or "completion" not in examples[0]:
@@ -637,7 +640,13 @@ class DataCollatorForVisionLanguageChatML(DataCollatorMixin):
                 if any(message.get("role") == "tool" for message in example["completion"]):
                     completion_messages[i] = (example["prompt"], example["completion"])
             examples = [
-                apply_chat_template(example, self.processor, tools=self.tools, chat_template=self.chat_template)
+                apply_chat_template(
+                    example,
+                    self.processor,
+                    tools=self.tools,
+                    chat_template=self.chat_template,
+                    **(self.chat_template_kwargs or {}),
+                )
                 for example in examples
             ]
 
@@ -809,6 +818,7 @@ class DataCollatorForVisionLanguageChatML(DataCollatorMixin):
                 tools=self.tools,
                 tokenize=False,
                 chat_template=self.chat_template,
+                **(self.chat_template_kwargs or {}),
             )
             continuation = rendered[len(rendered_prompt) :]
             num_tokens = len(self.processor(text=[continuation], add_special_tokens=False)["input_ids"][0])
