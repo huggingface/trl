@@ -851,7 +851,7 @@ class RLOOTrainer(_BaseTrainer):
         )
 
         if isinstance(eval_dataset, IterableDataset):
-            # Datasets passed to `evaluate`/`predict` are absent at `__init__`, so apply the iterable config here too.
+            # Apply the `__init__` iterable config here too
             if self.args.accelerator_config.dispatch_batches:
                 raise ValueError(
                     "Iterable datasets require `dispatch_batches=False`, but it is set to `True` in "
@@ -860,8 +860,7 @@ class RLOOTrainer(_BaseTrainer):
             self.accelerator.dataloader_config.dispatch_batches = False
             eval_dataset = eval_dataset.shuffle(seed=self.args.seed)
             eval_dataset = repeat_iterable_dataset(eval_dataset, mini_repeat_count=self.num_generations_eval)
-            # Force a single worker for this loader only, without persisting the change, so map-style loaders
-            # (e.g. training) keep their workers.
+            # Force a single worker for this loader only, without persisting the change
             num_workers = self.args.dataloader_num_workers
             self.args.dataloader_num_workers = 0
 
