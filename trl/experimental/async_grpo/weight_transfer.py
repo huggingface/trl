@@ -73,6 +73,7 @@ class WeightTransferClient:
     def init_weight_transfer(self) -> None:
         self._wait_for_server_ready_sync()
         response = requests.get(f"{self.vllm_server_url}/get_world_size")
+        response.raise_for_status()
         inference_world_size = response.json()["world_size"]
         world_size = inference_world_size + 1
         master_address = get_ip()
@@ -104,11 +105,12 @@ class WeightTransferClient:
             return
         t0 = time.time()
         # Prepare the workers for the reload; must complete before any weights are sent.
-        requests.post(
+        response = requests.post(
             f"{self.vllm_server_url}/start_weight_update",
             json={"is_checkpoint_format": True},
             timeout=1800,
         )
+        response.raise_for_status()
         # The /update_weights POST drives the workers' blocking NCCL recv, so it runs on a thread
         # concurrently with the trainer-side broadcast.
         t_update = threading.Thread(
@@ -122,17 +124,20 @@ class WeightTransferClient:
             trainer_args=NCCLTrainerSendWeightsArgs(group=self.model_update_group, packed=True),
         )
         t_update.join()
-        requests.post(f"{self.vllm_server_url}/finish_weight_update", timeout=1800)
+        response = requests.post(f"{self.vllm_server_url}/finish_weight_update", timeout=1800)
+        response.raise_for_status()
         logger.debug(f"[weight_sync] send_weights took {time.time() - t0:.1f}s")
 
     def pause(self) -> None:
         t0 = time.time()
-        requests.post(f"{self.vllm_server_url}/pause", params={"mode": "keep"})
+        response = requests.post(f"{self.vllm_server_url}/pause", params={"mode": "keep"})
+        response.raise_for_status()
         logger.debug(f"[weight_sync] pause HTTP took {time.time() - t0:.1f}s")
 
     def resume(self) -> None:
         t0 = time.time()
-        requests.post(f"{self.vllm_server_url}/resume")
+        response = requests.post(f"{self.vllm_server_url}/resume")
+        response.raise_for_status()
         logger.debug(f"[weight_sync] resume HTTP took {time.time() - t0:.1f}s")
 
     def destroy(self) -> None:

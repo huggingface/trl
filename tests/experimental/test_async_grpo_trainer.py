@@ -17,9 +17,12 @@ import itertools
 import math
 import multiprocessing as mp
 import queue
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import numpy as np
 import pytest
+import requests
 import torch
 from accelerate import PartialState
 from datasets import load_dataset
@@ -27,6 +30,7 @@ from transformers import AutoTokenizer
 from transformers.testing_utils import torch_device
 
 import trl.experimental.async_grpo.async_rollout_worker as worker
+import trl.experimental.async_grpo.weight_transfer as weight_transfer
 from trl.experimental.async_grpo import AsyncGRPOConfig, AsyncGRPOTrainer
 from trl.experimental.async_grpo.async_grpo_trainer import (
     DataCollatorForRollout,
@@ -156,6 +160,95 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+
+class _MockHTTPServer:
+    """A local HTTP server that returns 200 for `/health` and a fixed error status for every other path.
+
+    `_wait_for_server_ready_sync`'s health poll must see 200 so callers can reach the call under test.
+    """
+
+    def __init__(self, error_status: int = 500):
+        error_status_ = error_status
+
+        class _Handler(BaseHTTPRequestHandler):
+            def _respond(self):
+                self.send_response(200 if self.path == "/health" else error_status_)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(b"{}")
+
+            def do_GET(self):
+                self._respond()
+
+            def do_POST(self):
+                self._respond()
+
+            def log_message(self, format, *args):
+                pass  # silence request logging to stderr
+
+        self._server = HTTPServer(("127.0.0.1", 0), _Handler)
+        self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
+
+    @property
+    def url(self) -> str:
+        return f"http://127.0.0.1:{self._server.server_port}"
+
+    def __enter__(self):
+        self._thread.start()
+        return self
+
+    def __exit__(self, *exc_info):
+        self._server.shutdown()
+        self._server.server_close()
+        self._thread.join(timeout=5)
+
+
+class TestWeightTransferClientHTTPErrorHandling(TrlTestCase):
+    """
+    Regression tests for `WeightTransferClient`'s HTTP error handling.
+
+    A full `WeightTransferClient` needs a real vLLM server plus an NCCL rendezvous, neither of which is
+    available here. Instead, these tests construct the real, unmodified client — bypassing only the
+    vLLM-availability gate in `__init__` — and point it at a local HTTP server that always errors, so the
+    actual `pause`, `resume`, `init_weight_transfer`, and `send_weights` request call sites run for real.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _init_accelerate_state(self):
+        # Every method under test logs via accelerate's logger on at least one path (either the debug line
+        # after the checked call, or, for init_weight_transfer, _wait_for_server_ready_sync's own logging),
+        # which requires PartialState() to be initialized.
+        PartialState()
+
+    def _make_client(self, monkeypatch, url):
+        monkeypatch.setattr(weight_transfer, "is_vllm_available", lambda *args, **kwargs: True)
+        return weight_transfer.WeightTransferClient(vllm_server_url=url, weight_update_info={})
+
+    def test_pause_raises_on_server_error(self, monkeypatch):
+        with _MockHTTPServer() as server:
+            client = self._make_client(monkeypatch, server.url)
+            with pytest.raises(requests.HTTPError):
+                client.pause()
+
+    def test_resume_raises_on_server_error(self, monkeypatch):
+        with _MockHTTPServer() as server:
+            client = self._make_client(monkeypatch, server.url)
+            with pytest.raises(requests.HTTPError):
+                client.resume()
+
+    def test_init_weight_transfer_raises_on_get_world_size_error(self, monkeypatch):
+        with _MockHTTPServer() as server:
+            client = self._make_client(monkeypatch, server.url)
+            with pytest.raises(requests.HTTPError):
+                client.init_weight_transfer()
+
+    def test_send_weights_raises_on_start_weight_update_error(self, monkeypatch):
+        with _MockHTTPServer() as server:
+            client = self._make_client(monkeypatch, server.url)
+            client.model_update_group = object()  # non-None: bypass the "no group yet" early return
+            with pytest.raises(requests.HTTPError):
+                client.send_weights(iter([]))
 
 
 class TestAsyncRolloutWorkerEnvironments(TrlTestCase):
