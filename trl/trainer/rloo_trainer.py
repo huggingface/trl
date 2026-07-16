@@ -540,15 +540,14 @@ class RLOOTrainer(_BaseTrainer):
                     "`accelerator_config`. Please set it to `False`."
                 )
             args.accelerator_config.dispatch_batches = False
-            # Prompt repetitions are baked into the stream, so it must be consumed in order by a single worker.
-            # Multiple workers would shard and interleave the stream, splitting the num_generations groups. The wrapped
-            # dataset is single-shard anyway, so extra workers bring no speedup.
-            if args.dataloader_num_workers != 0:
-                logger.warning(
-                    f"Iterable datasets require `dataloader_num_workers=0` to preserve prompt grouping; overriding the "
-                    f"provided value ({args.dataloader_num_workers})."
-                )
-                args.dataloader_num_workers = 0
+        # An iterable train set bakes prompt repeats into the stream, so it must be read by a single worker: multiple
+        # workers would shard and interleave it, splitting the num_generations groups. Map-style train keeps its workers.
+        if isinstance(train_dataset, IterableDataset) and args.dataloader_num_workers != 0:
+            logger.warning(
+                f"Iterable datasets require `dataloader_num_workers=0` to preserve prompt grouping; overriding the "
+                f"provided value ({args.dataloader_num_workers})."
+            )
+            args.dataloader_num_workers = 0
 
         # Multi-step
         self.num_iterations = args.num_iterations
@@ -851,7 +850,8 @@ class RLOOTrainer(_BaseTrainer):
             else self.eval_dataset
         )
 
-        if isinstance(eval_dataset, IterableDataset):
+        iterable_eval = isinstance(eval_dataset, IterableDataset)
+        if iterable_eval:
             # Datasets passed to `evaluate`/`predict` are absent at `__init__`, so apply the iterable config here too.
             if self.args.accelerator_config.dispatch_batches:
                 raise ValueError(
@@ -859,22 +859,23 @@ class RLOOTrainer(_BaseTrainer):
                     "`accelerator_config`. Please set it to `False`."
                 )
             self.accelerator.dataloader_config.dispatch_batches = False
-            if self.args.dataloader_num_workers != 0:
-                logger.warning(
-                    f"Iterable datasets require `dataloader_num_workers=0` to preserve prompt grouping; overriding the "
-                    f"provided value ({self.args.dataloader_num_workers})."
-                )
-                self.args.dataloader_num_workers = 0
             eval_dataset = eval_dataset.shuffle(seed=self.args.seed)
             eval_dataset = repeat_iterable_dataset(eval_dataset, mini_repeat_count=self.num_generations_eval)
+            # Force a single worker for this loader only, without persisting the change, so map-style loaders
+            # (e.g. training) keep their workers.
+            num_workers = self.args.dataloader_num_workers
+            self.args.dataloader_num_workers = 0
 
-        return self._get_dataloader(
+        dataloader = self._get_dataloader(
             dataset=eval_dataset,
             description="Evaluation",
             batch_size=self.args.eval_batch_size,
             sampler_fn=self._get_eval_sampler,
             dataloader_key=dataloader_key,
         )
+        if iterable_eval:
+            self.args.dataloader_num_workers = num_workers
+        return dataloader
 
     @profiling_decorator
     def _get_per_token_logps_and_entropies(
