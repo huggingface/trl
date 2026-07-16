@@ -26,7 +26,7 @@ from collections.abc import Callable, Mapping, Sequence, Sized
 from contextlib import contextmanager, nullcontext
 from importlib.metadata import version
 from itertools import accumulate
-from typing import TypeVar
+from typing import TYPE_CHECKING, TypeVar
 
 import numpy as np
 import pandas as pd
@@ -66,6 +66,10 @@ if is_rich_available():
     from rich.panel import Panel
     from rich.table import Table
     from rich.text import Text
+
+
+if TYPE_CHECKING:
+    from datasets import IterableDataset
 
 
 logger = get_logger(__name__)
@@ -787,7 +791,9 @@ class RepeatSampler(Sampler):
         return (self.num_samples // self.batch_size) * self.batch_size * self.mini_repeat_count * self.repeat_count
 
 
-def repeat_iterable_dataset(dataset, mini_repeat_count: int, batch_size: int = 1, repeat_count: int = 1):
+def repeat_iterable_dataset(
+    dataset: IterableDataset, mini_repeat_count: int, batch_size: int = 1, repeat_count: int = 1
+):
     """
     Streaming counterpart of [`RepeatSampler`] for [`~datasets.IterableDataset`].
 
