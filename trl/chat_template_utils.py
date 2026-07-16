@@ -446,6 +446,16 @@ gptoss_template = {
     },
 }
 
+# An LFM2.5 argument value is either a single-quoted string, a JSON list/mapping, or a bare literal running up to the
+# next `,` or `)`. Lists and mappings contain those very separators, so the pattern has to consume balanced brackets,
+# which a regex can only do up to a fixed nesting depth. Three levels covers realistic tool arguments; deeper values
+# truncate.
+_LFM2_2_5_ATOM = r"[^\[\]{}'\"]|'[^']*'|\"[^\"]*\""
+_LFM2_2_5_NESTED = _LFM2_2_5_ATOM
+for _ in range(3):
+    _LFM2_2_5_NESTED = rf"{_LFM2_2_5_ATOM}|[\[{{](?:{_LFM2_2_5_NESTED})*[\]}}]"
+_LFM2_2_5_ARG_VALUE = rf"'[^']*'|[\[{{](?:{_LFM2_2_5_NESTED})*[\]}}]|[^,)]*"
+
 lfm2_2_5_template = {
     # LFM2.5 renders every tool call of a turn into a single `<|tool_call_start|>[...]<|tool_call_end|>` block, as a
     # comma-separated list of Python-style calls: `[get_weather(city='Paris', days=3), ping()]`. The `open_pattern`
@@ -474,7 +484,7 @@ lfm2_2_5_template = {
             "repeats": True,
             "content": "xml-inline",
             "content_args": {
-                "tag_pattern": r"(?P<key>\w+)=(?P<value>'[^']*'|\{.*?\}|[^,)]*)",
+                "tag_pattern": rf"(?P<key>\w+)=(?P<value>{_LFM2_2_5_ARG_VALUE})",
                 "value_parser": {"name": "json", "args": {"string_delims": [["'", "'"]], "allow_non_json": True}},
             },
             "transform": {"type": "function", "function": {"name": "{name}", "arguments": "{content}"}},

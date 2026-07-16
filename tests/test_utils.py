@@ -1349,17 +1349,14 @@ class TestPatchChunkedLMHead:
 
     @pytest.mark.parametrize("model_id", _CHUNKED_LM_HEAD_MODEL_IDS)
     @pytest.mark.parametrize("temperature", [1.0, 0.7])
-    def test_backward(self, model_id, temperature, request):
-        # LFM2 ties its embeddings, so the chunked LM head's `grad_hidden` reaches `lm_head.weight` through the
-        # embedding. There the chunked path (fp32 accumulation) and the reference (whose `.float()` backward casts to
-        # bf16) round differently, and both land several percent from the true fp32 gradient. A temperature below 1
-        # scales the gradients up enough for that gap to exceed the tolerance. The other tied models (Gemma, Cohere)
-        # stay under it only because their gradients are ~40x smaller. See #XXXX.
-        if "Lfm2" in model_id and temperature != 1.0:
-            request.node.add_marker(
-                pytest.mark.xfail(reason="Chunked LM head is bf16-lossy for tied embeddings (see #XXXX)", strict=True)
-            )
-        model_ref = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch.bfloat16).to(torch_device)
+    def test_backward(self, model_id, temperature):
+        # Run in float32, not bfloat16. For models that tie their embeddings, `lm_head.weight.grad` is the sum of the
+        # LM-head projection and the input-embedding lookup, so its absolute error is set by the larger of the two
+        # rather than by the element's own value. In bfloat16 that error (~1 ULP at the gradient's scale) swamps the
+        # assertion: every untied model lands on the same ~1.6e-2 bf16 quantum, and the tied ones range up to ~4e-1,
+        # which no useful tolerance can separate from a real bug. float32 drops the worst case to ~3e-5 and makes the
+        # test sensitive to the thing it is meant to check: that the chunked gradient matches the reference.
+        model_ref = AutoModelForCausalLM.from_pretrained(model_id, dtype=torch.float32).to(torch_device)
         model_chunked = copy.deepcopy(model_ref)
 
         B, S, chunk_size = 2, 8, 32
@@ -1381,7 +1378,7 @@ class TestPatchChunkedLMHead:
         out["log_probs"].sum().backward()
         chunked_grad = model_chunked.lm_head.weight.grad.clone()
 
-        torch.testing.assert_close(chunked_grad, ref_grad, atol=5e-2, rtol=5e-2)
+        torch.testing.assert_close(chunked_grad, ref_grad, atol=1e-3, rtol=1e-3)
 
 
 class TestComputeFlopsPerToken(TrlTestCase):
