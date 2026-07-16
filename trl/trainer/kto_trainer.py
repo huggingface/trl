@@ -1526,8 +1526,6 @@ class KTOTrainer(_BaseTrainer):
 
         chosen_logps = completion_logps.index_select(0, chosen_idx)
         rejected_logps = completion_logps.index_select(0, rejected_idx)
-        chosen_logits = outputs.logits.index_select(0, chosen_idx)
-        rejected_logits = outputs.logits.index_select(0, rejected_idx)
 
         if self.precompute_ref_logps:
             ref_chosen_logps = batch["ref_logps"].index_select(0, chosen_idx)
@@ -1618,6 +1616,25 @@ class KTOTrainer(_BaseTrainer):
             self._total_train_tokens += num_tokens_in_batch
         self._metrics[mode]["num_tokens"] = [self._total_train_tokens]
 
+        # Average logits for chosen and rejected completions
+        shift_completion_mask = batch["completion_mask"][:, 1:]
+        chosen_logits = shift_logits.detach().index_select(0, chosen_idx)
+        rejected_logits = shift_logits.detach().index_select(0, rejected_idx)
+        chosen_mask = shift_completion_mask.index_select(0, chosen_idx)
+        rejected_mask = shift_completion_mask.index_select(0, rejected_idx)
+        total_chosen_logits = chosen_logits[chosen_mask.bool()].mean(-1).sum()
+        total_chosen_tokens = chosen_mask.sum()
+        total_rejected_logits = rejected_logits[rejected_mask.bool()].mean(-1).sum()
+        total_rejected_tokens = rejected_mask.sum()
+        total_chosen_logits = self.accelerator.gather_for_metrics(total_chosen_logits).sum().item()
+        total_chosen_tokens = self.accelerator.gather_for_metrics(total_chosen_tokens).sum().item()
+        total_rejected_logits = self.accelerator.gather_for_metrics(total_rejected_logits).sum().item()
+        total_rejected_tokens = self.accelerator.gather_for_metrics(total_rejected_tokens).sum().item()
+        avg_chosen_logits = total_chosen_logits / total_chosen_tokens if total_chosen_tokens > 0 else 0.0
+        avg_rejected_logits = total_rejected_logits / total_rejected_tokens if total_rejected_tokens > 0 else 0.0
+        self._metrics[mode]["logits/chosen"].append(avg_chosen_logits)
+        self._metrics[mode]["logits/rejected"].append(avg_rejected_logits)
+
         all_num_chosen = self.accelerator.gather_for_metrics(num_chosen).sum().item()
         all_num_rejected = self.accelerator.gather_for_metrics(num_rejected).sum().item()
 
@@ -1628,9 +1645,6 @@ class KTOTrainer(_BaseTrainer):
             self._metrics[mode]["logps/chosen"].append(
                 self.accelerator.gather_for_metrics(chosen_logps.nansum()).nansum().item() / all_num_chosen
             )
-            self._metrics[mode]["logits/chosen"].append(
-                self.accelerator.gather_for_metrics(chosen_logits.nansum()).nansum().item() / all_num_chosen
-            )
 
         if all_num_rejected > 0:
             self._metrics[mode]["rewards/rejected"].append(
@@ -1638,9 +1652,6 @@ class KTOTrainer(_BaseTrainer):
             )
             self._metrics[mode]["logps/rejected"].append(
                 self.accelerator.gather_for_metrics(rejected_logps.nansum()).nansum().item() / all_num_rejected
-            )
-            self._metrics[mode]["logits/rejected"].append(
-                self.accelerator.gather_for_metrics(rejected_logits.nansum()).nansum().item() / all_num_rejected
             )
 
         if all_num_chosen > 0 and all_num_rejected > 0:
