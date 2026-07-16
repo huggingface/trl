@@ -312,29 +312,51 @@ class TestRLOOTrainer(TrlTestCase):
 
         assert trainer.args.dataloader_num_workers == 0
 
-    @pytest.mark.parametrize("eval_dataset_type", ["dataset", "dataset_dict", "dict_of_dataset"])
+    @pytest.mark.parametrize(
+        "eval_dataset_type",
+        [
+            "dataset",
+            "iterable_dataset",
+            "dataset_dict",
+            "iterable_dataset_dict",
+            "dict_of_dataset",
+            "dict_of_iterable_dataset",
+        ],
+    )
     def test_evaluate_with_eval_dataset(self, eval_dataset_type):
-        # `evaluate` accepts a dataset passed directly, not only an `eval_dataset` set at init. Streaming datasets
-        # are not supported in RLOO, so only map-style types are covered here.
-        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
+        # `evaluate` accepts a dataset passed directly, not only an `eval_dataset` set at init. Iterable datasets passed
+        # this way must still be configured for the iterable path, since they are absent at init.
+        train_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
-        if eval_dataset_type == "dataset":
-            eval_dataset = dataset["test"]
-        elif eval_dataset_type == "dataset_dict":
-            eval_dataset = DatasetDict({"data1": dataset["test"], "data2": dataset["test"]})
-        else:  # "dict_of_dataset"
-            eval_dataset = {"data1": dataset["test"], "data2": dataset["test"]}
+        streaming = "iterable" in eval_dataset_type
+        eval_split = load_dataset(
+            "trl-internal-testing/zen", "standard_prompt_only", split="test", streaming=streaming
+        )
+        if eval_dataset_type in ("dataset", "iterable_dataset"):
+            eval_dataset = eval_split
+        elif eval_dataset_type in ("dataset_dict", "iterable_dataset_dict"):
+            dataset_dict_cls = IterableDatasetDict if streaming else DatasetDict
+            eval_dataset = dataset_dict_cls({"data1": eval_split, "data2": eval_split})
+        else:  # "dict_of_dataset" or "dict_of_iterable_dataset"
+            eval_dataset = {"data1": eval_split, "data2": eval_split}
 
-        training_args = RLOOConfig(output_dir=self.tmp_dir, report_to="none")
+        training_args = RLOOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,
+            per_device_eval_batch_size=3,
+            num_generations=3,
+            max_completion_length=8,
+            report_to="none",
+        )
         trainer = RLOOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
             args=training_args,
-            train_dataset=dataset["train"],
+            train_dataset=train_dataset,
         )
 
         metrics = trainer.evaluate(eval_dataset=eval_dataset)
-        if eval_dataset_type == "dataset":
+        if eval_dataset_type in ("dataset", "iterable_dataset"):
             assert metrics["eval_loss"] is not None
         else:
             assert metrics["eval_data1_loss"] is not None
