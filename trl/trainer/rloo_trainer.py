@@ -850,8 +850,7 @@ class RLOOTrainer(_BaseTrainer):
             else self.eval_dataset
         )
 
-        iterable_eval = isinstance(eval_dataset, IterableDataset)
-        if iterable_eval:
+        if isinstance(eval_dataset, IterableDataset):
             # Datasets passed to `evaluate`/`predict` are absent at `__init__`, so apply the iterable config here too.
             if self.args.accelerator_config.dispatch_batches:
                 raise ValueError(
@@ -875,7 +874,7 @@ class RLOOTrainer(_BaseTrainer):
                 dataloader_key=dataloader_key,
             )
         finally:
-            if iterable_eval:
+            if isinstance(eval_dataset, IterableDataset):
                 self.args.dataloader_num_workers = num_workers
 
     @profiling_decorator
