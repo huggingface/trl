@@ -1296,16 +1296,17 @@ class GRPOTrainer(_BaseTrainer):
             num_workers = self.args.dataloader_num_workers
             self.args.dataloader_num_workers = 0
 
-        dataloader = self._get_dataloader(
-            dataset=eval_dataset,
-            description="Evaluation",
-            batch_size=self.args.eval_batch_size,
-            sampler_fn=self._get_eval_sampler,
-            dataloader_key=dataloader_key,
-        )
-        if iterable_eval:
-            self.args.dataloader_num_workers = num_workers
-        return dataloader
+        try:
+            return self._get_dataloader(
+                dataset=eval_dataset,
+                description="Evaluation",
+                batch_size=self.args.eval_batch_size,
+                sampler_fn=self._get_eval_sampler,
+                dataloader_key=dataloader_key,
+            )
+        finally:
+            if iterable_eval:
+                self.args.dataloader_num_workers = num_workers
 
     @profiling_decorator
     def _get_last_hidden_state(
