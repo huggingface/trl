@@ -2,11 +2,13 @@ name: Slow tests (on push)
 
 on:
   push:
-    branches: [main]
-    paths:
-      # Run only when python files are modified
-      - "trl/**.py"
-      - "examples/**.py"
+    branches:
+      - main
+      - ci-*
+#    paths:
+#      # Run only when python files are modified
+#      - "trl/**.py"
+#      - "examples/**.py"
 env:
   RUN_SLOW: "yes"
   IS_GITHUB_CI: "1"
