@@ -13,7 +13,9 @@
 # limitations under the License.
 
 
+import json
 import math
+import os
 import queue
 import textwrap
 import time
@@ -35,6 +37,7 @@ from ...trainer.base_trainer import _BaseTrainer
 from ...trainer.utils import nanmax, nanmin, pad, patch_chunked_lm_head
 from .async_grpo_config import AsyncGRPOConfig
 from .async_rollout_worker import AsyncRolloutWorker
+from .lora import LoRAWeightTransferClient
 from .weight_transfer import WeightTransferClient
 
 
@@ -109,8 +112,11 @@ class _InitialWeightSyncCallback(TrainerCallback):
         if self._fired:
             return
         self._fired = True
-        if self._trainer.accelerator.is_main_process and self._trainer.weight_transfer is not None:
-            self._trainer.weight_transfer.init_weight_transfer()
+        if self._trainer.accelerator.is_main_process:
+            if self._trainer.lora_weight_transfer is not None:
+                self._trainer.lora_weight_transfer.init_lora_sync_group()
+            elif self._trainer.weight_transfer is not None:
+                self._trainer.weight_transfer.init_weight_transfer()
         self._trainer._sync_weight()
 
 
@@ -543,6 +549,26 @@ class AsyncGRPOTrainer(_BaseTrainer):
             **model_init_kwargs,
         )
 
+        if self.args.use_lora:
+            lora_count = 0
+            for name, param in model.named_parameters():
+                param.requires_grad = "lora_" in name
+                if param.requires_grad:
+                    lora_count += 1
+            if lora_count == 0:
+                raise ValueError(
+                    "use_lora=True but no LoRA parameters found in model. "
+                    "Ensure the model path contains adapter_config.json and adapter weights."
+                )
+            logger.info(f"LoRA mode: enabled gradients on {lora_count} LoRA parameter tensors")
+
+            adapter_config_path = os.path.join(self.args.lora_adapter_path, "adapter_config.json")
+            with open(adapter_config_path) as f:
+                adapter_cfg = json.load(f)
+            self._lora_alpha = float(adapter_cfg["lora_alpha"])
+            self._lora_rank = int(adapter_cfg["r"])
+            self._lora_int_id = 1  # vLLM assigns lora_int_id=1 for the first adapter loaded at startup
+
         if self.args.use_liger_kernel:
             raise NotImplementedError("`use_liger_kernel` is not supported yet.")
 
@@ -618,28 +644,37 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 # if the stub doesn't sync to a real vLLM).
                 self.rollout_worker = rollout_worker
                 self.weight_transfer = None
+                self.lora_weight_transfer = None
             else:
-                # Collect weight metadata once — names/dtypes/shapes are fixed for the lifetime of training.
-                # DTensor.shape returns the global shape without triggering any all-gather.
-                weight_names, weight_dtype_names, weight_shapes = [], [], []
-                for name, param in model.named_parameters():
-                    # DDP/FSDP1 wrapping, avoids vllm module not exist error
-                    name = name.removeprefix("module.")
-                    weight_names.append(name)
-                    weight_dtype_names.append(str(param.dtype).split(".")[-1])
-                    weight_shapes.append(list(param.shape))
-                self.weight_transfer = WeightTransferClient(
-                    vllm_server_url=self.args.vllm_server_base_url,
-                    server_timeout=self.args.vllm_server_timeout,
-                    weight_update_info={
-                        "names": weight_names,
-                        "dtype_names": weight_dtype_names,
-                        "shapes": weight_shapes,
-                        "packed": True,
-                    },
-                )
+                if self.args.use_lora:
+                    self.weight_transfer = None
+                    self.lora_weight_transfer = LoRAWeightTransferClient(
+                        vllm_server_url=self.args.vllm_server_base_url,
+                        server_timeout=self.args.vllm_server_timeout,
+                    )
+                else:
+                    self.lora_weight_transfer = None
+                    weight_names, weight_dtype_names, weight_shapes = [], [], []
+                    for name, param in model.named_parameters():
+                        name = name.removeprefix("module.")
+                        weight_names.append(name)
+                        weight_dtype_names.append(str(param.dtype).split(".")[-1])
+                        weight_shapes.append(list(param.shape))
+                    self.weight_transfer = WeightTransferClient(
+                        vllm_server_url=self.args.vllm_server_base_url,
+                        server_timeout=self.args.vllm_server_timeout,
+                        weight_update_info={
+                            "names": weight_names,
+                            "dtype_names": weight_dtype_names,
+                            "shapes": weight_shapes,
+                            "packed": True,
+                        },
+                    )
+                # In LoRA mode, generation requests use the adapter name (e.g. "sft")
+                # while the tokenizer still loads from the original model path.
+                rollout_model_name = self.args.lora_name if self.args.use_lora else model_name
                 self.rollout_worker = AsyncRolloutWorker(
-                    model_name=model_name,
+                    model_name=rollout_model_name,
                     dataset=train_dataset,
                     reward_funcs=reward_funcs,
                     processing_class=processing_class,
@@ -664,6 +699,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
             self.rollout_queue = None
             self.rollout_worker = None
             self.weight_transfer = None
+            self.lora_weight_transfer = None
 
         # Add callbacks. Registration order matters: weight sync first, then worker start.
         self.add_callback(_InitialWeightSyncCallback(self))
@@ -684,7 +720,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
             # rollout sample can exceed it. Only the built-in worker manages a vLLM server (weight_transfer is set);
             # with a custom rollout_worker there may be none to query, so require an explicit budget instead.
             if self.args.token_budget is None:
-                if self.weight_transfer is None:
+                if self.weight_transfer is None and self.lora_weight_transfer is None:
                     raise ValueError(
                         "Set `token_budget` explicitly when passing a custom `rollout_worker`: the default is the "
                         "vLLM server's max_model_len, which is only queried for the built-in rollout worker."
@@ -940,7 +976,51 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 full = full.to(device)
             yield name, full
 
+    def _lora_param_iter(self):
+        """Yield (name, tensor) for LoRA A/B parameters only."""
+        device = self.accelerator.device
+        for name, param in self.model.named_parameters():
+            if "lora_" not in name:
+                continue
+            name = name.removeprefix("module.")
+            full = param.full_tensor() if isinstance(param, DTensor) else param.detach()
+            if full.device != device:
+                full = full.to(device)
+            yield name, full
+
     def _sync_weight(self):
+        if self.args.use_lora:
+            self._sync_weight_lora()
+        else:
+            self._sync_weight_full()
+
+    def _sync_weight_lora(self):
+        """LoRA sync: stream LoRA A/B tensors to vLLM via NCCL, bypassing disk + adapter lifecycle."""
+        t0 = time.time()
+        if self.accelerator.is_main_process and self.lora_weight_transfer:
+            self.lora_weight_transfer.send_lora_weights(
+                self._lora_param_iter(),
+                lora_alpha=self._lora_alpha,
+                lora_rank=self._lora_rank,
+                lora_int_id=self._lora_int_id,
+            )
+        else:
+            # Non-rank-0 must still participate in DTensor full_tensor() collectives for FSDP2
+            for _ in self._lora_param_iter():
+                pass
+
+        self.accelerator.wait_for_everyone()
+
+        if self.accelerator.is_main_process:
+            self.model_version += 1
+            if self.rollout_worker:
+                self.rollout_worker.update_model_version(self.model_version)
+        weight_sync_time_s = time.time() - t0
+        self._metrics["train"]["weight_sync_time_s"].append(weight_sync_time_s)
+        logger.info(f"Weight sync (LoRA): done. Total {weight_sync_time_s:.1f}s")
+
+    def _sync_weight_full(self):
+        """Full-weight NCCL sync: pause vLLM, transfer all weights, resume."""
         t0 = time.time()
         logger.info("Weight sync: pausing vLLM...")
         if self.accelerator.is_main_process and self.weight_transfer:
@@ -982,3 +1062,5 @@ class AsyncGRPOTrainer(_BaseTrainer):
                     self.rollout_worker.stop()
                 if self.weight_transfer:
                     self.weight_transfer.destroy()
+                if self.lora_weight_transfer:
+                    self.lora_weight_transfer.destroy()
