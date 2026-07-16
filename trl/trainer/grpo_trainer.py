@@ -726,7 +726,6 @@ class GRPOTrainer(_BaseTrainer):
         # Training arguments
         self.max_completion_length = args.max_completion_length  # = |o_i| in the GRPO paper
         self.num_generations = args.num_generations  # = G in the GRPO paper
-        # `is not None`: an explicit 0 means "parse tool calls but never execute them", not "unlimited"
         self.max_tool_calling_iterations = (
             args.max_tool_calling_iterations if args.max_tool_calling_iterations is not None else sys.maxsize
         )
