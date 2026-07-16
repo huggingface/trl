@@ -2620,14 +2620,15 @@ def test_cross_architecture_vlm_without_uld_raises_error(monkeypatch):
     student, teacher = _make_dummy_vlm_models("smolvlm", "qwen2_5_vl")
     args = _make_vlm_trainer_args()  # use_uld_loss=False by default
 
-    with pytest.raises(ValueError, match="Cross-architecture VLM distillation.*use_uld_loss=True"):
-        GOLDTrainer(
-            model=student,
-            teacher_model=teacher,
-            args=args,
-            train_dataset=vision_dataset,
-            processing_class=processor,
-        )
+    with pytest.warns(UserWarning, match="Cross-architecture VLM distillation"):
+        with pytest.raises(ValueError, match="Cross-architecture VLM distillation.*use_uld_loss=True"):
+            GOLDTrainer(
+                model=student,
+                teacher_model=teacher,
+                args=args,
+                train_dataset=vision_dataset,
+                processing_class=processor,
+            )
 
 
 def test_cross_architecture_vlm_with_uld_sets_teacher_processor(monkeypatch):
@@ -3553,13 +3554,14 @@ def test_vlm_uld_cross_arch_train_step_smoke(tmp_path, vlm_dataset):
         dataloader_drop_last=True,
     )
 
-    trainer = GOLDTrainer(
-        model=student,
-        teacher_model=teacher,
-        args=args,
-        train_dataset=vlm_dataset,
-        processing_class=processor,
-    )
+    with pytest.warns(UserWarning, match="Cross-architecture VLM distillation"):
+        trainer = GOLDTrainer(
+            model=student,
+            teacher_model=teacher,
+            args=args,
+            train_dataset=vlm_dataset,
+            processing_class=processor,
+        )
     train_output = trainer.train()
     assert torch.isfinite(torch.tensor(train_output.training_loss))
 
