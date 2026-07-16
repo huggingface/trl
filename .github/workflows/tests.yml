@@ -5,18 +5,18 @@ on:
     branches:
       - main
       - ci-*
-    paths:
-      # Run only when relevant files are modified
-      - ".github/workflows/tests.yml"
-      - ".github/actions/**"
-      - "Makefile"
-      - "examples/**.py"
-      - "tests/**"
-      - "trl/**"
-      - "pyproject.toml"
-      # Exclude if only experimental code/tests
-      - "!trl/experimental/**"
-      - "!tests/experimental/**"
+#    paths:
+#      # Run only when relevant files are modified
+#      - ".github/workflows/tests.yml"
+#      - ".github/actions/**"
+#      - "Makefile"
+#      - "examples/**.py"
+#      - "tests/**"
+#      - "trl/**"
+#      - "pyproject.toml"
+#      # Exclude if only experimental code/tests
+#      - "!trl/experimental/**"
+#      - "!tests/experimental/**"
   pull_request:
     paths:
       # Run only when relevant files are modified
