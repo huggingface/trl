@@ -585,6 +585,33 @@ class TestGRPOTrainer(TrlTestCase):
 
         assert trainer.args.dataloader_num_workers == 0
 
+    def test_iterable_eval_keeps_map_style_train_workers(self):
+        # A map-style train set keeps its workers even when the eval set is iterable; the single-worker restriction is
+        # scoped to the iterable eval loader and not persisted.
+        train_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        eval_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="test", streaming=True)
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,
+            per_device_eval_batch_size=3,
+            num_generations=3,
+            dataloader_num_workers=4,
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=train_dataset,
+            eval_dataset=eval_dataset,
+        )
+
+        assert trainer.args.dataloader_num_workers == 4  # not disabled by the iterable eval set
+        assert trainer.get_train_dataloader().num_workers == 4  # map-style train keeps its workers
+        assert trainer.get_eval_dataloader().num_workers == 0  # iterable eval loader uses a single worker
+        assert trainer.args.dataloader_num_workers == 4  # override is scoped, not persisted
+
     @pytest.mark.parametrize(
         "eval_dataset_type",
         [
