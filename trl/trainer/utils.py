@@ -26,7 +26,7 @@ from collections.abc import Callable, Mapping, Sequence, Sized
 from contextlib import contextmanager, nullcontext
 from importlib.metadata import version
 from itertools import accumulate
-from typing import TYPE_CHECKING, TypeVar
+from typing import TypeVar
 
 import numpy as np
 import pandas as pd
@@ -34,6 +34,7 @@ import torch
 import torch.nn.functional as F
 import transformers
 from accelerate.logging import get_logger
+from datasets import IterableDataset
 from huggingface_hub import ModelCard, ModelCardData
 from packaging.version import Version
 from torch.utils.data import Sampler
@@ -66,10 +67,6 @@ if is_rich_available():
     from rich.panel import Panel
     from rich.table import Table
     from rich.text import Text
-
-
-if TYPE_CHECKING:
-    from datasets import IterableDataset
 
 
 logger = get_logger(__name__)
