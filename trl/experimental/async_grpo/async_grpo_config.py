@@ -56,6 +56,14 @@ class AsyncGRPOConfig(_BaseConfig):
             Maximum number of tool-calling turns when training an agent. If `None`, there is no limit and generation
             stops when the model generates a response turn with no tool calls or when the total response length reaches
             `max_completion_length`.
+        fork_threshold_tokens (`int`, *optional*, defaults to `1024`):
+            A multi-turn conversation is turned into training rows by re-tokenizing the whole conversation every turn
+            and reconciling the result against the tokens held so far: a clean append stays one row, a rewrite (dropped
+            reasoning, summarized history) forks a new row. When a turn's re-tokenized prompt drifts inside the last
+            generated answer, the decision is made on the **drift size** — how many previously-trained tokens the
+            realign would mask to context. A drift smaller than this many tokens is treated as a re-tokenization
+            wobble (realigned as context); a larger drift — e.g. a long reasoning block dropped by the template —
+            forks a new row so those trained tokens keep their training signal instead of being silently masked.
 
         > Parameters that control the vLLM server
 
@@ -77,11 +85,11 @@ class AsyncGRPOConfig(_BaseConfig):
             Maximum number of real tokens packed into a single row (one DP rank's forward) for dynamic
             token-budgeted micro-batching. When `> 0`, a `TokenBudgetBatcher` forms Σ Lᵢ²-balanced micro-batches
             whose rows each stay within this budget, bounding peak memory independently of the sample count (the
-            number of samples per row becomes dynamic). If `None` (default), it is set to
-            `per_device_train_batch_size * max_completion_length`. A sample longer than `token_budget` fits in no
-            row and is dropped with a warning, so raise it to avoid dropping samples. Set `<= 0` to disable token
-            budgeting and instead pack a fixed `per_device_train_batch_size × num_processes` samples per
-            micro-batch, Σ Lᵢ²-balanced across the rows.
+            number of samples per row becomes dynamic). If `None` (default), it is set to the vLLM server's
+            `max_model_len` (queried at train start) — the cap on prompt + completion length — so no rollout sample
+            can ever exceed the budget. A sample longer than `token_budget` fits in no row and is dropped with a
+            warning. Set `<= 0` to disable token budgeting and instead pack a fixed `per_device_train_batch_size ×
+            num_processes` samples per micro-batch, Σ Lᵢ²-balanced across the rows.
 
         > Parameters that control the async rollout pipeline
 
@@ -183,6 +191,15 @@ class AsyncGRPOConfig(_BaseConfig):
             "length reaches `max_completion_length`."
         },
     )
+    fork_threshold_tokens: int = field(
+        default=1024,
+        metadata={
+            "help": "A multi-turn conversation is reconciled into training rows by re-tokenizing the whole "
+            "conversation every turn: a clean append stays one row, a rewrite forks a new row. A re-tokenization "
+            "drift inside the last answer smaller than this many tokens (measured as the number of previously-trained "
+            "tokens the realign would mask) is realigned as context; a larger drift forks a new row."
+        },
+    )
 
     # Parameters that control the vLLM server
     vllm_server_base_url: str = field(
@@ -219,10 +236,10 @@ class AsyncGRPOConfig(_BaseConfig):
             "help": "Maximum number of real tokens packed into a single row (one DP rank's forward) for dynamic "
             "token-budgeted micro-batching. When > 0, a `TokenBudgetBatcher` forms Σ Lᵢ²-balanced micro-batches "
             "whose rows each stay within this budget, bounding peak memory independently of the sample count. If "
-            "None (default), it is set to `per_device_train_batch_size * max_completion_length`. A sample longer "
-            "than `token_budget` fits in no row and is dropped with a warning, so raise it to avoid dropping "
-            "samples. Set <= 0 to disable token budgeting and instead pack a fixed `per_device_train_batch_size × "
-            "num_processes` samples per micro-batch, Σ Lᵢ²-balanced across the rows."
+            "None (default), it is set to the vLLM server's `max_model_len` (queried at train start), so no "
+            "rollout sample can ever exceed the budget. A sample longer than `token_budget` fits in no row and is "
+            "dropped with a warning. Set <= 0 to disable token budgeting and instead pack a fixed "
+            "`per_device_train_batch_size × num_processes` samples per micro-batch, Σ Lᵢ²-balanced across the rows."
         },
     )
 
@@ -275,11 +292,6 @@ class AsyncGRPOConfig(_BaseConfig):
 
     def __post_init__(self):
         super().__post_init__()
-
-        # Default the per-row budget to ~`per_device_train_batch_size` worst-case samples (set <= 0 to disable
-        # budgeting and use FixedCountBatcher).
-        if self.token_budget is None:
-            self.token_budget = self.per_device_train_batch_size * self.max_completion_length
 
         # Accelerator config: required for the async IterableDataset-backed dataloader to work correctly.
         # split_batches=True and dispatch_batches=True ensure that the main process drives the dataloader

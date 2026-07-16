@@ -418,6 +418,9 @@ class DistillationTrainer(_BaseTrainer):
         if isinstance(model, str):
             model_name_or_path = model
             model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
+            # Distributed training requires device_map=None ("auto" fails)
+            if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
+                model_init_kwargs["device_map"] = None
             model = create_model_from_path(model, **model_init_kwargs)
         else:
             model_name_or_path = model.config._name_or_path if model is not None else None
@@ -478,7 +481,7 @@ class DistillationTrainer(_BaseTrainer):
         # ── Liger fused JSD loss ──
         self.use_liger_loss = False
         if args.use_liger_kernel:
-            self.liger_jsd_loss = LigerFusedLinearJSDLoss(
+            self.liger_loss = LigerFusedLinearJSDLoss(
                 beta=args.beta,
                 ignore_index=-100,
                 temperature=args.temperature,
@@ -549,6 +552,9 @@ class DistillationTrainer(_BaseTrainer):
                 init_kwargs = dict(teacher_model_init_kwargs)
                 if args.teacher_model_revision is not None:
                     init_kwargs.setdefault("revision", args.teacher_model_revision)
+                # Distributed training requires device_map=None ("auto" fails)
+                if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
+                    init_kwargs["device_map"] = None
                 teacher_model = create_model_from_path(teacher_model, **init_kwargs)
 
         # Trainer does not need to remove unused columns — the collator handles raw data
@@ -584,6 +590,9 @@ class DistillationTrainer(_BaseTrainer):
         # ── Store config values ──
         self.lmbda = args.lmbda
         self.beta = args.beta
+        self.distillation_objective = args.distillation_objective
+        self.iw_opd_gamma = args.iw_opd_gamma
+        self.iw_opd_epsilon = args.iw_opd_epsilon
         self.temperature = args.temperature
         self.top_p = args.top_p
         self.num_generations = args.num_generations
@@ -657,11 +666,12 @@ class DistillationTrainer(_BaseTrainer):
                 max_num_seqs=args.per_device_train_batch_size * args.gradient_accumulation_steps,
                 enable_sleep_mode=args.vllm_enable_sleep_mode,
                 model_impl=args.vllm_model_impl,
+                trust_remote_code=args.trust_remote_code,
                 temperature=args.temperature,
                 top_p=args.top_p,
                 top_k=args.top_k,
                 max_completion_length=args.max_completion_length,
-                logprobs=None,
+                logprobs=0 if args.distillation_objective == "iw_opd" else None,
             )
             self.vllm_sync_frequency = args.vllm_sync_frequency
             self._last_vllm_sync_step = -1
@@ -878,13 +888,13 @@ class DistillationTrainer(_BaseTrainer):
 
         # Generate completions — pass token IDs directly, no text decoding
         prompt_ids_list = [p.tolist() for p in local_prompts]
-        _, completion_ids, _, _ = self.vllm_generation.generate(
+        _, completion_ids, logprobs, logprob_token_ids = self.vllm_generation.generate(
             prompts=prompt_ids_list, images=None, num_generations=self.num_generations
         )
 
         # Process completions into the buffer
         self._store_completions_in_buffer(
-            slices, on_policy_indices, local_slice_indices, local_prompts, completion_ids
+            slices, on_policy_indices, local_slice_indices, local_prompts, completion_ids, logprobs, logprob_token_ids
         )
 
     def _generate_with_model(self, slices: list[dict[str, torch.Tensor | Any]], on_policy_indices: list[int]):
@@ -951,6 +961,8 @@ class DistillationTrainer(_BaseTrainer):
         local_slice_indices: list[int],
         local_prompts: list[torch.Tensor],
         completion_ids: list,
+        logprobs: list | None = None,
+        logprob_token_ids: list | None = None,
     ):
         """Process vLLM completions and store them in the buffer.
 
@@ -963,9 +975,18 @@ class DistillationTrainer(_BaseTrainer):
 
         # Group completions and prompt token IDs by slice
         slice_completions = {idx: [] for idx in on_policy_indices}
+        slice_rollout_logprobs = {idx: [] for idx in on_policy_indices}
         slice_prompt_ids = {idx: [] for idx in on_policy_indices}
         for i, slice_idx in enumerate(local_slice_indices):
             slice_completions[slice_idx].append(completion_ids[i])
+            if logprobs is not None:
+                sampled_logprobs = []
+                for step_lps, step_token_ids, sampled_token_id in zip(
+                    logprobs[i], logprob_token_ids[i], completion_ids[i], strict=True
+                ):
+                    sampled_idx = step_token_ids.index(sampled_token_id)
+                    sampled_logprobs.append(step_lps[sampled_idx])
+                slice_rollout_logprobs[slice_idx].append(sampled_logprobs)
             slice_prompt_ids[slice_idx].append(local_prompts[i])
 
         for slice_idx in on_policy_indices:
@@ -985,14 +1006,28 @@ class DistillationTrainer(_BaseTrainer):
 
             # Pad/truncate completions (right-pad to max_completion_length)
             completion_tensors = []
+            rollout_logprob_tensors = []
             completion_ids_for_text = []
             completion_lengths = []
-            for comp_ids in slice_completions[slice_idx]:
+            for completion_idx, comp_ids in enumerate(slice_completions[slice_idx]):
                 t = torch.tensor(comp_ids, device=device)
                 if len(t) > max_completion_length:
                     t = t[:max_completion_length]
                 completion_ids_for_text.append(t.tolist())
                 completion_lengths.append(len(t))
+                if logprobs is not None:
+                    rollout_logprobs = torch.tensor(
+                        slice_rollout_logprobs[slice_idx][completion_idx], device=device, dtype=torch.float32
+                    )
+                    if len(rollout_logprobs) > max_completion_length:
+                        rollout_logprobs = rollout_logprobs[:max_completion_length]
+                    if len(rollout_logprobs) < max_completion_length:
+                        rollout_logprobs = F.pad(
+                            rollout_logprobs,
+                            (0, max_completion_length - len(rollout_logprobs)),
+                            value=0.0,
+                        )
+                    rollout_logprob_tensors.append(rollout_logprobs)
                 if len(t) < max_completion_length:
                     padding = torch.full((max_completion_length - len(t),), pad_token_id, device=device, dtype=t.dtype)
                     t = torch.cat([t, padding])
@@ -1020,6 +1055,9 @@ class DistillationTrainer(_BaseTrainer):
             # Update prompts to match the new padding width so prompt_length is consistent
             updated["prompts"] = prompt_ids
             updated["prompt_attention_mask"] = prompt_attention_mask
+            if logprobs is not None:
+                # Full sequence width (zeros over the prompt) so compute_loss can slice it like labels
+                updated["rollout_logprobs"] = F.pad(torch.stack(rollout_logprob_tensors), (prompt_width, 0), value=0.0)
 
             self._buffered_inputs[slice_idx] = updated
             self._buffered_text_logs[slice_idx] = (prompt_texts, completion_texts)
@@ -1181,6 +1219,63 @@ class DistillationTrainer(_BaseTrainer):
         if self.reverse_kl_top_1_mode == "argmax":
             return student_scores.argmax(dim=-1)
         return completion_tokens
+
+    def _compute_iw_opd_loss(
+        self,
+        student_logits: torch.Tensor,
+        completion_tokens: torch.Tensor,
+        labels: torch.Tensor,
+        teacher_actual_logprobs: torch.Tensor,
+        rollout_logprobs: torch.Tensor | None = None,
+        num_items_in_batch=None,
+    ) -> torch.Tensor:
+        """Compute the sampled-token Importance-Weighted On-Policy Distillation loss."""
+        student_log_probs = F.log_softmax(student_logits / self.temperature, dim=-1)
+        student_actual_logprobs = student_log_probs.gather(dim=-1, index=completion_tokens.unsqueeze(-1)).squeeze(-1)
+
+        valid_mask = labels != -100
+        missing_teacher = valid_mask & ~torch.isfinite(teacher_actual_logprobs)
+        if missing_teacher.any():
+            missing_count = int(missing_teacher.sum().item())
+            total_required = int(valid_mask.sum().item())
+            raise ValueError(
+                f"Teacher logprobs are missing for required IW-OPD positions: {missing_count}/{total_required}."
+            )
+
+        safe_teacher_logprobs = torch.where(valid_mask, teacher_actual_logprobs, 0.0)
+        if rollout_logprobs is None:
+            rollout_logprobs = student_actual_logprobs
+        safe_rollout_logprobs = torch.where(valid_mask, rollout_logprobs, 0.0)
+        a_opd = (safe_teacher_logprobs - safe_rollout_logprobs).detach()
+        a_opd = torch.where(valid_mask, a_opd, torch.zeros_like(a_opd))
+
+        abs_advantages = a_opd.abs()
+        prefix_abs_advantages = abs_advantages.cumsum(dim=1) - abs_advantages
+        total_abs_advantages = abs_advantages.sum(dim=1, keepdim=True).clamp_min(self.iw_opd_epsilon)
+        weights = (1.0 + self.iw_opd_gamma * (1.0 - prefix_abs_advantages / total_abs_advantages)).detach()
+        advantages = weights * a_opd
+
+        loss = -student_actual_logprobs * advantages
+        loss = torch.where(valid_mask, loss, torch.zeros_like(loss))
+
+        with torch.no_grad():
+            mode = "train" if self.model.training else "eval"
+            if valid_mask.any():
+                valid_advantages = advantages[valid_mask]
+                valid_abs_advantages = abs_advantages[valid_mask]
+                valid_weights = weights[valid_mask]
+                self._metrics[mode]["iw_opd/mean_advantage"].append(valid_advantages.mean().item())
+                self._metrics[mode]["iw_opd/mean_abs_advantage"].append(valid_abs_advantages.mean().item())
+                self._metrics[mode]["iw_opd/mean_weight"].append(valid_weights.mean().item())
+                self._metrics[mode]["iw_opd/min_weight"].append(valid_weights.min().item())
+                self._metrics[mode]["iw_opd/max_weight"].append(valid_weights.max().item())
+
+        if num_items_in_batch is not None:
+            loss_sum = loss.sum()
+            if isinstance(num_items_in_batch, torch.Tensor):
+                num_items_in_batch = num_items_in_batch.to(loss_sum.device)
+            return loss_sum / num_items_in_batch
+        return loss.sum() / valid_mask.sum().clamp_min(1)
 
     def _compute_sparse_top_1_divergence_loss(
         self,
@@ -1488,6 +1583,10 @@ class DistillationTrainer(_BaseTrainer):
         prompt_length = self._compute_prompt_length(inputs)
         labels = inputs["labels"][:, prompt_length:]
         completion_tokens = inputs["input_ids"][:, prompt_length:]
+        # Cached rollout logprobs are stored at full sequence width, so this slice keeps them aligned with labels
+        rollout_logprobs = inputs.get("rollout_logprobs")
+        if rollout_logprobs is not None:
+            rollout_logprobs = rollout_logprobs[:, prompt_length:]
 
         if self.use_teacher_server:
             # Server path: token-level divergence using teacher logprobs.
@@ -1504,7 +1603,26 @@ class DistillationTrainer(_BaseTrainer):
             completion_tokens = completion_tokens[:, :comp_len]
             trimmed_labels = labels[:, :comp_len]
 
-            if self.beta > 0:
+            if self.distillation_objective == "iw_opd":
+                if rollout_logprobs is not None:
+                    rollout_logprobs = rollout_logprobs[:, :comp_len]
+                # Unlike the JSD server losses, IW-OPD raises on missing teacher coverage instead of skipping
+                # positions, so once the window is verified to cover every valid token, num_items_in_batch is
+                # the correct gradient-accumulation denominator here too.
+                if (labels[:, comp_len:] != -100).any():
+                    raise ValueError(
+                        "Teacher server returned fewer completion logprobs than the student completion length; "
+                        "IW-OPD requires teacher logprobs for every completion token."
+                    )
+                loss = self._compute_iw_opd_loss(
+                    student_logits=student_logits[:, :comp_len, :],
+                    completion_tokens=completion_tokens,
+                    labels=trimmed_labels,
+                    teacher_actual_logprobs=teacher_result["actual_logprobs"],
+                    rollout_logprobs=rollout_logprobs,
+                    num_items_in_batch=num_items_in_batch,
+                )
+            elif self.beta > 0:
                 loss = self._compute_server_sparse_top_1_divergence_loss(
                     teacher_result=teacher_result,
                     student_log_probs=student_log_probs[:, :comp_len, :],
@@ -1522,7 +1640,20 @@ class DistillationTrainer(_BaseTrainer):
             teacher_logits = self._get_teacher_logits(inputs)
             student_logits = student_outputs.logits[:, prompt_length - 1 : -1, :]
             teacher_logits = teacher_logits[:, prompt_length - 1 : -1, :]
-            if self.beta > 0 and self.loss_top_k == 1:
+            if self.distillation_objective == "iw_opd":
+                teacher_log_probs = F.log_softmax(teacher_logits / self.temperature, dim=-1)
+                teacher_actual_logprobs = teacher_log_probs.gather(
+                    dim=-1, index=completion_tokens.unsqueeze(-1)
+                ).squeeze(-1)
+                loss = self._compute_iw_opd_loss(
+                    student_logits=student_logits,
+                    completion_tokens=completion_tokens,
+                    labels=labels,
+                    teacher_actual_logprobs=teacher_actual_logprobs,
+                    rollout_logprobs=rollout_logprobs,
+                    num_items_in_batch=num_items_in_batch,
+                )
+            elif self.beta > 0 and self.loss_top_k == 1:
                 loss = self._compute_local_sparse_top_1_divergence_loss(
                     student_logits=student_logits,
                     teacher_logits=teacher_logits,
@@ -1594,7 +1725,7 @@ class DistillationTrainer(_BaseTrainer):
         student_head = unwrapped_student.get_output_embeddings()
         teacher_head = unwrapped_teacher.get_output_embeddings()
 
-        loss = self.liger_jsd_loss(
+        loss = self.liger_loss(
             student_input=student_hidden,
             student_weight=student_head.weight,
             teacher_input=teacher_hidden,

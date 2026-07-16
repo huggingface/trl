@@ -54,7 +54,7 @@ from ...generation.vllm_client import VLLMClient
 from ...import_utils import is_vllm_available
 from ...models.utils import prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
 from ...trainer.base_trainer import _BaseTrainer
-from ...trainer.utils import disable_dropout_in_model, ensure_master_addr_port, get_config_model_id
+from ...trainer.utils import disable_dropout_in_model, ensure_master_addr_port, get_callable_name, get_config_model_id
 from ..utils import DPODataCollatorWithPadding, create_reference_model, empty_cache, prepare_peft_model, truncate_right
 from .online_dpo_config import OnlineDPOConfig
 
@@ -217,7 +217,7 @@ class OnlineDPOTrainer(_BaseTrainer):
             if isinstance(reward_funcs[i], nn.Module):
                 self.reward_func_names.append(get_config_model_id(reward_funcs[i].config).split("/")[-1])
             else:
-                self.reward_func_names.append(reward_funcs[i].__name__)
+                self.reward_func_names.append(get_callable_name(reward_funcs[i]))
         self.reward_funcs = reward_funcs
 
         # Handle reward processing classes for reward_funcs
@@ -651,19 +651,13 @@ class OnlineDPOTrainer(_BaseTrainer):
             all_images = gather_object(images)
 
         if self.accelerator.is_main_process:
-            # Since 'prompts' contains 'num_generations' duplicates, we first take unique prompts, and generate
-            # num_generations outputs for each one. This is faster than generating outputs for each duplicate
-            # prompt individually.
-            ordered_set_of_prompts = all_prompts[:: self.num_generations]
             if has_images:
-                ordered_set_of_images = [
-                    [img] if img is not None else None for img in all_images[:: self.num_generations]
-                ]
+                images_per_prompt = [[img] if img is not None else None for img in all_images]
             else:
-                ordered_set_of_images = None
+                images_per_prompt = None
             completion_ids = self.vllm_client.generate(
-                prompts=ordered_set_of_prompts,
-                images=ordered_set_of_images,
+                prompts=all_prompts,
+                images=images_per_prompt,
                 n=self.num_generations,
                 repetition_penalty=self.repetition_penalty,
                 temperature=self.temperature,
@@ -676,22 +670,23 @@ class OnlineDPOTrainer(_BaseTrainer):
                 else None,
                 generation_kwargs=self.args.generation_kwargs,
             )["completion_ids"]
-            # Flatten: each prompt generates 2 completions
-            completion_ids = [[comp_id] for prompt_completions in completion_ids for comp_id in prompt_completions]
         else:
             completion_ids = [None] * (len(all_prompts) * 2)
 
         # Broadcast completions to all processes
         completion_ids = broadcast_object_list(completion_ids, from_process=0)
 
-        # Each process takes its slice
+        # Slice to keep only the local part of the data
         process_slice = slice(
             self.accelerator.process_index * len(prompts) * 2,
             (self.accelerator.process_index + 1) * len(prompts) * 2,
         )
         completion_ids = completion_ids[process_slice]
+        # Reorder to block layout ([p0c0, p1c0, ..., p0c1, p1c1, ...]) to match the colocate and transformers
+        # generation paths, which is what the loss expects (`rewards.split(batch_size)`).
+        completion_ids = completion_ids[0::2] + completion_ids[1::2]
 
-        # Create prompt_ids by tokenizing locally
+        # Create prompt_ids by tokenizing locally, in the same block layout (2 copies per prompt)
         prompt_inputs = self.processing_class(
             text=prompts_text,
             return_tensors="pt",
@@ -699,9 +694,8 @@ class OnlineDPOTrainer(_BaseTrainer):
             padding_side="left",
             add_special_tokens=False,
         )
-        prompt_ids = []
-        for prompt_tokens in prompt_inputs["input_ids"]:
-            prompt_ids.extend([prompt_tokens.tolist(), prompt_tokens.tolist()])  # 2 copies for 2 completions
+        prompt_ids = [prompt_tokens.tolist() for prompt_tokens in prompt_inputs["input_ids"]]
+        prompt_ids = prompt_ids + prompt_ids  # 2 copies for 2 completions
         return completion_ids, prompt_ids
 
     def _generate_vllm_colocate(self, prompts, images=None):

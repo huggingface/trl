@@ -128,7 +128,7 @@ In a fully online, single-step setting (default),  \\( \frac{\pi_\theta(o_i \mid
 
 ## Logged metrics
 
-While training and evaluating, we record the following reward metrics:
+While training and evaluating, we record the following metrics:
 
 - `num_tokens`: The total number of tokens processed so far, including both prompts and completions.
 - `step_time`: The average time (in seconds) taken per training step (including generation).
@@ -139,8 +139,8 @@ While training and evaluating, we record the following reward metrics:
 - `completions/min_terminated_length`: The minimum length of generated completions that terminate with EOS.
 - `completions/max_terminated_length`: The maximum length of generated completions that terminate with EOS.
 - `completions/clipped_ratio`: The ratio of truncated (clipped) completions.
-- `reward/{reward_func_name}/mean`: The average reward from a specific reward function.
-- `reward/{reward_func_name}/std`: The standard deviation of the reward from a specific reward function.
+- `rewards/{reward_func_name}/mean`: The average reward from a specific reward function.
+- `rewards/{reward_func_name}/std`: The standard deviation of the reward from a specific reward function.
 - `reward`: The overall average reward after summing rewards across functions (weighted by `reward_weights`).
 - `reward_std`: The standard deviation of summed rewards across functions (weighted by `reward_weights`), computed over the full batch.
 - `frac_reward_zero_std`: The fraction of samples in the generation batch with a reward std of zero, implying there is little diversity for that prompt (all answers are correct or incorrect).
