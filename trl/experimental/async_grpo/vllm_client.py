@@ -66,7 +66,7 @@ class VLLMClient:
 
     def get_max_model_len(self) -> int:
         """Return the served model's `max_model_len` (the cap on prompt + completion tokens)."""
-        response = requests.get(f"{self.server_url}/v1/models", timeout=self.server_timeout)
+        response = requests.get(f"{self.server_url}/v1/models")
         response.raise_for_status()
         return response.json()["data"][0]["max_model_len"]
 
