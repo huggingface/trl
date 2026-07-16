@@ -1159,7 +1159,9 @@ class GOLDTrainer(SFTTrainer):
         # isn't, we replace it with a training-safe, prefix-preserving template. This is (re-)applied *after*
         # `super().__init__()` below, because `SFTTrainer.__init__` unconditionally sets `self.chat_template` from
         # `assistant_only_loss` and would otherwise clobber the tool template back to `None`.
-        self.max_tool_calling_iterations = args.max_tool_calling_iterations or sys.maxsize
+        self.max_tool_calling_iterations = (
+            args.max_tool_calling_iterations if args.max_tool_calling_iterations is not None else sys.maxsize
+        )
         self.max_completion_length = args.max_completion_length
         # GOLDConfig has no chat_template_kwargs; kept as an empty dict so the generation paths shared with
         # GRPOTrainer stay identical.
