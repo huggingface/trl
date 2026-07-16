@@ -586,16 +586,22 @@ class TestPeftModel(TrlTestCase):
         assert nb_trainable_params == 905
         assert isinstance(trl_model.pretrained_model.model.model.layers[0].mlp.gate_proj, Linear8bitLt)
 
-    def test_save_pretrained_peft(self):
+    @pytest.mark.parametrize("save_pretrained_call", ["positional", "save_directory_kwarg"])
+    def test_save_pretrained_peft(self, save_pretrained_call):
         r"""
-        Check that the model can be saved and loaded properly.
+        Check that the model can be saved and loaded properly, whether the save directory is passed positionally
+        (`save_pretrained(path)`) or as the `save_directory` keyword argument (`save_pretrained(save_directory=path)`),
+        mirroring the signature of [`~transformers.PreTrainedModel.save_pretrained`].
         """
         causal_lm_model = AutoModelForCausalLM.from_pretrained(self.causal_lm_model_id)
         pretrained_model = get_peft_model(causal_lm_model, self.lora_config)
 
         model = AutoModelForCausalLMWithValueHead.from_pretrained(pretrained_model)
 
-        model.save_pretrained(self.tmp_dir)
+        if save_pretrained_call == "positional":
+            model.save_pretrained(self.tmp_dir)
+        else:
+            model.save_pretrained(save_directory=self.tmp_dir)
 
         # check that the files `adapter_model.safetensors` and `adapter_config.json` are in the directory
         assert os.path.isfile(f"{self.tmp_dir}/adapter_model.safetensors"), (

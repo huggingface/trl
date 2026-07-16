@@ -540,8 +540,10 @@ class PreTrainedModelWrapper(nn.Module):
         # if it is a peft model only save the `v_head` state_dict and
         # pop the `state_dict` from the kwargs to avoid silent bugs with `peft`
         if self.is_peft_model:
-            save_path = args[0]
-            save_path = os.path.join(save_path, "pytorch_model.bin")
+            # `save_directory` may be passed positionally or as a keyword, mirroring
+            # `~transformers.PreTrainedModel.save_pretrained`'s signature.
+            save_directory = args[0] if args else kwargs["save_directory"]
+            save_path = os.path.join(save_directory, "pytorch_model.bin")
             torch.save(state_dict, save_path)
             _ = kwargs.pop("state_dict", None)
 
