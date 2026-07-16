@@ -179,6 +179,7 @@ class RolloutGroup:
     tool_failure_counts: list[int]
     model_version: int
     env_rewards: list[tuple[type, float] | None]
+    rollout_rewards: list[float | None]
     queued_at: float = 0.0
 
 
@@ -276,6 +277,9 @@ class _AsyncRolloutLoop:
     `/v1/completions`. Pushes scored `RolloutSample`s into the shared `mp.Queue` (`rollout_buffer`); reads the bumped
     policy version from the shared `mp.Value` (`model_version_value`).
     """
+
+    # Class attribute  declares that this loop produces its own per-rollout reward
+    _provides_rollout_reward: bool = False
 
     def __init__(
         self,
@@ -397,7 +401,7 @@ class _AsyncRolloutLoop:
 
         # At least one reward source is required: either `reward_funcs`, or an environment that owns the reward via a
         # `get_reward` method.
-        if not self.reward_funcs and not self._env_reward_types:
+        if not self.reward_funcs and not self._env_reward_types and not self._provides_rollout_reward:
             raise ValueError(
                 "No reward source provided. Pass `reward_funcs`, or an `environment_factory` whose environment "
                 "defines a `get_reward` method."
@@ -539,6 +543,7 @@ class _AsyncRolloutLoop:
                             tool_failure_counts=[],
                             model_version=self.model_version,
                             env_rewards=[],
+                            rollout_rewards=[],
                         )
                         pending_completed[group_id] = 0
 
@@ -567,6 +572,7 @@ class _AsyncRolloutLoop:
                         sequences,
                         tool_call_count,
                         tool_failure_count,
+                        rollout_reward,
                     ) = task.result()
                     group = pending_groups[group_id]
                     group.prompts.append(prompt)
@@ -575,6 +581,7 @@ class _AsyncRolloutLoop:
                     group.completions_sequences.append(sequences)
                     group.tool_call_counts.append(tool_call_count)
                     group.tool_failure_counts.append(tool_failure_count)
+                    group.rollout_rewards.append(rollout_reward)
                     # The environment owns the reward: score it now, while this rollout's environment still holds its
                     # final state and before returning it to the pool. `get_reward` may be async awaiting yields to
                     # inflight requests instead of halting them. The env is returned to the pool only after scoring, so
@@ -691,7 +698,7 @@ class _AsyncRolloutLoop:
 
     async def _generate_one(
         self, prompt: Messages, tool_dict: dict[str, Callable], tools: list[Callable]
-    ) -> tuple[list[dict[str, str]], list[int], list[TrainingSequence], int, int]:
+    ) -> tuple[list[dict[str, str]], list[int], list[TrainingSequence], int, int, float | None]:
         """Roll out one conversation, re-tokenizing the whole message list each turn and reconciling drift.
 
         Every turn renders the full conversation through the chat template, generates, records the turn, and feeds the
@@ -699,8 +706,11 @@ class _AsyncRolloutLoop:
         `_chain_to_sequences` reconciles re-tokenization drift into one or more training rows: a clean append stays one
         row, a rewrite (dropped reasoning, summarized history) forks a new row. Rebuilding `prompt_ids` from the
         message list each turn (instead of gluing tokens on the end and never looking back) is what lets the reconciler
-        catch rewrites. Returns the completion messages, their token ids, and the reconciled training rows (each row
-        carries its own `input_ids`).
+        catch rewrites.
+
+        Returns `(completion messages, their token ids, reconciled training rows (each carries its own `input_ids`),
+        tool-call count, tool-failure count, rollout reward)`; the built-in worker's rollout reward is always `None`
+        (it scores via `reward_funcs`/env), a trailing slot loop subclasses override.
         """
         messages = list(prompt)  # a MESSAGE list, not a token list
         rollout_id = uuid.uuid4().hex
@@ -735,7 +745,7 @@ class _AsyncRolloutLoop:
             messages.extend(tool_messages)  # tool result goes back as a MESSAGE, re-tokenized next turn
             iteration_num += 1
         sequences = _chain_to_sequences(turns, rollout_id, self._fork_threshold_tokens)  # >= 1 row per conversation
-        return completion, completion_ids, sequences, tool_call_count, tool_failure_count
+        return completion, completion_ids, sequences, tool_call_count, tool_failure_count, None
 
     def _execute_tool_calls(
         self, tool_calls: list[dict[str, Any]], tool_dict: dict[str, Callable]
@@ -796,6 +806,9 @@ class _AsyncRolloutLoop:
         for env_type in self._env_reward_types:
             column = [r[1] if (r is not None and r[0] is env_type) else None for r in group.env_rewards]
             all_rewards = [*all_rewards, column]
+
+        if self._provides_rollout_reward:
+            all_rewards = [*all_rewards, list(group.rollout_rewards)]
 
         # Reward funcs may return None per-sample (unparseable gold). Convert to NaN. A completion
         # for which every func returned None is unscorable: nansum would give 0 and the row would
@@ -942,6 +955,11 @@ class AsyncRolloutWorker:
     def update_model_version(self, model_version: int) -> None:
         self.model_version = model_version
 
+    def _child_entry(self):
+        """The spawned child's entry function (builds the loop and runs it). Subclasses override to run a different
+        loop class without duplicating `start()`. Must be a module-level, picklable function."""
+        return _child_main
+
     def start(self) -> None:
         if self._process is not None:
             logger.warning("AsyncRolloutWorker.start() called but child process is already running; ignoring.")
@@ -958,7 +976,7 @@ class AsyncRolloutWorker:
                 "module-level function, functools.partial, or a callable class instance instead."
             ) from e
         self._process = self._mp_ctx.Process(
-            target=_child_main,
+            target=self._child_entry(),
             args=(
                 self._loop_kwargs,
                 self.rollout_buffer,
