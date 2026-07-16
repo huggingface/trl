@@ -2918,6 +2918,7 @@ def test_same_architecture_vlm_uld_preserves_raw_images_for_teacher_processor(
         }
 
     trainer._vlm_collator = stub_collator
+    trainer.chat_template_kwargs = {}
     monkeypatch.setattr(
         gold_trainer_module,
         "broadcast_object_list",
@@ -3033,6 +3034,7 @@ def test_on_policy_vlm_vllm_does_not_duplicate_repeated_sampler_batch(monkeypatc
         }
 
     trainer._vlm_collator = stub_collator
+    trainer.chat_template_kwargs = {}
 
     class FakeImage:
         def __init__(self, tag):
@@ -3123,6 +3125,7 @@ def test_off_policy_vlm_collates_only_consumed_slice(monkeypatch):
         return {"input_ids": torch.zeros(len(examples), 1, dtype=torch.long)}
 
     trainer._vlm_collator = stub_collator
+    trainer.chat_template_kwargs = {}
     monkeypatch.setattr(
         gold_trainer_module,
         "broadcast_object_list",
@@ -3167,6 +3170,7 @@ def test_eval_vlm_collates_raw_batch_off_policy():
         return {"input_ids": torch.zeros(len(examples), 1, dtype=torch.long)}
 
     trainer._vlm_collator = stub_collator
+    trainer.chat_template_kwargs = {}
 
     generation_batch = [
         {"prompt": [{"role": "user", "content": "q0"}], "image": object()},
@@ -3197,6 +3201,7 @@ def test_eval_vlm_attaches_raw_images_for_teacher_processor(monkeypatch):
         return {"input_ids": torch.zeros(len(examples), 1, dtype=torch.long)}
 
     trainer._vlm_collator = stub_collator
+    trainer.chat_template_kwargs = {}
     # The exact multimodal-message shape is irrelevant here; pass the prompt through unchanged.
     monkeypatch.setattr(
         gold_trainer_module,
@@ -3273,6 +3278,7 @@ def test_on_policy_vlm_without_vllm_collates_only_consumed_slice(monkeypatch):
         }
 
     trainer._vlm_collator = stub_collator
+    trainer.chat_template_kwargs = {}
 
     class FakeModel:
         training = True
