@@ -749,11 +749,9 @@ class RLOOTrainer(_BaseTrainer):
     # Instead of returning a standard per-step batch (i.e., `per_device_batch_size), our dataloader loads an
     # *generation* batch (i.e., `per_device_batch_size × steps_per_generation`). This allows us to generate completions
     # once every steps_per_generation step—rather than once per accumulation step—which is significantly more
-    # efficient. The only change from the original implementation is multiplying the batch size by
-    # `steps_per_generation`. Thus, `_prepare_inputs` is called with this *generation* batch, and it handles the
-    # splitting internally.
-    # Maintenance note: This method is a copy-paste of the original `Trainer.get_train_dataloader` with only one line
-    # modification.
+    # efficient. Thus, `_prepare_inputs` is called with this *generation* batch, and it handles the splitting internally.
+    # Maintenance note: this method is a copy-paste of the original `Trainer.get_train_dataloader` with two changes: the
+    # batch size is multiplied by `steps_per_generation`, and iterable datasets are wrapped (see `repeat_iterable_dataset`).
     def get_train_dataloader(self):
         dataset = self.train_dataset
         if isinstance(dataset, IterableDataset):
