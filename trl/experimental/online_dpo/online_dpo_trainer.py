@@ -34,6 +34,7 @@ from torch.utils.data import IterableDataset
 from transformers import (
     AutoModelForCausalLM,
     AutoModelForSequenceClassification,
+    AutoProcessor,
     AutoTokenizer,
     DataCollator,
     GenerationConfig,
@@ -285,11 +286,15 @@ class OnlineDPOTrainer(_BaseTrainer):
         self.is_encoder_decoder = model.config.is_encoder_decoder
         self.is_vision_model = model.config.model_type in MODEL_FOR_IMAGE_TEXT_TO_TEXT_MAPPING_NAMES.keys()
 
-        # Handle the processing_class: load the tokenizer from the model if not provided. This is done here, after
-        # `model` has been resolved from a string to an instantiated model above, so that `model.config` is always
-        # available regardless of whether `model` was originally passed as a string or an instance.
+        # Handle the processing_class: load the processing class from the model if not provided. This is done here,
+        # after `model` has been resolved from a string to an instantiated model above, so that `model.config` is
+        # always available regardless of whether `model` was originally passed as a string or an instance. We use
+        # `AutoProcessor` rather than `AutoTokenizer` because this trainer also supports VLMs (see
+        # `self.is_vision_model` above): `AutoProcessor` transparently falls back to a plain tokenizer for text-only
+        # models, but the reverse isn't true, and a tokenizer can't handle the `images` kwarg passed to
+        # `processing_class(...)` in `_generate` for vision models.
         if processing_class is None:
-            processing_class = AutoTokenizer.from_pretrained(
+            processing_class = AutoProcessor.from_pretrained(
                 get_config_model_id(model.config), trust_remote_code=args.trust_remote_code
             )
 

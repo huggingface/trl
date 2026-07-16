@@ -14,7 +14,7 @@
 
 import pytest
 from datasets import Dataset, features, load_dataset
-from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer, ProcessorMixin
 from transformers.utils import is_peft_available, is_vision_available
 
 from trl.experimental.online_dpo import OnlineDPOConfig, OnlineDPOTrainer
@@ -116,8 +116,9 @@ class TestOnlineDPOTrainer(TrlTestCase):
         assert "train_loss" in trainer.state.log_history[-1]
 
     def test_train_processing_class_autoloaded(self):
-        # processing_class is documented as optional: when omitted it should be auto-loaded from the model,
-        # consistent with CPO/ORPO/BCO trainers.
+        # processing_class is documented as optional: when omitted it should be auto-loaded from the model using
+        # `AutoProcessor.from_pretrained`, consistent with GRPO/DPO/SFT. Unlike CPO/ORPO/BCO, this trainer also
+        # supports VLMs, so loading via `AutoTokenizer` would break image inputs (see the VLM test below).
         training_args = OnlineDPOConfig(
             output_dir=self.tmp_dir,
             per_device_train_batch_size=2,
@@ -504,6 +505,58 @@ class TestOnlineDPOVisionTrainer(TrlTestCase):
             eval_dataset=dataset,
             reward_processing_classes=reward_tokenizer,
         )
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Idefics2ForConditionalGeneration",
+            "trl-internal-testing/tiny-LlavaForConditionalGeneration",
+        ],
+    )
+    def test_online_dpo_vlm_trainer_processing_class_autoloaded(self, model_id):
+        # Same as test_online_dpo_vlm_trainer, but processing_class is omitted. For VLMs, the auto-load must use
+        # `AutoProcessor.from_pretrained`, not `AutoTokenizer.from_pretrained`: a plain tokenizer can't handle the
+        # `images` kwarg that `_generate` passes to `processing_class(...)` for vision models.
+        dataset_dict = {
+            "prompt": [
+                [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "Describe the image."}]}],
+                [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "What do you see?"}]}],
+            ],
+            "images": [
+                [Image.fromarray(np.random.randint(0, 255, (64, 64, 3), dtype=np.uint8))],
+                [Image.fromarray(np.random.randint(0, 255, (64, 64, 3), dtype=np.uint8))],
+            ],
+        }
+        dataset = Dataset.from_dict(dataset_dict)
+        dataset = dataset.cast_column("images", features.Sequence(features.Image()))
+
+        model = AutoModelForImageTextToText.from_pretrained(model_id, dtype="float32")
+        reward_model = AutoModelForSequenceClassification.from_pretrained(
+            "trl-internal-testing/tiny-LlamaForCausalLM-3.2", num_labels=1
+        )
+        reward_tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-LlamaForCausalLM-3.2")
+        reward_tokenizer.pad_token = reward_tokenizer.eos_token
+
+        training_args = OnlineDPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=1,
+            max_steps=2,
+            learning_rate=0.01,
+            report_to="none",
+        )
+        trainer = OnlineDPOTrainer(
+            model=model,
+            reward_funcs=reward_model,
+            args=training_args,
+            train_dataset=dataset,
+            eval_dataset=dataset,
+            reward_processing_classes=reward_tokenizer,
+        )
+        assert isinstance(trainer.processing_class, ProcessorMixin)
 
         trainer.train()
 

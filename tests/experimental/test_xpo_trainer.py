@@ -63,8 +63,9 @@ class TestXPOTrainer(TrlTestCase):
         assert "train_loss" in trainer.state.log_history[-1]
 
     def test_xpo_trainer_training_processing_class_autoloaded(self):
-        # processing_class is documented as optional: when omitted it should be auto-loaded from the model,
-        # consistent with OnlineDPOTrainer (which XPOTrainer subclasses) and CPO/ORPO/BCO trainers.
+        # processing_class is documented as optional: when omitted it should be auto-loaded from the model using
+        # `AutoProcessor.from_pretrained`, consistent with OnlineDPOTrainer (which XPOTrainer subclasses) and
+        # GRPO/DPO/SFT.
         training_args = XPOConfig(
             output_dir=self.tmp_dir,
             per_device_train_batch_size=2,

@@ -113,8 +113,9 @@ class TestNashMDTrainer(TrlTestCase):
         assert "train_loss" in trainer.state.log_history[-1]
 
     def test_nash_md_trainer_training_processing_class_autoloaded(self):
-        # processing_class is documented as optional: when omitted it should be auto-loaded from the model,
-        # consistent with OnlineDPOTrainer (which NashMDTrainer subclasses) and CPO/ORPO/BCO trainers.
+        # processing_class is documented as optional: when omitted it should be auto-loaded from the model using
+        # `AutoProcessor.from_pretrained`, consistent with OnlineDPOTrainer (which NashMDTrainer subclasses) and
+        # GRPO/DPO/SFT.
         training_args = NashMDConfig(
             output_dir=self.tmp_dir,
             per_device_train_batch_size=2,
