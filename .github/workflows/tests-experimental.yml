@@ -1,6 +1,9 @@
 name: Tests (experimental)
 
 on:
+  push:
+    branches:
+      - ci-*
   pull_request:
     paths:
       # Run only when relevant files are modified
