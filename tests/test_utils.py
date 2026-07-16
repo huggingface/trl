@@ -541,30 +541,30 @@ class TestRepeatIterableDataset(TrlTestCase):
     def _make_dataset(n):
         return IterableDataset.from_generator(lambda: ({"x": i} for i in range(n)))
 
-    def test_matches_repeat_sampler(self):
+    @pytest.mark.parametrize("mini_repeat_count,batch_size,repeat_count", [(1, 1, 1), (2, 3, 4), (3, 2, 2), (2, 2, 3)])
+    def test_matches_repeat_sampler(self, mini_repeat_count, batch_size, repeat_count):
         # The streaming transform must yield records in exactly the same order as RepeatSampler yields indices for a
         # map-style dataset (unshuffled), across a representative range of arguments.
-        for mini_repeat_count, batch_size, repeat_count in [(1, 1, 1), (2, 3, 4), (3, 2, 2), (2, 2, 3)]:
-            n = 12
-            expected = list(
-                RepeatSampler(
-                    list(range(n)),
-                    mini_repeat_count=mini_repeat_count,
-                    batch_size=batch_size,
-                    repeat_count=repeat_count,
-                    shuffle=False,
-                )
+        n = 12
+        expected = list(
+            RepeatSampler(
+                list(range(n)),
+                mini_repeat_count=mini_repeat_count,
+                batch_size=batch_size,
+                repeat_count=repeat_count,
+                shuffle=False,
             )
-            actual = [
-                record["x"]
-                for record in repeat_iterable_dataset(
-                    self._make_dataset(n),
-                    mini_repeat_count=mini_repeat_count,
-                    batch_size=batch_size,
-                    repeat_count=repeat_count,
-                )
-            ]
-            assert actual == expected
+        )
+        actual = [
+            record["x"]
+            for record in repeat_iterable_dataset(
+                self._make_dataset(n),
+                mini_repeat_count=mini_repeat_count,
+                batch_size=batch_size,
+                repeat_count=repeat_count,
+            )
+        ]
+        assert actual == expected
 
     def test_default_arguments(self):
         dataset = self._make_dataset(4)
