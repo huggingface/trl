@@ -1421,11 +1421,11 @@ class KTOTrainer(_BaseTrainer):
                 _input=outputs.last_hidden_state[:, :-1],
                 lin_weight=lm_head.weight,
                 target=target,
-                bias=lm_head.bias if hasattr(lm_head, "bias") else None,
+                bias=lm_head.bias,
                 preference_labels=torch.tensor(batch["label"], dtype=torch.bool).to(self.accelerator.device),
                 ref_input=ref_outputs.last_hidden_state[:, :-1],
                 ref_weight=ref_lm_head.weight,
-                ref_bias=ref_lm_head.bias if hasattr(lm_head, "bias") else None,
+                ref_bias=ref_lm_head.bias,
                 kl=kl,
             )
 
@@ -1515,8 +1515,6 @@ class KTOTrainer(_BaseTrainer):
 
         chosen_logps = completion_logps.index_select(0, chosen_idx)
         rejected_logps = completion_logps.index_select(0, rejected_idx)
-        chosen_logits = outputs.logits.index_select(0, chosen_idx)
-        rejected_logits = outputs.logits.index_select(0, rejected_idx)
 
         if self.precompute_ref_logps:
             ref_chosen_logps = batch["ref_logps"].index_select(0, chosen_idx)
@@ -1607,6 +1605,25 @@ class KTOTrainer(_BaseTrainer):
             self._total_train_tokens += num_tokens_in_batch
         self._metrics[mode]["num_tokens"] = [self._total_train_tokens]
 
+        # Average logits for chosen and rejected completions
+        shift_completion_mask = batch["completion_mask"][:, 1:]
+        chosen_logits = shift_logits.detach().index_select(0, chosen_idx)
+        rejected_logits = shift_logits.detach().index_select(0, rejected_idx)
+        chosen_mask = shift_completion_mask.index_select(0, chosen_idx)
+        rejected_mask = shift_completion_mask.index_select(0, rejected_idx)
+        total_chosen_logits = chosen_logits[chosen_mask.bool()].mean(-1).sum()
+        total_chosen_tokens = chosen_mask.sum()
+        total_rejected_logits = rejected_logits[rejected_mask.bool()].mean(-1).sum()
+        total_rejected_tokens = rejected_mask.sum()
+        total_chosen_logits = self.accelerator.gather_for_metrics(total_chosen_logits).sum().item()
+        total_chosen_tokens = self.accelerator.gather_for_metrics(total_chosen_tokens).sum().item()
+        total_rejected_logits = self.accelerator.gather_for_metrics(total_rejected_logits).sum().item()
+        total_rejected_tokens = self.accelerator.gather_for_metrics(total_rejected_tokens).sum().item()
+        if total_chosen_tokens > 0:
+            self._metrics[mode]["logits/chosen"].append(total_chosen_logits / total_chosen_tokens)
+        if total_rejected_tokens > 0:
+            self._metrics[mode]["logits/rejected"].append(total_rejected_logits / total_rejected_tokens)
+
         all_num_chosen = self.accelerator.gather_for_metrics(num_chosen).sum().item()
         all_num_rejected = self.accelerator.gather_for_metrics(num_rejected).sum().item()
 
@@ -1617,9 +1634,6 @@ class KTOTrainer(_BaseTrainer):
             self._metrics[mode]["logps/chosen"].append(
                 self.accelerator.gather_for_metrics(chosen_logps.nansum()).nansum().item() / all_num_chosen
             )
-            self._metrics[mode]["logits/chosen"].append(
-                self.accelerator.gather_for_metrics(chosen_logits.nansum()).nansum().item() / all_num_chosen
-            )
 
         if all_num_rejected > 0:
             self._metrics[mode]["rewards/rejected"].append(
@@ -1627,9 +1641,6 @@ class KTOTrainer(_BaseTrainer):
             )
             self._metrics[mode]["logps/rejected"].append(
                 self.accelerator.gather_for_metrics(rejected_logps.nansum()).nansum().item() / all_num_rejected
-            )
-            self._metrics[mode]["logits/rejected"].append(
-                self.accelerator.gather_for_metrics(rejected_logits.nansum()).nansum().item() / all_num_rejected
             )
 
         if all_num_chosen > 0 and all_num_rejected > 0:
