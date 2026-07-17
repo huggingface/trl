@@ -2170,93 +2170,178 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    @patch("transformers.generation.utils.GenerationMixin.generate")
-    def test_train_with_mask_truncated_completions(self, mock_generate):
-        """Test that training works with mask_truncated_completions=True parameter."""
+    @pytest.mark.parametrize("loss_type", ["dapo", "cispo", "vespo"])
+    def test_train_with_mask_truncated_completions(self, loss_type):
+        """Test that token-normalized losses use the final completion mask for normalization."""
 
-        # We mock the generate method because the model's random weights make it extremely unlikely to produce a
-        # sequence containing the EOS token within the allowed max_completion_length. As a result, all tokens are
-        # masked in the loss, the model doesn't update, and the final check (which verifies the update) fails.
+        dataset = Dataset.from_dict({"prompt": ["What is 2 + 2?"]})
+
+        def reward_func(completions, **kwargs):
+            return list(range(len(completions)))
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,
+            num_generations=3,
+            max_completion_length=8,
+            mask_truncated_completions=True,
+            loss_type=loss_type,
+            max_steps=1,
+            bf16=False,
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs=reward_func,
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        eos_token_id = trainer._tokenizer.eos_token_id
+        pad_token_id = trainer._tokenizer.pad_token_id
+
         def fake_generate(input_ids, **kwargs):
-            # pad_token_id = 151643; eos_token_id = 151645
             completion_ids = torch.tensor(
                 [
-                    [1, 2, 3, 4, 5, 6, 7, 8],  # this one is truncated
-                    [9, 10, 11, 151645, 151643, 151643, 151643, 151643],  # this one contains eos
-                    [12, 13, 14, 15, 16, 17, 18, 151645],  # particular case, eos is generated just within the limit
+                    [1, 2, 3, 4, 5, 6, 7, 8],  # truncated: excluded from the loss
+                    [9, 10, 11, eos_token_id, pad_token_id, pad_token_id, pad_token_id, pad_token_id],
+                    [12, 13, 14, 15, 16, 17, 18, eos_token_id],
                 ],
                 device=input_ids.device,
             )
             return torch.cat([input_ids, completion_ids], dim=1)
 
-        mock_generate.side_effect = fake_generate
+        captured = {}
+        original_compute_loss = trainer._compute_loss
 
-        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        def capture_compute_loss(model, inputs):
+            captured["completion_tokens"] = inputs["completion_mask"].sum().item()
+            captured["num_items_in_batch"] = inputs["num_items_in_batch"].item()
+            return original_compute_loss(model, inputs)
 
-        training_args = GRPOConfig(
-            output_dir=self.tmp_dir,
-            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
-            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
-            num_generations=3,  # reduce the number of generations to reduce memory usage
-            max_completion_length=8,  # reduce the completion length to reduce memory usage
-            mask_truncated_completions=True,  # Enable masking of truncated completions
-            report_to="none",
-        )
-        trainer = GRPOTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
-            args=training_args,
-            train_dataset=dataset,
-        )
+        with (
+            patch.object(trainer.model, "generate", side_effect=fake_generate),
+            patch.object(trainer, "_compute_loss", side_effect=capture_compute_loss),
+        ):
+            trainer.train()
 
-        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+        # The raw generated total is 20 tokens, but the truncated 8-token completion is excluded from the loss.
+        assert captured["completion_tokens"] == 12
+        assert captured["num_items_in_batch"] == 12
+        assert np.isfinite(trainer.state.log_history[-1]["train_loss"])
 
-        trainer.train()
-
-        assert trainer.state.log_history[-1]["train_loss"] is not None
-
-        # Check that the params have changed
-        for n, param in previous_trainable_params.items():
-            new_param = trainer.model.get_parameter(n)
-            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
-
-    def test_train_with_mask_truncated_completions_all_masked(self):
+    @pytest.mark.parametrize("loss_type", ["dapo", "cispo", "vespo"])
+    def test_train_with_mask_truncated_completions_all_masked(self, loss_type):
         """
         Test that when all generated completions are truncated (i.e., none contain an EOS token), and
         mask_truncated_completions=True, the model receives no effective learning signal and therefore does not update
         its parameters.
-
-        Here, we don't mock the generate method, be we rely on the fact that the model the probability of generating
-        the EOS token is extremely low, so all generated completions are truncated.
         """
-        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        dataset = Dataset.from_dict({"prompt": ["What is 2 + 2?"]})
+
+        def reward_func(completions, **kwargs):
+            return list(range(len(completions)))
 
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
-            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
-            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
-            num_generations=3,  # reduce the number of generations to reduce memory usage
-            max_completion_length=8,  # reduce the completion length to reduce memory usage
-            mask_truncated_completions=True,  # Enable masking of truncated completions
+            per_device_train_batch_size=3,
+            num_generations=3,
+            max_completion_length=8,
+            mask_truncated_completions=True,
+            loss_type=loss_type,
+            max_steps=1,
+            bf16=False,
             report_to="none",
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=reward_func,
             args=training_args,
             train_dataset=dataset,
         )
 
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
-        trainer.train()
+        def fake_generate(input_ids, **kwargs):
+            completion_ids = torch.arange(1, 25, device=input_ids.device).view(3, 8)
+            return torch.cat([input_ids, completion_ids], dim=1)
 
-        assert trainer.state.log_history[-1]["train_loss"] is not None
+        captured = {}
+        original_compute_loss = trainer._compute_loss
 
-        # Check that the params have changed
+        def capture_compute_loss(model, inputs):
+            captured["num_items_in_batch"] = inputs["num_items_in_batch"].item()
+            loss = original_compute_loss(model, inputs)
+            captured["loss"] = loss.detach().item()
+            return loss
+
+        with (
+            patch.object(trainer.model, "generate", side_effect=fake_generate),
+            patch.object(trainer, "_compute_loss", side_effect=capture_compute_loss),
+        ):
+            trainer.train()
+
+        assert captured["num_items_in_batch"] == 0
+        assert captured["loss"] == pytest.approx(0.0)
+        assert trainer.state.log_history[-1]["train_loss"] == pytest.approx(0.0)
+
+        # Check that the params have not changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert torch.equal(param, new_param), f"Parameter {n} has changed."
+
+    def test_train_with_tool_mask_and_truncated_completions(self):
+        dataset = Dataset.from_dict({"prompt": ["What is 2 + 2?"]})
+
+        def reward_func(completions, **kwargs):
+            return list(range(len(completions)))
+
+        def rollout_func(prompts, trainer):
+            assert len(prompts) == 3
+            eos_token_id = trainer._tokenizer.eos_token_id
+            return {
+                "prompt_ids": [[1], [1], [1]],
+                "completion_ids": [[10, 11, 12], [13, eos_token_id], [14, 15, eos_token_id]],
+                "logprobs": None,
+                "env_mask": [[1, 0, 1], [0, 0], [1, 0, 1]],
+            }
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,
+            num_generations=3,
+            max_completion_length=3,
+            mask_truncated_completions=True,
+            loss_type="dapo",
+            max_steps=1,
+            bf16=False,
+            report_to="none",
+        )
+        with patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"}):
+            trainer = GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs=reward_func,
+                args=training_args,
+                train_dataset=dataset,
+                rollout_func=rollout_func,
+            )
+
+        captured = {}
+        original_compute_loss = trainer._compute_loss
+
+        def capture_compute_loss(model, inputs):
+            loss_mask = inputs["completion_mask"] * inputs["tool_mask"]
+            captured["completion_tokens"] = loss_mask.sum().item()
+            captured["num_items_in_batch"] = inputs["num_items_in_batch"].item()
+            return original_compute_loss(model, inputs)
+
+        with patch.object(trainer, "_compute_loss", side_effect=capture_compute_loss):
+            trainer.train()
+
+        assert captured["completion_tokens"] == 2
+        assert captured["num_items_in_batch"] == 2
+        # Throughput still counts all four model-generated tokens, including two from the truncated completion.
+        assert trainer.state.num_input_tokens_seen == 7
 
     def test_warning_raised_all_rewards_none(self, caplog):
         """Test that a proper warning is raised when all rewards are None."""

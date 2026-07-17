@@ -13,6 +13,9 @@
 # limitations under the License.
 
 
+from collections import defaultdict
+from types import SimpleNamespace
+
 import pytest
 import torch
 from datasets import DatasetDict, load_dataset
@@ -24,6 +27,54 @@ from ..testing_utils import TrlTestCase
 
 
 class TestGSPOTokenTrainer(TrlTestCase):
+    @pytest.mark.parametrize(
+        ("tool_mask", "num_items_in_batch", "expected_loss", "expected_entropy"),
+        [
+            ([1, 0, 1], 2, 1.0, 2.0),
+            ([0, 0, 0], 0, 0.0, 0.0),
+        ],
+    )
+    def test_dapo_uses_tool_mask_for_loss_and_metrics(
+        self, tool_mask, num_items_in_batch, expected_loss, expected_entropy
+    ):
+        trainer = object.__new__(GSPOTokenTrainer)
+        trainer.accelerator = SimpleNamespace(num_processes=1, gather=lambda tensor: tensor)
+        trainer.top_entropy_quantile = 1.0
+        trainer.beta = 0.0
+        trainer.importance_sampling_level = "sequence_token"
+        trainer.epsilon_low = 0.2
+        trainer.epsilon_high = 0.2
+        trainer.args = SimpleNamespace(delta=None)
+        trainer.use_vllm = False
+        trainer.loss_type = "dapo"
+        trainer.model = SimpleNamespace(training=True)
+        trainer._metrics = {"train": defaultdict(list)}
+
+        per_token_logps = torch.zeros((1, 3))
+        entropies = torch.tensor([[1.0, 100.0, 3.0]])
+        trainer._get_per_token_logps_and_entropies = lambda *args, **kwargs: (
+            per_token_logps,
+            entropies,
+            None,
+        )
+        inputs = {
+            "prompt_ids": torch.tensor([[1]]),
+            "prompt_mask": torch.tensor([[1]]),
+            "completion_ids": torch.tensor([[2, 3, 4]]),
+            "completion_mask": torch.tensor([[1, 1, 1]]),
+            "tool_mask": torch.tensor([tool_mask]),
+            "advantages": torch.tensor([-1.0]),
+            # A large policy ratio on the masked tool-result token must not affect GSPO's sequence weight.
+            "old_per_token_logps": torch.tensor([[0.0, -6.0, 0.0]]),
+            "num_items_in_batch": torch.tensor(num_items_in_batch),
+        }
+
+        loss = trainer._compute_loss(trainer.model, inputs)
+
+        assert loss.item() == pytest.approx(expected_loss)
+        assert torch.isfinite(loss)
+        assert trainer._metrics["train"]["entropy"][-1] == pytest.approx(expected_entropy)
+
     def test_train(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 

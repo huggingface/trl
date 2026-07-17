@@ -444,9 +444,7 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
             ref_per_token_logps,
             importance_sampling_ratio if self.use_vllm and self.vllm_importance_sampling_correction else None,
         )
-        if outputs_after_sampling_buffer is not None:
-            return outputs_after_sampling_buffer
-        else:
+        if outputs_after_sampling_buffer is None:
             output = {
                 "prompt_ids": prompt_ids,
                 "prompt_mask": prompt_mask,
@@ -475,7 +473,15 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
                 output["num_images"] = num_images
             if self.tools:
                 output["tool_mask"] = tool_mask
-            return output
+        else:
+            output = outputs_after_sampling_buffer
+
+        # Recompute the loss denominator after replay-buffer replacement from the final masks used by the loss.
+        loss_mask = (
+            output["completion_mask"] if "tool_mask" not in output else output["completion_mask"] * output["tool_mask"]
+        )
+        output["num_items_in_batch"] = self.accelerator.gather(loss_mask.sum()).sum()
+        return output
 
     def slice_group_data(
         self, data: torch.Tensor, mask: torch.Tensor, group_idx: int

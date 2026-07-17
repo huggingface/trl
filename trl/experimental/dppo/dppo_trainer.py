@@ -946,7 +946,7 @@ class DPPOTrainer(GRPOTrainer):
             completion_ids_list,
             tool_mask_list,
             completions,
-            num_items_in_batch,
+            _total_completion_tokens,
             sampling_per_token_logps_list,
             topk_logprobs_list,
             topk_token_ids_list,
@@ -1018,6 +1018,10 @@ class DPPOTrainer(GRPOTrainer):
             # Also mask tool_mask for consistency in multi-turn training
             if tool_mask is not None:
                 tool_mask = tool_mask * (~is_truncated).unsqueeze(1).int()
+
+        # Keep loss normalization separate from `_generate`'s raw completion count, which feeds throughput metrics.
+        loss_mask = completion_mask if tool_mask is None else completion_mask * tool_mask
+        num_items_in_batch = self.accelerator.gather(loss_mask.sum()).sum()
 
         # Concatenate prompt_mask with completion_mask for logit computation
         prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)  # (B, P+C)
@@ -1401,7 +1405,7 @@ class DPPOTrainer(GRPOTrainer):
             per_token_loss = per_token_loss + self.beta * per_token_kl
 
         mode = "train" if self.model.training else "eval"
-        normalizer = inputs["num_items_in_batch"] / self.accelerator.num_processes
+        normalizer = inputs["num_items_in_batch"].clamp(min=1.0) / self.accelerator.num_processes
         loss = (per_token_loss * mask).sum() / normalizer
 
         # Log metrics
