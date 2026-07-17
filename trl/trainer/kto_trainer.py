@@ -1344,7 +1344,7 @@ class KTOTrainer(_BaseTrainer):
         mode = "train" if self.model.training else "eval"
         batch = {k: (v.to(self.accelerator.device) if isinstance(v, torch.Tensor) else v) for k, v in inputs.items()}
 
-        labels = torch.tensor(batch["label"])
+        labels = batch["label"]
         num_chosen = labels.sum().to(self.accelerator.device)
         num_rejected = (len(labels) - num_chosen).to(self.accelerator.device)
 
@@ -1433,7 +1433,7 @@ class KTOTrainer(_BaseTrainer):
                 lin_weight=lm_head.weight,
                 target=target,
                 bias=lm_head.bias,
-                preference_labels=torch.tensor(batch["label"], dtype=torch.bool).to(self.accelerator.device),
+                preference_labels=batch["label"],
                 ref_input=ref_outputs.last_hidden_state[:, :-1],
                 ref_weight=ref_lm_head.weight,
                 ref_bias=ref_lm_head.bias,
@@ -1485,7 +1485,7 @@ class KTOTrainer(_BaseTrainer):
         mode = "train" if self.model.training else "eval"
         batch = {k: (v.to(self.accelerator.device) if isinstance(v, torch.Tensor) else v) for k, v in inputs.items()}
 
-        labels = torch.tensor(batch["label"])
+        labels = batch["label"]
         num_chosen = labels.sum().to(self.accelerator.device)
         num_rejected = (len(labels) - num_chosen).to(self.accelerator.device)
 
