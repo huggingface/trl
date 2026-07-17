@@ -2,6 +2,9 @@
 
 <!-- Within sections, papers are sorted by publish dates -->
 
+> [!TIP]
+> Each paper below links to its Hugging Face paper page. You can also read any of them from the terminal with the `hf` CLI, e.g. `hf papers read 2402.03300` — particularly handy for coding agents.
+
 ## Group Relative Policy Optimization
 
 Papers relating to the [`GRPOTrainer`].

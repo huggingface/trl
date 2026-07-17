@@ -40,7 +40,7 @@ from datasets import Dataset, DatasetDict, IterableDataset, IterableDatasetDict
 from huggingface_hub import CommitScheduler, DatasetCard, DatasetCardData, create_repo
 from packaging.version import Version
 from torch import nn
-from torch.utils.data import Sampler
+from torch.utils.data import DataLoader, Sampler
 from transformers import (
     AutoModelForSequenceClassification,
     AutoProcessor,
@@ -89,6 +89,7 @@ from .utils import (
     nanstd,
     pad,
     print_prompt_completions_sample,
+    repeat_iterable_dataset,
     selective_log_softmax,
     shuffle_sequence_dict,
     shutdown_event_loop_in_daemon,
@@ -726,7 +727,9 @@ class GRPOTrainer(_BaseTrainer):
         # Training arguments
         self.max_completion_length = args.max_completion_length  # = |o_i| in the GRPO paper
         self.num_generations = args.num_generations  # = G in the GRPO paper
-        self.max_tool_calling_iterations = args.max_tool_calling_iterations or sys.maxsize
+        self.max_tool_calling_iterations = (
+            args.max_tool_calling_iterations if args.max_tool_calling_iterations is not None else sys.maxsize
+        )
         self.num_generations_eval = args.num_generations_eval or self.num_generations
         self.chat_template_kwargs = args.chat_template_kwargs or {}
         self.temperature = args.temperature
@@ -829,17 +832,35 @@ class GRPOTrainer(_BaseTrainer):
 
         if train_dataset is None:
             raise ValueError("`train_dataset` is required")
-        elif (
+
+        # Iterable datasets can't be indexed, so the RepeatSampler can't be attached to them. Instead, the sampler's
+        # ordering is reproduced by streaming (see `get_train_dataloader`/`get_eval_dataloader` and
+        # `repeat_iterable_dataset`). This requires `dispatch_batches=False`: with the default dispatch path, batches
+        # are collated on the main process and Accelerate tries to concatenate the string `prompt` column, which fails;
+        # `dispatch_batches=False` also lets each process shard the stream into contiguous slices, as the sampler does.
+        # See https://github.com/huggingface/trl/issues/3213
+        uses_iterable_dataset = (
             isinstance(train_dataset, IterableDataset)
             or isinstance(eval_dataset, IterableDataset)
             or (
                 isinstance(eval_dataset, dict) and any(isinstance(ds, IterableDataset) for ds in eval_dataset.values())
             )
-        ):
-            # See https://github.com/huggingface/trl/issues/3213
-            raise ValueError(
-                "Iterable datasets are not yet supported in GRPOTrainer. Please use a standard dataset instead."
+        )
+        if uses_iterable_dataset:
+            if args.accelerator_config.dispatch_batches:
+                raise ValueError(
+                    "Iterable datasets require `dispatch_batches=False`, but it is set to `True` in "
+                    "`accelerator_config`. Please set it to `False`."
+                )
+            args.accelerator_config.dispatch_batches = False
+        # An iterable train set bakes prompt repeats into the stream, so it must be read by a single worker: multiple
+        # workers would shard and interleave it, splitting the num_generations groups. Map-style train keeps its workers.
+        if isinstance(train_dataset, IterableDataset) and args.dataloader_num_workers != 0:
+            logger.warning(
+                f"Iterable datasets require `dataloader_num_workers=0` to preserve prompt grouping; overriding the "
+                f"provided value ({args.dataloader_num_workers})."
             )
+            args.dataloader_num_workers = 0
 
         if args.loss_type == "luspo" and args.importance_sampling_level != "sequence":
             logger.warning(
@@ -1160,14 +1181,25 @@ class GRPOTrainer(_BaseTrainer):
     # Instead of returning a standard per-step batch (i.e., `per_device_batch_size), our dataloader loads an
     # *generation* batch (i.e., `per_device_batch_size × steps_per_generation`). This allows us to generate completions
     # once every steps_per_generation step—rather than once per accumulation step—which is significantly more
-    # efficient. The only change from the original implementation is multiplying the batch size by
-    # `steps_per_generation`. Thus, `_prepare_inputs` is called with this *generation* batch, and it handles the
-    # splitting internally.
-    # Maintenance note: This method is a copy-paste of the original `Trainer.get_train_dataloader` with only one line
-    # modification.
+    # efficient. Thus, `_prepare_inputs` is called with this *generation* batch, and it handles the splitting internally.
+    # Maintenance note: this method is a copy-paste of the original `Trainer.get_train_dataloader` with two changes: the
+    # batch size is multiplied by `steps_per_generation`, and iterable datasets are wrapped (see `repeat_iterable_dataset`).
     def get_train_dataloader(self):
+        dataset = self.train_dataset
+        if isinstance(dataset, IterableDataset):
+            # Iterable datasets can't be indexed, so RepeatSampler can't be attached. Reproduce its ordering by
+            # transforming the stream instead (see `repeat_iterable_dataset`). The full permutation done by
+            # RepeatSampler becomes a buffered shuffle here.
+            if self.shuffle_dataset:
+                dataset = dataset.shuffle(seed=self.args.seed)
+            dataset = repeat_iterable_dataset(
+                dataset,
+                mini_repeat_count=self.num_generations,
+                batch_size=self.args.generation_batch_size // self.num_generations,
+                repeat_count=self.num_iterations * self.args.steps_per_generation,
+            )
         return self._get_dataloader(
-            dataset=self.train_dataset,
+            dataset=dataset,
             description="Training",
             batch_size=self._train_batch_size * self.args.steps_per_generation,  # < this is the change
             sampler_fn=self._get_train_sampler,
@@ -1219,6 +1251,60 @@ class GRPOTrainer(_BaseTrainer):
             mini_repeat_count=self.num_generations_eval,
             seed=self.args.seed,
         )
+
+    # This method overrides `Trainer.get_eval_dataloader` to wrap iterable eval datasets, reproducing the
+    # RepeatSampler ordering that can't be attached to them (see `get_train_dataloader`). Map-style datasets keep the
+    # default path via `_get_eval_sampler`, which shuffles with `seed`, so the iterable wrap shuffles too (buffered)
+    # to walk prompts in a matching order.
+    # Maintenance note: this method is a copy-paste of the original `Trainer.get_eval_dataloader`, with the iterable
+    # wrapping as the only addition.
+    def get_eval_dataloader(self, eval_dataset: str | Dataset | IterableDataset | None = None) -> DataLoader:
+        if eval_dataset is None and self.eval_dataset is None:
+            raise ValueError("Trainer: evaluation requires an eval_dataset.")
+
+        # If we have persistent workers, don't do a fork bomb especially as eval datasets
+        # don't change during training
+        dataloader_key = eval_dataset if isinstance(eval_dataset, str) else "eval"
+        if (
+            hasattr(self, "_eval_dataloaders")
+            and dataloader_key in self._eval_dataloaders
+            and self.args.dataloader_persistent_workers
+        ):
+            return self._eval_dataloaders[dataloader_key]
+
+        eval_dataset = (
+            self.eval_dataset[eval_dataset]
+            if isinstance(eval_dataset, str)
+            else eval_dataset
+            if eval_dataset is not None
+            else self.eval_dataset
+        )
+
+        if isinstance(eval_dataset, IterableDataset):
+            # Apply the `__init__` iterable config here too
+            if self.args.accelerator_config.dispatch_batches:
+                raise ValueError(
+                    "Iterable datasets require `dispatch_batches=False`, but it is set to `True` in "
+                    "`accelerator_config`. Please set it to `False`."
+                )
+            self.accelerator.dataloader_config.dispatch_batches = False
+            eval_dataset = eval_dataset.shuffle(seed=self.args.seed)
+            eval_dataset = repeat_iterable_dataset(eval_dataset, mini_repeat_count=self.num_generations_eval)
+            # Force a single worker for this loader only, without persisting the change
+            num_workers = self.args.dataloader_num_workers
+            self.args.dataloader_num_workers = 0
+
+        try:
+            return self._get_dataloader(
+                dataset=eval_dataset,
+                description="Evaluation",
+                batch_size=self.args.eval_batch_size,
+                sampler_fn=self._get_eval_sampler,
+                dataloader_key=dataloader_key,
+            )
+        finally:
+            if isinstance(eval_dataset, IterableDataset):
+                self.args.dataloader_num_workers = num_workers
 
     @profiling_decorator
     def _get_last_hidden_state(
