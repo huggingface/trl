@@ -2,6 +2,9 @@
 
 <!-- Within sections, papers are sorted by publish dates -->
 
+> [!TIP]
+> Each paper below links to its Hugging Face paper page. You can also read any of them from the terminal with the `hf` CLI, e.g. `hf papers read 2402.03300` — particularly handy for coding agents.
+
 ## Group Relative Policy Optimization
 
 Papers relating to the [`GRPOTrainer`].
@@ -250,6 +253,27 @@ training_args = GRPOConfig(
 )
 ```
 
+### Skywork-OR1: Open Reasoning Models
+
+**📜 Paper**: https://huggingface.co/papers/2505.22312
+
+Skywork-OR1 is a family of open reasoning models trained with GRPO. The paper introduces **adaptive entropy control**: an entropy regularization term `−α·H(π_θ)` is added to the GRPO objective, and the coefficient `α` is automatically adjusted each optimizer step. When the model's mean per-token entropy falls at or below a target, `α` is incremented to encourage more exploration; otherwise it is decremented. The bonus is only applied while entropy is at or below the target. To replicate this adaptive entropy control, use the following configuration:
+
+```python
+from trl import GRPOConfig, GRPOTrainer
+
+training_args = GRPOConfig(
+    use_adaptive_entropy=True,   # enable adaptive entropy control (Section 3.3 of the paper)
+    entropy_coef=0.01,           # initial entropy regularization coefficient
+    entropy_target=5.0,          # target mean per-token entropy (nats); tune for your model
+    entropy_coef_delta=0.005,    # step size for coefficient updates per optimizer step
+)
+trainer = GRPOTrainer(
+    ...,
+    args=training_args,
+)
+```
+
 ### Beyond the 80/20 Rule: High-Entropy Minority Tokens Drive Effective Reinforcement Learning for LLM Reasoning
 
 **📜 Paper**: https://huggingface.co/papers/2506.01939
@@ -471,37 +495,6 @@ $$
 $$
 
 TRL exposes the Importance Sampling granularity level through the `vllm_importance_sampling_mode` configuration parameter where `"sequence_*"` modes implement a sequence-level importance sampling ratio and `"token_*"` a per-token ratio.
-
-### Sample More to Think Less: Group Filtered Policy Optimization for Concise Reasoning
-
-**📜 Paper**: https://huggingface.co/papers/2508.09726
-
-See [Experimental - GFPO](gfpo).
-
-### Perception-Aware Policy Optimization for Multimodal Reasoning
-
-**📜 Paper**: https://huggingface.co/papers/2507.06448
-
-A novel policy gradient algorithm that encourages VLMs to learn to perceive while learning to reason. This is a TRL adaptation. The TRL implementation is not the official one provided by the authors.
-This is a TRL adaptation of PAPO. Note that this is not the official implementation. The official code can be found in [MikeWangWZHL/PAPO](https://github.com/MikeWangWZHL/PAPO).
-
-```python
-from trl.experimental.papo import PAPOConfig, PAPOTrainer
-
-training_args = PAPOConfig(
-    # PAPO-specific params
-    perception_loss_weight=0.01,  # Weight for perception loss
-    mask_ratio=0.6,  # 40% of image will be masked
-    mask_type="random",  # Use patch masking (recommended)
-    der_loss_weight1=0.02,
-    der_loss_weight2=0.02,
-    # ...other GRPO params...
-)
-trainer = PAPOTrainer(
-    args=training_args,
-    ...
-)
-```
 
 ### The Art of Scaling Reinforcement Learning
 
@@ -1258,17 +1251,17 @@ training_args = DPOConfig(
 
 ## Kahneman–Tversky Optimization
 
-Papers relating to the [`experimental.kto.KTOTrainer`]
+Papers relating to the [`KTOTrainer`]
 
 ### KTO: Model Alignment as Prospect Theoretic Optimization
 
 **📜 Paper**: https://huggingface.co/papers/2402.01306
 
 KTO derives an alignment objective from prospect theory and learns directly from **binary** human feedback (liked/disliked), matching or surpassing DPO-style methods while handling imbalanced/noisy signals well.
-To reproduce the paper's setting, you can use the default configuration of [`experimental.kto.KTOTrainer`]:
+To reproduce the paper's setting, you can use the default configuration of [`KTOTrainer`]:
 
 ```python
-from trl.experimental.kto import KTOConfig, KTOTrainer
+from trl import KTOConfig, KTOTrainer
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 model = AutoModelForCausalLM.from_pretrained(model_id)
@@ -1708,6 +1701,38 @@ training_args = DistillationConfig(
 )
 ```
 
+### On the Position Bias of On-Policy Distillation
+
+**📜 Paper**: https://huggingface.co/papers/2606.22600
+
+Introduces Importance-Weighted On-Policy Distillation (IW-OPD), which addresses the position bias in OPD by reweighting sampled-token distillation updates according to accumulated teacher-student prefix discrepancy. Early tokens keep larger weights, while later tokens after high drift are downweighted. Used in TRL via [`experimental.distillation.DistillationTrainer`] with `distillation_objective="iw_opd"`.
+
+The paper reports its main experiments with a verl PPO trainer and vLLM rollouts. `DistillationTrainer` exposes the matching distillation and rollout settings below; PPO-specific settings from the paper such as clipping range `0.2`, dual-clip constant `3.0`, PPO epochs, entropy coefficient, KL reward penalty, auxiliary KL, and rollout importance correction are not `DistillationConfig` parameters.
+
+```python
+from trl.experimental.distillation import DistillationConfig
+
+# Table 6 and Algorithm 1 of the paper, mapped to DistillationConfig where available.
+training_args = DistillationConfig(
+    distillation_objective="iw_opd",
+    iw_opd_gamma=0.5,  # γ amplification, Algorithm 1 and Appendix C.3
+    lmbda=1.0,  # fully on-policy rollouts
+    learning_rate=1e-5,  # Table 6
+    per_device_train_batch_size=1,  # Table 6 uses PPO micro-batch size 1 per GPU
+    gradient_accumulation_steps=32,  # with 32 GPUs, this gives the paper's 1024-prompt batch
+    num_generations=1,  # Table 6 rollout samples per prompt
+    temperature=1.0,  # Table 6 training decoding temperature
+    top_p=1.0,  # Table 6 training decoding top-p
+    max_prompt_length=2048,  # Table 6
+    max_completion_length=16384,  # Table 6
+    warmup_ratio=0.0,  # Table 6
+    use_vllm=True,  # Table 6 uses vLLM rollouts
+    vllm_sync_frequency=1,  # refresh rollout policy after each update
+    save_steps=10,  # Table 6 checkpoint frequency
+    eval_steps=10,  # Table 6 validation frequency
+)
+```
+
 ### On-Policy Distillation
 
 **📰 Blog**: https://thinkingmachines.ai/blog/on-policy-distillation/
@@ -1751,7 +1776,7 @@ training_args = GKDConfig(
 You can also use the [`GOLDTrainer`] and [`GOLDConfig`] to perform on-policy distillation with a similar configuration:
 
 ```python
-from trl.experimental import GOLDConfig
+from trl.experimental.gold import GOLDConfig
 
 config = GOLDConfig(
     lmbda=1.0, # student produces rollouts for all batches
@@ -1769,7 +1794,7 @@ MiniLLM is the first on-policy knowledge distillation method, which minimizes th
 
 It is a generalized version of [Think Machine Lab's On-Policy Distillation](https://thinkingmachines.ai/blog/on-policy-distillation/), with the option to add distribution-level single-step distillation signals (like GKD when `beta=1`) and long-context reverse KLD signals.
 
-Alternatively, you can use the [`experimental.MiniLLMTrainer`] and [`experimental.MiniLLMConfig`] to perform MiniLLM distillation as follows:
+Alternatively, you can use the [`experimental.minillm.MiniLLMTrainer`] and [`experimental.minillm.MiniLLMConfig`] to perform MiniLLM distillation as follows:
 
 ```python
 from datasets import load_dataset
@@ -1805,7 +1830,7 @@ training_args = SDPOConfig(
     use_successful_as_teacher=True,        # Use successful rollouts as teacher
     teacher_model_kind="ema",              # Supported: "base", "live", "ema"
     teacher_update_rate=0.05,              # EMA update rate
-    include_environment_feedback=False,    # Use dataset privileged_context when available
+    include_environment_feedback=True,     # required to use the dataset's privileged_context (defaults to False)
 )
 
 trainer = SDPOTrainer(

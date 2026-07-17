@@ -80,7 +80,7 @@ test = [
     "pytest"
 ]
 vllm = [
-    "vllm>=0.15.0,<=0.23.0",
+    "vllm>=0.16.0,<=0.24.0",
     "fastapi",
     "pydantic",
     "aiohttp>=3.13.3",
@@ -202,4 +202,11 @@ filterwarnings = [
     # Upstream issue: https://github.com/pytorch/pytorch/issues/174546
     "ignore:The argument 'device' of Tensor.pin_memory:DeprecationWarning",
     "ignore:The argument 'device' of Tensor.is_pinned:DeprecationWarning",
+
+    # Liger SAPO loss torch.compile anomaly-mode warning (upstream, not actionable in TRL)
+    # Liger's SAPO branch assigns per-token loss with boolean-mask indexing, which graph-breaks under
+    # torch.compile and is traced by AOTAutograd under anomaly mode
+    # Tracking issue: https://github.com/huggingface/trl/issues/6435
+    # Upstream fix (merged, unreleased as of liger-kernel 0.8.0): https://github.com/linkedin/Liger-Kernel/pull/1274
+    "ignore:Error detected in IndexPutBackward0:UserWarning",
 ]
