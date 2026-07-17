@@ -1823,6 +1823,22 @@ class GRPOTrainer(_BaseTrainer):
                     generate_inputs[k] = pad([torch.tensor(x) for x in v], padding_value=0, padding_side="left")
                 else:
                     generate_inputs[k] = torch.tensor(np.array(v))
+
+            # For VLM tool images: build token type IDs from the padded input IDs.
+            if self._is_vlm and self.tools:
+                mm_ids = torch.zeros_like(padded_ids)
+                if self._image_pad_token_id is not None:
+                    mm_ids[padded_ids == self._image_pad_token_id] = 1
+                if self._video_pad_token_id is not None:
+                    mm_ids[padded_ids == self._video_pad_token_id] = 2
+
+                # Use the same key the model expects: token_type_ids for models like Gemma,
+                # mm_token_type_ids for models like Qwen.
+                if "image_grid_thw" in generate_inputs or "mm_token_type_ids" in generate_inputs:
+                    generate_inputs["mm_token_type_ids"] = mm_ids
+                elif "token_type_ids" in generate_inputs:
+                    generate_inputs["token_type_ids"] = mm_ids
+
             generate_inputs = super()._prepare_inputs(generate_inputs)
 
             with (
@@ -2046,7 +2062,15 @@ class GRPOTrainer(_BaseTrainer):
                         (existing or []) + new for existing, new in zip(merged_images, tool_images, strict=True)
                     ]
             loop_images = [merged_images[i] for i in idxs_with_tool] if merged_images else None
-            if multimodal_fields:
+            if self._is_vlm and self.tools and any(imgs for imgs in tool_images):
+                flat_loop_images = [img for img_list in loop_images if img_list for img in img_list]
+                if flat_loop_images:
+                    image_inputs = self.processing_class.image_processor(images=flat_loop_images, return_tensors="pt")
+                    image_inputs = super()._prepare_inputs(image_inputs)
+                    loop_multimodal_fields = dict(image_inputs)
+                else:
+                    loop_multimodal_fields = {}
+            elif multimodal_fields:
                 if "num_images" not in multimodal_fields and images is not None:
                     multimodal_fields = {
                         **multimodal_fields,

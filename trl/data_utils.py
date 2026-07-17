@@ -210,6 +210,21 @@ def apply_chat_template(
     For more details, see [`maybe_apply_chat_template`].
     """
     tools = tools or None  # `or None`: Llama bug: it renders tool boilerplate for tools=[]
+    if not isinstance(processing_class, ProcessorMixin):
+        # Text-only tokenizer: convert any list content (multimodal) to string by extracting the text parts
+        new_example = {}
+        for key in ["messages", "prompt", "chosen", "rejected", "completion"]:
+            if key in example:
+                cleaned_msgs = []
+                for msg in example[key]:
+                    content = msg.get("content")
+                    if isinstance(content, list):
+                        text_parts = [part["text"] for part in content if part.get("type") == "text"]
+                        content = "".join(text_parts)
+                    cleaned_msgs.append({**msg, "content": content})
+                new_example[key] = cleaned_msgs
+        example = {**example, **new_example}
+
     # Check that the example has the correct keys
     supported_keys = ["prompt", "chosen", "rejected", "completion", "messages", "label"]
     example_keys = {key for key in example.keys() if key in supported_keys}

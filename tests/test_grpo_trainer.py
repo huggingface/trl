@@ -3847,6 +3847,8 @@ class TestGRPOTrainerVLM(TrlTestCase):
                 )
                 # fmt: on
             else:  # second call: 1 tool call succeeded
+                assert "image_grid_thw" in kwargs, "image_grid_thw must be passed to generate"
+                assert kwargs["image_grid_thw"].shape[0] == 2, f"Expected 2 images (1 original + 1 tool-returned), got {kwargs['image_grid_thw'].shape[0]}"
                 completion_ids = torch.tensor(
                     [
                         # 'Done!<|im_end|>'
