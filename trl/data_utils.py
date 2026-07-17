@@ -268,8 +268,6 @@ def apply_chat_template(
             # between the prompt alone and the combined prompt+completion. To ensure consistency, we extract the
             # common prefix between the two. In most cases, this is a no-op.
             prompt = "".join(x for x, _ in takewhile(lambda x: x[0] == x[1], zip(prompt, prompt_chosen, strict=False)))
-
-            chosen = prompt_chosen[len(prompt) :]
         if "rejected" in example and "prompt" in example:  # explicit prompt
             prompt_rejected = processing_class.apply_chat_template(
                 example["prompt"] + example["rejected"],
@@ -282,7 +280,6 @@ def apply_chat_template(
             prompt = "".join(
                 x for x, _ in takewhile(lambda x: x[0] == x[1], zip(prompt, prompt_rejected, strict=False))
             )
-            rejected = prompt_rejected[len(prompt) :]
         if "completion" in example:
             prompt_completion = processing_class.apply_chat_template(
                 example["prompt"] + example["completion"],
@@ -295,6 +292,15 @@ def apply_chat_template(
             prompt = "".join(
                 x for x, _ in takewhile(lambda x: x[0] == x[1], zip(prompt, prompt_completion, strict=False))
             )
+        # Slice the completions only after all common-prefix reductions of the prompt are done. Otherwise, a
+        # completion sliced against an intermediate (longer) prompt would silently lose the characters between the
+        # intermediate and final prompt lengths (e.g., the leading `<think>` tag of `chosen` when the prompt shrinks
+        # further against `rejected`).
+        if "chosen" in example:
+            chosen = prompt_chosen[len(prompt) :]
+        if "rejected" in example:
+            rejected = prompt_rejected[len(prompt) :]
+        if "completion" in example:
             completion = prompt_completion[len(prompt) :]
     else:  # implicit prompt case
         if "chosen" in example:
