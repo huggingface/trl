@@ -1342,6 +1342,12 @@ class SFTTrainer(_BaseTrainer):
         if args.selective_activation_checkpointing and not args.gradient_checkpointing:
             raise ValueError("`selective_activation_checkpointing=True` requires `gradient_checkpointing=True`.")
 
+        # Enable selective activation checkpointing (SAC): save attention, recompute the rest. Wrap the model's
+        # `gradient_checkpointing_enable` before `super().__init__()` so the injected SAC context function is already in
+        # place when the Trainer turns gradient checkpointing on in `train()`.
+        if args.selective_activation_checkpointing:
+            enable_selective_activation_checkpointing(model)
+
         super().__init__(
             model=model,
             args=args,
@@ -1362,11 +1368,6 @@ class SFTTrainer(_BaseTrainer):
             self.maybe_activation_offload_context = get_act_offloading_ctx_manager(model=self.model)
         else:
             self.maybe_activation_offload_context = contextlib.nullcontext()
-
-        # Enable selective activation checkpointing (SAC): save attention, recompute the rest. Wraps the model's
-        # `gradient_checkpointing_enable` so the SAC context function is injected when checkpointing is turned on.
-        if self.args.selective_activation_checkpointing:
-            enable_selective_activation_checkpointing(self.model)
 
         # MoE load-balancing auxiliary loss, applied to Mixture-of-Experts models (no effect otherwise)
         text_config = model.config.get_text_config()

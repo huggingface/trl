@@ -20,6 +20,7 @@
 
 
 import sys
+from functools import partial
 
 import psutil
 import torch
@@ -27,6 +28,7 @@ from accelerate.logging import get_logger
 from accelerate.utils.versions import is_torch_version
 from torch import nn
 from torch.autograd.graph import saved_tensors_hooks
+from torch.utils.checkpoint import CheckpointPolicy, create_selective_checkpoint_contexts
 from transformers import is_torch_npu_available
 
 
@@ -811,12 +813,8 @@ def enable_selective_activation_checkpointing(model: nn.Module) -> None:
         model (`nn.Module`):
             Model on which to enable selective activation checkpointing. Must support `gradient_checkpointing_enable`.
     """
-    from functools import partial
-
-    from torch.utils.checkpoint import CheckpointPolicy, create_selective_checkpoint_contexts
 
     def policy_fn(ctx, op, *args, **kwargs):
-        # Save the attention output; recompute everything else.
         if any(marker in str(op) for marker in _ATTENTION_OP_MARKERS):
             return CheckpointPolicy.MUST_SAVE
         return CheckpointPolicy.PREFER_RECOMPUTE
