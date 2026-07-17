@@ -18,11 +18,10 @@ import queue
 import textwrap
 import time
 from collections import defaultdict
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-import requests
 import torch
 from accelerate.logging import get_logger
 from datasets import Dataset, IterableDataset
@@ -35,6 +34,7 @@ from ...trainer.base_trainer import _BaseTrainer
 from ...trainer.utils import nanmax, nanmin, pad, patch_chunked_lm_head
 from .async_grpo_config import AsyncGRPOConfig
 from .async_rollout_worker import AsyncRolloutWorker
+from .vllm_client import VLLMClient
 from .weight_transfer import WeightTransferClient
 
 
@@ -81,6 +81,35 @@ class RolloutWorkerProtocol(Protocol):
 
     def check_health(self, stale_after_s: float) -> None:
         """Raise if the worker has crashed or stopped producing within `stale_after_s` seconds."""
+        ...
+
+
+class WeightTransferProtocol(Protocol):
+    """Interface a weight-sync backend must implement to be passed as `weight_transfer` to [`AsyncGRPOTrainer`].
+
+    The default [`WeightTransferClient`] streams the trainer's weights into the vLLM server over NCCL. Implement this
+    protocol to plug in a different sync mechanism, or pass a no-op implementation to disable trainer-side weight sync
+    (e.g. when a custom `rollout_worker` updates the policy itself).
+    """
+
+    def init_weight_transfer(self) -> None:
+        """Set up the transfer (e.g. the NCCL group). Called once on train begin, before the first sync."""
+        ...
+
+    def pause(self) -> None:
+        """Pause the inference server before weights are swapped in."""
+        ...
+
+    def send_weights(self, iterator: Iterator[tuple[str, torch.Tensor]]) -> None:
+        """Stream `(name, tensor)` pairs from `iterator` to the inference server."""
+        ...
+
+    def resume(self) -> None:
+        """Resume the inference server after the weights are updated."""
+        ...
+
+    def destroy(self) -> None:
+        """Release transfer resources. Called on train end."""
         ...
 
 
@@ -162,13 +191,6 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
                 "advantage": sample.advantage,
                 "metrics": {**sample.metrics, "queue_wait_time_s": queue_wait_time_s},
             }
-
-
-def _get_vllm_max_model_len(server_url: str, timeout: float) -> int:
-    """Query the vLLM server for the served model's `max_model_len` (the cap on prompt + completion tokens)."""
-    response = requests.get(f"{server_url.rstrip('/')}/v1/models", timeout=timeout)
-    response.raise_for_status()
-    return response.json()["data"][0]["max_model_len"]
 
 
 def _balance_by_squared_length(examples: list[dict[str, Any]], num_groups: int) -> list[list[dict[str, Any]]]:
@@ -481,6 +503,11 @@ class AsyncGRPOTrainer(_BaseTrainer):
             is created, which spawns a CUDA-free child process and scores completions with the trainer's
             `reward_funcs`. Pass a custom worker to plug in a different rollout/scoring backend instead — for example,
             one that runs reward models on their own GPUs.
+        weight_transfer (`WeightTransferProtocol`, *optional*):
+            Custom weight-sync backend implementing [`WeightTransferProtocol`]. If `None`, a default
+            [`WeightTransferClient`] is created that streams the trainer's weights into the config's vLLM server over
+            NCCL. This is independent of `rollout_worker`: a custom rollout worker still gets weight sync. Pass a no-op
+            implementation to disable trainer-side weight sync.
     """
 
     _tag_names = ["trl", "async-grpo"]
@@ -510,6 +537,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
         tools: list[Callable] | None = None,
         environment_factory: EnvironmentFactory | dict[str, EnvironmentFactory] | None = None,
         rollout_worker: RolloutWorkerProtocol | None = None,
+        weight_transfer: WeightTransferProtocol | None = None,
     ):
         self.args = args or AsyncGRPOConfig()
 
@@ -601,12 +629,13 @@ class AsyncGRPOTrainer(_BaseTrainer):
             if self.train_dataset is None:
                 raise ValueError("train_dataset is required for AsyncGRPOTrainer")
 
-            if rollout_worker is not None:
-                # Use the injected worker (e.g. a stub in tests). The queue is owned by the worker.
-                # Weight transfer is also expected to be wired by the test fixture (or left as None
-                # if the stub doesn't sync to a real vLLM).
-                self.rollout_worker = rollout_worker
-                self.weight_transfer = None
+            # Weight sync and the token-budget query target the vLLM server from the config; the client is the single
+            # place that talks to it, independent of how rollouts are produced.
+            self.vllm_client = VLLMClient(self.args.vllm_server_base_url, self.args.vllm_server_timeout)
+
+            if weight_transfer is not None:
+                # Injected backend (e.g. a no-op stub in tests, or a custom sync mechanism).
+                self.weight_transfer = weight_transfer
             else:
                 # Collect weight metadata once — names/dtypes/shapes are fixed for the lifetime of training.
                 # DTensor.shape returns the global shape without triggering any all-gather.
@@ -618,8 +647,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
                     weight_dtype_names.append(str(param.dtype).split(".")[-1])
                     weight_shapes.append(list(param.shape))
                 self.weight_transfer = WeightTransferClient(
-                    vllm_server_url=self.args.vllm_server_base_url,
-                    server_timeout=self.args.vllm_server_timeout,
+                    vllm_client=self.vllm_client,
                     weight_update_info={
                         "names": weight_names,
                         "dtype_names": weight_dtype_names,
@@ -627,6 +655,11 @@ class AsyncGRPOTrainer(_BaseTrainer):
                         "packed": True,
                     },
                 )
+
+            if rollout_worker is not None:
+                # Use the injected worker (e.g. a stub in tests). The queue is owned by the worker.
+                self.rollout_worker = rollout_worker
+            else:
                 self.rollout_worker = AsyncRolloutWorker(
                     model_name=model_name,
                     dataset=train_dataset,
@@ -652,6 +685,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
         else:
             self.rollout_queue = None
             self.rollout_worker = None
+            self.vllm_client = None
             self.weight_transfer = None
 
         # Add callbacks. Cold weight sync + worker start on train begin, then periodic weight syncs.
@@ -669,17 +703,11 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 max_staleness=self.args.max_staleness,
             )
             # Default the token budget to the vLLM server's max_model_len (the cap on prompt + completion), so no
-            # rollout sample can exceed it. Only the built-in worker manages a vLLM server (weight_transfer is set);
-            # with a custom rollout_worker there may be none to query, so require an explicit budget instead.
+            # rollout sample can exceed it. Wait for the server like weight sync does, so a still-loading vLLM doesn't
+            # fail training here.
             if self.args.token_budget is None:
-                if self.weight_transfer is None:
-                    raise ValueError(
-                        "Set `token_budget` explicitly when passing a custom `rollout_worker`: the default is the "
-                        "vLLM server's max_model_len, which is only queried for the built-in rollout worker."
-                    )
-                self.args.token_budget = _get_vllm_max_model_len(
-                    self.args.vllm_server_base_url, self.args.vllm_server_timeout
-                )
+                self.vllm_client.wait_for_server_ready()
+                self.args.token_budget = self.vllm_client.get_max_model_len()
                 logger.info(f"token_budget unset; defaulting to vLLM max_model_len={self.args.token_budget}")
             # The planner partitions the rollout stream into Σ Lᵢ²-balanced micro-batches of `num_processes` rows.
             # TokenBudgetBatcher caps each row at `token_budget` tokens (dynamic count, bounds peak memory);
@@ -785,8 +813,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
             local_kl_sum = ((coef_1[valid_mask] - 1) - log_ratio[valid_mask]).sum()
             local_entropy_sum = entropy[valid_mask].sum()
 
-            # Compute the clipped probability ratios. A token is counted as clipped only when clipping is binding in a
-            # policy-relevant direction: low clip when the advantage is negative, high clip when it is positive.
+            # Compute the clipped probability ratios
             is_low_clipped = (coef_1 < 1 - self.epsilon_low) & (advantages < 0)
             is_high_clipped = (coef_1 > 1 + self.epsilon_high) & (advantages > 0)
             is_region_clipped = is_low_clipped | is_high_clipped
