@@ -117,6 +117,11 @@ class SFTConfig(_BaseConfig):
 
         activation_offloading (`bool`, *optional*, defaults to `False`):
             Whether to offload the activations to the CPU.
+        selective_activation_checkpointing (`bool`, *optional*, defaults to `False`):
+            Whether to use selective activation checkpointing (SAC). When `gradient_checkpointing` is enabled, the
+            attention output is saved during the forward pass instead of being recomputed in the backward pass,
+            recovering most of the checkpointing slowdown at long context for one extra hidden-state-sized tensor per
+            layer. Requires `gradient_checkpointing=True` and forces non-reentrant checkpointing.
 
         > Deprecated parameters
 
@@ -296,6 +301,15 @@ class SFTConfig(_BaseConfig):
     activation_offloading: bool = field(
         default=False,
         metadata={"help": "Whether to offload the activations to the CPU."},
+    )
+    selective_activation_checkpointing: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to use selective activation checkpointing (SAC). When gradient checkpointing is enabled, "
+            "the attention output is saved during the forward pass instead of being recomputed in the backward pass, "
+            "recovering most of the checkpointing slowdown at long context for one extra hidden-state-sized tensor per "
+            "layer. Requires `gradient_checkpointing=True` and forces non-reentrant checkpointing."
+        },
     )
 
     # Deprecated parameters
