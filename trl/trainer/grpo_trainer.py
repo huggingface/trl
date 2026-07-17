@@ -26,7 +26,6 @@ import time
 import warnings
 from collections import defaultdict, deque
 from collections.abc import Callable
-from contextlib import nullcontext
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -41,7 +40,7 @@ from datasets import Dataset, DatasetDict, IterableDataset, IterableDatasetDict
 from huggingface_hub import CommitScheduler, DatasetCard, DatasetCardData, create_repo
 from packaging.version import Version
 from torch import nn
-from torch.utils.data import Sampler
+from torch.utils.data import DataLoader, Sampler
 from transformers import (
     AutoModelForSequenceClassification,
     AutoProcessor,
@@ -84,11 +83,13 @@ from .utils import (
     get_callable_name,
     get_config_model_id,
     identity,
+    maybe_gather_lm_head_ctx,
     nanmax,
     nanmin,
     nanstd,
     pad,
     print_prompt_completions_sample,
+    repeat_iterable_dataset,
     selective_log_softmax,
     shuffle_sequence_dict,
     shutdown_event_loop_in_daemon,
@@ -464,6 +465,25 @@ class GRPOTrainer(_BaseTrainer):
                         ref_param = model.get_parameter(ref_name)
                         ref_param.data.copy_(param.data)
 
+        # PEFT + DeepSpeed ZeRO-3 requires reentrant checkpointing. For more details, see
+        # https://github.com/huggingface/trl/issues/2514#issuecomment-2692152703.
+        # Can be removed once https://github.com/deepspeedai/DeepSpeed/pull/8130 is merged and released.
+        if (
+            is_peft_model(model)
+            and args.deepspeed_plugin is not None
+            and args.deepspeed_plugin.zero_stage == 3
+            and args.gradient_checkpointing
+        ):
+            args.gradient_checkpointing_kwargs = args.gradient_checkpointing_kwargs or {}
+            use_reentrant = args.gradient_checkpointing_kwargs.get("use_reentrant")
+            if use_reentrant is False:
+                logger.warning(
+                    "You are using PEFT with DeepSpeed ZeRO-3 and gradient checkpointing with `use_reentrant=False`. "
+                    "`use_reentrant` is forced to `True` in this configuration to ensure correct training. To remove "
+                    "this warning, unset `use_reentrant` in `gradient_checkpointing_kwargs` or set it to `True`."
+                )
+            args.gradient_checkpointing_kwargs["use_reentrant"] = True
+
         # When using gradient checkpointing with PEFT, we need to enable input gradients. transformers.Trainer normally
         # handles this, but a bug currently prevents it; see https://github.com/huggingface/transformers/issues/42489
         if is_peft_model(model) and args.gradient_checkpointing:
@@ -711,7 +731,9 @@ class GRPOTrainer(_BaseTrainer):
         # Training arguments
         self.max_completion_length = args.max_completion_length  # = |o_i| in the GRPO paper
         self.num_generations = args.num_generations  # = G in the GRPO paper
-        self.max_tool_calling_iterations = args.max_tool_calling_iterations or sys.maxsize
+        self.max_tool_calling_iterations = (
+            args.max_tool_calling_iterations if args.max_tool_calling_iterations is not None else sys.maxsize
+        )
         self.num_generations_eval = args.num_generations_eval or self.num_generations
         self.chat_template_kwargs = args.chat_template_kwargs or {}
         self.temperature = args.temperature
@@ -833,17 +855,34 @@ class GRPOTrainer(_BaseTrainer):
             num_placeholder_rows = args.generation_batch_size // args.num_generations
             train_dataset = Dataset.from_dict({"prompt": [[{"role": "user", "content": ""}]] * num_placeholder_rows})
 
-        if (
+        # Iterable datasets can't be indexed, so the RepeatSampler can't be attached to them. Instead, the sampler's
+        # ordering is reproduced by streaming (see `get_train_dataloader`/`get_eval_dataloader` and
+        # `repeat_iterable_dataset`). This requires `dispatch_batches=False`: with the default dispatch path, batches
+        # are collated on the main process and Accelerate tries to concatenate the string `prompt` column, which fails;
+        # `dispatch_batches=False` also lets each process shard the stream into contiguous slices, as the sampler does.
+        # See https://github.com/huggingface/trl/issues/3213
+        uses_iterable_dataset = (
             isinstance(train_dataset, IterableDataset)
             or isinstance(eval_dataset, IterableDataset)
             or (
                 isinstance(eval_dataset, dict) and any(isinstance(ds, IterableDataset) for ds in eval_dataset.values())
             )
-        ):
-            # See https://github.com/huggingface/trl/issues/3213
-            raise ValueError(
-                "Iterable datasets are not yet supported in GRPOTrainer. Please use a standard dataset instead."
+        )
+        if uses_iterable_dataset:
+            if args.accelerator_config.dispatch_batches:
+                raise ValueError(
+                    "Iterable datasets require `dispatch_batches=False`, but it is set to `True` in "
+                    "`accelerator_config`. Please set it to `False`."
+                )
+            args.accelerator_config.dispatch_batches = False
+        # An iterable train set bakes prompt repeats into the stream, so it must be read by a single worker: multiple
+        # workers would shard and interleave it, splitting the num_generations groups. Map-style train keeps its workers.
+        if isinstance(train_dataset, IterableDataset) and args.dataloader_num_workers != 0:
+            logger.warning(
+                f"Iterable datasets require `dataloader_num_workers=0` to preserve prompt grouping; overriding the "
+                f"provided value ({args.dataloader_num_workers})."
             )
+            args.dataloader_num_workers = 0
 
         if args.loss_type == "luspo" and args.importance_sampling_level != "sequence":
             logger.warning(
@@ -939,15 +978,25 @@ class GRPOTrainer(_BaseTrainer):
             def _cast_lm_head_to_fp32(target_model: PreTrainedModel):
                 """Cast lm_head to fp32 while preserving embedding output dtype if tied."""
 
-                def cast_inputs_to_fp32(module, inputs):
-                    # Preserve other positional args and kwargs untouched
-                    if not inputs:
-                        return inputs
-                    return (inputs[0].to(torch.float32),) + inputs[1:]
+                if is_peft_available() and isinstance(target_model.lm_head, BaseTunerLayer):
+                    raise ValueError(
+                        "`cast_lm_head_to_fp32=True` is not supported when the lm_head carries a PEFT "
+                        "adapter (e.g. `target_modules` includes `lm_head`). Remove `lm_head` from the "
+                        "adapter's target modules, or set `cast_lm_head_to_fp32=False`."
+                    )
 
                 original_dtype_local = target_model.lm_head.weight.dtype
-                target_model.lm_head = target_model.lm_head.float()
-                target_model.lm_head.register_forward_pre_hook(cast_inputs_to_fp32)
+                lm_head = target_model.lm_head.float()
+                target_model.lm_head = lm_head
+
+                def cast_forward_to_fp32(hidden_states):
+                    return nn.functional.linear(
+                        hidden_states.to(torch.float32),
+                        lm_head.weight.to(torch.float32),
+                        None if lm_head.bias is None else lm_head.bias.to(torch.float32),
+                    )
+
+                lm_head.forward = cast_forward_to_fp32
 
                 if target_model.config.tie_word_embeddings:
 
@@ -967,7 +1016,8 @@ class GRPOTrainer(_BaseTrainer):
                 raise ImportError(
                     "Liger is required to use `use_liger_kernel` as the GRPO loss. Run `pip install liger-kernel`."
                 )
-            # redirect the model.module forward to the model forward to ensure pre-forward hooks are called
+            # Redirect the model.module forward to the model forward to ensure pre-forward hooks are called, so that
+            # under ZeRO-3 the parameter coordinator gathers/reduces `lm_head.weight` around the fused loss.
             self._forward_redirection = _ForwardRedirection()
 
             self.liger_loss = LigerFusedLinearGRPOLoss(
@@ -1153,14 +1203,25 @@ class GRPOTrainer(_BaseTrainer):
     # Instead of returning a standard per-step batch (i.e., `per_device_batch_size), our dataloader loads an
     # *generation* batch (i.e., `per_device_batch_size × steps_per_generation`). This allows us to generate completions
     # once every steps_per_generation step—rather than once per accumulation step—which is significantly more
-    # efficient. The only change from the original implementation is multiplying the batch size by
-    # `steps_per_generation`. Thus, `_prepare_inputs` is called with this *generation* batch, and it handles the
-    # splitting internally.
-    # Maintenance note: This method is a copy-paste of the original `Trainer.get_train_dataloader` with only one line
-    # modification.
+    # efficient. Thus, `_prepare_inputs` is called with this *generation* batch, and it handles the splitting internally.
+    # Maintenance note: this method is a copy-paste of the original `Trainer.get_train_dataloader` with two changes: the
+    # batch size is multiplied by `steps_per_generation`, and iterable datasets are wrapped (see `repeat_iterable_dataset`).
     def get_train_dataloader(self):
+        dataset = self.train_dataset
+        if isinstance(dataset, IterableDataset):
+            # Iterable datasets can't be indexed, so RepeatSampler can't be attached. Reproduce its ordering by
+            # transforming the stream instead (see `repeat_iterable_dataset`). The full permutation done by
+            # RepeatSampler becomes a buffered shuffle here.
+            if self.shuffle_dataset:
+                dataset = dataset.shuffle(seed=self.args.seed)
+            dataset = repeat_iterable_dataset(
+                dataset,
+                mini_repeat_count=self.num_generations,
+                batch_size=self.args.generation_batch_size // self.num_generations,
+                repeat_count=self.num_iterations * self.args.steps_per_generation,
+            )
         return self._get_dataloader(
-            dataset=self.train_dataset,
+            dataset=dataset,
             description="Training",
             batch_size=self._train_batch_size * self.args.steps_per_generation,  # < this is the change
             sampler_fn=self._get_train_sampler,
@@ -1212,6 +1273,60 @@ class GRPOTrainer(_BaseTrainer):
             mini_repeat_count=self.num_generations_eval,
             seed=self.args.seed,
         )
+
+    # This method overrides `Trainer.get_eval_dataloader` to wrap iterable eval datasets, reproducing the
+    # RepeatSampler ordering that can't be attached to them (see `get_train_dataloader`). Map-style datasets keep the
+    # default path via `_get_eval_sampler`, which shuffles with `seed`, so the iterable wrap shuffles too (buffered)
+    # to walk prompts in a matching order.
+    # Maintenance note: this method is a copy-paste of the original `Trainer.get_eval_dataloader`, with the iterable
+    # wrapping as the only addition.
+    def get_eval_dataloader(self, eval_dataset: str | Dataset | IterableDataset | None = None) -> DataLoader:
+        if eval_dataset is None and self.eval_dataset is None:
+            raise ValueError("Trainer: evaluation requires an eval_dataset.")
+
+        # If we have persistent workers, don't do a fork bomb especially as eval datasets
+        # don't change during training
+        dataloader_key = eval_dataset if isinstance(eval_dataset, str) else "eval"
+        if (
+            hasattr(self, "_eval_dataloaders")
+            and dataloader_key in self._eval_dataloaders
+            and self.args.dataloader_persistent_workers
+        ):
+            return self._eval_dataloaders[dataloader_key]
+
+        eval_dataset = (
+            self.eval_dataset[eval_dataset]
+            if isinstance(eval_dataset, str)
+            else eval_dataset
+            if eval_dataset is not None
+            else self.eval_dataset
+        )
+
+        if isinstance(eval_dataset, IterableDataset):
+            # Apply the `__init__` iterable config here too
+            if self.args.accelerator_config.dispatch_batches:
+                raise ValueError(
+                    "Iterable datasets require `dispatch_batches=False`, but it is set to `True` in "
+                    "`accelerator_config`. Please set it to `False`."
+                )
+            self.accelerator.dataloader_config.dispatch_batches = False
+            eval_dataset = eval_dataset.shuffle(seed=self.args.seed)
+            eval_dataset = repeat_iterable_dataset(eval_dataset, mini_repeat_count=self.num_generations_eval)
+            # Force a single worker for this loader only, without persisting the change
+            num_workers = self.args.dataloader_num_workers
+            self.args.dataloader_num_workers = 0
+
+        try:
+            return self._get_dataloader(
+                dataset=eval_dataset,
+                description="Evaluation",
+                batch_size=self.args.eval_batch_size,
+                sampler_fn=self._get_eval_sampler,
+                dataloader_key=dataloader_key,
+            )
+        finally:
+            if isinstance(eval_dataset, IterableDataset):
+                self.args.dataloader_num_workers = num_workers
 
     @profiling_decorator
     def _get_last_hidden_state(
@@ -2210,17 +2325,19 @@ class GRPOTrainer(_BaseTrainer):
                 self._async_tool_dicts.append(async_tool_dict)
 
         if self.environments:
-            for prompt, environment, x in zip(prompts, self.environments, inputs, strict=True):
+            for i, (prompt, environment, x) in enumerate(zip(prompts, self.environments, inputs, strict=True)):
                 # `environment` is a control field in multi-environment mode, so it is not forwarded to `reset`.
                 reset_kwargs = {k: v for k, v in x.items() if k != "environment"} if self._multi_environment else x
                 observation = environment.reset(**reset_kwargs)
                 if observation is None:
                     continue
-                if isinstance(observation, list) and isinstance(prompt[-1]["content"], str):
-                    prompt[-1]["content"] = [{"type": "text", "text": prompt[-1]["content"]}]
-                if isinstance(observation, str) and isinstance(prompt[-1]["content"], list):
+                content = prompt[-1]["content"]
+                if isinstance(observation, list) and isinstance(content, str):
+                    content = [{"type": "text", "text": content}]
+                if isinstance(observation, str) and isinstance(content, list):
                     observation = [{"type": "text", "text": observation}]
-                prompt[-1]["content"] += observation
+                # Rebuild the last message rather than mutating it in place, so the input example is left untouched.
+                prompts[i] = prompt[:-1] + [{**prompt[-1], "content": content + observation}]
 
         if "images" in inputs[0]:
             images = [example.get("images") for example in inputs]
@@ -2766,21 +2883,10 @@ class GRPOTrainer(_BaseTrainer):
         loss_mask = completion_mask if "tool_mask" not in inputs else completion_mask * inputs["tool_mask"]
         lm_head_weight = unwrapped_model.lm_head.weight
         lm_head_bias = unwrapped_model.lm_head.bias
-        # Liger reads `lm_head` directly instead of through `model.forward()`, so its ZeRO-3 gather hook never fires
-        # and the fused matmul gets an empty shard. Gather the weight/bias ourselves for the call (the weight grad is
-        # computed during this forward, so it isn't needed in the backward). Skip it when already gathered: with tied
-        # embeddings `embed_tokens` keeps the weight `AVAILABLE`, and re-partitioning on exit breaks its tracking.
-        deepspeed_plugin = self.accelerator.state.deepspeed_plugin
-        gather_ctx = nullcontext()
-        if deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3:
-            from deepspeed.runtime.zero.partition_parameters import ZeroParamStatus
-
-            params = [lm_head_weight] if lm_head_bias is None else [lm_head_weight, lm_head_bias]
-            if any(p.ds_status != ZeroParamStatus.AVAILABLE for p in params):
-                import deepspeed
-
-                gather_ctx = deepspeed.zero.GatheredParameters(params, modifier_rank=None)
-        with gather_ctx:
+        # Liger reads `lm_head` directly instead of through `model.forward()`, so its ZeRO-3 gather hook never fires and
+        # the fused matmul gets an empty shard. Gather the weight/bias ourselves for the call (the weight grad is
+        # computed during this forward, so it isn't needed in the backward).
+        with maybe_gather_lm_head_ctx(lm_head_weight, lm_head_bias):
             loss, metrics = self.liger_loss(
                 _input=last_hidden_state,
                 lin_weight=lm_head_weight,

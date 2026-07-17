@@ -108,6 +108,26 @@ class _StubRolloutWorker:
         pass
 
 
+class _StubWeightTransfer:
+    """No-op weight transfer for testing the trainer without a real vLLM server."""
+
+    def init_weight_transfer(self):
+        pass
+
+    def pause(self):
+        pass
+
+    def send_weights(self, iterator):
+        for _ in iterator:  # drain the param stream like the real client does
+            pass
+
+    def resume(self):
+        pass
+
+    def destroy(self):
+        pass
+
+
 @pytest.mark.skipif(
     not is_ampere_or_newer() and torch_device != "xpu",
     reason="Flash Attention 2 requires Ampere or newer GPU, or XPU",
@@ -122,6 +142,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             reward_funcs=dummy_reward_func,
             train_dataset=dataset,
             rollout_worker=_StubRolloutWorker(AutoTokenizer.from_pretrained(model_id), dataset, num_generations=3),
+            weight_transfer=_StubWeightTransfer(),
         )
 
     def test_train(self):
@@ -144,6 +165,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             args=training_args,
             train_dataset=dataset,
             rollout_worker=_StubRolloutWorker(AutoTokenizer.from_pretrained(model_id), dataset, num_generations=3),
+            weight_transfer=_StubWeightTransfer(),
         )
 
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
