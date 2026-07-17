@@ -1705,7 +1705,9 @@ class KTOTrainer(_BaseTrainer):
                 for name, dataset in eval_dataset.items():
                     metrics.update(
                         super().evaluate(
-                            eval_dataset=dataset, ignore_keys=ignore_keys, metric_key_prefix=f"{metric_key_prefix}_{name}"
+                            eval_dataset=dataset,
+                            ignore_keys=ignore_keys,
+                            metric_key_prefix=f"{metric_key_prefix}_{name}",
                         )
                     )
                 return metrics
