@@ -472,7 +472,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
             - [Conversational](dataset_formats#conversational): Each sample contains structured messages (e.g., role
               and content).
         processing_class ([`~transformers.PreTrainedTokenizerBase`], *optional*):
-            Processing class used to process the data. The padding side must be set to `"left"`. If `None`, the
+            Processing class used to process the data. The padding side must be set to "left". If `None`, the
             processing class is loaded from the model's name with [`~transformers.AutoTokenizer.from_pretrained`]. A
             padding token, `tokenizer.pad_token`, must be set. If the processing class has not set a padding token,
             `tokenizer.eos_token` will be used as the default.
