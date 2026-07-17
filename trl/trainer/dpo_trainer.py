@@ -48,7 +48,7 @@ from transformers.utils import is_peft_available
 from ..data_utils import _tokenize, apply_chat_template, extract_prompt, is_conversational, prepare_multimodal_messages
 from ..import_utils import is_liger_kernel_available
 from ..models import get_act_offloading_ctx_manager, prepare_deepspeed, prepare_fsdp
-from ..models.utils import disable_gradient_checkpointing
+from ..models.utils import _ForwardRedirection, disable_gradient_checkpointing
 from .base_trainer import _BaseTrainer
 from .callbacks import SyncRefModelCallback
 from .dpo_config import DPOConfig
@@ -59,6 +59,7 @@ from .utils import (
     flush_left,
     get_config_model_id,
     hash_module,
+    maybe_gather_lm_head_ctx,
     pad,
     selective_log_softmax,
     use_adapter,
@@ -668,6 +669,25 @@ class DPOTrainer(_BaseTrainer):
                         ref_param = model.get_parameter(ref_name)
                         ref_param.data.copy_(param.data)
 
+        # PEFT + DeepSpeed ZeRO-3 requires reentrant checkpointing. For more details, see
+        # https://github.com/huggingface/trl/issues/2514#issuecomment-2692152703.
+        # Can be removed once https://github.com/deepspeedai/DeepSpeed/pull/8130 is merged and released.
+        if (
+            is_peft_model(model)
+            and args.deepspeed_plugin is not None
+            and args.deepspeed_plugin.zero_stage == 3
+            and args.gradient_checkpointing
+        ):
+            args.gradient_checkpointing_kwargs = args.gradient_checkpointing_kwargs or {}
+            use_reentrant = args.gradient_checkpointing_kwargs.get("use_reentrant")
+            if use_reentrant is False:
+                logger.warning(
+                    "You are using PEFT with DeepSpeed ZeRO-3 and gradient checkpointing with `use_reentrant=False`. "
+                    "`use_reentrant` is forced to `True` in this configuration to ensure correct training. To remove "
+                    "this warning, unset `use_reentrant` in `gradient_checkpointing_kwargs` or set it to `True`."
+                )
+            args.gradient_checkpointing_kwargs["use_reentrant"] = True
+
         # When using gradient checkpointing with PEFT, we need to enable input gradients. transformers.Trainer normally
         # handles this, but a bug currently prevents it; see https://github.com/huggingface/transformers/issues/42489
         if is_peft_model(model) and args.gradient_checkpointing:
@@ -812,6 +832,9 @@ class DPOTrainer(_BaseTrainer):
                         "`use_liger_kernel=False`."
                     )
             self.liger_loss = LigerFusedLinearDPOLoss(beta=args.beta, loss_type=self.loss_types[0])
+            # Redirect the model.module forward to the model forward to ensure pre-forward hooks are called, so that
+            # under ZeRO-3 the parameter coordinator gathers/reduces `lm_head.weight` around the fused loss.
+            self._forward_redirection = _ForwardRedirection()
 
         # Dataset
         # Skip dataset preparation if it's a VLM, where preprocessing (e.g., image-to-pixel conversion) is too costly
@@ -1045,6 +1068,14 @@ class DPOTrainer(_BaseTrainer):
                 **map_kwargs,
             )
 
+            # Drop examples whose prompt alone fills `max_length`: with `keep_start` truncation the collator would
+            # remove every completion token, leaving no learning signal. `keep_end` keeps the completion end, so
+            # nothing is dropped there.
+            if args.max_length is not None and args.truncation_mode == "keep_start":
+                if isinstance(dataset, Dataset):  # `IterableDataset.filter` does not support `desc`
+                    map_kwargs["desc"] = f"Dropping fully truncated examples from {dataset_name} dataset"
+                dataset = dataset.filter(lambda example: len(example["prompt_ids"]) < args.max_length, **map_kwargs)
+
         return dataset
 
     def _set_signature_columns_if_needed(self):
@@ -1077,6 +1108,9 @@ class DPOTrainer(_BaseTrainer):
                 "`precompute_ref_log_probs=True` is not supported with IterableDataset. Please use a map-style "
                 "Dataset or set `precompute_ref_log_probs=False`."
             )
+        # Idempotent skip: dataset already has ref log-probs precomputed.
+        if "ref_chosen_logps" in dataset.column_names and "ref_rejected_logps" in dataset.column_names:
+            return dataset
         model_hash = hash_module(self.ref_model or self.model)
         fingerprint = Hasher.hash((dataset._fingerprint, model_hash))
         cache_file = dataset._get_cache_file_path(fingerprint)
@@ -1236,7 +1270,10 @@ class DPOTrainer(_BaseTrainer):
         labels = input_ids[:, 1:].clone()
         labels[shift_completion_mask == 0] = -100
 
-        loss, metrics = self.liger_loss(weight, hidden_states, labels, bias, ref_hidden_states, ref_weight, ref_bias)
+        with maybe_gather_lm_head_ctx(weight, bias, ref_weight, ref_bias):
+            loss, metrics = self.liger_loss(
+                weight, hidden_states, labels, bias, ref_hidden_states, ref_weight, ref_bias
+            )
 
         (
             chosen_logps,
@@ -1606,7 +1643,12 @@ class DPOTrainer(_BaseTrainer):
 
     def evaluate(
         self,
-        eval_dataset: Dataset | dict[str, Dataset] | None = None,
+        eval_dataset: Dataset
+        | IterableDataset
+        | DatasetDict
+        | IterableDatasetDict
+        | dict[str, Dataset | IterableDataset]
+        | None = None,
         ignore_keys: list[str] | None = None,
         metric_key_prefix: str = "eval",
     ) -> dict[str, float]:
@@ -1640,7 +1682,17 @@ class DPOTrainer(_BaseTrainer):
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         try:
             if self.use_liger_kernel:
-                return self._compute_loss_liger(model, inputs, return_outputs)
+                # Under ZeRO-3, `lm_head.weight` is sharded and the fused loss reads it directly (bypassing the
+                # module), so run the loss inside the engine's forward via `_forward_redirection` to arm the parameter
+                # coordinator's gather/reduce hooks.
+                deepspeed_plugin = self.accelerator.state.deepspeed_plugin
+                is_zero3 = deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3
+                unwrapped_model = self.accelerator.unwrap_model(model)
+                if is_zero3 or self.is_fsdp_enabled:
+                    return self._forward_redirection(
+                        model, unwrapped_model, self._compute_loss_liger, unwrapped_model, inputs, return_outputs
+                    )
+                return self._compute_loss_liger(unwrapped_model, inputs, return_outputs)
             return self._compute_loss(model, inputs, return_outputs)
         except ValueError as e:
             if "Image features and image tokens do not match" in str(e) and self.args.max_length is not None:
