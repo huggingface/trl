@@ -73,6 +73,7 @@ from ...trainer.utils import (
     get_config_model_id,
     identity,
     pad,
+    repeat_iterable_dataset,
     split_tensor_dict,
 )
 from ..utils import (
@@ -805,6 +806,36 @@ class GOLDTrainer(SFTTrainer):
         self.model_name_or_path = model if isinstance(model, str) else model.config._name_or_path
         self.model_revision = (args.model_init_kwargs or {}).get("revision")
         dataset_sample = next(iter(train_dataset)) if train_dataset is not None else {}
+
+        # Iterable datasets can't be indexed, so the RepeatSampler can't be attached to them. Instead, the sampler's
+        # ordering is reproduced by streaming (see `get_train_dataloader` and `repeat_iterable_dataset`; evaluation is
+        # off-policy and needs no repeats, so it keeps the base `Trainer` eval path). This requires
+        # `dispatch_batches=False`: with the default dispatch path, batches are collated on the main process and
+        # Accelerate tries to concatenate non-tensor columns (e.g. the conversational `messages`), which fails;
+        # `dispatch_batches=False` also lets each process shard the stream into contiguous slices, as the sampler does.
+        # See https://github.com/huggingface/trl/issues/3213
+        uses_iterable_dataset = (
+            isinstance(train_dataset, IterableDataset)
+            or isinstance(eval_dataset, IterableDataset)
+            or (
+                isinstance(eval_dataset, dict) and any(isinstance(ds, IterableDataset) for ds in eval_dataset.values())
+            )
+        )
+        if uses_iterable_dataset:
+            if args.accelerator_config.dispatch_batches:
+                raise ValueError(
+                    "Iterable datasets require `dispatch_batches=False`, but it is set to `True` in "
+                    "`accelerator_config`. Please set it to `False`."
+                )
+            args.accelerator_config.dispatch_batches = False
+        # An iterable train set bakes prompt repeats into the stream, so it must be read by a single worker: multiple
+        # workers would shard and interleave it, splitting the num_generations groups. Map-style train keeps its workers.
+        if isinstance(train_dataset, IterableDataset) and args.dataloader_num_workers != 0:
+            warnings.warn(
+                f"Iterable datasets require `dataloader_num_workers=0` to preserve prompt grouping; overriding the "
+                f"provided value ({args.dataloader_num_workers})."
+            )
+            args.dataloader_num_workers = 0
         if processing_class is None:
             model_id = model if isinstance(model, str) else get_config_model_id(model.config)
             processing_class = AutoProcessor.from_pretrained(model_id, trust_remote_code=args.trust_remote_code)
@@ -1162,12 +1193,24 @@ class GOLDTrainer(SFTTrainer):
         The dataloader yields local batches of size `per_device_train_batch_size * gradient_accumulation_steps`. The
         `RepeatSampler` (with `repeat_count=gradient_accumulation_steps`) ensures each generation batch is sampled
         `gradient_accumulation_steps` times so Trainer's loop iterates the correct number of times. Only the first
-        batch in each window triggers `_fill_buffer`; the rest are ignored by `_prepare_inputs`.
+        batch in each window triggers `_fill_buffer`; the rest are ignored by `_prepare_inputs`. Iterable datasets
+        can't carry a sampler, so the same ordering is baked into the stream (see `repeat_iterable_dataset`).
         """
         if self.train_dataset is None:
             raise ValueError("Trainer: training requires a train_dataset.")
 
         train_dataset = self.train_dataset
+        if isinstance(train_dataset, IterableDataset):
+            # Iterable datasets can't be indexed, so RepeatSampler can't be attached. Reproduce its ordering by
+            # transforming the stream instead (see `repeat_iterable_dataset`). The full permutation done by
+            # RepeatSampler (which always shuffles here) becomes a buffered shuffle.
+            train_dataset = train_dataset.shuffle(seed=self.args.seed)
+            train_dataset = repeat_iterable_dataset(
+                train_dataset,
+                mini_repeat_count=self.num_generations,
+                batch_size=self.args.generation_batch_size * self.accelerator.num_processes,
+                repeat_count=self.args.gradient_accumulation_steps,
+            )
         data_collator = self.data_collator
         if is_datasets_available() and isinstance(train_dataset, Dataset):
             train_dataset = self._remove_unused_columns(train_dataset, description="training")
