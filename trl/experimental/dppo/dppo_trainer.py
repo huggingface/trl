@@ -901,17 +901,19 @@ class DPPOTrainer(GRPOTrainer):
                 self._async_tool_dicts.append(async_tool_dict)
 
         if self.environments:
-            for prompt, environment, x in zip(prompts, self.environments, inputs, strict=True):
+            for i, (prompt, environment, x) in enumerate(zip(prompts, self.environments, inputs, strict=True)):
                 # `environment` is a control field in multi-environment mode, so it is not forwarded to `reset`.
                 reset_kwargs = {k: v for k, v in x.items() if k != "environment"} if self._multi_environment else x
                 observation = environment.reset(**reset_kwargs)
                 if observation is None:
                     continue
-                if isinstance(observation, list) and isinstance(prompt[-1]["content"], str):
-                    prompt[-1]["content"] = [{"type": "text", "text": prompt[-1]["content"]}]
-                if isinstance(observation, str) and isinstance(prompt[-1]["content"], list):
+                content = prompt[-1]["content"]
+                if isinstance(observation, list) and isinstance(content, str):
+                    content = [{"type": "text", "text": content}]
+                if isinstance(observation, str) and isinstance(content, list):
                     observation = [{"type": "text", "text": observation}]
-                prompt[-1]["content"] += observation
+                # Rebuild the last message rather than mutating it in place, so the input example is left untouched.
+                prompts[i] = prompt[:-1] + [{**prompt[-1], "content": content + observation}]
 
         if "images" in inputs[0]:
             images = [example.get("images") for example in inputs]
