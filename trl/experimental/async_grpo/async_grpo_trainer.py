@@ -31,7 +31,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenize
 from transformers.data.data_collator import DataCollatorMixin
 
 from ...trainer.base_trainer import _BaseTrainer
-from ...trainer.utils import nanmax, nanmin, pad, patch_chunked_lm_head
+from ...trainer.utils import get_config_model_id, nanmax, nanmin, pad, patch_chunked_lm_head
 from .async_grpo_config import AsyncGRPOConfig
 from .async_rollout_worker import AsyncRolloutWorker
 from .vllm_client import VLLMClient
@@ -566,7 +566,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
         # FlashAttention is required: training runs in padding-free mode, where sequences are concatenated into a
         # single row and `cu_seq_lens` are derived from `position_ids` resets. SDPA/eager can't handle this.
         model = AutoModelForCausalLM.from_pretrained(
-            model_name,
+            model,
             device_map=None,
             dtype=torch.float32,
             attn_implementation="kernels-community/flash-attn3",
@@ -588,7 +588,9 @@ class AsyncGRPOTrainer(_BaseTrainer):
 
         # Processing class
         if processing_class is None:
-            processing_class = AutoTokenizer.from_pretrained(model_name, trust_remote_code=args.trust_remote_code)
+            processing_class = AutoTokenizer.from_pretrained(
+                get_config_model_id(model.config), trust_remote_code=args.trust_remote_code
+            )
         if processing_class.pad_token is None:
             processing_class.pad_token = processing_class.eos_token
 
@@ -674,7 +676,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 self.rollout_worker = rollout_worker
             else:
                 self.rollout_worker = AsyncRolloutWorker(
-                    model_name=model_name,
+                    model_name=get_config_model_id(model.config),
                     dataset=train_dataset,
                     reward_funcs=reward_funcs,
                     processing_class=processing_class,
