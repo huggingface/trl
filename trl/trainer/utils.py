@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import asyncio
+import copy
 import functools
 import hashlib
 import importlib.resources as pkg_resources
@@ -33,6 +34,7 @@ import torch
 import torch.nn.functional as F
 import transformers
 from accelerate.logging import get_logger
+from datasets import IterableDataset
 from huggingface_hub import ModelCard, ModelCardData
 from packaging.version import Version
 from torch.utils.data import Sampler
@@ -784,6 +786,71 @@ class RepeatSampler(Sampler):
 
     def __len__(self) -> int:
         return (self.num_samples // self.batch_size) * self.batch_size * self.mini_repeat_count * self.repeat_count
+
+
+def repeat_iterable_dataset(
+    dataset: IterableDataset, mini_repeat_count: int, batch_size: int = 1, repeat_count: int = 1
+):
+    """
+    Streaming counterpart of [`RepeatSampler`] for [`~datasets.IterableDataset`].
+
+    An [`~datasets.IterableDataset`] cannot be indexed, so a sampler cannot be attached to it. Instead of reordering
+    indices, this reorders the *stream* itself with [`~datasets.IterableDataset.map`], producing records in exactly the
+    same order that [`RepeatSampler`] yields indices for a map-style dataset with the same arguments. Because the
+    transform stays chained to `dataset`, `set_epoch` propagates to an upstream [`~datasets.IterableDataset.shuffle`]
+    and the order is reshuffled every epoch, as [`RepeatSampler`] does.
+
+    Shuffling is intentionally left out: it is handled upstream via [`~datasets.IterableDataset.shuffle`] (buffered
+    shuffling), the streaming equivalent of the full permutation done by [`RepeatSampler`].
+
+    Args:
+        dataset (`datasets.IterableDataset`):
+            Dataset to stream from.
+        mini_repeat_count (`int`):
+            Number of times to repeat each record per batch.
+        batch_size (`int`, *optional*, defaults to `1`):
+            Number of unique records per batch.
+        repeat_count (`int`, *optional*, defaults to `1`):
+            Number of times to repeat the full batch.
+
+    Returns:
+        `datasets.IterableDataset`: Dataset yielding the records of `dataset`, repeated and reordered.
+
+    Example:
+    ```python
+    >>> from datasets import IterableDataset
+
+    >>> dataset = IterableDataset.from_generator(lambda: ({"x": i} for i in range(7)))
+    >>> repeated = repeat_iterable_dataset(dataset, mini_repeat_count=2, batch_size=3, repeat_count=4)
+    >>> [record["x"] for record in repeated]
+    [0, 0, 1, 1, 2, 2,
+     0, 0, 1, 1, 2, 2,
+     0, 0, 1, 1, 2, 2,
+     0, 0, 1, 1, 2, 2,
+     3, 3, 4, 4, 5, 5,
+     3, 3, 4, 4, 5, 5,
+     3, 3, 4, 4, 5, 5,
+     3, 3, 4, 4, 5, 5]
+    ```
+    """
+
+    def repeat_batch(batch: dict) -> dict:
+        # `batch` maps each column to a list of `batch_size` values (fewer for the trailing batch, which is dropped to
+        # match RepeatSampler). Transpose it back to records, repeating them as RepeatSampler repeats indices. Records
+        # are deep-copied so repeats stay independent, matching the map-style path where the dataset re-materializes a
+        # fresh object per access.
+        keys = list(batch)
+        if len(batch[keys[0]]) < batch_size:
+            return {key: [] for key in keys}
+        repeated = {key: [] for key in keys}
+        for _ in range(repeat_count):
+            for values in zip(*(batch[key] for key in keys), strict=True):
+                for _ in range(mini_repeat_count):
+                    for key, value in zip(keys, values, strict=True):
+                        repeated[key].append(copy.deepcopy(value))
+        return repeated
+
+    return dataset.map(repeat_batch, batched=True, batch_size=batch_size)
 
 
 # torch.nanstd doesn't exist, so we define it here
