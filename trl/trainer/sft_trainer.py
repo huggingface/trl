@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import contextlib
+import inspect
 import json
 import os
 import types
@@ -30,7 +31,7 @@ import transformers
 from accelerate import PartialState
 from accelerate.logging import get_logger
 from accelerate.utils import is_peft_model
-from datasets import Dataset, IterableDataset
+from datasets import Dataset, DatasetDict, IterableDataset, IterableDatasetDict
 from packaging.version import Version
 from transformers import (
     AutoProcessor,
@@ -54,6 +55,7 @@ from ..chat_template_utils import (
     is_chat_template_stop_token_trained,
 )
 from ..data_utils import (
+    _tokenize,
     apply_chat_template,
     get_dataset_column_names,
     is_conversational,
@@ -70,6 +72,7 @@ from .utils import (
     entropy_from_logits,
     flush_left,
     get_config_model_id,
+    maybe_gather_lm_head_ctx,
     pad,
     selective_log_softmax,
 )
@@ -93,26 +96,8 @@ class _ChunkedCELMHeadOutput(CausalLMOutputWithPast):
     aux_loss: torch.Tensor | None = None
 
 
-def _maybe_gather_lm_head_ctx(w, b):
-    # Allgather ZeRO-3 partitioned `lm_head` weight/bias for the chunked matmul. No-op if not ZeRO-3, or if the
-    # param is already gathered (tied embeddings: `embed_tokens` shares the weight and keeps it `AVAILABLE`, so
-    # partitioning on our exit would collide with its active-submodule tracking).
-    from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
-
-    if not is_deepspeed_zero3_enabled():
-        return contextlib.nullcontext()
-
-    import deepspeed
-    from deepspeed.runtime.zero.partition_parameters import ZeroParamStatus
-
-    params = [w] if b is None else [w, b]
-    if all(p.ds_status == ZeroParamStatus.AVAILABLE for p in params):
-        return contextlib.nullcontext()
-    return deepspeed.zero.GatheredParameters(params)
-
-
 def _chunk(h, w, b, lbl, logit_scale, final_logit_softcapping):
-    with _maybe_gather_lm_head_ctx(w, b):
+    with maybe_gather_lm_head_ctx(w, b):
         logits = h.float() @ w.float().t()
         if b is not None:
             logits = logits + b.float()
@@ -121,9 +106,11 @@ def _chunk(h, w, b, lbl, logit_scale, final_logit_softcapping):
     if final_logit_softcapping is not None:
         logits = final_logit_softcapping * torch.tanh(logits / final_logit_softcapping)
     log_p = F.log_softmax(logits, dim=-1)
-    chunk_loss = F.nll_loss(log_p, lbl, reduction="sum")
-    chunk_correct = (logits.argmax(dim=-1) == lbl).sum().float()
-    chunk_entropy = -(log_p.exp() * log_p).sum(dim=-1).sum()
+    # A chunk's tail may be `-100` padding: `ignore_index` zeroes their loss; `valid` does the same for accuracy/entropy.
+    chunk_loss = F.nll_loss(log_p, lbl, ignore_index=-100, reduction="sum")
+    valid = lbl != -100
+    chunk_correct = ((logits.argmax(dim=-1) == lbl) & valid).sum().float()
+    chunk_entropy = (-(log_p.exp() * log_p).sum(dim=-1) * valid).sum()
     return chunk_loss, chunk_correct, chunk_entropy
 
 
@@ -141,16 +128,18 @@ def _chunked_cross_entropy_loss(
     """
     Memory-efficient next-token cross-entropy over hidden states and an `lm_head` weight.
 
-    The full `lm_head` projection is never materialized. Positions where labels equal `-100` are dropped before the
-    matmul, and the remaining tokens are processed in chunks of `chunk_size`. Each chunk's `[chunk_size, vocab_size]`
-    logits tensor is kept alive only during its own forward/backward pass via gradient checkpointing, so peak
-    logits-activation memory is `chunk_size * vocab_size` instead of `batch_size * seq_len * vocab_size`.
+    The full `lm_head` projection is never materialized. Valid (non-`-100`) tokens are packed to the front (via
+    `argsort` on the label mask, a static-shape op) and processed in chunks of `chunk_size`, rounding the count up to a
+    whole chunk so masked positions land in a skippable tail. Each chunk's `[chunk_size, vocab_size]` logits are kept
+    alive only during its own forward/backward via gradient checkpointing, so peak logits memory is `chunk_size *
+    vocab_size` instead of `batch_size * seq_len * vocab_size`. Quantizing the chunk count to a multiple of
+    `chunk_size` keeps this XLA/Neuron-safe (at most `total / chunk_size` distinct traced shapes, not one per
+    valid-token count) while still dropping fully-masked chunks on GPU.
 
-    At least one of `labels` or `shift_labels` must be provided. Passing `labels` alone is the standard path and
-    triggers the internal `labels[..., 1:]` / `hidden_states[..., :-1, :]` shift. Passing `shift_labels` skips the
-    shift and assumes the caller has already aligned labels with hidden states — this is the contract used under
-    context / sequence parallelism, where labels are shifted before being sharded. If both are provided, `shift_labels`
-    wins (matching [`~transformers.loss.ForCausalLMLoss`]).
+    At least one of `labels` or `shift_labels` must be provided. `labels` triggers the internal `labels[..., 1:]` /
+    `hidden_states[..., :-1, :]` shift; `shift_labels` skips it, assuming the caller already aligned labels with hidden
+    states (the contract under context / sequence parallelism). If both are given, `shift_labels` wins (matching
+    [`~transformers.loss.ForCausalLMLoss`]).
 
     Args:
         hidden_states (`torch.Tensor`):
@@ -194,26 +183,32 @@ def _chunked_cross_entropy_loss(
         labels = labels[..., 1:].reshape(-1)
 
     valid = labels != -100
-    hidden = hidden[valid]
-    labels = labels[valid]
-    n_valid = hidden.size(0)
+    n_valid_tensor = valid.sum()
 
     correct = hidden.new_zeros((), dtype=torch.float32)
     entropy_sum = hidden.new_zeros((), dtype=torch.float32)
-    n_valid_tensor = torch.tensor(n_valid, device=hidden.device, dtype=torch.long)
-    if n_valid == 0:
+    if n_valid_tensor == 0:
         # Whole micro-batch masked (e.g. completion-only loss + truncation). Keep the loss connected
         # to the autograd graph through every trainable parameter so `.backward()` succeeds and DDP /
         # FSDP gradient sync doesn't hang on a missing param.
-        with _maybe_gather_lm_head_ctx(lm_head_weight, lm_head_bias):
+        with maybe_gather_lm_head_ctx(lm_head_weight, lm_head_bias):
             loss = (hidden_states.float().sum() + lm_head_weight.float().sum()) * 0.0
             if lm_head_bias is not None:
                 loss = loss + lm_head_bias.float().sum() * 0.0
         return loss, correct, entropy_sum, n_valid_tensor
 
+    # Pack valid tokens to the front so masked positions form whole trailing chunks. `argsort` on the boolean mask is
+    # a static-shape op (unlike `hidden[valid]`, whose output shape is data-dependent and poisons XLA compilation).
+    order = valid.to(torch.int8).argsort(descending=True, stable=True)
+    hidden = hidden[order]
+    labels = labels[order]
+
+    # Process only the whole chunks covering the valid prefix: bounds XLA recompiles and drops fully-masked chunks on GPU.
+    n_padded = (n_valid_tensor / chunk_size).ceil().to(torch.int64) * chunk_size
+
     loss = hidden.new_zeros((), dtype=torch.float32)
 
-    for start in range(0, n_valid, chunk_size):
+    for start in range(0, n_padded, chunk_size):
         h_chunk = hidden[start : start + chunk_size]
         lbl_chunk = labels[start : start + chunk_size]
         chunk_loss, chunk_correct, chunk_entropy = torch.utils.checkpoint.checkpoint(
@@ -231,7 +226,7 @@ def _chunked_cross_entropy_loss(
         entropy_sum = entropy_sum + chunk_entropy
 
     if num_items_in_batch is None:
-        loss = loss / n_valid
+        loss = loss / n_valid_tensor
     else:
         if isinstance(num_items_in_batch, torch.Tensor):
             num_items_in_batch = num_items_in_batch.to(loss.device)
@@ -376,6 +371,10 @@ def _patch_chunked_ce_lm_head(model: torch.nn.Module, chunk_size: int, is_vlm: b
             aux_loss=aux_loss,
         )
 
+    # Keep the original forward signature so `generate`'s `_validate_model_kwargs` still sees the
+    # model's real inputs (e.g. VLM `pixel_values`, `spatial_shapes`) and doesn't reject them. The
+    # unbound `__func__` signature makes `MethodType`'s `self`-stripping land correctly.
+    _chunked_ce_forward.__signature__ = inspect.signature(original_forward.__func__)
     model.forward = types.MethodType(_chunked_ce_forward, model)
 
 
@@ -843,7 +842,11 @@ class SFTTrainer(_BaseTrainer):
             `completion_mask` only when `completion_only_loss=True`), or default to a copy of `input_ids`. Sequences
             are truncated to `max_length` during preparation. With `skip_prepare_dataset=True`, preparation is skipped
             and the collator is expected to handle the dataset as is.
-        eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`] or `dict[str, Dataset | IterableDataset]`):
+
+            When `train_dataset` is an [`~datasets.IterableDataset`] (e.g. a streaming dataset), `max_steps` must be
+            set in the training arguments, since its length cannot be inferred and the total number of training steps
+            is required to bound the training loop and configure the learning rate scheduler.
+        eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`], [`~datasets.DatasetDict`], [`~datasets.IterableDatasetDict`] or `dict[str, Dataset | IterableDataset]`):
             Dataset to use for evaluation. It must meet the same requirements as `train_dataset`.
         processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.ProcessorMixin`], *optional*):
             Processing class used to process the data. If `None`, the processing class is loaded from the model's name
@@ -901,7 +904,12 @@ class SFTTrainer(_BaseTrainer):
         args: SFTConfig | TrainingArguments | None = None,
         data_collator: DataCollator | None = None,
         train_dataset: Dataset | IterableDataset | None = None,
-        eval_dataset: Dataset | IterableDataset | dict[str, Dataset | IterableDataset] | None = None,
+        eval_dataset: Dataset
+        | IterableDataset
+        | DatasetDict
+        | IterableDatasetDict
+        | dict[str, Dataset | IterableDataset]
+        | None = None,
         processing_class: PreTrainedTokenizerBase | ProcessorMixin | None = None,
         compute_loss_func: Callable | None = None,
         compute_metrics: Callable[[EvalPrediction], dict] | None = None,
@@ -1089,7 +1097,8 @@ class SFTTrainer(_BaseTrainer):
             model = get_peft_model(model, peft_config, **get_peft_model_kwargs)
 
         # PEFT + DeepSpeed ZeRO-3 requires reentrant checkpointing. For more details, see
-        # https://github.com/huggingface/trl/issues/2514#issuecomment-2692152703
+        # https://github.com/huggingface/trl/issues/2514#issuecomment-2692152703.
+        # Can be removed once https://github.com/deepspeedai/DeepSpeed/pull/8130 is merged and released.
         if (
             is_peft_model(model)
             and args.deepspeed_plugin is not None
@@ -1363,49 +1372,6 @@ class SFTTrainer(_BaseTrainer):
         # Add tags to the model
         self.model.add_model_tags(self._tag_names)
 
-    @staticmethod
-    def _tokenize(
-        processing_class: PreTrainedTokenizerBase | ProcessorMixin,
-        input: str | list,
-        is_vlm: bool,
-        chat_template: str | None,
-        **kwargs,
-    ) -> dict[str, list]:
-        """Tokenize a single example for dataset preprocessing.
-
-        Dispatches to `apply_chat_template` for conversational input (list of message dicts) and to `__call__` for
-        non-conversational input (str). For VLMs, normalizes the batch dimension that processors emit even for single
-        examples.
-
-        Args:
-            processing_class ([`~transformers.PreTrainedTokenizerBase`] or [`~transformers.ProcessorMixin`]):
-                The tokenizer or processor to use.
-            input (`str` or `list`):
-                A string for non-conversational input, or a list of message dicts for conversational input.
-            is_vlm (`bool`):
-                Whether the processing class is a VLM processor, requiring multimodal message preparation and batch
-                dimension normalization.
-            chat_template (`str` or `None`):
-                Chat template forwarded to `apply_chat_template` for conversational input.
-            **kwargs:
-                Forwarded to `apply_chat_template` (e.g. `add_generation_prompt`, `return_assistant_tokens_mask`).
-
-        Returns:
-            `dict` with at least an `"input_ids"` key mapping to a flat `list[int]`.
-        """
-        if isinstance(input, list):  # conversational: list of message dicts
-            if is_vlm:
-                input = prepare_multimodal_messages(input)
-            result = processing_class.apply_chat_template(
-                input, tokenize=True, return_dict=True, chat_template=chat_template, **kwargs
-            )
-        else:  # non-conversational: plain text string
-            result = processing_class(text=input)
-        # VLMs emit a batch dimension even for single examples; unwrap it
-        if is_vlm:
-            return {k: v[0] for k, v in result.items()}
-        return result
-
     def _prepare_dataset(
         self,
         dataset: Dataset | IterableDataset,
@@ -1488,45 +1454,40 @@ class SFTTrainer(_BaseTrainer):
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Tokenizing {dataset_name} dataset"
 
-                # Bind `_tokenize` to a local so `tokenize_fn` doesn't capture `self`: a closure over `self` makes the
-                # map function unhashable, forcing a random fingerprint that silently disables dataset caching.
-                tokenize = self._tokenize
-
-                def tokenize_fn(
-                    example, processing_class, dataset_text_field, assistant_only_loss, is_vlm, chat_template
-                ):
+                def tokenize_fn(example, processing_class, dataset_text_field, assistant_only_loss, chat_template):
                     tools = example.get("tools")
                     tools = json.loads(tools) if isinstance(tools, str) else tools
+                    apply_chat_template_kwargs = {
+                        "chat_template": chat_template,
+                        "tools": tools,
+                        **example.get("chat_template_kwargs", {}),
+                    }
                     if "prompt" in example:  # prompt-completion case
                         output = {}
                         if is_conversational(example):
-                            prompt_ids = tokenize(
+                            prompt_ids = _tokenize(
                                 processing_class,
                                 example["prompt"],
-                                is_vlm,
-                                chat_template,
-                                tools=tools,
                                 add_generation_prompt=True,
-                                **example.get("chat_template_kwargs", {}),
+                                **apply_chat_template_kwargs,
                             )["input_ids"]
-                            prompt_completion_processed = tokenize(
+                            prompt_completion_processed = _tokenize(
                                 processing_class,
                                 example["prompt"] + example["completion"],
-                                is_vlm,
-                                chat_template,
-                                tools=tools,
                                 return_assistant_tokens_mask=assistant_only_loss,
-                                **example.get("chat_template_kwargs", {}),
+                                **apply_chat_template_kwargs,
                             )
                             prompt_completion_ids = prompt_completion_processed["input_ids"]
                             if "assistant_masks" in prompt_completion_processed:
                                 output["assistant_masks"] = prompt_completion_processed["assistant_masks"]
                         else:
-                            prompt_ids = tokenize(processing_class, example["prompt"], is_vlm, chat_template)[
+                            prompt_ids = _tokenize(processing_class, example["prompt"], chat_template=chat_template)[
                                 "input_ids"
                             ]
-                            prompt_completion_ids = tokenize(
-                                processing_class, example["prompt"] + example["completion"], is_vlm, chat_template
+                            prompt_completion_ids = _tokenize(
+                                processing_class,
+                                example["prompt"] + example["completion"],
+                                chat_template=chat_template,
                             )["input_ids"]
 
                         # Check if the tokenized prompt starts with the tokenized prompt+completion
@@ -1544,20 +1505,17 @@ class SFTTrainer(_BaseTrainer):
 
                     else:  # language modeling case
                         if is_conversational(example):
-                            processed = tokenize(
+                            processed = _tokenize(
                                 processing_class,
                                 example["messages"],
-                                is_vlm,
-                                chat_template,
-                                tools=tools,
                                 return_assistant_tokens_mask=assistant_only_loss,
-                                **example.get("chat_template_kwargs", {}),
+                                **apply_chat_template_kwargs,
                             )
                             output = {k: processed[k] for k in ("input_ids", "assistant_masks") if k in processed}
                         else:
                             output = {
-                                "input_ids": tokenize(
-                                    processing_class, example[dataset_text_field], is_vlm, chat_template
+                                "input_ids": _tokenize(
+                                    processing_class, example[dataset_text_field], chat_template=chat_template
                                 )["input_ids"]
                             }
 
@@ -1576,7 +1534,6 @@ class SFTTrainer(_BaseTrainer):
                         "processing_class": processing_class,
                         "dataset_text_field": args.dataset_text_field,
                         "assistant_only_loss": args.assistant_only_loss,
-                        "is_vlm": self._is_vlm,
                         "chat_template": self.chat_template,
                     },
                     **map_kwargs,
@@ -1630,6 +1587,15 @@ class SFTTrainer(_BaseTrainer):
                     return {"input_ids": example["input_ids"][sl], "labels": example["labels"][sl]}
 
                 dataset = dataset.map(truncate, fn_kwargs={"sl": sl}, **map_kwargs)
+
+                # Drop examples left fully masked by truncation (e.g. a prompt alone filling `max_length` with
+                # `truncation_mode="keep_start"`), since they contribute no loss.
+                if isinstance(dataset, Dataset):  # `IterableDataset.filter` does not support `desc`
+                    map_kwargs["desc"] = f"Dropping fully masked examples from {dataset_name} dataset"
+
+                dataset = dataset.filter(
+                    lambda example: any(label != -100 for label in example["labels"]), **map_kwargs
+                )
 
             # Pack
             if packing:
@@ -1693,7 +1659,12 @@ class SFTTrainer(_BaseTrainer):
 
     def evaluate(
         self,
-        eval_dataset: Dataset | dict[str, Dataset] | None = None,
+        eval_dataset: Dataset
+        | IterableDataset
+        | DatasetDict
+        | IterableDatasetDict
+        | dict[str, Dataset | IterableDataset]
+        | None = None,
         ignore_keys: list[str] | None = None,
         metric_key_prefix: str = "eval",
     ) -> dict[str, float]:

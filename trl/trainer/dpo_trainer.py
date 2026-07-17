@@ -28,7 +28,7 @@ import transformers
 from accelerate import PartialState
 from accelerate.logging import get_logger
 from accelerate.utils import is_peft_model, tqdm
-from datasets import Dataset, IterableDataset, IterableDatasetDict, concatenate_datasets
+from datasets import Dataset, DatasetDict, IterableDataset, IterableDatasetDict, concatenate_datasets
 from datasets.fingerprint import Hasher
 from packaging.version import Version
 from torch.utils.data import DataLoader
@@ -45,10 +45,10 @@ from transformers.data.data_collator import DataCollatorMixin
 from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_peft_available
 
-from ..data_utils import apply_chat_template, extract_prompt, is_conversational, prepare_multimodal_messages
+from ..data_utils import _tokenize, apply_chat_template, extract_prompt, is_conversational, prepare_multimodal_messages
 from ..import_utils import is_liger_kernel_available
 from ..models import get_act_offloading_ctx_manager, prepare_deepspeed, prepare_fsdp
-from ..models.utils import disable_gradient_checkpointing
+from ..models.utils import _ForwardRedirection, disable_gradient_checkpointing
 from .base_trainer import _BaseTrainer
 from .callbacks import SyncRefModelCallback
 from .dpo_config import DPOConfig
@@ -59,6 +59,7 @@ from .utils import (
     flush_left,
     get_config_model_id,
     hash_module,
+    maybe_gather_lm_head_ctx,
     pad,
     selective_log_softmax,
     use_adapter,
@@ -461,7 +462,11 @@ class DPOTrainer(_BaseTrainer):
             - [Standard](dataset_formats#standard): Each sample contains plain text.
             - [Conversational](dataset_formats#conversational): Each sample contains structured messages (e.g., role
               and content).
-        eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`] or `dict[str, Dataset | IterableDataset]`):
+
+            When `train_dataset` is an [`~datasets.IterableDataset`] (e.g. a streaming dataset), `max_steps` must be
+            set in the training arguments, since its length cannot be inferred and the total number of training steps
+            is required to bound the training loop and configure the learning rate scheduler.
+        eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`], [`~datasets.DatasetDict`], [`~datasets.IterableDatasetDict`] or `dict[str, Dataset | IterableDataset]`):
             Dataset to use for evaluation. It must meet the same requirements as `train_dataset`.
         processing_class ([`~transformers.PreTrainedTokenizerBase`] or [`~transformers.ProcessorMixin`], *optional*):
             Processing class used to process the data. The padding side must be set to "left". If `None`, the
@@ -515,7 +520,12 @@ class DPOTrainer(_BaseTrainer):
         args: DPOConfig | None = None,
         data_collator: DataCollator | None = None,
         train_dataset: Dataset | IterableDataset | None = None,
-        eval_dataset: Dataset | IterableDataset | dict[str, Dataset | IterableDataset] | None = None,
+        eval_dataset: Dataset
+        | IterableDataset
+        | DatasetDict
+        | IterableDatasetDict
+        | dict[str, Dataset | IterableDataset]
+        | None = None,
         processing_class: PreTrainedTokenizerBase | ProcessorMixin | None = None,
         compute_metrics: Callable[[EvalPrediction], dict] | None = None,
         callbacks: list[TrainerCallback] | None = None,
@@ -564,9 +574,10 @@ class DPOTrainer(_BaseTrainer):
                     "The `model_init_kwargs` will be ignored."
                 )
             if quantization_config is not None:
-                logger.warning(
-                    "You passed `quantization_config` to the trainer, but your model is already instantiated. The "
-                    "`quantization_config` will be ignored."
+                raise ValueError(
+                    "You passed `quantization_config` to the trainer, but your model is already instantiated. "
+                    "Quantization can only be applied when the model is loaded from a model identifier (`str`). "
+                    "Either pass the model as a model identifier, or omit `quantization_config`."
                 )
         # Non-quantized models do not have the `is_loaded_in_{8,4}bit` attributes, whereas quantized models do
         _is_quantized_model = getattr(model, "is_loaded_in_4bit", False) or getattr(model, "is_loaded_in_8bit", False)
@@ -657,6 +668,25 @@ class DPOTrainer(_BaseTrainer):
                         ref_name = name.replace(".default.", ".ref.")
                         ref_param = model.get_parameter(ref_name)
                         ref_param.data.copy_(param.data)
+
+        # PEFT + DeepSpeed ZeRO-3 requires reentrant checkpointing. For more details, see
+        # https://github.com/huggingface/trl/issues/2514#issuecomment-2692152703.
+        # Can be removed once https://github.com/deepspeedai/DeepSpeed/pull/8130 is merged and released.
+        if (
+            is_peft_model(model)
+            and args.deepspeed_plugin is not None
+            and args.deepspeed_plugin.zero_stage == 3
+            and args.gradient_checkpointing
+        ):
+            args.gradient_checkpointing_kwargs = args.gradient_checkpointing_kwargs or {}
+            use_reentrant = args.gradient_checkpointing_kwargs.get("use_reentrant")
+            if use_reentrant is False:
+                logger.warning(
+                    "You are using PEFT with DeepSpeed ZeRO-3 and gradient checkpointing with `use_reentrant=False`. "
+                    "`use_reentrant` is forced to `True` in this configuration to ensure correct training. To remove "
+                    "this warning, unset `use_reentrant` in `gradient_checkpointing_kwargs` or set it to `True`."
+                )
+            args.gradient_checkpointing_kwargs["use_reentrant"] = True
 
         # When using gradient checkpointing with PEFT, we need to enable input gradients. transformers.Trainer normally
         # handles this, but a bug currently prevents it; see https://github.com/huggingface/transformers/issues/42489
@@ -802,6 +832,9 @@ class DPOTrainer(_BaseTrainer):
                         "`use_liger_kernel=False`."
                     )
             self.liger_loss = LigerFusedLinearDPOLoss(beta=args.beta, loss_type=self.loss_types[0])
+            # Redirect the model.module forward to the model forward to ensure pre-forward hooks are called, so that
+            # under ZeRO-3 the parameter coordinator gathers/reduces `lm_head.weight` around the fused loss.
+            self._forward_redirection = _ForwardRedirection()
 
         # Dataset
         # Skip dataset preparation if it's a VLM, where preprocessing (e.g., image-to-pixel conversion) is too costly
@@ -922,14 +955,6 @@ class DPOTrainer(_BaseTrainer):
             self.add_callback(SyncRefModelCallback(ref_model=self.ref_model, accelerator=self.accelerator))
 
         if args.precompute_ref_log_probs:
-            if isinstance(self.train_dataset, IterableDataset) or isinstance(
-                self.eval_dataset, (IterableDataset, IterableDatasetDict)
-            ):
-                raise ValueError(
-                    "`precompute_ref_log_probs=True` is not supported with IterableDataset. Please use a map-style "
-                    "Dataset or set `precompute_ref_log_probs=False`."
-                )
-
             self.train_dataset = self._precompute_ref_logps(
                 self.train_dataset,
                 "train",
@@ -949,44 +974,6 @@ class DPOTrainer(_BaseTrainer):
                         "eval",
                         self.args.precompute_ref_batch_size or self.args.per_device_eval_batch_size,
                     )
-
-    @staticmethod
-    def _tokenize(
-        processing_class: PreTrainedTokenizerBase | ProcessorMixin,
-        input: str | list,
-        is_vlm: bool,
-        **kwargs,
-    ) -> dict[str, list]:
-        """Tokenize a single example for dataset preprocessing.
-
-        Dispatches to `apply_chat_template` for conversational input (list of message dicts) and to `__call__` for
-        non-conversational input (str). For VLMs, normalizes the batch dimension that processors emit even for single
-        examples.
-
-        Args:
-            processing_class ([`~transformers.PreTrainedTokenizerBase`] or [`~transformers.ProcessorMixin`]):
-                The tokenizer or processor to use.
-            input (`str` or `list`):
-                A string for non-conversational input, or a list of message dicts for conversational input.
-            is_vlm (`bool`):
-                Whether the processing class is a VLM processor, requiring multimodal message preparation and batch
-                dimension normalization.
-            **kwargs:
-                Forwarded to `apply_chat_template` (e.g. `add_generation_prompt`, `return_assistant_tokens_mask`).
-
-        Returns:
-            `dict` with at least an `"input_ids"` key mapping to a flat `list[int]`.
-        """
-        if isinstance(input, list):  # conversational: list of message dicts
-            if is_vlm:
-                input = prepare_multimodal_messages(input)
-            result = processing_class.apply_chat_template(input, tokenize=True, return_dict=True, **kwargs)
-        else:  # non-conversational: plain text string
-            result = processing_class(text=input)
-        # VLMs emit a batch dimension even for single examples; unwrap it
-        if is_vlm:
-            return {k: v[0] for k, v in result.items()}
-        return result
 
     def _prepare_dataset(
         self,
@@ -1027,43 +1014,32 @@ class DPOTrainer(_BaseTrainer):
             if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                 map_kwargs["desc"] = f"Tokenizing {dataset_name} dataset"
 
-            # Bind `_tokenize` to a local so `tokenize_fn` doesn't capture `self`: a closure over `self` makes the map
-            # function unhashable, forcing a random fingerprint that silently disables dataset caching.
-            tokenize = self._tokenize
-
-            def tokenize_fn(example, processing_class, is_vlm):
+            def tokenize_fn(example, processing_class):
                 tools = example.get("tools")
                 tools = json.loads(tools) if isinstance(tools, str) else tools
+                apply_chat_template_kwargs = {"tools": tools, **example.get("chat_template_kwargs", {})}
                 output = {}
                 if is_conversational(example):
-                    prompt_ids = tokenize(
+                    prompt_ids = _tokenize(
                         processing_class,
                         example["prompt"],
-                        is_vlm,
-                        tools=tools,
                         add_generation_prompt=True,
-                        **example.get("chat_template_kwargs", {}),
+                        **apply_chat_template_kwargs,
                     )["input_ids"]
-                    prompt_chosen_ids = tokenize(
+                    prompt_chosen_ids = _tokenize(
                         processing_class,
                         example["prompt"] + example["chosen"],
-                        is_vlm,
-                        tools=tools,
-                        **example.get("chat_template_kwargs", {}),
+                        **apply_chat_template_kwargs,
                     )["input_ids"]
-                    prompt_rejected_ids = tokenize(
+                    prompt_rejected_ids = _tokenize(
                         processing_class,
                         example["prompt"] + example["rejected"],
-                        is_vlm,
-                        tools=tools,
-                        **example.get("chat_template_kwargs", {}),
+                        **apply_chat_template_kwargs,
                     )["input_ids"]
                 else:
-                    prompt_ids = tokenize(processing_class, example["prompt"], is_vlm)["input_ids"]
-                    prompt_chosen_ids = tokenize(processing_class, example["prompt"] + example["chosen"], is_vlm)[
-                        "input_ids"
-                    ]
-                    prompt_rejected_ids = tokenize(processing_class, example["prompt"] + example["rejected"], is_vlm)[
+                    prompt_ids = _tokenize(processing_class, example["prompt"])["input_ids"]
+                    prompt_chosen_ids = _tokenize(processing_class, example["prompt"] + example["chosen"])["input_ids"]
+                    prompt_rejected_ids = _tokenize(processing_class, example["prompt"] + example["rejected"])[
                         "input_ids"
                     ]
 
@@ -1088,9 +1064,17 @@ class DPOTrainer(_BaseTrainer):
 
             dataset = dataset.map(
                 tokenize_fn,
-                fn_kwargs={"processing_class": processing_class, "is_vlm": self._is_vlm},
+                fn_kwargs={"processing_class": processing_class},
                 **map_kwargs,
             )
+
+            # Drop examples whose prompt alone fills `max_length`: with `keep_start` truncation the collator would
+            # remove every completion token, leaving no learning signal. `keep_end` keeps the completion end, so
+            # nothing is dropped there.
+            if args.max_length is not None and args.truncation_mode == "keep_start":
+                if isinstance(dataset, Dataset):  # `IterableDataset.filter` does not support `desc`
+                    map_kwargs["desc"] = f"Dropping fully truncated examples from {dataset_name} dataset"
+                dataset = dataset.filter(lambda example: len(example["prompt_ids"]) < args.max_length, **map_kwargs)
 
         return dataset
 
@@ -1119,6 +1103,14 @@ class DPOTrainer(_BaseTrainer):
                 ]
 
     def _precompute_ref_logps(self, dataset: Dataset, name: str, batch_size: int) -> Dataset:
+        if isinstance(dataset, IterableDataset):
+            raise ValueError(
+                "`precompute_ref_log_probs=True` is not supported with IterableDataset. Please use a map-style "
+                "Dataset or set `precompute_ref_log_probs=False`."
+            )
+        # Idempotent skip: dataset already has ref log-probs precomputed.
+        if "ref_chosen_logps" in dataset.column_names and "ref_rejected_logps" in dataset.column_names:
+            return dataset
         model_hash = hash_module(self.ref_model or self.model)
         fingerprint = Hasher.hash((dataset._fingerprint, model_hash))
         cache_file = dataset._get_cache_file_path(fingerprint)
@@ -1162,6 +1154,7 @@ class DPOTrainer(_BaseTrainer):
                 batched=True,
                 remove_columns=dataset.column_names,
                 new_fingerprint=fingerprint,
+                cache_file_name=cache_file,
                 desc=f"Caching reference log probs for {name} dataset",
             )
         self.accelerator.wait_for_everyone()
@@ -1277,7 +1270,10 @@ class DPOTrainer(_BaseTrainer):
         labels = input_ids[:, 1:].clone()
         labels[shift_completion_mask == 0] = -100
 
-        loss, metrics = self.liger_loss(weight, hidden_states, labels, bias, ref_hidden_states, ref_weight, ref_bias)
+        with maybe_gather_lm_head_ctx(weight, bias, ref_weight, ref_bias):
+            loss, metrics = self.liger_loss(
+                weight, hidden_states, labels, bias, ref_hidden_states, ref_weight, ref_bias
+            )
 
         (
             chosen_logps,
@@ -1647,7 +1643,12 @@ class DPOTrainer(_BaseTrainer):
 
     def evaluate(
         self,
-        eval_dataset: Dataset | dict[str, Dataset] | None = None,
+        eval_dataset: Dataset
+        | IterableDataset
+        | DatasetDict
+        | IterableDatasetDict
+        | dict[str, Dataset | IterableDataset]
+        | None = None,
         ignore_keys: list[str] | None = None,
         metric_key_prefix: str = "eval",
     ) -> dict[str, float]:
@@ -1681,7 +1682,17 @@ class DPOTrainer(_BaseTrainer):
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         try:
             if self.use_liger_kernel:
-                return self._compute_loss_liger(model, inputs, return_outputs)
+                # Under ZeRO-3, `lm_head.weight` is sharded and the fused loss reads it directly (bypassing the
+                # module), so run the loss inside the engine's forward via `_forward_redirection` to arm the parameter
+                # coordinator's gather/reduce hooks.
+                deepspeed_plugin = self.accelerator.state.deepspeed_plugin
+                is_zero3 = deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3
+                unwrapped_model = self.accelerator.unwrap_model(model)
+                if is_zero3 or self.is_fsdp_enabled:
+                    return self._forward_redirection(
+                        model, unwrapped_model, self._compute_loss_liger, unwrapped_model, inputs, return_outputs
+                    )
+                return self._compute_loss_liger(unwrapped_model, inputs, return_outputs)
             return self._compute_loss(model, inputs, return_outputs)
         except ValueError as e:
             if "Image features and image tokens do not match" in str(e) and self.args.max_length is not None:
