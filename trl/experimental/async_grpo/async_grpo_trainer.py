@@ -821,10 +821,6 @@ class AsyncGRPOTrainer(_BaseTrainer):
             local_high_clip_sum = is_high_clipped[valid_mask].float().sum()
             local_region_clip_sum = is_region_clipped[valid_mask].float().sum()
 
-            # Per-rank clip fractions, gathered below to report the cross-rank saturation extrema.
-            local_low_clip_mean = local_low_clip_sum / local_count.clamp(min=1.0)
-            local_high_clip_mean = local_high_clip_sum / local_count.clamp(min=1.0)
-
             # Batch all-reduce: [ratio_sum, kl_sum, entropy_sum, low_clip_sum, high_clip_sum, region_clip_sum, count]
             stats = torch.stack(
                 [
@@ -854,12 +850,23 @@ class AsyncGRPOTrainer(_BaseTrainer):
             self._metrics["train"]["clip_ratio/high_mean"].append((global_high_clip_sum / global_count).item())
             self._metrics["train"]["clip_ratio/region_mean"].append((global_region_clip_sum / global_count).item())
 
-            # Cross-rank saturation extrema, mirroring GRPOTrainer's clip_ratio/low_min and clip_ratio/high_max:
-            # the smallest per-rank low-clip and largest per-rank high-clip fractions across ranks.
-            gathered_low_clip = self.accelerator.gather(local_low_clip_mean)
-            gathered_high_clip = self.accelerator.gather(local_high_clip_mean)
-            self._metrics["train"]["clip_ratio/low_min"].append(nanmin(gathered_low_clip).item())
-            self._metrics["train"]["clip_ratio/high_max"].append(nanmax(gathered_high_clip).item())
+            seq_ids = (position_ids[0] == 0).cumsum(0)[1:] - 1  # (T-1,) completion index per (shifted) token
+            n_completions = (position_ids == 0).sum()  # number of packed completions in this rank's row
+            num_seq = int(n_completions)
+            comp_mask = completion_mask[0].float()  # (T-1,) valid completion-token mask
+
+            def seg_sum(vals):  # per-completion segment sum over the packed row
+                return torch.zeros(num_seq, device=comp_mask.device).index_add_(0, seq_ids, vals)
+
+            seq_tokens = seg_sum(comp_mask)
+            seq_low = seg_sum(is_low_clipped[0].float() * comp_mask)
+            seq_high = seg_sum(is_high_clipped[0].float() * comp_mask)
+            per_seq_low = seq_low / seq_tokens  # NaN for a completion with no valid tokens; ignored by nan-aware min
+            per_seq_high = seq_high / seq_tokens
+            gathered_low_min = self.accelerator.gather(nanmin(per_seq_low))
+            gathered_high_max = self.accelerator.gather(nanmax(per_seq_high))
+            self._metrics["train"]["clip_ratio/low_min"].append(nanmin(gathered_low_min).item())
+            self._metrics["train"]["clip_ratio/high_max"].append(nanmax(gathered_high_max).item())
 
             if self.aux_loss_enabled:
                 gathered_aux = self.accelerator.reduce(aux_loss.detach().to(torch.float32), reduction="sum")
@@ -871,7 +878,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
             sample_metrics = inputs["metrics"]  # dict[str, Tensor(shape=[1, n_samples_local])]
             keys = list(sample_metrics.keys())
             device = completion_mask.device
-            n_samples = (position_ids == 0).sum().to(torch.float32)
+            n_samples = n_completions.to(torch.float32)
             if keys:
                 # nan-aware per key: unscorable samples carry NaN, so a plain .sum() would poison the whole metric.
                 local_sums = torch.stack([torch.nansum(sample_metrics[k].to(device)) for k in keys])
