@@ -629,8 +629,8 @@ class DPPOTrainer(GRPOTrainer):
         """Generate completions, handling tool calls, and thread top-K logprob data through the full pipeline.
 
         Returns:
-            9-tuple of (prompt_ids, completion_ids, tool_mask, completions, total_completion_tokens, logprobs,
-            topk_logprobs, topk_token_ids, extra_fields).
+            8-tuple of (prompt_ids, completion_ids, tool_mask, completions, logprobs, topk_logprobs, topk_token_ids,
+            extra_fields).
         """
         device = self.accelerator.device
         mode = "train" if self.model.training else "eval"
@@ -751,7 +751,6 @@ class DPPOTrainer(GRPOTrainer):
             completion_ids,
             tool_mask,
             completions,
-            total_completion_tokens,
             logprobs,
             topk_logprobs,
             topk_token_ids,
@@ -946,7 +945,6 @@ class DPPOTrainer(GRPOTrainer):
             completion_ids_list,
             tool_mask_list,
             completions,
-            _total_completion_tokens,
             sampling_per_token_logps_list,
             topk_logprobs_list,
             topk_token_ids_list,
@@ -1019,7 +1017,6 @@ class DPPOTrainer(GRPOTrainer):
             if tool_mask is not None:
                 tool_mask = tool_mask * (~is_truncated).unsqueeze(1).int()
 
-        # Keep loss normalization separate from `_generate`'s raw completion count, which feeds throughput metrics.
         loss_mask = completion_mask if tool_mask is None else completion_mask * tool_mask
         num_items_in_batch = self.accelerator.gather(loss_mask.sum()).sum()
 

@@ -2200,7 +2200,7 @@ class GRPOTrainer(_BaseTrainer):
         agg_prompt_lengths = self.accelerator.gather(prompt_lengths)
         agg_completion_lengths = self.accelerator.gather(completion_lengths)
         total_prompt_tokens = agg_prompt_lengths.sum()
-        total_completion_tokens = agg_completion_lengths.sum()
+        total_completion_tokens = agg_completion_lengths.sum()  # used for throughput metrics
 
         # Log the metrics
         if mode == "train":
@@ -2239,7 +2239,6 @@ class GRPOTrainer(_BaseTrainer):
             completion_ids,
             tool_mask,
             completions,
-            total_completion_tokens,
             logprobs,
             extra_fields,
             images,
@@ -2345,7 +2344,6 @@ class GRPOTrainer(_BaseTrainer):
             completion_ids_list,
             tool_mask_list,
             completions,
-            _total_completion_tokens,
             sampling_per_token_logps_list,
             extra_fields,
             images,
@@ -2405,7 +2403,6 @@ class GRPOTrainer(_BaseTrainer):
             if tool_mask is not None:
                 tool_mask = tool_mask * (~is_truncated).unsqueeze(1).int()
 
-        # Keep loss normalization separate from `_generate`'s raw completion count, which feeds throughput metrics.
         loss_mask = completion_mask if tool_mask is None else completion_mask * tool_mask
         num_items_in_batch = self.accelerator.gather(loss_mask.sum()).sum()
 
