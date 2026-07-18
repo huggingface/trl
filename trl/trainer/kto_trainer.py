@@ -1176,9 +1176,6 @@ class KTOTrainer(_BaseTrainer):
                 "`precompute_ref_log_probs=True` is not supported with IterableDataset. Please use a map-style "
                 "Dataset or set `precompute_ref_log_probs=False`."
             )
-        # Idempotent skip: dataset already has ref log-probs precomputed.
-        if "ref_logps" in dataset.column_names:
-            return dataset
         model_hash = hash_module(self.ref_model or self.model)
         fingerprint = Hasher.hash((dataset._fingerprint, model_hash, self.calculate_KL))
         cache_file = dataset._get_cache_file_path(fingerprint)
@@ -1701,6 +1698,19 @@ class KTOTrainer(_BaseTrainer):
                     }
                 else:
                     eval_dataset = self._precompute_ref_logps(eval_dataset, "eval", batch_size)
+            # Call `super().evaluate()` once per split ourselves instead of handing the whole dict to it: `Trainer.evaluate`
+            # would otherwise recurse into `self.evaluate` per split, re-entering this override on an already-prepared dataset.
+            if isinstance(eval_dataset, dict):
+                metrics = {}
+                for name, dataset in eval_dataset.items():
+                    metrics.update(
+                        super().evaluate(
+                            eval_dataset=dataset,
+                            ignore_keys=ignore_keys,
+                            metric_key_prefix=f"{metric_key_prefix}_{name}",
+                        )
+                    )
+                return metrics
         return super().evaluate(
             eval_dataset=eval_dataset, ignore_keys=ignore_keys, metric_key_prefix=metric_key_prefix
         )
