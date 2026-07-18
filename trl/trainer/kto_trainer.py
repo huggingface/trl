@@ -1690,6 +1690,17 @@ class KTOTrainer(_BaseTrainer):
             # With `precompute_ref_log_probs`, `_compute_loss` reads the reference log-probs from the batch, so they
             # must be precomputed here as well, mirroring `__init__`.
             if self.precompute_ref_logps:
+                # Full fine-tuning with no `ref_model` uses `self.model` as the reference, which is only valid before
+                # training. After a step (`global_step > 0`) it's the trained policy, so we can't precompute a correct
+                # reference here. (PEFT is exempt: the reference is recovered by disabling the adapter.)
+                if self.ref_model is None and not is_peft_model(self.model) and self.state.global_step > 0:
+                    raise ValueError(
+                        "Cannot compute reference log-probs for a dataset passed to `evaluate()` after training has "
+                        "started, because `precompute_ref_log_probs=True` and no `ref_model` was provided (full "
+                        "fine-tuning). In this setup the reference model is not kept in memory, so it is only available "
+                        "before training. Provide this dataset as `eval_dataset` at initialization, pass an explicit "
+                        "`ref_model`, or set `precompute_ref_log_probs=False`."
+                    )
                 batch_size = self.args.precompute_ref_batch_size or self.args.per_device_eval_batch_size
                 if isinstance(eval_dataset, dict):
                     eval_dataset = {
