@@ -1759,7 +1759,7 @@ class GRPOTrainer(_BaseTrainer):
             multimodal_fields = {}
         return prompt_ids, images, multimodal_fields
 
-    def _generate_single_turn(self, prompt_ids, images, multimodal_fields):
+    def _generate_single_turn(self, prompt_ids, images, multimodal_fields, has_tool_images=False):
         device = self.accelerator.device
         mode = "train" if self.model.training else "eval"
 
@@ -1825,7 +1825,7 @@ class GRPOTrainer(_BaseTrainer):
                     generate_inputs[k] = torch.tensor(np.array(v))
 
             # For VLM tool images: build token type IDs from the padded input IDs.
-            if self._is_vlm and self.tools:
+            if self._is_vlm and self.tools and has_tool_images:
                 mm_ids = torch.zeros_like(padded_ids)
                 if self._image_pad_token_id is not None:
                     mm_ids[padded_ids == self._image_pad_token_id] = 1
@@ -1834,9 +1834,9 @@ class GRPOTrainer(_BaseTrainer):
 
                 # Use the same key the model expects: token_type_ids for models like Gemma,
                 # mm_token_type_ids for models like Qwen.
-                if "image_grid_thw" in generate_inputs or "mm_token_type_ids" in generate_inputs:
+                if "image_grid_thw" in generate_inputs:
                     generate_inputs["mm_token_type_ids"] = mm_ids
-                elif "token_type_ids" in generate_inputs:
+                else:
                     generate_inputs["token_type_ids"] = mm_ids
 
             generate_inputs = super()._prepare_inputs(generate_inputs)
@@ -2096,7 +2096,10 @@ class GRPOTrainer(_BaseTrainer):
 
             # Generate new completions after tool execution (using concatenated IDs, no re-tokenization)
             post_tool_ids, post_tool_logprobs = self._generate_single_turn(
-                prompt_completion_tool_ids, loop_images, loop_multimodal_fields
+                prompt_completion_tool_ids,
+                loop_images,
+                loop_multimodal_fields,
+                has_tool_images=any(imgs for imgs in tool_images),
             )
 
             # Truncate so that pct[len(prompt_ids[idx]) :] + post_tool does not exceed max_completion_length.
