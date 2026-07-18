@@ -420,6 +420,7 @@ Choosing the right dataset type depends on the task you are working on and the s
 | [`experimental.orpo.ORPOTrainer`] | [Preference (explicit prompt recommended)](#preference) |
 | [`experimental.ppo.PPOTrainer`] | Tokenized language modeling |
 | [`experimental.prm.PRMTrainer`] | [Stepwise supervision](#stepwise-supervision) |
+| [`experimental.vimpo.VIMPOTrainer`] | [Prompt-only](#prompt-only) |
 | [`experimental.xpo.XPOTrainer`] | [Prompt-only](#prompt-only) |
 
 ## Using any dataset with TRL: preprocessing and conversion

@@ -139,6 +139,8 @@
     title: SSD
   - local: tpo_trainer
     title: TPO
+  - local: vimpo_trainer
+    title: VIMPO
   - local: xpo_trainer
     title: XPO
   title: Experimental
