@@ -451,7 +451,6 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
             old_per_token_logps,
             ref_per_token_logps,
             importance_sampling_ratio if self.use_vllm and self.vllm_importance_sampling_correction else None,
-            tool_mask=tool_mask,
         )
         if outputs_after_sampling_buffer is None:
             output = {
@@ -528,7 +527,6 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
         old_per_token_logps: torch.Tensor | None = None,
         ref_per_token_logps: torch.Tensor | None = None,
         importance_sampling_ratio: float | None = None,
-        tool_mask: torch.Tensor | None = None,
     ) -> None:
         """
         Update the replay buffer with groups that have reward variance (std > 0).
@@ -546,7 +544,6 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
             old_per_token_logps: Optional tensor of old per-token log probabilities
             ref_per_token_logps: Optional tensor of reference per-token log probabilities
             importance_sampling_ratio: Optional importance sampling correction ratio
-            tool_mask: Optional tensor marking model-generated tokens
         """
         # Prepare buffered outputs for groups with variance
         buffered_outputs = []
@@ -567,7 +564,6 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
 
             # Add optional fields if they exist
             optional_fields = {
-                "tool_mask": tool_mask,
                 "old_per_token_logps": old_per_token_logps if old_per_token_logps is not None else None,
                 "ref_per_token_logps": ref_per_token_logps if ref_per_token_logps is not None else None,
             }
@@ -655,7 +651,6 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
         old_per_token_logps: torch.Tensor | None = None,
         ref_per_token_logps: torch.Tensor | None = None,
         importance_sampling_ratio: float | None = None,
-        tool_mask: torch.Tensor | None = None,
     ) -> None:
         """
         Update current batch data with samples from replay buffer.
@@ -675,7 +670,6 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
             old_per_token_logps: Optional tensor of old per-token log probabilities
             ref_per_token_logps: Optional tensor of reference per-token log probabilities
             importance_sampling_ratio: Optional importance sampling correction ratio
-            tool_mask: Optional tensor marking model-generated tokens
         """
         if self.replay_buffer.max_size <= 0:
             return
@@ -687,7 +681,6 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
 
         # Track which optional fields are present in sampled data
         optional_tensor_fields = ["old_per_token_logps", "ref_per_token_logps"]
-        buffer_tensor_fields = optional_tensor_fields + (["tool_mask"] if tool_mask is not None else [])
         vision_fields = ["pixel_values", "image_grid_thw", "pixel_attention_mask", "image_sizes"]
 
         self.update_replay_buffer(
@@ -703,7 +696,6 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
             old_per_token_logps,
             ref_per_token_logps,
             importance_sampling_ratio,
-            tool_mask=tool_mask,
         )
 
         # Sample from replay buffer to replace groups with variance
@@ -714,7 +706,7 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
         sampled_data = self.sample_from_replay_buffer(
             num_samples=num_groups_to_replace,
             optional_vision_fields=vision_fields,
-            optional_tensor_fields=buffer_tensor_fields,
+            optional_tensor_fields=optional_tensor_fields,
         )
 
         # Pad sampled data if they are shorter than the current batch sequences
@@ -755,13 +747,6 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
                 pad_to_multiple_of=target_completion_len,
                 padding_side="right",
             )
-            if tool_mask is not None:
-                tool_mask = pad(
-                    list(tool_mask.unbind(0)),
-                    padding_value=1,
-                    pad_to_multiple_of=target_completion_len,
-                    padding_side="right",
-                )
             if old_per_token_logps is not None:
                 old_per_token_logps = pad(
                     list(old_per_token_logps.unbind(0)),
@@ -812,13 +797,6 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
                     pad_to_multiple_of=target_completion_len,
                     padding_side="right",
                 )
-                if "tool_mask" in sampled_data:
-                    sampled_data["tool_mask"][i] = pad(
-                        sampled_data["tool_mask"][i],
-                        padding_value=1,
-                        pad_to_multiple_of=target_completion_len,
-                        padding_side="right",
-                    )
                 if "old_per_token_logps" in sampled_data:
                     sampled_data["old_per_token_logps"][i] = pad(
                         sampled_data["old_per_token_logps"][i],
@@ -841,8 +819,6 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
             completion_mask[idx_range] = sampled_data["completion_mask"][i]
             group_advantages[group_idx] = sampled_data["advantages"][i]
 
-            if "tool_mask" in sampled_data:
-                tool_mask[idx_range] = sampled_data["tool_mask"][i]
             if "old_per_token_logps" in sampled_data:
                 old_per_token_logps[idx_range] = sampled_data["old_per_token_logps"][i]
             if "ref_per_token_logps" in sampled_data:
@@ -860,8 +836,6 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
             "completion_mask": completion_mask,
             "advantages": group_advantages,
         }
-        if tool_mask is not None:
-            outputs_after_sampling_buffer["tool_mask"] = tool_mask
 
         # Replace optional tensor fields if they exist
         for field in optional_tensor_fields:

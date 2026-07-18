@@ -2200,11 +2200,10 @@ class GRPOTrainer(_BaseTrainer):
         agg_prompt_lengths = self.accelerator.gather(prompt_lengths)
         agg_completion_lengths = self.accelerator.gather(completion_lengths)
         total_prompt_tokens = agg_prompt_lengths.sum()
-        total_completion_tokens = agg_completion_lengths.sum()  # used for throughput metrics
 
         # Log the metrics
         if mode == "train":
-            self.state.num_input_tokens_seen += (total_prompt_tokens + total_completion_tokens).item()
+            self.state.num_input_tokens_seen += (total_prompt_tokens + agg_completion_lengths.sum()).item()
         self._metrics[mode]["num_tokens"] = [self.state.num_input_tokens_seen]
 
         # Log completion lengths, mean, min, max
@@ -2234,16 +2233,7 @@ class GRPOTrainer(_BaseTrainer):
             )
             self._metrics[mode]["tools/failure_frequency"].append(failure_frequency)
 
-        return (
-            prompt_ids,
-            completion_ids,
-            tool_mask,
-            completions,
-            logprobs,
-            extra_fields,
-            images,
-            tool_images,
-        )
+        return prompt_ids, completion_ids, tool_mask, completions, logprobs, extra_fields, images, tool_images
 
     def _generate_and_score_completions(
         self, inputs: list[dict[str, torch.Tensor | Any]]

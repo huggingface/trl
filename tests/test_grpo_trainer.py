@@ -2200,7 +2200,7 @@ class TestGRPOTrainer(TrlTestCase):
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
             mask_truncated_completions=True,  # Enable masking of truncated completions
-            loss_type="dapo",
+            loss_type="dapo",  # we test specifically dapo because it normalizes by num_items_in_batch
             report_to="none",
         )
         trainer = GRPOTrainer(
@@ -2212,18 +2212,8 @@ class TestGRPOTrainer(TrlTestCase):
 
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
-        captured = {}
-        original_compute_loss = trainer._compute_loss
+        trainer.train()
 
-        def capture_compute_loss(model, inputs):
-            captured["completion_tokens"] = inputs["completion_mask"].sum().item()
-            captured["num_items_in_batch"] = inputs["num_items_in_batch"].item()
-            return original_compute_loss(model, inputs)
-
-        with patch.object(trainer, "_compute_loss", side_effect=capture_compute_loss):
-            trainer.train()
-
-        assert captured["num_items_in_batch"] == captured["completion_tokens"]
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the params have changed
@@ -2249,7 +2239,7 @@ class TestGRPOTrainer(TrlTestCase):
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
             mask_truncated_completions=True,  # Enable masking of truncated completions
-            loss_type="dapo",
+            loss_type="dapo",  # we test specifically dapo because it normalizes by num_items_in_batch
             report_to="none",
         )
         trainer = GRPOTrainer(

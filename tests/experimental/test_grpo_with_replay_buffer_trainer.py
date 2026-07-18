@@ -12,8 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from types import SimpleNamespace
-
 import pytest
 import torch
 from datasets import DatasetDict, load_dataset
@@ -93,48 +91,6 @@ class TestReplayBuffer:
         assert len(sampled) == 3
         for item in sampled:
             assert item in [entry[1] for entry in self.replay_buffer.heap]
-
-
-@pytest.mark.low_priority
-def test_update_with_replay_buffer_preserves_tool_mask():
-    trainer = object.__new__(GRPOWithReplayBufferTrainer)
-    trainer.replay_buffer = ReplayBuffer(max_size=5)
-    trainer.num_generations = 2
-    trainer._tokenizer = SimpleNamespace(pad_token_id=0)
-    trainer.use_vllm = False
-    trainer.vllm_importance_sampling_correction = False
-
-    buffered_group = {
-        "prompt_ids": torch.tensor([[100, 101], [102, 103]]),
-        "prompt_mask": torch.ones(2, 2, dtype=torch.long),
-        "completion_ids": torch.tensor([[10, 11, 12], [13, 14, 0]]),
-        "completion_mask": torch.tensor([[1, 1, 1], [1, 1, 0]]),
-        "tool_mask": torch.tensor([[1, 0, 1], [0, 1, 1]]),
-        "advantages": torch.tensor([0.5, 0.6]),
-    }
-    trainer.replay_buffer.add([1.0], [buffered_group])
-    trainer.replay_buffer.sample = lambda num_samples: [buffered_group]
-
-    outputs = trainer.update_with_replay_buffer(
-        group_advantages=torch.tensor([[0.5, 0.5], [0.2, 0.8]]),
-        group_std_rewards=torch.tensor([[0.0, 1.0], [0.0, 1.0]]),
-        prompt_ids=torch.tensor([[1, 2], [3, 4], [5, 6], [7, 8]]),
-        prompt_mask=torch.ones(4, 2, dtype=torch.long),
-        completion_ids=torch.tensor([[20, 21], [22, 23], [24, 25], [26, 27]]),
-        completion_mask=torch.ones(4, 2, dtype=torch.long),
-        forward_kwargs={},
-        num_items_in_batch=8,
-        tool_mask=torch.tensor([[0, 0], [0, 0], [1, 0], [0, 1]]),
-    )
-
-    expected_tool_mask = torch.tensor([[1, 0, 1], [0, 1, 1], [1, 0, 1], [0, 1, 1]])
-    torch.testing.assert_close(outputs["tool_mask"], expected_tool_mask)
-    assert (outputs["completion_mask"] * outputs["tool_mask"]).sum().item() == 5
-
-    stored_group = next(
-        data for _, data in trainer.replay_buffer.heap if data["prompt_ids"].tolist() == [[5, 6], [7, 8]]
-    )
-    torch.testing.assert_close(stored_group["tool_mask"], torch.tensor([[1, 0], [0, 1]]))
 
 
 @pytest.mark.low_priority
