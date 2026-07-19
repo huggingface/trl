@@ -2069,6 +2069,11 @@ class GOLDTrainer(SFTTrainer):
         privileged_context = str(privileged_context)
         if isinstance(prompt, list):
             messages = [dict(message) for message in prompt]
+            if not messages:
+                raise ValueError(
+                    "Privileged-context teacher prompt construction expects the conversation to end with a user turn, "
+                    "but the prompt is empty."
+                )
             last_message = messages[-1]
             if last_message.get("role") != "user":
                 raise ValueError(
