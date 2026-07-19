@@ -27,18 +27,6 @@ from trl.experimental.gkd.gkd_trainer import GKDTrainer
 from ..testing_utils import TrlTestCase, require_liger_kernel, require_torch_accelerator
 
 
-def test_lmbda_deprecation_warns(tmp_path):
-    # `lmbda` (on/off-policy mixing) is on its way out; the trainer is becoming always on-policy. Setting it to
-    # anything other than 1.0 warns and points at GKDTrainer.
-    with pytest.warns(FutureWarning, match="lmbda"):
-        DistillationConfig(output_dir=str(tmp_path), use_cpu=True, bf16=False, lmbda=0.5)
-
-
-def test_lmbda_default_does_not_warn(tmp_path, recwarn):
-    DistillationConfig(output_dir=str(tmp_path), use_cpu=True, bf16=False)
-    assert not [w for w in recwarn.list if issubclass(w.category, FutureWarning) and "lmbda" in str(w.message)]
-
-
 def _reference_generalized_jsd(student_logits, teacher_logits, labels=None, beta=0.5, temperature=1.0):
     """Naive reference for the generalized JSD, written straight from the definition.
 
@@ -210,7 +198,6 @@ class TestDistillationTrainer(TrlTestCase):
             "disable_tqdm": True,
             "use_cpu": True,
             "bf16": False,
-            "lmbda": 0.0,
             "max_length": 128,
             "max_completion_length": 32,
             "model_init_kwargs": {"dtype": "float32", "device_map": None},
@@ -266,17 +253,11 @@ class TestDistillationTrainer(TrlTestCase):
         assert train_result.metrics["train_loss"] >= -1e-4
         assert "model.safetensors" in os.listdir(self.tmp_dir + "/checkpoint-2")
 
-    @pytest.mark.parametrize("lmbda", [0.0, 1.0])
-    def test_train_updates_params_on_and_off_policy(self, lmbda):
-        """Pin both policy modes end to end before `lmbda` is removed.
-
-        `lmbda=0.0` trains on the dataset's own completions, `lmbda=1.0` on completions the student generates. The
-        trainer is scheduled to become always-on-policy, so the off-policy case is pinned here to make its removal a
-        deliberate deletion rather than a silent one.
-        """
+    def test_train_updates_params(self):
+        """Training is always on-policy: the student generates completions, the teacher scores them, params move."""
         # Higher lr than the default: gradients are tiny on this model and the default lr can stall the update, which
         # would make the assertion below vacuous.
-        trainer = self._make_local_trainer(lmbda=lmbda, max_steps=2, learning_rate=0.1)
+        trainer = self._make_local_trainer(max_steps=2, learning_rate=0.1)
         previous_params = {name: param.clone() for name, param in trainer.model.named_parameters()}
 
         trainer.train()

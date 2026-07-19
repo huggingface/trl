@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import warnings
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -50,9 +49,6 @@ class DistillationConfig(_BaseConfig):
         temperature (`float`, *optional*, defaults to `1.0`):
             Temperature for sampling during generation and for computing the distillation loss. Higher values produce
             softer probability distributions.
-        lmbda (`float`, *optional*, defaults to `1.0`):
-            Probability of using on-policy (student-generated) data for each gradient accumulation slice. A value of
-            `0.0` means fully off-policy (dataset completions only), `1.0` means fully on-policy.
         beta (`float`, *optional*, defaults to `1.0`):
             Interpolation coefficient for the Generalized Jensen-Shannon Divergence loss. When `0.0`, the loss is the
             forward KL divergence. When `1.0`, the loss is the reverse KL divergence. When `0.5`, it is the standard
@@ -163,13 +159,6 @@ class DistillationConfig(_BaseConfig):
         default=1.0,
         metadata={
             "help": "Temperature for sampling and loss computation. Higher values produce softer distributions."
-        },
-    )
-    lmbda: float = field(
-        default=1.0,
-        metadata={
-            "help": "Probability of using on-policy (student-generated) data per gradient accumulation slice. "
-            "0.0 = fully off-policy, 1.0 = fully on-policy."
         },
     )
     beta: float = field(
@@ -314,16 +303,6 @@ class DistillationConfig(_BaseConfig):
     def __post_init__(self):
         super().__post_init__()
 
-        if self.lmbda < 0.0 or self.lmbda > 1.0:
-            raise ValueError(f"lmbda must be in [0.0, 1.0], got {self.lmbda}.")
-        if self.lmbda != 1.0:
-            warnings.warn(
-                "`lmbda` (on/off-policy mixing) is deprecated and will be removed: the distillation trainer is "
-                "becoming always on-policy. For on/off-policy mixing, use `GKDTrainer`, which exposes the same "
-                "`lmbda` knob.",
-                FutureWarning,
-                stacklevel=3,
-            )
         if self.beta < 0.0 or self.beta > 1.0:
             raise ValueError(f"beta must be in [0.0, 1.0], got {self.beta}.")
 
@@ -349,12 +328,4 @@ class DistillationConfig(_BaseConfig):
                 "generation_batch_size * num_generations must equal per_device_train_batch_size * "
                 f"gradient_accumulation_steps. Got {self.generation_batch_size} * {self.num_generations} != "
                 f"{self.per_device_train_batch_size} * {self.gradient_accumulation_steps}."
-            )
-
-        if self.num_generations > 1 and self.lmbda < 1.0:
-            warnings.warn(
-                f"num_generations={self.num_generations} with lmbda={self.lmbda} means off-policy batches include "
-                f"{self.num_generations} copies of each sample. Consider lmbda=1.0 when num_generations > 1.",
-                UserWarning,
-                stacklevel=2,
             )

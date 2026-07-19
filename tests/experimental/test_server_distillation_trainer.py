@@ -278,7 +278,6 @@ class TestServerDistillationTrainerRaggedGrad(TrlTestCase):
             teacher_model_server_url="http://fake-teacher.invalid:8000",
             loss_top_k=1,
             beta=1.0,
-            lmbda=0.0,
             loss_add_tail=True,
             save_strategy="no",
             report_to="none",

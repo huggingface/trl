@@ -21,10 +21,9 @@ from functools import partial
 from typing import Any, Optional
 
 import torch
-import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
-from accelerate.utils import DistributedType, broadcast_object_list, gather_object
+from accelerate.utils import gather_object
 from datasets import Dataset
 from packaging.version import Version
 from torch.utils.data import DataLoader
@@ -150,8 +149,8 @@ class _DistillationCollator:
     """Data collator for the distillation trainer with independent prompt/completion budgets.
 
     Unlike ``DataCollatorForChatML``, this collator tokenizes prompts and completions separately so that long
-    completions can never truncate the prompt to empty. It also handles prompt-only data (no assistant completions) for
-    pure on-policy distillation (``lmbda=1``).
+    completions can never truncate the prompt to empty. It also handles prompt-only data (no assistant completions),
+    which is what on-policy distillation uses.
     """
 
     def __init__(
@@ -300,8 +299,8 @@ class DistillationTrainer(_BaseTrainer):
 
     Supports:
     - Generalized JSD loss (forward KL, reverse KL, or interpolated JSD via `beta`)
-    - On-policy / off-policy mixing via `lmbda` (buffered across gradient accumulation)
-    - Local teacher model or external teacher via vLLM server
+    - On-policy distillation: the student generates completions, the teacher scores them
+    - Local teacher model
     - Student on-policy generation via vLLM or model.generate()
     - Liger kernel for memory-efficient fused JSD loss
     """
@@ -492,7 +491,6 @@ class DistillationTrainer(_BaseTrainer):
             disable_dropout_in_model(self.model)
 
         # ── Store config values ──
-        self.lmbda = args.lmbda
         self.beta = args.beta
         self.temperature = args.temperature
         self.top_p = args.top_p
@@ -500,15 +498,10 @@ class DistillationTrainer(_BaseTrainer):
 
         # ── Buffer state ──
         self._buffered_inputs = None
-        self._buffered_on_policy_flags = None
         self._buffered_text_logs = None
         self._buffer_step = 0
 
         # ── Loss tracking ──
-        self._on_policy_loss_total = 0.0
-        self._off_policy_loss_total = 0.0
-        self._on_policy_step_equiv = 0.0
-        self._off_policy_step_equiv = 0.0
 
         # ── Generation config ──
         generation_kwargs = {
@@ -697,43 +690,26 @@ class DistillationTrainer(_BaseTrainer):
 
     @profiling_decorator
     def _fill_buffer(self, generation_batch: dict[str, torch.Tensor | Any], buffer_steps: int):
-        """Split batch into slices and decide which are on-policy (student-generated) vs off-policy."""
+        """Split the batch into slices and generate student completions for each (always on-policy)."""
         slices = split_tensor_dict(generation_batch, buffer_steps)
 
-        # Decide on-policy flags (synchronized across processes)
-        if self.accelerator.is_main_process:
-            on_policy_flags = [random.random() <= self.lmbda for _ in range(buffer_steps)]
-        else:
-            on_policy_flags = [False] * buffer_steps
-        on_policy_flags = broadcast_object_list(on_policy_flags, from_process=0)
-
         self._buffered_inputs = [None] * buffer_steps
-        self._buffered_on_policy_flags = on_policy_flags
         self._buffered_text_logs = [None] * buffer_steps
 
-        # Store off-policy slices directly
-        on_policy_indices = []
-        for i, is_on_policy in enumerate(on_policy_flags):
-            if is_on_policy:
-                on_policy_indices.append(i)
-            else:
-                self._buffered_inputs[i] = slices[i]
+        # Generate student completions for every slice
+        self._generate_student_completions(slices, list(range(buffer_steps)))
 
-        # Generate student completions for on-policy slices
-        if on_policy_indices:
-            self._generate_student_completions(slices, on_policy_indices)
-
-        # Gather on-policy text logs once per optimizer step (all processes must participate)
+        # Gather text logs once per optimizer step (all processes must participate)
         if self.log_completions:
-            on_policy_prompts = []
-            on_policy_completions = []
-            for i in on_policy_indices:
-                if self._buffered_text_logs[i] is not None:
-                    prompts, completions = self._buffered_text_logs[i]
-                    on_policy_prompts.extend(prompts)
-                    on_policy_completions.extend(completions)
-            self._textual_logs["prompt"].extend(gather_object(on_policy_prompts))
-            self._textual_logs["completion"].extend(gather_object(on_policy_completions))
+            prompts_all = []
+            completions_all = []
+            for entry in self._buffered_text_logs:
+                if entry is not None:
+                    prompts, completions = entry
+                    prompts_all.extend(prompts)
+                    completions_all.extend(completions)
+            self._textual_logs["prompt"].extend(gather_object(prompts_all))
+            self._textual_logs["completion"].extend(gather_object(completions_all))
 
     @profiling_decorator
     def _generate_student_completions(self, slices: list[dict[str, torch.Tensor | Any]], on_policy_indices: list[int]):
@@ -1146,7 +1122,7 @@ class DistillationTrainer(_BaseTrainer):
     def training_step(
         self, model: nn.Module, inputs: dict[str, torch.Tensor | Any], num_items_in_batch: int | None = None
     ) -> torch.Tensor:
-        """Training step with on/off-policy loss tracking and completion stats."""
+        """Training step: generate on-policy, then run the parent step, tracking completion stats."""
         buffer_steps = self.args.gradient_accumulation_steps
 
         with self._get_liger_zero3_lm_head_gather_ctx(model):
@@ -1154,74 +1130,28 @@ class DistillationTrainer(_BaseTrainer):
 
         slice_idx = (self._buffer_step - 1) % buffer_steps
 
-        # Determine if this slice is on-policy
-        is_on_policy = False
-        if self._buffered_on_policy_flags is not None and slice_idx < len(self._buffered_on_policy_flags):
-            is_on_policy = self._buffered_on_policy_flags[slice_idx]
-
-        # Track completion length stats — read from buffered inputs (which reflect on-policy generation)
+        # Track completion length stats — read from buffered inputs (which reflect the generated completions)
         actual_inputs = self._buffered_inputs[slice_idx] if self._buffered_inputs is not None else inputs
         labels = actual_inputs.get("labels")
         if labels is not None:
             completion_lengths = (labels != -100).sum(dim=1).float()
             gathered_lengths = self.accelerator.gather(completion_lengths)
             mode = "train"
-            prefix = "on_policy" if is_on_policy else "off_policy"
-            self._metrics[mode][f"completions/{prefix}_mean_length"].append(gathered_lengths.mean().item())
-            self._metrics[mode][f"completions/{prefix}_max_length"].append(gathered_lengths.max().item())
-            self._metrics[mode][f"completions/{prefix}_min_length"].append(gathered_lengths.min().item())
+            self._metrics[mode]["completions/mean_length"].append(gathered_lengths.mean().item())
+            self._metrics[mode]["completions/max_length"].append(gathered_lengths.max().item())
+            self._metrics[mode]["completions/min_length"].append(gathered_lengths.min().item())
 
             # Log fraction of completions that hit max_completion_length (truncated)
             max_comp_len = getattr(self.generation_config, "max_new_tokens", None)
-            if is_on_policy and max_comp_len is not None:
+            if max_comp_len is not None:
                 truncated_frac = (gathered_lengths >= max_comp_len).float().mean().item()
                 self._metrics[mode]["completions/truncated_fraction"].append(truncated_frac)
-
-        # Track loss per policy type
-        loss_scalar = float(loss.detach())
-        step_equiv = 1.0 / self.args.gradient_accumulation_steps
-        if is_on_policy:
-            self._on_policy_loss_total += loss_scalar
-            self._on_policy_step_equiv += step_equiv
-        else:
-            self._off_policy_loss_total += loss_scalar
-            self._off_policy_step_equiv += step_equiv
 
         return loss
 
     def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
         mode = "train" if self.model.training else "eval"
         metrics = {key: sum(val) / len(val) for key, val in self._metrics[mode].items()}
-
-        if mode == "train":
-            # Aggregate on/off-policy losses across distributed processes
-            device = self.accelerator.device if hasattr(self.accelerator, "device") else torch.device("cpu")
-            vec = torch.tensor(
-                [
-                    self._on_policy_loss_total,
-                    self._off_policy_loss_total,
-                    self._on_policy_step_equiv,
-                    self._off_policy_step_equiv,
-                ],
-                dtype=torch.float64,
-                device=device,
-            )
-
-            if (
-                getattr(self.accelerator, "distributed_type", DistributedType.NO) != DistributedType.NO
-                and dist.is_available()
-                and dist.is_initialized()
-            ):
-                dist.all_reduce(vec, op=dist.ReduceOp.SUM)
-
-            on_sum, off_sum, on_eq, off_eq = vec.tolist()
-            if on_eq > 0:
-                logs["on_policy_loss"] = round(on_sum / on_eq, 4)
-            if off_eq > 0:
-                logs["off_policy_loss"] = round(off_sum / off_eq, 4)
-
-            self._on_policy_loss_total = self._off_policy_loss_total = 0.0
-            self._on_policy_step_equiv = self._off_policy_step_equiv = 0.0
 
         if mode == "eval":
             metrics = {f"eval_{key}": val for key, val in metrics.items()}
