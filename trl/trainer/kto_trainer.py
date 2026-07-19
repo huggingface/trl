@@ -817,7 +817,7 @@ class KTOTrainer(_BaseTrainer):
                 )
             if self.loss_type in ["apo_zero_unpaired"]:
                 raise ValueError(
-                    "You cannot set `loss_type='apo_zero_unpaired'` with liger-kernel."
+                    "You cannot set `loss_type='apo_zero_unpaired'` with liger-kernel. "
                     "Only KTO loss is supported with liger-kernel."
                 )
             if compute_metrics is not None:
@@ -1176,9 +1176,6 @@ class KTOTrainer(_BaseTrainer):
                 "`precompute_ref_log_probs=True` is not supported with IterableDataset. Please use a map-style "
                 "Dataset or set `precompute_ref_log_probs=False`."
             )
-        # Idempotent skip: dataset already has ref log-probs precomputed.
-        if "ref_logps" in dataset.column_names:
-            return dataset
         model_hash = hash_module(self.ref_model or self.model)
         fingerprint = Hasher.hash((dataset._fingerprint, model_hash, self.calculate_KL))
         cache_file = dataset._get_cache_file_path(fingerprint)
@@ -1344,7 +1341,7 @@ class KTOTrainer(_BaseTrainer):
         mode = "train" if self.model.training else "eval"
         batch = {k: (v.to(self.accelerator.device) if isinstance(v, torch.Tensor) else v) for k, v in inputs.items()}
 
-        labels = torch.tensor(batch["label"])
+        labels = batch["label"]
         num_chosen = labels.sum().to(self.accelerator.device)
         num_rejected = (len(labels) - num_chosen).to(self.accelerator.device)
 
@@ -1433,7 +1430,7 @@ class KTOTrainer(_BaseTrainer):
                 lin_weight=lm_head.weight,
                 target=target,
                 bias=lm_head.bias,
-                preference_labels=torch.tensor(batch["label"], dtype=torch.bool).to(self.accelerator.device),
+                preference_labels=batch["label"],
                 ref_input=ref_outputs.last_hidden_state[:, :-1],
                 ref_weight=ref_lm_head.weight,
                 ref_bias=ref_lm_head.bias,
@@ -1485,7 +1482,7 @@ class KTOTrainer(_BaseTrainer):
         mode = "train" if self.model.training else "eval"
         batch = {k: (v.to(self.accelerator.device) if isinstance(v, torch.Tensor) else v) for k, v in inputs.items()}
 
-        labels = torch.tensor(batch["label"])
+        labels = batch["label"]
         num_chosen = labels.sum().to(self.accelerator.device)
         num_rejected = (len(labels) - num_chosen).to(self.accelerator.device)
 
@@ -1701,6 +1698,19 @@ class KTOTrainer(_BaseTrainer):
                     }
                 else:
                     eval_dataset = self._precompute_ref_logps(eval_dataset, "eval", batch_size)
+            # Call `super().evaluate()` once per split ourselves instead of handing the whole dict to it: `Trainer.evaluate`
+            # would otherwise recurse into `self.evaluate` per split, re-entering this override on an already-prepared dataset.
+            if isinstance(eval_dataset, dict):
+                metrics = {}
+                for name, dataset in eval_dataset.items():
+                    metrics.update(
+                        super().evaluate(
+                            eval_dataset=dataset,
+                            ignore_keys=ignore_keys,
+                            metric_key_prefix=f"{metric_key_prefix}_{name}",
+                        )
+                    )
+                return metrics
         return super().evaluate(
             eval_dataset=eval_dataset, ignore_keys=ignore_keys, metric_key_prefix=metric_key_prefix
         )

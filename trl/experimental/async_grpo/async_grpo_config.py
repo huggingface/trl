@@ -47,7 +47,7 @@ class AsyncGRPOConfig(_BaseConfig):
         num_generations (`int`, *optional*, defaults to `8`):
             Number of generations per prompt to sample.
         max_completion_length (`int`, *optional*, defaults to `2048`):
-            Maximum number of tokens to generate per completion.
+            Maximum length of the generated completion.
         temperature (`float`, *optional*, defaults to `1.0`):
             Temperature for sampling. The higher the temperature, the more random the completions.
         chat_template_kwargs (`dict[str, Any]`, *optional*):
@@ -195,7 +195,7 @@ class AsyncGRPOConfig(_BaseConfig):
     )
     max_completion_length: int = field(
         default=2048,
-        metadata={"help": "Maximum number of tokens to generate per completion."},
+        metadata={"help": "Maximum length of the generated completion."},
     )
     temperature: float = field(
         default=1.0,
