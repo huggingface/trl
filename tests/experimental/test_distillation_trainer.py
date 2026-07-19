@@ -249,7 +249,9 @@ class TestDistillationTrainer(TrlTestCase):
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
         assert trainer.state.log_history[0]["eval_loss"] is not None
-        assert train_result.metrics["train_loss"] >= 0.0
+        # Self-distillation (teacher == student), so the divergence is ~0; allow tiny floating-point noise below zero
+        # while still catching a genuinely negative loss.
+        assert train_result.metrics["train_loss"] >= -1e-4
         assert "model.safetensors" in os.listdir(self.tmp_dir + "/checkpoint-2")
 
     @pytest.mark.parametrize("lmbda", [0.0, 1.0])
@@ -356,13 +358,11 @@ class TestDistillationTrainer(TrlTestCase):
         else:
             assert trainer.eval_dataset is eval_dataset
 
-    @pytest.mark.parametrize("loss_top_k", [0, 1])
-    def test_loss_normalizes_by_num_items_in_batch(self, loss_top_k):
+    def test_loss_normalizes_by_num_items_in_batch(self):
         # When `num_items_in_batch` is passed (as under gradient accumulation), the divergence loss must be reduced as
-        # sum / num_items_in_batch rather than the local per-microbatch mean. See issue #4719. Both the full-vocabulary
-        # JSD path (loss_top_k=0) and the default mixed top-1 path (loss_top_k=1) route through
-        # `_reduce_divergence_loss`, so both must honor `num_items_in_batch`.
-        trainer = self._make_local_trainer(beta=0.5, loss_top_k=loss_top_k)
+        # sum / num_items_in_batch rather than the local per-microbatch mean. See issue #4719. The full-vocabulary JSD
+        # path routes through `_reduce_divergence_loss`, which must honor `num_items_in_batch`.
+        trainer = self._make_local_trainer(beta=0.5)
 
         # Diverge the teacher from the student so the divergence is well above fp noise (else the loss is ~0).
         torch.manual_seed(0)

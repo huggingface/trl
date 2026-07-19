@@ -21,12 +21,13 @@ import torch.nn.functional as F
 from datasets import Dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from trl.experimental.distillation.distillation_trainer import _add_tail_bucket, _jsd_divergence
+from trl.experimental.distillation.distillation_trainer import _jsd_divergence
 from trl.experimental.server_distillation import (
     ServerDistillationConfig,
     ServerDistillationTrainer,
     build_teacher_request_inputs,
 )
+from trl.experimental.server_distillation.server_distillation_trainer import _add_tail_bucket
 
 from ..testing_utils import TrlTestCase
 
