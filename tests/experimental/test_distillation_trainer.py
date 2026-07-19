@@ -603,6 +603,25 @@ class TestDistillationTrainer(TrlTestCase):
         assert train_result.metrics["train_loss"] >= 0.0
         assert "model.safetensors" in os.listdir(self.tmp_dir + "/checkpoint-2")
 
+    @pytest.mark.parametrize("lmbda", [0.0, 1.0])
+    def test_train_updates_params_on_and_off_policy(self, lmbda):
+        """Pin both policy modes end to end before `lmbda` is removed.
+
+        `lmbda=0.0` trains on the dataset's own completions, `lmbda=1.0` on completions the student generates. The
+        trainer is scheduled to become always-on-policy, so the off-policy case is pinned here to make its removal a
+        deliberate deletion rather than a silent one.
+        """
+        # Higher lr than the default: gradients are tiny on this model and the default lr can stall the update, which
+        # would make the assertion below vacuous.
+        trainer = self._make_local_trainer(lmbda=lmbda, max_steps=2, learning_rate=0.1)
+        previous_params = {name: param.clone() for name, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+        for name, param in previous_params.items():
+            assert not torch.equal(param, trainer.model.get_parameter(name)), f"Parameter {name} has not changed."
+
     @pytest.mark.parametrize(
         "eval_dataset_type",
         [
