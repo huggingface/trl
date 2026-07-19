@@ -622,6 +622,43 @@ class TestDistillationTrainer(TrlTestCase):
         for name, param in previous_params.items():
             assert not torch.equal(param, trainer.model.get_parameter(name)), f"Parameter {name} has not changed."
 
+    @pytest.mark.xfail(
+        reason="num_items_in_batch is computed from the raw dataloader batches, before _prepare_inputs runs. "
+        "_RepeatBatchDataLoader yields the same generation batch once per accumulation step, so the count is "
+        "gradient_accumulation_steps times too large, and it is derived from the dataset labels even on steps whose "
+        "completions are replaced by generation. Fixed when the buffer moves to the GRPO-style _prepare_inputs."
+    )
+    def test_num_items_in_batch_counts_the_tokens_trained_on(self):
+        """`num_items_in_batch` is the loss denominator, so it must count the tokens actually trained on.
+
+        The loss is reduced as `sum / num_items_in_batch`, so an inflated count silently scales the loss — and the
+        gradient — down. Documented here as a known failure; un-xfail it in the PR that fixes the denominator.
+        """
+        recorded = []
+
+        class _RecordingTrainer(DistillationTrainer):
+            def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+                # Prompt positions are already -100, so this is the completion-token count either way.
+                recorded.append((num_items_in_batch, int((inputs["labels"] != -100).sum())))
+                return super().compute_loss(model, inputs, return_outputs, num_items_in_batch)
+
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
+        trainer = _RecordingTrainer(
+            model=self.model_id,
+            teacher_model=self.model_id,
+            args=self._make_args(gradient_accumulation_steps=2, max_steps=1),
+            train_dataset=dataset,
+            processing_class=self.tokenizer,
+        )
+
+        trainer.train()
+
+        assert len(recorded) == 2, "expected one compute_loss call per accumulation step"
+        reported = recorded[0][0]
+        assert reported is not None, "transformers did not pass num_items_in_batch"
+        # The denominator should be the number of tokens summed over the accumulation window.
+        assert int(reported) == sum(trained_on for _, trained_on in recorded)
+
     @pytest.mark.parametrize(
         "eval_dataset_type",
         [
