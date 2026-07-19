@@ -57,11 +57,6 @@ class DistillationConfig(_BaseConfig):
             Interpolation coefficient for the Generalized Jensen-Shannon Divergence loss. When `0.0`, the loss is the
             forward KL divergence. When `1.0`, the loss is the reverse KL divergence. When `0.5`, it is the standard
             JSD.
-        reverse_kl_top_1_mode (`str`, *optional*, defaults to `"sampled"`):
-            Selection rule for the reverse-KL top-1 token when `beta > 0` and `loss_top_k == 1`. `"sampled"` uses the
-            actual completion token in the batch. `"argmax"` uses the student's highest-probability token. This
-            setting does not affect the forward-KL support, which always uses the teacher's top-1 token. Ignored when
-            `beta == 0` or `loss_top_k != 1`.
         max_completion_length (`int`, *optional*, defaults to `512`):
             Maximum number of tokens to generate per completion during on-policy generation.
         max_prompt_length (`int` or `None`, *optional*):
@@ -83,8 +78,7 @@ class DistillationConfig(_BaseConfig):
             Number of top tokens to use when computing the JSD/KL loss. Both student and teacher distributions are
             restricted to these K tokens and re-normalized before computing divergence. If 0, the full vocabulary
             is used. For local teachers, the general support rule is teacher top-k for forward KL, student top-k for
-            reverse KL, and the union for mixed JSD. When `beta > 0` and `loss_top_k == 1`, the forward support still
-            uses the teacher's top-1 token, while the reverse top-1 token is controlled by `reverse_kl_top_1_mode`.
+            reverse KL, and the union for mixed JSD.
         loss_add_tail (`bool`, *optional*, defaults to `True`):
             Whether to append a tail bucket that represents the remaining probability mass outside the selected top-k
             support when computing the loss.
@@ -194,14 +188,6 @@ class DistillationConfig(_BaseConfig):
             "0.0 = forward KL, 0.5 = JSD, 1.0 = reverse KL."
         },
     )
-    reverse_kl_top_1_mode: str = field(
-        default="sampled",
-        metadata={
-            "help": "Reverse-KL top-1 token selection when beta > 0 and loss_top_k == 1. "
-            "Use 'sampled' for the actual completion token or 'argmax' for the student's top-1 token. "
-            "The forward-KL support always uses the teacher's top-1 token. Ignored when beta == 0 or loss_top_k != 1."
-        },
-    )
     max_completion_length: int = field(
         default=512,
         metadata={"help": "Maximum number of tokens to generate per completion."},
@@ -241,9 +227,7 @@ class DistillationConfig(_BaseConfig):
             "Both student and teacher distributions are restricted to these K tokens "
             "(selected based on beta: teacher's top-k for forward KL, student's top-k for reverse KL, "
             "union of both for JSD) and re-normalized before computing divergence. "
-            "If 0, the full vocabulary is used (slower but exact). "
-            "When beta > 0 and loss_top_k == 1, the forward support still uses the teacher's top-1 token, "
-            "while the reverse top-1 token is controlled by reverse_kl_top_1_mode."
+            "If 0, the full vocabulary is used (slower but exact)."
         },
     )
     loss_add_tail: bool = field(
@@ -359,8 +343,6 @@ class DistillationConfig(_BaseConfig):
             raise ValueError(f"lmbda must be in [0.0, 1.0], got {self.lmbda}.")
         if self.beta < 0.0 or self.beta > 1.0:
             raise ValueError(f"beta must be in [0.0, 1.0], got {self.beta}.")
-        if self.reverse_kl_top_1_mode not in {"sampled", "argmax"}:
-            raise ValueError("reverse_kl_top_1_mode must be one of: 'sampled', 'argmax'")
 
         if self.max_length is not None and self.max_completion_length >= self.max_length:
             raise ValueError(
@@ -384,14 +366,6 @@ class DistillationConfig(_BaseConfig):
                 "generation_batch_size * num_generations must equal per_device_train_batch_size * "
                 f"gradient_accumulation_steps. Got {self.generation_batch_size} * {self.num_generations} != "
                 f"{self.per_device_train_batch_size} * {self.gradient_accumulation_steps}."
-            )
-
-        if self.reverse_kl_top_1_mode != "sampled" and (self.beta == 0 or self.loss_top_k != 1):
-            warnings.warn(
-                f"reverse_kl_top_1_mode='{self.reverse_kl_top_1_mode}' has no effect when beta={self.beta} "
-                f"and loss_top_k={self.loss_top_k}. It only applies when beta > 0 and loss_top_k == 1.",
-                UserWarning,
-                stacklevel=2,
             )
 
         if self.num_generations > 1 and self.lmbda < 1.0:

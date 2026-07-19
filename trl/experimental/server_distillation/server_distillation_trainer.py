@@ -111,9 +111,72 @@ class ServerDistillationTrainer(DistillationTrainer):
             peft_config=peft_config,
         )
 
+        self.reverse_kl_top_1_mode = args.reverse_kl_top_1_mode
+
         from ...generation.vllm_client import VLLMClient
 
         self.teacher_client = VLLMClient(base_url=args.teacher_model_server_url, connection_timeout=60.0)
+
+    def _get_reverse_kl_top_1_tokens(
+        self, student_scores: torch.Tensor, completion_tokens: torch.Tensor
+    ) -> torch.Tensor:
+        """Return the reverse-KL top-1 token IDs for the mixed top-1 loss path.
+
+        Args:
+            student_scores: Any (B, T, V) tensor whose argmax selects the student's top token
+                (logits or log-probs — both are order-preserving).
+            completion_tokens: (B, T) actual token IDs in the completion.
+        """
+        if self.reverse_kl_top_1_mode == "argmax":
+            return student_scores.argmax(dim=-1)
+        return completion_tokens
+
+    def _compute_sparse_top_1_divergence_loss(
+        self,
+        student_log_probs: torch.Tensor,
+        teacher_top1_token_ids: torch.Tensor,
+        teacher_top1_logprobs: torch.Tensor,
+        reverse_token_ids: torch.Tensor,
+        reverse_teacher_logprobs: torch.Tensor,
+        labels: torch.Tensor,
+        num_items_in_batch=None,
+    ) -> torch.Tensor:
+        """Compute exact generalized JSD/KL on top-1 support for the mixed beta>0 path."""
+        neg_inf = torch.full((), float("-inf"), dtype=student_log_probs.dtype, device=student_log_probs.device)
+
+        if self.beta == 1:
+            support = reverse_token_ids.unsqueeze(-1)
+            support_mask = torch.ones_like(support, dtype=torch.bool)
+            teacher_support_logprobs = reverse_teacher_logprobs.unsqueeze(-1)
+        else:
+            teacher_support = teacher_top1_token_ids.unsqueeze(-1)
+            reverse_support = reverse_token_ids.unsqueeze(-1)
+            support = torch.cat([teacher_support, reverse_support], dim=-1)
+            support_mask = torch.ones_like(support, dtype=torch.bool)
+            support_mask[..., 1] = support[..., 1] != support[..., 0]
+            teacher_support_logprobs = torch.stack([teacher_top1_logprobs, reverse_teacher_logprobs], dim=-1)
+            support = torch.where(support_mask, support, torch.zeros_like(support))
+
+        student_support_logprobs = student_log_probs.gather(-1, support)
+        student_support_logprobs = torch.where(support_mask, student_support_logprobs, neg_inf)
+        teacher_support_logprobs = torch.where(support_mask, teacher_support_logprobs, neg_inf)
+
+        if self.loss_add_tail:
+            base_support_mask = support_mask
+            student_sparse_log_probs, support_mask = _add_tail_bucket(student_support_logprobs, base_support_mask)
+            teacher_sparse_log_probs, _ = _add_tail_bucket(teacher_support_logprobs, base_support_mask)
+        else:
+            student_sparse_log_probs = student_support_logprobs - torch.logsumexp(
+                student_support_logprobs, dim=-1, keepdim=True
+            )
+            teacher_sparse_log_probs = teacher_support_logprobs - torch.logsumexp(
+                teacher_support_logprobs, dim=-1, keepdim=True
+            )
+
+        jsd = _jsd_divergence(student_sparse_log_probs, teacher_sparse_log_probs, self.beta, support_mask)
+        return self._reduce_divergence_loss(
+            jsd, labels=labels, reduction="batchmean", num_items_in_batch=num_items_in_batch
+        )
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         # Student forward pass

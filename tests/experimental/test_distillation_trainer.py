@@ -27,15 +27,6 @@ from trl.experimental.gkd.gkd_trainer import GKDTrainer
 from ..testing_utils import TrlTestCase, require_liger_kernel, require_torch_accelerator
 
 
-def _make_distillation_config_kwargs(tmp_path):
-    return {"output_dir": str(tmp_path), "report_to": "none", "use_cpu": True, "bf16": False}
-
-
-def test_distillation_config_rejects_invalid_reverse_kl_top_1_mode(tmp_path):
-    with pytest.raises(ValueError, match="reverse_kl_top_1_mode must be one of"):
-        DistillationConfig(**_make_distillation_config_kwargs(tmp_path), reverse_kl_top_1_mode="invalid")
-
-
 def _reference_generalized_jsd(student_logits, teacher_logits, labels=None, beta=0.5, temperature=1.0):
     """Naive reference for the generalized JSD, written straight from the definition.
 
