@@ -27,6 +27,18 @@ from trl.experimental.gkd.gkd_trainer import GKDTrainer
 from ..testing_utils import TrlTestCase, require_liger_kernel, require_torch_accelerator
 
 
+def test_lmbda_deprecation_warns(tmp_path):
+    # `lmbda` (on/off-policy mixing) is on its way out; the trainer is becoming always on-policy. Setting it to
+    # anything other than 1.0 warns and points at GKDTrainer.
+    with pytest.warns(FutureWarning, match="lmbda"):
+        DistillationConfig(output_dir=str(tmp_path), use_cpu=True, bf16=False, lmbda=0.5)
+
+
+def test_lmbda_default_does_not_warn(tmp_path, recwarn):
+    DistillationConfig(output_dir=str(tmp_path), use_cpu=True, bf16=False)
+    assert not [w for w in recwarn.list if issubclass(w.category, FutureWarning) and "lmbda" in str(w.message)]
+
+
 def _reference_generalized_jsd(student_logits, teacher_logits, labels=None, beta=0.5, temperature=1.0):
     """Naive reference for the generalized JSD, written straight from the definition.
 

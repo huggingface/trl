@@ -316,6 +316,14 @@ class DistillationConfig(_BaseConfig):
 
         if self.lmbda < 0.0 or self.lmbda > 1.0:
             raise ValueError(f"lmbda must be in [0.0, 1.0], got {self.lmbda}.")
+        if self.lmbda != 1.0:
+            warnings.warn(
+                "`lmbda` (on/off-policy mixing) is deprecated and will be removed: the distillation trainer is "
+                "becoming always on-policy. For on/off-policy mixing, use `GKDTrainer`, which exposes the same "
+                "`lmbda` knob.",
+                FutureWarning,
+                stacklevel=3,
+            )
         if self.beta < 0.0 or self.beta > 1.0:
             raise ValueError(f"beta must be in [0.0, 1.0], got {self.beta}.")
 
