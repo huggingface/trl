@@ -18,7 +18,7 @@ import pytest
 import torch
 import torch.nn.functional as F
 from datasets import DatasetDict, IterableDatasetDict, load_dataset
-from transformers import AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from trl.experimental.distillation import DistillationConfig, DistillationTrainer
 from trl.experimental.distillation.distillation_trainer import _RepeatBatchDataLoader
@@ -409,6 +409,32 @@ class TestDistillationTrainer(TrlTestCase):
             assert trainer.state.log_history[-1]["train_loss"] is not None
         finally:
             importlib.reload(importlib.import_module(trainer.model.__module__))
+
+    def test_teacher_vocab_size_mismatch_raises(self):
+        # The local-teacher loss compares full next-token distributions, so student and teacher must share a
+        # vocabulary. A teacher with a different vocab_size is rejected (use GOLD for cross-tokenizer distillation).
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
+        with pytest.raises(ValueError, match="vocab_size"):
+            DistillationTrainer(
+                model=self.model_id,
+                teacher_model="trl-internal-testing/tiny-LlamaForCausalLM-3.2",
+                args=self._make_args(),
+                train_dataset=dataset,
+                processing_class=self.tokenizer,
+            )
+
+    def test_teacher_model_init_kwargs_with_instantiated_teacher_raises(self):
+        # `teacher_model_init_kwargs` only applies when the teacher is a model id; passing it alongside an already
+        # instantiated teacher is a mistake worth surfacing.
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
+        with pytest.raises(ValueError, match="teacher_model_init_kwargs"):
+            DistillationTrainer(
+                model=self.model_id,
+                teacher_model=AutoModelForCausalLM.from_pretrained(self.model_id),
+                args=self._make_args(),
+                train_dataset=dataset,
+                processing_class=self.tokenizer,
+            )
 
 
 def test_repeat_batch_dataloader_delegates_set_epoch_via_getattr():
