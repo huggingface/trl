@@ -1687,15 +1687,15 @@ training_args = DistillationConfig(
 
 **📜 Paper**: https://huggingface.co/papers/2606.22600
 
-Introduces Importance-Weighted On-Policy Distillation (IW-OPD), which addresses the position bias in OPD by reweighting sampled-token distillation updates according to accumulated teacher-student prefix discrepancy. Early tokens keep larger weights, while later tokens after high drift are downweighted. Used in TRL via [`experimental.distillation.DistillationTrainer`] with `distillation_objective="iw_opd"`.
+Introduces Importance-Weighted On-Policy Distillation (IW-OPD), which addresses the position bias in OPD by reweighting sampled-token distillation updates according to accumulated teacher-student prefix discrepancy. Early tokens keep larger weights, while later tokens after high drift are downweighted. Used in TRL via [`experimental.iw_opd.IWOPDTrainer`] with `distillation_objective="iw_opd"`.
 
-The paper reports its main experiments with a verl PPO trainer and vLLM rollouts. `DistillationTrainer` exposes the matching distillation and rollout settings below; PPO-specific settings from the paper such as clipping range `0.2`, dual-clip constant `3.0`, PPO epochs, entropy coefficient, KL reward penalty, auxiliary KL, and rollout importance correction are not `DistillationConfig` parameters.
+The paper optimizes IW-OPD with a clipped policy-gradient setup (verl) and vLLM rollouts. `IWOPDTrainer` exposes the matching distillation and rollout settings below; policy-optimization settings from the paper such as clipping range `0.2`, dual-clip constant `3.0`, inner PPO epochs, entropy coefficient, KL reward penalty, auxiliary KL, and rollout importance correction are not `IWOPDConfig` parameters.
 
 ```python
-from trl.experimental.distillation import DistillationConfig
+from trl.experimental.iw_opd import IWOPDConfig
 
-# Table 6 and Algorithm 1 of the paper, mapped to DistillationConfig where available.
-training_args = DistillationConfig(
+# Table 6 and Algorithm 1 of the paper, mapped to IWOPDConfig where available.
+training_args = IWOPDConfig(
     distillation_objective="iw_opd",
     iw_opd_gamma=0.5,  # γ amplification, Algorithm 1 and Appendix C.3
     lmbda=1.0,  # fully on-policy rollouts
