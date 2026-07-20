@@ -27,7 +27,7 @@ import torch.nn.functional as F
 import transformers
 from accelerate import PartialState
 from accelerate.logging import get_logger
-from accelerate.utils import is_peft_model, tqdm
+from accelerate.utils import broadcast_object_list, is_peft_model, tqdm
 from datasets import Dataset, DatasetDict, IterableDataset, IterableDatasetDict, concatenate_datasets
 from datasets.fingerprint import Hasher
 from packaging.version import Version
@@ -980,6 +980,8 @@ class KTOTrainer(_BaseTrainer):
             # under ZeRO-3 the parameter coordinator gathers/reduces `lm_head.weight` around the fused loss.
             self._forward_redirection = _ForwardRedirection()
 
+        # Reference forwards during precompute reuse a single DeepSpeed inference engine (see `_precompute_ref_logps`).
+        self._precompute_engine = None
         if self.precompute_ref_logps:
             self.train_dataset = self._precompute_ref_logps(
                 self.train_dataset,
@@ -1177,7 +1179,11 @@ class KTOTrainer(_BaseTrainer):
                 "Dataset or set `precompute_ref_log_probs=False`."
             )
         model_hash = hash_module(self.ref_model or self.model)
-        fingerprint = Hasher.hash((dataset._fingerprint, model_hash, self.calculate_KL))
+        # Both inputs are rank-dependent under distributed training (ZeRO-3 shards the model), so broadcast rank 0's
+        # value so all ranks share one cache file.
+        fingerprint = [Hasher.hash((dataset._fingerprint, model_hash, self.calculate_KL))]
+        broadcast_object_list(fingerprint, from_process=0)
+        fingerprint = fingerprint[0]
         cache_file = dataset._get_cache_file_path(fingerprint)
         if os.path.exists(cache_file):
             return concatenate_datasets([dataset, Dataset.from_file(cache_file)], axis=1)
@@ -1193,9 +1199,12 @@ class KTOTrainer(_BaseTrainer):
         data_loader = self.accelerator.prepare(dataloader)
 
         # This runs before the parent class prepares the model in `train`, so with DeepSpeed the parameters are still
-        # on CPU (ZeRO-1/2) and sharded (ZeRO-3). Wrap the model in an inference engine to place and gather them.
+        # on CPU (ZeRO-1/2) and sharded (ZeRO-3). Wrap the model in an inference engine to place and gather them. Build
+        # it once and reuse it across precompute passes (train, eval, and later `evaluate` calls)
         if self.ref_model is None and self.is_deepspeed_enabled:
-            model = prepare_deepspeed(self.model, self.accelerator)
+            if self._precompute_engine is None:
+                self._precompute_engine = prepare_deepspeed(self.model, self.accelerator)
+            model = self._precompute_engine
         else:
             model = self.ref_model or self.model
 
