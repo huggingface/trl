@@ -378,17 +378,15 @@ class IWOPDTrainer(_BaseTrainer):
     _tag_names = ["trl", "iw-opd"]
     _name = "IW-OPD"
     _paper = {
-        "title": "On-Policy Distillation of Language Models: Learning from Self-Generated Mistakes",
-        "id": "2306.13649",
+        "title": "On the Position Bias of On-Policy Distillation",
+        "id": "2606.22600",
         # docstyle-ignore
         "citation": textwrap.dedent("""\
-            @inproceedings{agarwal2024on-policy,
-                title        = {{On-Policy Distillation of Language Models: Learning from Self-Generated Mistakes}},
-                author       = {Rishabh Agarwal and Nino Vieillard and Yongchao Zhou and Piotr Stanczyk and Sabela Ramos Garea and Matthieu Geist and Olivier Bachem},
-                year         = 2024,
-                booktitle    = {The Twelfth International Conference on Learning Representations, {ICLR} 2024, Vienna, Austria, May 7-11, 2024},
-                publisher    = {OpenReview.net},
-                url          = {https://openreview.net/forum?id=3zKtaqxLhW},
+            @article{xie2026position,
+                title        = {{On the Position Bias of On-Policy Distillation}},
+                author       = {Yan Xie and Sijie Zhu and Tiansheng Wen and Bo Chen and Yifei Wang},
+                year         = 2026,
+                eprint       = {arXiv:2606.22600},
             }"""),
     }
 
