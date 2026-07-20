@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import dataclasses
 import math
 from unittest.mock import MagicMock
 
@@ -342,8 +343,11 @@ class TestServerVsLocalTeacher(TrlTestCase):
     def _make_server_trainer(self, **kwargs):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
         args = self._local_args(**kwargs)
+        # Copy only the dataclass init fields: vars() also carries post-init-derived attributes
+        # (mixed_precision, distributed_state, ...) that are not accepted by __init__.
+        init_fields = {f.name for f in dataclasses.fields(ServerDistillationConfig) if f.init}
         server_args = ServerDistillationConfig(
-            **{k: v for k, v in vars(args).items() if not k.startswith("_")},
+            **{k: v for k, v in vars(args).items() if k in init_fields},
             teacher_model_server_url="http://localhost:8000",
         )
         return ServerDistillationTrainer(
