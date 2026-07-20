@@ -36,6 +36,7 @@ from .testing_utils import (
 
 
 if is_peft_available():
+    import peft
     from peft import LoraConfig, PromptTuningConfig, get_peft_model
     from peft.utils import TaskType
 
@@ -858,12 +859,21 @@ class TestDPOTrainer(TrlTestCase):
         # ignored and never trained. The trainer must fail fast instead of training a silently-frozen head.
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
         training_args = DPOConfig(output_dir=self.tmp_dir, use_liger_kernel=True, report_to="none")
+        # `ensure_weight_tying=True` silences PEFT's weight-tying warning fired when lm_head is in the adapter on a
+        # model with untied embeddings; once tying respects `tie_word_embeddings`, the flag itself warns that no tied
+        # modules were found, so it must only be set on the affected range.
+        # - Introduced in PEFT 0.19.0 (peft#2879); fixed on main, unreleased as of 0.19.2.dev0 (peft#3171)
+        needs_ensure_weight_tying = Version("0.19.0") <= Version(peft.__version__) < Version("0.19.2.dev0")
+        lora_config = LoraConfig(
+            target_modules=["q_proj", "v_proj", "lm_head"],
+            **({"ensure_weight_tying": True} if needs_ensure_weight_tying else {}),
+        )
         with pytest.raises(ValueError, match="lm_head"):
             DPOTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
                 args=training_args,
                 train_dataset=dataset,
-                peft_config=LoraConfig(target_modules=["q_proj", "v_proj", "lm_head"]),
+                peft_config=lora_config,
             )
 
     @require_liger_kernel
