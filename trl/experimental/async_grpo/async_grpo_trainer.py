@@ -31,7 +31,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenize
 from transformers.data.data_collator import DataCollatorMixin
 
 from ...trainer.base_trainer import _BaseTrainer
-from ...trainer.utils import nanmax, nanmin, pad, patch_chunked_lm_head
+from ...trainer.utils import get_config_model_id, nanmax, nanmin, pad, patch_chunked_lm_head
 from .async_grpo_config import AsyncGRPOConfig
 from .async_rollout_worker import AsyncRolloutWorker
 from .vllm_client import VLLMClient
@@ -464,13 +464,17 @@ class AsyncGRPOTrainer(_BaseTrainer):
             trainer's GPU.
         args ([`AsyncGRPOConfig`], *optional*):
             Configuration for this trainer. If `None`, a default configuration is used.
-        train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
+        train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`], *optional*):
             Dataset to use for training. It must include a column `"prompt"`. Any additional columns in the dataset are
             ignored. The format of the samples can be either:
 
             - [Standard](dataset_formats#standard): Each sample contains plain text.
             - [Conversational](dataset_formats#conversational): Each sample contains structured messages (e.g., role
               and content).
+
+            May be omitted only when an `environment_factory` is provided and the environment owns (or procedurally
+            generates) the data, returning the prompt from its `reset()` method. In that case, `max_steps` must be set
+            to define the training length.
         processing_class ([`~transformers.PreTrainedTokenizerBase`], *optional*):
             Processing class used to process the data. The padding side must be set to "left". If `None`, the
             processing class is loaded from the model's name with [`~transformers.AutoTokenizer.from_pretrained`]. A
@@ -550,35 +554,37 @@ class AsyncGRPOTrainer(_BaseTrainer):
         rollout_worker: RolloutWorkerProtocol | None = None,
         weight_transfer: WeightTransferProtocol | None = None,
     ):
-        self.args = args or AsyncGRPOConfig()
+        # Args
+        if args is None:
+            model_name = model.split("/")[-1]
+            args = AsyncGRPOConfig(f"{model_name}-AsyncGRPO")
 
         # Training arguments
-        self.epsilon_low = self.args.epsilon
-        self.epsilon_high = self.args.epsilon_high if self.args.epsilon_high is not None else self.args.epsilon
-        self.temperature = self.args.temperature
+        self.epsilon_low = args.epsilon
+        self.epsilon_high = args.epsilon_high if args.epsilon_high is not None else args.epsilon
+        self.temperature = args.temperature
 
         # Model
-        model_name = model
-        model_init_kwargs = self.args.model_init_kwargs or {}
-        model_init_kwargs.setdefault("trust_remote_code", self.args.trust_remote_code)
+        model_init_kwargs = args.model_init_kwargs or {}
+        model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
         # FlashAttention is required: training runs in padding-free mode, where sequences are concatenated into a
         # single row and `cu_seq_lens` are derived from `position_ids` resets. SDPA/eager can't handle this.
         model = AutoModelForCausalLM.from_pretrained(
-            model_name,
+            model,
             device_map=None,
             dtype=torch.float32,
             attn_implementation="kernels-community/flash-attn3",
             **model_init_kwargs,
         )
 
-        if self.args.use_liger_kernel:
+        if args.use_liger_kernel:
             raise NotImplementedError("`use_liger_kernel` is not supported yet.")
 
         # MoE load-balancing auxiliary loss, applied to Mixture-of-Experts models (no effect otherwise)
         text_config = model.config.get_text_config()
         is_moe = getattr(text_config, "output_router_logits", None) is not None
-        self.aux_loss_enabled = is_moe and self.args.router_aux_loss_coef != 0.0
-        self.router_aux_loss_coef = self.args.router_aux_loss_coef
+        self.aux_loss_enabled = is_moe and args.router_aux_loss_coef != 0.0
+        self.router_aux_loss_coef = args.router_aux_loss_coef
 
         patch_chunked_lm_head(
             model, chunk_size=8192, temperature=self.temperature, output_router_logits=self.aux_loss_enabled
@@ -586,7 +592,9 @@ class AsyncGRPOTrainer(_BaseTrainer):
 
         # Processing class
         if processing_class is None:
-            processing_class = AutoTokenizer.from_pretrained(model_name, trust_remote_code=self.args.trust_remote_code)
+            processing_class = AutoTokenizer.from_pretrained(
+                get_config_model_id(model.config), trust_remote_code=args.trust_remote_code
+            )
         if processing_class.pad_token is None:
             processing_class.pad_token = processing_class.eos_token
 
@@ -596,10 +604,31 @@ class AsyncGRPOTrainer(_BaseTrainer):
         elif not isinstance(reward_funcs, list):
             reward_funcs = [reward_funcs]
 
+        if train_dataset is None:
+            # A dataset is optional when an environment owns the data and returns the prompt from `reset()`; then
+            # `max_steps` sets the length. Build a placeholder dataset of empty prompts to feed the rollout worker,
+            # which cycles it indefinitely (so its length only needs to be non-degenerate).
+            if environment_factory is None:
+                raise ValueError("`train_dataset` is required unless an `environment_factory` is provided.")
+            if isinstance(environment_factory, dict):
+                raise ValueError(
+                    "A `dict` `environment_factory` (multiple environments) requires a `train_dataset` with an "
+                    "`environment` column to route each example to its environment. Provide a dataset, or pass a "
+                    "single environment factory."
+                )
+            if self.args.max_steps <= 0:
+                raise ValueError(
+                    "When training without a `train_dataset` (the environment owns the data and returns the prompt "
+                    "from `reset()`), `max_steps` must be set to a positive value to define the training length. Set "
+                    "it via `AsyncGRPOConfig(max_steps=...)`."
+                )
+            num_placeholder_rows = self.args.per_device_train_batch_size * self.args.gradient_accumulation_steps
+            train_dataset = Dataset.from_dict({"prompt": [[{"role": "user", "content": ""}]] * num_placeholder_rows})
+
         # Initialize the Trainer
         super().__init__(
             model=model,
-            args=self.args,
+            args=args,
             train_dataset=train_dataset,
             processing_class=processing_class,
             callbacks=callbacks,
@@ -637,9 +666,6 @@ class AsyncGRPOTrainer(_BaseTrainer):
         self.model_version = 0
         # Create worker and queue on rank 0
         if self.accelerator.is_main_process:
-            if self.train_dataset is None:
-                raise ValueError("train_dataset is required for AsyncGRPOTrainer")
-
             # Weight sync and the token-budget query target the vLLM server from the config; the client is the single
             # place that talks to it, independent of how rollouts are produced.
             self.vllm_client = VLLMClient(self.args.vllm_server_base_url, self.args.vllm_server_timeout)
@@ -672,7 +698,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 self.rollout_worker = rollout_worker
             else:
                 self.rollout_worker = AsyncRolloutWorker(
-                    model_name=model_name,
+                    model_name=get_config_model_id(model.config),
                     dataset=train_dataset,
                     reward_funcs=reward_funcs,
                     processing_class=processing_class,
