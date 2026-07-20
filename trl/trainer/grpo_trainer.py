@@ -205,13 +205,17 @@ class GRPOTrainer(_BaseTrainer):
             types within the list (e.g., a string model ID and a custom reward function) is allowed.
         args ([`GRPOConfig`], *optional*):
             Configuration for this trainer. If `None`, a default configuration is used.
-        train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
+        train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`], *optional*):
             Dataset to use for training. It must include a column `"prompt"`. Any additional columns in the dataset is
             ignored. The format of the samples can be either:
 
             - [Standard](dataset_formats#standard): Each sample contains plain text.
             - [Conversational](dataset_formats#conversational): Each sample contains structured messages (e.g., role
               and content).
+
+            May be omitted only when an `environment_factory` is provided and the environment owns (or procedurally
+            generates) the data, returning the prompt from its `reset()` method. In that case, `max_steps` must be set
+            to define the training length.
 
             When `train_dataset` is an [`~datasets.IterableDataset`] (e.g. a streaming dataset), `max_steps` must be
             set in the training arguments, since its length cannot be inferred and the total number of training steps
@@ -835,7 +839,25 @@ class GRPOTrainer(_BaseTrainer):
         self.shuffle_dataset = args.shuffle_dataset
 
         if train_dataset is None:
-            raise ValueError("`train_dataset` is required")
+            # A dataset is optional when an environment owns the data and returns the prompt from `reset()`; then
+            # `max_steps` sets the length. Build a placeholder dataset of empty prompts to drive the loop — one
+            # generation round's worth of rows, cycled across steps.
+            if self.environment_factories is None:
+                raise ValueError("`train_dataset` is required unless an `environment_factory` is provided.")
+            if self._multi_environment:
+                raise ValueError(
+                    "A `dict` `environment_factory` (multiple environments) requires a `train_dataset` with an "
+                    "`environment` column to route each example to its environment. Provide a dataset, or pass a "
+                    "single environment factory."
+                )
+            if args.max_steps <= 0:
+                raise ValueError(
+                    "When training without a `train_dataset` (the environment owns the data and returns the prompt "
+                    "from `reset()`), `max_steps` must be set to a positive value to define the training length. Set "
+                    "it via `GRPOConfig(max_steps=...)`."
+                )
+            num_placeholder_rows = args.generation_batch_size // args.num_generations
+            train_dataset = Dataset.from_dict({"prompt": [[{"role": "user", "content": ""}]] * num_placeholder_rows})
 
         # Iterable datasets can't be indexed, so the RepeatSampler can't be attached to them. Instead, the sampler's
         # ordering is reproduced by streaming (see `get_train_dataloader`/`get_eval_dataloader` and
@@ -1615,7 +1637,7 @@ class GRPOTrainer(_BaseTrainer):
         ):
             if isinstance(reward_func, nn.Module):  # Module (no PretrainedModel) for compat with compiled models
                 with profiling_context(self, reward_func_name):
-                    if is_conversational(inputs[0]):
+                    if is_conversational({"prompt": prompts[0]}):
                         messages = [{"messages": p + c} for p, c in zip(prompts, completions, strict=True)]
                         texts = [
                             apply_chat_template(x, reward_processing_class, **self.chat_template_kwargs)["text"]
@@ -2241,7 +2263,15 @@ class GRPOTrainer(_BaseTrainer):
         device = self.accelerator.device
         mode = "train" if self.model.training else "eval"
 
-        prompts = [x["prompt"] for x in inputs]
+        # `prompt` is optional only when an environment owns the data (e.g. a multi-environment routing dataset that
+        # carries only an `environment` column); each rollout's `reset()` then supplies it. Default it here rather than
+        # writing it back onto the row, so the placeholder stays out of the `reset()` kwargs built below, while every
+        # prompt-derived check downstream (conversational detection, multimodal handling) stays consistent. Without an
+        # environment, a missing `prompt` is a malformed dataset and must still fail fast.
+        if self.environment_factories is not None:
+            prompts = [x.get("prompt", [{"role": "user", "content": ""}]) for x in inputs]
+        else:
+            prompts = [x["prompt"] for x in inputs]
 
         # Resolve each example's environment and draw one reusable instance per rollout from the pool, creating more
         # only when this batch needs more concurrent instances of an environment than exist. `_batch_environments`
@@ -3191,47 +3221,41 @@ class GRPOTrainer(_BaseTrainer):
             self._metrics[mode]["aux_loss"].append(self.accelerator.gather_for_metrics(aux_loss).mean().item())
 
         # Log the metrics
-        completion_token_count = mask.sum().clamp(min=1.0)
+        def masked_seq_mean(x):
+            if x.shape[1] == 1:  # when importance_sampling_level == "sequence": already one value per sequence
+                return x.squeeze(1)
+            return (x * mask).sum(-1) / mask.sum(-1)
 
-        def masked_batch_mean(x):
-            if x.shape[1] == 1:  # when importance_sampling_level == "sequence"
-                return x.mean()
+        def global_masked_mean(x):
+            if x.shape[1] == 1:  # when importance_sampling_level == "sequence": one value per sequence
+                local_sum, local_count = x.sum(), torch.tensor(float(x.shape[0]), device=x.device)
             else:
-                return (x * mask).sum() / completion_token_count
+                local_sum, local_count = (x * mask).sum(), mask.sum().float()
+            totals = self.accelerator.reduce(torch.stack([local_sum, local_count]), reduction="sum")
+            return (totals[0] / totals[1].clamp(min=1.0)).item()
 
         if self.beta != 0.0:
-            mean_kl = masked_batch_mean(per_token_kl)
-            self._metrics[mode]["kl"].append(self.accelerator.gather(mean_kl).nanmean().item())
+            self._metrics[mode]["kl"].append(global_masked_mean(per_token_kl))
 
-        mean_entropy = masked_batch_mean(entropies)
-        self._metrics[mode]["entropy"].append(self.accelerator.gather(mean_entropy).nanmean().item())
+        self._metrics[mode]["entropy"].append(global_masked_mean(entropies))
 
         if self.loss_type in ["grpo", "bnpo", "dr_grpo", "dapo", "luspo"]:
             # Compute the clipped probability ratios
             is_low_clipped = (coef_1 < 1 - self.epsilon_low) & (advantages < 0)
             is_high_clipped = (coef_1 > 1 + self.epsilon_high) & (advantages > 0)
             is_region_clipped = is_low_clipped | is_high_clipped
-
-            low_clip = masked_batch_mean(is_low_clipped.float())
-            high_clip = masked_batch_mean(is_high_clipped.float())
-            clip_ratio = masked_batch_mean(is_region_clipped.float())
-
-            gathered_low_clip = self.accelerator.gather(low_clip)
-            self._metrics[mode]["clip_ratio/low_mean"].append(gathered_low_clip.nanmean().item())
+            self._metrics[mode]["clip_ratio/low_mean"].append(global_masked_mean(is_low_clipped.float()))
+            self._metrics[mode]["clip_ratio/high_mean"].append(global_masked_mean(is_high_clipped.float()))
+            self._metrics[mode]["clip_ratio/region_mean"].append(global_masked_mean(is_region_clipped.float()))
+            gathered_low_clip = self.accelerator.gather(masked_seq_mean(is_low_clipped.float()))
             self._metrics[mode]["clip_ratio/low_min"].append(nanmin(gathered_low_clip).item())
-            gathered_high_clip = self.accelerator.gather(high_clip)
-            self._metrics[mode]["clip_ratio/high_mean"].append(gathered_high_clip.nanmean().item())
+            gathered_high_clip = self.accelerator.gather(masked_seq_mean(is_high_clipped.float()))
             self._metrics[mode]["clip_ratio/high_max"].append(nanmax(gathered_high_clip).item())
-            gathered_clip_ratio = self.accelerator.gather(clip_ratio)
-            self._metrics[mode]["clip_ratio/region_mean"].append(gathered_clip_ratio.nanmean().item())
         elif self.loss_type == "cispo":
             is_cispo_clipped = (coef_1 > self.epsilon_high) & (advantages > 0)
-            cispo_clip_ratio = masked_batch_mean(is_cispo_clipped.float())
-            gathered_cispo_clip_ratio = self.accelerator.gather(cispo_clip_ratio)
-            self._metrics[mode]["cispo_clip_ratio"].append(gathered_cispo_clip_ratio.nanmean().item())
+            self._metrics[mode]["cispo_clip_ratio"].append(global_masked_mean(is_cispo_clipped.float()))
         elif self.loss_type == "vespo":
-            gathered_phi_seq = self.accelerator.gather(phi_seq)
-            self._metrics[mode]["vespo/phi_seq_mean"].append(gathered_phi_seq.nanmean().item())
+            self._metrics[mode]["vespo/phi_seq_mean"].append(global_masked_mean(phi_seq))
 
         return loss
 
