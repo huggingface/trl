@@ -152,8 +152,8 @@ class _DistillationCollator:
 
     - a ``prompt`` column (prompt-only, the forward-looking format shared with GRPO): the student generates the
       completion on-policy, so there is nothing to train on in the dataset;
-    - a ``messages`` column (language-modeling format): the prompt is everything before the last assistant turn and
-      the completion is that turn.
+    - a ``messages`` column (language-modeling format): the prompt is everything before the last assistant turn and the
+      completion is that turn.
 
     Unlike ``DataCollatorForChatML``, this collator tokenizes prompts and completions separately so that long
     completions can never truncate the prompt to empty.
