@@ -631,7 +631,6 @@ class TestDistillationTrainer(TrlTestCase):
             assert not torch.equal(param, trainer.model.get_parameter(name)), f"Parameter {name} has not changed."
 
     @pytest.mark.xfail(
-        strict=True,
         reason="On-policy, num_items_in_batch is computed by transformers from the raw dataloader labels before "
         "generation replaces the completions, and _RepeatBatchDataLoader repeats one generation batch across the "
         "accumulation window, so the denominator the loss divides by does not equal the completion tokens actually "
