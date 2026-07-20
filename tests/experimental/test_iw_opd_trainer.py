@@ -201,6 +201,7 @@ def test_distillation_config_rejects_teacher_server_with_reverse_kl_argmax(tmp_p
     with pytest.raises(ValueError, match="reverse_kl_top_1_mode='argmax' is not supported"):
         IWOPDConfig(
             **_make_distillation_config_kwargs(tmp_path),
+            distillation_objective="jsd",
             use_teacher_server=True,
             teacher_model_server_url="http://localhost:8000",
             reverse_kl_top_1_mode="argmax",
@@ -460,6 +461,9 @@ class TestIWOPDTrainer(TrlTestCase):
             "use_cpu": True,
             "bf16": False,
             "lmbda": 0.0,
+            # These are the JSD-path tests inherited from the DistillationTrainer suite; IWOPDConfig now defaults
+            # distillation_objective to "iw_opd", so pin "jsd" here. IW-OPD tests override it via kwargs.
+            "distillation_objective": "jsd",
             "max_length": 128,
             "max_completion_length": 32,
             "model_init_kwargs": {"dtype": "float32", "device_map": None},
@@ -850,6 +854,7 @@ class TestIWOPDTrainerServerPath(TrlTestCase):
             loss_top_k=1,
             beta=1.0,
             lmbda=0.0,
+            distillation_objective="jsd",
             loss_add_tail=True,
             save_strategy="no",
             report_to="none",
