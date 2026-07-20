@@ -57,9 +57,9 @@ class IWOPDConfig(_BaseConfig):
             Interpolation coefficient for the Generalized Jensen-Shannon Divergence loss. When `0.0`, the loss is the
             forward KL divergence. When `1.0`, the loss is the reverse KL divergence. When `0.5`, it is the standard
             JSD.
-        distillation_objective (`str`, *optional*, defaults to `"jsd"`):
-            Objective to optimize. `"jsd"` keeps the existing generalized JSD/KL objective. `"iw_opd"` uses the
-            sampled-token Importance-Weighted On-Policy Distillation objective.
+        distillation_objective (`str`, *optional*, defaults to `"iw_opd"`):
+            Objective to optimize. `"iw_opd"` uses the sampled-token Importance-Weighted On-Policy Distillation
+            objective. `"jsd"` keeps the generalized JSD/KL objective.
         iw_opd_gamma (`float`, *optional*, defaults to `0.5`):
             Importance-weight amplification for `distillation_objective="iw_opd"`.
         iw_opd_epsilon (`float`, *optional*, defaults to `1e-8`):
@@ -210,10 +210,10 @@ class IWOPDConfig(_BaseConfig):
         },
     )
     distillation_objective: str = field(
-        default="jsd",
+        default="iw_opd",
         metadata={
-            "help": "Objective to optimize. Use 'jsd' for the existing generalized JSD/KL objective or 'iw_opd' "
-            "for sampled-token Importance-Weighted On-Policy Distillation."
+            "help": "Objective to optimize. Use 'iw_opd' for sampled-token Importance-Weighted On-Policy "
+            "Distillation or 'jsd' for the generalized JSD/KL objective."
         },
     )
     iw_opd_gamma: float = field(
