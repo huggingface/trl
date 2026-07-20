@@ -178,6 +178,7 @@ class RolloutGroup:
     tool_call_counts: list[int]
     tool_failure_counts: list[int]
     model_version: int
+    group_id: int
     env_rewards: list[tuple[type, float] | None]
     queued_at: float = 0.0
 
@@ -191,6 +192,7 @@ class RolloutSample:
     old_log_probs: list[float]
     advantage: float
     model_version: int
+    group_id: int
     metrics: dict[str, float]
 
 
@@ -500,7 +502,12 @@ class _AsyncRolloutLoop:
                             {k: v for k, v in row.items() if k != "environment"} if self._multi_environment else row
                         )
                         observation = environment.reset(**reset_kwargs)
-                    prompt = row["prompt"]
+                    # `prompt` is optional only when an environment owns the data; `reset()` then supplies it. Without
+                    # an environment, a missing `prompt` is a malformed dataset and must still fail fast (KeyError).
+                    if "prompt" not in row and self.environment_factories is not None:
+                        prompt = [{"role": "user", "content": ""}]
+                    else:
+                        prompt = row["prompt"]
                     if observation is not None:
                         # Rebuild the last message instead of mutating in place (as GRPOTrainer does): the
                         # same row is reused across the group's generations and across epochs. Normalize str vs
@@ -538,6 +545,7 @@ class _AsyncRolloutLoop:
                             tool_call_counts=[],
                             tool_failure_counts=[],
                             model_version=self.model_version,
+                            group_id=group_id,
                             env_rewards=[],
                         )
                         pending_completed[group_id] = 0
@@ -867,6 +875,7 @@ class _AsyncRolloutLoop:
                         old_log_probs=seq.old_log_probs,
                         advantage=float(advantage),
                         model_version=group.model_version,
+                        group_id=group.group_id,
                         metrics=dict(metrics),  # own copy per row; _compute_rollout_metrics mutates it
                     )
                 )
