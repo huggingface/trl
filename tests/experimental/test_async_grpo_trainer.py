@@ -108,6 +108,26 @@ class _StubRolloutWorker:
         pass
 
 
+class _StubWeightTransfer:
+    """No-op weight transfer for testing the trainer without a real vLLM server."""
+
+    def init_weight_transfer(self):
+        pass
+
+    def pause(self):
+        pass
+
+    def send_weights(self, iterator):
+        for _ in iterator:  # drain the param stream like the real client does
+            pass
+
+    def resume(self):
+        pass
+
+    def destroy(self):
+        pass
+
+
 @pytest.mark.skipif(
     not is_ampere_or_newer() and torch_device != "xpu",
     reason="Flash Attention 2 requires Ampere or newer GPU, or XPU",
@@ -122,6 +142,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             reward_funcs=dummy_reward_func,
             train_dataset=dataset,
             rollout_worker=_StubRolloutWorker(AutoTokenizer.from_pretrained(model_id), dataset, num_generations=3),
+            weight_transfer=_StubWeightTransfer(),
         )
 
     def test_train(self):
@@ -144,6 +165,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             args=training_args,
             train_dataset=dataset,
             rollout_worker=_StubRolloutWorker(AutoTokenizer.from_pretrained(model_id), dataset, num_generations=3),
+            weight_transfer=_StubWeightTransfer(),
         )
 
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
@@ -156,6 +178,51 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    def test_dataset_required_without_environment(self):
+        # The data has to come from somewhere: an external `train_dataset`, or an environment that owns it. With
+        # neither, construction fails fast.
+        training_args = AsyncGRPOConfig(output_dir=self.tmp_dir, max_steps=5, report_to="none")
+        with pytest.raises(ValueError, match="`train_dataset` is required"):
+            AsyncGRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs=dummy_reward_func,
+                args=training_args,
+            )
+
+    def test_environment_owned_data_requires_max_steps(self):
+        # When the environment owns the data and no external `train_dataset` is provided, `max_steps` must set the
+        # training length. The guard fires before the rollout worker is built, so no worker/dataset is needed.
+        class DummyEnvironment:
+            def reset(self, **kwargs):
+                return "Guess the 5-letter word."
+
+        args = AsyncGRPOConfig(output_dir=self.tmp_dir, report_to="none")  # max_steps unset
+        with pytest.raises(ValueError, match="max_steps"):
+            AsyncGRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs=dummy_reward_func,
+                args=args,
+                environment_factory=DummyEnvironment,
+            )
+
+    def test_multiple_environments_without_dataset_raises(self):
+        # Multiple environments (a `dict` factory) need a `train_dataset` with an `environment` column to route each
+        # example. Without one, there is no per-rollout selector, so construction fails fast with a clear message.
+        class EnvA:
+            def reset(self, **kwargs): ...
+
+        class EnvB:
+            def reset(self, **kwargs): ...
+
+        args = AsyncGRPOConfig(output_dir=self.tmp_dir, max_steps=1, report_to="none")
+        with pytest.raises(ValueError, match="requires a `train_dataset`"):
+            AsyncGRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs=dummy_reward_func,
+                args=args,
+                environment_factory={"a": EnvA, "b": EnvB},
+            )
 
 
 class TestAsyncRolloutWorkerEnvironments(TrlTestCase):

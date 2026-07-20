@@ -40,7 +40,7 @@ from datasets import Dataset, DatasetDict, IterableDataset, IterableDatasetDict
 from huggingface_hub import CommitScheduler, DatasetCard, DatasetCardData, create_repo
 from packaging.version import Version
 from torch import nn
-from torch.utils.data import Sampler
+from torch.utils.data import DataLoader, Sampler
 from transformers import (
     AutoModelForSequenceClassification,
     AutoProcessor,
@@ -89,6 +89,7 @@ from .utils import (
     nanstd,
     pad,
     print_prompt_completions_sample,
+    repeat_iterable_dataset,
     selective_log_softmax,
     shuffle_sequence_dict,
     shutdown_event_loop_in_daemon,
@@ -204,13 +205,21 @@ class GRPOTrainer(_BaseTrainer):
             types within the list (e.g., a string model ID and a custom reward function) is allowed.
         args ([`GRPOConfig`], *optional*):
             Configuration for this trainer. If `None`, a default configuration is used.
-        train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
+        train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`], *optional*):
             Dataset to use for training. It must include a column `"prompt"`. Any additional columns in the dataset is
             ignored. The format of the samples can be either:
 
             - [Standard](dataset_formats#standard): Each sample contains plain text.
             - [Conversational](dataset_formats#conversational): Each sample contains structured messages (e.g., role
               and content).
+
+            May be omitted only when an `environment_factory` is provided and the environment owns (or procedurally
+            generates) the data, returning the prompt from its `reset()` method. In that case, `max_steps` must be set
+            to define the training length.
+
+            When `train_dataset` is an [`~datasets.IterableDataset`] (e.g. a streaming dataset), `max_steps` must be
+            set in the training arguments, since its length cannot be inferred and the total number of training steps
+            is required to bound the training loop and configure the learning rate scheduler.
         eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`], [`~datasets.DatasetDict`], [`~datasets.IterableDatasetDict`] or `dict[str, Dataset | IterableDataset]`):
             Dataset to use for evaluation. It must meet the same requirements as `train_dataset`.
         processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.ProcessorMixin`], *optional*):
@@ -460,6 +469,25 @@ class GRPOTrainer(_BaseTrainer):
                         ref_param = model.get_parameter(ref_name)
                         ref_param.data.copy_(param.data)
 
+        # PEFT + DeepSpeed ZeRO-3 requires reentrant checkpointing. For more details, see
+        # https://github.com/huggingface/trl/issues/2514#issuecomment-2692152703.
+        # Can be removed once https://github.com/deepspeedai/DeepSpeed/pull/8130 is merged and released.
+        if (
+            is_peft_model(model)
+            and args.deepspeed_plugin is not None
+            and args.deepspeed_plugin.zero_stage == 3
+            and args.gradient_checkpointing
+        ):
+            args.gradient_checkpointing_kwargs = args.gradient_checkpointing_kwargs or {}
+            use_reentrant = args.gradient_checkpointing_kwargs.get("use_reentrant")
+            if use_reentrant is False:
+                logger.warning(
+                    "You are using PEFT with DeepSpeed ZeRO-3 and gradient checkpointing with `use_reentrant=False`. "
+                    "`use_reentrant` is forced to `True` in this configuration to ensure correct training. To remove "
+                    "this warning, unset `use_reentrant` in `gradient_checkpointing_kwargs` or set it to `True`."
+                )
+            args.gradient_checkpointing_kwargs["use_reentrant"] = True
+
         # When using gradient checkpointing with PEFT, we need to enable input gradients. transformers.Trainer normally
         # handles this, but a bug currently prevents it; see https://github.com/huggingface/transformers/issues/42489
         if is_peft_model(model) and args.gradient_checkpointing:
@@ -707,7 +735,9 @@ class GRPOTrainer(_BaseTrainer):
         # Training arguments
         self.max_completion_length = args.max_completion_length  # = |o_i| in the GRPO paper
         self.num_generations = args.num_generations  # = G in the GRPO paper
-        self.max_tool_calling_iterations = args.max_tool_calling_iterations or sys.maxsize
+        self.max_tool_calling_iterations = (
+            args.max_tool_calling_iterations if args.max_tool_calling_iterations is not None else sys.maxsize
+        )
         self.num_generations_eval = args.num_generations_eval or self.num_generations
         self.chat_template_kwargs = args.chat_template_kwargs or {}
         self.temperature = args.temperature
@@ -809,18 +839,54 @@ class GRPOTrainer(_BaseTrainer):
         self.shuffle_dataset = args.shuffle_dataset
 
         if train_dataset is None:
-            raise ValueError("`train_dataset` is required")
-        elif (
+            # A dataset is optional when an environment owns the data and returns the prompt from `reset()`; then
+            # `max_steps` sets the length. Build a placeholder dataset of empty prompts to drive the loop — one
+            # generation round's worth of rows, cycled across steps.
+            if self.environment_factories is None:
+                raise ValueError("`train_dataset` is required unless an `environment_factory` is provided.")
+            if self._multi_environment:
+                raise ValueError(
+                    "A `dict` `environment_factory` (multiple environments) requires a `train_dataset` with an "
+                    "`environment` column to route each example to its environment. Provide a dataset, or pass a "
+                    "single environment factory."
+                )
+            if args.max_steps <= 0:
+                raise ValueError(
+                    "When training without a `train_dataset` (the environment owns the data and returns the prompt "
+                    "from `reset()`), `max_steps` must be set to a positive value to define the training length. Set "
+                    "it via `GRPOConfig(max_steps=...)`."
+                )
+            num_placeholder_rows = args.generation_batch_size // args.num_generations
+            train_dataset = Dataset.from_dict({"prompt": [[{"role": "user", "content": ""}]] * num_placeholder_rows})
+
+        # Iterable datasets can't be indexed, so the RepeatSampler can't be attached to them. Instead, the sampler's
+        # ordering is reproduced by streaming (see `get_train_dataloader`/`get_eval_dataloader` and
+        # `repeat_iterable_dataset`). This requires `dispatch_batches=False`: with the default dispatch path, batches
+        # are collated on the main process and Accelerate tries to concatenate the string `prompt` column, which fails;
+        # `dispatch_batches=False` also lets each process shard the stream into contiguous slices, as the sampler does.
+        # See https://github.com/huggingface/trl/issues/3213
+        uses_iterable_dataset = (
             isinstance(train_dataset, IterableDataset)
             or isinstance(eval_dataset, IterableDataset)
             or (
                 isinstance(eval_dataset, dict) and any(isinstance(ds, IterableDataset) for ds in eval_dataset.values())
             )
-        ):
-            # See https://github.com/huggingface/trl/issues/3213
-            raise ValueError(
-                "Iterable datasets are not yet supported in GRPOTrainer. Please use a standard dataset instead."
+        )
+        if uses_iterable_dataset:
+            if args.accelerator_config.dispatch_batches:
+                raise ValueError(
+                    "Iterable datasets require `dispatch_batches=False`, but it is set to `True` in "
+                    "`accelerator_config`. Please set it to `False`."
+                )
+            args.accelerator_config.dispatch_batches = False
+        # An iterable train set bakes prompt repeats into the stream, so it must be read by a single worker: multiple
+        # workers would shard and interleave it, splitting the num_generations groups. Map-style train keeps its workers.
+        if isinstance(train_dataset, IterableDataset) and args.dataloader_num_workers != 0:
+            logger.warning(
+                f"Iterable datasets require `dataloader_num_workers=0` to preserve prompt grouping; overriding the "
+                f"provided value ({args.dataloader_num_workers})."
             )
+            args.dataloader_num_workers = 0
 
         if args.loss_type == "luspo" and args.importance_sampling_level != "sequence":
             logger.warning(
@@ -1141,14 +1207,25 @@ class GRPOTrainer(_BaseTrainer):
     # Instead of returning a standard per-step batch (i.e., `per_device_batch_size), our dataloader loads an
     # *generation* batch (i.e., `per_device_batch_size × steps_per_generation`). This allows us to generate completions
     # once every steps_per_generation step—rather than once per accumulation step—which is significantly more
-    # efficient. The only change from the original implementation is multiplying the batch size by
-    # `steps_per_generation`. Thus, `_prepare_inputs` is called with this *generation* batch, and it handles the
-    # splitting internally.
-    # Maintenance note: This method is a copy-paste of the original `Trainer.get_train_dataloader` with only one line
-    # modification.
+    # efficient. Thus, `_prepare_inputs` is called with this *generation* batch, and it handles the splitting internally.
+    # Maintenance note: this method is a copy-paste of the original `Trainer.get_train_dataloader` with two changes: the
+    # batch size is multiplied by `steps_per_generation`, and iterable datasets are wrapped (see `repeat_iterable_dataset`).
     def get_train_dataloader(self):
+        dataset = self.train_dataset
+        if isinstance(dataset, IterableDataset):
+            # Iterable datasets can't be indexed, so RepeatSampler can't be attached. Reproduce its ordering by
+            # transforming the stream instead (see `repeat_iterable_dataset`). The full permutation done by
+            # RepeatSampler becomes a buffered shuffle here.
+            if self.shuffle_dataset:
+                dataset = dataset.shuffle(seed=self.args.seed)
+            dataset = repeat_iterable_dataset(
+                dataset,
+                mini_repeat_count=self.num_generations,
+                batch_size=self.args.generation_batch_size // self.num_generations,
+                repeat_count=self.num_iterations * self.args.steps_per_generation,
+            )
         return self._get_dataloader(
-            dataset=self.train_dataset,
+            dataset=dataset,
             description="Training",
             batch_size=self._train_batch_size * self.args.steps_per_generation,  # < this is the change
             sampler_fn=self._get_train_sampler,
@@ -1200,6 +1277,60 @@ class GRPOTrainer(_BaseTrainer):
             mini_repeat_count=self.num_generations_eval,
             seed=self.args.seed,
         )
+
+    # This method overrides `Trainer.get_eval_dataloader` to wrap iterable eval datasets, reproducing the
+    # RepeatSampler ordering that can't be attached to them (see `get_train_dataloader`). Map-style datasets keep the
+    # default path via `_get_eval_sampler`, which shuffles with `seed`, so the iterable wrap shuffles too (buffered)
+    # to walk prompts in a matching order.
+    # Maintenance note: this method is a copy-paste of the original `Trainer.get_eval_dataloader`, with the iterable
+    # wrapping as the only addition.
+    def get_eval_dataloader(self, eval_dataset: str | Dataset | IterableDataset | None = None) -> DataLoader:
+        if eval_dataset is None and self.eval_dataset is None:
+            raise ValueError("Trainer: evaluation requires an eval_dataset.")
+
+        # If we have persistent workers, don't do a fork bomb especially as eval datasets
+        # don't change during training
+        dataloader_key = eval_dataset if isinstance(eval_dataset, str) else "eval"
+        if (
+            hasattr(self, "_eval_dataloaders")
+            and dataloader_key in self._eval_dataloaders
+            and self.args.dataloader_persistent_workers
+        ):
+            return self._eval_dataloaders[dataloader_key]
+
+        eval_dataset = (
+            self.eval_dataset[eval_dataset]
+            if isinstance(eval_dataset, str)
+            else eval_dataset
+            if eval_dataset is not None
+            else self.eval_dataset
+        )
+
+        if isinstance(eval_dataset, IterableDataset):
+            # Apply the `__init__` iterable config here too
+            if self.args.accelerator_config.dispatch_batches:
+                raise ValueError(
+                    "Iterable datasets require `dispatch_batches=False`, but it is set to `True` in "
+                    "`accelerator_config`. Please set it to `False`."
+                )
+            self.accelerator.dataloader_config.dispatch_batches = False
+            eval_dataset = eval_dataset.shuffle(seed=self.args.seed)
+            eval_dataset = repeat_iterable_dataset(eval_dataset, mini_repeat_count=self.num_generations_eval)
+            # Force a single worker for this loader only, without persisting the change
+            num_workers = self.args.dataloader_num_workers
+            self.args.dataloader_num_workers = 0
+
+        try:
+            return self._get_dataloader(
+                dataset=eval_dataset,
+                description="Evaluation",
+                batch_size=self.args.eval_batch_size,
+                sampler_fn=self._get_eval_sampler,
+                dataloader_key=dataloader_key,
+            )
+        finally:
+            if isinstance(eval_dataset, IterableDataset):
+                self.args.dataloader_num_workers = num_workers
 
     @profiling_decorator
     def _get_last_hidden_state(
@@ -1506,7 +1637,7 @@ class GRPOTrainer(_BaseTrainer):
         ):
             if isinstance(reward_func, nn.Module):  # Module (no PretrainedModel) for compat with compiled models
                 with profiling_context(self, reward_func_name):
-                    if is_conversational(inputs[0]):
+                    if is_conversational({"prompt": prompts[0]}):
                         messages = [{"messages": p + c} for p, c in zip(prompts, completions, strict=True)]
                         texts = [
                             apply_chat_template(x, reward_processing_class, **self.chat_template_kwargs)["text"]
@@ -2091,11 +2222,10 @@ class GRPOTrainer(_BaseTrainer):
         agg_prompt_lengths = self.accelerator.gather(prompt_lengths)
         agg_completion_lengths = self.accelerator.gather(completion_lengths)
         total_prompt_tokens = agg_prompt_lengths.sum()
-        total_completion_tokens = agg_completion_lengths.sum()  # = num_items_in_batch, required for the DAPO loss
 
         # Log the metrics
         if mode == "train":
-            self.state.num_input_tokens_seen += (total_prompt_tokens + total_completion_tokens).item()
+            self.state.num_input_tokens_seen += (total_prompt_tokens + agg_completion_lengths.sum()).item()
         self._metrics[mode]["num_tokens"] = [self.state.num_input_tokens_seen]
 
         # Log completion lengths, mean, min, max
@@ -2125,17 +2255,7 @@ class GRPOTrainer(_BaseTrainer):
             )
             self._metrics[mode]["tools/failure_frequency"].append(failure_frequency)
 
-        return (
-            prompt_ids,
-            completion_ids,
-            tool_mask,
-            completions,
-            total_completion_tokens,
-            logprobs,
-            extra_fields,
-            images,
-            tool_images,
-        )
+        return prompt_ids, completion_ids, tool_mask, completions, logprobs, extra_fields, images, tool_images
 
     def _generate_and_score_completions(
         self, inputs: list[dict[str, torch.Tensor | Any]]
@@ -2143,7 +2263,15 @@ class GRPOTrainer(_BaseTrainer):
         device = self.accelerator.device
         mode = "train" if self.model.training else "eval"
 
-        prompts = [x["prompt"] for x in inputs]
+        # `prompt` is optional only when an environment owns the data (e.g. a multi-environment routing dataset that
+        # carries only an `environment` column); each rollout's `reset()` then supplies it. Default it here rather than
+        # writing it back onto the row, so the placeholder stays out of the `reset()` kwargs built below, while every
+        # prompt-derived check downstream (conversational detection, multimodal handling) stays consistent. Without an
+        # environment, a missing `prompt` is a malformed dataset and must still fail fast.
+        if self.environment_factories is not None:
+            prompts = [x.get("prompt", [{"role": "user", "content": ""}]) for x in inputs]
+        else:
+            prompts = [x["prompt"] for x in inputs]
 
         # Resolve each example's environment and draw one reusable instance per rollout from the pool, creating more
         # only when this batch needs more concurrent instances of an environment than exist. `_batch_environments`
@@ -2236,7 +2364,6 @@ class GRPOTrainer(_BaseTrainer):
             completion_ids_list,
             tool_mask_list,
             completions,
-            num_items_in_batch,
             sampling_per_token_logps_list,
             extra_fields,
             images,
@@ -2295,6 +2422,9 @@ class GRPOTrainer(_BaseTrainer):
             # Also mask tool_mask for consistency in multi-turn training
             if tool_mask is not None:
                 tool_mask = tool_mask * (~is_truncated).unsqueeze(1).int()
+
+        loss_mask = completion_mask if tool_mask is None else completion_mask * tool_mask
+        num_items_in_batch = self.accelerator.gather(loss_mask.sum()).sum()
 
         # Concatenate prompt_mask with completion_mask for logit computation
         prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)  # (B, P+C)
@@ -3007,7 +3137,7 @@ class GRPOTrainer(_BaseTrainer):
             policy_loss = loss.detach()
             loss = loss / normalizer
         elif self.loss_type in ["cispo", "dapo", "vespo"]:
-            normalizer = inputs["num_items_in_batch"] / self.accelerator.num_processes
+            normalizer = inputs["num_items_in_batch"].clamp(min=1.0) / self.accelerator.num_processes
             loss = (per_token_loss * mask).sum() / normalizer
             policy_loss = loss.detach()
         elif self.loss_type == "luspo":
@@ -3091,47 +3221,41 @@ class GRPOTrainer(_BaseTrainer):
             self._metrics[mode]["aux_loss"].append(self.accelerator.gather_for_metrics(aux_loss).mean().item())
 
         # Log the metrics
-        completion_token_count = mask.sum().clamp(min=1.0)
+        def masked_seq_mean(x):
+            if x.shape[1] == 1:  # when importance_sampling_level == "sequence": already one value per sequence
+                return x.squeeze(1)
+            return (x * mask).sum(-1) / mask.sum(-1)
 
-        def masked_batch_mean(x):
-            if x.shape[1] == 1:  # when importance_sampling_level == "sequence"
-                return x.mean()
+        def global_masked_mean(x):
+            if x.shape[1] == 1:  # when importance_sampling_level == "sequence": one value per sequence
+                local_sum, local_count = x.sum(), torch.tensor(float(x.shape[0]), device=x.device)
             else:
-                return (x * mask).sum() / completion_token_count
+                local_sum, local_count = (x * mask).sum(), mask.sum().float()
+            totals = self.accelerator.reduce(torch.stack([local_sum, local_count]), reduction="sum")
+            return (totals[0] / totals[1].clamp(min=1.0)).item()
 
         if self.beta != 0.0:
-            mean_kl = masked_batch_mean(per_token_kl)
-            self._metrics[mode]["kl"].append(self.accelerator.gather(mean_kl).nanmean().item())
+            self._metrics[mode]["kl"].append(global_masked_mean(per_token_kl))
 
-        mean_entropy = masked_batch_mean(entropies)
-        self._metrics[mode]["entropy"].append(self.accelerator.gather(mean_entropy).nanmean().item())
+        self._metrics[mode]["entropy"].append(global_masked_mean(entropies))
 
         if self.loss_type in ["grpo", "bnpo", "dr_grpo", "dapo", "luspo"]:
             # Compute the clipped probability ratios
             is_low_clipped = (coef_1 < 1 - self.epsilon_low) & (advantages < 0)
             is_high_clipped = (coef_1 > 1 + self.epsilon_high) & (advantages > 0)
             is_region_clipped = is_low_clipped | is_high_clipped
-
-            low_clip = masked_batch_mean(is_low_clipped.float())
-            high_clip = masked_batch_mean(is_high_clipped.float())
-            clip_ratio = masked_batch_mean(is_region_clipped.float())
-
-            gathered_low_clip = self.accelerator.gather(low_clip)
-            self._metrics[mode]["clip_ratio/low_mean"].append(gathered_low_clip.nanmean().item())
+            self._metrics[mode]["clip_ratio/low_mean"].append(global_masked_mean(is_low_clipped.float()))
+            self._metrics[mode]["clip_ratio/high_mean"].append(global_masked_mean(is_high_clipped.float()))
+            self._metrics[mode]["clip_ratio/region_mean"].append(global_masked_mean(is_region_clipped.float()))
+            gathered_low_clip = self.accelerator.gather(masked_seq_mean(is_low_clipped.float()))
             self._metrics[mode]["clip_ratio/low_min"].append(nanmin(gathered_low_clip).item())
-            gathered_high_clip = self.accelerator.gather(high_clip)
-            self._metrics[mode]["clip_ratio/high_mean"].append(gathered_high_clip.nanmean().item())
+            gathered_high_clip = self.accelerator.gather(masked_seq_mean(is_high_clipped.float()))
             self._metrics[mode]["clip_ratio/high_max"].append(nanmax(gathered_high_clip).item())
-            gathered_clip_ratio = self.accelerator.gather(clip_ratio)
-            self._metrics[mode]["clip_ratio/region_mean"].append(gathered_clip_ratio.nanmean().item())
         elif self.loss_type == "cispo":
             is_cispo_clipped = (coef_1 > self.epsilon_high) & (advantages > 0)
-            cispo_clip_ratio = masked_batch_mean(is_cispo_clipped.float())
-            gathered_cispo_clip_ratio = self.accelerator.gather(cispo_clip_ratio)
-            self._metrics[mode]["cispo_clip_ratio"].append(gathered_cispo_clip_ratio.nanmean().item())
+            self._metrics[mode]["cispo_clip_ratio"].append(global_masked_mean(is_cispo_clipped.float()))
         elif self.loss_type == "vespo":
-            gathered_phi_seq = self.accelerator.gather(phi_seq)
-            self._metrics[mode]["vespo/phi_seq_mean"].append(gathered_phi_seq.nanmean().item())
+            self._metrics[mode]["vespo/phi_seq_mean"].append(global_masked_mean(phi_seq))
 
         return loss
 
