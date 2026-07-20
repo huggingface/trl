@@ -684,37 +684,6 @@ training_args = GRPOConfig(
 )
 ```
 
-
-### Rethinking the Trust Region in LLM Reinforcement Learning
-
-**📜 Paper**: https://huggingface.co/papers/2602.04879
-
-DPPO replaces PPO/GRPO's heuristic ratio-clipping with a principled trust region based on direct policy divergence estimates. PPO-style clipping masks tokens based on the probability ratio π/μ, which over-penalizes low-probability tokens and under-penalizes high-probability ones. DPPO instead masks based on direct approximations of policy divergence (TV or KL), ensuring updates stay within a theoretically grounded trust region. Four divergence approximations are supported: `binary_tv`, `binary_kl`, `topk_tv`, and `topk_kl`.
-
-```python
-from trl.experimental.dppo import DPPOConfig, DPPOTrainer
-
-training_args = DPPOConfig(
-    divergence_type="binary_tv",  # divergence approximation
-    divergence_topk=20,  # K for top-K divergence modes (Section 7 / Appendix G.2 of the paper)
-    epsilon=0.15,  # δ_low threshold (Appendix F of the paper)
-    epsilon_high=0.15,  # δ_high threshold (Appendix F of the paper)
-    clip_ratio_c=20.0,  # IS ratio upper bound C (Section 5.4 of the paper)
-    beta=0.0,  # KL regularization coefficient
-    use_vllm=True,
-)
-
-trainer = DPPOTrainer(
-    model="your-model",
-    reward_funcs=[...],
-    args=training_args,
-    train_dataset=dataset,
-)
-trainer.train()
-```
-
-The official code [sail-sg/Stable-RL](https://github.com/sail-sg/Stable-RL)
-
 ## Optimal Advantage Regression
 
 Papers relating to the [`experimental.a2po.A2POTrainer`].
@@ -1870,6 +1839,37 @@ Expected dataset columns:
 - `privileged_context` containing only the extra teacher-only information
 
 For more details, see the [SDFT Trainer documentation](sdft_trainer).
+
+### Embarrassingly Simple Self-Distillation Improves Code Generation
+
+**📜 Paper**: https://huggingface.co/papers/2604.01193
+
+Simple Self-Distillation (SSD) improves code generation by sampling completions from the model at a training-time temperature and truncation configuration, then fine-tuning on those raw, unverified samples with standard cross-entropy loss. No reward model, verifier, teacher model, or reinforcement learning is needed. SSD reshapes token distributions in a context-dependent way: suppressing distractor tails at "lock" positions (where syntax leaves little ambiguity) while preserving diversity at "fork" positions (where multiple valid continuations exist).
+
+```python
+from trl.experimental.ssd import SSDConfig, SSDTrainer
+
+training_args = SSDConfig(
+    temperature=0.6,                       # Training-time sampling temperature (T_train)
+    top_k=20,                              # Training-time top-k truncation
+    top_p=0.95,                            # Training-time top-p truncation
+    max_completion_length=65536,
+    learning_rate=5e-6,
+)
+
+trainer = SSDTrainer(
+    model="Qwen/Qwen3-4B-Instruct",
+    args=training_args,
+    train_dataset=...,
+)
+trainer.train()
+```
+
+Expected dataset columns:
+
+- `prompt`
+
+For more details, see the [SSD Trainer documentation](ssd_trainer).
 
 ## Distributed Training
 
