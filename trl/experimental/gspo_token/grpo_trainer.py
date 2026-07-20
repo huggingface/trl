@@ -26,6 +26,7 @@ class GRPOTrainer(_GRPOTrainer):
         input_ids = torch.cat([prompt_ids, completion_ids], dim=1)
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
         logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
+        mask = completion_mask if "tool_mask" not in inputs else completion_mask * inputs["tool_mask"]
 
         # Compute the per_token_logps and the entropy at each position in the completion
         per_token_logps, entropies, _ = self._get_per_token_logps_and_entropies(
@@ -43,7 +44,7 @@ class GRPOTrainer(_GRPOTrainer):
         )
 
         if self.top_entropy_quantile < 1.0:
-            entropy_mask = self.get_high_entropy_mask(entropies, completion_mask, 1 - self.top_entropy_quantile)
+            entropy_mask = self.get_high_entropy_mask(entropies, mask, 1 - self.top_entropy_quantile)
         else:
             entropy_mask = None
 
@@ -72,11 +73,11 @@ class GRPOTrainer(_GRPOTrainer):
         if self.importance_sampling_level == "token":
             log_importance_weights = log_ratio
         elif self.importance_sampling_level == "sequence":
-            log_importance_weights = (log_ratio * completion_mask).sum(-1) / completion_mask.sum(-1).clamp(min=1.0)
+            log_importance_weights = (log_ratio * mask).sum(-1) / mask.sum(-1).clamp(min=1.0)
             log_importance_weights = log_importance_weights.unsqueeze(-1)
         elif self.importance_sampling_level == "sequence_token":
             # GSPO-token: sg[si(θ)] * πθ(yi,t)/sg[πθ(yi,t)]
-            seq_level_log_weight = (log_ratio * completion_mask).sum(-1) / completion_mask.sum(-1).clamp(min=1.0)
+            seq_level_log_weight = (log_ratio * mask).sum(-1) / mask.sum(-1).clamp(min=1.0)
             seq_level_log_weight = seq_level_log_weight.detach().unsqueeze(-1)  # Stop gradient
             log_importance_weights = per_token_logps - per_token_logps.detach() + seq_level_log_weight
         else:
@@ -108,20 +109,20 @@ class GRPOTrainer(_GRPOTrainer):
 
         mode = "train" if self.model.training else "eval"
         if self.loss_type == "grpo":
-            loss = ((per_token_loss * completion_mask).sum(-1) / completion_mask.sum(-1).clamp(min=1.0)).mean()
+            loss = ((per_token_loss * mask).sum(-1) / mask.sum(-1).clamp(min=1.0)).mean()
             normalizer = self.current_gradient_accumulation_steps if mode == "train" else 1.0  # no accum in eval
             loss = loss / normalizer
         elif self.loss_type == "bnpo":
-            loss = (per_token_loss * completion_mask).sum() / completion_mask.sum().clamp(min=1.0)
+            loss = (per_token_loss * mask).sum() / mask.sum().clamp(min=1.0)
             normalizer = self.current_gradient_accumulation_steps if mode == "train" else 1.0  # no accum in eval
             loss = loss / normalizer
         elif self.loss_type == "dr_grpo":
-            loss = (per_token_loss * completion_mask).sum() / (per_token_loss.size(0) * self.max_completion_length)
+            loss = (per_token_loss * mask).sum() / (per_token_loss.size(0) * self.max_completion_length)
             normalizer = self.current_gradient_accumulation_steps if mode == "train" else 1.0  # no accum in eval
             loss = loss / normalizer
         elif self.loss_type == "dapo":
-            normalizer = inputs["num_items_in_batch"] / self.accelerator.num_processes
-            loss = (per_token_loss * completion_mask).sum() / normalizer
+            normalizer = inputs["num_items_in_batch"].clamp(min=1.0) / self.accelerator.num_processes
+            loss = (per_token_loss * mask).sum() / normalizer
         else:
             raise ValueError(f"Unknown loss type: {self.loss_type}")
 
@@ -129,13 +130,13 @@ class GRPOTrainer(_GRPOTrainer):
         def masked_seq_mean(x):
             if x.shape[1] == 1:  # when importance_sampling_level == "sequence": already one value per sequence
                 return x.squeeze(1)
-            return (x * completion_mask).sum(-1) / completion_mask.sum(-1)
+            return (x * mask).sum(-1) / mask.sum(-1)
 
         def global_masked_mean(x):
             if x.shape[1] == 1:  # when importance_sampling_level == "sequence": one value per sequence
                 local_sum, local_count = x.sum(), torch.tensor(float(x.shape[0]), device=x.device)
             else:
-                local_sum, local_count = (x * completion_mask).sum(), completion_mask.sum().float()
+                local_sum, local_count = (x * mask).sum(), mask.sum().float()
             totals = self.accelerator.reduce(torch.stack([local_sum, local_count]), reduction="sum")
             return (totals[0] / totals[1].clamp(min=1.0)).item()
 
