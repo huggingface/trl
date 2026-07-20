@@ -27,7 +27,7 @@ import torch.nn.functional as F
 import transformers
 from accelerate import PartialState
 from accelerate.logging import get_logger
-from accelerate.utils import is_peft_model, tqdm
+from accelerate.utils import broadcast_object_list, is_peft_model, tqdm
 from datasets import Dataset, DatasetDict, IterableDataset, IterableDatasetDict, concatenate_datasets
 from datasets.fingerprint import Hasher
 from packaging.version import Version
@@ -980,6 +980,8 @@ class KTOTrainer(_BaseTrainer):
             # under ZeRO-3 the parameter coordinator gathers/reduces `lm_head.weight` around the fused loss.
             self._forward_redirection = _ForwardRedirection()
 
+        # Reference forwards during precompute reuse a single DeepSpeed inference engine (see `_precompute_ref_logps`).
+        self._precompute_engine = None
         if self.precompute_ref_logps:
             self.train_dataset = self._precompute_ref_logps(
                 self.train_dataset,
@@ -1177,7 +1179,11 @@ class KTOTrainer(_BaseTrainer):
                 "Dataset or set `precompute_ref_log_probs=False`."
             )
         model_hash = hash_module(self.ref_model or self.model)
-        fingerprint = Hasher.hash((dataset._fingerprint, model_hash, self.calculate_KL))
+        # Both inputs are rank-dependent under distributed training (ZeRO-3 shards the model), so broadcast rank 0's
+        # value so all ranks share one cache file.
+        fingerprint = [Hasher.hash((dataset._fingerprint, model_hash, self.calculate_KL))]
+        broadcast_object_list(fingerprint, from_process=0)
+        fingerprint = fingerprint[0]
         cache_file = dataset._get_cache_file_path(fingerprint)
         if os.path.exists(cache_file):
             return concatenate_datasets([dataset, Dataset.from_file(cache_file)], axis=1)
@@ -1191,10 +1197,21 @@ class KTOTrainer(_BaseTrainer):
             shuffle=False,
         )
         data_loader = self.accelerator.prepare(dataloader)
+
+        # This runs before the parent class prepares the model in `train`, so with DeepSpeed the parameters are still
+        # on CPU (ZeRO-1/2) and sharded (ZeRO-3). Wrap the model in an inference engine to place and gather them. Build
+        # it once and reuse it across precompute passes (train, eval, and later `evaluate` calls)
+        if self.ref_model is None and self.is_deepspeed_enabled:
+            if self._precompute_engine is None:
+                self._precompute_engine = prepare_deepspeed(self.model, self.accelerator)
+            model = self._precompute_engine
+        else:
+            model = self.ref_model or self.model
+
         ref_logps = []
         ref_KL_logps = []
         for padded_batch in tqdm(iterable=data_loader, desc=f"Computing reference log probs for {name} dataset"):
-            ref_logp, ref_KL_logp = self.compute_ref_log_probs(padded_batch)
+            ref_logp, ref_KL_logp = self.compute_ref_log_probs(model, padded_batch)
             if self.calculate_KL:
                 ref_logp, ref_KL_logp = self.accelerator.gather_for_metrics((ref_logp, ref_KL_logp))
                 ref_KL_logps.append(ref_KL_logp.cpu())
@@ -1227,42 +1244,23 @@ class KTOTrainer(_BaseTrainer):
 
         return concatenate_datasets([dataset, Dataset.from_file(cache_file)], axis=1)
 
-    def compute_ref_log_probs(self, inputs):
+    def compute_ref_log_probs(self, model, inputs):
         """Computes reference log probabilities for a single padded batch."""
         with torch.no_grad(), disable_gradient_checkpointing(self.model, self.args.gradient_checkpointing_kwargs):
-            if self.ref_model is None:
-                if is_peft_model(self.model):
-                    model = self.accelerator.unwrap_model(self.model)
-                    with use_adapter(model, adapter_name="ref" if "ref" in model.peft_config else None):
-                        completion_logits = self.model(
-                            inputs["input_ids"],
-                            attention_mask=inputs["attention_mask"],
-                        ).logits
-
-                        if self.calculate_KL:
-                            KL_logits = self.model(
-                                inputs["KL_input_ids"],
-                                attention_mask=inputs["KL_attention_mask"],
-                            ).logits
-                else:
-                    completion_logits = self.model(
-                        inputs["input_ids"],
-                        attention_mask=inputs["attention_mask"],
-                    ).logits
+            if self.ref_model is None and is_peft_model(self.model):
+                unwrapped_model = self.accelerator.unwrap_model(self.model)
+                with use_adapter(
+                    unwrapped_model, adapter_name="ref" if "ref" in unwrapped_model.peft_config else None
+                ):
+                    completion_logits = model(inputs["input_ids"], attention_mask=inputs["attention_mask"]).logits
 
                     if self.calculate_KL:
-                        KL_logits = self.model(
-                            inputs["KL_input_ids"],
-                            attention_mask=inputs["KL_attention_mask"],
-                        ).logits
+                        KL_logits = model(inputs["KL_input_ids"], attention_mask=inputs["KL_attention_mask"]).logits
             else:
-                completion_logits = self.ref_model(inputs["input_ids"], attention_mask=inputs["attention_mask"]).logits
+                completion_logits = model(inputs["input_ids"], attention_mask=inputs["attention_mask"]).logits
 
                 if self.calculate_KL:
-                    KL_logits = self.ref_model(
-                        inputs["KL_input_ids"],
-                        attention_mask=inputs["KL_attention_mask"],
-                    ).logits
+                    KL_logits = model(inputs["KL_input_ids"], attention_mask=inputs["KL_attention_mask"]).logits
 
         shift_logits = completion_logits[:, :-1, :]
         per_token_logps = selective_log_softmax(shift_logits, inputs["input_ids"][:, 1:])
