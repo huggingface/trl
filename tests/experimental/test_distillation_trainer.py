@@ -31,6 +31,7 @@ from trl.experimental.distillation.distillation_trainer import (
     _RepeatBatchDataLoader,
     build_teacher_request_inputs,
 )
+from trl.experimental.gkd.gkd_trainer import GKDTrainer
 
 from ..testing_utils import TrlTestCase, require_liger_kernel, require_torch_accelerator
 
@@ -367,6 +368,81 @@ class TestServerReverseKLPaddingMask(TrlTestCase):
         assert torch.isfinite(raw_student.grad).all()
 
 
+def _reference_generalized_jsd(student_logits, teacher_logits, labels=None, beta=0.5, temperature=1.0):
+    """Naive reference for the generalized JSD, written straight from the definition.
+
+    Deliberately independent of the implementation: probabilities are formed explicitly and the mixture is built in
+    probability space, so this does not share `F.kl_div`'s inverted argument order nor the `logsumexp` trick. That is
+    what makes it able to catch an argument-order or mixture-weight regression.
+    """
+    student_log_probs = torch.log_softmax(student_logits / temperature, dim=-1)
+    teacher_log_probs = torch.log_softmax(teacher_logits / temperature, dim=-1)
+    student_probs, teacher_probs = student_log_probs.exp(), teacher_log_probs.exp()
+
+    if beta == 0.0:  # forward KL: KL(teacher || student)
+        per_element = teacher_probs * (teacher_log_probs - student_log_probs)
+    elif beta == 1.0:  # reverse KL: KL(student || teacher)
+        per_element = student_probs * (student_log_probs - teacher_log_probs)
+    else:  # generalized JSD against the mixture M = (1 - beta) * student + beta * teacher
+        mixture_log_probs = ((1 - beta) * student_probs + beta * teacher_probs).log()
+        per_element = beta * (teacher_probs * (teacher_log_probs - mixture_log_probs)) + (1 - beta) * (
+            student_probs * (student_log_probs - mixture_log_probs)
+        )
+
+    if labels is None:  # "batchmean" without labels divides by the batch size
+        return per_element.sum() / max(per_element.size(0), 1)
+    mask = labels != -100
+    return per_element[mask].sum() / mask.sum().clamp(min=1)
+
+
+class TestGeneralizedJSDLossIsPinned(TrlTestCase):
+    """Pins the distillation objective while the trainer is refactored.
+
+    The implementation is expected to change (top-k support removal, then the switch to a chunked loss); the value it
+    computes is not. Any diff that moves these numbers is changing the objective and must say so.
+    """
+
+    def setup_method(self):
+        generator = torch.Generator().manual_seed(42)  # seeded: an unseeded fixture cannot pin anything
+        self.student_logits = torch.randn(2, 3, 5, generator=generator)
+        self.teacher_logits = torch.randn(2, 3, 5, generator=generator)
+        self.labels = torch.tensor([[-100, 1, 2], [-100, -100, 3]])
+
+    @pytest.mark.parametrize("beta", [0.0, 0.25, 1.0])
+    @pytest.mark.parametrize("use_labels", [False, True])
+    def test_matches_reference_implementation(self, beta, use_labels):
+        labels = self.labels if use_labels else None
+        loss = DistillationTrainer.generalized_jsd_loss(
+            self.student_logits, self.teacher_logits, labels=labels, beta=beta
+        )
+        expected = _reference_generalized_jsd(self.student_logits, self.teacher_logits, labels=labels, beta=beta)
+        torch.testing.assert_close(loss, expected)
+
+    @pytest.mark.parametrize("beta", [0.0, 0.25, 1.0])
+    @pytest.mark.parametrize("use_labels", [False, True])
+    def test_matches_gkd(self, beta, use_labels):
+        # GKD implements the same objective. Keeping the two in lockstep is the cross-trainer contract: if this breaks,
+        # either the promotion changed the objective or GKD drifted.
+        labels = self.labels if use_labels else None
+        loss = DistillationTrainer.generalized_jsd_loss(
+            self.student_logits, self.teacher_logits, labels=labels, beta=beta
+        )
+        gkd_loss = GKDTrainer.generalized_jsd_loss(self.student_logits, self.teacher_logits, labels=labels, beta=beta)
+        torch.testing.assert_close(loss, gkd_loss)
+
+    @pytest.mark.parametrize("beta", [0.0, 0.25, 1.0])
+    def test_temperature_matches_reference(self, beta):
+        # `temperature` is applied to the loss today. It is scheduled to become sampling-only, so pin it explicitly:
+        # that change must be a visible diff here, not a silent drift.
+        loss = DistillationTrainer.generalized_jsd_loss(
+            self.student_logits, self.teacher_logits, labels=self.labels, beta=beta, temperature=2.0
+        )
+        expected = _reference_generalized_jsd(
+            self.student_logits, self.teacher_logits, labels=self.labels, beta=beta, temperature=2.0
+        )
+        torch.testing.assert_close(loss, expected)
+
+
 class TestGeneralizedJSDLoss(TrlTestCase):
     def setup_method(self):
         self.batch_size = 2
@@ -526,6 +602,33 @@ class TestDistillationTrainer(TrlTestCase):
         assert trainer.state.log_history[0]["eval_loss"] is not None
         assert train_result.metrics["train_loss"] >= 0.0
         assert "model.safetensors" in os.listdir(self.tmp_dir + "/checkpoint-2")
+
+    @pytest.mark.parametrize("lmbda", [0.0, 1.0])
+    def test_train_updates_params_on_and_off_policy(self, lmbda):
+        """Pin both policy modes end to end before `lmbda` is removed.
+
+        `lmbda=0.0` trains on the dataset's own completions, `lmbda=1.0` on completions the student generates. The
+        trainer is scheduled to become always-on-policy, so the off-policy case is pinned here to make its removal a
+        deliberate deletion rather than a silent one.
+        """
+        # Higher lr than the default: gradients are tiny on this model and the default lr can stall the update, which
+        # would make the assertion below vacuous.
+        trainer = self._make_local_trainer(lmbda=lmbda, max_steps=2, learning_rate=0.1)
+
+        # Diverge the teacher from the student so the divergence (and thus the gradient) is well above fp noise; with
+        # matched weights it would be ~0 and the update below could pass on noise alone.
+        torch.manual_seed(0)
+        with torch.no_grad():
+            for p in trainer.teacher_model.parameters():
+                p.add_(0.5 * torch.randn_like(p))
+
+        previous_params = {name: param.clone() for name, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+        for name, param in previous_params.items():
+            assert not torch.equal(param, trainer.model.get_parameter(name)), f"Parameter {name} has not changed."
 
     @pytest.mark.parametrize(
         "eval_dataset_type",
