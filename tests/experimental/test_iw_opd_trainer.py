@@ -442,7 +442,7 @@ class TestGeneralizedJSDLoss(TrlTestCase):
         assert round(abs(loss.item() - 0), 6) == 0
 
 
-class TestDistillationTrainer(TrlTestCase):
+class TestIWOPDTrainer(TrlTestCase):
     def setup_method(self):
         self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
@@ -821,7 +821,7 @@ class TestDistillationTrainer(TrlTestCase):
         assert teacher_client.calls[0]["top_logprobs"] == 1
 
 
-class TestDistillationTrainerServerPath(TrlTestCase):
+class TestIWOPDTrainerServerPath(TrlTestCase):
     @classmethod
     def setup_class(cls):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"

@@ -764,6 +764,8 @@ class TestDistillationTrainer(TrlTestCase):
         assert teacher_client.calls[0]["top_logprobs"] == 1
         torch.testing.assert_close(local_loss, server_loss)
 
+
+class TestDistillationTrainerServerPath(TrlTestCase):
     @classmethod
     def setup_class(cls):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
