@@ -1507,8 +1507,11 @@ class DPOTrainer(_BaseTrainer):
                 # Eqn (8) of the APO paper (https://huggingface.co/papers/2408.06266)
                 # Use this loss when you believe the chosen outputs are worse than your model's default output.
                 # Decrease chosen likelihood and decrease rejected likelihood more
+                # Both terms use the raw reverse-KL log-ratios (the paper's r_theta), matching apo_zero
+                # and remaining invariant to f_divergence_type. Using delta_score mixed a raw chosen
+                # term with an f-divergence-transformed rejected term (#6441).
                 losses_chosen = torch.sigmoid(self.beta * chosen_logratios)
-                losses_rejected = 1 - torch.sigmoid(self.beta * delta_score)
+                losses_rejected = 1 - torch.sigmoid(self.beta * (chosen_logratios - rejected_logratios))
                 per_sequence_loss = losses_chosen + losses_rejected
 
             elif loss_type == "discopop":

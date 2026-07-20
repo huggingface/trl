@@ -524,6 +524,53 @@ class TestDPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @pytest.mark.parametrize(
+        "f_divergence_type",
+        ["forward_kl", "js_divergence", "alpha_divergence"],
+    )
+    def test_apo_down_loss_is_f_divergence_invariant(self, f_divergence_type):
+        # apo_down implements Eq. 8 of the APO paper (https://huggingface.co/papers/2408.06266), which is
+        # defined purely on the raw reverse-KL log-ratios r_theta, exactly like apo_zero. Its loss must
+        # therefore be identical regardless of `f_divergence_type`. Previously the rejected term used the
+        # f-divergence-transformed `delta_score` while the chosen term used the raw log-ratio, so a
+        # non-default `f_divergence_type` silently changed the loss (it only matched by accident under the
+        # default `reverse_kl`). See #6441.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            loss_type="apo_down",
+            per_device_train_batch_size=4,
+            bf16=False,  # precision-independent loss-math check; keep fp32 so it runs on CPU too
+            report_to="none",
+        )
+        trainer = DPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+        trainer.model.eval()
+
+        # The reference model is a frozen snapshot of the initial policy, so an untrained policy has zero
+        # log-ratios and `delta_score` collapses to zero under every `f_divergence_type`, which would hide
+        # the bug. Perturb the policy weights (the reference stays fixed) so the log-ratios are non-zero.
+        torch.manual_seed(0)
+        with torch.no_grad():
+            for param in trainer.model.parameters():
+                param.add_(torch.randn_like(param) * 0.05)
+
+        # Reuse a single fixed batch so only `f_divergence_type` varies between the two loss computations.
+        batch = next(iter(trainer.get_train_dataloader()))
+        batch = trainer._prepare_inputs(batch)
+
+        with torch.no_grad():
+            trainer.f_divergence_type = "reverse_kl"
+            reference_loss = trainer.compute_loss(trainer.model, batch)
+            trainer.f_divergence_type = f_divergence_type
+            other_loss = trainer.compute_loss(trainer.model, batch)
+
+        torch.testing.assert_close(other_loss, reference_loss)
+
     def test_train_with_explicit_ref_model(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
 
