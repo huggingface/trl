@@ -54,11 +54,10 @@ trainer.save_model()
 
 ## Usage tips
 
-The [`experimental.distillation.DistillationTrainer`] needs three key parameters set via [`experimental.distillation.DistillationConfig`]:
+The [`experimental.distillation.DistillationTrainer`] needs two key parameters set via [`experimental.distillation.DistillationConfig`]:
 
 * `lmbda`: controls the student data fraction, i.e., the proportion of on-policy student-generated outputs. When `lmbda=0.0`, training is fully off-policy (dataset completions only). When `lmbda=1.0`, training is fully on-policy (student generates all completions). For values in between, each gradient accumulation slice is randomly assigned as on- or off-policy based on `lmbda`.
 * `beta`: controls the interpolation in the Generalized Jensen-Shannon Divergence. When `beta=0.0` the loss approximates forward KL divergence, while `beta=1.0` approximates reverse KL divergence. Values in between interpolate.
-* `loss_top_k`: number of top tokens to use for the KL/JSD loss. Set to `0` for exact full-vocabulary computation (local teacher only), or `> 0` for a top-k approximation. See more about top-k with external teacher server below.
 
 ### On-policy vs. off-policy
 
