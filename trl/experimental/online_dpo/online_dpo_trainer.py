@@ -1094,20 +1094,18 @@ class OnlineDPOTrainer(_BaseTrainer):
         logprobs = torch.take_along_dim(logits.log_softmax(dim=-1), completion_ids.unsqueeze(-1), dim=2).squeeze(-1)
         return logprobs
 
-    def _compute_online_dpo_loss(
-        self, model: nn.Module, inputs: dict[str, torch.Tensor | Any]
-    ) -> torch.Tensor:
+    def _compute_online_dpo_loss(self, model: nn.Module, inputs: dict[str, torch.Tensor | Any]) -> torch.Tensor:
         """Generate completions, score them, and return the online DPO loss.
 
-        This method encapsulates the forward pass (generation → rewards → DPO loss) so that
-        both :meth:`training_step` (which adds a backward pass) and :meth:`prediction_step`
-        (eval-only, no gradients) can share the same logic without code duplication.
+        This method encapsulates the forward pass (generation → rewards → DPO loss) so that both :meth:`training_step`
+        (which adds a backward pass) and :meth:`prediction_step` (eval-only, no gradients) can share the same logic
+        without code duplication.
 
         Args:
             model: The policy model.
             inputs: A batch dict that must contain at minimum a ``"prompt"`` key with raw
-                prompt strings (or conversation lists). Other keys (e.g. ``"image"``) are
-                forwarded to the reward functions as extra kwargs.
+                prompt strings (or conversation lists). Other keys (e.g. ``"image"``) are forwarded to the reward
+                functions as extra kwargs.
 
         Returns:
             A scalar loss tensor (not yet divided by ``gradient_accumulation_steps``).
@@ -1325,15 +1323,14 @@ class OnlineDPOTrainer(_BaseTrainer):
     ) -> tuple[torch.Tensor | None, torch.Tensor | None, torch.Tensor | None]:
         """Run eval by generating completions and computing the DPO loss.
 
-        The default :meth:`~transformers.Trainer.prediction_step` would call
-        ``model(**inputs)`` with every dataset column, including the raw ``prompt``
-        strings, which causes::
+        The default :meth:`~transformers.Trainer.prediction_step` would call ``model(**inputs)`` with every dataset
+        column, including the raw ``prompt`` strings, which causes::
 
             TypeError: forward() got an unexpected keyword argument 'prompt'
 
-        Instead, we reuse :meth:`_compute_online_dpo_loss` (the same generation +
-        reward + DPO loss logic used during training) inside a ``torch.no_grad`` block
-        so that eval metrics stay consistent with what the model actually optimises.
+        Instead, we reuse :meth:`_compute_online_dpo_loss` (the same generation + reward + DPO loss logic used during
+        training) inside a ``torch.no_grad`` block so that eval metrics stay consistent with what the model actually
+        optimises.
 
         See https://github.com/huggingface/trl/issues/2228
         """
@@ -1342,7 +1339,6 @@ class OnlineDPOTrainer(_BaseTrainer):
         with torch.no_grad():
             loss = self._compute_online_dpo_loss(model, inputs)
         return loss.detach(), None, None
-
 
     # Same as Trainer._maybe_log_save_evaluate but log our metrics
     def _maybe_log_save_evaluate(
