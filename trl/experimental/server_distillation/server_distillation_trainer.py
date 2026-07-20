@@ -85,7 +85,8 @@ class ServerDistillationTrainer(DistillationTrainer):
     Instead of running a local teacher forward pass, per-token teacher logprobs are fetched from a vLLM server via
     [`~generation.vllm_client.VLLMClient`]. The server only returns the teacher's top-k logprobs, so the divergence is
     restricted to a sparse support (top-1 for `beta > 0`, top-k for the pure forward path `beta = 0`). Everything else
-    — the student forward, generation, buffering, metrics — is inherited from [`experimental.distillation.DistillationTrainer`].
+    — the student forward, generation, buffering, metrics — is inherited from
+    [`experimental.distillation.DistillationTrainer`].
     """
 
     _tag_names = ["trl", "server-distillation"]
