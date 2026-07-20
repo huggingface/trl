@@ -1074,7 +1074,7 @@ class RLOOTrainer(_BaseTrainer):
         ):
             if isinstance(reward_func, nn.Module):  # Module (no PretrainedModel) for compat with compiled models
                 with profiling_context(self, reward_func_name):
-                    if is_conversational(inputs[0]):
+                    if is_conversational({"prompt": prompts[0]}):
                         messages = [{"messages": p + c} for p, c in zip(prompts, completions, strict=True)]
                         texts = [
                             apply_chat_template(x, reward_processing_class, **self.chat_template_kwargs)["text"]
@@ -1572,8 +1572,10 @@ class RLOOTrainer(_BaseTrainer):
 
         # Calculate and log the mean KL divergence between current and reference model
         if self.beta != 0.0:
-            mean_kl = (per_token_kl * completion_mask).sum() / completion_mask.sum().clamp(min=1.0)
-            self._metrics[mode]["kl"].append(self.accelerator.gather(mean_kl).nanmean().item())
+            kl_stats = self.accelerator.reduce(
+                torch.stack([(per_token_kl * completion_mask).sum(), completion_mask.sum().float()]), reduction="sum"
+            )
+            self._metrics[mode]["kl"].append((kl_stats[0] / kl_stats[1].clamp(min=1.0)).item())
 
         # Calculate mean reward per function, but only for samples where the function was applied (non-NaN values)
         for i, reward_func_name in enumerate(self.reward_func_names):
@@ -1700,20 +1702,22 @@ class RLOOTrainer(_BaseTrainer):
             self._metrics[mode]["aux_loss"].append(self.accelerator.gather_for_metrics(aux_loss).mean().item())
 
         # Entropy
-        mean_entropy = (entropies * completion_mask).sum() / completion_mask.sum().clamp(min=1.0)
-        self._metrics[mode]["entropy"].append(self.accelerator.gather(mean_entropy).nanmean().item())
+        entropy_stats = self.accelerator.reduce(
+            torch.stack([(entropies * completion_mask).sum(), completion_mask.sum().float()]), reduction="sum"
+        )
+        self._metrics[mode]["entropy"].append((entropy_stats[0] / entropy_stats[1].clamp(min=1.0)).item())
 
         # Compute the clipped probability ratios
         is_low_clipped = (coef_1 < 1 - self.epsilon_low) & (advantages < 0)
         is_high_clipped = (coef_1 > 1 + self.epsilon_high) & (advantages > 0)
         is_region_clipped = is_low_clipped | is_high_clipped
-        gathered_low_clip = self.accelerator.gather(is_low_clipped.float().mean())
+        gathered_low_clip = self.accelerator.gather(is_low_clipped.float())
         self._metrics[mode]["clip_ratio/low_mean"].append(gathered_low_clip.nanmean().item())
         self._metrics[mode]["clip_ratio/low_min"].append(nanmin(gathered_low_clip).item())
-        gathered_high_clip = self.accelerator.gather(is_high_clipped.float().mean())
+        gathered_high_clip = self.accelerator.gather(is_high_clipped.float())
         self._metrics[mode]["clip_ratio/high_mean"].append(gathered_high_clip.nanmean().item())
         self._metrics[mode]["clip_ratio/high_max"].append(nanmax(gathered_high_clip).item())
-        gathered_clip_ratio = self.accelerator.gather(is_region_clipped.float().mean())
+        gathered_clip_ratio = self.accelerator.gather(is_region_clipped.float())
         self._metrics[mode]["clip_ratio/region_mean"].append(gathered_clip_ratio.nanmean().item())
         return loss
 
