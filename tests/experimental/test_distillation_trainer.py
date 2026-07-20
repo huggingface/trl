@@ -249,7 +249,9 @@ class TestDistillationTrainer(TrlTestCase):
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
         assert trainer.state.log_history[0]["eval_loss"] is not None
-        assert train_result.metrics["train_loss"] >= 0.0
+        # Self-distillation (teacher == student), so the divergence is ~0; allow tiny floating-point noise below zero
+        # while still catching a genuinely negative loss.
+        assert train_result.metrics["train_loss"] >= -1e-4
         assert "model.safetensors" in os.listdir(self.tmp_dir + "/checkpoint-2")
 
     @pytest.mark.parametrize("lmbda", [0.0, 1.0])
