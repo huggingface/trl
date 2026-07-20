@@ -630,6 +630,45 @@ class TestDistillationTrainer(TrlTestCase):
         for name, param in previous_params.items():
             assert not torch.equal(param, trainer.model.get_parameter(name)), f"Parameter {name} has not changed."
 
+    @pytest.mark.xfail(
+        reason="On-policy, num_items_in_batch is computed by transformers from the raw dataloader labels before "
+        "generation replaces the completions, and _RepeatBatchDataLoader repeats one generation batch across the "
+        "accumulation window, so the denominator the loss divides by does not equal the completion tokens actually "
+        "trained on. Un-xfail when the count moves to the GRPO-style _prepare_inputs (plan 5.6).",
+    )
+    def test_num_items_in_batch_counts_the_tokens_trained_on(self, monkeypatch):
+        """`num_items_in_batch` is the loss denominator, so it must count the completion tokens actually trained on.
+
+        Capture the value where it is applied (`_reduce_divergence_loss`) rather than the argument transformers passes
+        to `compute_loss`: the GRPO-style fix computes the count during generation and the loss reads it from there, so
+        asserting on the applied denominator keeps the test valid — and able to turn green — across that move.
+        """
+        recorded = []  # (denominator applied, completion tokens in this microbatch)
+        original = DistillationTrainer._reduce_divergence_loss
+
+        def _recording(jsd, labels=None, reduction="batchmean", num_items_in_batch=None):
+            recorded.append((num_items_in_batch, int((labels != -100).sum())))
+            return original(jsd, labels=labels, reduction=reduction, num_items_in_batch=num_items_in_batch)
+
+        monkeypatch.setattr(DistillationTrainer, "_reduce_divergence_loss", staticmethod(_recording))
+
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
+        trainer = DistillationTrainer(
+            model=self.model_id,
+            teacher_model=self.model_id,
+            args=self._make_args(lmbda=1.0, gradient_accumulation_steps=2, max_steps=1),
+            train_dataset=dataset,
+            processing_class=self.tokenizer,
+        )
+
+        trainer.train()
+
+        assert len(recorded) == 2, "expected one loss reduction per accumulation step"
+        denominator = recorded[0][0]
+        assert denominator is not None, "the loss was not reduced by a token count"
+        # The denominator must be the completion tokens summed over the whole accumulation window.
+        assert int(denominator) == sum(tokens for _, tokens in recorded)
+
     @pytest.mark.parametrize(
         "eval_dataset_type",
         [
