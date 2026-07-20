@@ -762,10 +762,14 @@ class TestGRPOTrainer(TrlTestCase):
         model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="float32")
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         training_args = GRPOConfig(output_dir=self.tmp_dir, use_liger_kernel=True, report_to="none")
-        # ensure_weight_tying suppresses the PEFT weight-tying warning, which fires for target_modules since PEFT 0.19.0
+        # `ensure_weight_tying=True` silences PEFT's weight-tying warning fired when lm_head is in the adapter on a
+        # model with untied embeddings; once tying respects `tie_word_embeddings`, the flag itself warns that no tied
+        # modules were found, so it must only be set on the affected range.
+        # - Introduced in PEFT 0.19.0 (peft#2879); fixed on main, unreleased as of 0.19.2.dev0 (peft#3171)
+        needs_ensure_weight_tying = Version("0.19.0") <= Version(peft.__version__) < Version("0.19.2.dev0")
         lora_config = LoraConfig(
             target_modules=["q_proj", "v_proj", "lm_head"],
-            **({"ensure_weight_tying": True} if Version(peft.__version__) >= Version("0.19.0") else {}),
+            **({"ensure_weight_tying": True} if needs_ensure_weight_tying else {}),
         )
         with pytest.raises(ValueError, match="lm_head"):
             GRPOTrainer(
@@ -807,11 +811,15 @@ class TestGRPOTrainer(TrlTestCase):
         model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="float32")
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         training_args = GRPOConfig(output_dir=self.tmp_dir, use_liger_kernel=True, report_to="none")
-        # ensure_weight_tying suppresses the PEFT weight-tying warning, which fires for modules_to_save since PEFT 0.19.0
+        # `ensure_weight_tying=True` silences PEFT's weight-tying warning fired when lm_head is in the adapter on a
+        # model with untied embeddings; once tying respects `tie_word_embeddings`, the flag itself warns that no tied
+        # modules were found, so it must only be set on the affected range.
+        # - Introduced in PEFT 0.19.0 (peft#2879); fixed on main, unreleased as of 0.19.2.dev0 (peft#3171)
+        needs_ensure_weight_tying = Version("0.19.0") <= Version(peft.__version__) < Version("0.19.2.dev0")
         peft_config = LoraConfig(
             target_modules=["q_proj", "v_proj"],
             modules_to_save=["lm_head"],
-            **({"ensure_weight_tying": True} if Version(peft.__version__) >= Version("0.19.0") else {}),
+            **({"ensure_weight_tying": True} if needs_ensure_weight_tying else {}),
         )
         kwargs = {
             "model": model,
@@ -3007,6 +3015,7 @@ class TestGRPOTrainer(TrlTestCase):
         strict=True,
     )
     @require_jmespath
+    @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
     def test_train_with_environment_owned_reward(self):
         # Same setup as `test_train_with_environment_factory`, but the environment owns the reward via a `get_reward`
         # method and no `reward_funcs` is passed. The reward equals the final counter, so the 3 generations
@@ -3105,6 +3114,7 @@ class TestGRPOTrainer(TrlTestCase):
         strict=True,
     )
     @require_jmespath
+    @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
     def test_environment_owned_reward_coexists_with_reward_funcs(self):
         # When both `reward_funcs` and an environment-owned `get_reward` are present, `get_reward` is appended as an
         # extra reward source (weight 1) after the trainer-owned reward functions.
@@ -3161,6 +3171,7 @@ class TestGRPOTrainer(TrlTestCase):
         strict=True,
     )
     @require_jmespath
+    @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
     def test_environment_owned_reward_mixed_environments(self):
         # With a dict `environment_factory`, only some environments may own their reward via `get_reward`. Each such
         # env *class* contributes one reward column (named after its class); a rollout is scored only when its
