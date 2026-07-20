@@ -272,7 +272,7 @@ def build_teacher_inputs_from_completion_ids(
     """Tokenize teacher prompts and append the student's completion token IDs unchanged."""
     pad_token_id = tokenizer.pad_token_id
     eos_token_id = tokenizer.eos_token_id
-    prompt_token_ids = tokenizer(prompt_texts, add_special_tokens=True)["input_ids"]
+    prompt_token_ids = tokenizer(prompt_texts, add_special_tokens=False)["input_ids"]
 
     sequences: list[torch.Tensor] = []
     attention_masks: list[torch.Tensor] = []
@@ -863,9 +863,9 @@ class GOLDTrainer(SFTTrainer):
             self._is_vlm = False
 
         self.pad_token_id = self._tokenizer.pad_token_id
-        self.use_privileged_context = getattr(args, "use_privileged_context", False)
-        self.teacher_prompt_template = getattr(args, "teacher_prompt_template", None) or "{prompt}\n\n{privileged_context}"
-        self.privileged_context_column = getattr(args, "privileged_context_column", "privileged_context")
+        self.use_privileged_context = args.use_privileged_context
+        self.teacher_prompt_template = args.teacher_prompt_template or "{prompt}\n\n{privileged_context}"
+        self.privileged_context_column = args.privileged_context_column
 
         if self.use_privileged_context and self._is_vlm:
             raise ValueError("`use_privileged_context=True` is currently supported only for text models.")
@@ -2031,13 +2031,13 @@ class GOLDTrainer(SFTTrainer):
                 "Packing is not supported with cross-tokenizer ULD because byte-offset alignment is defined per "
                 "prompt/completion example."
             )
-        if packing and getattr(self, "use_privileged_context", False):
+        if packing and self.use_privileged_context:
             raise ValueError(
                 "Packing is not supported with privileged context because teacher prompts are constructed per "
                 "prompt/completion example."
             )
 
-        if not is_processed or (self.use_uld_loss and self.teacher_tokenizer is not None) or getattr(self, "use_privileged_context", False):
+        if not is_processed or (self.use_uld_loss and self.teacher_tokenizer is not None) or self.use_privileged_context:
             return self._prepare_dataset_with_original_text(
                 dataset, processing_class, args, packing, formatting_func, dataset_name
             )
@@ -2331,9 +2331,9 @@ class GOLDTrainer(SFTTrainer):
                     "processing_class": processing_class,
                     "dataset_text_field": args.dataset_text_field,
                     "max_length": getattr(args, "max_length", None),
-                    "use_privileged_context": getattr(self, "use_privileged_context", False),
-                    "teacher_prompt_template": getattr(self, "teacher_prompt_template", None),
-                    "privileged_context_column": getattr(self, "privileged_context_column", "privileged_context"),
+                    "use_privileged_context": self.use_privileged_context,
+                    "teacher_prompt_template": self.teacher_prompt_template,
+                    "privileged_context_column": self.privileged_context_column,
                 },
                 **map_kwargs,
             )
