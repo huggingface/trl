@@ -614,6 +614,14 @@ class TestDistillationTrainer(TrlTestCase):
         # Higher lr than the default: gradients are tiny on this model and the default lr can stall the update, which
         # would make the assertion below vacuous.
         trainer = self._make_local_trainer(lmbda=lmbda, max_steps=2, learning_rate=0.1)
+
+        # Diverge the teacher from the student so the divergence (and thus the gradient) is well above fp noise; with
+        # matched weights it would be ~0 and the update below could pass on noise alone.
+        torch.manual_seed(0)
+        with torch.no_grad():
+            for p in trainer.teacher_model.parameters():
+                p.add_(0.5 * torch.randn_like(p))
+
         previous_params = {name: param.clone() for name, param in trainer.model.named_parameters()}
 
         trainer.train()
