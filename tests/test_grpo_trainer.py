@@ -2200,6 +2200,7 @@ class TestGRPOTrainer(TrlTestCase):
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
             mask_truncated_completions=True,  # Enable masking of truncated completions
+            loss_type="dapo",  # we test specifically dapo because it normalizes by num_items_in_batch
             report_to="none",
         )
         trainer = GRPOTrainer(
@@ -2238,6 +2239,7 @@ class TestGRPOTrainer(TrlTestCase):
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
             mask_truncated_completions=True,  # Enable masking of truncated completions
+            loss_type="dapo",  # we test specifically dapo because it normalizes by num_items_in_batch
             report_to="none",
         )
         trainer = GRPOTrainer(
@@ -2251,7 +2253,7 @@ class TestGRPOTrainer(TrlTestCase):
 
         trainer.train()
 
-        assert trainer.state.log_history[-1]["train_loss"] is not None
+        assert trainer.state.log_history[-1]["train_loss"] == pytest.approx(0.0)
 
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
