@@ -718,6 +718,25 @@ class KTOTrainer(_BaseTrainer):
                         ref_param = model.get_parameter(ref_name)
                         ref_param.data.copy_(param.data)
 
+        # PEFT + DeepSpeed ZeRO-3 requires reentrant checkpointing. For more details, see
+        # https://github.com/huggingface/trl/issues/2514#issuecomment-2692152703.
+        # Can be removed once https://github.com/deepspeedai/DeepSpeed/pull/8130 is merged and released.
+        if (
+            is_peft_model(model)
+            and args.deepspeed_plugin is not None
+            and args.deepspeed_plugin.zero_stage == 3
+            and args.gradient_checkpointing
+        ):
+            args.gradient_checkpointing_kwargs = args.gradient_checkpointing_kwargs or {}
+            use_reentrant = args.gradient_checkpointing_kwargs.get("use_reentrant")
+            if use_reentrant is False:
+                logger.warning(
+                    "You are using PEFT with DeepSpeed ZeRO-3 and gradient checkpointing with `use_reentrant=False`. "
+                    "`use_reentrant` is forced to `True` in this configuration to ensure correct training. To remove "
+                    "this warning, unset `use_reentrant` in `gradient_checkpointing_kwargs` or set it to `True`."
+                )
+            args.gradient_checkpointing_kwargs["use_reentrant"] = True
+
         # When using gradient checkpointing with PEFT, we need to enable input gradients. transformers.Trainer normally
         # handles this, but a bug currently prevents it; see https://github.com/huggingface/transformers/issues/42489
         if is_peft_model(model) and args.gradient_checkpointing:
@@ -798,7 +817,7 @@ class KTOTrainer(_BaseTrainer):
                 )
             if self.loss_type in ["apo_zero_unpaired"]:
                 raise ValueError(
-                    "You cannot set `loss_type='apo_zero_unpaired'` with liger-kernel."
+                    "You cannot set `loss_type='apo_zero_unpaired'` with liger-kernel. "
                     "Only KTO loss is supported with liger-kernel."
                 )
             if compute_metrics is not None:
@@ -1157,9 +1176,6 @@ class KTOTrainer(_BaseTrainer):
                 "`precompute_ref_log_probs=True` is not supported with IterableDataset. Please use a map-style "
                 "Dataset or set `precompute_ref_log_probs=False`."
             )
-        # Idempotent skip: dataset already has ref log-probs precomputed.
-        if "ref_logps" in dataset.column_names:
-            return dataset
         model_hash = hash_module(self.ref_model or self.model)
         fingerprint = Hasher.hash((dataset._fingerprint, model_hash, self.calculate_KL))
         cache_file = dataset._get_cache_file_path(fingerprint)
@@ -1325,7 +1341,7 @@ class KTOTrainer(_BaseTrainer):
         mode = "train" if self.model.training else "eval"
         batch = {k: (v.to(self.accelerator.device) if isinstance(v, torch.Tensor) else v) for k, v in inputs.items()}
 
-        labels = torch.tensor(batch["label"])
+        labels = batch["label"]
         num_chosen = labels.sum().to(self.accelerator.device)
         num_rejected = (len(labels) - num_chosen).to(self.accelerator.device)
 
@@ -1413,11 +1429,11 @@ class KTOTrainer(_BaseTrainer):
                 _input=outputs.last_hidden_state[:, :-1],
                 lin_weight=lm_head.weight,
                 target=target,
-                bias=lm_head.bias if hasattr(lm_head, "bias") else None,
-                preference_labels=torch.tensor(batch["label"], dtype=torch.bool).to(self.accelerator.device),
+                bias=lm_head.bias,
+                preference_labels=batch["label"],
                 ref_input=ref_outputs.last_hidden_state[:, :-1],
                 ref_weight=ref_lm_head.weight,
-                ref_bias=ref_lm_head.bias if hasattr(lm_head, "bias") else None,
+                ref_bias=ref_lm_head.bias,
                 kl=kl,
             )
 
@@ -1466,7 +1482,7 @@ class KTOTrainer(_BaseTrainer):
         mode = "train" if self.model.training else "eval"
         batch = {k: (v.to(self.accelerator.device) if isinstance(v, torch.Tensor) else v) for k, v in inputs.items()}
 
-        labels = torch.tensor(batch["label"])
+        labels = batch["label"]
         num_chosen = labels.sum().to(self.accelerator.device)
         num_rejected = (len(labels) - num_chosen).to(self.accelerator.device)
 
@@ -1507,8 +1523,6 @@ class KTOTrainer(_BaseTrainer):
 
         chosen_logps = completion_logps.index_select(0, chosen_idx)
         rejected_logps = completion_logps.index_select(0, rejected_idx)
-        chosen_logits = outputs.logits.index_select(0, chosen_idx)
-        rejected_logits = outputs.logits.index_select(0, rejected_idx)
 
         if self.precompute_ref_logps:
             ref_chosen_logps = batch["ref_logps"].index_select(0, chosen_idx)
@@ -1599,6 +1613,25 @@ class KTOTrainer(_BaseTrainer):
             self._total_train_tokens += num_tokens_in_batch
         self._metrics[mode]["num_tokens"] = [self._total_train_tokens]
 
+        # Average logits for chosen and rejected completions
+        shift_completion_mask = batch["completion_mask"][:, 1:]
+        chosen_logits = shift_logits.detach().index_select(0, chosen_idx)
+        rejected_logits = shift_logits.detach().index_select(0, rejected_idx)
+        chosen_mask = shift_completion_mask.index_select(0, chosen_idx)
+        rejected_mask = shift_completion_mask.index_select(0, rejected_idx)
+        total_chosen_logits = chosen_logits[chosen_mask.bool()].mean(-1).sum()
+        total_chosen_tokens = chosen_mask.sum()
+        total_rejected_logits = rejected_logits[rejected_mask.bool()].mean(-1).sum()
+        total_rejected_tokens = rejected_mask.sum()
+        total_chosen_logits = self.accelerator.gather_for_metrics(total_chosen_logits).sum().item()
+        total_chosen_tokens = self.accelerator.gather_for_metrics(total_chosen_tokens).sum().item()
+        total_rejected_logits = self.accelerator.gather_for_metrics(total_rejected_logits).sum().item()
+        total_rejected_tokens = self.accelerator.gather_for_metrics(total_rejected_tokens).sum().item()
+        if total_chosen_tokens > 0:
+            self._metrics[mode]["logits/chosen"].append(total_chosen_logits / total_chosen_tokens)
+        if total_rejected_tokens > 0:
+            self._metrics[mode]["logits/rejected"].append(total_rejected_logits / total_rejected_tokens)
+
         all_num_chosen = self.accelerator.gather_for_metrics(num_chosen).sum().item()
         all_num_rejected = self.accelerator.gather_for_metrics(num_rejected).sum().item()
 
@@ -1609,9 +1642,6 @@ class KTOTrainer(_BaseTrainer):
             self._metrics[mode]["logps/chosen"].append(
                 self.accelerator.gather_for_metrics(chosen_logps.nansum()).nansum().item() / all_num_chosen
             )
-            self._metrics[mode]["logits/chosen"].append(
-                self.accelerator.gather_for_metrics(chosen_logits.nansum()).nansum().item() / all_num_chosen
-            )
 
         if all_num_rejected > 0:
             self._metrics[mode]["rewards/rejected"].append(
@@ -1619,9 +1649,6 @@ class KTOTrainer(_BaseTrainer):
             )
             self._metrics[mode]["logps/rejected"].append(
                 self.accelerator.gather_for_metrics(rejected_logps.nansum()).nansum().item() / all_num_rejected
-            )
-            self._metrics[mode]["logits/rejected"].append(
-                self.accelerator.gather_for_metrics(rejected_logits.nansum()).nansum().item() / all_num_rejected
             )
 
         if all_num_chosen > 0 and all_num_rejected > 0:
@@ -1671,6 +1698,19 @@ class KTOTrainer(_BaseTrainer):
                     }
                 else:
                     eval_dataset = self._precompute_ref_logps(eval_dataset, "eval", batch_size)
+            # Call `super().evaluate()` once per split ourselves instead of handing the whole dict to it: `Trainer.evaluate`
+            # would otherwise recurse into `self.evaluate` per split, re-entering this override on an already-prepared dataset.
+            if isinstance(eval_dataset, dict):
+                metrics = {}
+                for name, dataset in eval_dataset.items():
+                    metrics.update(
+                        super().evaluate(
+                            eval_dataset=dataset,
+                            ignore_keys=ignore_keys,
+                            metric_key_prefix=f"{metric_key_prefix}_{name}",
+                        )
+                    )
+                return metrics
         return super().evaluate(
             eval_dataset=eval_dataset, ignore_keys=ignore_keys, metric_key_prefix=metric_key_prefix
         )
