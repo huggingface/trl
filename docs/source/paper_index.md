@@ -2,6 +2,9 @@
 
 <!-- Within sections, papers are sorted by publish dates -->
 
+> [!TIP]
+> Each paper below links to its Hugging Face paper page. You can also read any of them from the terminal with the `hf` CLI, e.g. `hf papers read 2402.03300` — particularly handy for coding agents.
+
 ## Group Relative Policy Optimization
 
 Papers relating to the [`GRPOTrainer`].
@@ -1677,6 +1680,38 @@ training_args = DistillationConfig(
     per_device_train_batch_size=32,  # batch size (Table A.1 of the paper)
     warmup_steps=2000,  # warm-up steps (Table A.1 of the paper)
     max_completion_length=64,  # max output tokens (Table A.1 of the paper)
+)
+```
+
+### On the Position Bias of On-Policy Distillation
+
+**📜 Paper**: https://huggingface.co/papers/2606.22600
+
+Introduces Importance-Weighted On-Policy Distillation (IW-OPD), which addresses the position bias in OPD by reweighting sampled-token distillation updates according to accumulated teacher-student prefix discrepancy. Early tokens keep larger weights, while later tokens after high drift are downweighted. Used in TRL via [`experimental.distillation.DistillationTrainer`] with `distillation_objective="iw_opd"`.
+
+The paper reports its main experiments with a verl PPO trainer and vLLM rollouts. `DistillationTrainer` exposes the matching distillation and rollout settings below; PPO-specific settings from the paper such as clipping range `0.2`, dual-clip constant `3.0`, PPO epochs, entropy coefficient, KL reward penalty, auxiliary KL, and rollout importance correction are not `DistillationConfig` parameters.
+
+```python
+from trl.experimental.distillation import DistillationConfig
+
+# Table 6 and Algorithm 1 of the paper, mapped to DistillationConfig where available.
+training_args = DistillationConfig(
+    distillation_objective="iw_opd",
+    iw_opd_gamma=0.5,  # γ amplification, Algorithm 1 and Appendix C.3
+    lmbda=1.0,  # fully on-policy rollouts
+    learning_rate=1e-5,  # Table 6
+    per_device_train_batch_size=1,  # Table 6 uses PPO micro-batch size 1 per GPU
+    gradient_accumulation_steps=32,  # with 32 GPUs, this gives the paper's 1024-prompt batch
+    num_generations=1,  # Table 6 rollout samples per prompt
+    temperature=1.0,  # Table 6 training decoding temperature
+    top_p=1.0,  # Table 6 training decoding top-p
+    max_prompt_length=2048,  # Table 6
+    max_completion_length=16384,  # Table 6
+    warmup_ratio=0.0,  # Table 6
+    use_vllm=True,  # Table 6 uses vLLM rollouts
+    vllm_sync_frequency=1,  # refresh rollout policy after each update
+    save_steps=10,  # Table 6 checkpoint frequency
+    eval_steps=10,  # Table 6 validation frequency
 )
 ```
 

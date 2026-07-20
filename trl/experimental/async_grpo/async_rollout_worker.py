@@ -45,7 +45,7 @@ from ...chat_template_utils import (
     parse_response,
 )
 from ...import_utils import is_vllm_available
-from ...trainer.utils import print_prompt_completions_sample
+from ...trainer.utils import get_callable_name, print_prompt_completions_sample
 
 
 logger = get_logger(__name__)
@@ -318,7 +318,7 @@ class _AsyncRolloutLoop:
         if prompt_index_value is not None:
             prompt_index_value.value = dataset_start_index
         self.reward_funcs = reward_funcs
-        self.reward_func_names = [f.__name__ for f in reward_funcs]
+        self.reward_func_names = [get_callable_name(f) for f in reward_funcs]
         # `add_response_schema` sets the response template (transformers >= 5.13) or legacy schema for known chat
         # templates, so tool calls can be parsed. Skip if one is already set; warn if it's a migratable legacy schema.
         has_template = getattr(processing_class, "response_template", None) is not None
@@ -510,7 +510,12 @@ class _AsyncRolloutLoop:
                             {k: v for k, v in row.items() if k != "environment"} if self._multi_environment else row
                         )
                         observation = environment.reset(**reset_kwargs)
-                    prompt = row["prompt"]
+                    # `prompt` is optional only when an environment owns the data; `reset()` then supplies it. Without
+                    # an environment, a missing `prompt` is a malformed dataset and must still fail fast (KeyError).
+                    if "prompt" not in row and self.environment_factories is not None:
+                        prompt = [{"role": "user", "content": ""}]
+                    else:
+                        prompt = row["prompt"]
                     if observation is not None:
                         # Rebuild the last message instead of mutating in place (as GRPOTrainer does): the
                         # same row is reused across the group's generations and across epochs. Normalize str vs
