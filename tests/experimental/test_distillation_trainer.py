@@ -266,6 +266,49 @@ class TestDistillationTrainer(TrlTestCase):
         for name, param in previous_params.items():
             assert not torch.equal(param, trainer.model.get_parameter(name)), f"Parameter {name} has not changed."
 
+    def test_collator_accepts_prompt_only_dataset(self):
+        """A `prompt` column carries no completion, so the collated batch is entirely masked (nothing to train on)."""
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        trainer = DistillationTrainer(
+            model=self.model_id,
+            teacher_model=self.model_id,
+            args=self._make_args(),
+            train_dataset=dataset,
+            processing_class=self.tokenizer,
+        )
+        batch = trainer.data_collator([dataset[i] for i in range(2)])
+        assert (batch["labels"] == -100).all()
+        assert torch.equal(batch["input_ids"], batch["prompts"])
+
+    @pytest.mark.xfail(
+        strict=True,
+        reason="Prompt-only datasets carry no dataset-completion tokens, so num_items_in_batch (counted from the raw "
+        "dataloader labels before on-policy generation replaces them) is 0 and the loss is sum / 0 = NaN. Un-xfail "
+        "when the num_items_in_batch denominator is fixed (plan 5.6).",
+    )
+    def test_train_runs_with_prompt_only_dataset(self):
+        """The forward-looking prompt-only format should train end to end once the loss denominator is fixed."""
+        losses = []
+
+        class _RecordingTrainer(DistillationTrainer):
+            def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+                out = super().compute_loss(model, inputs, return_outputs, num_items_in_batch)
+                losses.append(out[0] if isinstance(out, tuple) else out)
+                return out
+
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        trainer = _RecordingTrainer(
+            model=self.model_id,
+            teacher_model=self.model_id,
+            args=self._make_args(max_steps=1, learning_rate=0.1),
+            train_dataset=dataset,
+            processing_class=self.tokenizer,
+        )
+
+        trainer.train()
+
+        assert all(torch.isfinite(loss).item() for loss in losses)
+
     @pytest.mark.xfail(
         reason="num_items_in_batch is computed from the raw dataloader batches, before _prepare_inputs runs. "
         "_RepeatBatchDataLoader yields the same generation batch once per accumulation step, so the count is "
