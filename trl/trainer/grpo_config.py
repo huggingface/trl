@@ -1062,6 +1062,16 @@ class GRPOConfig(_BaseConfig):
                 "completions to the Hub, or unset log_completions_hub_repo."
             )
 
+        # `auto_find_batch_size` halves the train batch size on OOM, and the generation batch is derived from it. The
+        # reduced batch is no longer guaranteed to hold full prompt groups, which breaks grouping the rewards by
+        # prompt. There's no way to preserve the invariant while shrinking the batch, so reject it up front.
+        if self.auto_find_batch_size:
+            raise ValueError(
+                "auto_find_batch_size is not supported by GRPO, because the generation batch must contain full "
+                "prompt groups of num_generations completions, and reducing the batch size on out-of-memory breaks "
+                "this invariant. Set auto_find_batch_size=False and lower per_device_train_batch_size instead."
+            )
+
         num_processes = self.world_size
         # The current default effective batch size
         if self.generation_batch_size is None and self.steps_per_generation is None:
