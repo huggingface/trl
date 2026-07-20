@@ -501,8 +501,6 @@ class DistillationTrainer(_BaseTrainer):
         self._buffered_text_logs = None
         self._buffer_step = 0
 
-        # ── Loss tracking ──
-
         # ── Generation config ──
         generation_kwargs = {
             "max_new_tokens": args.max_completion_length,
@@ -671,7 +669,7 @@ class DistillationTrainer(_BaseTrainer):
         return _RepeatBatchDataLoader(base_dataloader, repeat_count=self.args.gradient_accumulation_steps)
 
     # ──────────────────────────────────────────────────────────────────────
-    #  Buffering: on/off-policy mixing across gradient accumulation steps
+    #  Buffering across gradient accumulation steps
     # ──────────────────────────────────────────────────────────────────────
 
     @profiling_decorator
