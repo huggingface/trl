@@ -38,7 +38,7 @@ class OnlineDPOConfig(_BaseConfig):
             Path to the reward model.
         max_new_tokens (`int`, *optional*, defaults to `64`):
             Maximum number of tokens to generate per completion.
-        max_length (`int`, *optional*, defaults to `256`):
+        max_length (`int`, *optional*, defaults to `512`):
             Maximum total length of the sequence (prompt + completion) used to compute log probabilities. If the
             sequence exceeds this limit, the leftmost tokens will be truncated to preserve as much of the completion as
             possible.
@@ -144,6 +144,13 @@ class OnlineDPOConfig(_BaseConfig):
         model_init_kwargs (`dict[str, Any]`, *optional*):
             Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the model from a
             string.
+        trust_remote_code (`bool`, *optional*, defaults to `False`):
+            Whether to allow loading models that ship custom Python code from the Hub. Forwarded to
+            [`~transformers.AutoModelForCausalLM.from_pretrained`]. Also applied to reward-model and reward-tokenizer
+            loads.
+        reward_weights (`list[float]`, *optional*):
+            Weights for combining multiple reward functions. Must match the number of reward functions. If `None`, all
+            reward functions are equally weighted.
 
     > [!NOTE]
     > These parameters have default values different from [`~transformers.TrainingArguments`]:
@@ -351,6 +358,13 @@ class OnlineDPOConfig(_BaseConfig):
         metadata={
             "help": "Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the model "
             "from a string."
+        },
+    )
+    trust_remote_code: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to allow loading models that ship custom Python code from the Hub. Forwarded to "
+            "`AutoModelForCausalLM.from_pretrained`. Also applied to reward-model and reward-tokenizer loads."
         },
     )
     reward_weights: list[float] | None = field(

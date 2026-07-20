@@ -58,11 +58,29 @@ The [`experimental.distillation.DistillationTrainer`] needs three key parameters
 
 * `lmbda`: controls the student data fraction, i.e., the proportion of on-policy student-generated outputs. When `lmbda=0.0`, training is fully off-policy (dataset completions only). When `lmbda=1.0`, training is fully on-policy (student generates all completions). For values in between, each gradient accumulation slice is randomly assigned as on- or off-policy based on `lmbda`.
 * `beta`: controls the interpolation in the Generalized Jensen-Shannon Divergence. When `beta=0.0` the loss approximates forward KL divergence, while `beta=1.0` approximates reverse KL divergence. Values in between interpolate.
+* `distillation_objective`: selects the training objective. Use `"jsd"` for the generalized JSD/KL objective, or `"iw_opd"` for Importance-Weighted On-Policy Distillation, which reweights sampled-token reverse-KL policy-gradient updates by prefix teacher-student agreement. IW-OPD requires `lmbda=1.0`.
 * `loss_top_k`: number of top tokens to use for the KL/JSD loss. Set to `0` for exact full-vocabulary computation (local teacher only), or `> 0` for a top-k approximation. See more about top-k with external teacher server below.
 
 ### On-policy vs. off-policy
 
 Setting `lmbda=1.0` (fully on-policy) generally outperforms off-policy distillation because the student learns from its own mistakes rather than imitating trajectories it may never produce. The generation buffer ensures on-policy training stays efficient: prompts across gradient accumulation steps are batched into a single vLLM call.
+
+### Importance-Weighted On-Policy Distillation
+
+Set `distillation_objective="iw_opd"` to use Importance-Weighted On-Policy Distillation from [On the Position Bias of On-Policy Distillation](https://huggingface.co/papers/2606.22600). IW-OPD computes a sampled-token OPD advantage from teacher and student log-probabilities, then upweights earlier tokens and downweights later tokens according to accumulated teacher-student drift.
+
+```python
+config = DistillationConfig(
+    output_dir="distilled-model",
+    distillation_objective="iw_opd",
+    iw_opd_gamma=0.5,
+    lmbda=1.0,
+)
+```
+
+IW-OPD is only available for fully on-policy training. It is incompatible with `use_liger_kernel=True`; when
+`use_vllm=True`, set `vllm_sync_frequency=1`. The vLLM path requests sampled-token rollout log-probabilities and
+uses them as the detached IW-OPD rollout policy log-probs.
 
 ### Using an external teacher server
 
@@ -94,7 +112,7 @@ When using the teacher server:
 
 ### Expected dataset type
 
-The dataset should be formatted as a [conversational](dataset_formats#conversational) [language modeling](dataset_formats#language_modeling) dataset:
+The dataset should be formatted as a [conversational](dataset_formats#conversational) [language modeling](dataset_formats#language-modeling) dataset:
 
 ```python
 {"messages": [{"role": "user", "content": "What color is the sky?"},
@@ -109,11 +127,11 @@ When using fully on-policy distillation (`lmbda=1.0`), the assistant turn can be
 
 ## Example script
 
-Use [`trl/experimental/distillation/distillation.py`](https://github.com/huggingface/trl/blob/main/trl/experimental/distillation/distillation.py) to launch distillation training from the command line. The script supports full training, mixed on/off-policy, and LoRA via the standard `ModelConfig` flags.
+Use [`examples/scripts/distillation.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/distillation.py) to launch distillation training from the command line. The script supports full training, mixed on/off-policy, and LoRA via the standard `ModelConfig` flags.
 
 ```bash
 # Full training (off-policy only, lmbda=0):
-python trl/experimental/distillation/distillation.py \
+python examples/scripts/distillation.py \
     --model_name_or_path Qwen/Qwen2.5-0.5B-Instruct \
     --teacher_model_name_or_path Qwen/Qwen2.5-1.5B-Instruct \
     --dataset_name trl-lib/chatbot_arena_completions \
@@ -127,7 +145,7 @@ python trl/experimental/distillation/distillation.py \
 
 ```bash
 # Mixed on/off-policy (lmbda=0.5):
-python trl/experimental/distillation/distillation.py \
+python examples/scripts/distillation.py \
     --model_name_or_path Qwen/Qwen2.5-0.5B-Instruct \
     --teacher_model_name_or_path Qwen/Qwen2.5-1.5B-Instruct \
     --dataset_name trl-lib/chatbot_arena_completions \

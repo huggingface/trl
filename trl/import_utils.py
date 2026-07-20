@@ -65,6 +65,10 @@ def is_fastapi_available() -> bool:
     return _is_package_available("fastapi")
 
 
+def is_harbor_available() -> bool:
+    return _is_package_available("harbor")
+
+
 def is_jmespath_available() -> bool:
     return _is_package_available("jmespath")
 
@@ -109,9 +113,12 @@ def is_uvicorn_available() -> bool:
 def is_vllm_available(min_version: str | None = None) -> bool:
     _vllm_available, _vllm_version = _is_package_available("vllm", return_version=True)
     if _vllm_available:
-        if not (Version("0.12.0") <= Version(_vllm_version) <= Version("0.19.0")):
+        # Use base_version to drop any local segment (e.g. the "+cu129" in "0.24.0+cu129"), which PEP 440 orders
+        # above the plain release and would otherwise fail the upper-bound check.
+        _vllm_base_version = Version(Version(_vllm_version).base_version)
+        if not (Version("0.16.0") <= _vllm_base_version <= Version("0.24.0")):
             warnings.warn(
-                f"TRL currently supports vLLM versions from 0.12.0 to 0.19.0. You have version {_vllm_version} "
+                f"TRL currently supports vLLM versions from 0.16.0 to 0.24.0. You have version {_vllm_version} "
                 "installed. We recommend installing a supported version to avoid compatibility issues.",
                 stacklevel=2,
             )

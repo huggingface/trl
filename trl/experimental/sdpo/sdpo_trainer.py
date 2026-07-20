@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import inspect
+import math
 import re
 import textwrap
 from collections import defaultdict
@@ -23,6 +24,7 @@ from typing import Any
 
 import datasets
 import torch
+from accelerate.logging import get_logger
 from accelerate.utils import gather_object, is_peft_model
 from datasets import Dataset, IterableDataset
 from torch import nn
@@ -39,7 +41,7 @@ from transformers import (
     TrainerCallback,
 )
 from transformers.trainer_utils import seed_worker
-from transformers.utils import is_datasets_available, is_liger_kernel_available, is_peft_available, logging
+from transformers.utils import is_datasets_available, is_liger_kernel_available, is_peft_available
 
 from ...data_utils import apply_chat_template, is_conversational
 from ...models import prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
@@ -49,6 +51,7 @@ from ...trainer.utils import (
     RepeatSampler,
     create_model_from_path,
     disable_dropout_in_model,
+    get_callable_name,
     get_config_model_id,
     identity,
     pad,
@@ -58,7 +61,9 @@ from ...trainer.utils import (
 )
 from ..utils import prepare_peft_model
 from .loss_utils import (
+    add_tail_bucket,
     apply_importance_sampling_clipping,
+    compute_divergence,
     compute_full_logit_self_distillation_loss,
     compute_sampled_token_self_distillation_loss,
     compute_topk_self_distillation_loss,
@@ -67,17 +72,49 @@ from .sdpo_config import SDPOConfig
 from .teacher_sync import PEFTAdapterEMACallback, SyncTeacherModelCallback, is_pure_lora_training
 
 
-logger = logging.get_logger(__name__)
+if is_liger_kernel_available():
+    from liger_kernel.chunked_loss import LigerFusedLinearJSDLoss
 
 
 if is_peft_available():
     from peft import PeftConfig
 
-if is_liger_kernel_available():
-    from liger_kernel.chunked_loss import LigerFusedLinearJSDLoss
+
+logger = get_logger(__name__)
 
 
 TrainingBatch = dict[str, torch.Tensor | Any]
+
+
+def build_teacher_request_inputs(
+    input_ids: torch.Tensor,
+    attention_mask: torch.Tensor,
+    prompt_attention_mask: torch.Tensor,
+) -> tuple[list[list[int]], list[int], list[int]]:
+    """Trim padded batch tensors into per-sample (prompt+completion) sequences for teacher-server requests."""
+    if input_ids.shape != attention_mask.shape:
+        raise ValueError(
+            f"input_ids and attention_mask must have the same shape, got {input_ids.shape} and {attention_mask.shape}."
+        )
+
+    input_ids_cpu = input_ids.detach().cpu()
+    attention_mask_cpu = attention_mask.detach().cpu().bool()
+    prompt_lengths = prompt_attention_mask.detach().cpu().sum(dim=1).to(torch.long)
+
+    trimmed_input_ids: list[list[int]] = []
+    prompt_lengths_list: list[int] = []
+    completion_lengths_list: list[int] = []
+    for row, mask, prompt_length in zip(input_ids_cpu, attention_mask_cpu, prompt_lengths, strict=True):
+        trimmed_row = row[mask]
+        prompt_len = int(prompt_length.item())
+        if prompt_len < 0 or prompt_len > trimmed_row.numel():
+            raise ValueError(
+                f"Invalid prompt length {prompt_len} for trimmed sequence of length {trimmed_row.numel()}."
+            )
+        trimmed_input_ids.append(trimmed_row.tolist())
+        prompt_lengths_list.append(prompt_len)
+        completion_lengths_list.append(int(trimmed_row.numel()) - prompt_len)
+    return trimmed_input_ids, prompt_lengths_list, completion_lengths_list
 
 
 @dataclass
@@ -328,6 +365,7 @@ class SDPOTrainer(_BaseTrainer):
             model_init_kwargs = args.model_init_kwargs or {}
             if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 model_init_kwargs["device_map"] = None
+            model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
             model = create_model_from_path(model, **model_init_kwargs)
         elif args.model_init_kwargs is not None:
             logger.warning(
@@ -370,7 +408,10 @@ class SDPOTrainer(_BaseTrainer):
 
         if processing_class is None:
             processing_class = AutoProcessor.from_pretrained(
-                get_config_model_id(model.config), truncation_side="left", padding_side="left"
+                get_config_model_id(model.config),
+                truncation_side="left",
+                padding_side="left",
+                trust_remote_code=args.trust_remote_code,
             )
 
         if isinstance(processing_class, ProcessorMixin):
@@ -422,6 +463,38 @@ class SDPOTrainer(_BaseTrainer):
         if hasattr(model, "warnings_issued"):
             model.warnings_issued["estimate_tokens"] = True
 
+        # Teacher logprobs from the running vLLM generation server (reuses the synced student weights) instead of a
+        # local teacher forward. MVP: `live` teacher only — the generation server holds the current student weights.
+        self.use_teacher_server = args.use_teacher_server
+        if self.use_teacher_server:
+            if not (args.use_vllm and args.vllm_mode == "server"):
+                raise ValueError(
+                    "`use_teacher_server=True` requires `use_vllm=True` and `vllm_mode='server'`: teacher logprobs are "
+                    "served by the same vLLM server used for generation."
+                )
+            if args.teacher_model_kind != "live":
+                raise ValueError(
+                    "`use_teacher_server=True` only supports `teacher_model_kind='live'` (the generation server holds "
+                    f"the current student weights), got {args.teacher_model_kind!r}."
+                )
+            if args.distillation_weight != 1.0:
+                raise ValueError(
+                    "`use_teacher_server=True` only supports pure self-distillation with `distillation_weight=1.0`, "
+                    f"got {args.distillation_weight}. A convex blend with the policy loss needs the full-vocabulary "
+                    "logits, which the server does not return."
+                )
+            if args.distillation_mode not in ("sampled_token", "topk_logits"):
+                raise ValueError(
+                    "`use_teacher_server=True` only supports `distillation_mode` in {'sampled_token', 'topk_logits'}, "
+                    f"got {args.distillation_mode!r}. The server returns the teacher's top-k logprobs, not the full "
+                    "vocabulary, so `full_logits` is unavailable. Note `topk_logits` distills over the teacher's own "
+                    "top-k support (the server cannot score the student's top-k indices)."
+                )
+            if args.use_liger_kernel:
+                raise ValueError(
+                    "`use_teacher_server=True` is incompatible with `use_liger_kernel`: the server returns top-k "
+                    "logprobs while the Liger fused loss needs full-vocabulary hidden states."
+                )
         # Liger fused JSD loss for `full_logits`: same generalized JSD as `compute_divergence`, so alpha maps to beta.
         self.use_liger_loss = False
         if args.use_liger_kernel:
@@ -452,7 +525,7 @@ class SDPOTrainer(_BaseTrainer):
                     "The Liger fused loss reduces with a token-level mean (equivalent to `loss_type='bnpo'`); the "
                     f"configured `loss_type={args.loss_type!r}` is ignored on the Liger path."
                 )
-            self.liger_jsd_loss = LigerFusedLinearJSDLoss(
+            self.liger_loss = LigerFusedLinearJSDLoss(
                 beta=args.distillation_alpha,
                 ignore_index=-100,
                 temperature=args.temperature,
@@ -482,7 +555,6 @@ class SDPOTrainer(_BaseTrainer):
             self.vllm_generation = VLLMGeneration(
                 model=self.model,
                 accelerator=self.accelerator,
-                is_fsdp_enabled=self.is_fsdp_enabled,
                 processing_class=self.processing_class,
                 mode=args.vllm_mode,
                 server_base_url=args.vllm_server_base_url,
@@ -498,6 +570,7 @@ class SDPOTrainer(_BaseTrainer):
                 * args.steps_per_generation,
                 enable_sleep_mode=args.vllm_enable_sleep_mode,
                 model_impl=args.vllm_model_impl,
+                trust_remote_code=args.trust_remote_code,
                 repetition_penalty=args.repetition_penalty,
                 temperature=self.temperature,
                 top_p=args.top_p,
@@ -507,6 +580,16 @@ class SDPOTrainer(_BaseTrainer):
                 logprobs=None,
                 generation_kwargs=args.generation_kwargs,
             )
+
+        # Per-rank read-only client to the same generation server for teacher scoring (weights are synced there by
+        # `VLLMGeneration`; scoring needs no weight-update communicator). Mirrors the distillation trainer's
+        # `teacher_client`.
+        self.teacher_client = None
+        if self.use_teacher_server:
+            from ...generation.vllm_client import VLLMClient
+
+            base_url = args.vllm_server_base_url or f"http://{args.vllm_server_host}:{args.vllm_server_port}"
+            self.teacher_client = VLLMClient(base_url=base_url, connection_timeout=args.vllm_server_timeout)
 
         if args.disable_dropout:
             disable_dropout_in_model(self.model)
@@ -523,6 +606,14 @@ class SDPOTrainer(_BaseTrainer):
         self.epsilon_high = args.epsilon_high
         self.beta = args.beta
 
+        if args.importance_sampling_level == "sequence" and args.loss_type in ["bnpo", "dr_grpo", "dapo"]:
+            logger.warning(
+                f"When using `importance_sampling_level='sequence'`, the `'{args.loss_type}'` loss sums per-token "
+                "contributions, which effectively weights each sequence by its completion length instead of "
+                "optimizing the per-sequence objective. To reproduce the GSPO paper's setup, set `loss_type='grpo'` "
+                "(see https://huggingface.co/docs/trl/main/en/paper_index#group-sequence-policy-optimization)."
+            )
+
         if not isinstance(reward_funcs, list):
             reward_funcs = [reward_funcs]
         self.reward_func_names = []
@@ -531,6 +622,7 @@ class SDPOTrainer(_BaseTrainer):
                 reward_model_init_kwargs = args.model_init_kwargs or {}
                 if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                     reward_model_init_kwargs["device_map"] = None
+                reward_model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
                 reward_funcs[i] = AutoModelForSequenceClassification.from_pretrained(
                     reward_func,
                     num_labels=1,
@@ -539,7 +631,7 @@ class SDPOTrainer(_BaseTrainer):
             if isinstance(reward_funcs[i], nn.Module):
                 self.reward_func_names.append(get_config_model_id(reward_funcs[i].config).split("/")[-1])
             else:
-                self.reward_func_names.append(reward_funcs[i].__name__)
+                self.reward_func_names.append(get_callable_name(reward_funcs[i]))
         self.reward_funcs = reward_funcs
 
         if args.reward_weights is not None:
@@ -561,7 +653,9 @@ class SDPOTrainer(_BaseTrainer):
         ):
             if isinstance(reward_func, PreTrainedModel):
                 if reward_processing_class is None:
-                    reward_processing_class = AutoTokenizer.from_pretrained(get_config_model_id(reward_func.config))
+                    reward_processing_class = AutoTokenizer.from_pretrained(
+                        get_config_model_id(reward_func.config), trust_remote_code=args.trust_remote_code
+                    )
                 if reward_processing_class.pad_token_id is None:
                     reward_processing_class.pad_token = reward_processing_class.eos_token
                 reward_func.config.pad_token_id = reward_processing_class.pad_token_id
@@ -653,6 +747,7 @@ class SDPOTrainer(_BaseTrainer):
         model_init_kwargs = self.args.model_init_kwargs or {}
         if self.args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
             model_init_kwargs["device_map"] = None
+        model_init_kwargs.setdefault("trust_remote_code", self.args.trust_remote_code)
         self.teacher_model = create_model_from_path(get_config_model_id(self.model.config), **model_init_kwargs)
         self.teacher_model.requires_grad_(False)
         self.teacher_model.eval()
@@ -1040,11 +1135,14 @@ class SDPOTrainer(_BaseTrainer):
             raise ValueError("The SDPOTrainer does not support returning outputs")
 
         if self.args.distillation_weight == 1.0:
-            if self.use_liger_loss:
+            if self.use_teacher_server:
+                loss = self._compute_server_distillation_loss(model, inputs)
+            elif self.use_liger_loss:
                 accumulation_scale = self.current_gradient_accumulation_steps if self.model.training else 1.0
                 return self._compute_liger_loss(model, inputs) / accumulation_scale
-            distillation_logits = self._compute_teacher_student_logits(model, self.teacher_model, inputs)
-            loss = self._compute_self_distillation_loss(model, inputs, distillation_logits)
+            else:
+                distillation_logits = self._compute_teacher_student_logits(model, self.teacher_model, inputs)
+                loss = self._compute_self_distillation_loss(model, inputs, distillation_logits)
         elif self.args.distillation_weight == 0.0:
             student_input_ids = torch.cat([inputs["prompt_ids"], inputs["completion_ids"]], dim=1)
             student_attention_mask = torch.cat([inputs["prompt_mask"], inputs["completion_mask"]], dim=1)
@@ -1187,6 +1285,145 @@ class SDPOTrainer(_BaseTrainer):
             self.accelerator.gather(mean_distill_loss).mean().item(),
         )
         return loss
+
+    def _compute_server_distillation_loss(self, model, inputs: TrainingBatch) -> torch.Tensor:
+        """Distillation loss with teacher logprobs served by the vLLM generation server (`teacher_model_kind='live'`).
+
+        The student is forwarded locally (grad) for its logits; the teacher logprobs are fetched from the server (no
+        local teacher forward). `sampled_token` distills the realized token (reverse KL); `topk_logits` distills over
+        the teacher's own top-k support (the server cannot score the student's top-k indices).
+        """
+        # Buffered batches are reused across optimizer steps (`num_iterations > 1`), so the server weights can lag the
+        # live student; re-sync before scoring.
+        if self.state.global_step != self._last_loaded_step:
+            self.vllm_generation.sync_weights()
+            # Only the main process pushes weights to the server, so hold every rank here until the push completes;
+            # otherwise non-main ranks could score against half-updated weights.
+            self.accelerator.wait_for_everyone()
+            self._last_loaded_step = self.state.global_step
+
+        completion_ids = inputs["completion_ids"]
+        completion_mask = inputs["completion_mask"]
+        logits_to_keep = completion_ids.size(1)
+
+        self_distillation_mask = inputs.get("self_distillation_mask")
+        if self_distillation_mask is None:
+            loss_mask = completion_mask
+        else:
+            loss_mask = completion_mask * self_distillation_mask.unsqueeze(1)
+
+        student_input_ids = torch.cat([inputs["prompt_ids"], completion_ids], dim=1)
+        student_attention_mask = torch.cat([inputs["prompt_mask"], completion_mask], dim=1)
+        student_logits = self._forward_logits(
+            model=model,
+            input_ids=student_input_ids,
+            attention_mask=student_attention_mask,
+            logits_to_keep=logits_to_keep,
+        )
+
+        mode = "train" if model.training else "eval"
+        teacher = self._get_teacher_token_logprobs_from_server(inputs, logits_to_keep)
+        # Padding positions come back as `-inf`; the masked-out positions are neutralized to finite values below so the
+        # divergence does not leak `+inf` through them (mirrors the distillation trainer).
+        required = loss_mask.bool()
+        student_per_token_logps = selective_log_softmax(student_logits, completion_ids)
+
+        teacher_per_token_logps = teacher["actual_logprobs"]
+        if (required & ~torch.isfinite(teacher_per_token_logps)).any():
+            raise ValueError("Teacher server returned no logprob for a required completion token.")
+        teacher_per_token_logps = torch.where(
+            required, teacher_per_token_logps, torch.zeros_like(teacher_per_token_logps)
+        )
+
+        # Diagnostic for disagreement between local student scores and server teacher scores on realized tokens.
+        # Sudden jumps can indicate stale server weights or numerical drift.
+        abs_diff = ((student_per_token_logps.detach() - teacher_per_token_logps).abs() * loss_mask).sum() / (
+            loss_mask.sum().clamp(min=1.0)
+        )
+        self._metrics[mode]["self_distillation/server_logprob_abs_diff"].append(
+            self.accelerator.gather(abs_diff).mean().item()
+        )
+
+        if self.args.distillation_mode == "sampled_token":
+            # Reverse-KL token-level objective, matching `compute_sampled_token_self_distillation_loss`.
+            per_token_loss = (student_per_token_logps - teacher_per_token_logps).detach() * student_per_token_logps
+        else:
+            teacher_topk_logps = teacher["topk_logprobs"]
+            teacher_topk_ids = teacher["topk_token_ids"]
+            # Project the student onto the teacher's top-k support, then renormalize (or add a tail bucket) before the
+            # divergence, matching `compute_topk_self_distillation_loss` on the teacher's support.
+            keep = required.unsqueeze(-1)
+            student_topk_logps = torch.gather(
+                torch.log_softmax(student_logits, dim=-1), dim=-1, index=teacher_topk_ids
+            )
+            student_topk_logps = torch.where(keep, student_topk_logps, torch.zeros_like(student_topk_logps))
+            teacher_topk_logps = torch.where(keep, teacher_topk_logps, torch.zeros_like(teacher_topk_logps))
+            if self.args.distillation_add_tail:
+                student_topk_logps = add_tail_bucket(student_topk_logps)
+                teacher_topk_logps = add_tail_bucket(teacher_topk_logps)
+            else:
+                student_topk_logps = student_topk_logps - torch.logsumexp(student_topk_logps, dim=-1, keepdim=True)
+                teacher_topk_logps = teacher_topk_logps - torch.logsumexp(teacher_topk_logps, dim=-1, keepdim=True)
+            per_token_loss = compute_divergence(student_topk_logps, teacher_topk_logps, self.args.distillation_alpha)
+
+        old_per_token_logps = inputs.get("old_per_token_logps")
+        if self.args.distillation_is_clip is not None and old_per_token_logps is not None:
+            per_token_loss = apply_importance_sampling_clipping(
+                per_token_loss, student_per_token_logps, old_per_token_logps, self.args.distillation_is_clip
+            )
+
+        loss = (per_token_loss * loss_mask).sum(-1) / loss_mask.sum(-1).clamp(min=1.0)
+        loss = loss.mean()
+        mean_distill_loss = (per_token_loss * loss_mask).sum() / loss_mask.sum().clamp(min=1.0)
+        self._log_self_distillation_metric(mode, self.accelerator.gather(mean_distill_loss).mean().item())
+        return loss
+
+    def _get_teacher_token_logprobs_from_server(
+        self, inputs: TrainingBatch, logits_to_keep: int
+    ) -> dict[str, torch.Tensor]:
+        """Per-token teacher logprobs from the vLLM server.
+
+        Returns a dict with `actual_logprobs` (`(B, T)`, the realized-token logprob for reverse KL) and `topk_logprobs`
+        / `topk_token_ids` (`(B, T, K)`, the teacher's top-k support for top-k logit distillation). Completions are
+        right-padded, so server values fill the leading positions of each row and the trailing padding keeps the `-inf`
+        / `0` sentinels (neutralized by the caller).
+        """
+        import numpy as np
+
+        teacher_input_ids = inputs["teacher_input_ids"]
+        teacher_attention_mask = inputs["teacher_attention_mask"]
+        device = teacher_input_ids.device
+        batch_size = teacher_input_ids.size(0)
+        prompt_attention_mask = teacher_attention_mask[:, : teacher_attention_mask.size(1) - logits_to_keep]
+        if self.args.distillation_mode == "topk_logits" and self.args.distillation_topk is None:
+            raise ValueError("`distillation_mode='topk_logits'` requires `distillation_topk` to be set.")
+        top_logprobs = self.args.distillation_topk if self.args.distillation_mode == "topk_logits" else 1
+
+        sequences, prompt_lengths, _ = build_teacher_request_inputs(
+            teacher_input_ids, teacher_attention_mask, prompt_attention_mask
+        )
+        result = self.teacher_client.get_sequence_logprobs(
+            sequences=sequences,
+            prompt_lengths=prompt_lengths,
+            top_logprobs=top_logprobs,
+            temperature=self.temperature,
+        )
+
+        actual = np.full((batch_size, logits_to_keep), float("-inf"), dtype=np.float32)
+        topk = np.full((batch_size, logits_to_keep, top_logprobs), float("-inf"), dtype=np.float32)
+        topk_ids = np.zeros((batch_size, logits_to_keep, top_logprobs), dtype=np.int64)
+        for i in range(batch_size):
+            seq_actual = result["actual_logprobs"][i]
+            n = min(len(seq_actual), logits_to_keep)
+            if n:
+                actual[i, :n] = np.array(seq_actual, dtype=np.float32)[:n, 0]
+                topk[i, :n] = np.array(result["logprobs"][i], dtype=np.float32)[:n]
+                topk_ids[i, :n] = np.array(result["logprob_token_ids"][i], dtype=np.int64)[:n]
+        return {
+            "actual_logprobs": torch.from_numpy(actual).to(device),
+            "topk_logprobs": torch.from_numpy(topk).to(device),
+            "topk_token_ids": torch.from_numpy(topk_ids).to(device),
+        }
 
     def _compute_teacher_student_logits(
         self,
@@ -1343,7 +1580,7 @@ class SDPOTrainer(_BaseTrainer):
         # Per-sequence then batch mean (grpo), matching the non-Liger path: the fused kernel reduces by total tokens
         # (bnpo), so we call it per sequence and average.
         seq_losses = [
-            self.liger_jsd_loss(
+            self.liger_loss(
                 student_input=student_hidden[i],
                 student_weight=student_head.weight,
                 teacher_input=teacher_hidden[i],
@@ -1431,10 +1668,22 @@ class SDPOTrainer(_BaseTrainer):
 
     def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
         mode = "train" if self.model.training else "eval"
-        metrics = {k: sum(v) / len(v) for k, v in self._metrics[mode].items() if v}
+        # Average the metrics
+        metrics = {}
+        for key, val in self._metrics[mode].items():
+            # Filter out NaN values before averaging. A reward function that returns None for all samples
+            # in a batch produces NaN for that batch's metric. With logging_steps > 1, a naive sum()/len()
+            # would let a single NaN contaminate valid data from other batches. Only return None when no
+            # valid values remain (e.g. JSON loggers crash on float NaN).
+            valid = [v for v in val if not math.isnan(v)]
+            metrics[key] = sum(valid) / len(valid) if valid else None
+
+        # This method can be called both in training and evaluation. When called in evaluation, the keys in `logs`
+        # start with "eval_". We need to add the prefix "eval_" to the keys in `metrics` to match the format.
         if mode == "eval":
-            metrics = {f"eval_{k}": v for k, v in metrics.items()}
-        logs = {**logs, **metrics}
+            metrics = {f"eval_{key}": val for key, val in metrics.items()}
+
+        logs.update(metrics)
         super().log(logs, start_time)
         self._metrics[mode].clear()
 
