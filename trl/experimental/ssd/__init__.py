@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from .ssd_config import SSDConfig
+from .ssd_trainer import SSDTrainer
 
-from .dppo_config import DPPOConfig
-from .dppo_trainer import DPPOTrainer
+
+__all__ = ["SSDConfig", "SSDTrainer"]
