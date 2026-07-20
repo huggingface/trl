@@ -112,6 +112,8 @@ When using the teacher server:
 
 ### Expected dataset type
 
+<!-- TODO: Add a prompt-only dataset preview/format section here (as GRPO has) and point the `messages`-deprecation warning in `_DistillationCollator` at it, instead of linking to the GRPO quick-start. -->
+
 The dataset should be formatted as a [conversational](dataset_formats#conversational) [language modeling](dataset_formats#language-modeling) dataset:
 
 ```python

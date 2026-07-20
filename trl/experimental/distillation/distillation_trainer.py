@@ -14,6 +14,7 @@
 
 import random
 import textwrap
+import warnings
 from collections import defaultdict
 from collections.abc import Callable
 from contextlib import nullcontext
@@ -188,6 +189,12 @@ class _DistillationCollator:
                 prompt_messages = example["prompt"]
                 has_completion = False
             else:
+                warnings.warn(
+                    "Passing a `messages`-style (conversational language-modeling) dataset to `DistillationTrainer` "
+                    "is deprecated and will be removed in a future release. Use the prompt-only format instead: "
+                    "https://huggingface.co/docs/trl/v1.8.0/en/grpo_trainer#quick-start",
+                    FutureWarning,
+                )
                 messages = example[self.messages_key]
                 # Split: prompt = everything before the last assistant turn, completion = last assistant turn
                 has_completion = len(messages) > 1 and messages[-1].get("role") == "assistant"
