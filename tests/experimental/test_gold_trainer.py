@@ -3810,3 +3810,74 @@ class TestGOLDTrainerIterableDataset(TrlTestCase):
 
         metrics = trainer.evaluate()
         assert metrics["eval_loss"] is not None
+
+
+class TestGOLDTrainerRepeatBatchDataLoader(TrlTestCase):
+    def setup_method(self):
+        self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
+        self.tokenizer.pad_token = self.tokenizer.eos_token
+
+    @pytest.mark.parametrize("streaming", [False, True])
+    def test_generation_batch_is_collated_once_per_window(self, streaming):
+        # The training dataloader must collate (tokenize) each generation batch exactly once and then replay the cached
+        # batch across the gradient-accumulation window, instead of re-collating the same examples on every micro-step.
+        # `_RepeatBatchDataLoader` applies this window replay uniformly to map-style datasets (sampler `repeat_count=1`)
+        # and iterable datasets (`repeat_iterable_dataset(repeat_count=1)`), so the collator runs exactly once per
+        # window on both paths -- in particular the iterable path must not repeat the window a second time.
+        grad_accum = 3
+        per_device = 2
+        num_windows = 2  # dataset holds `per_device * grad_accum * num_windows` unique examples
+        messages = [
+            [{"role": "user", "content": f"Question {i}?"}, {"role": "assistant", "content": f"Answer {i}."}]
+            for i in range(per_device * grad_accum * num_windows)
+        ]
+        dataset = Dataset.from_dict({"messages": messages})
+        if streaming:
+            dataset = dataset.to_iterable_dataset()
+
+        trainer = GOLDTrainer(
+            model=self.model_id,
+            teacher_model=self.model_id,
+            args=GOLDConfig(
+                output_dir=self.tmp_dir,
+                report_to="none",
+                per_device_train_batch_size=per_device,
+                gradient_accumulation_steps=grad_accum,
+                num_generations=1,
+                max_length=64,
+                max_completion_length=16,
+                # Required for the streaming case: the Trainer rejects a length-less dataset at construction without
+                # it. Harmless for the map-style case since this test only builds the dataloader, never trains.
+                max_steps=num_windows * grad_accum,
+                use_cpu=True,
+                bf16=False,
+            ),
+            train_dataset=dataset,
+            processing_class=self.tokenizer,
+        )
+
+        # Wrap the collator to count how many times examples are actually collated (tokenized).
+        class _CountingCollator:
+            def __init__(self, inner):
+                self.inner = inner
+                self.n_calls = 0
+
+            def __call__(self, examples):
+                self.n_calls += 1
+                return self.inner(examples)
+
+        counting_collator = _CountingCollator(trainer.data_collator)
+        trainer.data_collator = counting_collator
+
+        batches = list(trainer.get_train_dataloader())
+
+        # Collated exactly once per window (not once per micro-step, and not twice for iterable datasets), then
+        # replayed `grad_accum` times across the window.
+        assert counting_collator.n_calls == num_windows
+        assert len(batches) == num_windows * grad_accum
+
+        # The `grad_accum` micro-step batches within a window are the same cached object (proof of no re-collation).
+        for window_start in range(0, len(batches), grad_accum):
+            window = batches[window_start : window_start + grad_accum]
+            assert all(batch is window[0] for batch in window)

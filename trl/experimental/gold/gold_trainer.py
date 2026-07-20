@@ -766,6 +766,34 @@ class ULDLoss(nn.Module):
         return answers_index, answers_size
 
 
+class _RepeatBatchDataLoader:
+    """Repeats each collated batch ``repeat_count`` times without re-collation.
+
+    ``RepeatSampler`` with ``repeat_count > 1`` causes the DataLoader to re-collate (re-tokenize) the same examples on
+    every repeat, which is wasteful. This wrapper instead keeps ``repeat_count=1`` in the sampler and repeats the
+    already-collated tensor dict, avoiding redundant tokenization.
+    """
+
+    def __init__(self, dataloader, repeat_count: int):
+        self.dataloader = dataloader
+        self.repeat_count = repeat_count
+
+    def __iter__(self):
+        for batch in self.dataloader:
+            for _ in range(self.repeat_count):
+                yield batch
+
+    def __len__(self):
+        return len(self.dataloader) * self.repeat_count
+
+    def set_epoch(self, epoch: int):
+        if hasattr(self.dataloader, "set_epoch"):
+            self.dataloader.set_epoch(epoch)
+
+    def __getattr__(self, attr):
+        return getattr(self.dataloader, attr)
+
+
 class GOLDTrainer(SFTTrainer):
     _tag_names = ["trl", "gold"]
     _name = "GOLD"
@@ -1177,11 +1205,14 @@ class GOLDTrainer(SFTTrainer):
     def _get_train_sampler(self, dataset=None):
         if dataset is None:
             dataset = self.train_dataset
+        # The gradient-accumulation-window repeat is applied by `_RepeatBatchDataLoader` (see `get_train_dataloader`)
+        # rather than baked into the sampler with `repeat_count`, so each generation batch is collated (tokenized)
+        # once and the cached batch is replayed across the window instead of being re-collated every micro-step.
         return RepeatSampler(
             data_source=dataset,
             mini_repeat_count=self.num_generations,
             batch_size=self.args.generation_batch_size * self.accelerator.num_processes,
-            repeat_count=self.args.gradient_accumulation_steps,
+            repeat_count=1,
             shuffle=True,
             seed=self.args.seed,
         )
@@ -1190,26 +1221,30 @@ class GOLDTrainer(SFTTrainer):
         """
         Override Trainer.get_train_dataloader to load one generation batch per optimizer window.
 
-        The dataloader yields local batches of size `per_device_train_batch_size * gradient_accumulation_steps`. The
-        `RepeatSampler` (with `repeat_count=gradient_accumulation_steps`) ensures each generation batch is sampled
-        `gradient_accumulation_steps` times so Trainer's loop iterates the correct number of times. Only the first
-        batch in each window triggers `_fill_buffer`; the rest are ignored by `_prepare_inputs`. Iterable datasets
-        can't carry a sampler, so the same ordering is baked into the stream (see `repeat_iterable_dataset`).
+        The dataloader yields local batches of size `per_device_train_batch_size * gradient_accumulation_steps`. Each
+        generation batch is collated once and then replayed `gradient_accumulation_steps` times by
+        `_RepeatBatchDataLoader`, so Trainer's loop iterates the correct number of times without re-tokenizing the same
+        examples every micro-step. Only the first batch in each window triggers `_fill_buffer`; the rest are ignored by
+        `_prepare_inputs`. This window replay is applied uniformly to both map-style datasets (indexed via
+        `RepeatSampler`) and iterable datasets (streamed via `repeat_iterable_dataset`); neither carries the window
+        repeat itself (both use `repeat_count=1`), so it is never applied twice.
         """
         if self.train_dataset is None:
             raise ValueError("Trainer: training requires a train_dataset.")
 
         train_dataset = self.train_dataset
         if isinstance(train_dataset, IterableDataset):
-            # Iterable datasets can't be indexed, so RepeatSampler can't be attached. Reproduce its ordering by
-            # transforming the stream instead (see `repeat_iterable_dataset`). The full permutation done by
-            # RepeatSampler (which always shuffles here) becomes a buffered shuffle.
+            # Iterable datasets can't be indexed, so RepeatSampler can't be attached. Reproduce its `num_generations`
+            # grouping by transforming the stream instead (see `repeat_iterable_dataset`); the full permutation done by
+            # RepeatSampler (which always shuffles here) becomes a buffered shuffle. `repeat_count=1`: the
+            # gradient-accumulation-window repeat is applied afterwards by `_RepeatBatchDataLoader`, the same as for
+            # map-style datasets, so it is not baked into the stream here.
             train_dataset = train_dataset.shuffle(seed=self.args.seed)
             train_dataset = repeat_iterable_dataset(
                 train_dataset,
                 mini_repeat_count=self.num_generations,
                 batch_size=self.args.generation_batch_size * self.accelerator.num_processes,
-                repeat_count=self.args.gradient_accumulation_steps,
+                repeat_count=1,
             )
         data_collator = self.data_collator
         if is_datasets_available() and isinstance(train_dataset, Dataset):
@@ -1236,7 +1271,9 @@ class GOLDTrainer(SFTTrainer):
             if self.args.dataloader_num_workers > 0:
                 dataloader_params["prefetch_factor"] = self.args.dataloader_prefetch_factor
 
-        return self.accelerator.prepare(DataLoader(train_dataset, **dataloader_params))
+        dataloader = self.accelerator.prepare(DataLoader(train_dataset, **dataloader_params))
+        # Replay each collated generation batch across the accumulation window (see `_get_train_sampler`).
+        return _RepeatBatchDataLoader(dataloader, repeat_count=self.args.gradient_accumulation_steps)
 
     @profiling_decorator
     def _prepare_inputs(self, generation_batch: dict[str, torch.Tensor | Any]) -> dict[str, torch.Tensor | Any]:
