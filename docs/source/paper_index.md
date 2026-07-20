@@ -1755,7 +1755,7 @@ training_args = GKDConfig(
 )
 ```
 
-You can also use the [`GOLDTrainer`] and [`GOLDConfig`] to perform on-policy distillation with a similar configuration:
+You can also use the [`GOLDTrainer`] and [`GOLDConfig`] to perform on-policy distillation with a similar configuration. See also [Unlocking On-Policy Distillation for Any Model Family](https://huggingface.co/spaces/HuggingFaceH4/on-policy-distillation):
 
 ```python
 from trl.experimental.gold import GOLDConfig
@@ -1765,6 +1765,52 @@ config = GOLDConfig(
     beta=1.0, # to ensure reverse-kl as the loss function
     teacher_model_name_or_path="teacher-model", # specify the teacher model
 
+)
+```
+
+### Cross-Tokenizer Knowledge Distillation (X-Token)
+
+**📜 Paper**: https://huggingface.co/papers/2605.21699
+
+X-Token extends the GOLD distillation framework to student-teacher pairs that **do not share a tokenizer**. It is an **off-policy** method (`lmbda=0`): the dataset provides the completion text, both student and teacher run forward passes on that text, and the cross-tokenizer KD loss is computed between their logits. No on-policy student rollouts are needed. A precomputed sparse projection matrix W ∈ ℝ^{V_s × V_t} maps each student token to the teacher tokens it most plausibly corresponds to, projecting the student distribution into the teacher vocab space so the two can be compared directly.
+
+Two loss formulations are provided:
+
+| Variant | `xtoken_loss_type` | Description |
+|---------|-------------------|-------------|
+| P-KL | `"p_kl"` | Projects the full student distribution into teacher vocab via W and computes forward KL on a global top-k subset. Implements Eq. (2) of the paper. |
+| H-KL | `"h_kl"` | Hybrid: forward KL on a relaxed common set (top-1 projection weight ≥ 0.6) and sorted-L1 on uncommon tokens. Implements Eq. (3–4). |
+
+First build the projection matrix with the prep scripts in `trl/experimental/gold/scripts/xtoken/`. Step 1 re-tokenizes the student vocab with the teacher tokenizer; the optional `--runtime-top-k` flag then sorts and trims the matrix in one go (equivalent to running `sort_and_cut_projection_matrix.py` afterwards):
+
+```bash
+python trl/experimental/gold/scripts/xtoken/build_projection_matrix.py \
+    --student-model meta-llama/Llama-3.2-1B-Instruct \
+    --teacher-model Qwen/Qwen3-4B \
+    --runtime-top-k 4 \
+    --output-dir cross_tokenizer_data
+```
+
+Then train with the example script (off-policy, no vLLM needed):
+
+```bash
+python examples/scripts/xtoken.py \
+    --student-model meta-llama/Llama-3.2-1B-Instruct \
+    --teacher-model Qwen/Qwen3-4B \
+    --projection-matrix cross_tokenizer_data/projection_map_..._top_4_sorted.pt \
+    --loss-type p_kl
+```
+
+or pass the path to `GOLDConfig` directly:
+
+```python
+from trl.experimental.gold import GOLDConfig
+
+config = GOLDConfig(
+    lmbda=0.0,  # off-policy: no student rollouts needed
+    xtoken_loss_type="p_kl",
+    xtoken_projection_matrix_path="cross_tokenizer_data/projection_matrix_llama_qwen_top4.pt",
+    teacher_tokenizer_name_or_path="Qwen/Qwen3-4B",
 )
 ```
 

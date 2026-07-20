@@ -112,6 +112,28 @@ class GOLDConfig(SFTConfig):
             Whether to skip EOS token for student in ULD loss computation.
         uld_skip_teacher_eos (`bool`, *optional*, defaults to `True`):
             Whether to skip EOS token for teacher in ULD loss computation.
+        > Parameters for X-Token cross-tokenizer KD (https://huggingface.co/papers/2605.21699)
+
+        xtoken_loss_type (`str`, *optional*, defaults to `"none"`):
+            Cross-tokenizer KD variant: `"none"` (disabled), `"p_kl"` (projection KL), or `"h_kl"`
+            (hybrid KL with relaxed common set). Requires `teacher_tokenizer_name_or_path` and
+            `xtoken_projection_matrix_path`.
+        xtoken_projection_matrix_path (`str`, *optional*):
+            Path to a precomputed projection matrix file. Required when `xtoken_loss_type != "none"`.
+        xtoken_temperature (`float`, *optional*, defaults to `1.0`):
+            Temperature T for X-Token KD loss; the loss is multiplied by T² (Hinton 2015).
+        xtoken_dynamic_scaling (`bool`, *optional*, defaults to `True`):
+            Scale KD by `stop_gradient(CE / KD)` to balance loss magnitudes (paper Eq. 7).
+        xtoken_uncommon_topk (`int`, *optional*, defaults to `8192`):
+            H-KL: cap sorted-L1 uncommon comparison to the top-k tokens per side.
+        xtoken_vocab_topk (`int`, *optional*, defaults to `8192`):
+            P-KL: restrict KL to the global top-k teacher tokens by max logit. Interacts with the projection
+            matrix `--top-k`: teacher tokens outside the matrix's reach get near-zero projected student mass
+            and dominate the KL, so smaller values concentrate the loss on tokens the student can match.
+        xtoken_kl_weight (`float`, *optional*, defaults to `1.0`):
+            Weight for the X-Token KD term when `xtoken_dynamic_scaling=False`.
+        xtoken_ce_scale (`float`, *optional*, defaults to `0.1`):
+            Scale factor for the CE term in the X-Token loss when `xtoken_dynamic_scaling=False`.
         > Parameters that control vLLM integration
 
         use_vllm (`bool`, *optional*, defaults to `False`):
@@ -359,6 +381,87 @@ class GOLDConfig(SFTConfig):
         metadata={"help": "Whether to skip EOS token for teacher in ULD loss computation."},
     )
 
+    # X-Token parameters
+    xtoken_loss_type: str = field(
+        default="none",
+        metadata={
+            "help": (
+                'Cross-tokenizer KD loss variant. "none" disables X-Token; "p_kl" uses full-vocab '
+                'projection (P-KL, Eq. 2 in https://huggingface.co/papers/2605.21699); "h_kl" uses '
+                "the relaxed common-set hybrid (H-KL, Eq. 3-4). Requires `teacher_tokenizer_name_or_path` "
+                "and `xtoken_projection_matrix_path`."
+            )
+        },
+    )
+    xtoken_projection_matrix_path: str | None = field(
+        default=None,
+        metadata={
+            "help": (
+                "Path to a precomputed projection matrix file (torch.save'd dict with 'indices' and "
+                "'likelihoods' tensors for the dense top-k format, or dict[(s_id, t_id)] -> count for "
+                "the sparse multi-token format). Required when `xtoken_loss_type != 'none'`. See "
+                "https://huggingface.co/papers/2605.21699 Algorithm 2 for construction details."
+            )
+        },
+    )
+    xtoken_temperature: float = field(
+        default=1.0,
+        metadata={
+            "help": (
+                "Temperature T for X-Token KD loss. The loss is multiplied by T² so gradient magnitudes "
+                "stay temperature-independent (Hinton 2015). Independent of the sampling temperature."
+            )
+        },
+    )
+    xtoken_dynamic_scaling: bool = field(
+        default=True,
+        metadata={
+            "help": (
+                "When True, scale the KD loss by stop_gradient(CE / KD) before adding CE, keeping CE and "
+                "KD magnitudes balanced throughout training (X-Token paper Eq. 7)."
+            )
+        },
+    )
+    xtoken_uncommon_topk: int = field(
+        default=8192,
+        metadata={
+            "help": (
+                "H-KL only: cap the uncommon-partition sorted-L1 comparison to the top-k tokens on each "
+                "side. 0 means no cap (all tokens compared). Reducing this saves memory at the cost of "
+                "less signal from the long tail."
+            )
+        },
+    )
+    xtoken_vocab_topk: int = field(
+        default=8192,
+        metadata={
+            "help": (
+                "P-KL only: after projecting student probs to teacher vocab, compute forward KL only over "
+                "the global top-k teacher tokens (by max logit across the chunk batch). 0 means full vocab. "
+                "Interacts with the projection matrix --top-k: teacher tokens outside the matrix's reach get "
+                "near-zero projected student mass and dominate the KL, so smaller values concentrate the loss "
+                "on tokens the student can match."
+            )
+        },
+    )
+    xtoken_kl_weight: float = field(
+        default=1.0,
+        metadata={
+            "help": (
+                "Weight for the X-Token KD loss relative to the CE loss. Only used when "
+                "`xtoken_dynamic_scaling=False`."
+            )
+        },
+    )
+    xtoken_ce_scale: float = field(
+        default=0.1,
+        metadata={
+            "help": (
+                "Scale factor for the CE term in the X-Token loss. Only used when `xtoken_dynamic_scaling=False`."
+            )
+        },
+    )
+
     # vLLM parameters
     use_vllm: bool = field(
         default=False,
@@ -529,3 +632,31 @@ class GOLDConfig(SFTConfig):
                         raise ValueError("uld_hybrid_matched_weight must be non-negative.")
                     if self.uld_hybrid_unmatched_weight < 0.0:
                         raise ValueError("uld_hybrid_unmatched_weight must be non-negative.")
+
+        # Validate X-Token parameters
+        _valid_xtoken_types = ("none", "p_kl", "h_kl")
+        if self.xtoken_loss_type not in _valid_xtoken_types:
+            raise ValueError(f"xtoken_loss_type must be one of {_valid_xtoken_types}, got '{self.xtoken_loss_type}'.")
+        if self.xtoken_loss_type != "none":
+            if self.lmbda != 0.0:
+                raise ValueError(
+                    "X-Token KD is off-policy only: set lmbda=0.0 when xtoken_loss_type != 'none'. "
+                    f"Got lmbda={self.lmbda}."
+                )
+            if self.xtoken_projection_matrix_path is None:
+                raise ValueError("xtoken_projection_matrix_path must be set when xtoken_loss_type != 'none'.")
+            if self.xtoken_temperature <= 0.0:
+                raise ValueError("xtoken_temperature must be positive.")
+            if self.xtoken_kl_weight < 0.0:
+                raise ValueError("xtoken_kl_weight must be non-negative.")
+            if self.xtoken_ce_scale < 0.0:
+                raise ValueError("xtoken_ce_scale must be non-negative.")
+            if self.xtoken_uncommon_topk < 0:
+                raise ValueError("xtoken_uncommon_topk must be non-negative.")
+            if self.xtoken_vocab_topk < 0:
+                raise ValueError("xtoken_vocab_topk must be non-negative.")
+        if self.xtoken_loss_type != "none" and self.use_uld_loss:
+            raise ValueError(
+                "`xtoken_loss_type` and `use_uld_loss` are mutually exclusive — use one cross-tokenizer "
+                "KD approach at a time."
+            )
