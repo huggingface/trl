@@ -17,8 +17,21 @@ from typing import Any
 import torch
 import torch.nn.functional as F
 
-from ..distillation.distillation_trainer import DistillationTrainer, _add_tail_bucket, _jsd_divergence
+from ..distillation.distillation_trainer import DistillationTrainer, _jsd_divergence
 from .server_distillation_config import ServerDistillationConfig
+
+
+def _add_tail_bucket(log_probs, valid_mask):
+    """Append a (K+1)-th tail element: log(1 - sum(exp(top_k_logps))).
+
+    This creates a proper probability distribution over K+1 elements, preventing trivial zero loss when top_k is small
+    (especially top_k=1).
+    """
+    log_sum = torch.logsumexp(log_probs, dim=-1, keepdim=True)
+    log_sum = torch.clamp(log_sum, max=-1e-7)  # ensure sum < 1
+    tail = torch.log(-torch.expm1(log_sum))  # log(1 - exp(log_sum))
+    tail_mask = torch.ones_like(valid_mask[..., :1], dtype=torch.bool)
+    return torch.cat([log_probs, tail], dim=-1), torch.cat([valid_mask, tail_mask], dim=-1)
 
 
 def build_teacher_request_inputs(
@@ -113,6 +126,8 @@ class ServerDistillationTrainer(DistillationTrainer):
         )
 
         self.reverse_kl_top_1_mode = args.reverse_kl_top_1_mode
+        self.loss_top_k = args.loss_top_k
+        self.loss_add_tail = args.loss_add_tail
 
         from ...generation.vllm_client import VLLMClient
 

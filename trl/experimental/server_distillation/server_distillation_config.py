@@ -29,6 +29,13 @@ class ServerDistillationConfig(DistillationConfig):
     Parameters:
         teacher_model_server_url (`str` or `None`, *optional*):
             Base URL of a vLLM server hosting the teacher model (e.g., `"http://localhost:8000"`). Required.
+        loss_top_k (`int`, *optional*, defaults to `1`):
+            Number of top tokens the teacher server returns and over which the divergence is computed. For `beta == 0`
+            (pure forward KL) this must be positive; for `beta > 0` it must be `1` (top-1 support). `0` (full
+            vocabulary) is not available with a server teacher, which only exposes top-k logprobs.
+        loss_add_tail (`bool`, *optional*, defaults to `True`):
+            Whether to append a tail bucket representing the remaining probability mass outside the selected top-k
+            support when computing the loss.
         reverse_kl_top_1_mode (`str`, *optional*, defaults to `"sampled"`):
             Selection rule for the reverse-KL top-1 token when `beta > 0` and `loss_top_k == 1`. `"sampled"` uses the
             actual completion token in the batch. `"argmax"` uses the student's highest-probability token (not
@@ -40,6 +47,20 @@ class ServerDistillationConfig(DistillationConfig):
         default=None,
         metadata={
             "help": 'Base URL of a vLLM server hosting the teacher model (e.g., "http://localhost:8000"). Required.'
+        },
+    )
+    loss_top_k: int = field(
+        default=1,
+        metadata={
+            "help": "Number of top tokens the teacher server returns and over which the divergence is computed. "
+            "For beta == 0 this must be positive; for beta > 0 it must be 1."
+        },
+    )
+    loss_add_tail: bool = field(
+        default=True,
+        metadata={
+            "help": "Whether to append a tail bucket representing the remaining probability mass outside the selected "
+            "top-k support."
         },
     )
     reverse_kl_top_1_mode: str = field(

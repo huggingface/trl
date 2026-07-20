@@ -74,15 +74,6 @@ class DistillationConfig(_BaseConfig):
         teacher_model_init_kwargs (`dict[str, Any]` or `None`, *optional*):
             Keyword arguments passed to `AutoModelForCausalLM.from_pretrained` when instantiating the teacher model
             from a string.
-        loss_top_k (`int`, *optional*, defaults to `1`):
-            Number of top tokens to use when computing the JSD/KL loss. Both student and teacher distributions are
-            restricted to these K tokens and re-normalized before computing divergence. If 0, the full vocabulary
-            is used. For local teachers, the general support rule is teacher top-k for forward KL, student top-k for
-            reverse KL, and the union for mixed JSD.
-        loss_add_tail (`bool`, *optional*, defaults to `True`):
-            Whether to append a tail bucket that represents the remaining probability mass outside the selected top-k
-            support when computing the loss.
-
         > Parameters that control on-policy generation
 
         num_generations (`int`, *optional*, defaults to `1`):
@@ -218,22 +209,6 @@ class DistillationConfig(_BaseConfig):
         default=None,
         metadata={
             "help": "Keyword arguments for `AutoModelForCausalLM.from_pretrained` when instantiating the teacher."
-        },
-    )
-    loss_top_k: int = field(
-        default=1,
-        metadata={
-            "help": "Number of top tokens to use when computing the JSD/KL loss. "
-            "Both student and teacher distributions are restricted to these K tokens "
-            "(selected based on beta: teacher's top-k for forward KL, student's top-k for reverse KL, "
-            "union of both for JSD) and re-normalized before computing divergence. "
-            "If 0, the full vocabulary is used (slower but exact)."
-        },
-    )
-    loss_add_tail: bool = field(
-        default=True,
-        metadata={
-            "help": "Whether to append a tail bucket representing the remaining probability mass outside the selected top-k support."
         },
     )
 
