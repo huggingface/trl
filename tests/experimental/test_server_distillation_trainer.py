@@ -12,17 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import dataclasses
 import math
 from unittest.mock import MagicMock
 
 import pytest
 import torch
 import torch.nn.functional as F
-from datasets import Dataset, load_dataset
+from datasets import Dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from trl.experimental.distillation import DistillationConfig, DistillationTrainer
 from trl.experimental.distillation.distillation_trainer import _add_tail_bucket, _jsd_divergence
 from trl.experimental.server_distillation import (
     ServerDistillationConfig,
@@ -41,64 +39,6 @@ def _make_server_config_kwargs(tmp_path):
         "bf16": False,
         "teacher_model_server_url": "http://localhost:8000",
     }
-
-
-def _build_server_result(teacher_logits, inputs, temperature=1.0):
-    """Simulate a vLLM server response with variable-length per-sample completions."""
-    _, _, completion_lengths = build_teacher_request_inputs(
-        inputs["input_ids"],
-        inputs["attention_mask"],
-        prompt_attention_mask=inputs.get("prompt_attention_mask"),
-        labels=inputs.get("labels"),
-    )
-
-    label_mask = inputs["labels"] != -100
-    actual_logprobs = []
-    logprobs = []
-    logprob_token_ids = []
-
-    for i, comp_len in enumerate(completion_lengths):
-        if comp_len == 0:
-            actual_logprobs.append([])
-            logprobs.append([])
-            logprob_token_ids.append([])
-            continue
-
-        comp_start = int(torch.nonzero(label_mask[i], as_tuple=False)[0].item())
-        sample_logits = teacher_logits[i, comp_start - 1 : comp_start - 1 + comp_len, :]
-        sample_log_probs = F.log_softmax(sample_logits / temperature, dim=-1)
-        comp_tokens = inputs["input_ids"][i, comp_start : comp_start + comp_len]
-
-        top1_ids = sample_logits.argmax(dim=-1, keepdim=True)
-        top1_lps = sample_log_probs.gather(dim=-1, index=top1_ids)
-        actual_lps = sample_log_probs.gather(dim=-1, index=comp_tokens.unsqueeze(-1))
-
-        actual_logprobs.append(actual_lps.tolist())
-        logprobs.append(top1_lps.tolist())
-        logprob_token_ids.append(top1_ids.tolist())
-
-    return {
-        "actual_logprobs": actual_logprobs,
-        "logprobs": logprobs,
-        "logprob_token_ids": logprob_token_ids,
-    }
-
-
-class RecordingTeacherClient:
-    def __init__(self):
-        self.calls = []
-        self.result = None
-
-    def get_sequence_logprobs(self, sequences, prompt_lengths, top_logprobs, temperature):
-        self.calls.append(
-            {
-                "sequences": sequences,
-                "prompt_lengths": prompt_lengths,
-                "top_logprobs": top_logprobs,
-                "temperature": temperature,
-            }
-        )
-        return self.result
 
 
 def _ragged_server_response():
@@ -150,6 +90,11 @@ def test_config_rejects_liger(tmp_path):
 def test_config_rejects_reverse_kl_argmax(tmp_path):
     with pytest.raises(ValueError, match="reverse_kl_top_1_mode='argmax' is not supported"):
         ServerDistillationConfig(**_make_server_config_kwargs(tmp_path), reverse_kl_top_1_mode="argmax")
+
+
+def test_config_rejects_invalid_reverse_kl_top_1_mode(tmp_path):
+    with pytest.raises(ValueError, match="reverse_kl_top_1_mode must be one of"):
+        ServerDistillationConfig(**_make_server_config_kwargs(tmp_path), reverse_kl_top_1_mode="invalid")
 
 
 def test_config_rejects_mixed_loss_without_top_1(tmp_path):
@@ -303,106 +248,6 @@ class TestServerReverseKLPaddingMask(TrlTestCase):
 
         loss.sum().backward()
         assert torch.isfinite(raw_student.grad).all()
-
-
-class TestServerVsLocalTeacher(TrlTestCase):
-    def setup_method(self):
-        self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
-        self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
-        self.tokenizer.pad_token = self.tokenizer.eos_token
-
-    def _local_args(self, **kwargs):
-        args = {
-            "output_dir": self.tmp_dir,
-            "per_device_train_batch_size": 2,
-            "gradient_accumulation_steps": 1,
-            "max_steps": 1,
-            "save_strategy": "no",
-            "report_to": "none",
-            "use_cpu": True,
-            "bf16": False,
-            "lmbda": 0.0,
-            "max_length": 128,
-            "max_completion_length": 32,
-            "model_init_kwargs": {"dtype": "float32", "device_map": None},
-            "teacher_model_init_kwargs": {"dtype": "float32", "device_map": None},
-        }
-        args.update(kwargs)
-        return DistillationConfig(**args)
-
-    def _make_local_trainer(self, **kwargs):
-        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
-        return DistillationTrainer(
-            model=self.model_id,
-            teacher_model=self.model_id,
-            args=self._local_args(**kwargs),
-            train_dataset=dataset,
-            processing_class=self.tokenizer,
-        )
-
-    def _make_server_trainer(self, **kwargs):
-        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
-        args = self._local_args(**kwargs)
-        # Copy only the dataclass init fields: vars() also carries post-init-derived attributes
-        # (mixed_precision, distributed_state, ...) that are not accepted by __init__.
-        init_fields = {f.name for f in dataclasses.fields(ServerDistillationConfig) if f.init}
-        server_args = ServerDistillationConfig(
-            **{k: v for k, v in vars(args).items() if k in init_fields},
-            teacher_model_server_url="http://localhost:8000",
-        )
-        return ServerDistillationTrainer(
-            model=self.model_id,
-            args=server_args,
-            train_dataset=dataset,
-            processing_class=self.tokenizer,
-        )
-
-    def _make_batch(self, trainer):
-        examples = [trainer.train_dataset[i] for i in range(2)]
-        return trainer.data_collator(examples)
-
-    @staticmethod
-    def _move_batch_to_device(batch, device):
-        return {key: value.to(device) for key, value in batch.items()}
-
-    def test_sampled_mode_matches_between_local_and_external_teachers(self, monkeypatch):
-        import trl.generation.vllm_client as vllm_client_module
-
-        teacher_client = RecordingTeacherClient()
-        monkeypatch.setattr(vllm_client_module, "VLLMClient", lambda *args, **kwargs: teacher_client)
-
-        local_trainer = self._make_local_trainer(beta=0.5, loss_top_k=1, reverse_kl_top_1_mode="sampled")
-        server_trainer = self._make_server_trainer(beta=0.5, loss_top_k=1)
-
-        cpu_inputs = self._make_batch(local_trainer)
-        expected_sequences, expected_prompt_lengths, _ = build_teacher_request_inputs(
-            cpu_inputs["input_ids"],
-            cpu_inputs["attention_mask"],
-            prompt_attention_mask=cpu_inputs["prompt_attention_mask"],
-            labels=cpu_inputs["labels"],
-        )
-
-        local_inputs = self._move_batch_to_device(cpu_inputs, local_trainer.accelerator.device)
-        server_inputs = self._move_batch_to_device(cpu_inputs, server_trainer.accelerator.device)
-
-        local_trainer.teacher_model.eval()
-        with torch.no_grad():
-            teacher_logits = local_trainer.teacher_model(
-                input_ids=local_inputs["input_ids"],
-                attention_mask=local_inputs["attention_mask"],
-            ).logits
-            teacher_client.result = _build_server_result(
-                teacher_logits,
-                local_inputs,
-                temperature=local_trainer.temperature,
-            )
-            local_loss = local_trainer.compute_loss(local_trainer.model, local_inputs)
-            server_loss = server_trainer.compute_loss(server_trainer.model, server_inputs)
-
-        assert teacher_client.calls[0]["sequences"] == expected_sequences
-        assert teacher_client.calls[0]["prompt_lengths"] == expected_prompt_lengths
-        assert teacher_client.calls[0]["top_logprobs"] == 1
-        torch.testing.assert_close(local_loss, server_loss)
 
 
 class TestServerDistillationTrainerRaggedGrad(TrlTestCase):

@@ -29,6 +29,11 @@ class ServerDistillationConfig(DistillationConfig):
     Parameters:
         teacher_model_server_url (`str` or `None`, *optional*):
             Base URL of a vLLM server hosting the teacher model (e.g., `"http://localhost:8000"`). Required.
+        reverse_kl_top_1_mode (`str`, *optional*, defaults to `"sampled"`):
+            Selection rule for the reverse-KL top-1 token when `beta > 0` and `loss_top_k == 1`. `"sampled"` uses the
+            actual completion token in the batch. `"argmax"` uses the student's highest-probability token (not
+            supported by the server, which cannot score arbitrary student-selected tokens). This setting does not
+            affect the forward-KL support, which always uses the teacher's top-1 token.
     """
 
     teacher_model_server_url: str | None = field(
@@ -37,10 +42,20 @@ class ServerDistillationConfig(DistillationConfig):
             "help": 'Base URL of a vLLM server hosting the teacher model (e.g., "http://localhost:8000"). Required.'
         },
     )
+    reverse_kl_top_1_mode: str = field(
+        default="sampled",
+        metadata={
+            "help": "Reverse-KL top-1 token selection when beta > 0 and loss_top_k == 1. "
+            "Use 'sampled' for the actual completion token or 'argmax' for the student's top-1 token. "
+            "The forward-KL support always uses the teacher's top-1 token."
+        },
+    )
 
     def __post_init__(self):
         super().__post_init__()
 
+        if self.reverse_kl_top_1_mode not in {"sampled", "argmax"}:
+            raise ValueError("reverse_kl_top_1_mode must be one of: 'sampled', 'argmax'")
         if self.use_liger_kernel:
             raise ValueError(
                 "use_liger_kernel=True is not supported by ServerDistillationTrainer because the Liger loss path "
