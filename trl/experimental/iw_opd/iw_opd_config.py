@@ -20,10 +20,10 @@ from ...trainer.base_config import _BaseConfig
 
 
 @dataclass
-class DistillationConfig(_BaseConfig):
+class IWOPDConfig(_BaseConfig):
     # docstyle-ignore
     r"""
-    Configuration class for the [`DistillationTrainer`].
+    Configuration class for the [`IWOPDTrainer`].
 
     Extends [`~transformers.TrainingArguments`] with parameters specific to knowledge distillation. This config is
     independent of [`SFTConfig`] — all necessary fields are declared here.
@@ -57,6 +57,13 @@ class DistillationConfig(_BaseConfig):
             Interpolation coefficient for the Generalized Jensen-Shannon Divergence loss. When `0.0`, the loss is the
             forward KL divergence. When `1.0`, the loss is the reverse KL divergence. When `0.5`, it is the standard
             JSD.
+        distillation_objective (`str`, *optional*, defaults to `"iw_opd"`):
+            Objective to optimize. `"iw_opd"` uses the sampled-token Importance-Weighted On-Policy Distillation
+            objective. `"jsd"` keeps the generalized JSD/KL objective.
+        iw_opd_gamma (`float`, *optional*, defaults to `0.5`):
+            Importance-weight amplification for `distillation_objective="iw_opd"`.
+        iw_opd_epsilon (`float`, *optional*, defaults to `1e-8`):
+            Stabilizer used when normalizing IW-OPD prefix weights.
         reverse_kl_top_1_mode (`str`, *optional*, defaults to `"sampled"`):
             Selection rule for the reverse-KL top-1 token when `beta > 0` and `loss_top_k == 1`. `"sampled"` uses the
             actual completion token in the batch. `"argmax"` uses the student's highest-probability token. This
@@ -201,6 +208,21 @@ class DistillationConfig(_BaseConfig):
             "help": "Interpolation coefficient for the Generalized JSD loss. "
             "0.0 = forward KL, 0.5 = JSD, 1.0 = reverse KL."
         },
+    )
+    distillation_objective: str = field(
+        default="iw_opd",
+        metadata={
+            "help": "Objective to optimize. Use 'iw_opd' for sampled-token Importance-Weighted On-Policy "
+            "Distillation or 'jsd' for the generalized JSD/KL objective."
+        },
+    )
+    iw_opd_gamma: float = field(
+        default=0.5,
+        metadata={"help": "Importance-weight amplification for distillation_objective='iw_opd'."},
+    )
+    iw_opd_epsilon: float = field(
+        default=1e-8,
+        metadata={"help": "Stabilizer used when normalizing IW-OPD prefix weights."},
     )
     reverse_kl_top_1_mode: str = field(
         default="sampled",
@@ -383,6 +405,12 @@ class DistillationConfig(_BaseConfig):
             raise ValueError(f"lmbda must be in [0.0, 1.0], got {self.lmbda}.")
         if self.beta < 0.0 or self.beta > 1.0:
             raise ValueError(f"beta must be in [0.0, 1.0], got {self.beta}.")
+        if self.distillation_objective not in {"jsd", "iw_opd"}:
+            raise ValueError("distillation_objective must be one of: 'jsd', 'iw_opd'")
+        if self.iw_opd_gamma < 0.0:
+            raise ValueError(f"iw_opd_gamma must be non-negative, got {self.iw_opd_gamma}.")
+        if self.iw_opd_epsilon <= 0.0:
+            raise ValueError(f"iw_opd_epsilon must be positive, got {self.iw_opd_epsilon}.")
         if self.reverse_kl_top_1_mode not in {"sampled", "argmax"}:
             raise ValueError("reverse_kl_top_1_mode must be one of: 'sampled', 'argmax'")
 
@@ -414,6 +442,25 @@ class DistillationConfig(_BaseConfig):
             raise ValueError(
                 "use_liger_kernel=True is not supported with use_teacher_server=True because the Liger loss path "
                 "requires a local teacher model."
+            )
+        if self.distillation_objective == "iw_opd" and self.use_liger_kernel:
+            raise ValueError(
+                "use_liger_kernel=True is not supported with distillation_objective='iw_opd' because IW-OPD needs "
+                "sampled-token student and teacher logprobs."
+            )
+        if self.distillation_objective == "iw_opd" and self.lmbda < 1.0:
+            raise ValueError(
+                "distillation_objective='iw_opd' requires lmbda=1.0 because IW-OPD is an on-policy objective."
+            )
+        if self.distillation_objective == "iw_opd" and self.reverse_kl_top_1_mode != "sampled":
+            raise ValueError(
+                "distillation_objective='iw_opd' requires reverse_kl_top_1_mode='sampled' because IW-OPD is defined "
+                "on sampled completion tokens."
+            )
+        if self.distillation_objective == "iw_opd" and self.use_vllm and self.vllm_sync_frequency != 1:
+            raise ValueError(
+                "distillation_objective='iw_opd' with use_vllm=True requires vllm_sync_frequency=1 so generated "
+                "rollouts match the training policy as closely as possible."
             )
         if self.use_teacher_server and (
             self.teacher_model_server_url is None or not self.teacher_model_server_url.strip()

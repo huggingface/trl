@@ -48,6 +48,7 @@ _TELEMETRY_TRAINERS = {
     "GMPOTrainer",
     "GOLDTrainer",
     "GRPOWithReplayBufferTrainer",
+    "IWOPDTrainer",
     "MiniLLMTrainer",
     "NashMDTrainer",
     "OnlineDPOTrainer",
