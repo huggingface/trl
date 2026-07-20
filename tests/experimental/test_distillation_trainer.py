@@ -67,7 +67,7 @@ class TestGeneralizedJSDLossIsPinned(TrlTestCase):
         self.teacher_logits = torch.randn(2, 3, 5, generator=generator)
         self.labels = torch.tensor([[-100, 1, 2], [-100, -100, 3]])
 
-    @pytest.mark.parametrize("beta", [0.0, 0.5, 1.0])
+    @pytest.mark.parametrize("beta", [0.0, 0.25, 1.0])
     @pytest.mark.parametrize("use_labels", [False, True])
     def test_matches_reference_implementation(self, beta, use_labels):
         labels = self.labels if use_labels else None
@@ -77,7 +77,7 @@ class TestGeneralizedJSDLossIsPinned(TrlTestCase):
         expected = _reference_generalized_jsd(self.student_logits, self.teacher_logits, labels=labels, beta=beta)
         torch.testing.assert_close(loss, expected)
 
-    @pytest.mark.parametrize("beta", [0.0, 0.5, 1.0])
+    @pytest.mark.parametrize("beta", [0.0, 0.25, 1.0])
     @pytest.mark.parametrize("use_labels", [False, True])
     def test_matches_gkd(self, beta, use_labels):
         # GKD implements the same objective. Keeping the two in lockstep is the cross-trainer contract: if this breaks,
@@ -89,7 +89,7 @@ class TestGeneralizedJSDLossIsPinned(TrlTestCase):
         gkd_loss = GKDTrainer.generalized_jsd_loss(self.student_logits, self.teacher_logits, labels=labels, beta=beta)
         torch.testing.assert_close(loss, gkd_loss)
 
-    @pytest.mark.parametrize("beta", [0.0, 0.5, 1.0])
+    @pytest.mark.parametrize("beta", [0.0, 0.25, 1.0])
     def test_temperature_matches_reference(self, beta):
         # `temperature` is applied to the loss today. It is scheduled to become sampling-only, so pin it explicitly:
         # that change must be a visible diff here, not a silent drift.
@@ -258,6 +258,14 @@ class TestDistillationTrainer(TrlTestCase):
         # Higher lr than the default: gradients are tiny on this model and the default lr can stall the update, which
         # would make the assertion below vacuous.
         trainer = self._make_local_trainer(max_steps=2, learning_rate=0.1)
+
+        # Diverge the teacher from the student so the divergence (and thus the gradient) is well above fp noise; with
+        # matched weights it would be ~0 and the update below could pass on noise alone.
+        torch.manual_seed(0)
+        with torch.no_grad():
+            for p in trainer.teacher_model.parameters():
+                p.add_(0.5 * torch.randn_like(p))
+
         previous_params = {name: param.clone() for name, param in trainer.model.named_parameters()}
 
         trainer.train()
