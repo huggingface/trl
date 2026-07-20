@@ -79,20 +79,12 @@ class DistillationConfig(_BaseConfig):
         teacher_model_init_kwargs (`dict[str, Any]` or `None`, *optional*):
             Keyword arguments passed to `AutoModelForCausalLM.from_pretrained` when instantiating the teacher model
             from a string.
-        use_teacher_server (`bool`, *optional*, defaults to `False`):
-            Whether to use an external vLLM teacher server instead of a local teacher model.
-        teacher_model_server_url (`str` or `None`, *optional*):
-            Base URL of a vLLM server hosting the teacher model (e.g., `"http://localhost:8000"`). When set, teacher
-            logprobs are fetched from the server instead of running a local forward pass when `use_teacher_server=True`.
         loss_top_k (`int`, *optional*, defaults to `1`):
             Number of top tokens to use when computing the JSD/KL loss. Both student and teacher distributions are
             restricted to these K tokens and re-normalized before computing divergence. If 0, the full vocabulary
             is used. For local teachers, the general support rule is teacher top-k for forward KL, student top-k for
             reverse KL, and the union for mixed JSD. When `beta > 0` and `loss_top_k == 1`, the forward support still
             uses the teacher's top-1 token, while the reverse top-1 token is controlled by `reverse_kl_top_1_mode`.
-            When `use_teacher_server=True`, the pure forward path (`beta=0`) requires this to be positive and uses the
-            teacher's top-k logprobs for the forward term. When `beta > 0`, server-backed distillation requires
-            `loss_top_k == 1` and only supports `"sampled"` reverse top-1 tokens.
         loss_add_tail (`bool`, *optional*, defaults to `True`):
             Whether to append a tail bucket that represents the remaining probability mass outside the selected top-k
             support when computing the loss.
@@ -242,19 +234,6 @@ class DistillationConfig(_BaseConfig):
             "help": "Keyword arguments for `AutoModelForCausalLM.from_pretrained` when instantiating the teacher."
         },
     )
-
-    # Teacher model (external vLLM server)
-    use_teacher_server: bool = field(
-        default=False,
-        metadata={"help": "Whether to use an external vLLM teacher server instead of a local teacher model."},
-    )
-    teacher_model_server_url: str | None = field(
-        default=None,
-        metadata={
-            "help": 'Base URL of a vLLM server hosting the teacher model (e.g., "http://localhost:8000"). '
-            "Required when use_teacher_server=True."
-        },
-    )
     loss_top_k: int = field(
         default=1,
         metadata={
@@ -264,10 +243,7 @@ class DistillationConfig(_BaseConfig):
             "union of both for JSD) and re-normalized before computing divergence. "
             "If 0, the full vocabulary is used (slower but exact). "
             "When beta > 0 and loss_top_k == 1, the forward support still uses the teacher's top-1 token, "
-            "while the reverse top-1 token is controlled by reverse_kl_top_1_mode. "
-            "When use_teacher_server=True, beta=0 requires loss_top_k > 0 and uses the teacher's top-k "
-            "logprobs for the forward term. When beta > 0, server-backed distillation requires loss_top_k == 1 "
-            "and only supports 'sampled' reverse top-1 tokens."
+            "while the reverse top-1 token is controlled by reverse_kl_top_1_mode."
         },
     )
     loss_add_tail: bool = field(
@@ -410,33 +386,6 @@ class DistillationConfig(_BaseConfig):
                 f"{self.per_device_train_batch_size} * {self.gradient_accumulation_steps}."
             )
 
-        if self.use_teacher_server and self.use_liger_kernel:
-            raise ValueError(
-                "use_liger_kernel=True is not supported with use_teacher_server=True because the Liger loss path "
-                "requires a local teacher model."
-            )
-        if self.use_teacher_server and (
-            self.teacher_model_server_url is None or not self.teacher_model_server_url.strip()
-        ):
-            raise ValueError("teacher_model_server_url must be set when use_teacher_server=True.")
-
-        if self.use_teacher_server and self.beta == 0 and self.loss_top_k < 1:
-            raise ValueError(
-                f"loss_top_k must be positive when using use_teacher_server=True with beta=0 "
-                f"(got loss_top_k={self.loss_top_k}). The pure forward server path only has access to the "
-                f"teacher's top-k logprobs, so it cannot compute the exact full-vocabulary loss when loss_top_k=0."
-            )
-        if self.use_teacher_server and self.reverse_kl_top_1_mode == "argmax":
-            raise ValueError(
-                "reverse_kl_top_1_mode='argmax' is not supported with use_teacher_server=True because the server "
-                "cannot provide teacher logprobs for arbitrary student-selected tokens."
-            )
-        if self.use_teacher_server and self.beta > 0 and self.loss_top_k != 1:
-            raise ValueError(
-                f"loss_top_k must be 1 when using use_teacher_server=True with beta>0 "
-                f"(got loss_top_k={self.loss_top_k}). Mixed forward/reverse distillation with an external teacher "
-                "is only implemented for top-1 support."
-            )
         if self.reverse_kl_top_1_mode != "sampled" and (self.beta == 0 or self.loss_top_k != 1):
             warnings.warn(
                 f"reverse_kl_top_1_mode='{self.reverse_kl_top_1_mode}' has no effect when beta={self.beta} "

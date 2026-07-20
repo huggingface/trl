@@ -57,6 +57,7 @@ _TELEMETRY_TRAINERS = {
     "PRMTrainer",
     "SDFTTrainer",
     "SDPOTrainer",
+    "ServerDistillationTrainer",
     "SSDTrainer",
     "TPOTrainer",
     "XPOTrainer",
