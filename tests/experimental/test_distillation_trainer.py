@@ -321,7 +321,7 @@ class TestDistillationTrainer(TrlTestCase):
         trainer = DistillationTrainer(
             model=self.model_id,
             teacher_model=self.model_id,
-            args=self._make_args(lmbda=1.0, gradient_accumulation_steps=2, max_steps=1),
+            args=self._make_args(gradient_accumulation_steps=2, max_steps=1),
             train_dataset=dataset,
             processing_class=self.tokenizer,
         )
