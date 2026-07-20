@@ -362,8 +362,8 @@ class IWOPDTrainer(_BaseTrainer):
     whose supervision has drifted out of distribution. Select it with `distillation_objective="iw_opd"`.
 
     .. note::
-        This trainer is a frozen snapshot of the pre-refactor ``DistillationTrainer``, kept as the home for IW-OPD
-        (a teacher-guided policy-gradient method that does not fit the stable, full-vocabulary ``DistillationTrainer``).
+        This trainer is a frozen snapshot of the pre-refactor ``DistillationTrainer``, kept as the home for IW-OPD (a
+        teacher-guided policy-gradient method that does not fit the stable, full-vocabulary ``DistillationTrainer``).
         It is not actively maintained and will not track that trainer's later improvements.
 
     Supports:
