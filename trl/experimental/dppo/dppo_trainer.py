@@ -629,8 +629,8 @@ class DPPOTrainer(GRPOTrainer):
         """Generate completions, handling tool calls, and thread top-K logprob data through the full pipeline.
 
         Returns:
-            9-tuple of (prompt_ids, completion_ids, tool_mask, completions, total_completion_tokens, logprobs,
-            topk_logprobs, topk_token_ids, extra_fields).
+            8-tuple of (prompt_ids, completion_ids, tool_mask, completions, logprobs, topk_logprobs, topk_token_ids,
+            extra_fields).
         """
         device = self.accelerator.device
         mode = "train" if self.model.training else "eval"
@@ -715,10 +715,10 @@ class DPPOTrainer(GRPOTrainer):
         agg_prompt_lengths = self.accelerator.gather(prompt_lengths)
         agg_completion_lengths = self.accelerator.gather(completion_lengths)
         total_prompt_tokens = agg_prompt_lengths.sum()
-        total_completion_tokens = agg_completion_lengths.sum()
 
+        # Log the metrics
         if mode == "train":
-            self.state.num_input_tokens_seen += (total_prompt_tokens + total_completion_tokens).item()
+            self.state.num_input_tokens_seen += (total_prompt_tokens + agg_completion_lengths.sum()).item()
         self._metrics[mode]["num_tokens"] = [self.state.num_input_tokens_seen]
 
         self._metrics[mode]["completions/mean_length"].append(agg_completion_lengths.float().mean().item())
@@ -751,7 +751,6 @@ class DPPOTrainer(GRPOTrainer):
             completion_ids,
             tool_mask,
             completions,
-            total_completion_tokens,
             logprobs,
             topk_logprobs,
             topk_token_ids,
@@ -946,7 +945,6 @@ class DPPOTrainer(GRPOTrainer):
             completion_ids_list,
             tool_mask_list,
             completions,
-            num_items_in_batch,
             sampling_per_token_logps_list,
             topk_logprobs_list,
             topk_token_ids_list,
@@ -1018,6 +1016,9 @@ class DPPOTrainer(GRPOTrainer):
             # Also mask tool_mask for consistency in multi-turn training
             if tool_mask is not None:
                 tool_mask = tool_mask * (~is_truncated).unsqueeze(1).int()
+
+        loss_mask = completion_mask if tool_mask is None else completion_mask * tool_mask
+        num_items_in_batch = self.accelerator.gather(loss_mask.sum()).sum()
 
         # Concatenate prompt_mask with completion_mask for logit computation
         prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)  # (B, P+C)
@@ -1401,7 +1402,7 @@ class DPPOTrainer(GRPOTrainer):
             per_token_loss = per_token_loss + self.beta * per_token_kl
 
         mode = "train" if self.model.training else "eval"
-        normalizer = inputs["num_items_in_batch"] / self.accelerator.num_processes
+        normalizer = inputs["num_items_in_batch"].clamp(min=1.0) / self.accelerator.num_processes
         loss = (per_token_loss * mask).sum() / normalizer
 
         # Log metrics
