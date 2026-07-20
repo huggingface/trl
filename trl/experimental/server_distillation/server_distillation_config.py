@@ -23,8 +23,8 @@ class ServerDistillationConfig(DistillationConfig):
     Configuration class for the [`ServerDistillationTrainer`].
 
     Extends [`DistillationConfig`] with the address of an external vLLM server that scores the student's completions.
-    The teacher is never held locally: instead of a local forward pass, per-token teacher logprobs are fetched from
-    the server, so only the teacher's top-k logprobs are available and the loss is restricted to a sparse support.
+    The teacher is never held locally: instead of a local forward pass, per-token teacher logprobs are fetched from the
+    server, so only the teacher's top-k logprobs are available and the loss is restricted to a sparse support.
 
     Parameters:
         teacher_model_server_url (`str` or `None`, *optional*):
