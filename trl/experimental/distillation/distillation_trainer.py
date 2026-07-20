@@ -14,7 +14,6 @@
 
 import random
 import textwrap
-import warnings
 from collections import defaultdict
 from collections.abc import Callable
 from contextlib import nullcontext
@@ -435,61 +434,23 @@ class DistillationTrainer(_BaseTrainer):
             self._forward_redirection = _ForwardRedirection()
 
         # ── Teacher model setup ──
-        self._local_teacher_tokenizer_matches_student = True
+        # `teacher_model` may be None: subclasses (e.g. ServerDistillationTrainer) supply the teacher another way.
         if teacher_model is not None:
-            if args.teacher_model_init_kwargs is not None and not isinstance(teacher_model, str):
+            if isinstance(teacher_model, str):
+                teacher_model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
+                dtype = teacher_model_init_kwargs.get("dtype")
+                teacher_model_init_kwargs["dtype"] = dtype if dtype in ["auto", None] else getattr(torch, dtype)
+                if args.teacher_model_revision is not None:
+                    teacher_model_init_kwargs.setdefault("revision", args.teacher_model_revision)
+                # Distributed training requires device_map=None ("auto" fails)
+                if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
+                    teacher_model_init_kwargs["device_map"] = None
+                teacher_model = create_model_from_path(teacher_model, **teacher_model_init_kwargs)
+            elif args.teacher_model_init_kwargs is not None:
                 raise ValueError(
                     "You passed teacher_model_init_kwargs to the config, but your teacher_model is already "
                     "instantiated."
                 )
-
-            teacher_model_name_or_path = (
-                teacher_model
-                if isinstance(teacher_model, str)
-                else getattr(getattr(teacher_model, "config", None), "_name_or_path", None)
-            )
-            if teacher_model_name_or_path is None:
-                raise ValueError(
-                    "DistillationTrainer requires a local teacher model with `config._name_or_path` set so its "
-                    "tokenizer can be validated against the student tokenizer."
-                )
-
-            teacher_model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
-            teacher_tokenizer_kwargs = {}
-            teacher_revision = teacher_model_init_kwargs.get("revision", args.teacher_model_revision)
-            if teacher_revision is not None:
-                teacher_tokenizer_kwargs["revision"] = teacher_revision
-            teacher_tokenizer_kwargs["trust_remote_code"] = teacher_model_init_kwargs["trust_remote_code"]
-            teacher_processing_class = AutoTokenizer.from_pretrained(
-                teacher_model_name_or_path, **teacher_tokenizer_kwargs
-            )
-            if getattr(teacher_processing_class, "pad_token", None) is None:
-                teacher_processing_class.pad_token = teacher_processing_class.eos_token
-            self._local_teacher_tokenizer_matches_student = self._local_teacher_tokenizers_match(
-                processing_class, teacher_processing_class
-            )
-            if not self._local_teacher_tokenizer_matches_student:
-                warnings.warn(
-                    "DistillationTrainer's built-in local-teacher loss assumes the student and teacher share the "
-                    "same tokenizer. The loaded local teacher tokenizer does not match the student tokenizer, so "
-                    "the teacher weights will be left unchanged for subclass overrides. Direct use of the base "
-                    "DistillationTrainer with this local teacher remains unsupported.",
-                    UserWarning,
-                    stacklevel=2,
-                )
-
-            if isinstance(teacher_model, str):
-                dtype = teacher_model_init_kwargs.get("dtype")
-                teacher_model_init_kwargs["dtype"] = dtype if dtype in ["auto", None] else getattr(torch, dtype)
-
-            if isinstance(teacher_model, str):
-                init_kwargs = dict(teacher_model_init_kwargs)
-                if args.teacher_model_revision is not None:
-                    init_kwargs.setdefault("revision", args.teacher_model_revision)
-                # Distributed training requires device_map=None ("auto" fails)
-                if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
-                    init_kwargs["device_map"] = None
-                teacher_model = create_model_from_path(teacher_model, **init_kwargs)
 
         # Trainer does not need to remove unused columns — the collator handles raw data
         args.remove_unused_columns = False
@@ -509,8 +470,17 @@ class DistillationTrainer(_BaseTrainer):
 
         # ── Prepare teacher model (after super().__init__ so accelerator is ready) ──
         if teacher_model is not None:
-            if self._local_teacher_tokenizer_matches_student:
-                teacher_model.resize_token_embeddings(self.model.config.get_text_config().vocab_size)
+            # The divergence compares the full next-token distribution of the student against the teacher's, so both
+            # must be defined over the same vocabulary.
+            student_vocab_size = self.model.config.get_text_config().vocab_size
+            teacher_vocab_size = teacher_model.config.get_text_config().vocab_size
+            if student_vocab_size != teacher_vocab_size:
+                raise ValueError(
+                    f"The student model has vocab_size {student_vocab_size} but the teacher model has vocab_size "
+                    f"{teacher_vocab_size}. Distillation compares the teacher's full next-token distribution, which "
+                    f"requires a shared vocabulary. Use a teacher with the same vocab_size, or GOLD for "
+                    f"cross-tokenizer distillation."
+                )
             if self.is_deepspeed_enabled:
                 self.teacher_model = prepare_deepspeed(teacher_model, self.accelerator)
             else:
@@ -603,23 +573,6 @@ class DistillationTrainer(_BaseTrainer):
             )
             self.vllm_sync_frequency = args.vllm_sync_frequency
             self._last_vllm_sync_step = -1
-
-    @staticmethod
-    def _local_teacher_tokenizers_match(
-        student_processing_class: PreTrainedTokenizerBase,
-        teacher_processing_class: PreTrainedTokenizerBase,
-    ) -> bool:
-        """Check whether the student and local teacher tokenizers share the same vocabulary."""
-        return student_processing_class.get_vocab() == teacher_processing_class.get_vocab()
-
-    def _raise_if_local_teacher_tokenizer_mismatch(self) -> None:
-        """Guard the base local-teacher JSD path, while still allowing subclass overrides."""
-        if self.teacher_model is not None and not self._local_teacher_tokenizer_matches_student:
-            raise ValueError(
-                "DistillationTrainer's built-in local-teacher loss only supports student/teacher pairs that use "
-                "the same tokenizer. Use a same-tokenizer local teacher, use ServerDistillationTrainer with an "
-                "external teacher server, or override the local teacher loss path in a subclass."
-            )
 
     def _compute_prompt_length(self, inputs: dict[str, torch.Tensor | Any]) -> int:
         """Compute the earliest prompt boundary that still includes every completion token in the batch."""
@@ -1065,8 +1018,6 @@ class DistillationTrainer(_BaseTrainer):
             ).logits
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
-        self._raise_if_local_teacher_tokenizer_mismatch()
-
         if self.use_liger_loss:
             loss = self._compute_liger_loss(model, inputs, num_items_in_batch=num_items_in_batch)
             return (loss, None) if return_outputs else loss
