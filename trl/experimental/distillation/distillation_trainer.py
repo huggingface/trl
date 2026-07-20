@@ -14,6 +14,7 @@
 
 import random
 import textwrap
+import warnings
 from collections import defaultdict
 from collections.abc import Callable
 from contextlib import nullcontext
@@ -172,6 +173,7 @@ class _DistillationCollator:
         self.max_prompt_length = max_prompt_length
         self.messages_key = messages_key
         self.ignore_index = ignore_index
+        self._warned_messages_deprecated = False
 
         if tokenizer.pad_token_id is None:
             raise ValueError("The tokenizer does not have a pad token. Please set `pad_token_id` in the tokenizer.")
@@ -188,6 +190,14 @@ class _DistillationCollator:
                 prompt_messages = example["prompt"]
                 has_completion = False
             else:
+                if not self._warned_messages_deprecated:
+                    warnings.warn(
+                        "Passing a `messages`-format (conversational language-modeling) dataset to "
+                        "`DistillationTrainer` is deprecated and will be removed. Use a prompt-only dataset with a "
+                        "`prompt` column instead.",
+                        FutureWarning,
+                    )
+                    self._warned_messages_deprecated = True
                 messages = example[self.messages_key]
                 # Split: prompt = everything before the last assistant turn, completion = last assistant turn
                 has_completion = len(messages) > 1 and messages[-1].get("role") == "assistant"
