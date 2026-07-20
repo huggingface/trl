@@ -44,7 +44,6 @@ _TELEMETRY_TRAINERS = {
     "BCOTrainer",
     "CPOTrainer",
     "DistillationTrainer",
-    "DPPOTrainer",
     "GKDTrainer",
     "GMPOTrainer",
     "GOLDTrainer",
@@ -59,6 +58,7 @@ _TELEMETRY_TRAINERS = {
     "SDFTTrainer",
     "SDPOTrainer",
     "ServerDistillationTrainer",
+    "SSDTrainer",
     "TPOTrainer",
     "XPOTrainer",
 }
