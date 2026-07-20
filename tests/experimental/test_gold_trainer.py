@@ -287,6 +287,14 @@ def smollm_tokenizer():
 
 
 @pytest.fixture(scope="session")
+def gemma4_tokenizer():
+    tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Gemma4ForConditionalGeneration")
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    return tokenizer
+
+
+@pytest.fixture(scope="session")
 def smolvlm_processor():
     processor = AutoProcessor.from_pretrained("HuggingFaceTB/SmolVLM-256M-Instruct")
     if processor.tokenizer.pad_token is None:
@@ -964,6 +972,7 @@ def test_prepared_tokenized_rows_keep_completion_after_truncation(llama_tokenize
         max_length=max_length,
         packing_strategy="bfd",
         use_liger_kernel=False,
+        use_extended_uld=True,
     )
     trainer = GOLDTrainer.__new__(GOLDTrainer)
     prepared = trainer._prepare_dataset_with_original_text(
@@ -1018,6 +1027,7 @@ def test_prepared_tokenized_rows_rebase_byte_offsets_when_truncation_eats_into_c
         max_length=max_length,
         packing_strategy="bfd",
         use_liger_kernel=False,
+        use_extended_uld=True,
     )
     trainer = GOLDTrainer.__new__(GOLDTrainer)
     prepared = trainer._prepare_dataset_with_original_text(
@@ -1053,6 +1063,7 @@ def test_prepare_dataset_messages_uses_last_assistant_turn(qwen_tokenizer):
         max_length=512,
         packing_strategy="bfd",
         use_liger_kernel=False,
+        use_extended_uld=True,
     )
     trainer = GOLDTrainer.__new__(GOLDTrainer)
 
@@ -1078,6 +1089,103 @@ def test_prepare_dataset_messages_uses_last_assistant_turn(qwen_tokenizer):
         completion_ids, skip_special_tokens=False, clean_up_tokenization_spaces=False
     )
     assert decoded_completion == row["original_completion_text"]
+
+
+def test_prepare_dataset_extended_uld_keeps_seam_token(qwen_tokenizer):
+    dataset = Dataset.from_dict({"prompt": ["Question: "], "completion": ["Answer."]})
+    args = SimpleNamespace(
+        dataset_num_proc=None,
+        dataset_text_field="text",
+        max_length=64,
+        packing_strategy="bfd",
+        use_liger_kernel=False,
+        use_extended_uld=True,
+    )
+    trainer = GOLDTrainer.__new__(GOLDTrainer)
+
+    row = trainer._prepare_dataset_with_original_text(
+        dataset,
+        qwen_tokenizer,
+        args,
+        packing=False,
+        formatting_func=None,
+        dataset_name="train",
+    )[0]
+
+    completion_ids = [
+        token_id for token_id, mask in zip(row["input_ids"], row["completion_mask"], strict=True) if mask == 1
+    ]
+    completion_offsets = [
+        offset for offset, mask in zip(row["byte_offsets"], row["completion_mask"], strict=True) if mask == 1
+    ]
+    assert row["original_completion_text"] == "Answer."
+    assert qwen_tokenizer.decode(completion_ids[:-1]).lstrip() == row["original_completion_text"]
+    assert completion_ids.count(qwen_tokenizer.eos_token_id) == 1
+    assert completion_offsets[0] == [0, len(b"Answer")]
+    assert completion_offsets[-1] == [len(b"Answer."), len(b"Answer.")]
+
+    teacher_input_ids, teacher_labels, _, _ = build_teacher_inputs_from_texts(
+        qwen_tokenizer,
+        [row["original_prompt_text"]],
+        [row["original_completion_text"]],
+        use_extended_uld=True,
+    )
+    teacher_completion_ids = teacher_input_ids[0][teacher_labels[0] != -100].tolist()
+    assert teacher_completion_ids.count(qwen_tokenizer.eos_token_id) == 1
+
+
+def test_prepare_dataset_positional_uld_supports_sentencepiece(gemma4_tokenizer, qwen_tokenizer):
+    dataset = Dataset.from_dict({"text": ["Question: Answer."], "prompt": ["Question: "], "completion": ["Answer."]})
+    args = SimpleNamespace(
+        dataset_num_proc=None,
+        dataset_text_field="text",
+        max_length=64,
+        packing_strategy="bfd",
+        use_liger_kernel=False,
+        use_extended_uld=False,
+    )
+    trainer = GOLDTrainer.__new__(GOLDTrainer)
+
+    prepared = trainer._prepare_dataset_with_original_text(
+        dataset,
+        gemma4_tokenizer,
+        args,
+        packing=False,
+        formatting_func=None,
+        dataset_name="train",
+    )
+    row = prepared[0]
+
+    completion_ids = [
+        token_id for token_id, mask in zip(row["input_ids"], row["completion_mask"], strict=True) if mask == 1
+    ]
+    assert row["original_completion_text"] == "Answer."
+    assert completion_ids[-1] == gemma4_tokenizer.eos_token_id
+    assert gemma4_tokenizer.decode(completion_ids[:-1]).lstrip() == row["original_completion_text"]
+    assert row["byte_offsets"] == [[0, 0]] * len(row["input_ids"])
+
+    teacher_input_ids, teacher_labels, _, _ = build_teacher_inputs_from_texts(
+        qwen_tokenizer,
+        [row["original_prompt_text"]],
+        [row["original_completion_text"]],
+        use_extended_uld=False,
+    )
+    teacher_completion_ids = teacher_input_ids[0][teacher_labels[0] != -100].tolist()
+    assert qwen_tokenizer.decode(teacher_completion_ids) == "Answer." + qwen_tokenizer.eos_token
+
+
+def test_build_teacher_inputs_positional_uld_supports_sentencepiece(gemma4_tokenizer):
+    input_ids, labels, _, byte_offsets = build_teacher_inputs_from_texts(
+        gemma4_tokenizer,
+        ["Question: "],
+        ["Answer."],
+        use_extended_uld=False,
+    )
+
+    completion_ids = input_ids[0][labels[0] != -100].tolist()
+    assert completion_ids.count(gemma4_tokenizer.eos_token_id) == 1
+    assert gemma4_tokenizer.decode(completion_ids) == "Answer." + gemma4_tokenizer.eos_token
+    assert byte_offsets.tolist() == [[[0, 0]] * input_ids.shape[1]]
 
 
 def test_alignment_groups_cover_all_tokens(llama_tokenizer, qwen_tokenizer):
@@ -1801,6 +1909,7 @@ def test_build_teacher_vlm_inputs_feeds_images_and_completion_byte_offsets(qwen3
     trainer = GOLDTrainer.__new__(GOLDTrainer)
     trainer._teacher_processor = qwen3_vl_processor
     trainer.teacher_tokenizer = qwen3_vl_processor.tokenizer
+    trainer.uld_loss_fn = SimpleNamespace(use_extended_uld=True)
     trainer.accelerator = SimpleNamespace(device=torch.device("cpu"))
 
     images, prompts = trainer._extract_images_and_prompts(vlm_examples)
