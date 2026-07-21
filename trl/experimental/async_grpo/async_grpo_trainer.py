@@ -32,14 +32,17 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenize
 from transformers.data.data_collator import DataCollatorMixin
 
 from ...trainer.base_trainer import _BaseTrainer
-from ...trainer.utils import get_config_model_id, nanmax, nanmin, pad, patch_chunked_lm_head
+from ...trainer.utils import get_config_model_id, is_trackio_available, nanmax, nanmin, pad, patch_chunked_lm_head
 from .async_grpo_config import AsyncGRPOConfig
-from .async_rollout_worker import AsyncRolloutWorker, log_rollout_traces
+from .async_rollout_worker import AsyncRolloutWorker, RolloutSample
 from .vllm_client import VLLMClient
 from .weight_transfer import WeightTransferClient
 
 
 logger = get_logger(__name__)
+
+if is_trackio_available():
+    import trackio
 
 # A reward function is a callable that returns a list of floats (the rewards). The callable receives prompts,
 # completions, and additional arguments from the trainer (refer to the trainer's source for details). To ensure forward
@@ -178,6 +181,45 @@ class _EpochStopCallback(TrainerCallback):
         reached = torch.tensor(int(len(self._trainer._trained_groups) >= self._target), device=acc.device)
         if int(acc.reduce(reached, reduction="sum").item()) >= 1:
             control.should_training_stop = True
+
+
+def log_rollout_traces(samples: list[RolloutSample], step: int, report_to: list[str], max_traces: int = 16) -> None:
+    """Log rollout samples to trackio as inspectable traces (prompt + completion + reward/advantage per sample).
+
+    Call from rank 0 during training, where the HF trackio callback has already initialised the run; the traces then
+    show up under the run's Traces tab so rollouts can be read directly instead of grepping logs. No-op unless trackio
+    is the active logging backend (installed and listed in `report_to`). Best-effort: a trackio hiccup must never break
+    training.
+
+    Args:
+        samples (`list[RolloutSample]`):
+            Consumed rollout samples to log; the first `max_traces` are recorded.
+        step (`int`):
+            Step value the traces are logged under (e.g. the policy version, so the UI groups by policy).
+        report_to (`list[str]`):
+            The training args' `report_to`; logging happens only when it contains `"trackio"`.
+        max_traces (`int`, *optional*, defaults to `16`):
+            Maximum number of traces to log per call.
+    """
+    if not samples or "trackio" not in report_to or not is_trackio_available():
+        return
+    try:
+        traces = [
+            trackio.Trace(
+                messages=list(sample.completion) or list(sample.prompt),
+                metadata={
+                    "reward": float(sample.metrics.get("reward", float("nan"))),
+                    "reward_std": float(sample.metrics.get("reward_std", float("nan"))),
+                    "advantage": float(sample.advantage),
+                    "model_version": int(sample.model_version),
+                    "completion_tokens": int(sum(sample.completion_mask)),
+                },
+            )
+            for sample in samples[:max_traces]
+        ]
+        trackio.log({"rollouts": traces}, step=step)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"rollout trace logging skipped: {type(e).__name__}: {e}")
 
 
 class RolloutQueueDataset(torch.utils.data.IterableDataset):

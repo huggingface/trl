@@ -45,13 +45,10 @@ from ...chat_template_utils import (
     parse_response,
 )
 from ...import_utils import is_vllm_available
-from ...trainer.utils import get_callable_name, is_trackio_available, print_prompt_completions_sample
+from ...trainer.utils import get_callable_name, print_prompt_completions_sample
 
 
 logger = get_logger(__name__)
-
-if is_trackio_available():
-    import trackio
 
 Messages: TypeAlias = list[dict[str, str]]
 RolloutId: TypeAlias = str
@@ -197,45 +194,6 @@ class RolloutSample:
     model_version: int
     group_id: int
     metrics: dict[str, float]
-
-
-def log_rollout_traces(samples: list[RolloutSample], step: int, report_to: list[str], max_traces: int = 16) -> None:
-    """Log rollout samples to trackio as inspectable traces (prompt + completion + reward/advantage per sample).
-
-    Call from rank 0 during training, where the HF trackio callback has already initialised the run; the traces then
-    show up under the run's Traces tab so rollouts can be read directly instead of grepping logs. No-op unless trackio
-    is the active logging backend (installed and listed in `report_to`). Best-effort: a trackio hiccup must never break
-    training.
-
-    Args:
-        samples (`list[RolloutSample]`):
-            Consumed rollout samples to log; the first `max_traces` are recorded.
-        step (`int`):
-            Step value the traces are logged under (e.g. the policy version, so the UI groups by policy).
-        report_to (`list[str]`):
-            The training args' `report_to`; logging happens only when it contains `"trackio"`.
-        max_traces (`int`, *optional*, defaults to `16`):
-            Maximum number of traces to log per call.
-    """
-    if not samples or "trackio" not in report_to or not is_trackio_available():
-        return
-    try:
-        traces = [
-            trackio.Trace(
-                messages=list(sample.completion) or list(sample.prompt),
-                metadata={
-                    "reward": float(sample.metrics.get("reward", float("nan"))),
-                    "reward_std": float(sample.metrics.get("reward_std", float("nan"))),
-                    "advantage": float(sample.advantage),
-                    "model_version": int(sample.model_version),
-                    "completion_tokens": int(sum(sample.completion_mask)),
-                },
-            )
-            for sample in samples[:max_traces]
-        ]
-        trackio.log({"rollouts": traces}, step=step)
-    except Exception as e:  # noqa: BLE001
-        logger.warning(f"rollout trace logging skipped: {type(e).__name__}: {e}")
 
 
 # Env vars the child must drop so accelerate's `PartialState()` initialises in
