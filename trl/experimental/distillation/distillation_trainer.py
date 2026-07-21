@@ -494,6 +494,11 @@ class DistillationTrainer(_BaseTrainer):
             compute_loss_func="non-None value to disable scaling",
         )
 
+        # Gradient accumulation requires scaled loss. Normally, loss scaling in the parent class depends on whether the
+        # model accepts loss-related kwargs. Since we compute our own loss, this check is irrelevant. We set
+        # self.model_accepts_loss_kwargs to False to enable scaling.
+        self.model_accepts_loss_kwargs = False
+
         # ── Prepare teacher model (after super().__init__ so accelerator is ready) ──
         if teacher_model is not None:
             # The divergence compares the full next-token distribution of the student against the teacher's, so both

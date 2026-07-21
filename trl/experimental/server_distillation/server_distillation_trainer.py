@@ -232,6 +232,12 @@ class ServerDistillationTrainer(DistillationTrainer):
                 labels=trimmed_labels,
             )
 
+        # The base trainer disables Trainer's built-in grad-accum loss scaling (via `compute_loss_func`) because it
+        # normalizes by the global completion-token count. The server path normalizes locally with `batchmean` and does
+        # not consume `num_items_in_batch`, so it must re-apply that scaling itself.
+        if self.model.training:
+            loss = loss / self.current_gradient_accumulation_steps
+
         return (loss, student_outputs) if return_outputs else loss
 
     def _get_teacher_token_logprobs_from_server(
