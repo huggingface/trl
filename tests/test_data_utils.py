@@ -712,6 +712,33 @@ class TestApplyChatTemplate(TrlTestCase):
 
         assert result["prompt"] == expected
 
+    def test_apply_chat_template_preference_round_trips_with_generation_prompt_insertion(self):
+        # Regression test: when the generation prompt inserts extra tokens (e.g. an opening `<think>` tag, as in
+        # DeepSeek-R1-style templates), the prompt is reduced to the common prefix of the rendered prompt+chosen and
+        # prompt+rejected strings. The completions must be sliced against the *final* prompt; slicing `chosen` before
+        # the prompt shrinks again against `rejected` used to silently drop the leading `<think>` tag from `chosen`.
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM")
+        tokenizer.chat_template = (
+            "{% for message in messages %}"
+            "{{ message['role'] + ': ' + message['content'] + '\n' }}"
+            "{% endfor %}"
+            "{% if add_generation_prompt %}{{ 'assistant: <think>' }}{% endif %}"
+        )
+
+        example = {
+            "prompt": [{"role": "user", "content": "What is 2+2?"}],
+            # chosen keeps its reasoning trace, rejected doesn't: the common prefix of the two rendered strings ends
+            # before the `<think>` inserted by the generation prompt
+            "chosen": [{"role": "assistant", "content": "<think>2+2=4</think>It is 4."}],
+            "rejected": [{"role": "assistant", "content": "It is 4."}],
+        }
+        result = apply_chat_template(example, tokenizer)
+
+        expected_chosen = tokenizer.apply_chat_template(example["prompt"] + example["chosen"], tokenize=False)
+        expected_rejected = tokenizer.apply_chat_template(example["prompt"] + example["rejected"], tokenize=False)
+        assert result["prompt"] + result["chosen"] == expected_chosen
+        assert result["prompt"] + result["rejected"] == expected_rejected
+
     def test_apply_chat_template_with_tools(self):
         tokenizer = AutoProcessor.from_pretrained("trl-internal-testing/tiny-LlamaForCausalLM-3.2")
 
