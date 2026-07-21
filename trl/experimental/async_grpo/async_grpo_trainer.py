@@ -21,7 +21,7 @@ import textwrap
 import time
 from collections import defaultdict
 from collections.abc import Callable, Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 import torch
@@ -171,6 +171,25 @@ class _SaveRolloutStateCallback(TrainerCallback):
             checkpoint_dir = os.path.join(args.output_dir, f"checkpoint-{state.global_step}")
             with open(os.path.join(checkpoint_dir, "rollout_state.json"), "w") as f:
                 json.dump({"prompt_index": self._trainer.rollout_worker.prompt_index}, f)
+class _EpochStopCallback(TrainerCallback):
+    """Stop after `num_train_epochs` full passes over the prompt dataset.
+
+    An epoch is counted in distinct prompt-groups actually trained (accumulated in the collator, which runs on the main
+    process just before the model forward). This is fork-independent: all generations of a prompt and all forked rows
+    of a conversation share one `group_id`, so a conversation forking into many rows still counts once. Only the main
+    process collates (`dispatch_batches=True`), so the stop decision is reduced across ranks to keep data-parallel
+    workers in lockstep.
+    """
+
+    def __init__(self, trainer: "AsyncGRPOTrainer", target_groups: int):
+        self._trainer = trainer
+        self._target = target_groups
+
+    def on_step_end(self, _args, _state, control, **_kwargs):
+        acc = self._trainer.accelerator
+        reached = torch.tensor(int(len(self._trainer._trained_groups) >= self._target), device=acc.device)
+        if int(acc.reduce(reached, reduction="sum").item()) >= 1:
+            control.should_training_stop = True
 
 
 class RolloutQueueDataset(torch.utils.data.IterableDataset):
@@ -215,6 +234,7 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
                 "completion_mask": sample.completion_mask,
                 "old_log_probs": sample.old_log_probs,
                 "advantage": sample.advantage,
+                "group_id": sample.group_id,
                 "metrics": {**sample.metrics, "queue_wait_time_s": queue_wait_time_s},
             }
 
@@ -355,6 +375,8 @@ class DataCollatorForRollout(DataCollatorMixin):
     pad_token_id: int
     num_processes: int = 1
     return_tensors: str = "pt"
+    # Distinct prompt-group ids, it counts exactly the prompt-groups that get trained
+    groups_trained: set[int] = field(default_factory=set)
 
     def torch_call(self, examples: list[Any]) -> dict[str, Any]:
         # The dataloader uses batch_size=1 over a planner that pre-partitions each micro-batch into `num_processes`
@@ -388,6 +410,7 @@ class DataCollatorForRollout(DataCollatorMixin):
         advantages = pad(advantages, padding_value=0.0)
 
         all_examples = [example for group in groups for example in group]
+        self.groups_trained.update(example["group_id"] for example in all_examples)
 
         # Total valid completion tokens across all samples in the full batch.
         # Repeated per rank so that DataLoaderDispatcher (dispatch_batches=True) slices correctly on dim=0
@@ -655,16 +678,29 @@ class AsyncGRPOTrainer(_BaseTrainer):
         # self.model_accepts_loss_kwargs to False to enable scaling.
         self.model_accepts_loss_kwargs = False
 
-        # Infer max_steps from dataset size when not explicitly set. This must happen after super().__init__()
-        # so that self.accelerator.num_processes is available for the correct calculation.
+        # Epoch handling: stop after num_train_epochs full passes over the PROMPT dataset, counted as distinct
+        # prompt-groups trained (fork-independent).
+        self._trained_groups: set[int] = set()
+        self._epoch_stop_groups: int | None = None
         samples_per_step = (
             self.args.per_device_train_batch_size
             * self.args.gradient_accumulation_steps
             * self.accelerator.num_processes
         )
         if self.args.max_steps <= 0 and train_dataset is not None and hasattr(train_dataset, "__len__"):
-            samples_per_epoch = len(train_dataset) * self.args.num_generations
-            self.args.max_steps = int(self.args.num_train_epochs * samples_per_epoch / samples_per_step)
+            # Fork-independent stop: num_train_epochs full passes over the prompts.
+            self._epoch_stop_groups = math.ceil(self.args.num_train_epochs * len(train_dataset))
+            # max_steps is a generous safety ceiling; with the default constant LR its exact value doesn't matter.
+            max_rows_per_conv = (
+                self.args.max_tool_calling_iterations + 1 if self.args.max_tool_calling_iterations is not None else 32
+            )
+            samples_per_epoch = len(train_dataset) * self.args.num_generations * max_rows_per_conv
+            self.args.max_steps = math.ceil(self.args.num_train_epochs * samples_per_epoch / samples_per_step)
+            logger.info(
+                f"Epoch-driven stop: {self._epoch_stop_groups} prompt-groups "
+                f"({self.args.num_train_epochs} epochs x {len(train_dataset)} prompts); "
+                f"max_steps={self.args.max_steps} is a safety ceiling."
+            )
 
         # Infer max_inflight_tasks when not explicitly set. Generating more samples than the trainer can consume
         # before they become stale is wasteful. The useful upper bound is max_staleness * samples_per_step.
@@ -754,6 +790,8 @@ class AsyncGRPOTrainer(_BaseTrainer):
         self.add_callback(_StartRolloutWorkerCallback(self))
         self.add_callback(StepIntervalCallback(self._sync_weight, self.args.weight_sync_steps))
         self.add_callback(_SaveRolloutStateCallback(self))
+        if self._epoch_stop_groups is not None:
+            self.add_callback(_EpochStopCallback(self, self._epoch_stop_groups))
 
     def get_train_dataloader(self) -> DataLoader:
         num_processes = self.accelerator.num_processes
@@ -791,7 +829,9 @@ class AsyncGRPOTrainer(_BaseTrainer):
             DataLoader(
                 dataset,
                 batch_size=1,
-                collate_fn=DataCollatorForRollout(self.processing_class.pad_token_id, num_processes),
+                collate_fn=DataCollatorForRollout(
+                    self.processing_class.pad_token_id, num_processes, groups_trained=self._trained_groups
+                ),
                 num_workers=0,
                 # NOTE(@aminediro):
                 # dispatch_batches = True for DataLoader whose underlying dataset is an IterableDataset

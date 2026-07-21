@@ -178,6 +178,7 @@ class RolloutGroup:
     tool_call_counts: list[int]
     tool_failure_counts: list[int]
     model_version: int
+    group_id: int
     env_rewards: list[tuple[type, float] | None]
     queued_at: float = 0.0
 
@@ -191,6 +192,7 @@ class RolloutSample:
     old_log_probs: list[float]
     advantage: float
     model_version: int
+    group_id: int
     metrics: dict[str, float]
 
 
@@ -553,6 +555,7 @@ class _AsyncRolloutLoop:
                             tool_call_counts=[],
                             tool_failure_counts=[],
                             model_version=self.model_version,
+                            group_id=group_id,
                             env_rewards=[],
                         )
                         pending_completed[group_id] = 0
@@ -884,6 +887,7 @@ class _AsyncRolloutLoop:
                         old_log_probs=seq.old_log_probs,
                         advantage=float(advantage),
                         model_version=group.model_version,
+                        group_id=group.group_id,
                         metrics=dict(metrics),  # own copy per row; _compute_rollout_metrics mutates it
                     )
                 )
