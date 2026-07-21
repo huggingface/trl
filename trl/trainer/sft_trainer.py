@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import contextlib
+import functools
 import inspect
 import json
 import os
@@ -373,8 +374,16 @@ def _patch_chunked_ce_lm_head(model: torch.nn.Module, chunk_size: int, is_vlm: b
 
     # Keep the original forward signature so `generate`'s `_validate_model_kwargs` still sees the
     # model's real inputs (e.g. VLM `pixel_values`, `spatial_shapes`) and doesn't reject them. The
-    # unbound `__func__` signature makes `MethodType`'s `self`-stripping land correctly.
-    _chunked_ce_forward.__signature__ = inspect.signature(original_forward.__func__)
+    # unbound function signature makes `MethodType`'s `self`-stripping land correctly.
+    #
+    # Some multimodal models (e.g. Qwen3.5) expose `forward` as a `functools.partial` rather than a
+    # bound method, so `original_forward.__func__` is unavailable — unwrap partials / fall back to
+    # the callable itself (see #6483).
+    forward_for_sig = original_forward
+    while isinstance(forward_for_sig, functools.partial):
+        forward_for_sig = forward_for_sig.func
+    unbound = getattr(forward_for_sig, "__func__", forward_for_sig)
+    _chunked_ce_forward.__signature__ = inspect.signature(unbound)
     model.forward = types.MethodType(_chunked_ce_forward, model)
 
 
