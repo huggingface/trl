@@ -196,6 +196,8 @@ filterwarnings = [
     # Upstream fix released in deepspeed v0.18.6: https://github.com/deepspeedai/DeepSpeed/releases/tag/v0.18.6
     "ignore:`torch.jit.script_method` is deprecated:DeprecationWarning",
     "ignore:`torch.jit.script` is deprecated:DeprecationWarning",
+    # On Python 3.14+ the same deprecation is reworded to "is not supported in Python 3.14+ and may break"
+    "ignore:`torch.jit.script_method` is not supported:DeprecationWarning",
 
     # PyTorch DataLoader pin_memory device argument deprecations
     # Triggered internally by torch.utils.data, not by our code
@@ -215,4 +217,10 @@ filterwarnings = [
     # Tracking issue: https://github.com/huggingface/trl/issues/6447
     # Upstream fix (merged, unreleased as of bitsandbytes 0.49.2): https://github.com/bitsandbytes-foundation/bitsandbytes/pull/1940
     "ignore:_check_is_size will be removed in a future PyTorch release:FutureWarning",
+
+    # triton builds an ast.AnnAssign node without the required `simple` field during kernel compilation (upstream,
+    # not actionable in TRL); a DeprecationWarning on Python 3.14 that becomes an error on 3.15
+    # Tracking issue: https://github.com/huggingface/trl/issues/6466
+    # Upstream issue: https://github.com/triton-lang/triton/issues/10981
+    "ignore:AnnAssign.__init__ missing 1 required positional argument:DeprecationWarning",
 ]
