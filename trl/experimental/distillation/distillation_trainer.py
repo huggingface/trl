@@ -570,14 +570,12 @@ class DistillationTrainer(_BaseTrainer):
     # ──────────────────────────────────────────────────────────────────────
 
     def _set_signature_columns_if_needed(self):
-        super()._set_signature_columns_if_needed()
-        extra_columns = ["prompt", "prompts", "prompt_attention_mask", "messages", "chat_template_kwargs", "tools"]
+        # If `self.args.remove_unused_columns` is True, non-signature columns are removed.
+        # By default, this method sets `self._signature_columns` to the model's expected inputs (usually, "input_ids"
+        # and "attention_mask"). In DistillationTrainer, we preprocess data, so using the model's signature columns
+        # doesn't work. Instead, we set them to the columns expected by the `training_step` method, hence the override.
         if self._signature_columns is None:
-            self._signature_columns = extra_columns
-        else:
-            for col in extra_columns:
-                if col not in self._signature_columns:
-                    self._signature_columns.append(col)
+            self._signature_columns = ["prompt", "image", "images"]
 
     def _get_train_sampler(self, dataset=None):
         if dataset is None:
