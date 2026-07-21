@@ -275,6 +275,27 @@ class TestDistillationTrainer(TrlTestCase):
             assert not torch.equal(param, trainer.model.get_parameter(name)), f"Parameter {name} has not changed."
 
     @pytest.mark.xfail(
+        strict=True,
+        reason="Prompt-only datasets carry no dataset-completion tokens, so num_items_in_batch (counted from the raw "
+        "dataloader labels before on-policy generation replaces them) is 0 and the loss is sum / 0 = NaN. Un-xfail "
+        "when the num_items_in_batch denominator is fixed (plan 5.6).",
+    )
+    def test_train_runs_with_prompt_only_dataset(self):
+        """The forward-looking prompt-only format should train end to end once the loss denominator is fixed."""
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        trainer = DistillationTrainer(
+            model=self.model_id,
+            teacher_model=self.model_id,
+            args=self._make_args(max_steps=1, learning_rate=0.1),
+            train_dataset=dataset,
+            processing_class=self.tokenizer,
+        )
+
+        trainer.train()
+
+        assert all(torch.isfinite(param).all() for param in trainer.model.parameters())
+
+    @pytest.mark.xfail(
         reason="On-policy, num_items_in_batch is computed by transformers from the raw dataloader labels before "
         "generation replaces the completions, and _RepeatBatchDataLoader repeats one generation batch across the "
         "accumulation window, so the denominator the loss divides by does not equal the completion tokens actually "

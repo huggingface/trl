@@ -148,9 +148,15 @@ def _jsd_divergence(student_log_probs, teacher_log_probs, beta, support_mask=Non
 class _DistillationCollator:
     """Data collator for the distillation trainer with independent prompt/completion budgets.
 
+    Accepts either of two dataset formats:
+
+    - a ``prompt`` column (prompt-only, the forward-looking format shared with GRPO): the student generates the
+      completion on-policy, so there is nothing to train on in the dataset;
+    - a ``messages`` column (language-modeling format): the prompt is everything before the last assistant turn and the
+      completion is that turn.
+
     Unlike ``DataCollatorForChatML``, this collator tokenizes prompts and completions separately so that long
-    completions can never truncate the prompt to empty. It also handles prompt-only data (no assistant completions),
-    which is what on-policy distillation uses.
+    completions can never truncate the prompt to empty.
     """
 
     def __init__(
@@ -176,11 +182,16 @@ class _DistillationCollator:
         all_prompt_ids: list[list[int]] = []
 
         for example in examples:
-            messages = example[self.messages_key]
-
-            # Split: prompt = everything before the last assistant turn, completion = last assistant turn
-            has_completion = len(messages) > 1 and messages[-1].get("role") == "assistant"
-            prompt_messages = messages[:-1] if has_completion else messages
+            if "prompt" in example:
+                # Prompt-only dataset (the forward-looking format, shared with GRPO): no completion to train on, the
+                # student generates one on-policy.
+                prompt_messages = example["prompt"]
+                has_completion = False
+            else:
+                messages = example[self.messages_key]
+                # Split: prompt = everything before the last assistant turn, completion = last assistant turn
+                has_completion = len(messages) > 1 and messages[-1].get("role") == "assistant"
+                prompt_messages = messages[:-1] if has_completion else messages
 
             # Tokenize prompt with its own budget using the tokenizer's truncation side
             formatted_prompt = self.tokenizer.apply_chat_template(
@@ -612,7 +623,7 @@ class DistillationTrainer(_BaseTrainer):
 
     def _set_signature_columns_if_needed(self):
         super()._set_signature_columns_if_needed()
-        extra_columns = ["prompts", "prompt_attention_mask", "messages", "chat_template_kwargs", "tools"]
+        extra_columns = ["prompt", "prompts", "prompt_attention_mask", "messages", "chat_template_kwargs", "tools"]
         if self._signature_columns is None:
             self._signature_columns = extra_columns
         else:
