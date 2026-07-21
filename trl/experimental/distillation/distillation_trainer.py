@@ -520,6 +520,7 @@ class DistillationTrainer(_BaseTrainer):
         # ── Buffer state ──
         self._buffered_inputs = None
         self._buffered_text_logs = None
+        self._buffered_num_items = None
         self._buffer_step = 0
 
         # ── Generation config ──
@@ -717,6 +718,17 @@ class DistillationTrainer(_BaseTrainer):
 
         # Generate student completions for every slice
         self._generate_student_completions(slices, list(range(buffer_steps)))
+
+        # Loss denominator (`num_items_in_batch`): the global number of completion tokens actually trained on this
+        # optimizer step. transformers derives its own count from the *raw dataloader* labels — before generation
+        # replaces the completions — which is wrong for on-policy training and zero for prompt-only datasets (dividing
+        # the loss by zero). Recompute it here from the generated labels, gathered across processes (issue #4719).
+        local_completion_tokens = sum(
+            int((s["labels"] != -100).sum()) for s in self._buffered_inputs if s is not None
+        )
+        self._buffered_num_items = self.accelerator.gather(
+            torch.tensor(local_completion_tokens, device=self.accelerator.device)
+        ).sum()
 
         # Gather text logs once per optimizer step (all processes must participate)
         if self.log_completions:
@@ -1013,6 +1025,11 @@ class DistillationTrainer(_BaseTrainer):
             ).logits
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+        # transformers computes `num_items_in_batch` from the raw dataloader labels, before on-policy generation
+        # replaces the completions; use the count over the generated completions instead (computed in `_fill_buffer`).
+        if self.model.training and self._buffered_num_items is not None:
+            num_items_in_batch = self._buffered_num_items
+
         if self.use_liger_loss:
             loss = self._compute_liger_loss(model, inputs, num_items_in_batch=num_items_in_batch)
             return (loss, None) if return_outputs else loss
