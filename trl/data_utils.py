@@ -629,11 +629,16 @@ def extract_prompt(example: dict[str, Sequence]) -> dict[str, Sequence]:
      'rejected': [{'role': 'assistant', 'content': 'It is green.'}]}
     ```
     """
-    for idx in range(min(len(example["chosen"]), len(example["rejected"]))):
+    min_len = min(len(example["chosen"]), len(example["rejected"]))
+    for idx in range(min_len):
         if example["chosen"][idx] != example["rejected"][idx]:
-            if example["chosen"][idx - 1] == " ":  # remove space before the prompt
+            if idx > 0 and example["chosen"][idx - 1] == " ":  # remove space before the prompt
                 idx -= 1
             break
+    else:
+        # One completion is a prefix of the other, so they never diverge within the shared range:
+        # the whole shared part is the prompt.
+        idx = min_len
     return {
         "prompt": example["chosen"][:idx],
         "chosen": example["chosen"][idx:],

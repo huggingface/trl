@@ -1173,6 +1173,42 @@ class TestExtractPrompt(TrlTestCase):
         example_extracted_prompt = maybe_extract_prompt(self.example_explicit_prompt_standard)
         assert example_extracted_prompt == self.example_explicit_prompt_standard, "The prompt should remain unchanged."
 
+    def test_extract_prompt_one_completion_is_prefix_of_the_other_conversational(self):
+        # When one completion is a prefix of the other, the completions never diverge within the shared
+        # range, so the whole shared part is the prompt (not the shared part minus its last turn).
+        example = {
+            "chosen": [
+                {"role": "user", "content": "What color is the sky?"},
+                {"role": "assistant", "content": "It is blue."},
+            ],
+            "rejected": [
+                {"role": "user", "content": "What color is the sky?"},
+                {"role": "assistant", "content": "It is blue."},
+                {"role": "assistant", "content": "Actually, it is green."},
+            ],
+        }
+        expected = {
+            "prompt": [
+                {"role": "user", "content": "What color is the sky?"},
+                {"role": "assistant", "content": "It is blue."},
+            ],
+            "chosen": [],
+            "rejected": [{"role": "assistant", "content": "Actually, it is green."}],
+        }
+        assert extract_prompt(example) == expected
+
+    def test_extract_prompt_one_completion_is_prefix_of_the_other_standard(self):
+        example = {"chosen": "The sky", "rejected": "The sky is blue"}
+        expected = {"prompt": "The sky", "chosen": "", "rejected": " is blue"}
+        assert extract_prompt(example) == expected
+
+    def test_extract_prompt_completions_differ_at_first_token_standard(self):
+        # The completions differ at index 0, so the prompt is empty; the leading-space adjustment must
+        # not wrap around to the last character of the chosen completion.
+        example = {"chosen": "a b ", "rejected": "x"}
+        expected = {"prompt": "", "chosen": "a b ", "rejected": "x"}
+        assert extract_prompt(example) == expected
+
 
 class TestPackDatasetWrapped(TrlTestCase):
     def test_with_dataset(self):
