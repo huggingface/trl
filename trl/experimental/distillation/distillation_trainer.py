@@ -723,9 +723,7 @@ class DistillationTrainer(_BaseTrainer):
         # optimizer step. transformers derives its own count from the *raw dataloader* labels — before generation
         # replaces the completions — which is wrong for on-policy training and zero for prompt-only datasets (dividing
         # the loss by zero). Recompute it here from the generated labels, gathered across processes (issue #4719).
-        local_completion_tokens = sum(
-            int((s["labels"] != -100).sum()) for s in self._buffered_inputs if s is not None
-        )
+        local_completion_tokens = sum(int((s["labels"] != -100).sum()) for s in self._buffered_inputs if s is not None)
         self._buffered_num_items = self.accelerator.gather(
             torch.tensor(local_completion_tokens, device=self.accelerator.device)
         ).sum()
