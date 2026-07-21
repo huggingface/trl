@@ -13,7 +13,7 @@
 # limitations under the License.
 
 import pytest
-from datasets import load_dataset
+from datasets import DatasetDict, load_dataset
 from transformers.utils import is_peft_available
 
 from trl.experimental.ssd import SSDConfig, SSDTrainer
@@ -52,6 +52,36 @@ class TestSSDTrainer(TrlTestCase):
         trainer.train()
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
+
+    @pytest.mark.parametrize("eval_dataset_type", ["dataset", "dataset_dict", "dict_of_dataset", "none"])
+    def test_init_with_eval_dataset(self, eval_dataset_type):
+        # Streaming datasets are not yet supported in SSD
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
+
+        if eval_dataset_type == "none":
+            eval_dataset = None
+        elif eval_dataset_type == "dataset":
+            eval_dataset = dataset["test"]
+        elif eval_dataset_type == "dataset_dict":
+            eval_dataset = DatasetDict({"data1": dataset["test"], "data2": dataset["test"]})
+        else:  # "dict_of_dataset"
+            eval_dataset = {"data1": dataset["test"], "data2": dataset["test"]}
+
+        training_args = SSDConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = SSDTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset["train"],
+            eval_dataset=eval_dataset,
+        )
+
+        # SSD tokenizes prompts on the fly during generation, so eval datasets are stored as-is.
+        if eval_dataset_type == "none":
+            assert trainer.eval_dataset is None
+        elif isinstance(trainer.eval_dataset, dict):
+            assert set(trainer.eval_dataset.keys()) == {"data1", "data2"}
+        else:
+            assert trainer.eval_dataset is eval_dataset
 
     def test_trust_remote_code(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
