@@ -90,7 +90,7 @@ When using the teacher server:
 
 ### Expected dataset type
 
-The dataset should be formatted as a [prompt-only](dataset_formats#prompt-only) dataset. The student generates its own completions on-policy, so only the prompt is needed:
+The dataset should be formatted as a [conversational](dataset_formats#conversational) [prompt-only](dataset_formats#prompt-only) dataset. The student generates its own completions on-policy, so only the prompt is needed:
 
 ```python
 {"prompt": [{"role": "user", "content": "What color is the sky?"}]}
