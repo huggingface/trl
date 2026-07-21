@@ -701,6 +701,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
         self._train_tokens_start_time = None
+        self._last_step_end_time = None  # wall-clock of the previous optimizer step, for end-to-end step_time_s
         self.model_version = 0
         # Create worker and queue on rank 0
         if self.accelerator.is_main_process:
@@ -999,6 +1000,12 @@ class AsyncGRPOTrainer(_BaseTrainer):
             self._train_tokens_start_time = now
 
             self._metrics["train"]["forward_time_s"].append(self._last_forward_time_s)
+            # NOTE: `compute_loss` runs once per micro-batch, so we measure it only at the gradient-sync boundary
+            if self.accelerator.sync_gradients:
+                now2 = time.time()
+                if self._last_step_end_time is not None:
+                    self._metrics["train"]["step_time_s"].append(now2 - self._last_step_end_time)
+                self._last_step_end_time = now2
             # NOTE: in dynamic mbs setup, we would need to agg across DP ranks.
             self._metrics["train"]["train_seq_len"].append(float(position_ids.max() + 1))
         return loss
