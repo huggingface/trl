@@ -16,6 +16,7 @@
 import math
 import queue
 import textwrap
+import threading
 import time
 from collections import defaultdict
 from collections.abc import Callable, Iterator
@@ -199,6 +200,15 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
         self.report_to = report_to
         self._trace_buf: list = []
         self._trace_log_interval = 8
+        # Log traces off the training path: __iter__ enqueues, a daemon thread drains. Bounded + drop-on-full so a
+        # slow trackio backend never blocks sample delivery.
+        self._trace_queue: queue.Queue = queue.Queue(maxsize=4)
+        threading.Thread(target=self._drain_traces, name="rollout-trace-logger", daemon=True).start()
+
+    def _drain_traces(self):
+        while True:
+            samples, step = self._trace_queue.get()
+            log_rollout_traces(samples, step=step, report_to=self.report_to)
 
     def __iter__(self):
         while True:
@@ -222,7 +232,10 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
 
             self._trace_buf.append(sample)
             if len(self._trace_buf) >= self._trace_log_interval:
-                log_rollout_traces(self._trace_buf, step=self.model_version_fn(), report_to=self.report_to)
+                try:
+                    self._trace_queue.put_nowait((self._trace_buf, self.model_version_fn()))
+                except queue.Full:
+                    pass
                 self._trace_buf = []
 
             yield {
