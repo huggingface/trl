@@ -208,10 +208,11 @@ def log_rollout_traces(samples: list[RolloutSample], step: int, report_to: list[
             trackio.Trace(
                 messages=list(sample.completion) or list(sample.prompt),
                 metadata={
-                    "reward": float(sample.metrics.get("reward", float("nan"))),
-                    "reward_std": float(sample.metrics.get("reward_std", float("nan"))),
+                    **sample.metrics,  # reward, reward_std, rewards/<func>, tools/call_frequency, tools/failure_frequency
                     "advantage": float(sample.advantage),
+                    "group_id": int(sample.group_id),
                     "model_version": int(sample.model_version),
+                    "prompt_tokens": len(sample.input_ids) - int(sum(sample.completion_mask)),
                     "completion_tokens": int(sum(sample.completion_mask)),
                 },
             )
