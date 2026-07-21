@@ -486,7 +486,18 @@ class DistillationTrainer(_BaseTrainer):
             callbacks=callbacks,
             optimizers=optimizers,
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
+            # In Trainer, `training_step` scales the loss by `gradient_accumulation_steps` only if `compute_loss_func`
+            # is None. Here, loss scaling instead depends on the total number of completion tokens across the global
+            # accumulated batch. To control scaling ourselves, we must disable Trainer's built-in scaling. The simplest
+            # (though a bit hacky) way is to set `compute_loss_func` to any non-None value, which bypasses that behavior
+            # without rewriting `training_step`.
+            compute_loss_func="non-None value to disable scaling",
         )
+
+        # Gradient accumulation requires scaled loss. Normally, loss scaling in the parent class depends on whether the
+        # model accepts loss-related kwargs. Since we compute our own loss, this check is irrelevant. We set
+        # self.model_accepts_loss_kwargs to False to enable scaling.
+        self.model_accepts_loss_kwargs = False
 
         # ── Prepare teacher model (after super().__init__ so accelerator is ready) ──
         if teacher_model is not None:
@@ -520,6 +531,7 @@ class DistillationTrainer(_BaseTrainer):
         # ── Buffer state ──
         self._buffered_inputs = None
         self._buffered_text_logs = None
+        self._buffered_num_items = None
         self._buffer_step = 0
 
         # ── Generation config ──
@@ -717,6 +729,15 @@ class DistillationTrainer(_BaseTrainer):
 
         # Generate student completions for every slice
         self._generate_student_completions(slices, list(range(buffer_steps)))
+
+        # Loss denominator (`num_items_in_batch`): the global number of completion tokens actually trained on this
+        # optimizer step. transformers derives its own count from the *raw dataloader* labels — before generation
+        # replaces the completions — which is wrong for on-policy training and zero for prompt-only datasets (dividing
+        # the loss by zero). Recompute it here from the generated labels, gathered across processes (issue #4719).
+        local_completion_tokens = sum(int((s["labels"] != -100).sum()) for s in self._buffered_inputs if s is not None)
+        self._buffered_num_items = self.accelerator.gather(
+            torch.tensor(local_completion_tokens, device=self.accelerator.device)
+        ).sum()
 
         # Gather text logs once per optimizer step (all processes must participate)
         if self.log_completions:
@@ -1013,6 +1034,12 @@ class DistillationTrainer(_BaseTrainer):
             ).logits
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+        # transformers computes `num_items_in_batch` from the raw dataloader labels, before on-policy generation
+        # replaces the completions; use the count over the generated completions instead (computed in `_fill_buffer`).
+        # Divide by the process count so the per-process loss compensates for DDP gradient averaging (as GRPO does).
+        if self.model.training and self._buffered_num_items is not None:
+            num_items_in_batch = self._buffered_num_items.clamp(min=1.0) / self.accelerator.num_processes
+
         if self.use_liger_loss:
             loss = self._compute_liger_loss(model, inputs, num_items_in_batch=num_items_in_batch)
             return (loss, None) if return_outputs else loss
