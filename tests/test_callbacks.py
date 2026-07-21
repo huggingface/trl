@@ -211,8 +211,8 @@ class TestBEMACallback(TrlTestCase):
             # BEMA starts after step 3 and updates every 2 steps → updates at 5, 7, 9
             assert mock_update.call_args_list == [call(5), call(7), call(9)]
 
-    def test_no_bema(self):
-        """Test that BEMACallback works without BEMA updates."""
+    def test_bias_power_zero(self):
+        """Test that BEMACallback works with bias_power=0.0 (maximum, undecayed bias-correction)."""
         training_args = TrainingArguments(output_dir=self.tmp_dir, report_to="none")
         bema_callback = BEMACallback(update_freq=2, bias_power=0.0)
         trainer = Trainer(
