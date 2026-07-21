@@ -221,6 +221,8 @@ class TestDistillationTrainer(TrlTestCase):
         return DistillationConfig(**args)
 
     def _make_local_trainer(self, **kwargs):
+        # Messages-format: `_make_batch` reads completion tokens straight from the collator (no generation), which the
+        # `prompt`-only format cannot provide until generation replaces the collator. Switched to prompt-only then.
         dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
         return DistillationTrainer(
             model=self.model_id,
@@ -248,7 +250,7 @@ class TestDistillationTrainer(TrlTestCase):
             save_steps=2,
             per_device_eval_batch_size=2,
         )
-        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only")
         trainer = DistillationTrainer(
             model=self.model_id,
             teacher_model=self.model_id,
@@ -319,7 +321,7 @@ class TestDistillationTrainer(TrlTestCase):
 
         monkeypatch.setattr(DistillationTrainer, "_reduce_divergence_loss", staticmethod(_recording))
 
-        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
         trainer = DistillationTrainer(
             model=self.model_id,
             teacher_model=self.model_id,
@@ -349,14 +351,14 @@ class TestDistillationTrainer(TrlTestCase):
         ],
     )
     def test_init_with_eval_dataset(self, eval_dataset_type):
-        train_dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
+        train_dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
 
         if eval_dataset_type == "none":
             eval_dataset = None
         else:
             streaming = "iterable" in eval_dataset_type
             eval_split = load_dataset(
-                "trl-internal-testing/zen", "conversational_language_modeling", split="test", streaming=streaming
+                "trl-internal-testing/zen", "conversational_prompt_only", split="test", streaming=streaming
             )
             if eval_dataset_type in ("dataset", "iterable_dataset"):
                 eval_dataset = eval_split
@@ -419,7 +421,7 @@ class TestDistillationTrainer(TrlTestCase):
         import importlib
 
         training_args = self._make_args(use_liger_kernel=True, use_cpu=False)
-        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
 
         trainer = DistillationTrainer(
             model=self.model_id,
@@ -439,7 +441,7 @@ class TestDistillationTrainer(TrlTestCase):
     def test_teacher_vocab_size_mismatch_raises(self):
         # The local-teacher loss compares full next-token distributions, so student and teacher must share a
         # vocabulary. A teacher with a different vocab_size is rejected (use GOLD for cross-tokenizer distillation).
-        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
         with pytest.raises(ValueError, match="vocab_size"):
             DistillationTrainer(
                 model=self.model_id,
@@ -452,7 +454,7 @@ class TestDistillationTrainer(TrlTestCase):
     def test_teacher_model_init_kwargs_with_instantiated_teacher_raises(self):
         # `teacher_model_init_kwargs` only applies when the teacher is a model id; passing it alongside an already
         # instantiated teacher is a mistake worth surfacing.
-        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
         with pytest.raises(ValueError, match="teacher_model_init_kwargs"):
             DistillationTrainer(
                 model=self.model_id,

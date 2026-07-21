@@ -21,10 +21,10 @@ The `DistillationTrainer` is designed for distilling teacher models of all sizes
 from datasets import load_dataset
 from trl.experimental.distillation import DistillationConfig, DistillationTrainer
 
-# 1. Load dataset and format as prompt-only chat messages
+# 1. Load dataset and format as a prompt-only column
 dataset = load_dataset("openai/gsm8k", "main", split="train")
 dataset = dataset.map(
-    lambda x: {"messages": [{"role": "user", "content": x["question"]}]},
+    lambda x: {"prompt": [{"role": "user", "content": x["question"]}]},
     remove_columns=dataset.column_names,
 )
 
@@ -35,7 +35,6 @@ config = DistillationConfig(
     bf16=True,
     save_strategy="no",
     # Distillation
-    lmbda=1.0,                      # fully on-policy (student generates)
     beta=1.0,                       # reverse KL
     # Teacher
     teacher_model_init_kwargs={"dtype": "bfloat16"},
@@ -54,14 +53,13 @@ trainer.save_model()
 
 ## Usage tips
 
-The [`experimental.distillation.DistillationTrainer`] needs two key parameters set via [`experimental.distillation.DistillationConfig`]:
+The [`experimental.distillation.DistillationTrainer`] trains the student fully on-policy: the student generates its own completions and learns to match the teacher's next-token distribution on them. The key parameter is set via [`experimental.distillation.DistillationConfig`]:
 
-* `lmbda`: controls the student data fraction, i.e., the proportion of on-policy student-generated outputs. When `lmbda=0.0`, training is fully off-policy (dataset completions only). When `lmbda=1.0`, training is fully on-policy (student generates all completions). For values in between, each gradient accumulation slice is randomly assigned as on- or off-policy based on `lmbda`.
 * `beta`: controls the interpolation in the Generalized Jensen-Shannon Divergence. When `beta=0.0` the loss approximates forward KL divergence, while `beta=1.0` approximates reverse KL divergence. Values in between interpolate.
 
-### On-policy vs. off-policy
+### On-policy generation
 
-Setting `lmbda=1.0` (fully on-policy) generally outperforms off-policy distillation because the student learns from its own mistakes rather than imitating trajectories it may never produce. The generation buffer ensures on-policy training stays efficient: prompts across gradient accumulation steps are batched into a single vLLM call.
+Fully on-policy training generally outperforms off-policy distillation because the student learns from its own mistakes rather than imitating trajectories it may never produce. The generation buffer keeps this efficient: prompts across gradient accumulation steps are batched into a single vLLM call.
 
 ### Using an external teacher server
 
@@ -74,7 +72,6 @@ config = DistillationConfig(
     teacher_model_server_url="http://teacher-host:8000",
     loss_top_k=1,       # required with teacher server when beta > 0
     beta=1.0,
-    lmbda=1.0,
 )
 
 trainer = DistillationTrainer(
@@ -93,50 +90,43 @@ When using the teacher server:
 
 ### Expected dataset type
 
-The dataset should be formatted as a [conversational](dataset_formats#conversational) [language modeling](dataset_formats#language-modeling) dataset:
+The dataset should be formatted as a [prompt-only](dataset_formats#prompt-only) dataset. The student generates its own completions on-policy, so only the prompt is needed:
 
 ```python
-{"messages": [{"role": "user", "content": "What color is the sky?"},
-              {"role": "assistant", "content": "It is blue."}]}
-```
-
-When using fully on-policy distillation (`lmbda=1.0`), the assistant turn can be omitted since the student will generate its own completions:
-
-```python
-{"messages": [{"role": "user", "content": "What color is the sky?"}]}
+{"prompt": [{"role": "user", "content": "What color is the sky?"}]}
 ```
 
 ## Example script
 
-Use [`examples/scripts/distillation.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/distillation.py) to launch distillation training from the command line. The script supports full training, mixed on/off-policy, and LoRA via the standard `ModelConfig` flags.
+Use [`examples/scripts/distillation.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/distillation.py) to launch distillation training from the command line. The script supports full training and LoRA via the standard `ModelConfig` flags.
 
 ```bash
-# Full training (off-policy only, lmbda=0):
+# Full training:
 python examples/scripts/distillation.py \
     --model_name_or_path Qwen/Qwen2.5-0.5B-Instruct \
     --teacher_model_name_or_path Qwen/Qwen2.5-1.5B-Instruct \
-    --dataset_name trl-lib/chatbot_arena_completions \
+    --dataset_name trl-lib/ultrafeedback-prompt \
     --learning_rate 2e-5 \
     --per_device_train_batch_size 4 \
     --gradient_accumulation_steps 8 \
-    --lmbda 0.0 \
     --output_dir distilled-model \
     --num_train_epochs 1
 ```
 
 ```bash
-# Mixed on/off-policy (lmbda=0.5):
+# LoRA:
 python examples/scripts/distillation.py \
     --model_name_or_path Qwen/Qwen2.5-0.5B-Instruct \
     --teacher_model_name_or_path Qwen/Qwen2.5-1.5B-Instruct \
-    --dataset_name trl-lib/chatbot_arena_completions \
-    --learning_rate 2e-5 \
+    --dataset_name trl-lib/ultrafeedback-prompt \
+    --learning_rate 2e-4 \
     --per_device_train_batch_size 4 \
     --gradient_accumulation_steps 8 \
-    --lmbda 0.5 \
-    --beta 0.5 \
     --output_dir distilled-model \
-    --num_train_epochs 1
+    --num_train_epochs 1 \
+    --use_peft \
+    --lora_r 64 \
+    --lora_alpha 16
 ```
 
 ## DistillationTrainer
