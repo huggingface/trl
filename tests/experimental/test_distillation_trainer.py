@@ -426,6 +426,27 @@ class TestDistillationTrainer(TrlTestCase):
         assert "completion_mask" in inputs
         assert torch.equal(inputs["completion_mask"].bool(), inputs["labels"] != -100)
 
+    def test_generated_batch_emits_prompt_and_completion_ids(self, monkeypatch):
+        """The generated batch emits GRPO-style `prompt_ids`/`prompt_mask`/`completion_ids` alongside the old keys."""
+        trainer = self._make_local_trainer()
+        captured = {}
+        original = DistillationTrainer.compute_loss
+
+        def _capturing(self, model, inputs, *args, **kwargs):
+            captured.setdefault("inputs", {k: v.clone() if torch.is_tensor(v) else v for k, v in inputs.items()})
+            return original(self, model, inputs, *args, **kwargs)
+
+        monkeypatch.setattr(DistillationTrainer, "compute_loss", _capturing)
+        trainer.train()
+
+        inputs = captured["inputs"]
+        for key in ("prompt_ids", "prompt_mask", "completion_ids"):
+            assert key in inputs
+        # cat(prompt_ids, completion_ids) reconstructs input_ids; the new keys mirror the existing prompt tensors.
+        assert torch.equal(torch.cat([inputs["prompt_ids"], inputs["completion_ids"]], dim=1), inputs["input_ids"])
+        assert torch.equal(inputs["prompt_ids"], inputs["prompts"])
+        assert torch.equal(inputs["prompt_mask"], inputs["prompt_attention_mask"])
+
     @require_liger_kernel
     @require_torch_accelerator
     def test_distillation_trainer_with_liger(self):
