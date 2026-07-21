@@ -33,7 +33,7 @@ from transformers.data.data_collator import DataCollatorMixin
 from ...trainer.base_trainer import _BaseTrainer
 from ...trainer.utils import get_config_model_id, nanmax, nanmin, pad, patch_chunked_lm_head
 from .async_grpo_config import AsyncGRPOConfig
-from .async_rollout_worker import AsyncRolloutWorker
+from .async_rollout_worker import AsyncRolloutWorker, log_rollout_traces
 from .vllm_client import VLLMClient
 from .weight_transfer import WeightTransferClient
 
@@ -188,6 +188,7 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
         stale_after_s,
         max_staleness=3,
         poll_interval_s=5.0,
+        report_to=(),
     ):
         self.queue = rollout_queue
         self.model_version_fn = model_version_fn
@@ -195,6 +196,9 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
         self.stale_after_s = stale_after_s
         self.max_staleness = max_staleness
         self.poll_interval_s = poll_interval_s
+        self.report_to = report_to
+        self._trace_buf: list = []
+        self._trace_log_interval = 8
 
     def __iter__(self):
         while True:
@@ -215,6 +219,11 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
             if staleness > self.max_staleness:
                 logger.info(f"dropping stale sample (staleness={staleness}, max={self.max_staleness})")
                 continue  # drop stale, pull next
+
+            self._trace_buf.append(sample)
+            if len(self._trace_buf) >= self._trace_log_interval:
+                log_rollout_traces(self._trace_buf, step=self.model_version_fn(), report_to=self.report_to)
+                self._trace_buf = []
 
             yield {
                 "input_ids": sample.input_ids,
@@ -779,6 +788,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 check_health_fn=self.rollout_worker.check_health,
                 stale_after_s=self.args.heartbeat_stale_after_s,
                 max_staleness=self.args.max_staleness,
+                report_to=self.args.report_to,
             )
             # Default the token budget to the vLLM server's max_model_len (the cap on prompt + completion), so no
             # rollout sample can exceed it. Wait for the server like weight sync does, so a still-loading vLLM doesn't
