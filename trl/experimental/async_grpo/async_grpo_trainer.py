@@ -206,7 +206,7 @@ def log_rollout_traces(samples: list[RolloutSample], step: int, report_to: list[
     try:
         traces = [
             trackio.Trace(
-                messages=list(sample.completion) or list(sample.prompt),
+                messages=list(sample.prompt) + list(sample.completion),
                 metadata={
                     **sample.metrics,  # reward, reward_std, rewards/<func>, tools/call_frequency, tools/failure_frequency
                     "advantage": float(sample.advantage),
