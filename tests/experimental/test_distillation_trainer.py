@@ -403,6 +403,23 @@ class TestDistillationTrainer(TrlTestCase):
         # Doubling the global count exactly halves the loss (sum / num_items is linear in 1/num_items).
         torch.testing.assert_close(loss_double, loss_mean / 2, rtol=1e-4, atol=1e-6)
 
+    def test_generated_batch_emits_completion_mask(self, monkeypatch):
+        """The generated batch emits `completion_mask`, equal to `labels != -100` (added ahead of the loss switch)."""
+        trainer = self._make_local_trainer()
+        captured = {}
+        original = DistillationTrainer.compute_loss
+
+        def _capturing(self, model, inputs, *args, **kwargs):
+            captured.setdefault("inputs", {k: v.clone() if torch.is_tensor(v) else v for k, v in inputs.items()})
+            return original(self, model, inputs, *args, **kwargs)
+
+        monkeypatch.setattr(DistillationTrainer, "compute_loss", _capturing)
+        trainer.train()
+
+        inputs = captured["inputs"]
+        assert "completion_mask" in inputs
+        assert torch.equal(inputs["completion_mask"].bool(), inputs["labels"] != -100)
+
     @require_liger_kernel
     @require_torch_accelerator
     def test_distillation_trainer_with_liger(self):
