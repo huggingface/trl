@@ -14,7 +14,6 @@
 
 import random
 import textwrap
-import warnings
 from collections import defaultdict
 from collections.abc import Callable
 from contextlib import nullcontext
@@ -147,33 +146,19 @@ def _jsd_divergence(student_log_probs, teacher_log_probs, beta, support_mask=Non
 
 
 class _DistillationCollator:
-    """Data collator for the distillation trainer with independent prompt/completion budgets.
+    """Data collator for the distillation trainer.
 
-    Accepts either of two dataset formats:
-
-    - a ``prompt`` column (prompt-only, the forward-looking format shared with GRPO): the student generates the
-      completion on-policy, so there is nothing to train on in the dataset;
-    - a ``messages`` column (language-modeling format): the prompt is everything before the last assistant turn and the
-      completion is that turn.
-
-    Unlike ``DataCollatorForChatML``, this collator tokenizes prompts and completions separately so that long
-    completions can never truncate the prompt to empty.
+    Accepts a prompt-only dataset (a ``prompt`` column, the format shared with GRPO): the student generates the
+    completion on-policy, so there is nothing to train on in the dataset.
     """
 
     def __init__(
         self,
         tokenizer: "PreTrainedTokenizerBase",
-        max_length: int,
-        max_prompt_length: int,
-        messages_key: str = "messages",
         ignore_index: int = -100,
     ):
         self.tokenizer = tokenizer
-        self.max_length = max_length
-        self.max_prompt_length = max_prompt_length
-        self.messages_key = messages_key
         self.ignore_index = ignore_index
-        self._warned_messages_deprecated = False
 
         if tokenizer.pad_token_id is None:
             raise ValueError("The tokenizer does not have a pad token. Please set `pad_token_id` in the tokenizer.")
@@ -184,69 +169,14 @@ class _DistillationCollator:
         all_prompt_ids: list[list[int]] = []
 
         for example in examples:
-            if "prompt" in example:
-                # Prompt-only dataset (the forward-looking format, shared with GRPO): no completion to train on, the
-                # student generates one on-policy.
-                prompt_messages = example["prompt"]
-                has_completion = False
-            else:
-                if not self._warned_messages_deprecated:
-                    warnings.warn(
-                        "Passing a `messages`-format (conversational language-modeling) dataset to "
-                        "`DistillationTrainer` is deprecated and will be removed. Use a prompt-only dataset with a "
-                        "`prompt` column instead.",
-                        FutureWarning,
-                    )
-                    self._warned_messages_deprecated = True
-                messages = example[self.messages_key]
-                # Split: prompt = everything before the last assistant turn, completion = last assistant turn
-                has_completion = len(messages) > 1 and messages[-1].get("role") == "assistant"
-                prompt_messages = messages[:-1] if has_completion else messages
-
-            # Tokenize prompt with its own budget using the tokenizer's truncation side
             formatted_prompt = self.tokenizer.apply_chat_template(
-                prompt_messages, tokenize=False, add_generation_prompt=True
+                example["prompt"], tokenize=False, add_generation_prompt=True
             )
-            prompt_ids = self.tokenizer(
-                formatted_prompt,
-                truncation=True,
-                max_length=self.max_prompt_length,
-                padding=False,
-                add_special_tokens=False,
-            )["input_ids"]
+            prompt_ids = self.tokenizer(formatted_prompt, padding=False, add_special_tokens=False)["input_ids"]
 
-            if has_completion:
-                # Tokenize the full message (prompt + completion) without truncation first
-                formatted_full = self.tokenizer.apply_chat_template(
-                    messages, tokenize=False, add_generation_prompt=False
-                )
-                full_ids = self.tokenizer(formatted_full, truncation=False, padding=False, add_special_tokens=False)[
-                    "input_ids"
-                ]
-
-                # Identify completion tokens: everything after the prompt in the full sequence.
-                # Use the un-truncated prompt length as the split point.
-                formatted_prompt_ids = self.tokenizer(
-                    formatted_prompt, truncation=False, padding=False, add_special_tokens=False
-                )["input_ids"]
-                completion_ids = full_ids[len(formatted_prompt_ids) :]
-
-                # Trim completion so prompt + completion <= max_length
-                max_comp = self.max_length - len(prompt_ids)
-                if max_comp > 0 and len(completion_ids) > max_comp:
-                    completion_ids = completion_ids[:max_comp]
-                elif max_comp <= 0:
-                    completion_ids = []
-
-                input_ids = prompt_ids + completion_ids
-                labels = [self.ignore_index] * len(prompt_ids) + list(completion_ids)
-            else:
-                # Prompt-only: no completion to train on (on-policy will generate one)
-                input_ids = list(prompt_ids)
-                labels = [self.ignore_index] * len(prompt_ids)
-
-            all_input_ids.append(input_ids)
-            all_labels.append(labels)
+            # Prompt-only: no completion to train on (on-policy will generate one)
+            all_input_ids.append(list(prompt_ids))
+            all_labels.append([self.ignore_index] * len(prompt_ids))
             all_prompt_ids.append(list(prompt_ids))
 
         # Convert to tensors and left-pad
@@ -433,11 +363,7 @@ class DistillationTrainer(_BaseTrainer):
 
         # ── Data collator ──
         if data_collator is None:
-            data_collator = _DistillationCollator(
-                tokenizer=processing_class,
-                max_length=args.max_length,
-                max_prompt_length=args.max_prompt_length,
-            )
+            data_collator = _DistillationCollator(tokenizer=processing_class)
 
         # ── Liger fused JSD loss ──
         self.use_liger_loss = False
