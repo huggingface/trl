@@ -290,9 +290,14 @@ class TestDistillationTrainer(TrlTestCase):
         recorded = []  # (denominator applied, completion tokens in this microbatch)
         original = DistillationTrainer._reduce_divergence_loss
 
-        def _recording(jsd, labels=None, reduction="batchmean", num_items_in_batch=None):
-            recorded.append((num_items_in_batch, int((labels != -100).sum())))
-            return original(jsd, labels=labels, reduction=reduction, num_items_in_batch=num_items_in_batch)
+        def _recording(jsd, completion_mask=None, reduction="batchmean", num_items_in_batch=None):
+            # `generalized_jsd_loss(reduction="none")` also routes through here with `completion_mask=None`; only the
+            # loss-reducing call (with a mask) carries the denominator under test.
+            if completion_mask is not None:
+                recorded.append((num_items_in_batch, int(completion_mask.sum())))
+            return original(
+                jsd, completion_mask=completion_mask, reduction=reduction, num_items_in_batch=num_items_in_batch
+            )
 
         monkeypatch.setattr(DistillationTrainer, "_reduce_divergence_loss", staticmethod(_recording))
 
@@ -385,6 +390,7 @@ class TestDistillationTrainer(TrlTestCase):
             "input_ids": input_ids,
             "attention_mask": torch.ones_like(input_ids),
             "labels": labels,
+            "completion_mask": (labels != -100).int(),
             "prompts": input_ids[:, :prompt_length],
             "prompt_attention_mask": torch.ones(2, prompt_length, dtype=torch.long, device=device),
         }
