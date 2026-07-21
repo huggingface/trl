@@ -486,6 +486,12 @@ class DistillationTrainer(_BaseTrainer):
             callbacks=callbacks,
             optimizers=optimizers,
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
+            # In Trainer, `training_step` scales the loss by `gradient_accumulation_steps` only if `compute_loss_func`
+            # is None. Here, loss scaling instead depends on the total number of completion tokens across the global
+            # accumulated batch. To control scaling ourselves, we must disable Trainer's built-in scaling. The simplest
+            # (though a bit hacky) way is to set `compute_loss_func` to any non-None value, which bypasses that behavior
+            # without rewriting `training_step`.
+            compute_loss_func="non-None value to disable scaling",
         )
 
         # ── Prepare teacher model (after super().__init__ so accelerator is ready) ──
@@ -1025,8 +1031,9 @@ class DistillationTrainer(_BaseTrainer):
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         # transformers computes `num_items_in_batch` from the raw dataloader labels, before on-policy generation
         # replaces the completions; use the count over the generated completions instead (computed in `_fill_buffer`).
+        # Divide by the process count so the per-process loss compensates for DDP gradient averaging (as GRPO does).
         if self.model.training and self._buffered_num_items is not None:
-            num_items_in_batch = self._buffered_num_items
+            num_items_in_batch = self._buffered_num_items.clamp(min=1.0) / self.accelerator.num_processes
 
         if self.use_liger_loss:
             loss = self._compute_liger_loss(model, inputs, num_items_in_batch=num_items_in_batch)
