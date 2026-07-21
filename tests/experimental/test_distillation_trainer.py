@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import os
+import warnings
 
 import pytest
 import torch
@@ -21,7 +22,7 @@ from datasets import DatasetDict, IterableDatasetDict, load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from trl.experimental.distillation import DistillationConfig, DistillationTrainer
-from trl.experimental.distillation.distillation_trainer import _RepeatBatchDataLoader
+from trl.experimental.distillation.distillation_trainer import _DistillationCollator, _RepeatBatchDataLoader
 from trl.experimental.gkd.gkd_trainer import GKDTrainer
 
 from ..testing_utils import TrlTestCase, require_liger_kernel, require_torch_accelerator
@@ -186,6 +187,19 @@ class TestDistillationTrainer(TrlTestCase):
         self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
         self.tokenizer.pad_token = self.tokenizer.eos_token
+
+    def test_messages_format_dataset_is_deprecated(self):
+        """The `messages` (language-modeling) format is deprecated in favour of a prompt-only `prompt` column."""
+        messages_example = {"messages": [{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hi!"}]}
+        with pytest.warns(FutureWarning, match="`messages`-format"):
+            _DistillationCollator(self.tokenizer, max_length=128, max_prompt_length=64)([messages_example])
+
+        # The forward-looking `prompt` column must not trigger the deprecation.
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", FutureWarning)
+            _DistillationCollator(self.tokenizer, max_length=128, max_prompt_length=64)(
+                [{"prompt": [{"role": "user", "content": "Hi"}]}]
+            )
 
     def _make_args(self, **kwargs):
         args = {
