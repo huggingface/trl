@@ -80,7 +80,7 @@ test = [
     "pytest"
 ]
 vllm = [
-    "vllm>=0.16.0,<=0.24.0",
+    "vllm>=0.17.0,<=0.25.1",
     "fastapi",
     "pydantic",
     "aiohttp>=3.13.3",
@@ -196,6 +196,8 @@ filterwarnings = [
     # Upstream fix released in deepspeed v0.18.6: https://github.com/deepspeedai/DeepSpeed/releases/tag/v0.18.6
     "ignore:`torch.jit.script_method` is deprecated:DeprecationWarning",
     "ignore:`torch.jit.script` is deprecated:DeprecationWarning",
+    # On Python 3.14+ the same deprecation is reworded to "is not supported in Python 3.14+ and may break"
+    "ignore:`torch.jit.script_method` is not supported:DeprecationWarning",
 
     # PyTorch DataLoader pin_memory device argument deprecations
     # Triggered internally by torch.utils.data, not by our code
