@@ -3375,7 +3375,6 @@ class TestGRPOTrainerSlow(TrlTestCase):
         - LoRA (Low-Rank Adaptation) with minimal rank (r=4)
         - 4-bit quantization with BitsAndBytesConfig
         - Gradient checkpointing
-        - bfloat16 precision
         - Minimal batch sizes and sequence lengths
         - Very low GPU memory utilization (5%)
         """
