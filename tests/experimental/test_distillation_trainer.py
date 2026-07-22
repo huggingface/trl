@@ -221,7 +221,7 @@ class TestDistillationTrainer(TrlTestCase):
         return DistillationConfig(**args)
 
     def _make_local_trainer(self, **kwargs):
-        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
         return DistillationTrainer(
             model=self.model_id,
             teacher_model=self.model_id,
@@ -248,7 +248,7 @@ class TestDistillationTrainer(TrlTestCase):
             save_steps=2,
             per_device_eval_batch_size=2,
         )
-        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only")
         trainer = DistillationTrainer(
             model=self.model_id,
             teacher_model=self.model_id,
@@ -319,7 +319,7 @@ class TestDistillationTrainer(TrlTestCase):
 
         monkeypatch.setattr(DistillationTrainer, "_reduce_divergence_loss", staticmethod(_recording))
 
-        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
         trainer = DistillationTrainer(
             model=self.model_id,
             teacher_model=self.model_id,
@@ -419,7 +419,7 @@ class TestDistillationTrainer(TrlTestCase):
         import importlib
 
         training_args = self._make_args(use_liger_kernel=True, use_cpu=False)
-        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
 
         trainer = DistillationTrainer(
             model=self.model_id,
