@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import os
+import warnings
 
 import pytest
 import torch
@@ -21,7 +22,7 @@ from datasets import DatasetDict, IterableDatasetDict, load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from trl.experimental.distillation import DistillationConfig, DistillationTrainer
-from trl.experimental.distillation.distillation_trainer import _RepeatBatchDataLoader
+from trl.experimental.distillation.distillation_trainer import _DistillationCollator, _RepeatBatchDataLoader
 from trl.experimental.gkd.gkd_trainer import GKDTrainer
 
 from ..testing_utils import TrlTestCase, require_liger_kernel, require_torch_accelerator
@@ -187,6 +188,19 @@ class TestDistillationTrainer(TrlTestCase):
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
         self.tokenizer.pad_token = self.tokenizer.eos_token
 
+    def test_messages_format_dataset_is_deprecated(self):
+        """The `messages` (language-modeling) format is deprecated in favour of a prompt-only `prompt` column."""
+        messages_example = {"messages": [{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hi!"}]}
+        with pytest.warns(FutureWarning, match="`messages`-format"):
+            _DistillationCollator(self.tokenizer, max_length=128, max_prompt_length=64)([messages_example])
+
+        # The forward-looking `prompt` column must not trigger the deprecation.
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", FutureWarning)
+            _DistillationCollator(self.tokenizer, max_length=128, max_prompt_length=64)(
+                [{"prompt": [{"role": "user", "content": "Hi"}]}]
+            )
+
     def _make_args(self, **kwargs):
         args = {
             "output_dir": self.tmp_dir,
@@ -274,14 +288,8 @@ class TestDistillationTrainer(TrlTestCase):
         for name, param in previous_params.items():
             assert not torch.equal(param, trainer.model.get_parameter(name)), f"Parameter {name} has not changed."
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="Prompt-only datasets carry no dataset-completion tokens, so num_items_in_batch (counted from the raw "
-        "dataloader labels before on-policy generation replaces them) is 0 and the loss is sum / 0 = NaN. Un-xfail "
-        "when the num_items_in_batch denominator is fixed (plan 5.6).",
-    )
     def test_train_runs_with_prompt_only_dataset(self):
-        """The forward-looking prompt-only format should train end to end once the loss denominator is fixed."""
+        """The forward-looking prompt-only format trains end to end: the student generates, the teacher scores."""
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
         trainer = DistillationTrainer(
             model=self.model_id,
@@ -295,12 +303,6 @@ class TestDistillationTrainer(TrlTestCase):
 
         assert all(torch.isfinite(param).all() for param in trainer.model.parameters())
 
-    @pytest.mark.xfail(
-        reason="On-policy, num_items_in_batch is computed by transformers from the raw dataloader labels before "
-        "generation replaces the completions, and _RepeatBatchDataLoader repeats one generation batch across the "
-        "accumulation window, so the denominator the loss divides by does not equal the completion tokens actually "
-        "trained on. Un-xfail when the count moves to the GRPO-style _prepare_inputs (plan 5.6).",
-    )
     def test_num_items_in_batch_counts_the_tokens_trained_on(self, monkeypatch):
         """`num_items_in_batch` is the loss denominator, so it must count the completion tokens actually trained on.
 
