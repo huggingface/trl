@@ -982,7 +982,6 @@ class DistillationTrainer(_BaseTrainer):
         prompt_length = self._compute_prompt_length(inputs)
         completion_mask = inputs["completion_mask"][:, prompt_length:]
 
-        # Local teacher: exact full-vocabulary (optionally top-k) generalized JSD/KL loss.
         teacher_logits = self._get_teacher_logits(inputs)
         student_logits = student_outputs.logits[:, prompt_length - 1 : -1, :]
         teacher_logits = teacher_logits[:, prompt_length - 1 : -1, :]
