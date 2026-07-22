@@ -279,7 +279,7 @@ class _AsyncRolloutLoop:
     policy version from the shared `mp.Value` (`model_version_value`).
     """
 
-    # Class attribute  declares that this loop produces its own per-rollout reward
+    # Class attribute: declares that this loop produces its own per-rollout reward
     _provides_rollout_reward: bool = False
 
     def __init__(
