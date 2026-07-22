@@ -1210,7 +1210,11 @@ class KTOTrainer(_BaseTrainer):
 
         ref_logps = []
         ref_KL_logps = []
-        for padded_batch in tqdm(iterable=data_loader, desc=f"Computing reference log probs for {name} dataset"):
+        for padded_batch in tqdm(
+            iterable=data_loader,
+            desc=f"Computing reference log probs for {name} dataset",
+            disable=bool(os.environ.get("TQDM_DISABLE", "")),
+        ):
             ref_logp, ref_KL_logp = self.compute_ref_log_probs(model, padded_batch)
             if self.calculate_KL:
                 ref_logp, ref_KL_logp = self.accelerator.gather_for_metrics((ref_logp, ref_KL_logp))
