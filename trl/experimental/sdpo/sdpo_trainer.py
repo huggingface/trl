@@ -51,6 +51,7 @@ from ...trainer.utils import (
     RepeatSampler,
     create_model_from_path,
     disable_dropout_in_model,
+    get_callable_name,
     get_config_model_id,
     identity,
     pad,
@@ -569,6 +570,7 @@ class SDPOTrainer(_BaseTrainer):
                 * args.steps_per_generation,
                 enable_sleep_mode=args.vllm_enable_sleep_mode,
                 model_impl=args.vllm_model_impl,
+                trust_remote_code=args.trust_remote_code,
                 repetition_penalty=args.repetition_penalty,
                 temperature=self.temperature,
                 top_p=args.top_p,
@@ -629,7 +631,7 @@ class SDPOTrainer(_BaseTrainer):
             if isinstance(reward_funcs[i], nn.Module):
                 self.reward_func_names.append(get_config_model_id(reward_funcs[i].config).split("/")[-1])
             else:
-                self.reward_func_names.append(reward_funcs[i].__name__)
+                self.reward_func_names.append(get_callable_name(reward_funcs[i]))
         self.reward_funcs = reward_funcs
 
         if args.reward_weights is not None:
@@ -1098,7 +1100,7 @@ class SDPOTrainer(_BaseTrainer):
             zip(self.reward_funcs, self.reward_processing_classes, strict=True)
         ):
             if isinstance(reward_func, nn.Module):
-                if is_conversational(inputs[0]):
+                if is_conversational({"prompt": prompts[0]}):
                     messages = [{"messages": p + c} for p, c in zip(prompts, completions, strict=True)]
                     texts = [
                         apply_chat_template(x, reward_processing_class, **self.chat_template_kwargs)["text"]

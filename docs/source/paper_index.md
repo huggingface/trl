@@ -2,6 +2,9 @@
 
 <!-- Within sections, papers are sorted by publish dates -->
 
+> [!TIP]
+> Each paper below links to its Hugging Face paper page. You can also read any of them from the terminal with the `hf` CLI, e.g. `hf papers read 2402.03300` — particularly handy for coding agents.
+
 ## Group Relative Policy Optimization
 
 Papers relating to the [`GRPOTrainer`].
@@ -475,37 +478,6 @@ $$
 
 TRL exposes the Importance Sampling granularity level through the `vllm_importance_sampling_mode` configuration parameter where `"sequence_*"` modes implement a sequence-level importance sampling ratio and `"token_*"` a per-token ratio.
 
-### Sample More to Think Less: Group Filtered Policy Optimization for Concise Reasoning
-
-**📜 Paper**: https://huggingface.co/papers/2508.09726
-
-See [Experimental - GFPO](gfpo).
-
-### Perception-Aware Policy Optimization for Multimodal Reasoning
-
-**📜 Paper**: https://huggingface.co/papers/2507.06448
-
-A novel policy gradient algorithm that encourages VLMs to learn to perceive while learning to reason. This is a TRL adaptation. The TRL implementation is not the official one provided by the authors.
-This is a TRL adaptation of PAPO. Note that this is not the official implementation. The official code can be found in [MikeWangWZHL/PAPO](https://github.com/MikeWangWZHL/PAPO).
-
-```python
-from trl.experimental.papo import PAPOConfig, PAPOTrainer
-
-training_args = PAPOConfig(
-    # PAPO-specific params
-    perception_loss_weight=0.01,  # Weight for perception loss
-    mask_ratio=0.6,  # 40% of image will be masked
-    mask_type="random",  # Use patch masking (recommended)
-    der_loss_weight1=0.02,
-    der_loss_weight2=0.02,
-    # ...other GRPO params...
-)
-trainer = PAPOTrainer(
-    args=training_args,
-    ...
-)
-```
-
 ### The Art of Scaling Reinforcement Learning
 
 **📜 Paper**: https://huggingface.co/papers/2510.13786
@@ -711,37 +683,6 @@ training_args = GRPOConfig(
     vespo_lambda_neg=2.0,  # decay factor (c2 in paper Section 3.4) for negative advantages
 )
 ```
-
-
-### Rethinking the Trust Region in LLM Reinforcement Learning
-
-**📜 Paper**: https://huggingface.co/papers/2602.04879
-
-DPPO replaces PPO/GRPO's heuristic ratio-clipping with a principled trust region based on direct policy divergence estimates. PPO-style clipping masks tokens based on the probability ratio π/μ, which over-penalizes low-probability tokens and under-penalizes high-probability ones. DPPO instead masks based on direct approximations of policy divergence (TV or KL), ensuring updates stay within a theoretically grounded trust region. Four divergence approximations are supported: `binary_tv`, `binary_kl`, `topk_tv`, and `topk_kl`.
-
-```python
-from trl.experimental.dppo import DPPOConfig, DPPOTrainer
-
-training_args = DPPOConfig(
-    divergence_type="binary_tv",  # divergence approximation
-    divergence_topk=20,  # K for top-K divergence modes (Section 7 / Appendix G.2 of the paper)
-    epsilon=0.15,  # δ_low threshold (Appendix F of the paper)
-    epsilon_high=0.15,  # δ_high threshold (Appendix F of the paper)
-    clip_ratio_c=20.0,  # IS ratio upper bound C (Section 5.4 of the paper)
-    beta=0.0,  # KL regularization coefficient
-    use_vllm=True,
-)
-
-trainer = DPPOTrainer(
-    model="your-model",
-    reward_funcs=[...],
-    args=training_args,
-    train_dataset=dataset,
-)
-trainer.train()
-```
-
-The official code [sail-sg/Stable-RL](https://github.com/sail-sg/Stable-RL)
 
 ## Optimal Advantage Regression
 
@@ -1261,14 +1202,14 @@ training_args = DPOConfig(
 
 ## Kahneman–Tversky Optimization
 
-Papers relating to the [`experimental.kto.KTOTrainer`]
+Papers relating to the [`KTOTrainer`]
 
 ### KTO: Model Alignment as Prospect Theoretic Optimization
 
 **📜 Paper**: https://huggingface.co/papers/2402.01306
 
 KTO derives an alignment objective from prospect theory and learns directly from **binary** human feedback (liked/disliked), matching or surpassing DPO-style methods while handling imbalanced/noisy signals well.
-To reproduce the paper's setting, you can use the default configuration of [`experimental.kto.KTOTrainer`]:
+To reproduce the paper's setting, you can use the default configuration of [`KTOTrainer`]:
 
 ```python
 from trl import KTOConfig, KTOTrainer
@@ -1693,13 +1634,13 @@ Papers relating to training a student model with the help of a teacher model.
 
 **📜 Paper**: https://huggingface.co/papers/2306.13649
 
-Introduces Generalized Knowledge Distillation (GKD), which addresses distribution mismatch in KD for auto-regressive models by training the student on its own generated outputs with teacher feedback, instead of a fixed set of sequences. GKD supports flexible loss functions (e.g. beyond KL when the student cannot match the teacher) and integrates with RL fine-tuning (RLHF). The paper reports results on summarization, translation, arithmetic reasoning, and instruction-tuning. Used in TRL via [`experimental.distillation.DistillationTrainer`] and [`experimental.gkd.GKDTrainer`]. To reproduce the paper's setting, use this configuration:
+Introduces Generalized Knowledge Distillation (GKD), which addresses distribution mismatch in KD for auto-regressive models by training the student on its own generated outputs with teacher feedback, instead of a fixed set of sequences. GKD supports flexible loss functions (e.g. beyond KL when the student cannot match the teacher) and integrates with RL fine-tuning (RLHF). The paper reports results on summarization, translation, arithmetic reasoning, and instruction-tuning. Used in TRL via [`experimental.gkd.GKDTrainer`], which exposes the paper's on/off-policy mixing (`lmbda`). [`experimental.distillation.DistillationTrainer`] implements the same generalized-JSD objective for the always-on-policy case. To reproduce the paper's setting, use this configuration:
 
 ```python
-from trl.experimental.distillation import DistillationConfig
+from trl.experimental.gkd import GKDConfig
 
 # XSum summarization task (Table A.1 of the paper)
-training_args = DistillationConfig(
+training_args = GKDConfig(
     lmbda=0.5,  # λ student data fraction (Section 3 of the paper)
     beta=0.5,  # β Generalized JSD interpolation, 0=KL, 1=reverse KL (Section 3 of the paper)
     temperature=1.0,  # student training temperature (Appendix A of the paper)
@@ -1707,7 +1648,39 @@ training_args = DistillationConfig(
     learning_rate=3e-4,  # learning rate (Table A.1 of the paper)
     per_device_train_batch_size=32,  # batch size (Table A.1 of the paper)
     warmup_steps=2000,  # warm-up steps (Table A.1 of the paper)
-    max_completion_length=64,  # max output tokens (Table A.1 of the paper)
+    max_new_tokens=64,  # max output tokens (Table A.1 of the paper)
+)
+```
+
+### On the Position Bias of On-Policy Distillation
+
+**📜 Paper**: https://huggingface.co/papers/2606.22600
+
+Introduces Importance-Weighted On-Policy Distillation (IW-OPD), which addresses the position bias in OPD by reweighting sampled-token distillation updates according to accumulated teacher-student prefix discrepancy. Early tokens keep larger weights, while later tokens after high drift are downweighted. Used in TRL via [`experimental.iw_opd.IWOPDTrainer`] with `distillation_objective="iw_opd"`.
+
+The paper optimizes IW-OPD with a clipped policy-gradient setup (verl) and vLLM rollouts. `IWOPDTrainer` exposes the matching distillation and rollout settings below; policy-optimization settings from the paper such as clipping range `0.2`, dual-clip constant `3.0`, inner PPO epochs, entropy coefficient, KL reward penalty, auxiliary KL, and rollout importance correction are not `IWOPDConfig` parameters.
+
+```python
+from trl.experimental.iw_opd import IWOPDConfig
+
+# Table 6 and Algorithm 1 of the paper, mapped to IWOPDConfig where available.
+training_args = IWOPDConfig(
+    distillation_objective="iw_opd",
+    iw_opd_gamma=0.5,  # γ amplification, Algorithm 1 and Appendix C.3
+    lmbda=1.0,  # fully on-policy rollouts
+    learning_rate=1e-5,  # Table 6
+    per_device_train_batch_size=1,  # Table 6 uses PPO micro-batch size 1 per GPU
+    gradient_accumulation_steps=32,  # with 32 GPUs, this gives the paper's 1024-prompt batch
+    num_generations=1,  # Table 6 rollout samples per prompt
+    temperature=1.0,  # Table 6 training decoding temperature
+    top_p=1.0,  # Table 6 training decoding top-p
+    max_prompt_length=2048,  # Table 6
+    max_completion_length=16384,  # Table 6
+    warmup_ratio=0.0,  # Table 6
+    use_vllm=True,  # Table 6 uses vLLM rollouts
+    vllm_sync_frequency=1,  # refresh rollout policy after each update
+    save_steps=10,  # Table 6 checkpoint frequency
+    eval_steps=10,  # Table 6 validation frequency
 )
 ```
 
@@ -1754,7 +1727,7 @@ training_args = GKDConfig(
 You can also use the [`GOLDTrainer`] and [`GOLDConfig`] to perform on-policy distillation with a similar configuration:
 
 ```python
-from trl.experimental import GOLDConfig
+from trl.experimental.gold import GOLDConfig
 
 config = GOLDConfig(
     lmbda=1.0, # student produces rollouts for all batches
@@ -1772,7 +1745,7 @@ MiniLLM is the first on-policy knowledge distillation method, which minimizes th
 
 It is a generalized version of [Think Machine Lab's On-Policy Distillation](https://thinkingmachines.ai/blog/on-policy-distillation/), with the option to add distribution-level single-step distillation signals (like GKD when `beta=1`) and long-context reverse KLD signals.
 
-Alternatively, you can use the [`experimental.MiniLLMTrainer`] and [`experimental.MiniLLMConfig`] to perform MiniLLM distillation as follows:
+Alternatively, you can use the [`experimental.minillm.MiniLLMTrainer`] and [`experimental.minillm.MiniLLMConfig`] to perform MiniLLM distillation as follows:
 
 ```python
 from datasets import load_dataset
@@ -1808,7 +1781,7 @@ training_args = SDPOConfig(
     use_successful_as_teacher=True,        # Use successful rollouts as teacher
     teacher_model_kind="ema",              # Supported: "base", "live", "ema"
     teacher_update_rate=0.05,              # EMA update rate
-    include_environment_feedback=False,    # Use dataset privileged_context when available
+    include_environment_feedback=True,     # required to use the dataset's privileged_context (defaults to False)
 )
 
 trainer = SDPOTrainer(
