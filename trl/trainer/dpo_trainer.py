@@ -954,7 +954,8 @@ class DPOTrainer(_BaseTrainer):
                 )
             self.add_callback(SyncRefModelCallback(ref_model=self.ref_model, accelerator=self.accelerator))
 
-        # Reference forwards during precompute reuse a single DeepSpeed inference engine (see `_precompute_ref_logps`).
+        # Reference forwards during precompute reuse a single DeepSpeed/FSDP inference engine (see
+        # `_precompute_ref_logps`).
         self._precompute_engine = None
         if args.precompute_ref_log_probs:
             self.train_dataset = self._precompute_ref_logps(
@@ -1132,11 +1133,16 @@ class DPOTrainer(_BaseTrainer):
         data_loader = self.accelerator.prepare(dataloader)
 
         # This runs before the parent class prepares the model in `train`, so with DeepSpeed the parameters are still
-        # on CPU (ZeRO-1/2) and sharded (ZeRO-3). Wrap the model in an inference engine to place and gather them. Build
-        # it once and reuse it across precompute passes (train, eval, and later `evaluate` calls)
+        # on CPU (ZeRO-1/2) and sharded (ZeRO-3), and with FSDP they are still on the meta/CPU device. Wrap the model
+        # in an inference engine to place and gather them. Build it once and reuse it across precompute passes (train,
+        # eval, and later `evaluate` calls)
         if self.ref_model is None and self.is_deepspeed_enabled:
             if self._precompute_engine is None:
                 self._precompute_engine = prepare_deepspeed(self.model, self.accelerator)
+            model = self._precompute_engine
+        elif self.ref_model is None and self.is_fsdp_enabled:
+            if self._precompute_engine is None:
+                self._precompute_engine = prepare_fsdp(self.model, self.accelerator)
             model = self._precompute_engine
         else:
             model = self.ref_model or self.model
