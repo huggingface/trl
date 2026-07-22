@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import os
+import warnings
 
 import pytest
 import torch
@@ -21,7 +22,7 @@ from datasets import DatasetDict, IterableDatasetDict, load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from trl.experimental.distillation import DistillationConfig, DistillationTrainer
-from trl.experimental.distillation.distillation_trainer import _RepeatBatchDataLoader
+from trl.experimental.distillation.distillation_trainer import _DistillationCollator, _RepeatBatchDataLoader
 from trl.experimental.gkd.gkd_trainer import GKDTrainer
 
 from ..testing_utils import TrlTestCase, require_liger_kernel, require_torch_accelerator
@@ -187,6 +188,19 @@ class TestDistillationTrainer(TrlTestCase):
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
         self.tokenizer.pad_token = self.tokenizer.eos_token
 
+    def test_messages_format_dataset_is_deprecated(self):
+        """The `messages` (language-modeling) format is deprecated in favour of a prompt-only `prompt` column."""
+        messages_example = {"messages": [{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hi!"}]}
+        with pytest.warns(FutureWarning, match="`messages`-format"):
+            _DistillationCollator(self.tokenizer, max_length=128, max_prompt_length=64)([messages_example])
+
+        # The forward-looking `prompt` column must not trigger the deprecation.
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", FutureWarning)
+            _DistillationCollator(self.tokenizer, max_length=128, max_prompt_length=64)(
+                [{"prompt": [{"role": "user", "content": "Hi"}]}]
+            )
+
     def _make_args(self, **kwargs):
         args = {
             "output_dir": self.tmp_dir,
@@ -207,6 +221,8 @@ class TestDistillationTrainer(TrlTestCase):
         return DistillationConfig(**args)
 
     def _make_local_trainer(self, **kwargs):
+        # Messages-format: `_make_batch` reads completion tokens straight from the collator (no generation), which the
+        # `prompt`-only format cannot provide until generation replaces the collator. Switched to prompt-only then.
         dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
         return DistillationTrainer(
             model=self.model_id,
@@ -234,7 +250,7 @@ class TestDistillationTrainer(TrlTestCase):
             save_steps=2,
             per_device_eval_batch_size=2,
         )
-        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only")
         trainer = DistillationTrainer(
             model=self.model_id,
             teacher_model=self.model_id,
@@ -274,12 +290,21 @@ class TestDistillationTrainer(TrlTestCase):
         for name, param in previous_params.items():
             assert not torch.equal(param, trainer.model.get_parameter(name)), f"Parameter {name} has not changed."
 
-    @pytest.mark.xfail(
-        reason="On-policy, num_items_in_batch is computed by transformers from the raw dataloader labels before "
-        "generation replaces the completions, and _RepeatBatchDataLoader repeats one generation batch across the "
-        "accumulation window, so the denominator the loss divides by does not equal the completion tokens actually "
-        "trained on. Un-xfail when the count moves to the GRPO-style _prepare_inputs (plan 5.6).",
-    )
+    def test_train_runs_with_prompt_only_dataset(self):
+        """The forward-looking prompt-only format trains end to end: the student generates, the teacher scores."""
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        trainer = DistillationTrainer(
+            model=self.model_id,
+            teacher_model=self.model_id,
+            args=self._make_args(max_steps=1, learning_rate=0.1),
+            train_dataset=dataset,
+            processing_class=self.tokenizer,
+        )
+
+        trainer.train()
+
+        assert all(torch.isfinite(param).all() for param in trainer.model.parameters())
+
     def test_num_items_in_batch_counts_the_tokens_trained_on(self, monkeypatch):
         """`num_items_in_batch` is the loss denominator, so it must count the completion tokens actually trained on.
 
@@ -296,7 +321,7 @@ class TestDistillationTrainer(TrlTestCase):
 
         monkeypatch.setattr(DistillationTrainer, "_reduce_divergence_loss", staticmethod(_recording))
 
-        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
         trainer = DistillationTrainer(
             model=self.model_id,
             teacher_model=self.model_id,
@@ -326,14 +351,14 @@ class TestDistillationTrainer(TrlTestCase):
         ],
     )
     def test_init_with_eval_dataset(self, eval_dataset_type):
-        train_dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
+        train_dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
 
         if eval_dataset_type == "none":
             eval_dataset = None
         else:
             streaming = "iterable" in eval_dataset_type
             eval_split = load_dataset(
-                "trl-internal-testing/zen", "conversational_language_modeling", split="test", streaming=streaming
+                "trl-internal-testing/zen", "conversational_prompt_only", split="test", streaming=streaming
             )
             if eval_dataset_type in ("dataset", "iterable_dataset"):
                 eval_dataset = eval_split
@@ -396,7 +421,7 @@ class TestDistillationTrainer(TrlTestCase):
         import importlib
 
         training_args = self._make_args(use_liger_kernel=True, use_cpu=False)
-        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
 
         trainer = DistillationTrainer(
             model=self.model_id,
@@ -416,7 +441,7 @@ class TestDistillationTrainer(TrlTestCase):
     def test_teacher_vocab_size_mismatch_raises(self):
         # The local-teacher loss compares full next-token distributions, so student and teacher must share a
         # vocabulary. A teacher with a different vocab_size is rejected (use GOLD for cross-tokenizer distillation).
-        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
         with pytest.raises(ValueError, match="vocab_size"):
             DistillationTrainer(
                 model=self.model_id,
@@ -429,7 +454,7 @@ class TestDistillationTrainer(TrlTestCase):
     def test_teacher_model_init_kwargs_with_instantiated_teacher_raises(self):
         # `teacher_model_init_kwargs` only applies when the teacher is a model id; passing it alongside an already
         # instantiated teacher is a mistake worth surfacing.
-        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
         with pytest.raises(ValueError, match="teacher_model_init_kwargs"):
             DistillationTrainer(
                 model=self.model_id,

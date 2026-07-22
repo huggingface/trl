@@ -791,8 +791,8 @@ class GRPOConfig(_BaseConfig):
     loss_type: str = field(
         default="dapo",
         metadata={
-            "help": "Specifies the loss formulation to use. Supported values are 'grpo', 'dapo', 'bnpo', and "
-            "'dr_grpo'. "
+            "help": "Specifies the loss formulation to use. Supported values are 'grpo', 'dr_grpo', 'dapo', "
+            "'bnpo', 'cispo', 'sapo', 'luspo', and 'vespo'. "
             "'grpo': Aggregates token-level losses by normalizing over sequence length. Not recommended due to length "
             "bias—this approach tends to prefer shorter completions with positive advantages and longer ones with "
             "negative advantages. "
@@ -804,7 +804,7 @@ class GRPOConfig(_BaseConfig):
             "'bnpo': Aggregates token-level losses by normalizing with the number of active token in the local batch. "
             "Note that normalization is performed over the local batch only, so results may slightly vary depending "
             "on the local batch size, despite a constant effective batch size. When using "
-            "`per_device_train_batch_size==1`, the loss is equivalent to the GRPO loss."
+            "`per_device_train_batch_size==1`, the loss is equivalent to the GRPO loss. "
             "'cispo': Clips the importance sampling weights instead of the advantage scaled importance weights. "
             "The clipped weights are then multiplied with the advantages and policy model's log probs. "
             "Individual token losses are aggregated by normalizing with the number of active tokens in "
@@ -813,11 +813,11 @@ class GRPOConfig(_BaseConfig):
             "'sapo': Soft Adaptive Policy Optimization loss, as introduced in the "
             "[Soft Adaptive Policy Optimization paper](https://huggingface.co/papers/2511.20347). "
             "Replaces hard clipping with a smooth, temperature-controlled gate that adaptively attenuates "
-            "off-policy updates while preserving useful learning signals."
+            "off-policy updates while preserving useful learning signals. "
             "'luspo': Length-Unbiased Sequence Policy Optimization loss. A sequence-level loss that scales each "
             "sequence's loss by its length. This is a modification of GSPO and requires "
             "`importance_sampling_level='sequence'`. Introduced in the [LUSPO "
-            "paper](https://huggingface.co/papers/2602.05261)."
+            "paper](https://huggingface.co/papers/2602.05261). "
             "'vespo': Variational Sequence-Level Soft Policy Optimization. Replaces hard clipping with a smooth, "
             "asymmetric Gamma weighting function applied directly to sequence-level importance weights. Introduced in "
             "the [VESPO paper](https://huggingface.co/papers/2602.10693)."
