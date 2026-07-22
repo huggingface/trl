@@ -742,7 +742,7 @@ class DistillationTrainer(_BaseTrainer):
                 else:
                     prompt_token_lengths = torch.full((batch_size,), prompt_width, dtype=torch.long, device=device)
                 completion_lengths = self._get_completion_lengths(generated_tokens, prompt_width)
-                new_attention_mask, new_labels = self._build_sequence_batch(
+                new_attention_mask, new_labels, new_completion_mask = self._build_sequence_batch(
                     generated_tokens, prompt_width, prompt_token_lengths, completion_lengths
                 )
 
@@ -771,6 +771,7 @@ class DistillationTrainer(_BaseTrainer):
                 updated["input_ids"] = generated_tokens
                 updated["attention_mask"] = new_attention_mask
                 updated["labels"] = new_labels
+                updated["completion_mask"] = new_completion_mask
 
                 self._buffered_inputs[slice_idx] = updated
                 self._buffered_text_logs[slice_idx] = (prompt_texts, completion_texts)
@@ -832,7 +833,7 @@ class DistillationTrainer(_BaseTrainer):
             completion_ids_padded = torch.stack(completion_tensors)
             new_input_ids = torch.cat([prompt_ids, completion_ids_padded], dim=1)
             completion_lengths = torch.tensor(completion_lengths, device=device, dtype=torch.long)
-            new_attention_mask, new_labels = self._build_sequence_batch(
+            new_attention_mask, new_labels, new_completion_mask = self._build_sequence_batch(
                 new_input_ids, prompt_width, prompt_token_lengths, completion_lengths
             )
 
@@ -848,6 +849,7 @@ class DistillationTrainer(_BaseTrainer):
             updated["input_ids"] = new_input_ids
             updated["attention_mask"] = new_attention_mask
             updated["labels"] = new_labels
+            updated["completion_mask"] = new_completion_mask
             # Update prompts to match the new padding width so prompt_length is consistent
             updated["prompts"] = prompt_ids
             updated["prompt_attention_mask"] = prompt_attention_mask
@@ -861,8 +863,8 @@ class DistillationTrainer(_BaseTrainer):
         prompt_width: int,
         prompt_token_lengths: torch.Tensor,
         completion_lengths: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Build attention mask and labels from prompt/completion lengths."""
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Build attention mask, labels, and completion mask from prompt/completion lengths."""
         prompt_token_lengths = prompt_token_lengths.to(device=new_input_ids.device, dtype=torch.long)
         completion_lengths = completion_lengths.to(device=new_input_ids.device, dtype=torch.long)
         positions = torch.arange(new_input_ids.shape[1], device=new_input_ids.device).unsqueeze(0)
@@ -873,7 +875,7 @@ class DistillationTrainer(_BaseTrainer):
         new_labels = torch.full_like(new_input_ids, -100)
         new_labels[completion_mask] = new_input_ids[completion_mask]
 
-        return new_attention_mask, new_labels
+        return new_attention_mask, new_labels, completion_mask.int()
 
     # ──────────────────────────────────────────────────────────────────────
     #  Loss computation
