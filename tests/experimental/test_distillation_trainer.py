@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import os
-import warnings
 
 import pytest
 import torch
@@ -22,7 +21,7 @@ from datasets import DatasetDict, IterableDatasetDict, load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from trl.experimental.distillation import DistillationConfig, DistillationTrainer
-from trl.experimental.distillation.distillation_trainer import _DistillationCollator, _RepeatBatchDataLoader
+from trl.experimental.distillation.distillation_trainer import _RepeatBatchDataLoader
 from trl.experimental.gkd.gkd_trainer import GKDTrainer
 
 from ..testing_utils import TrlTestCase, require_liger_kernel, require_torch_accelerator
@@ -188,19 +187,6 @@ class TestDistillationTrainer(TrlTestCase):
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
         self.tokenizer.pad_token = self.tokenizer.eos_token
 
-    def test_messages_format_dataset_is_deprecated(self):
-        """The `messages` (language-modeling) format is deprecated in favour of a prompt-only `prompt` column."""
-        messages_example = {"messages": [{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hi!"}]}
-        with pytest.warns(FutureWarning, match="`messages`-format"):
-            _DistillationCollator(self.tokenizer, max_length=128, max_prompt_length=64)([messages_example])
-
-        # The forward-looking `prompt` column must not trigger the deprecation.
-        with warnings.catch_warnings():
-            warnings.simplefilter("error", FutureWarning)
-            _DistillationCollator(self.tokenizer, max_length=128, max_prompt_length=64)(
-                [{"prompt": [{"role": "user", "content": "Hi"}]}]
-            )
-
     def _make_args(self, **kwargs):
         args = {
             "output_dir": self.tmp_dir,
@@ -212,7 +198,6 @@ class TestDistillationTrainer(TrlTestCase):
             "disable_tqdm": True,
             "use_cpu": True,
             "bf16": False,
-            "max_length": 128,
             "max_completion_length": 32,
             "model_init_kwargs": {"dtype": "float32", "device_map": None},
             "teacher_model_init_kwargs": {"dtype": "float32", "device_map": None},
@@ -221,9 +206,7 @@ class TestDistillationTrainer(TrlTestCase):
         return DistillationConfig(**args)
 
     def _make_local_trainer(self, **kwargs):
-        # Messages-format: `_make_batch` reads completion tokens straight from the collator (no generation), which the
-        # `prompt`-only format cannot provide until generation replaces the collator. Switched to prompt-only then.
-        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
         return DistillationTrainer(
             model=self.model_id,
             teacher_model=self.model_id,
@@ -231,14 +214,6 @@ class TestDistillationTrainer(TrlTestCase):
             train_dataset=dataset,
             processing_class=self.tokenizer,
         )
-
-    def _make_batch(self, trainer):
-        examples = [trainer.train_dataset[i] for i in range(2)]
-        return trainer.data_collator(examples)
-
-    @staticmethod
-    def _move_batch_to_device(batch, device):
-        return {key: value.to(device) for key, value in batch.items()}
 
     def test_distillation_trainer_train_runs_with_local_teacher(self):
         training_args = self._make_args(
@@ -398,11 +373,24 @@ class TestDistillationTrainer(TrlTestCase):
             for p in trainer.teacher_model.parameters():
                 p.add_(0.5 * torch.randn_like(p))
 
-        batch = self._move_batch_to_device(self._make_batch(trainer), trainer.accelerator.device)
+        # The collator is prompt-only (completions come from on-policy generation); build a batch with completion
+        # tokens directly to exercise the loss reduction.
+        device = trainer.accelerator.device
+        prompt_length, completion_length = 4, 3
+        seq_length = prompt_length + completion_length
+        input_ids = torch.randint(0, trainer.model.config.vocab_size, (2, seq_length), device=device)
+        labels = input_ids.clone()
+        labels[:, :prompt_length] = -100
+        batch = {
+            "input_ids": input_ids,
+            "attention_mask": torch.ones_like(input_ids),
+            "labels": labels,
+            "prompts": input_ids[:, :prompt_length],
+            "prompt_attention_mask": torch.ones(2, prompt_length, dtype=torch.long, device=device),
+        }
 
         # Number of valid (non-ignored) tokens in the local batch, sliced the same way `compute_loss` does.
-        prompt_length = trainer._compute_prompt_length(batch)
-        num_valid = (batch["labels"][:, prompt_length:] != -100).sum()
+        num_valid = (labels[:, prompt_length:] != -100).sum()
 
         trainer.model.eval()
         with torch.no_grad():
@@ -414,6 +402,23 @@ class TestDistillationTrainer(TrlTestCase):
         torch.testing.assert_close(loss_global, loss_mean, rtol=1e-4, atol=1e-6)
         # Doubling the global count exactly halves the loss (sum / num_items is linear in 1/num_items).
         torch.testing.assert_close(loss_double, loss_mean / 2, rtol=1e-4, atol=1e-6)
+
+    def test_generated_batch_emits_completion_mask(self, monkeypatch):
+        """The generated batch emits `completion_mask`, equal to `labels != -100` (added ahead of the loss switch)."""
+        trainer = self._make_local_trainer()
+        captured = {}
+        original = DistillationTrainer.compute_loss
+
+        def _capturing(self, model, inputs, *args, **kwargs):
+            captured.setdefault("inputs", {k: v.clone() if torch.is_tensor(v) else v for k, v in inputs.items()})
+            return original(self, model, inputs, *args, **kwargs)
+
+        monkeypatch.setattr(DistillationTrainer, "compute_loss", _capturing)
+        trainer.train()
+
+        inputs = captured["inputs"]
+        assert "completion_mask" in inputs
+        assert torch.equal(inputs["completion_mask"].bool(), inputs["labels"] != -100)
 
     @require_liger_kernel
     @require_torch_accelerator
