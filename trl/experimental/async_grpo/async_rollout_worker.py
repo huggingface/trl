@@ -553,7 +553,9 @@ class _AsyncRolloutLoop:
                         )
                         pending_completed[group_id] = 0
 
-                    task = asyncio.create_task(self._generate_one(prompt, tool_dict=tool_dict, tools=tools))
+                    task = asyncio.create_task(
+                        self._generate_one(prompt, tool_dict=tool_dict, tools=tools, group_id=group_id)
+                    )
                     inflight_tasks[task] = (group_id, slot, name, environment, prompt)
 
                 if not inflight_tasks:
@@ -703,7 +705,7 @@ class _AsyncRolloutLoop:
             group_id += 1
 
     async def _generate_one(
-        self, prompt: Messages, tool_dict: dict[str, Callable], tools: list[Callable]
+        self, prompt: Messages, tool_dict: dict[str, Callable], tools: list[Callable], group_id: int = 0
     ) -> tuple[list[dict[str, str]], list[int], list[TrainingSequence], int, int, float | None]:
         """Roll out one conversation, re-tokenizing the whole message list each turn and reconciling drift.
 
