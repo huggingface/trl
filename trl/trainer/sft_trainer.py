@@ -72,6 +72,7 @@ from .utils import (
     entropy_from_logits,
     flush_left,
     get_config_model_id,
+    maybe_gather_lm_head_ctx,
     pad,
     selective_log_softmax,
 )
@@ -95,26 +96,8 @@ class _ChunkedCELMHeadOutput(CausalLMOutputWithPast):
     aux_loss: torch.Tensor | None = None
 
 
-def _maybe_gather_lm_head_ctx(w, b):
-    # Allgather ZeRO-3 partitioned `lm_head` weight/bias for the chunked matmul. No-op if not ZeRO-3, or if the
-    # param is already gathered (tied embeddings: `embed_tokens` shares the weight and keeps it `AVAILABLE`, so
-    # partitioning on our exit would collide with its active-submodule tracking).
-    from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
-
-    if not is_deepspeed_zero3_enabled():
-        return contextlib.nullcontext()
-
-    import deepspeed
-    from deepspeed.runtime.zero.partition_parameters import ZeroParamStatus
-
-    params = [w] if b is None else [w, b]
-    if all(p.ds_status == ZeroParamStatus.AVAILABLE for p in params):
-        return contextlib.nullcontext()
-    return deepspeed.zero.GatheredParameters(params)
-
-
 def _chunk(h, w, b, lbl, logit_scale, final_logit_softcapping):
-    with _maybe_gather_lm_head_ctx(w, b):
+    with maybe_gather_lm_head_ctx(w, b):
         logits = h.float() @ w.float().t()
         if b is not None:
             logits = logits + b.float()
@@ -208,7 +191,7 @@ def _chunked_cross_entropy_loss(
         # Whole micro-batch masked (e.g. completion-only loss + truncation). Keep the loss connected
         # to the autograd graph through every trainable parameter so `.backward()` succeeds and DDP /
         # FSDP gradient sync doesn't hang on a missing param.
-        with _maybe_gather_lm_head_ctx(lm_head_weight, lm_head_bias):
+        with maybe_gather_lm_head_ctx(lm_head_weight, lm_head_bias):
             loss = (hidden_states.float().sum() + lm_head_weight.float().sum()) * 0.0
             if lm_head_bias is not None:
                 loss = loss + lm_head_bias.float().sum() * 0.0
@@ -1114,7 +1097,8 @@ class SFTTrainer(_BaseTrainer):
             model = get_peft_model(model, peft_config, **get_peft_model_kwargs)
 
         # PEFT + DeepSpeed ZeRO-3 requires reentrant checkpointing. For more details, see
-        # https://github.com/huggingface/trl/issues/2514#issuecomment-2692152703
+        # https://github.com/huggingface/trl/issues/2514#issuecomment-2692152703.
+        # Can be removed once https://github.com/deepspeedai/DeepSpeed/pull/8130 is merged and released.
         if (
             is_peft_model(model)
             and args.deepspeed_plugin is not None
@@ -1604,6 +1588,15 @@ class SFTTrainer(_BaseTrainer):
 
                 dataset = dataset.map(truncate, fn_kwargs={"sl": sl}, **map_kwargs)
 
+                # Drop examples left fully masked by truncation (e.g. a prompt alone filling `max_length` with
+                # `truncation_mode="keep_start"`), since they contribute no loss.
+                if isinstance(dataset, Dataset):  # `IterableDataset.filter` does not support `desc`
+                    map_kwargs["desc"] = f"Dropping fully masked examples from {dataset_name} dataset"
+
+                dataset = dataset.filter(
+                    lambda example: any(label != -100 for label in example["labels"]), **map_kwargs
+                )
+
             # Pack
             if packing:
                 if args.max_length is None:
@@ -1666,7 +1659,12 @@ class SFTTrainer(_BaseTrainer):
 
     def evaluate(
         self,
-        eval_dataset: Dataset | dict[str, Dataset] | None = None,
+        eval_dataset: Dataset
+        | IterableDataset
+        | DatasetDict
+        | IterableDatasetDict
+        | dict[str, Dataset | IterableDataset]
+        | None = None,
         ignore_keys: list[str] | None = None,
         metric_key_prefix: str = "eval",
     ) -> dict[str, float]:

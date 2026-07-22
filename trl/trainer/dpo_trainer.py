@@ -27,7 +27,7 @@ import torch.nn.functional as F
 import transformers
 from accelerate import PartialState
 from accelerate.logging import get_logger
-from accelerate.utils import is_peft_model, tqdm
+from accelerate.utils import broadcast_object_list, is_peft_model, tqdm
 from datasets import Dataset, DatasetDict, IterableDataset, IterableDatasetDict, concatenate_datasets
 from datasets.fingerprint import Hasher
 from packaging.version import Version
@@ -48,7 +48,7 @@ from transformers.utils import is_peft_available
 from ..data_utils import _tokenize, apply_chat_template, extract_prompt, is_conversational, prepare_multimodal_messages
 from ..import_utils import is_liger_kernel_available
 from ..models import get_act_offloading_ctx_manager, prepare_deepspeed, prepare_fsdp
-from ..models.utils import disable_gradient_checkpointing
+from ..models.utils import _ForwardRedirection, disable_gradient_checkpointing
 from .base_trainer import _BaseTrainer
 from .callbacks import SyncRefModelCallback
 from .dpo_config import DPOConfig
@@ -59,6 +59,7 @@ from .utils import (
     flush_left,
     get_config_model_id,
     hash_module,
+    maybe_gather_lm_head_ctx,
     pad,
     selective_log_softmax,
     use_adapter,
@@ -668,6 +669,25 @@ class DPOTrainer(_BaseTrainer):
                         ref_param = model.get_parameter(ref_name)
                         ref_param.data.copy_(param.data)
 
+        # PEFT + DeepSpeed ZeRO-3 requires reentrant checkpointing. For more details, see
+        # https://github.com/huggingface/trl/issues/2514#issuecomment-2692152703.
+        # Can be removed once https://github.com/deepspeedai/DeepSpeed/pull/8130 is merged and released.
+        if (
+            is_peft_model(model)
+            and args.deepspeed_plugin is not None
+            and args.deepspeed_plugin.zero_stage == 3
+            and args.gradient_checkpointing
+        ):
+            args.gradient_checkpointing_kwargs = args.gradient_checkpointing_kwargs or {}
+            use_reentrant = args.gradient_checkpointing_kwargs.get("use_reentrant")
+            if use_reentrant is False:
+                logger.warning(
+                    "You are using PEFT with DeepSpeed ZeRO-3 and gradient checkpointing with `use_reentrant=False`. "
+                    "`use_reentrant` is forced to `True` in this configuration to ensure correct training. To remove "
+                    "this warning, unset `use_reentrant` in `gradient_checkpointing_kwargs` or set it to `True`."
+                )
+            args.gradient_checkpointing_kwargs["use_reentrant"] = True
+
         # When using gradient checkpointing with PEFT, we need to enable input gradients. transformers.Trainer normally
         # handles this, but a bug currently prevents it; see https://github.com/huggingface/transformers/issues/42489
         if is_peft_model(model) and args.gradient_checkpointing:
@@ -812,6 +832,9 @@ class DPOTrainer(_BaseTrainer):
                         "`use_liger_kernel=False`."
                     )
             self.liger_loss = LigerFusedLinearDPOLoss(beta=args.beta, loss_type=self.loss_types[0])
+            # Redirect the model.module forward to the model forward to ensure pre-forward hooks are called, so that
+            # under ZeRO-3 the parameter coordinator gathers/reduces `lm_head.weight` around the fused loss.
+            self._forward_redirection = _ForwardRedirection()
 
         # Dataset
         # Skip dataset preparation if it's a VLM, where preprocessing (e.g., image-to-pixel conversion) is too costly
@@ -931,6 +954,8 @@ class DPOTrainer(_BaseTrainer):
                 )
             self.add_callback(SyncRefModelCallback(ref_model=self.ref_model, accelerator=self.accelerator))
 
+        # Reference forwards during precompute reuse a single DeepSpeed inference engine (see `_precompute_ref_logps`).
+        self._precompute_engine = None
         if args.precompute_ref_log_probs:
             self.train_dataset = self._precompute_ref_logps(
                 self.train_dataset,
@@ -1045,6 +1070,14 @@ class DPOTrainer(_BaseTrainer):
                 **map_kwargs,
             )
 
+            # Drop examples whose prompt alone fills `max_length`: with `keep_start` truncation the collator would
+            # remove every completion token, leaving no learning signal. `keep_end` keeps the completion end, so
+            # nothing is dropped there.
+            if args.max_length is not None and args.truncation_mode == "keep_start":
+                if isinstance(dataset, Dataset):  # `IterableDataset.filter` does not support `desc`
+                    map_kwargs["desc"] = f"Dropping fully truncated examples from {dataset_name} dataset"
+                dataset = dataset.filter(lambda example: len(example["prompt_ids"]) < args.max_length, **map_kwargs)
+
         return dataset
 
     def _set_signature_columns_if_needed(self):
@@ -1078,7 +1111,11 @@ class DPOTrainer(_BaseTrainer):
                 "Dataset or set `precompute_ref_log_probs=False`."
             )
         model_hash = hash_module(self.ref_model or self.model)
-        fingerprint = Hasher.hash((dataset._fingerprint, model_hash))
+        # Both inputs are rank-dependent under distributed training (ZeRO-3 shards the model), so broadcast rank 0's
+        # value so all ranks share one cache file.
+        fingerprint = [Hasher.hash((dataset._fingerprint, model_hash))]
+        broadcast_object_list(fingerprint, from_process=0)
+        fingerprint = fingerprint[0]
         cache_file = dataset._get_cache_file_path(fingerprint)
 
         if os.path.exists(cache_file):
@@ -1093,10 +1130,21 @@ class DPOTrainer(_BaseTrainer):
             shuffle=False,
         )
         data_loader = self.accelerator.prepare(dataloader)
+
+        # This runs before the parent class prepares the model in `train`, so with DeepSpeed the parameters are still
+        # on CPU (ZeRO-1/2) and sharded (ZeRO-3). Wrap the model in an inference engine to place and gather them. Build
+        # it once and reuse it across precompute passes (train, eval, and later `evaluate` calls)
+        if self.ref_model is None and self.is_deepspeed_enabled:
+            if self._precompute_engine is None:
+                self._precompute_engine = prepare_deepspeed(self.model, self.accelerator)
+            model = self._precompute_engine
+        else:
+            model = self.ref_model or self.model
+
         ref_chosen_logps = []
         ref_rejected_logps = []
         for padded_batch in tqdm(iterable=data_loader, desc=f"Computing reference log probs for {name} dataset"):
-            ref_chosen_logp, ref_rejected_logp = self.compute_ref_log_probs(padded_batch)
+            ref_chosen_logp, ref_rejected_logp = self.compute_ref_log_probs(model, padded_batch)
             ref_chosen_logp, ref_rejected_logp = self.accelerator.gather_for_metrics(
                 (ref_chosen_logp, ref_rejected_logp)
             )
@@ -1127,7 +1175,7 @@ class DPOTrainer(_BaseTrainer):
 
         return concatenate_datasets([dataset, Dataset.from_file(cache_file)], axis=1)
 
-    def compute_ref_log_probs(self, inputs):
+    def compute_ref_log_probs(self, model, inputs):
         """Computes reference log probabilities for a single padded batch."""
         device = self.accelerator.device
 
@@ -1136,15 +1184,14 @@ class DPOTrainer(_BaseTrainer):
         model_kwargs["use_cache"] = False
 
         with torch.no_grad(), disable_gradient_checkpointing(self.model, self.args.gradient_checkpointing_kwargs):
-            if self.ref_model is None:
-                if is_peft_model(self.model):
-                    model = self.accelerator.unwrap_model(self.model)
-                    with use_adapter(model, adapter_name="ref" if "ref" in model.peft_config else None):
-                        ref_outputs = self.model(**model_kwargs)
-                else:
-                    ref_outputs = self.model(**model_kwargs)
+            if self.ref_model is None and is_peft_model(self.model):
+                unwrapped_model = self.accelerator.unwrap_model(self.model)
+                with use_adapter(
+                    unwrapped_model, adapter_name="ref" if "ref" in unwrapped_model.peft_config else None
+                ):
+                    ref_outputs = model(**model_kwargs)
             else:
-                ref_outputs = self.ref_model(**model_kwargs)
+                ref_outputs = model(**model_kwargs)
 
         input_ids = inputs["input_ids"]
         completion_mask = inputs["completion_mask"]
@@ -1236,7 +1283,10 @@ class DPOTrainer(_BaseTrainer):
         labels = input_ids[:, 1:].clone()
         labels[shift_completion_mask == 0] = -100
 
-        loss, metrics = self.liger_loss(weight, hidden_states, labels, bias, ref_hidden_states, ref_weight, ref_bias)
+        with maybe_gather_lm_head_ctx(weight, bias, ref_weight, ref_bias):
+            loss, metrics = self.liger_loss(
+                weight, hidden_states, labels, bias, ref_hidden_states, ref_weight, ref_bias
+            )
 
         (
             chosen_logps,
@@ -1606,7 +1656,12 @@ class DPOTrainer(_BaseTrainer):
 
     def evaluate(
         self,
-        eval_dataset: Dataset | dict[str, Dataset] | None = None,
+        eval_dataset: Dataset
+        | IterableDataset
+        | DatasetDict
+        | IterableDatasetDict
+        | dict[str, Dataset | IterableDataset]
+        | None = None,
         ignore_keys: list[str] | None = None,
         metric_key_prefix: str = "eval",
     ) -> dict[str, float]:
@@ -1615,6 +1670,23 @@ class DPOTrainer(_BaseTrainer):
         # idempotent: it skips datasets that are already tokenized. A `str` selects a dataset that was already prepared
         # at init time, so it's left untouched.
         if not self._is_vision_dataset and eval_dataset is not None and not isinstance(eval_dataset, str):
+            # Full fine-tuning with no `ref_model` uses `self.model` as the reference, which is only valid before
+            # training. After a step (`global_step > 0`) it's the trained policy, so we can't precompute a correct
+            # reference here. (PEFT is exempt: the reference is recovered by disabling the adapter.) Checked before
+            # tokenizing so we fail fast.
+            if (
+                self.precompute_ref_logps
+                and self.ref_model is None
+                and not is_peft_model(self.model)
+                and self.state.global_step > 0
+            ):
+                raise ValueError(
+                    "Cannot compute reference log-probs for a dataset passed to `evaluate()` after training has "
+                    "started, because `precompute_ref_log_probs=True` and no `ref_model` was provided (full "
+                    "fine-tuning). In this setup the reference model is not kept in memory, so it is only available "
+                    "before training. Provide this dataset as `eval_dataset` at initialization, pass an explicit "
+                    "`ref_model`, or set `precompute_ref_log_probs=False`."
+                )
             if isinstance(eval_dataset, dict):
                 eval_dataset = {
                     key: self._prepare_dataset(dataset, self.processing_class, self.args, key)
@@ -1633,6 +1705,19 @@ class DPOTrainer(_BaseTrainer):
                     }
                 else:
                     eval_dataset = self._precompute_ref_logps(eval_dataset, "eval", batch_size)
+            # Call `super().evaluate()` once per split ourselves instead of handing the whole dict to it: `Trainer.evaluate`
+            # would otherwise recurse into `self.evaluate` per split, re-entering this override on an already-prepared dataset.
+            if isinstance(eval_dataset, dict):
+                metrics = {}
+                for name, dataset in eval_dataset.items():
+                    metrics.update(
+                        super().evaluate(
+                            eval_dataset=dataset,
+                            ignore_keys=ignore_keys,
+                            metric_key_prefix=f"{metric_key_prefix}_{name}",
+                        )
+                    )
+                return metrics
         return super().evaluate(
             eval_dataset=eval_dataset, ignore_keys=ignore_keys, metric_key_prefix=metric_key_prefix
         )
@@ -1640,7 +1725,17 @@ class DPOTrainer(_BaseTrainer):
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         try:
             if self.use_liger_kernel:
-                return self._compute_loss_liger(model, inputs, return_outputs)
+                # Under ZeRO-3, `lm_head.weight` is sharded and the fused loss reads it directly (bypassing the
+                # module), so run the loss inside the engine's forward via `_forward_redirection` to arm the parameter
+                # coordinator's gather/reduce hooks.
+                deepspeed_plugin = self.accelerator.state.deepspeed_plugin
+                is_zero3 = deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3
+                unwrapped_model = self.accelerator.unwrap_model(model)
+                if is_zero3 or self.is_fsdp_enabled:
+                    return self._forward_redirection(
+                        model, unwrapped_model, self._compute_loss_liger, unwrapped_model, inputs, return_outputs
+                    )
+                return self._compute_loss_liger(unwrapped_model, inputs, return_outputs)
             return self._compute_loss(model, inputs, return_outputs)
         except ValueError as e:
             if "Image features and image tokens do not match" in str(e) and self.args.max_length is not None:
