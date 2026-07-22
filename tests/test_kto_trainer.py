@@ -441,7 +441,6 @@ class TestKTOTrainer(TrlTestCase):
 
         training_args = KTOConfig(
             output_dir=self.tmp_dir,
-            loss_type="apo_zero_unpaired",
             max_steps=1,
             precompute_ref_log_probs=True,
             report_to="none",
