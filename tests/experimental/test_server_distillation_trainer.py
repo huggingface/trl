@@ -69,16 +69,8 @@ def _canned_teacher_logprobs(**kwargs):
 def _variable_length_dataset():
     return Dataset.from_list(
         [
-            {"messages": [{"role": "user", "content": "What's 2+2?"}, {"role": "assistant", "content": "4."}]},
-            {
-                "messages": [
-                    {"role": "user", "content": "Name three primary colors."},
-                    {
-                        "role": "assistant",
-                        "content": "Red, green, and blue are the three primary colors commonly used in additive color mixing.",
-                    },
-                ]
-            },
+            {"prompt": [{"role": "user", "content": "What's 2+2?"}]},
+            {"prompt": [{"role": "user", "content": "Name three primary colors."}]},
         ]
     )
 
