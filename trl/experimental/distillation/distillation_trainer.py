@@ -214,6 +214,9 @@ class _DistillationCollator:
             "completion_mask": (labels_t != self.ignore_index).int(),
             "prompts": prompts_t,
             "prompt_attention_mask": prompt_mask_t,
+            "prompt_ids": prompts_t,
+            "prompt_mask": prompt_mask_t,
+            "completion_ids": input_ids_t[:, prompts_t.shape[1] :],
         }
 
 
@@ -773,6 +776,9 @@ class DistillationTrainer(_BaseTrainer):
                 updated["attention_mask"] = new_attention_mask
                 updated["labels"] = new_labels
                 updated["completion_mask"] = new_completion_mask
+                updated["prompt_ids"] = slice_inputs["prompts"]
+                updated["prompt_mask"] = prompt_mask
+                updated["completion_ids"] = generated_tokens[:, prompt_width:]
 
                 self._buffered_inputs[slice_idx] = updated
                 self._buffered_text_logs[slice_idx] = (prompt_texts, completion_texts)
@@ -851,6 +857,9 @@ class DistillationTrainer(_BaseTrainer):
             updated["attention_mask"] = new_attention_mask
             updated["labels"] = new_labels
             updated["completion_mask"] = new_completion_mask
+            updated["prompt_ids"] = prompt_ids
+            updated["prompt_mask"] = prompt_attention_mask
+            updated["completion_ids"] = completion_ids_padded
             # Update prompts to match the new padding width so prompt_length is consistent
             updated["prompts"] = prompt_ids
             updated["prompt_attention_mask"] = prompt_attention_mask
