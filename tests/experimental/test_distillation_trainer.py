@@ -230,10 +230,6 @@ class TestDistillationTrainer(TrlTestCase):
             processing_class=self.tokenizer,
         )
 
-    def _make_batch(self, trainer):
-        examples = [trainer.train_dataset[i] for i in range(2)]
-        return trainer.data_collator(examples)
-
     @staticmethod
     def _move_batch_to_device(batch, device):
         return {key: value.to(device) for key, value in batch.items()}
@@ -396,7 +392,12 @@ class TestDistillationTrainer(TrlTestCase):
             for p in trainer.teacher_model.parameters():
                 p.add_(0.5 * torch.randn_like(p))
 
-        batch = self._move_batch_to_device(self._make_batch(trainer), trainer.accelerator.device)
+        # A static batch standing in for what on-policy generation feeds `compute_loss`: a prompt (labels `-100`)
+        # followed by completion tokens (labels kept).
+        input_ids = torch.tensor([[1, 2, 3, 4, 5], [1, 2, 3, 6, 7]])
+        labels = torch.tensor([[-100, -100, -100, 4, 5], [-100, -100, -100, 6, 7]])
+        batch = {"input_ids": input_ids, "attention_mask": torch.ones_like(input_ids), "labels": labels}
+        batch = self._move_batch_to_device(batch, trainer.accelerator.device)
 
         # Number of valid (non-ignored) tokens in the local batch, sliced the same way `compute_loss` does.
         prompt_length = trainer._compute_prompt_length(batch)
