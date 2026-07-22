@@ -295,6 +295,34 @@ class GRPOConfig(_BaseConfig):
             position, improving results. Range: `[0.0-1.0]`. A value of `0.0` masks all but the highest entropy token;
             `1.0` keeps all tokens. The paper recommends a value of `0.2`. If used with
             `mask_truncated_completions=True`, only tokens from non-truncated completions are considered.
+        entropy_coef (`float`, *optional*, defaults to `0.0`):
+            Coefficient of the entropy regularization term in the loss. A positive value adds an entropy bonus that
+            encourages exploration by keeping the policy from collapsing to near-deterministic outputs. The bonus is
+            always the mean per-token entropy regardless of `loss_type`; it is not rescaled to match a loss type's
+            policy normalization, so `entropy_coef` has the same meaning for every loss type. When
+            `use_adaptive_entropy=True`, this serves as the initial coefficient and is updated each optimizer step.
+            Has no effect when set to `0.0` (default).
+        use_adaptive_entropy (`bool`, *optional*, defaults to `False`):
+            Whether to use adaptive entropy control, introduced in
+            [Skywork-OR1](https://huggingface.co/papers/2505.22312). When enabled, the entropy coefficient
+            `entropy_coef` is updated each optimizer step: incremented by `entropy_coef_delta` when the current
+            entropy is below `entropy_target`, and decremented otherwise. The coefficient is only applied when
+            entropy is at or below `entropy_target`.
+        entropy_coef_min (`float`, *optional*, defaults to `0.0`):
+            Lower bound for the entropy coefficient when using adaptive entropy control.
+        entropy_coef_max (`float`, *optional*, defaults to `1.0`):
+            Upper bound for the entropy coefficient when using adaptive entropy control.
+        entropy_coef_delta (`float`, *optional*, defaults to `0.005`):
+            Step size for adjusting the entropy coefficient at each optimizer step during adaptive entropy control.
+        entropy_target (`float`, *optional*, defaults to `0.2`):
+            Target mean per-token entropy (in nats) used by adaptive entropy control. The coefficient is only
+            applied when the current entropy falls at or below this value. Measured over the same token set as
+            the policy loss: all completion tokens by default, or only the high-entropy subset when
+            `top_entropy_quantile < 1.0`. Typical language models have per-token entropies in the range 2–10
+            nats, so the default of `0.2` almost never triggers regularization (only on near-complete entropy
+            collapse); set it close to the entropy you observe early in training (logged as the `entropy`
+            metric) so the bonus engages before the policy collapses (and account for the token subset when
+            using `top_entropy_quantile`).
         max_tool_calling_iterations (`int`, *optional*):
             Maximum number of tool-calling turns when training an agent. If `None`, there is no limit and generation
             stops when the model generates a response turn with no tool calls or when the total response length reaches
@@ -339,6 +367,9 @@ class GRPOConfig(_BaseConfig):
             Whether to log a sample of (prompt, completion) pairs every `logging_steps` steps. If `rich` is installed,
             it prints the sample. If `wandb` and/or `trackio` logging is enabled, it logs it to `wandb` and/or
             `trackio`.
+        log_multimodal (`bool`, *optional*, defaults to `True`):
+            Whether to log multimodal content (images, videos, etc.) together with completions. Disable this to reduce
+            log size when using high-resolution multimodal data.
         num_completions_to_print (`int`, *optional*):
             Number of completions to print with `rich`. If `None`, all completions are logged.
         log_unique_prompts (`bool`, *optional*, defaults to `False`):
@@ -760,8 +791,8 @@ class GRPOConfig(_BaseConfig):
     loss_type: str = field(
         default="dapo",
         metadata={
-            "help": "Specifies the loss formulation to use. Supported values are 'grpo', 'dapo', 'bnpo', and "
-            "'dr_grpo'. "
+            "help": "Specifies the loss formulation to use. Supported values are 'grpo', 'dr_grpo', 'dapo', "
+            "'bnpo', 'cispo', 'sapo', 'luspo', and 'vespo'. "
             "'grpo': Aggregates token-level losses by normalizing over sequence length. Not recommended due to length "
             "bias—this approach tends to prefer shorter completions with positive advantages and longer ones with "
             "negative advantages. "
@@ -773,7 +804,7 @@ class GRPOConfig(_BaseConfig):
             "'bnpo': Aggregates token-level losses by normalizing with the number of active token in the local batch. "
             "Note that normalization is performed over the local batch only, so results may slightly vary depending "
             "on the local batch size, despite a constant effective batch size. When using "
-            "`per_device_train_batch_size==1`, the loss is equivalent to the GRPO loss."
+            "`per_device_train_batch_size==1`, the loss is equivalent to the GRPO loss. "
             "'cispo': Clips the importance sampling weights instead of the advantage scaled importance weights. "
             "The clipped weights are then multiplied with the advantages and policy model's log probs. "
             "Individual token losses are aggregated by normalizing with the number of active tokens in "
@@ -782,11 +813,11 @@ class GRPOConfig(_BaseConfig):
             "'sapo': Soft Adaptive Policy Optimization loss, as introduced in the "
             "[Soft Adaptive Policy Optimization paper](https://huggingface.co/papers/2511.20347). "
             "Replaces hard clipping with a smooth, temperature-controlled gate that adaptively attenuates "
-            "off-policy updates while preserving useful learning signals."
+            "off-policy updates while preserving useful learning signals. "
             "'luspo': Length-Unbiased Sequence Policy Optimization loss. A sequence-level loss that scales each "
             "sequence's loss by its length. This is a modification of GSPO and requires "
             "`importance_sampling_level='sequence'`. Introduced in the [LUSPO "
-            "paper](https://huggingface.co/papers/2602.05261)."
+            "paper](https://huggingface.co/papers/2602.05261). "
             "'vespo': Variational Sequence-Level Soft Policy Optimization. Replaces hard clipping with a smooth, "
             "asymmetric Gamma weighting function applied directly to sequence-level importance weights. Introduced in "
             "the [VESPO paper](https://huggingface.co/papers/2602.10693)."
@@ -830,6 +861,47 @@ class GRPOConfig(_BaseConfig):
             "[0.0-1.0]. A value of `0.0` masks all but the highest entropy token; `1.0` keeps all tokens. The paper "
             "recommends a value of `0.2`. If used with `mask_truncated_completions=True`, only tokens from "
             "non-truncated completions are considered."
+        },
+    )
+    entropy_coef: float = field(
+        default=0.0,
+        metadata={
+            "help": "Coefficient of the entropy regularization term in the loss. A positive value adds an entropy "
+            "bonus that encourages exploration. The bonus is always the mean per-token entropy regardless of "
+            "`loss_type` (not rescaled to a loss type's policy normalization), so `entropy_coef` has the same "
+            "meaning for every loss type. When `use_adaptive_entropy=True`, this serves as the initial "
+            "coefficient and is updated each optimizer step. Has no effect when set to `0.0` (default)."
+        },
+    )
+    use_adaptive_entropy: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to use adaptive entropy control, introduced in Skywork-OR1 "
+            "(https://huggingface.co/papers/2505.22312). When enabled, `entropy_coef` is incremented by "
+            "`entropy_coef_delta` when entropy is below `entropy_target`, and decremented otherwise."
+        },
+    )
+    entropy_coef_min: float = field(
+        default=0.0,
+        metadata={"help": "Lower bound for the entropy coefficient when using adaptive entropy control."},
+    )
+    entropy_coef_max: float = field(
+        default=1.0,
+        metadata={"help": "Upper bound for the entropy coefficient when using adaptive entropy control."},
+    )
+    entropy_coef_delta: float = field(
+        default=0.005,
+        metadata={"help": "Step size for adjusting the entropy coefficient during adaptive entropy control."},
+    )
+    entropy_target: float = field(
+        default=0.2,
+        metadata={
+            "help": "Target mean per-token entropy (nats) for adaptive entropy control. The coefficient is only "
+            "applied when current entropy is at or below this value. Measured over the same token set as the "
+            "policy loss (all completion tokens, or the high-entropy subset when top_entropy_quantile < 1.0). "
+            "Typical language models have per-token entropies of 2–10 nats, so the default of 0.2 almost never "
+            "triggers regularization (only on near-complete collapse); set it close to the entropy observed "
+            "early in training and tune from there."
         },
     )
     max_tool_calling_iterations: int | None = field(
@@ -902,6 +974,13 @@ class GRPOConfig(_BaseConfig):
         metadata={
             "help": "Whether to log a sample of (prompt, completion) pairs every `logging_steps` steps. If `rich` is "
             "installed, it prints the sample. If `wandb` logging is enabled, it logs it to `wandb`."
+        },
+    )
+    log_multimodal: bool = field(
+        default=True,
+        metadata={
+            "help": "Whether to log multimodal content (images, videos, etc.) together with completions. Disable this "
+            "to reduce log size when using high-resolution multimodal data."
         },
     )
     num_completions_to_print: int | None = field(
@@ -981,6 +1060,16 @@ class GRPOConfig(_BaseConfig):
             raise ValueError(
                 "log_completions_hub_repo is set, but log_completions is False. Enable log_completions to upload "
                 "completions to the Hub, or unset log_completions_hub_repo."
+            )
+
+        # `auto_find_batch_size` halves the train batch size on OOM, and the generation batch is derived from it. The
+        # reduced batch is no longer guaranteed to hold full prompt groups, which breaks grouping the rewards by
+        # prompt. There's no way to preserve the invariant while shrinking the batch, so reject it up front.
+        if self.auto_find_batch_size:
+            raise ValueError(
+                "auto_find_batch_size is not supported by GRPO, because the generation batch must contain full "
+                "prompt groups of num_generations completions, and reducing the batch size on out-of-memory breaks "
+                "this invariant. Set auto_find_batch_size=False and lower per_device_train_batch_size instead."
             )
 
         num_processes = self.world_size

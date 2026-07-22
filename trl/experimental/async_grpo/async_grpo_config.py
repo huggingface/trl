@@ -47,7 +47,7 @@ class AsyncGRPOConfig(_BaseConfig):
         num_generations (`int`, *optional*, defaults to `8`):
             Number of generations per prompt to sample.
         max_completion_length (`int`, *optional*, defaults to `2048`):
-            Maximum number of tokens to generate per completion.
+            Maximum length of the generated completion.
         temperature (`float`, *optional*, defaults to `1.0`):
             Temperature for sampling. The higher the temperature, the more random the completions.
         chat_template_kwargs (`dict[str, Any]`, *optional*):
@@ -56,6 +56,14 @@ class AsyncGRPOConfig(_BaseConfig):
             Maximum number of tool-calling turns when training an agent. If `None`, there is no limit and generation
             stops when the model generates a response turn with no tool calls or when the total response length reaches
             `max_completion_length`.
+        fork_threshold_tokens (`int`, *optional*, defaults to `1024`):
+            A multi-turn conversation is turned into training rows by re-tokenizing the whole conversation every turn
+            and reconciling the result against the tokens held so far: a clean append stays one row, a rewrite (dropped
+            reasoning, summarized history) forks a new row. When a turn's re-tokenized prompt drifts inside the last
+            generated answer, the decision is made on the **drift size** — how many previously-trained tokens the
+            realign would mask to context. A drift smaller than this many tokens is treated as a re-tokenization
+            wobble (realigned as context); a larger drift — e.g. a long reasoning block dropped by the template —
+            forks a new row so those trained tokens keep their training signal instead of being silently masked.
 
         > Parameters that control the vLLM server
 
@@ -73,6 +81,15 @@ class AsyncGRPOConfig(_BaseConfig):
         epsilon_high (`float`, *optional*):
             Upper-bound epsilon value for clipping. If not specified, it defaults to the same value as the lower-bound
             specified in argument `epsilon`. Paper [DAPO](https://huggingface.co/papers/2503.14476) recommends `0.28`.
+        token_budget (`int`, *optional*):
+            Maximum number of real tokens packed into a single row (one DP rank's forward) for dynamic
+            token-budgeted micro-batching. When `> 0`, a `TokenBudgetBatcher` forms Σ Lᵢ²-balanced micro-batches
+            whose rows each stay within this budget, bounding peak memory independently of the sample count (the
+            number of samples per row becomes dynamic). If `None` (default), it is set to the vLLM server's
+            `max_model_len` (queried at train start) — the cap on prompt + completion length — so no rollout sample
+            can ever exceed the budget. A sample longer than `token_budget` fits in no row and is dropped with a
+            warning. Set `<= 0` to disable token budgeting and instead pack a fixed `per_device_train_batch_size ×
+            num_processes` samples per micro-batch, Σ Lᵢ²-balanced across the rows.
 
         > Parameters that control the async rollout pipeline
 
@@ -105,6 +122,22 @@ class AsyncGRPOConfig(_BaseConfig):
     > - `gradient_checkpointing`: Defaults to `True` instead of `False`.
     > - `bf16`: Defaults to `True` if `fp16` is not set, instead of `False`.
     > - `learning_rate`: Defaults to `1e-6` instead of `5e-5`.
+    > - `lr_scheduler_type`: Defaults to `constant` instead of `linear` (see below).
+
+    > [!NOTE]
+    > Training duration and learning rate under message-mode reconciliation:
+    > A multi-turn conversation can fork into a variable number of training rows (a rewrite of the conversation
+    > starts a new row), so the number of samples, and therefore the number of optimizer steps, per epoch is not
+    > known up front. As a consequence:
+    > - `num_train_epochs` bounds training by full passes over the *prompt* dataset, counted as the number of
+    >   distinct prompts actually trained on. This is independent of how many rows the forks produce, so requesting
+    >   N epochs always trains on N passes over the data. When `max_steps` is left unset, this is the stop condition
+    >   and `max_steps` is only a safety ceiling.
+    > - `max_steps`, if set explicitly (`> 0`), takes over as the stop condition (bounding by optimizer steps rather
+    >   than by epochs) and disables the epoch-based stop.
+    > - `lr_scheduler_type` defaults to `constant` because a decay horizon is measured in optimizer steps, which
+    >   cannot be known up front when the step count depends on the fork rate. For a decaying learning rate, set a
+    >   decaying schedule together with an explicit `max_steps`.
     """
 
     _VALID_DICT_FIELDS = _BaseConfig._VALID_DICT_FIELDS + ["model_init_kwargs"]
@@ -145,6 +178,15 @@ class AsyncGRPOConfig(_BaseConfig):
             "will be interpreted as ratio of total training steps."
         },
     )
+    lr_scheduler_type: str = field(
+        default="constant",
+        metadata={
+            "help": "Learning-rate schedule. Defaults to `constant`: when training is bounded by `num_train_epochs`, "
+            "message-mode forks make the total step count unknown up front, so `max_steps` is only a safety ceiling "
+            "and a decay horizon can't be calibrated. Set a decaying schedule (e.g. `cosine`) together with an "
+            "explicit `max_steps` if you want LR decay."
+        },
+    )
 
     # Parameters that control generation
     num_generations: int = field(
@@ -153,7 +195,7 @@ class AsyncGRPOConfig(_BaseConfig):
     )
     max_completion_length: int = field(
         default=2048,
-        metadata={"help": "Maximum number of tokens to generate per completion."},
+        metadata={"help": "Maximum length of the generated completion."},
     )
     temperature: float = field(
         default=1.0,
@@ -172,6 +214,15 @@ class AsyncGRPOConfig(_BaseConfig):
             "help": "Maximum number of tool-calling turns when training an agent. If `None`, there is no limit and "
             "generation stops when the model generates a response turn with no tool calls or when the total response "
             "length reaches `max_completion_length`."
+        },
+    )
+    fork_threshold_tokens: int = field(
+        default=1024,
+        metadata={
+            "help": "A multi-turn conversation is reconciled into training rows by re-tokenizing the whole "
+            "conversation every turn: a clean append stays one row, a rewrite forks a new row. A re-tokenization "
+            "drift inside the last answer smaller than this many tokens (measured as the number of previously-trained "
+            "tokens the realign would mask) is realigned as context; a larger drift forks a new row."
         },
     )
 
@@ -202,6 +253,18 @@ class AsyncGRPOConfig(_BaseConfig):
         metadata={
             "help": "Upper-bound epsilon value for clipping. If not specified, it defaults to the same value as the "
             "lower-bound specified in argument `epsilon`. Paper DAPO recommends `0.28`."
+        },
+    )
+    token_budget: int | None = field(
+        default=None,
+        metadata={
+            "help": "Maximum number of real tokens packed into a single row (one DP rank's forward) for dynamic "
+            "token-budgeted micro-batching. When > 0, a `TokenBudgetBatcher` forms Σ Lᵢ²-balanced micro-batches "
+            "whose rows each stay within this budget, bounding peak memory independently of the sample count. If "
+            "None (default), it is set to the vLLM server's `max_model_len` (queried at train start), so no "
+            "rollout sample can ever exceed the budget. A sample longer than `token_budget` fits in no row and is "
+            "dropped with a warning. Set <= 0 to disable token budgeting and instead pack a fixed "
+            "`per_device_train_batch_size × num_processes` samples per micro-batch, Σ Lᵢ²-balanced across the rows."
         },
     )
 

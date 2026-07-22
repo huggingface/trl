@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import heapq
+import inspect
 from typing import Any
 
 import torch
@@ -70,6 +71,50 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
 
         prompts = [x["prompt"] for x in inputs]
 
+        # Resolve each example's environment and draw one reusable instance per rollout from the pool, creating more
+        # only when this batch needs more concurrent instances of an environment than exist. `_batch_environments`
+        # records each example's environment so `_tokenize_prompts` can render the matching tool schema.
+        if self.environment_factories is not None:
+            self._batch_environments = [x.get("environment") if self._multi_environment else None for x in inputs]
+            if self._multi_environment:
+                for name in set(self._batch_environments):
+                    if name not in self.environment_factories:
+                        raise ValueError(
+                            f"Example has `environment={name!r}`, which is not among the environments passed to "
+                            f"`environment_factory`. Expected one of: {list(self.environment_factories)}."
+                        )
+            self.environments = []
+            pool_cursor = {}  # how many instances of each environment have been handed out so far this batch
+            for name in self._batch_environments:
+                pool = self._environment_pool[name]
+                index = pool_cursor.get(name, 0)
+                if index == len(pool):
+                    pool.append(self.environment_factories[name]())
+                pool_cursor[name] = index + 1
+                self.environments.append(pool[index])
+
+        # Build the per-rollout tool dicts for this batch: the standalone tools plus, for each rollout, the methods of
+        # its environment. Done here (not at init) because the environment instances are drawn at batch time.
+        if self.tools:
+            self._sync_tool_dicts = []
+            self._async_tool_dicts = []
+            for i in range(len(inputs)):
+                methods = []
+                if self.environments:
+                    methods = [
+                        member
+                        for member_name, member in inspect.getmembers(self.environments[i], predicate=inspect.ismethod)
+                        if member_name not in ("reset", "get_reward") and not member_name.startswith("_")
+                    ]
+                sync_tool_dict, async_tool_dict = {}, {}
+                for tool in self._standalone_tools + methods:
+                    if inspect.iscoroutinefunction(tool):
+                        async_tool_dict[tool.__name__] = tool
+                    else:
+                        sync_tool_dict[tool.__name__] = tool
+                self._sync_tool_dicts.append(sync_tool_dict)
+                self._async_tool_dicts.append(async_tool_dict)
+
         if "images" in inputs[0]:
             images = [example.get("images") for example in inputs]
         elif "image" in inputs[0]:
@@ -102,7 +147,6 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
             completion_ids_list,
             tool_mask_list,
             completions,
-            num_items_in_batch,
             sampling_per_token_logps_list,
             extra_fields,
             images,
@@ -150,7 +194,7 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
             ).to(device=device)
         else:
             sampling_per_token_logps = None
-        if self.tools:
+        if tool_mask_list is not None:
             tool_mask = [torch.tensor(mask) for mask in tool_mask_list]
             tool_mask = pad(
                 tool_mask,
@@ -158,12 +202,21 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
                 padding_side="right",
                 pad_to_multiple_of=self.pad_to_multiple_of,
             ).to(device=device)  # 0 for tool result tokens, 1 elsewhere
+        else:
+            tool_mask = None
 
-        # If mask_truncated_completions is enabled, zero out truncated completions in completion_mask
+        # If mask_truncated_completions is enabled, zero out truncated completions for attention and loss masking
         if self.mask_truncated_completions:
             eos_and_pad = [self._tokenizer.eos_token_id, self._tokenizer.pad_token_id]
             is_truncated = torch.tensor([ids[-1] not in eos_and_pad for ids in completion_ids_list], device=device)
+            # Mask completion_mask for attention masking
             completion_mask = completion_mask * (~is_truncated).unsqueeze(1).int()
+            # Also mask tool_mask for consistency in multi-turn training
+            if tool_mask is not None:
+                tool_mask = tool_mask * (~is_truncated).unsqueeze(1).int()
+
+        loss_mask = completion_mask if tool_mask is None else completion_mask * tool_mask
+        num_items_in_batch = self.accelerator.gather(loss_mask.sum()).sum()
 
         # Concatenate prompt_mask with completion_mask for logit computation
         prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)  # (B, P+C)
@@ -351,12 +404,12 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
             self._logs["rewards"][name].extend(rewards_per_func[:, i].tolist())
         self._logs["advantages"].extend(all_process_advantages.tolist())
 
-        if images is not None:
+        if images is not None and self.log_multimodal:
             self._logs["images"].extend(gather_object(images))
 
         if self.use_vllm and self.vllm_importance_sampling_correction:
             delta = torch.abs(old_per_token_logps - sampling_per_token_logps)
-            mask = completion_mask.bool() if not self.tools else (completion_mask * tool_mask).bool()
+            mask = completion_mask.bool() if tool_mask is None else (completion_mask * tool_mask).bool()
             delta = delta[mask]
             mean_delta = torch.mean(delta) if delta.numel() > 0 else torch.tensor(0.0, device=device)
             max_delta = torch.max(delta) if delta.numel() > 0 else torch.tensor(0.0, device=device)
@@ -399,9 +452,7 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
             ref_per_token_logps,
             importance_sampling_ratio if self.use_vllm and self.vllm_importance_sampling_correction else None,
         )
-        if outputs_after_sampling_buffer is not None:
-            return outputs_after_sampling_buffer
-        else:
+        if outputs_after_sampling_buffer is None:
             output = {
                 "prompt_ids": prompt_ids,
                 "prompt_mask": prompt_mask,
@@ -428,9 +479,17 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
                 output["token_type_ids"] = forward_kwargs["token_type_ids"]
             if images is not None:
                 output["num_images"] = num_images
-            if self.tools:
+            if tool_mask is not None:
                 output["tool_mask"] = tool_mask
-            return output
+        else:
+            output = outputs_after_sampling_buffer
+
+        # Recompute the loss denominator after replay-buffer replacement from the final masks used by the loss.
+        loss_mask = (
+            output["completion_mask"] if "tool_mask" not in output else output["completion_mask"] * output["tool_mask"]
+        )
+        output["num_items_in_batch"] = self.accelerator.gather(loss_mask.sum()).sum()
+        return output
 
     def slice_group_data(
         self, data: torch.Tensor, mask: torch.Tensor, group_idx: int
