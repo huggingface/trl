@@ -41,8 +41,6 @@ class DistillationConfig(_BaseConfig):
             Whether to allow loading models and tokenizers that ship custom Python code from the Hub. Forwarded to
             [`~transformers.AutoModelForCausalLM.from_pretrained`] and
             [`~transformers.AutoTokenizer.from_pretrained`], for both the student and teacher.
-        max_length (`int` or `None`, *optional*, defaults to `1024`):
-            Maximum total sequence length (prompt + completion) for tokenization and truncation.
 
         > Parameters that control the distillation
 
@@ -55,9 +53,6 @@ class DistillationConfig(_BaseConfig):
             JSD.
         max_completion_length (`int`, *optional*, defaults to `512`):
             Maximum number of tokens to generate per completion during on-policy generation.
-        max_prompt_length (`int` or `None`, *optional*):
-            Maximum number of tokens for the prompt. If `None`, auto-computed as `max_length - max_completion_length`.
-            Prompts are truncated according to the tokenizer's `truncation_side` setting.
         disable_dropout (`bool`, *optional*, defaults to `True`):
             Whether to disable dropout in the student model during training.
 
@@ -143,11 +138,6 @@ class DistillationConfig(_BaseConfig):
             "student and teacher."
         },
     )
-    max_length: int | None = field(
-        default=1024,
-        metadata={"help": "Maximum total sequence length (prompt + completion) for tokenization and truncation."},
-    )
-
     # Overridden defaults
     learning_rate: float = field(
         default=1e-6,
@@ -171,14 +161,6 @@ class DistillationConfig(_BaseConfig):
     max_completion_length: int = field(
         default=512,
         metadata={"help": "Maximum number of tokens to generate per completion."},
-    )
-    max_prompt_length: int | None = field(
-        default=None,
-        metadata={
-            "help": "Maximum number of tokens for the prompt. If None, auto-computed as "
-            "max_length - max_completion_length. Prompts are truncated according to the "
-            "tokenizer's truncation_side setting."
-        },
     )
     disable_dropout: bool = field(
         default=True,
@@ -305,15 +287,6 @@ class DistillationConfig(_BaseConfig):
 
         if self.beta < 0.0 or self.beta > 1.0:
             raise ValueError(f"beta must be in [0.0, 1.0], got {self.beta}.")
-
-        if self.max_length is not None and self.max_completion_length >= self.max_length:
-            raise ValueError(
-                f"max_completion_length ({self.max_completion_length}) must be smaller than "
-                f"max_length ({self.max_length}) to leave room for the prompt."
-            )
-
-        if self.max_prompt_length is None and self.max_length is not None:
-            self.max_prompt_length = self.max_length - self.max_completion_length
 
         if self.num_generations < 1:
             raise ValueError(f"num_generations must be at least 1, got {self.num_generations}.")

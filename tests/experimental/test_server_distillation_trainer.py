@@ -69,16 +69,8 @@ def _canned_teacher_logprobs(**kwargs):
 def _variable_length_dataset():
     return Dataset.from_list(
         [
-            {"messages": [{"role": "user", "content": "What's 2+2?"}, {"role": "assistant", "content": "4."}]},
-            {
-                "messages": [
-                    {"role": "user", "content": "Name three primary colors."},
-                    {
-                        "role": "assistant",
-                        "content": "Red, green, and blue are the three primary colors commonly used in additive color mixing.",
-                    },
-                ]
-            },
+            {"prompt": [{"role": "user", "content": "What's 2+2?"}]},
+            {"prompt": [{"role": "user", "content": "Name three primary colors."}]},
         ]
     )
 
@@ -272,8 +264,6 @@ class TestServerDistillationTrainerRaggedGrad(TrlTestCase):
             per_device_train_batch_size=bs,
             gradient_accumulation_steps=ga,
             learning_rate=1e-4,
-            max_length=64,
-            max_prompt_length=32,
             max_completion_length=32,
             teacher_model_server_url="http://fake-teacher.invalid:8000",
             loss_top_k=1,
