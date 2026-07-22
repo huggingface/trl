@@ -1195,6 +1195,11 @@ class TestDPOTrainer(TrlTestCase):
         assert trainer.state.log_history[-3]["eval_data1_loss"] is not None
         assert trainer.state.log_history[-2]["eval_data2_loss"] is not None
 
+    def test_train_dataset_required(self):
+        training_args = DPOConfig(output_dir=self.tmp_dir, report_to="none")
+        with pytest.raises(ValueError, match="`train_dataset` is required"):
+            DPOTrainer(model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args)
+
     @pytest.mark.parametrize(
         "eval_dataset_type",
         [
