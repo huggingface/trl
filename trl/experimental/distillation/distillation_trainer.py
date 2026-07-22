@@ -990,7 +990,6 @@ class DistillationTrainer(_BaseTrainer):
         # Student forward pass
         student_outputs = model(input_ids=input_ids, attention_mask=attention_mask)
 
-        # Local teacher: exact full-vocabulary generalized JSD/KL loss over the completion tokens.
         teacher_logits = self._get_teacher_logits(input_ids, attention_mask)
         student_logits = student_outputs.logits[:, -logits_to_keep - 1 : -1, :]
         teacher_logits = teacher_logits[:, -logits_to_keep - 1 : -1, :]
