@@ -121,6 +121,30 @@ def apply_model_revisions(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def force_use_cpu_without_accelerator(monkeypatch):
+    """Force `use_cpu=True` on all TRL configs when no CUDA device is available.
+
+    TRL configs default `bf16` to `True` (see `_BaseConfig.__post_init__`), which makes
+    `transformers.TrainingArguments.__post_init__` raise `ValueError: Your setup doesn't support bf16/gpu. You need to
+    assign use_cpu ...` on machines without a GPU. Setting `use_cpu=True` before that validation runs lets the whole
+    suite run on CPU without editing every individual config in the tests. On a machine with a CUDA device this fixture
+    is a no-op.
+    """
+    if torch.cuda.is_available():
+        return
+
+    from trl.trainer.base_config import _BaseConfig
+
+    original_post_init = _BaseConfig.__post_init__
+
+    def patched_post_init(self):
+        self.use_cpu = True
+        original_post_init(self)
+
+    monkeypatch.setattr(_BaseConfig, "__post_init__", patched_post_init)
+
+
+@pytest.fixture(autouse=True)
 def cleanup_gpu():
     """
     Automatically cleanup GPU memory after each test.
