@@ -748,10 +748,10 @@ class TestRewardTrainer(TrlTestCase):
 
     @pytest.mark.parametrize("train_dataset_type", ["dataset", "iterable_dataset", "none", "unsupported_dataset_dict"])
     def test_init_with_train_dataset(self, train_dataset_type):
+        streaming = "iterable" in train_dataset_type
         if train_dataset_type == "none":
             train_dataset = None
         else:
-            streaming = "iterable" in train_dataset_type
             train_dataset = load_dataset(
                 "trl-internal-testing/zen", "standard_implicit_prompt_preference", split="train", streaming=streaming
             )
@@ -759,7 +759,8 @@ class TestRewardTrainer(TrlTestCase):
                 # `DatasetDict` is representative of any unsupported type here; not exhaustive
                 train_dataset = DatasetDict({"train": train_dataset})
 
-        training_args = RewardConfig(output_dir=self.tmp_dir, report_to="none")
+        # Iterable (streaming) datasets have no length, so `max_steps` is required.
+        training_args = RewardConfig(output_dir=self.tmp_dir, max_steps=3 if streaming else -1, report_to="none")
 
         if train_dataset_type == "none":
             with pytest.raises(ValueError, match="`train_dataset` is required"):
