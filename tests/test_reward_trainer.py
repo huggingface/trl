@@ -147,30 +147,32 @@ class TestRewardTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    def test_evaluate_with_raw_dataset(self):
-        # `evaluate` should accept the same (unprocessed) dataset types as the trainer, e.g. a held-out test set
-        # passed directly to `evaluate`. See https://github.com/huggingface/trl/issues/6115.
-        dataset = load_dataset("trl-internal-testing/zen", "standard_implicit_prompt_preference", split="train")
-
-        training_args = RewardConfig(output_dir=self.tmp_dir, report_to="none")
-        trainer = RewardTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
-        )
-
-        metrics = trainer.evaluate(eval_dataset=dataset)
-        assert metrics["eval_loss"] is not None
-
-    @pytest.mark.parametrize("streaming", [False, True])
-    def test_evaluate_with_eval_dataset_dict(self, streaming):
-        # `evaluate` should accept a `DatasetDict` (map-style) or `IterableDatasetDict` (streaming) passed directly —
-        # e.g. the raw output of `load_dataset` without a `split` — not only a plain `dict`. Each split is prepared
-        # independently.
+    @pytest.mark.parametrize(
+        "eval_dataset_type",
+        [
+            "dataset",
+            "iterable_dataset",
+            "dataset_dict",
+            "iterable_dataset_dict",
+            "dict_of_dataset",
+            "dict_of_iterable_dataset",
+        ],
+    )
+    def test_evaluate_with_eval_dataset(self, eval_dataset_type):
+        # `evaluate` accepts a raw (unprepared) dataset passed directly, not only a preprocessed `eval_dataset` set
+        # at init. See https://github.com/huggingface/trl/issues/6115.
         train_dataset = load_dataset("trl-internal-testing/zen", "standard_implicit_prompt_preference", split="train")
+        streaming = "iterable" in eval_dataset_type
         eval_split = load_dataset(
             "trl-internal-testing/zen", "standard_implicit_prompt_preference", split="test", streaming=streaming
         )
-        dataset_dict_cls = IterableDatasetDict if streaming else DatasetDict
-        eval_dataset = dataset_dict_cls({"data1": eval_split, "data2": eval_split})
+        if eval_dataset_type in ("dataset", "iterable_dataset"):
+            eval_dataset = eval_split
+        elif eval_dataset_type in ("dataset_dict", "iterable_dataset_dict"):
+            dataset_dict_cls = IterableDatasetDict if streaming else DatasetDict
+            eval_dataset = dataset_dict_cls({"data1": eval_split, "data2": eval_split})
+        else:  # "dict_of_dataset" or "dict_of_iterable_dataset"
+            eval_dataset = {"data1": eval_split, "data2": eval_split}
 
         training_args = RewardConfig(output_dir=self.tmp_dir, report_to="none")
         trainer = RewardTrainer(
@@ -178,8 +180,11 @@ class TestRewardTrainer(TrlTestCase):
         )
 
         metrics = trainer.evaluate(eval_dataset=eval_dataset)
-        assert metrics["eval_data1_loss"] is not None
-        assert metrics["eval_data2_loss"] is not None
+        if eval_dataset_type in ("dataset", "iterable_dataset"):
+            assert metrics["eval_loss"] is not None
+        else:
+            assert metrics["eval_data1_loss"] is not None
+            assert metrics["eval_data2_loss"] is not None
 
     def test_trust_remote_code(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_implicit_prompt_preference", split="train")
@@ -741,16 +746,40 @@ class TestRewardTrainer(TrlTestCase):
         assert trainer.state.log_history[-3]["eval_data1_loss"] is not None
         assert trainer.state.log_history[-2]["eval_data2_loss"] is not None
 
-    @pytest.mark.parametrize("streaming", [False, True])
-    def test_init_with_eval_dataset_dict(self, streaming):
-        # `eval_dataset` may be a `DatasetDict` (map-style) or `IterableDatasetDict` (streaming) — e.g. the raw output
-        # of `load_dataset` without a `split` — not only a plain `dict`. Each split is prepared independently at init.
+    def test_train_dataset_required(self):
+        training_args = RewardConfig(output_dir=self.tmp_dir, report_to="none")
+        with pytest.raises(ValueError, match="`train_dataset` is required"):
+            RewardTrainer(model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args)
+
+    @pytest.mark.parametrize(
+        "eval_dataset_type",
+        [
+            "dataset",
+            "iterable_dataset",
+            "dataset_dict",
+            "iterable_dataset_dict",
+            "dict_of_dataset",
+            "dict_of_iterable_dataset",
+            "none",
+        ],
+    )
+    def test_init_with_eval_dataset(self, eval_dataset_type):
         train_dataset = load_dataset("trl-internal-testing/zen", "standard_implicit_prompt_preference", split="train")
-        eval_split = load_dataset(
-            "trl-internal-testing/zen", "standard_implicit_prompt_preference", split="test", streaming=streaming
-        )
-        dataset_dict_cls = IterableDatasetDict if streaming else DatasetDict
-        eval_dataset = dataset_dict_cls({"data1": eval_split, "data2": eval_split})
+
+        if eval_dataset_type == "none":
+            eval_dataset = None
+        else:
+            streaming = "iterable" in eval_dataset_type
+            eval_split = load_dataset(
+                "trl-internal-testing/zen", "standard_implicit_prompt_preference", split="test", streaming=streaming
+            )
+            if eval_dataset_type in ("dataset", "iterable_dataset"):
+                eval_dataset = eval_split
+            elif eval_dataset_type in ("dataset_dict", "iterable_dataset_dict"):
+                dataset_dict_cls = IterableDatasetDict if streaming else DatasetDict
+                eval_dataset = dataset_dict_cls({"data1": eval_split, "data2": eval_split})
+            else:  # "dict_of_dataset" or "dict_of_iterable_dataset"
+                eval_dataset = {"data1": eval_split, "data2": eval_split}
 
         training_args = RewardConfig(output_dir=self.tmp_dir, report_to="none")
         trainer = RewardTrainer(
@@ -760,10 +789,15 @@ class TestRewardTrainer(TrlTestCase):
             eval_dataset=eval_dataset,
         )
 
-        assert set(trainer.eval_dataset.keys()) == {"data1", "data2"}
-        # Each split was tokenized independently.
-        assert "chosen_ids" in next(iter(trainer.eval_dataset["data1"]))
-        assert "chosen_ids" in next(iter(trainer.eval_dataset["data2"]))
+        if eval_dataset_type == "none":
+            assert trainer.eval_dataset is None
+        elif isinstance(trainer.eval_dataset, dict):
+            assert set(trainer.eval_dataset.keys()) == {"data1", "data2"}
+            # Each split was tokenized independently.
+            assert "chosen_ids" in next(iter(trainer.eval_dataset["data1"]))
+            assert "chosen_ids" in next(iter(trainer.eval_dataset["data2"]))
+        else:
+            assert "chosen_ids" in next(iter(trainer.eval_dataset))
 
     def test_train_with_compute_metrics(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_implicit_prompt_preference")

@@ -45,7 +45,7 @@ from ...chat_template_utils import (
     parse_response,
 )
 from ...import_utils import is_vllm_available
-from ...trainer.utils import print_prompt_completions_sample
+from ...trainer.utils import get_callable_name, print_prompt_completions_sample
 
 
 logger = get_logger(__name__)
@@ -178,6 +178,7 @@ class RolloutGroup:
     tool_call_counts: list[int]
     tool_failure_counts: list[int]
     model_version: int
+    group_id: int
     env_rewards: list[tuple[type, float] | None]
     queued_at: float = 0.0
 
@@ -191,6 +192,7 @@ class RolloutSample:
     old_log_probs: list[float]
     advantage: float
     model_version: int
+    group_id: int
     metrics: dict[str, float]
 
 
@@ -308,7 +310,7 @@ class _AsyncRolloutLoop:
         self.dataset = dataset
         self._dataset_iter = iter(dataset)
         self.reward_funcs = reward_funcs
-        self.reward_func_names = [f.__name__ for f in reward_funcs]
+        self.reward_func_names = [get_callable_name(f) for f in reward_funcs]
         # `add_response_schema` sets the response template (transformers >= 5.13) or legacy schema for known chat
         # templates, so tool calls can be parsed. Skip if one is already set; warn if it's a migratable legacy schema.
         has_template = getattr(processing_class, "response_template", None) is not None
@@ -500,7 +502,12 @@ class _AsyncRolloutLoop:
                             {k: v for k, v in row.items() if k != "environment"} if self._multi_environment else row
                         )
                         observation = environment.reset(**reset_kwargs)
-                    prompt = row["prompt"]
+                    # `prompt` is optional only when an environment owns the data; `reset()` then supplies it. Without
+                    # an environment, a missing `prompt` is a malformed dataset and must still fail fast (KeyError).
+                    if "prompt" not in row and self.environment_factories is not None:
+                        prompt = [{"role": "user", "content": ""}]
+                    else:
+                        prompt = row["prompt"]
                     if observation is not None:
                         # Rebuild the last message instead of mutating in place (as GRPOTrainer does): the
                         # same row is reused across the group's generations and across epochs. Normalize str vs
@@ -538,6 +545,7 @@ class _AsyncRolloutLoop:
                             tool_call_counts=[],
                             tool_failure_counts=[],
                             model_version=self.model_version,
+                            group_id=group_id,
                             env_rewards=[],
                         )
                         pending_completed[group_id] = 0
@@ -867,6 +875,7 @@ class _AsyncRolloutLoop:
                         old_log_probs=seq.old_log_probs,
                         advantage=float(advantage),
                         model_version=group.model_version,
+                        group_id=group.group_id,
                         metrics=dict(metrics),  # own copy per row; _compute_rollout_metrics mutates it
                     )
                 )
