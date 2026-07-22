@@ -166,6 +166,7 @@ class TestDistributed(TrlTestCase):
                     reason="Upstream incompatibility: deepspeed and transformers==5.1.0 (see transformers#43780)",
                 ),
             ),
+            "fsdp2",
         ],
     )
     def test_dpo_precompute_ref_log_probs(self, config, get_config_path):
