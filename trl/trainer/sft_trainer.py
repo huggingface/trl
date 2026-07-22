@@ -1743,7 +1743,7 @@ class SFTTrainer(_BaseTrainer):
         # `evaluate`, since a dataset passed directly to `evaluate` also skips preparation.
         if not (
             self._skip_prepare_dataset
-            and not self._is_vision_dataset
+            and not self._is_multimodal_dataset
             and isinstance(data_collator, DataCollatorForLanguageModeling)
         ):
             return
