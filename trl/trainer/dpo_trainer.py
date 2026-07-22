@@ -551,9 +551,10 @@ class DPOTrainer(_BaseTrainer):
                     "`dispatch_batches` in `DPOConfig` or set it to `False`."
                 )
             args.accelerator_config.dispatch_batches = False
-        elif not isinstance(train_dataset, Dataset):
+        elif isinstance(train_dataset, dict):
             raise TypeError(
-                f"`train_dataset` must be a `Dataset` or `IterableDataset`, got `{type(train_dataset).__name__}`."
+                "`train_dataset` doesn't support `DatasetDict`, `IterableDatasetDict`, or a `dict` of datasets: "
+                f"training runs over a single dataset. Got `{type(train_dataset).__name__}`."
             )
 
         # Model
