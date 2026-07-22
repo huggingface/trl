@@ -213,6 +213,9 @@ class RLOOConfig(_BaseConfig):
             Whether to log a sample of (prompt, completion) pairs every `logging_steps` steps. If `rich` is installed,
             it prints the sample. If `wandb` and/or `trackio` logging is enabled, it logs it to `wandb` and/or
             `trackio`.
+        log_multimodal (`bool`, *optional*, defaults to `True`):
+            Whether to log multimodal content (images, videos, etc.) together with completions. Disable this to reduce
+            log size when using high-resolution multimodal data.
         num_completions_to_print (`int`, *optional*):
             Number of completions to print with `rich`. If `None`, all completions are logged.
         log_unique_prompts (`bool`, *optional*, defaults to `False`):
@@ -567,6 +570,13 @@ class RLOOConfig(_BaseConfig):
             "installed, it prints the sample. If `wandb` logging is enabled, it logs it to `wandb`."
         },
     )
+    log_multimodal: bool = field(
+        default=True,
+        metadata={
+            "help": "Whether to log multimodal content (images, videos, etc.) together with completions. Disable this "
+            "to reduce log size when using high-resolution multimodal data."
+        },
+    )
     num_completions_to_print: int | None = field(
         default=None,
         metadata={"help": "Number of completions to print with `rich`. If `None`, all completions are logged."},
@@ -618,6 +628,16 @@ class RLOOConfig(_BaseConfig):
                 "`parallelism_config.sp_size > 1`) yet. RLOO builds model inputs after generation inside the trainer, "
                 "so Transformers' context-parallel / Ulysses sequence-parallel input sharding cannot be applied to the "
                 "raw generation batch. Set both `cp_size=1` and `sp_size=1`, or disable `parallelism_config`."
+            )
+
+        # `auto_find_batch_size` halves the train batch size on OOM, and the generation batch is derived from it. The
+        # reduced batch is no longer guaranteed to hold full prompt groups, which breaks grouping the rewards by
+        # prompt. There's no way to preserve the invariant while shrinking the batch, so reject it up front.
+        if self.auto_find_batch_size:
+            raise ValueError(
+                "auto_find_batch_size is not supported by RLOO, because the generation batch must contain full "
+                "prompt groups of num_generations completions, and reducing the batch size on out-of-memory breaks "
+                "this invariant. Set auto_find_batch_size=False and lower per_device_train_batch_size instead."
             )
 
         num_processes = self.world_size

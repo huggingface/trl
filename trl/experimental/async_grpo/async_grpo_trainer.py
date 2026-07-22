@@ -18,8 +18,8 @@ import queue
 import textwrap
 import time
 from collections import defaultdict
-from collections.abc import Callable
-from dataclasses import dataclass
+from collections.abc import Callable, Iterator
+from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 import torch
@@ -31,9 +31,10 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenize
 from transformers.data.data_collator import DataCollatorMixin
 
 from ...trainer.base_trainer import _BaseTrainer
-from ...trainer.utils import nanmax, nanmin, pad, patch_chunked_lm_head
+from ...trainer.utils import get_config_model_id, nanmax, nanmin, pad, patch_chunked_lm_head
 from .async_grpo_config import AsyncGRPOConfig
 from .async_rollout_worker import AsyncRolloutWorker
+from .vllm_client import VLLMClient
 from .weight_transfer import WeightTransferClient
 
 
@@ -83,6 +84,35 @@ class RolloutWorkerProtocol(Protocol):
         ...
 
 
+class WeightTransferProtocol(Protocol):
+    """Interface a weight-sync backend must implement to be passed as `weight_transfer` to [`AsyncGRPOTrainer`].
+
+    The default [`WeightTransferClient`] streams the trainer's weights into the vLLM server over NCCL. Implement this
+    protocol to plug in a different sync mechanism, or pass a no-op implementation to disable trainer-side weight sync
+    (e.g. when a custom `rollout_worker` updates the policy itself).
+    """
+
+    def init_weight_transfer(self) -> None:
+        """Set up the transfer (e.g. the NCCL group). Called once on train begin, before the first sync."""
+        ...
+
+    def pause(self) -> None:
+        """Pause the inference server before weights are swapped in."""
+        ...
+
+    def send_weights(self, iterator: Iterator[tuple[str, torch.Tensor]]) -> None:
+        """Stream `(name, tensor)` pairs from `iterator` to the inference server."""
+        ...
+
+    def resume(self) -> None:
+        """Resume the inference server after the weights are updated."""
+        ...
+
+    def destroy(self) -> None:
+        """Release transfer resources. Called on train end."""
+        ...
+
+
 class StepIntervalCallback(TrainerCallback):
     """
     A callback that calls a function every N optimization steps.
@@ -128,6 +158,27 @@ class _StartRolloutWorkerCallback(TrainerCallback):
             self._trainer.rollout_worker.start()
 
 
+class _EpochStopCallback(TrainerCallback):
+    """Stop after `num_train_epochs` full passes over the prompt dataset.
+
+    An epoch is counted in distinct prompt-groups actually trained (accumulated in the collator, which runs on the main
+    process just before the model forward). This is fork-independent: all generations of a prompt and all forked rows
+    of a conversation share one `group_id`, so a conversation forking into many rows still counts once. Only the main
+    process collates (`dispatch_batches=True`), so the stop decision is reduced across ranks to keep data-parallel
+    workers in lockstep.
+    """
+
+    def __init__(self, trainer: "AsyncGRPOTrainer", target_groups: int):
+        self._trainer = trainer
+        self._target = target_groups
+
+    def on_step_end(self, _args, _state, control, **_kwargs):
+        acc = self._trainer.accelerator
+        reached = torch.tensor(int(len(self._trainer._trained_groups) >= self._target), device=acc.device)
+        if int(acc.reduce(reached, reduction="sum").item()) >= 1:
+            control.should_training_stop = True
+
+
 class RolloutQueueDataset(torch.utils.data.IterableDataset):
     def __init__(
         self,
@@ -170,6 +221,7 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
                 "completion_mask": sample.completion_mask,
                 "old_log_probs": sample.old_log_probs,
                 "advantage": sample.advantage,
+                "group_id": sample.group_id,
                 "metrics": {**sample.metrics, "queue_wait_time_s": queue_wait_time_s},
             }
 
@@ -235,8 +287,8 @@ class TokenBudgetBatcher(torch.utils.data.IterableDataset):
 
     Every emitted micro-batch has all `num_processes` rows non-empty (a rank forwarding zero tokens would desync
     FSDP/EP collectives): a micro-batch is only closed once every row holds at least one sample. A sample longer than
-    `token_budget` fits in no row, so it is dropped with a warning; set `token_budget` ≥ the longest sample
-    (`max_completion_length` + the longest prompt) to avoid dropping samples.
+    `token_budget` fits in no row, so it is dropped with a warning; set `token_budget` ≥ the vLLM server's
+    `max_model_len` (the cap on prompt + completion) to avoid dropping samples.
 
     Args:
         dataset ([`RolloutQueueDataset`]):
@@ -310,6 +362,8 @@ class DataCollatorForRollout(DataCollatorMixin):
     pad_token_id: int
     num_processes: int = 1
     return_tensors: str = "pt"
+    # Distinct prompt-group ids, it counts exactly the prompt-groups that get trained
+    groups_trained: set[int] = field(default_factory=set)
 
     def torch_call(self, examples: list[Any]) -> dict[str, Any]:
         # The dataloader uses batch_size=1 over a planner that pre-partitions each micro-batch into `num_processes`
@@ -343,6 +397,7 @@ class DataCollatorForRollout(DataCollatorMixin):
         advantages = pad(advantages, padding_value=0.0)
 
         all_examples = [example for group in groups for example in group]
+        self.groups_trained.update(example["group_id"] for example in all_examples)
 
         # Total valid completion tokens across all samples in the full batch.
         # Repeated per rank so that DataLoaderDispatcher (dispatch_batches=True) slices correctly on dim=0
@@ -412,9 +467,10 @@ class AsyncGRPOTrainer(_BaseTrainer):
             [`~transformers.PreTrainedModel.save_pretrained`], e.g., `'./my_model_directory/'`. The model is loaded
             using [`~transformers.AutoModelForCausalLM.from_pretrained`]. The model name is also used to identify the
             model on the vLLM server used for generation.
-        reward_funcs (`RewardFunc | list[RewardFunc]`):
+        reward_funcs (`RewardFunc | list[RewardFunc]`, *optional*):
             Reward functions to be used for computing the rewards. To compute the rewards, we call all the reward
-            functions with the prompts and completions and sum the rewards. Can be either:
+            functions with the prompts and completions and sum the rewards. May be omitted when the reward is supplied
+            by the environment through `environment_factory` (see below). Can be either:
 
             - A single reward function: The function is provided with the prompts and the generated completions, plus
               any additional columns in the dataset. It should return a list of rewards. Reward functions can be either
@@ -433,15 +489,19 @@ class AsyncGRPOTrainer(_BaseTrainer):
             trainer's GPU.
         args ([`AsyncGRPOConfig`], *optional*):
             Configuration for this trainer. If `None`, a default configuration is used.
-        train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
+        train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`], *optional*):
             Dataset to use for training. It must include a column `"prompt"`. Any additional columns in the dataset are
             ignored. The format of the samples can be either:
 
             - [Standard](dataset_formats#standard): Each sample contains plain text.
             - [Conversational](dataset_formats#conversational): Each sample contains structured messages (e.g., role
               and content).
+
+            May be omitted only when an `environment_factory` is provided and the environment owns (or procedurally
+            generates) the data, returning the prompt from its `reset()` method. In that case, `max_steps` must be set
+            to define the training length.
         processing_class ([`~transformers.PreTrainedTokenizerBase`], *optional*):
-            Processing class used to process the data. The padding side must be set to `"left"`. If `None`, the
+            Processing class used to process the data. The padding side must be set to "left". If `None`, the
             processing class is loaded from the model's name with [`~transformers.AutoTokenizer.from_pretrained`]. A
             padding token, `tokenizer.pad_token`, must be set. If the processing class has not set a padding token,
             `tokenizer.eos_token` will be used as the default.
@@ -461,20 +521,33 @@ class AsyncGRPOTrainer(_BaseTrainer):
             https://huggingface.co/docs/transformers/en/chat_extras#passing-tools. The model uses the function's name,
             type hints, and docstring to determine how to call it. Ensure that the model's chat template supports tool
             use and that it has been fine-tuned for tool calling.
-        environment_factory (`EnvironmentFactory`, *optional*):
-            A callable that creates and returns an environment instance. The environment class should define methods
-            that can be invoked as tools during generation. Each method should comply with the same requirements as the
-            `tools` described above. If `environment_factory` is provided, an instance of the environment is created
-            for each generation in the batch, allowing for parallel and independent interactions. The environment must
+        environment_factory (`EnvironmentFactory` or `dict[str, EnvironmentFactory]`, *optional*):
+            A callable that creates and returns an environment instance, or a dictionary mapping environment names to
+            such callables. The environment class should define methods that can be invoked as tools during generation.
+            Each method should comply with the same requirements as the `tools` described above. The environment must
             also implement a callable `reset` method that can be used to reset state between generations. The `reset`
             method should return either `None` or a string: when it returns a string, that string is appended to the
-            last user message before generation. This feature is experimental and may change or be removed at any time
-            without prior notice.
+            last user message before generation. The environment may also define a `get_reward` method taking no
+            argument and returning a `float`: when present, the environment owns the reward, and `get_reward` is called
+            once per completed rollout to score it from the environment's internal state. It acts as an additional
+            reward source (with weight 1, logged under the environment's class name) alongside `reward_funcs`, which
+            then becomes optional.
+
+            With a single callable, every example uses the same environment, with one instance per rollout so their
+            interactions stay isolated. With a dictionary, each example must carry an `environment` field selecting its
+            environment by name, and only that environment's tools are exposed in its prompt — letting a single run mix
+            tasks (e.g. a coding environment and a game). This feature is experimental and may change or be removed at
+            any time without prior notice.
         rollout_worker (`RolloutWorkerProtocol`, *optional*):
             Custom rollout worker implementing [`RolloutWorkerProtocol`]. If `None`, a default [`AsyncRolloutWorker`]
             is created, which spawns a CUDA-free child process and scores completions with the trainer's
             `reward_funcs`. Pass a custom worker to plug in a different rollout/scoring backend instead — for example,
             one that runs reward models on their own GPUs.
+        weight_transfer (`WeightTransferProtocol`, *optional*):
+            Custom weight-sync backend implementing [`WeightTransferProtocol`]. If `None`, a default
+            [`WeightTransferClient`] is created that streams the trainer's weights into the config's vLLM server over
+            NCCL. This is independent of `rollout_worker`: a custom rollout worker still gets weight sync. Pass a no-op
+            implementation to disable trainer-side weight sync.
     """
 
     _tag_names = ["trl", "async-grpo"]
@@ -495,45 +568,48 @@ class AsyncGRPOTrainer(_BaseTrainer):
     def __init__(
         self,
         model: str,
-        reward_funcs: RewardFunc | list[RewardFunc],
+        reward_funcs: RewardFunc | list[RewardFunc] | None = None,
         args: AsyncGRPOConfig | None = None,
         train_dataset: Dataset | IterableDataset | None = None,
         processing_class: PreTrainedTokenizerBase | None = None,
         callbacks: list[TrainerCallback] | None = None,
         optimizers: tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None] = (None, None),
         tools: list[Callable] | None = None,
-        environment_factory: EnvironmentFactory | None = None,
+        environment_factory: EnvironmentFactory | dict[str, EnvironmentFactory] | None = None,
         rollout_worker: RolloutWorkerProtocol | None = None,
+        weight_transfer: WeightTransferProtocol | None = None,
     ):
-        self.args = args or AsyncGRPOConfig()
+        # Args
+        if args is None:
+            model_name = model.split("/")[-1]
+            args = AsyncGRPOConfig(f"{model_name}-AsyncGRPO")
 
         # Training arguments
-        self.epsilon_low = self.args.epsilon
-        self.epsilon_high = self.args.epsilon_high if self.args.epsilon_high is not None else self.args.epsilon
-        self.temperature = self.args.temperature
+        self.epsilon_low = args.epsilon
+        self.epsilon_high = args.epsilon_high if args.epsilon_high is not None else args.epsilon
+        self.temperature = args.temperature
 
         # Model
-        model_name = model
-        model_init_kwargs = self.args.model_init_kwargs or {}
-        model_init_kwargs.setdefault("trust_remote_code", self.args.trust_remote_code)
+        model_init_kwargs = args.model_init_kwargs or {}
+        model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
         # FlashAttention is required: training runs in padding-free mode, where sequences are concatenated into a
         # single row and `cu_seq_lens` are derived from `position_ids` resets. SDPA/eager can't handle this.
         model = AutoModelForCausalLM.from_pretrained(
-            model_name,
+            model,
             device_map=None,
             dtype=torch.float32,
             attn_implementation="kernels-community/flash-attn3",
             **model_init_kwargs,
         )
 
-        if self.args.use_liger_kernel:
+        if args.use_liger_kernel:
             raise NotImplementedError("`use_liger_kernel` is not supported yet.")
 
         # MoE load-balancing auxiliary loss, applied to Mixture-of-Experts models (no effect otherwise)
         text_config = model.config.get_text_config()
         is_moe = getattr(text_config, "output_router_logits", None) is not None
-        self.aux_loss_enabled = is_moe and self.args.router_aux_loss_coef != 0.0
-        self.router_aux_loss_coef = self.args.router_aux_loss_coef
+        self.aux_loss_enabled = is_moe and args.router_aux_loss_coef != 0.0
+        self.router_aux_loss_coef = args.router_aux_loss_coef
 
         patch_chunked_lm_head(
             model, chunk_size=8192, temperature=self.temperature, output_router_logits=self.aux_loss_enabled
@@ -541,18 +617,43 @@ class AsyncGRPOTrainer(_BaseTrainer):
 
         # Processing class
         if processing_class is None:
-            processing_class = AutoTokenizer.from_pretrained(model_name, trust_remote_code=self.args.trust_remote_code)
+            processing_class = AutoTokenizer.from_pretrained(
+                get_config_model_id(model.config), trust_remote_code=args.trust_remote_code
+            )
         if processing_class.pad_token is None:
             processing_class.pad_token = processing_class.eos_token
 
         # Reward functions
-        if not isinstance(reward_funcs, list):
+        if reward_funcs is None:
+            reward_funcs = []
+        elif not isinstance(reward_funcs, list):
             reward_funcs = [reward_funcs]
+
+        if train_dataset is None:
+            # A dataset is optional when an environment owns the data and returns the prompt from `reset()`; then
+            # `max_steps` sets the length. Build a placeholder dataset of empty prompts to feed the rollout worker,
+            # which cycles it indefinitely (so its length only needs to be non-degenerate).
+            if environment_factory is None:
+                raise ValueError("`train_dataset` is required unless an `environment_factory` is provided.")
+            if isinstance(environment_factory, dict):
+                raise ValueError(
+                    "A `dict` `environment_factory` (multiple environments) requires a `train_dataset` with an "
+                    "`environment` column to route each example to its environment. Provide a dataset, or pass a "
+                    "single environment factory."
+                )
+            if self.args.max_steps <= 0:
+                raise ValueError(
+                    "When training without a `train_dataset` (the environment owns the data and returns the prompt "
+                    "from `reset()`), `max_steps` must be set to a positive value to define the training length. Set "
+                    "it via `AsyncGRPOConfig(max_steps=...)`."
+                )
+            num_placeholder_rows = self.args.per_device_train_batch_size * self.args.gradient_accumulation_steps
+            train_dataset = Dataset.from_dict({"prompt": [[{"role": "user", "content": ""}]] * num_placeholder_rows})
 
         # Initialize the Trainer
         super().__init__(
             model=model,
-            args=self.args,
+            args=args,
             train_dataset=train_dataset,
             processing_class=processing_class,
             callbacks=callbacks,
@@ -564,16 +665,29 @@ class AsyncGRPOTrainer(_BaseTrainer):
         # self.model_accepts_loss_kwargs to False to enable scaling.
         self.model_accepts_loss_kwargs = False
 
-        # Infer max_steps from dataset size when not explicitly set. This must happen after super().__init__()
-        # so that self.accelerator.num_processes is available for the correct calculation.
+        # Epoch handling: stop after num_train_epochs full passes over the PROMPT dataset, counted as distinct
+        # prompt-groups trained (fork-independent).
+        self._trained_groups: set[int] = set()
+        self._epoch_stop_groups: int | None = None
         samples_per_step = (
             self.args.per_device_train_batch_size
             * self.args.gradient_accumulation_steps
             * self.accelerator.num_processes
         )
         if self.args.max_steps <= 0 and train_dataset is not None and hasattr(train_dataset, "__len__"):
-            samples_per_epoch = len(train_dataset) * self.args.num_generations
-            self.args.max_steps = int(self.args.num_train_epochs * samples_per_epoch / samples_per_step)
+            # Fork-independent stop: num_train_epochs full passes over the prompts.
+            self._epoch_stop_groups = math.ceil(self.args.num_train_epochs * len(train_dataset))
+            # max_steps is a generous safety ceiling; with the default constant LR its exact value doesn't matter.
+            max_rows_per_conv = (
+                self.args.max_tool_calling_iterations + 1 if self.args.max_tool_calling_iterations is not None else 32
+            )
+            samples_per_epoch = len(train_dataset) * self.args.num_generations * max_rows_per_conv
+            self.args.max_steps = math.ceil(self.args.num_train_epochs * samples_per_epoch / samples_per_step)
+            logger.info(
+                f"Epoch-driven stop: {self._epoch_stop_groups} prompt-groups "
+                f"({self.args.num_train_epochs} epochs x {len(train_dataset)} prompts); "
+                f"max_steps={self.args.max_steps} is a safety ceiling."
+            )
 
         # Infer max_inflight_tasks when not explicitly set. Generating more samples than the trainer can consume
         # before they become stale is wasteful. The useful upper bound is max_staleness * samples_per_step.
@@ -590,15 +704,13 @@ class AsyncGRPOTrainer(_BaseTrainer):
         self.model_version = 0
         # Create worker and queue on rank 0
         if self.accelerator.is_main_process:
-            if self.train_dataset is None:
-                raise ValueError("train_dataset is required for AsyncGRPOTrainer")
+            # Weight sync and the token-budget query target the vLLM server from the config; the client is the single
+            # place that talks to it, independent of how rollouts are produced.
+            self.vllm_client = VLLMClient(self.args.vllm_server_base_url, self.args.vllm_server_timeout)
 
-            if rollout_worker is not None:
-                # Use the injected worker (e.g. a stub in tests). The queue is owned by the worker.
-                # Weight transfer is also expected to be wired by the test fixture (or left as None
-                # if the stub doesn't sync to a real vLLM).
-                self.rollout_worker = rollout_worker
-                self.weight_transfer = None
+            if weight_transfer is not None:
+                # Injected backend (e.g. a no-op stub in tests, or a custom sync mechanism).
+                self.weight_transfer = weight_transfer
             else:
                 # Collect weight metadata once — names/dtypes/shapes are fixed for the lifetime of training.
                 # DTensor.shape returns the global shape without triggering any all-gather.
@@ -610,8 +722,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
                     weight_dtype_names.append(str(param.dtype).split(".")[-1])
                     weight_shapes.append(list(param.shape))
                 self.weight_transfer = WeightTransferClient(
-                    vllm_server_url=self.args.vllm_server_base_url,
-                    server_timeout=self.args.vllm_server_timeout,
+                    vllm_client=self.vllm_client,
                     weight_update_info={
                         "names": weight_names,
                         "dtype_names": weight_dtype_names,
@@ -619,8 +730,13 @@ class AsyncGRPOTrainer(_BaseTrainer):
                         "packed": True,
                     },
                 )
+
+            if rollout_worker is not None:
+                # Use the injected worker (e.g. a stub in tests). The queue is owned by the worker.
+                self.rollout_worker = rollout_worker
+            else:
                 self.rollout_worker = AsyncRolloutWorker(
-                    model_name=model_name,
+                    model_name=get_config_model_id(model.config),
                     dataset=train_dataset,
                     reward_funcs=reward_funcs,
                     processing_class=processing_class,
@@ -637,18 +753,22 @@ class AsyncGRPOTrainer(_BaseTrainer):
                     max_tool_calling_iterations=self.args.max_tool_calling_iterations,
                     log_completions=self.args.log_completions,
                     num_completions_to_print=self.args.num_completions_to_print,
+                    fork_threshold_tokens=self.args.fork_threshold_tokens,
                 )
             # TODO(@aminediro): decide if this is returned by the worker or common API that is passed to the worker later.
             self.rollout_queue = self.rollout_worker.rollout_buffer
         else:
             self.rollout_queue = None
             self.rollout_worker = None
+            self.vllm_client = None
             self.weight_transfer = None
 
         # Add callbacks. Registration order matters: weight sync first, then worker start.
         self.add_callback(_InitialWeightSyncCallback(self))
         self.add_callback(_StartRolloutWorkerCallback(self))
         self.add_callback(StepIntervalCallback(self._sync_weight, self.args.weight_sync_steps))
+        if self._epoch_stop_groups is not None:
+            self.add_callback(_EpochStopCallback(self, self._epoch_stop_groups))
 
     def get_train_dataloader(self) -> DataLoader:
         num_processes = self.accelerator.num_processes
@@ -660,6 +780,13 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 stale_after_s=self.args.heartbeat_stale_after_s,
                 max_staleness=self.args.max_staleness,
             )
+            # Default the token budget to the vLLM server's max_model_len (the cap on prompt + completion), so no
+            # rollout sample can exceed it. Wait for the server like weight sync does, so a still-loading vLLM doesn't
+            # fail training here.
+            if self.args.token_budget is None:
+                self.vllm_client.wait_for_server_ready()
+                self.args.token_budget = self.vllm_client.get_max_model_len()
+                logger.info(f"token_budget unset; defaulting to vLLM max_model_len={self.args.token_budget}")
             # The planner partitions the rollout stream into Σ Lᵢ²-balanced micro-batches of `num_processes` rows.
             # TokenBudgetBatcher caps each row at `token_budget` tokens (dynamic count, bounds peak memory);
             # FixedCountBatcher uses a fixed `per_device_train_batch_size × num_processes` samples per micro-batch.
@@ -679,7 +806,9 @@ class AsyncGRPOTrainer(_BaseTrainer):
             DataLoader(
                 dataset,
                 batch_size=1,
-                collate_fn=DataCollatorForRollout(self.processing_class.pad_token_id, num_processes),
+                collate_fn=DataCollatorForRollout(
+                    self.processing_class.pad_token_id, num_processes, groups_trained=self._trained_groups
+                ),
                 num_workers=0,
                 # NOTE(@aminediro):
                 # dispatch_batches = True for DataLoader whose underlying dataset is an IterableDataset
@@ -772,8 +901,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 entropy[valid_mask].sum() if valid_mask.any() else torch.zeros((), device=completion_mask.device)
             )
 
-            # Compute the clipped probability ratios. A token is counted as clipped only when clipping is binding in a
-            # policy-relevant direction: low clip when the advantage is negative, high clip when it is positive.
+            # Compute the clipped probability ratios
             is_low_clipped = (coef_1 < 1 - self.epsilon_low) & (advantages < 0)
             is_high_clipped = (coef_1 > 1 + self.epsilon_high) & (advantages > 0)
             is_region_clipped = is_low_clipped | is_high_clipped
