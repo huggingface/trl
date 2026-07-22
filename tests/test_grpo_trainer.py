@@ -1632,12 +1632,12 @@ class TestGRPOTrainer(TrlTestCase):
         release_memory(trainer.model, trainer)
 
     @pytest.mark.parametrize("use_liger_kernel", [False, pytest.param(True, marks=require_liger_kernel)])
-    def test_train_with_bias_correction_kl(self, use_liger_kernel):
+    def test_train_without_bias_correction_kl(self, use_liger_kernel):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
             beta=0.1,  # set beta to non-zero value to test the case where the reference model is used
-            use_bias_correction_kl=True,
+            use_bias_correction_kl=False,  # default is True; explicitly cover the opt-out path
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
