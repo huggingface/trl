@@ -236,6 +236,15 @@ class TestRLOOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    def test_train_dataset_required(self):
+        training_args = RLOOConfig(output_dir=self.tmp_dir, report_to="none")
+        with pytest.raises(ValueError, match="`train_dataset` is required"):
+            RLOOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+            )
+
     @pytest.mark.parametrize(
         "eval_dataset_type",
         [
