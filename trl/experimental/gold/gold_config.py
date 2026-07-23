@@ -64,6 +64,14 @@ class GOLDConfig(SFTConfig):
         seq_kd (`bool`, *optional*, defaults to `False`):
             Seq_kd parameter that controls whether to perform Sequence-Level KD (can be viewed as supervised FT on
             teacher-generated output).
+        max_tool_calling_iterations (`int`, *optional*):
+            Maximum number of tool-calling turns when training an agent. If `None`, there is no limit and generation
+            stops when the model generates a response turn with no tool calls or when the total response length reaches
+            `max_model_length`.
+        remove_unused_columns (`bool`, *optional*, defaults to `False`):
+            Whether to remove dataset columns that are not used by the trainer. When training with
+            `environment_factory`, the raw example dicts are forwarded to `environment.reset(**kwargs)`, so any custom
+            column your environment needs requires this to be `False`.
         num_generations (`int`, *optional*, defaults to `1`):
             Number of generations per prompt. Each prompt is repeated this many times in the generation batch.
         generation_batch_size (`int` or `None`, *optional*, defaults to `None`):
@@ -253,6 +261,25 @@ class GOLDConfig(SFTConfig):
         metadata={
             "help": "Seq_kd parameter that controls whether to perform Sequence-Level KD (can be viewed as supervised "
             "FT on teacher-generated output)."
+        },
+    )
+    max_tool_calling_iterations: int | None = field(
+        default=None,
+        metadata={
+            "help": "Maximum number of tool-calling turns when training an agent. If `None`, there is no limit and "
+            "generation stops when the model generates a response turn with no tool calls or when the total "
+            "response length reaches `max_model_length`."
+        },
+    )
+    # The default value remove_unused_columns is overwritten from the parent class, because when training with
+    # `environment_factory` the raw example dicts are forwarded to `environment.reset(**kwargs)`, which usually relies
+    # on additional columns (same rationale as GRPO's reward functions)
+    remove_unused_columns: bool | None = field(
+        default=False,
+        metadata={
+            "help": "Whether to remove dataset columns that are not used by the trainer. When training with "
+            "`environment_factory`, the raw example dicts are forwarded to `environment.reset(**kwargs)`, so any "
+            "custom column your environment needs requires this to be `False`."
         },
     )
     num_generations: int = field(

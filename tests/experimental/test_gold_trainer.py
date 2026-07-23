@@ -15,10 +15,13 @@
 import copy
 from functools import partial
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 import torch
+import transformers
 from datasets import Dataset, DatasetDict, IterableDatasetDict, load_dataset
+from packaging.version import Version
 from transformers import AutoModelForCausalLM, AutoModelForImageTextToText, AutoProcessor, AutoTokenizer
 
 from trl.experimental.gold import GOLDConfig
@@ -36,7 +39,7 @@ from trl.experimental.utils import (
 )
 from trl.trainer.utils import RepeatSampler, identity
 
-from ..testing_utils import TrlTestCase, require_liger_kernel
+from ..testing_utils import TrlTestCase, require_jmespath, require_liger_kernel
 
 
 @pytest.fixture(scope="module")
@@ -464,6 +467,7 @@ def test_generate_on_policy_for_slices_uses_prompt_attention_mask_for_vllm_promp
     trainer = GOLDTrainer.__new__(GOLDTrainer)
     trainer.accelerator = SimpleNamespace(is_main_process=True)
     trainer.args = SimpleNamespace(max_length=None, report_to=[])
+    trainer.tools = None
     trainer.processing_class = RecordingTokenizer()
     trainer._tokenizer = RecordingTokenizer()
     trainer.use_vllm = True
@@ -542,6 +546,7 @@ def test_generate_on_policy_for_slices_reconstructs_prompt_with_special_tokens()
     trainer.processing_class = RecordingTokenizer()
     trainer._tokenizer = RecordingTokenizer()
     trainer.args = SimpleNamespace(max_length=None, report_to=[])
+    trainer.tools = None
     trainer.use_vllm = True
     trainer.use_uld_loss = False
     trainer.vllm_generation = RecordingVLLMGeneration()
@@ -621,6 +626,7 @@ def test_on_policy_prompt_text_reflects_truncated_prompt():
     trainer.accelerator = SimpleNamespace(device=torch.device("cpu"), is_main_process=True)
     trainer.processing_class = RecordingTokenizer()
     trainer.args = SimpleNamespace(max_length=3, report_to=[])
+    trainer.tools = None
     trainer.use_vllm = True
     trainer.use_uld_loss = False
     trainer.teacher_tokenizer = None
@@ -851,6 +857,7 @@ def test_gold_trainer_init_defaults_vllm_max_model_length_to_max_length(monkeypa
         seq_kd=False,
         num_generations=1,
         max_completion_length=16,
+        max_tool_calling_iterations=None,
         top_k=0,
         log_completions=False,
         log_completions_steps=100,
@@ -966,6 +973,7 @@ def test_prepared_tokenized_rows_keep_completion_after_truncation(llama_tokenize
         use_liger_kernel=False,
     )
     trainer = GOLDTrainer.__new__(GOLDTrainer)
+    trainer._tool_chat_template = None
     prepared = trainer._prepare_dataset_with_original_text(
         dataset,
         llama_tokenizer,
@@ -1020,6 +1028,7 @@ def test_prepared_tokenized_rows_rebase_byte_offsets_when_truncation_eats_into_c
         use_liger_kernel=False,
     )
     trainer = GOLDTrainer.__new__(GOLDTrainer)
+    trainer._tool_chat_template = None
     prepared = trainer._prepare_dataset_with_original_text(
         dataset,
         llama_tokenizer,
@@ -1055,6 +1064,7 @@ def test_prepare_dataset_messages_uses_last_assistant_turn(qwen_tokenizer):
         use_liger_kernel=False,
     )
     trainer = GOLDTrainer.__new__(GOLDTrainer)
+    trainer._tool_chat_template = None
 
     prepared = trainer._prepare_dataset_with_original_text(
         dataset,
@@ -1914,6 +1924,7 @@ def test_gold_trainer_init_rejects_llm_with_vision_dataset(monkeypatch):
         seq_kd=False,
         num_generations=1,
         max_completion_length=16,
+        max_tool_calling_iterations=None,
         top_k=0,
         log_completions=False,
         log_completions_steps=100,
@@ -2245,6 +2256,7 @@ def test_gold_trainer_init_rejects_non_vlm_teacher(monkeypatch):
         seq_kd=False,
         num_generations=1,
         max_completion_length=16,
+        max_tool_calling_iterations=None,
         top_k=0,
         log_completions=False,
         log_completions_steps=100,
@@ -2335,6 +2347,7 @@ def test_gold_trainer_init_rejects_keep_end_truncation_for_vlm(monkeypatch):
         seq_kd=False,
         num_generations=1,
         max_completion_length=16,
+        max_tool_calling_iterations=None,
         top_k=0,
         log_completions=False,
         log_completions_steps=100,
@@ -2441,6 +2454,7 @@ def test_gold_trainer_vlm_vllm_init_uses_identity_collator(monkeypatch):
         seq_kd=False,
         num_generations=1,
         max_completion_length=16,
+        max_tool_calling_iterations=None,
         top_k=0,
         log_completions=False,
         log_completions_steps=100,
@@ -2533,6 +2547,7 @@ def _make_vlm_trainer_args(use_vllm=False):
         seq_kd=False,
         num_generations=1,
         max_completion_length=16,
+        max_tool_calling_iterations=None,
         top_k=0,
         log_completions=False,
         log_completions_steps=100,
@@ -2903,6 +2918,7 @@ def test_same_architecture_vlm_uld_preserves_raw_images_for_teacher_processor(
         }
 
     trainer._vlm_collator = stub_collator
+    trainer.chat_template_kwargs = {}
     monkeypatch.setattr(
         gold_trainer_module,
         "broadcast_object_list",
@@ -2954,6 +2970,9 @@ def test_on_policy_vlm_vllm_does_not_duplicate_repeated_sampler_batch(monkeypatc
     trainer.vllm_sync_frequency = 1
     trainer.generation_config = SimpleNamespace(max_new_tokens=16)
     trainer.args = SimpleNamespace(max_length=32)  # budget of 32 - 16 = 16 fits the 5-token stub prompts
+    trainer.tools = None
+    trainer.chat_template = None
+    trainer.chat_template_kwargs = {}
     trainer._buffered_inputs = {}
     trainer._buffered_text_logs = {}
     trainer._teacher_processor = None
@@ -2963,7 +2982,7 @@ def test_on_policy_vlm_vllm_does_not_duplicate_repeated_sampler_batch(monkeypatc
 
     class StubProcessor:
         @staticmethod
-        def apply_chat_template(conversation, add_generation_prompt, tokenize, return_dict, **kwargs):
+        def apply_chat_template(conversation, add_generation_prompt=True, tokenize=True, return_dict=False, **kwargs):
             return {
                 "input_ids": [[1, 2, 3, 4, 5] for _ in conversation],
                 "attention_mask": [[1, 1, 1, 1, 1] for _ in conversation],
@@ -3015,6 +3034,7 @@ def test_on_policy_vlm_vllm_does_not_duplicate_repeated_sampler_batch(monkeypatc
         }
 
     trainer._vlm_collator = stub_collator
+    trainer.chat_template_kwargs = {}
 
     class FakeImage:
         def __init__(self, tag):
@@ -3105,6 +3125,7 @@ def test_off_policy_vlm_collates_only_consumed_slice(monkeypatch):
         return {"input_ids": torch.zeros(len(examples), 1, dtype=torch.long)}
 
     trainer._vlm_collator = stub_collator
+    trainer.chat_template_kwargs = {}
     monkeypatch.setattr(
         gold_trainer_module,
         "broadcast_object_list",
@@ -3149,6 +3170,7 @@ def test_eval_vlm_collates_raw_batch_off_policy():
         return {"input_ids": torch.zeros(len(examples), 1, dtype=torch.long)}
 
     trainer._vlm_collator = stub_collator
+    trainer.chat_template_kwargs = {}
 
     generation_batch = [
         {"prompt": [{"role": "user", "content": "q0"}], "image": object()},
@@ -3179,6 +3201,7 @@ def test_eval_vlm_attaches_raw_images_for_teacher_processor(monkeypatch):
         return {"input_ids": torch.zeros(len(examples), 1, dtype=torch.long)}
 
     trainer._vlm_collator = stub_collator
+    trainer.chat_template_kwargs = {}
     # The exact multimodal-message shape is irrelevant here; pass the prompt through unchanged.
     monkeypatch.setattr(
         gold_trainer_module,
@@ -3255,6 +3278,7 @@ def test_on_policy_vlm_without_vllm_collates_only_consumed_slice(monkeypatch):
         }
 
     trainer._vlm_collator = stub_collator
+    trainer.chat_template_kwargs = {}
 
     class FakeModel:
         training = True
@@ -3683,3 +3707,657 @@ class TestGOLDTrainerLoss(TrlTestCase):
             assert "input_ids" in next(iter(trainer.eval_dataset["data2"]))
         else:
             assert "input_ids" in next(iter(trainer.eval_dataset))
+
+
+# =====================================================================================================================
+# Tool-calling support (multi-turn, same-family)
+# =====================================================================================================================
+
+_TINY_QWEN3 = "trl-internal-testing/tiny-Qwen3ForCausalLM"
+
+# Tool schema used across the tool-calling tests. Mirrors the shape produced by `examples/scripts/
+# sft_tiny_aya_tool_calling.py` and expected by `apply_chat_template(tools=...)`.
+_MULTIPLY_TOOL_SCHEMA = [
+    {
+        "type": "function",
+        "function": {
+            "name": "multiply",
+            "description": "Multiply two integers.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "a": {"type": "integer", "description": "first integer"},
+                    "b": {"type": "integer", "description": "second integer"},
+                },
+                "required": ["a", "b"],
+            },
+        },
+    }
+]
+
+
+def multiply(a: int, b: int) -> int:
+    """
+    Multiplies two integers.
+
+    Args:
+        a: The first integer.
+        b: The second integer.
+
+    Returns:
+        The product of the two integers.
+    """
+    return a * b
+
+
+def _tool_tokenizer():
+    """tiny-Qwen3 tokenizer pinned to TRL's bundled Qwen3 chat template.
+
+    The tiny model ships a Qwen3-variant template whose exact string has drifted from the one transformers/TRL
+    recognize, so on newer transformers neither `add_response_schema` (tool-call parsing) nor
+    `get_training_chat_template` (prefix-preserving training patch) recognize it and init raises. Pinning the
+    recognized `qwen3_chat_template` makes both steps resolve, exercising the real tool-init path rather than a
+    version-drifted fixture.
+    """
+    from trl.chat_template_utils import qwen3_chat_template
+
+    tok = AutoTokenizer.from_pretrained(_TINY_QWEN3)
+    tok.chat_template = qwen3_chat_template
+    return tok
+
+
+def _gold_tool_config(tmp_dir, **overrides):
+    base = dict(
+        output_dir=str(tmp_dir),
+        report_to="none",
+        learning_rate=0.1,  # higher lr so the tiny model's parameters visibly move in one step
+        per_device_train_batch_size=3,
+        gradient_accumulation_steps=1,
+        num_generations=1,
+        max_completion_length=128,
+        max_length=512,
+        lmbda=1.0,
+        beta=0.5,
+        temperature=1.0,
+        use_vllm=False,
+        use_uld_loss=False,
+        use_cpu=True,
+        bf16=False,
+        max_steps=1,
+        save_strategy="no",
+        eval_strategy="no",
+        logging_strategy="steps",
+        logging_steps=1,
+        dataloader_drop_last=True,
+    )
+    base.update(overrides)
+    return GOLDConfig(**base)
+
+
+def _tool_prompt_only_dataset():
+    """Conversational dataset with a placeholder assistant turn (needed for the collator's first-assistant boundary).
+
+    With `lmbda=1.0` the placeholder completion is never consumed: the student regenerates on-policy, and only the
+    prompt (the user turn) is forwarded to generation.
+    """
+    return Dataset.from_dict(
+        {
+            "messages": [
+                [{"role": "user", "content": "What is 3 times 4?"}, {"role": "assistant", "content": "..."}],
+                [{"role": "user", "content": "Compute 5 times 6."}, {"role": "assistant", "content": "..."}],
+                [{"role": "user", "content": "Multiply 7 and 8."}, {"role": "assistant", "content": "..."}],
+            ],
+            "tools": [_MULTIPLY_TOOL_SCHEMA] * 3,
+        }
+    )
+
+
+# --- Off-policy collator tool masking (runs on any transformers: no trainer, only apply_chat_template) ---------------
+
+
+@pytest.mark.slow
+def test_smollm3_collator_masks_tool_results_supervises_assistant(smollm_tokenizer):
+    """Same-family off-policy tool masking in `DataCollatorForChatML`.
+
+    A full multi-turn tool conversation (assistant tool-call -> tool result -> assistant answer) must be labelled so
+    that: the prompt is masked, both assistant turns are supervised, and the tool-result tokens are masked (-100). The
+    assistant tool call is embedded in the message *content* as text because SmolLM3's chat template does not render a
+    structured `tool_calls` field (see the `smollm3-no-structured-toolcalls` note).
+    """
+    tool_result_marker = "BANANA_UNIQUE_RESULT"
+    final_answer_marker = "All finished here."
+    messages = [
+        {"role": "user", "content": "What is 3 times 4? Use the multiply tool."},
+        {
+            "role": "assistant",
+            "content": '<tool_call>\n{"name": "multiply", "arguments": {"a": 3, "b": 4}}\n</tool_call>',
+        },
+        {"role": "tool", "content": tool_result_marker},
+        {"role": "assistant", "content": final_answer_marker},
+    ]
+    example = {"messages": messages, "tools": _MULTIPLY_TOOL_SCHEMA}
+
+    collator = DataCollatorForChatML(tokenizer=smollm_tokenizer, max_length=1024)
+    batch = collator([example])
+
+    input_ids = batch["input_ids"][0].tolist()
+    labels = batch["labels"][0].tolist()
+    assert len(input_ids) == len(labels)
+
+    supervised_ids = [tok for tok, lab in zip(input_ids, labels, strict=False) if lab != -100]
+    masked_ids = [tok for tok, lab in zip(input_ids, labels, strict=False) if lab == -100]
+    supervised_text = smollm_tokenizer.decode(supervised_ids)
+    masked_text = smollm_tokenizer.decode(masked_ids)
+
+    # Supervised labels equal the input ids at the positions they cover (no shift baked into the collator).
+    for tok, lab in zip(input_ids, labels, strict=False):
+        if lab != -100:
+            assert lab == tok
+
+    # Both assistant turns are supervised: the (content-embedded) tool call and the final answer.
+    assert "<tool_call>" in supervised_text
+    assert "multiply" in supervised_text
+    assert final_answer_marker in supervised_text
+
+    # The tool-result tokens are masked, not supervised.
+    assert tool_result_marker in masked_text
+    assert tool_result_marker not in supervised_text
+
+    # The prompt (system preamble + user question) is masked.
+    assert "What is 3 times 4? Use the multiply tool." in masked_text
+    assert "What is 3 times 4? Use the multiply tool." not in supervised_text
+
+    # The completion region contains an interior masked run (the tool result) flanked by supervised assistant tokens.
+    completion_start = next(i for i, lab in enumerate(labels) if lab != -100)
+    completion_labels = labels[completion_start:]
+    assert -100 in completion_labels  # tool result masked inside the completion
+    assert completion_labels[-1] != -100 or completion_labels[-2] != -100  # final answer supervised at the tail
+
+
+# --- Trainer-level tool tests (require transformers >= 5.0.0 for tool parsing; xfail otherwise, like GRPO) -----------
+
+
+@pytest.mark.xfail(
+    condition=Version(transformers.__version__) < Version("5.0.0"),
+    reason="Tool parsing is not supported in transformers versions below 5.0.0",
+    strict=True,
+)
+@require_jmespath
+def test_gold_tools_lmbda_below_one_requires_tool_data(tmp_path):
+    # Off-policy slices (lmbda < 1) consume dataset completions, so a dataset without tool-calling data must be
+    # rejected up front.
+    dataset = Dataset.from_dict(
+        {
+            "messages": [
+                [{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello!"}],
+            ]
+        }
+    )
+    with pytest.raises(ValueError, match="tool-calling data"):
+        GOLDTrainer(
+            model=_TINY_QWEN3,
+            teacher_model=_TINY_QWEN3,
+            args=_gold_tool_config(tmp_path, lmbda=0.5),
+            train_dataset=dataset,
+            tools=[multiply],
+        )
+
+
+@pytest.mark.xfail(
+    condition=Version(transformers.__version__) < Version("5.0.0"),
+    reason="Tool parsing is not supported in transformers versions below 5.0.0",
+    strict=True,
+)
+@require_jmespath
+def test_gold_tools_lmbda_below_one_accepts_tool_data(tmp_path):
+    # A dataset that carries a full tool-calling conversation (tools column + tool_calls/tool messages) is accepted
+    # for off-policy (lmbda < 1) tool training.
+    dataset = Dataset.from_dict(
+        {
+            "messages": [
+                [
+                    {"role": "user", "content": "What is 3 times 4?"},
+                    {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [
+                            {"type": "function", "function": {"name": "multiply", "arguments": {"a": 3, "b": 4}}}
+                        ],
+                    },
+                    {"role": "tool", "name": "multiply", "content": "12"},
+                    {"role": "assistant", "content": "The answer is 12."},
+                ],
+            ],
+            "tools": [_MULTIPLY_TOOL_SCHEMA],
+        }
+    )
+    trainer = GOLDTrainer(
+        model=_TINY_QWEN3,
+        teacher_model=_TINY_QWEN3,
+        args=_gold_tool_config(tmp_path, lmbda=0.5, per_device_train_batch_size=1),
+        train_dataset=dataset,
+        processing_class=_tool_tokenizer(),
+        tools=[multiply],
+    )
+    assert trainer.tools == [multiply]
+
+
+@pytest.mark.xfail(
+    condition=Version(transformers.__version__) < Version("5.0.0"),
+    reason="Tool parsing is not supported in transformers versions below 5.0.0",
+    strict=True,
+)
+@require_jmespath
+def test_gold_tools_lmbda_below_one_rejects_pretokenized_without_tool_mask(tmp_path):
+    # A pretokenized dataset (input_ids present) skips GOLD's own tokenization, which is what emits `tool_mask`;
+    # without that column the collator would silently supervise tool-result tokens, so it must be rejected up front.
+    dataset = Dataset.from_dict(
+        {
+            "messages": [
+                [
+                    {"role": "user", "content": "What is 3 times 4?"},
+                    {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [
+                            {"type": "function", "function": {"name": "multiply", "arguments": {"a": 3, "b": 4}}}
+                        ],
+                    },
+                    {"role": "tool", "name": "multiply", "content": "12"},
+                    {"role": "assistant", "content": "The answer is 12."},
+                ],
+            ],
+            "tools": [_MULTIPLY_TOOL_SCHEMA],
+            "input_ids": [[1, 2, 3]],
+        }
+    )
+    with pytest.raises(ValueError, match="tool_mask"):
+        GOLDTrainer(
+            model=_TINY_QWEN3,
+            teacher_model=_TINY_QWEN3,
+            args=_gold_tool_config(tmp_path, lmbda=0.5),
+            train_dataset=dataset,
+            tools=[multiply],
+        )
+
+
+@pytest.mark.xfail(
+    condition=Version(transformers.__version__) < Version("5.0.0"),
+    reason="Tool parsing is not supported in transformers versions below 5.0.0",
+    strict=True,
+)
+@require_jmespath
+def test_gold_tools_reject_seq_kd(tmp_path):
+    with pytest.raises(ValueError, match="seq_kd"):
+        GOLDTrainer(
+            model=_TINY_QWEN3,
+            teacher_model=_TINY_QWEN3,
+            args=_gold_tool_config(tmp_path, seq_kd=True),
+            train_dataset=_tool_prompt_only_dataset(),
+            tools=[multiply],
+        )
+
+
+@pytest.mark.xfail(
+    condition=Version(transformers.__version__) < Version("5.0.0"),
+    reason="Tool parsing is not supported in transformers versions below 5.0.0",
+    strict=True,
+)
+@require_jmespath
+def test_gold_tools_reject_uld_loss(tmp_path):
+    # Tools are only supported for same-family (shared tokenizer) distillation; cross-tokenizer ULD is rejected.
+    with pytest.raises(ValueError, match="same-family"):
+        GOLDTrainer(
+            model=_TINY_QWEN3,
+            teacher_model=_TINY_QWEN3,
+            args=_gold_tool_config(tmp_path, use_uld_loss=True),
+            train_dataset=_tool_prompt_only_dataset(),
+            tools=[multiply],
+        )
+
+
+@pytest.mark.xfail(
+    condition=Version(transformers.__version__) < Version("5.0.0"),
+    reason="Tool parsing is not supported in transformers versions below 5.0.0",
+    strict=True,
+)
+@require_jmespath
+def test_gold_on_policy_tool_loop_smoke(tmp_path):
+    # Pure on-policy (lmbda=1.0) tool training: the student generates 3 completions, 2 of which are valid tool calls
+    # (one succeeds, one fails on a wrong argument name) and 1 is a plain answer. The tool loop executes the calls,
+    # appends the results, and regenerates. We assert a finite loss, that parameters move, that the tool metrics
+    # are logged, and that the tool-result tokens are masked out of the distillation labels (interior -100 run).
+    # `model.generate` is mocked to make the rollouts deterministic.
+    trainer = GOLDTrainer(
+        model=_TINY_QWEN3,
+        teacher_model=_TINY_QWEN3,
+        args=_gold_tool_config(tmp_path),
+        train_dataset=_tool_prompt_only_dataset(),
+        processing_class=_tool_tokenizer(),
+        tools=[multiply],
+    )
+
+    previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+    # Capture the labels that reach the loss so we can assert tool-result tokens are masked (-100). The tool_mask ->
+    # label masking happens in `_process_completions_to_buffer`; here we verify its effect on the labels compute_loss
+    # actually trains on.
+    captured_labels = []
+    original_compute_loss = trainer.compute_loss
+
+    def spy_compute_loss(model, inputs, *args, **kwargs):
+        if isinstance(inputs, dict) and "labels" in inputs:
+            captured_labels.append(inputs["labels"].detach().clone())
+        return original_compute_loss(model, inputs, *args, **kwargs)
+
+    def fake_generate(input_ids, **kwargs):
+        if input_ids.shape[0] == 3:  # first call: one prompt per rollout
+            # fmt: off
+            completion_ids = torch.tensor(
+                [
+                    # '<tool_call>\n{"name": "multiply", "arguments": {"a": 3, "b": 4}}\n</tool_call><|im_end|>'
+                    [151657, 198, 4913, 606, 788, 330, 64648, 497, 330, 16370, 788, 5212, 64, 788, 220, 18, 11, 330, 65, 788, 220, 19, 11248, 151658, 151645],
+                    # an invalid tool call with a wrong argument name (c instead of b)
+                    # '<tool_call>\n{"name": "multiply", "arguments": {"a": 3, "c": 4}}\n</tool_call><|im_end|>'
+                    [151657, 198, 4913, 606, 788, 330, 64648, 497, 330, 16370, 788, 5212, 64, 788, 220, 18, 11, 330, 66, 788, 220, 19, 11248, 151658, 151645],
+                    # "I don't know any tool<|im_end|>"
+                    [40, 1513, 944, 1414, 894, 5392, 151645, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643],
+                ],
+                device=input_ids.device,
+            )
+            # fmt: on
+        else:  # second call: only the two rollouts that produced a tool call are regenerated
+            completion_ids = torch.tensor(
+                [
+                    [17453, 0, 151645],  # 'Done!<|im_end|>'
+                    [17453, 0, 151645],  # 'Done!<|im_end|>'
+                ],
+                device=input_ids.device,
+            )
+        return torch.cat([input_ids, completion_ids], dim=-1)
+
+    with (
+        patch.object(trainer.model, "generate", side_effect=fake_generate),
+        patch.object(trainer, "compute_loss", side_effect=spy_compute_loss),
+    ):
+        train_output = trainer.train()
+
+    assert torch.isfinite(torch.tensor(train_output.training_loss))
+    tool_log = next(h for h in reversed(trainer.state.log_history) if "tools/call_frequency" in h)
+    assert tool_log["tools/call_frequency"] == pytest.approx(2 / 3)
+    assert tool_log["tools/failure_frequency"] == pytest.approx(1 / 2)
+
+    # The tool-result span is masked: at least one completion row has an interior -100 run — a masked tool result
+    # flanked by supervised model tokens (the assistant tool call before it, the post-tool answer after it). A plain
+    # completion (no tool call) or trailing padding would only produce a leading/trailing -100 run, not an interior one.
+    def has_interior_mask(row):
+        supervised = [i for i, label in enumerate(row) if label != -100]
+        if len(supervised) < 2:
+            return False
+        return any(row[i] == -100 for i in range(supervised[0], supervised[-1]))
+
+    assert captured_labels, "compute_loss was never called with labels"
+    assert any(has_interior_mask(row) for labels in captured_labels for row in labels.tolist()), (
+        "expected an interior -100 run (masked tool-result span) in the on-policy completion labels"
+    )
+
+    for n, param in previous_trainable_params.items():
+        new_param = trainer.model.get_parameter(n)
+        assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+
+@pytest.mark.xfail(
+    condition=Version(transformers.__version__) < Version("5.2.0"),
+    reason="Environment factory support is not available in transformers versions below 5.2.0",
+    strict=True,
+)
+@require_jmespath
+def test_gold_on_policy_environment_factory(tmp_path):
+    # On-policy tool training driven by an environment factory: the environment exposes an `increment` method as a
+    # tool. One rollout increments (succeeds), one calls a non-existent tool (fails), one makes no call. We assert the
+    # per-environment state and the tool metrics.
+    class DummyEnvironment:
+        def reset(self, **kwargs):
+            self._counter = 0
+            self._reset_kwargs = kwargs
+
+        def increment(self, step: int) -> int:
+            """
+            Increment the internal counter.
+
+            Args:
+                step: Value to add to the counter.
+
+            Returns:
+                The updated counter value.
+            """
+            self._counter += step
+            return self._counter
+
+    # Custom column: GOLDConfig defaults `remove_unused_columns=False` (like GRPO) so it survives dataset prep and
+    # reaches `environment.reset(**kwargs)`.
+    dataset = _tool_prompt_only_dataset().add_column("difficulty", ["easy", "medium", "hard"])
+    trainer = GOLDTrainer(
+        model=_TINY_QWEN3,
+        teacher_model=_TINY_QWEN3,
+        args=_gold_tool_config(tmp_path),
+        train_dataset=dataset,
+        processing_class=_tool_tokenizer(),
+        environment_factory=DummyEnvironment,
+    )
+
+    previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+    def fake_generate(input_ids, **kwargs):
+        if input_ids.shape[0] == 3:  # first call
+            # fmt: off
+            completion_ids = torch.tensor(
+                [
+                    # '<tool_call>\n{"name": "increment", "arguments": {"step": 1}}\n</tool_call><|im_end|>'
+                    [151657, 198, 4913, 606, 788, 330, 35744, 497, 330, 16370, 788, 5212, 9520, 788, 220, 16, 11248, 151658, 151645, 151643],
+                    # an invalid tool call with a wrong tool name
+                    # '<tool_call>\n{"name": "decrement", "arguments": {"step": 2}}\n</tool_call><|im_end|>'
+                    [151657, 198, 4913, 606, 788, 330, 450, 13477, 497, 330, 16370, 788, 5212, 9520, 788, 220, 17, 11248, 151658, 151645],
+                    # "I won't increment<|im_end|>"
+                    [40, 2765, 944, 16252, 151645, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643],
+                ],
+                device=input_ids.device,
+            )
+            # fmt: on
+        else:  # second call: only the two rollouts that produced a tool call are regenerated
+            completion_ids = torch.tensor(
+                [
+                    [17453, 0, 151645],  # 'Done!<|im_end|>'
+                    [17453, 0, 151645],  # 'Done!<|im_end|>'
+                ],
+                device=input_ids.device,
+            )
+        return torch.cat([input_ids, completion_ids], dim=-1)
+
+    with patch.object(trainer.model, "generate", side_effect=fake_generate):
+        train_output = trainer.train()
+
+    assert torch.isfinite(torch.tensor(train_output.training_loss))
+    tool_log = next(h for h in reversed(trainer.state.log_history) if "tools/call_frequency" in h)
+    assert tool_log["tools/call_frequency"] == pytest.approx(2 / 3)
+    assert tool_log["tools/failure_frequency"] == pytest.approx(1 / 2)
+
+    # Environment state: only the valid increment(step=1) mutated its environment.
+    assert trainer.environments[0]._counter == 1
+    assert trainer.environments[1]._counter == 0  # wrong tool name -> failed
+    assert trainer.environments[2]._counter == 0  # no tool call
+
+    # Each environment's `reset` received the raw example dict, including the custom dataset column.
+    assert {env._reset_kwargs["difficulty"] for env in trainer.environments} == {"easy", "medium", "hard"}
+
+    for n, param in previous_trainable_params.items():
+        new_param = trainer.model.get_parameter(n)
+        assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+
+@pytest.mark.xfail(
+    condition=Version(transformers.__version__) < Version("5.0.0"),
+    reason="Tool parsing is not supported in transformers versions below 5.0.0",
+    strict=True,
+)
+@require_jmespath
+def test_gold_offpolicy_tool_masking_with_non_prefix_preserving_template(tmp_path):
+    # Off-policy tool masking through the real prep + collator with the recognized Qwen3 template, which is NOT
+    # prefix-preserving (it drops the empty <think></think> block from historical assistant turns). Two regressions:
+    # (1) the tool-span scan must render with the prefix-preserving training template, otherwise every span is shifted
+    # by the dropped think-block bytes and the tool-result header (`<|im_start|>user`) leaks into the supervised
+    # labels; (2) a `messages`-format tool dataset must be split at the *first* assistant turn during prep, otherwise
+    # the assistant tool-call turns land in the masked prompt, the render drops the tool schemas, and no `tool_mask`
+    # is emitted.
+    messages = [
+        {"role": "user", "content": "What is 3 times 4?"},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{"type": "function", "function": {"name": "multiply", "arguments": {"a": 3, "b": 4}}}],
+        },
+        {"role": "tool", "name": "multiply", "content": "UNIQUE_TOOL_RESULT_12"},
+        {"role": "assistant", "content": "The answer is 12."},
+    ]
+    datasets = {
+        "messages": Dataset.from_dict({"messages": [messages], "tools": [_MULTIPLY_TOOL_SCHEMA]}),
+        "prompt-completion": Dataset.from_dict(
+            {"prompt": [messages[:1]], "completion": [messages[1:]], "tools": [_MULTIPLY_TOOL_SCHEMA]}
+        ),
+    }
+    for layout, dataset in datasets.items():
+        trainer = GOLDTrainer(
+            model=_TINY_QWEN3,
+            teacher_model=_TINY_QWEN3,
+            args=_gold_tool_config(tmp_path, lmbda=0.5, per_device_train_batch_size=1),
+            train_dataset=dataset,
+            processing_class=_tool_tokenizer(),
+            tools=[multiply],
+        )
+        row = trainer.train_dataset[0]
+        assert "tool_mask" in row, f"[{layout}] prep did not emit tool_mask"
+        batch = trainer.data_collator([row])
+
+        input_ids = batch["input_ids"][0].tolist()
+        labels = batch["labels"][0].tolist()
+        supervised = trainer._tokenizer.decode(
+            [tok for tok, lab in zip(input_ids, labels, strict=False) if lab != -100]
+        )
+
+        # Assistant turns supervised: the tool call and the final answer.
+        assert "<tool_call>" in supervised and '"multiply"' in supervised, f"[{layout}] tool call not supervised"
+        assert "The answer is 12." in supervised, f"[{layout}] final answer not supervised"
+        # The entire tool-result turn is masked: content, response wrapper, and the turn header. The header is the
+        # sensitive check — a shifted span scan supervises it while still masking the content.
+        assert "UNIQUE_TOOL_RESULT_12" not in supervised, f"[{layout}] tool result content supervised"
+        assert "<tool_response>" not in supervised, f"[{layout}] tool response wrapper supervised"
+        assert "<|im_start|>user" not in supervised, f"[{layout}] tool turn header supervised (shifted span scan)"
+        # The prompt is masked.
+        assert "What is 3 times 4?" not in supervised, f"[{layout}] prompt supervised"
+        # The prompt forwarded for on-policy generation stops at the first assistant turn.
+        assert [m["role"] for m in batch["prompt"][0]] == ["user"], f"[{layout}] wrong forwarded prompt boundary"
+
+
+@pytest.mark.xfail(
+    condition=Version(transformers.__version__) < Version("5.0.0"),
+    reason="Tool parsing is not supported in transformers versions below 5.0.0",
+    strict=True,
+)
+@require_jmespath
+def test_gold_tools_reject_multimodal_tool_response(tmp_path):
+    # Tools that return images (multimodal content blocks) are out of scope for GOLD; the text on-policy path must
+    # raise like the VLM path instead of silently dropping the images.
+    def multiply_with_image(a: int, b: int) -> str:
+        """
+        Multiplies two integers.
+
+        Args:
+            a: The first integer.
+            b: The second integer.
+
+        Returns:
+            The product of the two integers.
+        """
+        return [{"type": "image", "image": "fake-image"}, {"type": "text", "text": str(a * b)}]
+
+    multiply_with_image.__name__ = "multiply"
+
+    trainer = GOLDTrainer(
+        model=_TINY_QWEN3,
+        teacher_model=_TINY_QWEN3,
+        args=_gold_tool_config(tmp_path),
+        train_dataset=_tool_prompt_only_dataset(),
+        processing_class=_tool_tokenizer(),
+        tools=[multiply_with_image],
+    )
+
+    def fake_generate(input_ids, **kwargs):
+        if input_ids.shape[0] == 3:  # first call: one prompt per rollout
+            # fmt: off
+            completion_ids = torch.tensor(
+                [
+                    # '<tool_call>\n{"name": "multiply", "arguments": {"a": 3, "b": 4}}\n</tool_call><|im_end|>'
+                    [151657, 198, 4913, 606, 788, 330, 64648, 497, 330, 16370, 788, 5212, 64, 788, 220, 18, 11, 330, 65, 788, 220, 19, 11248, 151658, 151645],
+                    # "I don't know any tool<|im_end|>"
+                    [40, 1513, 944, 1414, 894, 5392, 151645, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643],
+                    # "I don't know any tool<|im_end|>"
+                    [40, 1513, 944, 1414, 894, 5392, 151645, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643],
+                ],
+                device=input_ids.device,
+            )
+            # fmt: on
+        else:  # second call: the rollout that produced the tool call is regenerated
+            completion_ids = torch.tensor([[17453, 0, 151645]], device=input_ids.device)  # 'Done!<|im_end|>'
+        return torch.cat([input_ids, completion_ids], dim=-1)
+
+    with patch.object(trainer.model, "generate", side_effect=fake_generate):
+        with pytest.raises(NotImplementedError, match="Multimodal tool responses"):
+            trainer.train()
+
+
+def test_prepare_dataset_liger_with_tools_keeps_all_columns():
+    # The liger prep branch narrows the dataset to a fixed column whitelist. With tools, the collator re-renders the
+    # prompt from the raw `messages`/`tools` columns and forwards the full example dicts to
+    # `environment.reset(**kwargs)`, so the narrowing must be skipped entirely (custom columns included) — matching
+    # the non-liger path. Without tools, the whitelist still applies.
+    from trl.chat_template_utils import get_training_chat_template
+
+    tokenizer = _tool_tokenizer()
+    messages = [
+        {"role": "user", "content": "What is 3 times 4?"},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{"type": "function", "function": {"name": "multiply", "arguments": {"a": 3, "b": 4}}}],
+        },
+        {"role": "tool", "name": "multiply", "content": "12"},
+        {"role": "assistant", "content": "The answer is 12."},
+    ]
+    dataset = Dataset.from_dict({"messages": [messages], "tools": [_MULTIPLY_TOOL_SCHEMA], "difficulty": ["easy"]})
+    args = SimpleNamespace(
+        dataset_num_proc=None,
+        dataset_text_field="text",
+        max_length=1024,
+        packing_strategy="bfd",
+        use_liger_kernel=True,
+    )
+
+    trainer = GOLDTrainer.__new__(GOLDTrainer)
+    trainer.tools = [multiply]
+    trainer._tool_chat_template = get_training_chat_template(tokenizer)
+    prepared = trainer._prepare_dataset_with_original_text(
+        dataset, tokenizer, args, packing=False, formatting_func=None, dataset_name="train"
+    )
+    # No narrowing: the raw conversational columns, the tool mask, and the custom column all survive.
+    for column in ("messages", "tools", "tool_mask", "input_ids", "difficulty"):
+        assert column in prepared.column_names, f"{column} dropped by liger column selection"
+
+    # Control: without tools the liger whitelist still narrows (custom column dropped, tool_mask kept).
+    trainer_no_tools = GOLDTrainer.__new__(GOLDTrainer)
+    trainer_no_tools.tools = []
+    trainer_no_tools._tool_chat_template = None
+    prepared = trainer_no_tools._prepare_dataset_with_original_text(
+        dataset, tokenizer, args, packing=False, formatting_func=None, dataset_name="train"
+    )
+    assert "difficulty" not in prepared.column_names
+    assert "tool_mask" in prepared.column_names
