@@ -26,6 +26,8 @@ import pytest
 import torch
 import transformers
 
+from ..testing_utils import is_bf16_supported
+
 
 MODEL = "Qwen/Qwen2.5-0.5B-Instruct"
 MODEL_REVISION = "7ae557604adf67be50417f59c2c2f167def9a775"
@@ -187,9 +189,11 @@ def _build(
     return CorrectnessConfig(name=name, method=method, args=args, num_processes=num_processes)
 
 
-# Equivalence classes: each maps to a `members` list and a tolerance pair. The first member is the canonical
-# config — it owns the class's reference snapshot and is the only one re-recorded under `--update-references`.
-# Every other member is asserted to match that snapshot.
+# Equivalence classes: each maps to a `members` list plus per-field `tol` (max |Δ|) and `residual_tol` (mean Δ)
+# dicts. The first member is the canonical config — it owns the class's reference snapshot and is the only one
+# re-recorded under `--update-references`. Every other member is asserted to match that snapshot.
+# Tuning tip: run `python tests/invariant/test_invariant.py <klass> --report` to see actual Δs and set tolerances
+# to ~1.5–2× the observed noise.
 EQUIVALENCE_CLASSES: dict[str, dict] = {
     "sft": {
         "tol": {"loss": 1e-3, "grad_norm": 1e-1},
@@ -199,6 +203,36 @@ EQUIVALENCE_CLASSES: dict[str, dict] = {
             _build("sft_pdb1_gas8", "sft", SFT_DATASET, per_device_train_batch_size=1, gradient_accumulation_steps=8),
             _build("sft_no_grad_ckpt", "sft", SFT_DATASET, gradient_checkpointing=False),
             _build("sft_ddp2", "sft", SFT_DATASET, per_device_train_batch_size=4, num_processes=2),
+        ],
+    },
+    "sft_fa2": {
+        # loss_type not pinned; this class exercises the current SFTConfig default ("chunked_nll").
+        # Loss is much tighter than grad_norm under FA2+bf16 (grad_norm absorbs bf16 + FA varlen kernel noise).
+        # The grad_norm tol (5.0) is intentionally ~50× looser than the non-FA2 sft class (0.1): it is sized to the
+        # FA2 varlen kernel noise observed in practice, not a regression budget. Do not tighten it without re-running
+        # the class and confirming the new gap; see https://github.com/huggingface/trl/pull/5842#issuecomment-4539190615
+        "tol": {"loss": 1.5e-2, "grad_norm": 5.0},
+        "residual_tol": {"loss": 1e-3, "grad_norm": 2.5e-1},
+        "members": [
+            _build(
+                "sft_fa2",
+                "sft",
+                SFT_DATASET,
+                attn="kernels-community/flash-attn2",  # to avoid cross-contamination between samples when padding_free=True
+                bf16=True,  # required for FA2 kernels, which are bfloat16-only
+                max_length=None,  # Required when padding_free=True
+                per_device_train_batch_size=2,
+            ),
+            _build(
+                "sft_fa2_padfree",
+                "sft",
+                SFT_DATASET,
+                attn="kernels-community/flash-attn2",  # to avoid cross-contamination between samples when padding_free=True
+                bf16=True,  # required for FA2 kernels, which are bfloat16-only
+                max_length=None,  # Required when padding_free=True
+                per_device_train_batch_size=2,
+                padding_free=True,
+            ),
         ],
     },
     "dpo": {
@@ -226,6 +260,11 @@ def test_invariant(klass, config):
 
     if config.num_processes > 1 and torch.cuda.device_count() < config.num_processes:
         pytest.skip(f"requires {config.num_processes} GPUs, got {torch.cuda.device_count()}")
+
+    # FA2 members require bf16 (the kernels are bfloat16-only), and bf16=True raises on a device that
+    # does not support it (CPU, pre-Ampere GPU). Skip rather than error on such devices.
+    if config.args.get("bf16") == "True" and not is_bf16_supported():
+        pytest.skip("config requires bf16, which the current device does not support")
 
     trajectory = run(config)
     reference = load(ref_path)

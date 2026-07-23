@@ -10,7 +10,7 @@ SDPO targets reinforcement learning with verifiable rewards (RLVR), where each a
 
 ## Loss modes and the teacher
 
-`sdpo_policy_loss_mode` controls how the two signals combine: `"distillation_only"` (the default) trains purely on the self-distillation loss, and `"hybrid"` adds the policy loss and `distillation_weight` × the distillation loss. The distillation objective itself is set by `distillation_mode` — `"sampled_token"` (the default) uses a token-level reverse KL and requires `distillation_alpha=1.0`, while `"full_logits"` and `"topk_logits"` distill over the full or top-`distillation_topk` vocabulary. Setting `use_liger_kernel=True` swaps in a memory-efficient fused JSD loss (Liger) for the distillation term; it requires `sdpo_policy_loss_mode="distillation_only"`, `distillation_mode="full_logits"`, and is incompatible with `distillation_is_clip`.
+`distillation_weight` controls how the two signals combine as a convex combination: the loss is `(1 - distillation_weight) * policy_loss + distillation_weight * distillation_loss`. `1.0` (the default) trains purely on the self-distillation loss, `0.0` falls back to the standard GRPO-style policy gradient, and intermediate values blend both. The distillation objective itself is set by `distillation_mode` — `"sampled_token"` (the default) uses a token-level reverse KL and requires `distillation_alpha=1.0`, while `"full_logits"` and `"topk_logits"` distill over the full or top-`distillation_topk` vocabulary. Setting `use_liger_kernel=True` swaps in a memory-efficient fused JSD loss (Liger) for the distillation term; it requires `distillation_weight=1.0`, `distillation_mode="full_logits"`, and is incompatible with `distillation_is_clip`.
 
 `teacher_model_kind` chooses the teacher weights: `"ema"` (the default) tracks the student with an exponential moving average synced every `teacher_sync_steps` steps at rate `teacher_update_rate`, `"live"` reuses the current student directly, and `"base"` freezes the initial weights. Reprompting is governed by `use_successful_as_teacher`, `success_reward_threshold`, `dont_reprompt_on_self_success`, and the `reprompt_template` / `solution_template` / `feedback_template` strings. Generation runs through transformers by default, or vLLM (colocate or server mode) when `use_vllm=True`.
 
@@ -53,6 +53,30 @@ trainer.train()
 
 SDPO always requires a `prompt` column. To use environment feedback, also include a `privileged_context` column and set `include_environment_feedback=True`. SDPO will use successful rollouts and, when enabled, that text to build teacher reprompts for self-distillation.
 
+## Serving the teacher from the vLLM server
+
+With `teacher_model_kind="live"` the teacher is the current student, whose weights the vLLM **server** already holds (they are synced for generation each step). Set `use_teacher_server=True` to score the teacher log-probabilities on that same server instead of running a separate local teacher forward, removing the teacher from the training step entirely:
+
+```python
+training_args = SDPOConfig(
+    output_dir="sdpo-model",
+    use_vllm=True,
+    vllm_mode="server",
+    teacher_model_kind="live",
+    use_teacher_server=True,
+    distillation_weight=1.0,
+    distillation_mode="sampled_token",
+)
+```
+
+When using the teacher server:
+
+- `use_vllm=True` and `vllm_mode="server"` are required
+- `teacher_model_kind` must be `"live"` (the server holds the current student weights)
+- `distillation_weight` must be `1.0` (pure distillation; a convex blend with the policy loss needs the full-vocabulary logits)
+- `distillation_mode` must be `"sampled_token"` (reverse KL on the realized token) or `"topk_logits"`. The server returns the teacher's own top-k log-probs, so `topk_logits` distills over the teacher's top-k support (it cannot use the student's, unlike the local objective); with a `"live"` teacher the two supports nearly coincide. `full_logits` is unavailable.
+- `use_liger_kernel` is not supported
+
 ## Callbacks
 
 The trainer emits a small set of callback hooks that are useful for debugging, observability, and tests. These hooks are intended as practical integration points for experimental self-distillation workflows.
@@ -68,10 +92,10 @@ SDPO-specific hook:
 
 ## Example script
 
-Use [`trl/experimental/sdpo/sdpo.py`](https://github.com/huggingface/trl/blob/main/trl/experimental/sdpo/sdpo.py) to launch SDPO training from the command line. The script supports verifiable math rewards, environment feedback via `--feedback_column`, and PEFT/LoRA via the standard `ModelConfig` flags.
+Use [`examples/scripts/sdpo.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/sdpo.py) to launch SDPO training from the command line. The script supports verifiable math rewards, environment feedback via `--feedback_column`, and PEFT/LoRA via the standard `ModelConfig` flags.
 
 ```bash
-python trl/experimental/sdpo/sdpo.py \
+python examples/scripts/sdpo.py \
     --model_name_or_path Qwen/Qwen2.5-Math-1.5B-Instruct \
     --dataset_name openai/gsm8k \
     --dataset_config main \
@@ -88,7 +112,7 @@ python trl/experimental/sdpo/sdpo.py \
     --generation_batch_size 32 \
     --distillation_alpha 1.0 \
     --distillation_mode sampled_token \
-    --sdpo_policy_loss_mode hybrid \
+    --distillation_weight 0.5 \
     --report_to none \
     --eval_strategy steps \
     --eval_steps 1000 \

@@ -98,7 +98,7 @@ class TestDistributed(TrlTestCase):
             "fsdp2",
         ],
     )
-    def test_sft_chunked_nll(self, config, get_config_path):
+    def test_sft_nll_loss(self, config, get_config_path):
         # fmt: off
         run_command(
             [
@@ -107,7 +107,7 @@ class TestDistributed(TrlTestCase):
                 "--model_name_or_path", "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
                 "--dataset_name", "trl-internal-testing/zen",
                 "--dataset_config", "standard_language_modeling",
-                "--loss_type", "chunked_nll",
+                "--loss_type", "nll",
             ],
             os.environ.copy(),
         )
@@ -143,6 +143,133 @@ class TestDistributed(TrlTestCase):
                 "--model_name_or_path", "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
                 "--dataset_name", "trl-internal-testing/zen",
                 "--dataset_config", "standard_preference",
+            ],
+            os.environ.copy(),
+        )
+        # fmt: on
+
+    @pytest.mark.parametrize(
+        "config",
+        [
+            "ddp",
+            pytest.param(
+                "zero2",
+                marks=pytest.mark.xfail(
+                    Version(transformers.__version__) == Version("5.1.0"),
+                    reason="Upstream incompatibility: deepspeed and transformers==5.1.0 (see transformers#43780)",
+                ),
+            ),
+            pytest.param(
+                "zero3",
+                marks=pytest.mark.xfail(
+                    Version(transformers.__version__) == Version("5.1.0"),
+                    reason="Upstream incompatibility: deepspeed and transformers==5.1.0 (see transformers#43780)",
+                ),
+            ),
+        ],
+    )
+    def test_dpo_precompute_ref_log_probs(self, config, get_config_path):
+        # `--eval_strategy epoch` passes an eval dataset, so reference log-probs are precomputed for both the train and
+        # eval splits (two passes), which is what previously broke multi-GPU precompute (fingerprint cache mismatch, and
+        # a corrupted ZeRO-3 parameter coordinator from re-initializing DeepSpeed on the policy model per pass).
+        # fmt: off
+        run_command(
+            [
+                "accelerate", "launch", "--config_file", get_config_path(config), "trl/scripts/dpo.py",
+                "--output_dir", self.tmp_dir,
+                "--model_name_or_path", "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                "--dataset_name", "trl-internal-testing/zen",
+                "--dataset_config", "standard_preference",
+                "--precompute_ref_log_probs",
+                "--eval_strategy", "epoch",
+            ],
+            os.environ.copy(),
+        )
+        # fmt: on
+
+    @require_liger_kernel
+    @pytest.mark.parametrize(
+        "config",
+        [
+            "ddp",
+            pytest.param(
+                "zero2",
+                marks=pytest.mark.xfail(
+                    Version(transformers.__version__) == Version("5.1.0"),
+                    reason="Upstream incompatibility: deepspeed and transformers==5.1.0 (see transformers#43780)",
+                ),
+            ),
+            pytest.param(
+                "zero3",
+                marks=pytest.mark.xfail(
+                    Version(transformers.__version__) == Version("5.1.0"),
+                    reason="Upstream incompatibility: deepspeed and transformers==5.1.0 (see transformers#43780)",
+                ),
+            ),
+            pytest.param(
+                "fsdp2",
+                marks=pytest.mark.xfail(
+                    reason="Liger DPO loss reads `lm_head.weight` and runs the backbone directly, which is "
+                    "incompatible with FSDP2's DTensor-sharded parameters (mixed Tensor/DTensor ops).",
+                    strict=True,
+                ),
+            ),
+        ],
+    )
+    def test_dpo_liger(self, config, get_config_path):
+        # fmt: off
+        run_command(
+            [
+                "accelerate", "launch", "--config_file", get_config_path(config), "trl/scripts/dpo.py",
+                "--output_dir", self.tmp_dir,
+                "--model_name_or_path", "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                "--dataset_name", "trl-internal-testing/zen",
+                "--dataset_config", "standard_preference",
+                "--use_liger_kernel",
+            ],
+            os.environ.copy(),
+        )
+        # fmt: on
+
+    @require_liger_kernel
+    @pytest.mark.parametrize(
+        "config",
+        [
+            "ddp",
+            pytest.param(
+                "zero2",
+                marks=pytest.mark.xfail(
+                    Version(transformers.__version__) == Version("5.1.0"),
+                    reason="Upstream incompatibility: deepspeed and transformers==5.1.0 (see transformers#43780)",
+                ),
+            ),
+            pytest.param(
+                "zero3",
+                marks=pytest.mark.xfail(
+                    Version(transformers.__version__) == Version("5.1.0"),
+                    reason="Upstream incompatibility: deepspeed and transformers==5.1.0 (see transformers#43780)",
+                ),
+            ),
+            pytest.param(
+                "fsdp2",
+                marks=pytest.mark.xfail(
+                    reason="Liger KTO loss reads `lm_head.weight` and runs the backbone directly, which is "
+                    "incompatible with FSDP2's DTensor-sharded parameters (mixed Tensor/DTensor ops).",
+                    strict=True,
+                ),
+            ),
+        ],
+    )
+    def test_kto_liger(self, config, get_config_path):
+        # fmt: off
+        run_command(
+            [
+                "accelerate", "launch", "--config_file", get_config_path(config), "trl/scripts/kto.py",
+                "--output_dir", self.tmp_dir,
+                "--model_name_or_path", "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                "--dataset_name", "trl-internal-testing/zen",
+                "--dataset_config", "standard_unpaired_preference",
+                "--use_liger_kernel",
             ],
             os.environ.copy(),
         )

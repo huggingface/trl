@@ -32,17 +32,13 @@ from pathlib import Path
 
 
 AGENT_PATHS = {
+    "agents": {
+        "global": Path("~/.agents/skills"),
+        "project": Path("./.agents/skills"),
+    },
     "claude": {
         "global": Path("~/.claude/skills"),
         "project": Path("./.claude/skills"),
-    },
-    "codex": {
-        "global": Path("~/.codex/skills"),
-        "project": Path("./.codex/skills"),
-    },
-    "opencode": {
-        "global": Path("~/.config/opencode/skills"),
-        "project": Path(".opencode/skills"),
     },
 }
 
@@ -52,7 +48,7 @@ def list_agent_names() -> list[str]:
     List available predefined agent names.
 
     Returns:
-        `list[str]`: Sorted list of agent names (e.g., ['claude', 'codex', 'opencode']).
+        `list[str]`: Sorted list of agent names (e.g., ['agents', 'claude']).
     """
     return sorted(AGENT_PATHS.keys())
 
@@ -76,9 +72,9 @@ def resolve_target_path(target: str | Path, scope: str = "project") -> Path:
     Converts semantic agent names (e.g., 'claude') with scope to actual filesystem paths, or normalizes provided paths.
 
     Args:
-        target (`str | Path`): Agent name (e.g., 'claude', 'codex') or directory path.
+        target (`str | Path`): Agent name (e.g., 'agents', 'claude') or directory path.
         scope (`str`, defaults to `"project"`):
-            Scope for agent names: 'global' (user-level like ~/.agent/skills/) or 'project' (./agent/skills/).
+            Scope for agent names: 'global' (user-level like ~/.agents/skills/) or 'project' (./agents/skills/).
 
     Returns:
         `Path`: Resolved absolute path.
@@ -88,15 +84,15 @@ def resolve_target_path(target: str | Path, scope: str = "project") -> Path:
 
     Example:
         ```python
-        from trl.skills import resolve_target_path
+        >>> from trl.skills import resolve_target_path
 
-        # Resolve agent name with scope
-        path = resolve_target_path("claude", "global")
-        print(path)  # /home/user/.claude/skills
+        >>> # Resolve agent name with scope
+        >>> resolve_target_path("claude", "global")
+        /home/user/.claude/skills
 
-        # Resolve custom path
-        path = resolve_target_path("/custom/skills")
-        print(path)  # /custom/skills
+        >>> # Resolve custom path
+        >>> resolve_target_path("/custom/skills")
+        /custom/skills
         ```
     """
     if isinstance(target, Path):
@@ -152,19 +148,19 @@ def list_skills(target: str | Path | None = None, scope: str = "project") -> lis
 
     Example:
         ```python
-        from trl.skills import list_skills
+        >>> from trl.skills import list_skills
 
-        # List TRL's built-in skills
-        skills = list_skills()
-        print(skills)  # ['trl-training']
+        >>> # List TRL's built-in skills
+        >>> list_skills()
+        ['trl-training']
 
-        # List skills installed for Claude globally
-        installed = list_skills(target="claude", scope="global")
-        print(installed)  # ['trl-training', 'custom-skill']
+        >>> # List skills installed for Claude globally
+        >>> list_skills(target="claude", scope="global")
+        ['trl-training', 'custom-skill']
 
-        # List skills in custom directory
-        custom = list_skills(target="/path/to/skills")
-        print(custom)  # [...]
+        >>> # List skills in custom directory
+        >>> list_skills(target="/path/to/skills")
+        [...]
         ```
     """
     if target is None:
@@ -253,7 +249,7 @@ def install_skill(
 
     Args:
         skill_name (`str`): Name of skill to install.
-        target (`str | Path`): Agent name (e.g., 'claude', 'codex') or directory path.
+        target (`str | Path`): Agent name (e.g., 'agents', 'claude') or directory path.
         scope (`str`, defaults to `"project"`):
             Scope for agent names: 'global' (user-level) or 'project' (current directory).
         source (`str | Path`, *optional*):
@@ -274,16 +270,16 @@ def install_skill(
 
     Example:
         ```python
-        from trl.skills import install_skill
+        >>> from trl.skills import install_skill
 
-        # Install to Claude's global skills directory
-        install_skill("trl-training", target="claude", scope="global")
+        >>> # Install to Claude's global skills directory
+        >>> install_skill("trl-training", target="claude", scope="global")
 
-        # Install to custom directory
-        install_skill("trl-training", target="/path/to/skills")
+        >>> # Install to custom directory
+        >>> install_skill("trl-training", target="/path/to/skills")
 
-        # Overwrite existing installation
-        install_skill("trl-training", target="claude", force=True)
+        >>> # Overwrite existing installation
+        >>> install_skill("trl-training", target="claude", force=True)
         ```
     """
     target_dir = resolve_target_path(target, scope)
@@ -329,7 +325,7 @@ def uninstall_skill(skill_name: str, target: str | Path, scope: str = "project")
 
     Args:
         skill_name (`str`): Name of skill to uninstall.
-        target (`str | Path`): Agent name (e.g., 'claude', 'codex') or directory path.
+        target (`str | Path`): Agent name (e.g., 'agents', 'claude') or directory path.
         scope (`str`, defaults to `"project"`):
             Scope for agent names: 'global' (user-level) or 'project' (current directory).
 
@@ -344,13 +340,13 @@ def uninstall_skill(skill_name: str, target: str | Path, scope: str = "project")
 
     Example:
         ```python
-        from trl.skills import uninstall_skill
+        >>> from trl.skills import uninstall_skill
 
-        # Uninstall from Claude's global directory
-        uninstall_skill("trl-training", target="claude", scope="global")
+        >>> # Uninstall from Claude's global directory
+        >>> uninstall_skill("trl-training", target="claude", scope="global")
 
-        # Uninstall from custom directory
-        uninstall_skill("trl-training", target="/path/to/skills")
+        >>> # Uninstall from custom directory
+        >>> uninstall_skill("trl-training", target="/path/to/skills")
         ```
     """
     target_dir = resolve_target_path(target, scope)

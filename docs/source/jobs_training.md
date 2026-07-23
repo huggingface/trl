@@ -13,7 +13,7 @@ For general details about Hugging Face Jobs (hardware selection, job monitoring,
 
 ## Requirements
 
-* A [Pro](https://hf.co/pro), [Team](https://hf.co/enterprise), or [Enterprise](https://hf.co/enterprise) plan
+* A Hugging Face account with a positive [credit balance](https://huggingface.co/settings/billing). Jobs is pay-as-you-go—you only pay for the seconds you use.
 * Logged in to the Hugging Face Hub (`hf auth login`)
 
 ## Using TRL Jobs
@@ -208,7 +208,8 @@ run_uv_job(
 
 </hfoption>
 </hfoptions>
-See the full list of examples in [Maintained examples](example_overview#maintained-examples).
+
+See the full list of examples in [Example Scripts](example_overview#scripts).
 
 ### Docker Images
 
