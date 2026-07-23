@@ -2904,13 +2904,14 @@ class GRPOTrainer(_BaseTrainer):
         if self.beta != 0.0:
             self._metrics[mode]["kl"].append(self.accelerator.gather(mean_kl).mean().item())
         self._metrics[mode]["clip_ratio"].append(self.accelerator.gather(clip_ratio).mean().item())
-        # DAPO/CISPO/VESPO normalize by num_items_in_batch / num_processes (the total active
-        # tokens across the whole generation batch, i.e. all grad-accum micro-batches and
-        # processes), which the Liger loss already applies via num_items_in_batch. They must
-        # therefore not be re-divided by the grad-accum step count, matching the non-Liger path
-        # (see _compute_loss). Other loss types average per micro-batch and need the division.
+        # DAPO/CISPO/VESPO normalize by num_items_in_batch / num_processes (applied internally by
+        # the Liger loss), then need a `current_gradient_accumulation_steps / steps_per_generation`
+        # rescale to land on the per-window token-mean — matching the non-Liger path
+        # (see `_compute_loss`).
         if self.loss_type in ["cispo", "dapo", "vespo"]:
-            normalizer = 1.0
+            normalizer = (
+                self.current_gradient_accumulation_steps / self.args.steps_per_generation if mode == "train" else 1.0
+            )
         else:
             normalizer = self.current_gradient_accumulation_steps if mode == "train" else 1.0  # no accum in eval
         return loss / normalizer

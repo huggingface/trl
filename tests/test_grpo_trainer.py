@@ -1633,24 +1633,23 @@ class TestGRPOTrainer(TrlTestCase):
 
     @require_liger_kernel
     def test_compute_liger_loss_dapo_normalizer(self):
-        """DAPO/CISPO/VESPO must normalize by num_items_in_batch / num_processes (the total
-        active tokens across the whole generation batch) rather than the current micro-batch.
+        """DAPO/CISPO/VESPO must rescale the Liger loss by ``gradient_accumulation_steps / steps_per_generation`` so
+        the accumulated loss lands on the per-window token-mean, matching the non-Liger ``_compute_loss`` path.
 
-        This requires ``compute_liger_loss`` to (1) forward ``num_items_in_batch`` to the Liger loss and (2) NOT
-        re-divide the returned loss by ``gradient_accumulation_steps`` for these loss types, matching the non-Liger
-        ``_compute_loss`` path. Regression test for the Liger/non-Liger GRPO normalizer mismatch
-        (linkedin/Liger-Kernel#1082).
+        Regression test for the per-window rescale (huggingface/trl#5619). The ``num_items_in_batch`` forwarding is
+        covered by ``test_compute_liger_loss_passes_vllm_is_ratio``.
         """
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
             loss_type="dapo",
-            gradient_accumulation_steps=2,  # >1 so the (incorrect) /grad_accum division would be visible
-            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
-            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
-            num_generations=3,  # reduce the number of generations to reduce memory usage
-            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            steps_per_generation=4,  # differs from gradient_accumulation_steps so the rescale is non-trivial
+            gradient_accumulation_steps=2,
+            learning_rate=0.1,
+            per_device_train_batch_size=3,
+            num_generations=3,
+            max_completion_length=8,
             use_liger_kernel=True,
             report_to="none",
             logging_strategy="no",
@@ -1663,12 +1662,12 @@ class TestGRPOTrainer(TrlTestCase):
             train_dataset=dataset,
         )
 
-        raw_calls = []
+        raw_losses = []
         original_forward = trainer.liger_loss.forward
 
         def forward_capture(*args, **kwargs):
             out = original_forward(*args, **kwargs)
-            raw_calls.append((kwargs.get("num_items_in_batch"), out[0].detach().clone()))
+            raw_losses.append(out[0].detach().clone())
             return out
 
         final_losses = []
@@ -1685,11 +1684,12 @@ class TestGRPOTrainer(TrlTestCase):
         ):
             trainer.train()
 
-        assert len(raw_calls) > 0, "liger_loss.forward was never called"
-        assert len(final_losses) == len(raw_calls)
-        for (num_items, raw_loss), final_loss in zip(raw_calls, final_losses, strict=True):
-            assert num_items is not None, "num_items_in_batch should be passed to liger_loss for dapo"
-            torch.testing.assert_close(final_loss, raw_loss)
+        # `num_items_in_batch` spans `steps_per_generation` micro-steps, so the per-window rescale
+        # the trainer applies is `gradient_accumulation_steps / steps_per_generation` (i.e. it divides
+        # the Liger output by `spg/gas`).
+        expected_rescale = training_args.steps_per_generation / training_args.gradient_accumulation_steps
+        for raw_loss, final_loss in zip(raw_losses, final_losses, strict=True):
+            torch.testing.assert_close(final_loss, raw_loss * expected_rescale)
 
         release_memory(trainer.model, trainer)
 
