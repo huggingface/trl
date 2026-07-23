@@ -142,7 +142,7 @@ TRL's [`GRPOTrainer`] supports interactive environment training through the `env
 
 Your environment class must follow these rules:
 
-- `__init__(self)` *(optional)*: If provided, must take no arguments. Use it to initialize state or clients. If you need external configuration (e.g., a URL), capture it from the enclosing scope or module-level variables.
+- `__init__(self)` _(optional)_: If provided, must take no arguments. Use it to initialize state or clients. If you need external configuration (e.g., a URL), capture it from the enclosing scope or module-level variables.
 - `reset(self, **kwargs)`: Called at the start of each episode. Receives all dataset columns as keyword arguments. Return a string observation (or `None` for no initial observation).
 - **Tool methods**: Any public method (not starting with `_`) other than `reset` is automatically exposed as a tool. Each tool method must have a docstring with `Args:` descriptions, since the trainer uses these to generate the tool schema for the model.
 
@@ -237,6 +237,7 @@ Wordle is a good benchmark for environment-based RL because it requires reasonin
 > G U E S S
 > X G Y X X
 > ```
+>
 > X = not in the word, G = correct position (green), Y = wrong position (yellow). Here, "U" is correct and in place, "E" is in the word but misplaced.
 
 ### Environment class
@@ -496,7 +497,7 @@ When using `environment_factory`, the trainer connects to the environment server
 
 <hfoption id="space">
 
-**Connect to a remote Hugging Face Space** *(simplest)*
+**Connect to a remote Hugging Face Space** _(simplest)_
 
 Most example scripts default to a hosted Space (no setup needed):
 
@@ -511,7 +512,7 @@ env = EchoEnv(base_url="https://openenv-echo-env.hf.space")
 
 <hfoption id="docker">
 
-**Docker container** *(recommended for production)*
+**Docker container** _(recommended for production)_
 
 ```bash
 docker run -d -p 8001:8000 --platform linux/amd64 registry.hf.space/openenv-echo-env:latest
@@ -540,7 +541,7 @@ env = EchoEnv.from_docker_image("registry.hf.space/openenv-echo-env:latest")
 
 <hfoption id="local">
 
-**Local Python process** *(for development)*
+**Local Python process** _(for development)_
 
 ```bash
 hf download openenv/echo_env --repo-type=space --local-dir=echo_env
@@ -572,11 +573,13 @@ When using `environment_factory`, the trainer creates N environment instances (o
 To support parallel training, configure the server for concurrency:
 
 1. In your environment file, declare concurrent session support:
+
 ```python
 SUPPORTS_CONCURRENT_SESSIONS: bool = True
 ```
 
 2. In your server app, set the concurrency limit:
+
 ```python
 app = create_app(
     create_my_environment,
@@ -597,3 +600,112 @@ app = create_app(
 - **`rollout_func`**: You write the entire generation and environment interaction loop yourself. This gives full control over how completions are produced, how tools are executed, and how rewards are computed.
 
 Use `rollout_func` when `environment_factory` doesn't fit your use case. For example, **external agent servers** where an external server owns the generation loop and manages its own agent-environment interaction protocol.
+
+## Training on harnesses: training a real coding agent (opencode)
+
+The integrations above are **white-box**: TRL drives the multi-turn loop itself. It samples each turn, parses the tool calls, runs them, and feeds the results back.
+
+Some agents cannot be driven this way because they own their own loop. A production coding agent harness like [`opencode`](https://opencode.ai) has its own planner, tool set, context management, and stop condition. You want to train that exact agent, not a reimplementation of it.
+
+For this, TRL provides an experimental **black box (loop-owning)** path built on [`experimental.async_grpo.AsyncGRPOTrainer`] and a `HarnessRolloutWorker` specific for OpenEnv that drives an [OpenEnv `ResourceSessionFactory`](https://huggingface.co/docs/openenv). See [`examples/scripts/openenv/opencode.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/openenv/opencode.py) for a complete, self-contained example.
+
+### How it works
+
+TRL does not sample each turn here. The agent runs to completion on its own, and TRL reads back what it did:
+
+1. The agent runs inside an OpenEnv session (a local subprocess sandbox in the example, so no container is needed) in `transparent_proxy` mode. A small proxy inside the sandbox forwards the agent's `/v1/chat/completions` calls to your vLLM server and records each turn's token ids and logprobs.
+2. When the agent stops, TRL reads the proxy trace, rebuilds the per-turn training rows from the recorded ids, and scores the final workspace with the session's `verify()` method (a held-out verifier).
+3. GRPO trains on those rows. The reward is propagated to every trained token through the group-relative advantage.
+
+Each rollout runs in its own isolated session. In the example that means one sandbox directory, one proxy on its own port, and one agent process per rollout. The isolation matters for two reasons: the proxy has to capture exactly that rollout's tokens, and one rollout must not interfere with another. The `max_inflight` setting controls how many rollouts run at the same time.
+
+### Wiring
+
+You pass a `HarnessRolloutWorker` to [`experimental.async_grpo.AsyncGRPOTrainer`] with `harness_adapter=None` to select loop-owning mode. Besides the usual training arguments, you provide three functions (`rollout_reward_fn`, `train_turn_fn`, and `agent_turn_fn`) that tell TRL how to score, filter, and read the agent's rollouts. They are described in [What you need to define](#what-you-need-to-define).
+
+```python
+from trl.experimental.async_grpo import AsyncGRPOConfig, AsyncGRPOTrainer
+from trl.experimental.async_grpo.openenv_harness import HarnessRolloutWorker, has_tool_call
+
+worker = HarnessRolloutWorker(
+    harness_session_factory=build_factory(...),  # your OpenEnv ResourceSessionFactory
+    harness_adapter=None,                         # loop-owning: the agent runs its own loop
+    rollout_reward_fn=my_reward,                  # outcome -> float | None
+    train_turn_fn=has_tool_call,                  # reinforce only action turns
+    agent_turn_fn=my_agent_turns,                 # drop auxiliary (non-agent) calls
+    model_name=model,
+    dataset=dataset,
+    reward_funcs=[],
+    processing_class=tokenizer,
+    num_generations=8,
+    max_inflight_tasks=8,
+    vllm_server_url=vllm_url,
+)
+trainer = AsyncGRPOTrainer(model=model, args=config, train_dataset=dataset, rollout_worker=worker)
+trainer.train()
+```
+
+### What you need to define
+
+In loop-owning mode the agent runs the loop and TRL only sees a raw trace of the LLM calls it made. TRL takes care of everything mechanical: it drives the agent, captures the trace, rebuilds the training rows from the recorded token ids, keeps the policy in sync with vLLM, and runs the GRPO update. But three decisions depend on your task and your agent, and TRL cannot make them for you. You supply each as a small function. Every function receives a typed input and has a default, so you only write the ones your task needs.
+
+#### `rollout_reward_fn`: how to score a rollout
+
+`Callable[[HarnessRolloutOutcome], float | None]`
+
+TRL does not know what success means for your task, so you turn each finished rollout into a scalar reward. The function receives a `HarnessRolloutOutcome` that describes what the agent did:
+
+- `env_reward` (`float | None`): the reward from the session's `verify()` (for opencode, the fraction of held-out tests that passed), or `None` when the rollout could not be scored.
+- `completion` (`list[dict]`): the final message transcript.
+- `trace` (`list[TraceEntry]`): the raw proxy trace.
+- `tool_call_count` and `tool_failure_count` (`int`): how many tool calls the agent made, and how many looked like failures.
+- `tool_calls_by_name` (`dict[str, int]`): calls per tool, for example `{"bash": 3, "edit": 2}`.
+- `timed_out` (`bool`): whether the agent ran out of its time budget.
+
+Return a `float`, or return `None` to mark the rollout unscorable so it is dropped from the group baseline instead of being counted as a zero. If you do not pass this function, the raw `env_reward` is used as is. The opencode example turns the dense pass fraction into a binary pass or fail and subtracts small penalties for degenerate behavior, such as never running the code or looping for far too many steps.
+
+> [!NOTE]
+> **Why not just use `verify()`?** `verify()` is the environment's job and answers one question, "how correct was the outcome," which keeps it clean and reusable for evaluation. The reward you train on is a separate, training-time decision (binarize the score, penalize degenerate behavior, drop unscorable rollouts). It also needs signals `verify()` never sees, since `verify()` only inspects the final workspace, while `rollout_reward_fn` also gets the trajectory (tool counts, `timed_out`, the trace). For example, a rollout can pass some tests yet never run `bash`; only `rollout_reward_fn` can see that and penalize it.
+
+#### `train_turn_fn`: which turns to reinforce
+
+`Callable[[HarnessTurn], bool]`
+
+A rollout is made of many turns, and not every turn should receive a gradient. This function is called once per turn and returns `True` to train on that turn. It receives a `HarnessTurn`:
+
+- `messages` (`list[dict]`): the conversation the model saw on this turn.
+- `tools` (`list[dict] | None`): the tools available on this turn.
+- `content` (`str`): the assistant's text for this turn.
+- `tool_calls` (`list[dict]`): the tool calls the assistant emitted (empty for a text-only turn).
+
+By default every agent turn is trained. For a tool-heavy agent you usually want to reinforce only the turns that took an action. TRL ships `has_tool_call` for this, which is what the opencode example uses:
+
+```python
+def has_tool_call(turn: HarnessTurn) -> bool:
+    # Train only turns where the agent actually called a tool (e.g. wrote a file, ran bash),
+    # and skip pure-text turns like a final "done" message or thinking-out-loud.
+    return bool(turn.tool_calls)
+```
+
+An agent whose answer is plain text, such as a question-answering agent, would keep the default (train every turn) instead.
+
+#### `agent_turn_fn`: which trace entries are real agent turns
+
+`Callable[[list[TraceEntry]], list[TraceEntry]]`
+
+Agent frameworks make extra LLM calls that are not part of the task. opencode, for example, fires a separate call to generate a thread title and another to summarize context. These land in the same proxy trace as the real agent turns, but they must never be trained, scored, or shown as the transcript, because they answer a different prompt. This function receives the full trace and returns only the entries that are real agent turns. Each entry is a `TraceEntry`, the raw record of one LLM call (`request`, `response`, `completion_token_ids`, `per_token_logps`). By default TRL keeps every entry that has both a request and a response; the opencode example overrides this to keep only the calls that carry the agent's own system prompt and tools, which drops the title and summary calls.
+
+### Requirements
+
+The vLLM server must expose tool-calling and real token ids, and enable NCCL weight sync so the agent always hits the current policy:
+
+```bash
+vllm serve <model> \
+    --enable-auto-tool-choice --tool-call-parser hermes \
+    --logprobs-mode processed_logprobs \
+    --return-tokens-as-token-ids \
+    --weight-transfer-config '{"backend":"nccl"}'
+```
+
+> [!NOTE]
+> Loop-owning training lives under `trl.experimental` and its API may change. The example installs the `opencode` CLI into a sandbox template on first run (needs internet once) and uses [`agentica-org/DeepCoder-Preview-Dataset`](https://huggingface.co/datasets/agentica-org/DeepCoder-Preview-Dataset) with a held-out stdin/stdout verifier.
