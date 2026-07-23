@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import inspect
 import random
 import textwrap
 from collections import defaultdict
@@ -23,7 +24,7 @@ from typing import Any, Optional
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from accelerate.utils import gather_object
+from accelerate.utils import gather_object, set_seed
 from datasets import Dataset
 from packaging.version import Version
 from torch.utils.data import DataLoader
@@ -39,6 +40,7 @@ from transformers.trainer_utils import EvalPrediction, seed_worker
 from transformers.utils import is_liger_kernel_available, is_peft_available, is_rich_available
 
 from ...data_utils import is_conversational
+from ...distributed import DistributedBackend
 from ...extras.profiling import profiling_decorator
 from ...generation.vllm_generation import VLLMGeneration
 from ...import_utils import is_vllm_available
@@ -321,6 +323,14 @@ class DistillationTrainer(_BaseTrainer):
         else:
             model_name_or_path = model.config._name_or_path if model is not None else None
 
+        # Some models (SmolVLM/Idefics3) don't support `logits_to_keep` argument and error out if we pass it
+        # Inspect the forward method before we wrap the model with PEFT
+        self.model_kwarg_keys = (
+            inspect.signature(model.forward).parameters.keys()
+            if not hasattr(model, "get_base_model")
+            else inspect.signature(model.get_base_model().forward).parameters.keys()
+        )
+
         # ── Processing class (tokenizer) ──
         if processing_class is None and model_name_or_path is not None:
             processing_class = AutoTokenizer.from_pretrained(
@@ -329,6 +339,9 @@ class DistillationTrainer(_BaseTrainer):
         if processing_class is not None:
             if getattr(processing_class, "pad_token", None) is None:
                 processing_class.pad_token = processing_class.eos_token
+        self._tokenizer = (
+            processing_class.tokenizer if isinstance(processing_class, ProcessorMixin) else processing_class
+        )
 
         # ── PEFT ──
         if peft_config is not None:
@@ -430,6 +443,11 @@ class DistillationTrainer(_BaseTrainer):
         # self.model_accepts_loss_kwargs to False to enable scaling.
         self.model_accepts_loss_kwargs = False
 
+        self._dist = DistributedBackend(self.accelerator)
+
+        # Add tags to the model
+        self.model.add_model_tags(self._tag_names)
+
         # ── Prepare teacher model (after super().__init__ so accelerator is ready) ──
         if teacher_model is not None:
             # The divergence compares the full next-token distribution of the student against the teacher's, so both
@@ -457,6 +475,12 @@ class DistillationTrainer(_BaseTrainer):
         self.beta = args.beta
         self.temperature = args.temperature
         self.top_p = args.top_p
+        self.top_k = args.top_k
+        self.min_p = args.min_p
+        self.repetition_penalty = args.repetition_penalty
+        self.chat_template_kwargs = args.chat_template_kwargs or {}
+        self.pad_to_multiple_of = args.pad_to_multiple_of
+        self.shuffle_dataset = args.shuffle_dataset
         self.num_generations = args.num_generations
 
         # ── Buffer state ──
@@ -464,6 +488,11 @@ class DistillationTrainer(_BaseTrainer):
         self._buffered_text_logs = None
         self._buffered_num_items = None
         self._buffer_step = 0
+
+        # Ensure each process receives a unique seed to prevent duplicate completions when generating with
+        # transformers if num_generations exceeds per_device_train_batch_size. We could skip it if we use vLLM, but
+        # it's safer to set it in all cases.
+        set_seed(args.seed, device_specific=True)
 
         # ── Generation config ──
         generation_kwargs = {
@@ -527,7 +556,7 @@ class DistillationTrainer(_BaseTrainer):
                 logprobs=None,
             )
             self.vllm_sync_frequency = args.vllm_sync_frequency
-            self._last_vllm_sync_step = -1
+            self._last_loaded_step = -1
 
     def _get_completion_lengths(self, generated_tokens: torch.Tensor, prompt_width: int) -> torch.Tensor:
         """Infer per-sample completion lengths from generated tokens."""
@@ -634,6 +663,7 @@ class DistillationTrainer(_BaseTrainer):
                 add_generation_prompt=True,
                 tokenize=True,
                 return_dict=True,
+                **self.chat_template_kwargs,
             )
             prompt_ids = tokenized["input_ids"]
             # For VLMs, the processor returns extra multimodal fields (pixel_values, image_grid_thw, etc.)
@@ -719,12 +749,9 @@ class DistillationTrainer(_BaseTrainer):
                 local_slice_indices.append(slice_idx)
 
         # Sync student weights to vLLM if needed
-        if (
-            self.state.global_step != self._last_vllm_sync_step
-            and self.state.global_step % self.vllm_sync_frequency == 0
-        ):
+        if self.state.global_step != self._last_loaded_step and self.state.global_step % self.vllm_sync_frequency == 0:
             self.vllm_generation.sync_weights()
-            self._last_vllm_sync_step = self.state.global_step
+            self._last_loaded_step = self.state.global_step
 
         # Generate completions — pass token IDs directly, no text decoding
         prompt_ids_list = [p.tolist() for p in local_prompts]
