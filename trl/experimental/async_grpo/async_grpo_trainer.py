@@ -17,7 +17,7 @@ import math
 import queue
 import textwrap
 import time
-from collections import defaultdict
+from collections import defaultdict, deque
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from typing import Any, Protocol
@@ -27,11 +27,20 @@ from accelerate.logging import get_logger
 from datasets import Dataset, IterableDataset
 from torch.distributed._tensor import DTensor
 from torch.utils.data import DataLoader
-from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenizerBase, TrainerCallback
+from transformers import AutoProcessor, PreTrainedTokenizerBase, ProcessorMixin, TrainerCallback
 from transformers.data.data_collator import DataCollatorMixin
 
 from ...trainer.base_trainer import _BaseTrainer
-from ...trainer.utils import get_config_model_id, nanmax, nanmin, pad, patch_chunked_lm_head
+from ...trainer.utils import (
+    create_model_from_path,
+    get_config_model_id,
+    nanmax,
+    nanmin,
+    pad,
+    patch_chunked_lm_head,
+    split_pixel_values_by_grid,
+    unsplit_pixel_values_by_grid,
+)
 from .async_grpo_config import AsyncGRPOConfig
 from .async_rollout_worker import AsyncRolloutWorker
 from .vllm_client import VLLMClient
@@ -222,6 +231,7 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
                 "advantage": sample.advantage,
                 "group_id": sample.group_id,
                 "metrics": {**sample.metrics, "queue_wait_time_s": queue_wait_time_s},
+                "multimodal_inputs": sample.multimodal_inputs,  # VLM pixel tensors, else None
             }
 
 
@@ -361,8 +371,15 @@ class DataCollatorForRollout(DataCollatorMixin):
     pad_token_id: int
     num_processes: int = 1
     return_tensors: str = "pt"
+    is_vlm: bool = False
     # Distinct prompt-group ids, it counts exactly the prompt-groups that get trained
     groups_trained: set[int] = field(default_factory=set)
+    # VLM only: a FIFO of each micro-batch's per-row pixel tensors, kept OUT of the returned batch because
+    # accelerate's DataLoaderDispatcher slices every batch tensor along dim 0 to the row count, corrupting ragged
+    # `pixel_values`. A queue (not a single slot) because the dispatcher prefetches one batch ahead, so a single
+    # slot would be overwritten by batch N+1 before `compute_loss` consumes batch N. `torch_call` appends;
+    # `compute_loss` pops in order (collate and loss are 1:1 and ordered on the main process).
+    multimodal_queue: deque = field(default_factory=deque)
 
     def torch_call(self, examples: list[Any]) -> dict[str, Any]:
         # The dataloader uses batch_size=1 over a planner that pre-partitions each micro-batch into `num_processes`
@@ -422,7 +439,7 @@ class DataCollatorForRollout(DataCollatorMixin):
             else {}
         )
 
-        return {
+        batch = {
             "input_ids": input_ids,
             "attention_mask": attention_mask,
             "completion_mask": completion_mask,
@@ -432,6 +449,22 @@ class DataCollatorForRollout(DataCollatorMixin):
             "global_n_tokens": global_n_tokens,
             "metrics": metrics,
         }
+
+        # VLM: per row (one per DP rank), concatenate its samples' pixel tensors in sample order — matching the
+        # order their image-placeholder tokens appear in that row's packed `input_ids`. Stashed on the collator
+        # (row i -> rank i) rather than returned in `batch`, so `DataLoaderDispatcher` doesn't slice the ragged
+        # `pixel_values`; `compute_loss` reads `self.multimodal_rows[rank]`. Rows with no images contribute `None`.
+        if self.is_vlm:
+            multimodal_rows = []
+            for group in groups:
+                row_mm = [ex["multimodal_inputs"] for ex in group if ex.get("multimodal_inputs")]
+                if row_mm:
+                    multimodal_rows.append({k: torch.cat([m[k] for m in row_mm], dim=0) for k in row_mm[0]})
+                else:
+                    multimodal_rows.append(None)
+            self.multimodal_queue.append(multimodal_rows)
+
+        return batch
 
 
 class AsyncGRPOTrainer(_BaseTrainer):
@@ -593,7 +626,11 @@ class AsyncGRPOTrainer(_BaseTrainer):
         model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
         # FlashAttention is required: training runs in padding-free mode, where sequences are concatenated into a
         # single row and `cu_seq_lens` are derived from `position_ids` resets. SDPA/eager can't handle this.
-        model = AutoModelForCausalLM.from_pretrained(
+        # `create_model_from_path` infers the architecture from the config: `AutoModelForImageTextToText` for
+        # `*ForConditionalGeneration`/`*ImageTextToText` (VLM) checkpoints, `AutoModelForCausalLM` otherwise. Loading
+        # the full VLM (not just the text tower) is what makes `named_parameters()` match the vLLM server for weight
+        # sync (fixes the #6028 key mismatch) and provides the vision tower for the training forward pass.
+        model = create_model_from_path(
             model,
             device_map=None,
             dtype=torch.float32,
@@ -614,13 +651,26 @@ class AsyncGRPOTrainer(_BaseTrainer):
             model, chunk_size=8192, temperature=self.temperature, output_router_logits=self.aux_loss_enabled
         )
 
-        # Processing class
+        # Processing class. A `ProcessorMixin` (VLM) wraps a tokenizer + image processor; a bare tokenizer is used
+        # directly. `self._tokenizer` is the text tokenizer (template rendering / padding); `self._is_vlm` gates every
+        # multimodal branch so text-only training is unchanged. Mirrors the sync `GRPOTrainer`.
         if processing_class is None:
-            processing_class = AutoTokenizer.from_pretrained(
-                get_config_model_id(model.config), trust_remote_code=args.trust_remote_code
+            processing_class = AutoProcessor.from_pretrained(
+                get_config_model_id(model.config),
+                truncation_side="left",
+                padding_side="left",
+                trust_remote_code=args.trust_remote_code,
             )
-        if processing_class.pad_token is None:
-            processing_class.pad_token = processing_class.eos_token
+        if isinstance(processing_class, ProcessorMixin):
+            self._tokenizer = processing_class.tokenizer
+            self._is_vlm = True
+        elif isinstance(processing_class, PreTrainedTokenizerBase):
+            self._tokenizer = processing_class
+            self._is_vlm = False
+        else:
+            raise TypeError("The `processing_class` must be either a `PreTrainedTokenizerBase` or a `ProcessorMixin`")
+        if self._tokenizer.pad_token is None:
+            self._tokenizer.pad_token = self._tokenizer.eos_token
 
         # Reward functions
         if reward_funcs is None:
@@ -715,8 +765,9 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 # DTensor.shape returns the global shape without triggering any all-gather.
                 weight_names, weight_dtype_names, weight_shapes = [], [], []
                 for name, param in model.named_parameters():
-                    # DDP/FSDP1 wrapping, avoids vllm module not exist error
-                    name = name.removeprefix("module.")
+                    # Strip wrapper prefixes (must match `_streaming_iter`): DDP `module.`, gradient-checkpointing
+                    # `_checkpoint_wrapped_module.`. Avoids "vllm module not exist" on the server.
+                    name = name.removeprefix("module.").replace("_checkpoint_wrapped_module.", "")
                     weight_names.append(name)
                     weight_dtype_names.append(str(param.dtype).split(".")[-1])
                     weight_shapes.append(list(param.shape))
@@ -801,13 +852,16 @@ class AsyncGRPOTrainer(_BaseTrainer):
         # Each planner item is one complete micro-batch (`num_processes` pre-packed rows), so the dataloader pulls them
         # one at a time (batch_size=1) and the collator tensorizes each into a rectangular `(num_processes, T_max)`
         # batch that DataLoaderDispatcher scatters row `i` -> rank `i`.
+        # Keep a handle on the collator so `compute_loss` can read the current batch's stashed VLM pixel tensors
+        # (they can't ride in the dispatched batch dict — see `DataCollatorForRollout.multimodal_rows`).
+        self._rollout_collator = DataCollatorForRollout(
+            self._tokenizer.pad_token_id, num_processes, is_vlm=self._is_vlm, groups_trained=self._trained_groups
+        )
         return self.accelerator.prepare(
             DataLoader(
                 dataset,
                 batch_size=1,
-                collate_fn=DataCollatorForRollout(
-                    self.processing_class.pad_token_id, num_processes, groups_trained=self._trained_groups
-                ),
+                collate_fn=self._rollout_collator,
                 num_workers=0,
                 # NOTE(@aminediro):
                 # dispatch_batches = True for DataLoader whose underlying dataset is an IterableDataset
@@ -830,6 +884,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 "advantages",
                 "global_n_tokens",
                 "metrics",
+                "multimodal_inputs",
             ]
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
@@ -844,6 +899,15 @@ class AsyncGRPOTrainer(_BaseTrainer):
         position_ids = inputs["position_ids"][mask_bool].unsqueeze(0)
         advantages = inputs["advantages"][mask_bool].unsqueeze(0)
 
+        # VLM: add this rank's pixel tensors to the forward. `multimodal_inputs` is a per-rank list from the collator
+        # (row i -> rank i); its placeholder tokens are already in `input_ids`, so the model binds pixels to them.
+        forward_kwargs = {}
+        if self._is_vlm:
+            mm_rows = self._rollout_collator.multimodal_queue.popleft()
+            mm = mm_rows[self.accelerator.process_index]
+            if mm is not None:
+                forward_kwargs = {k: v.to(input_ids.device) for k, v in mm.items()}
+
         forward_start = time.time()
         outputs = model(
             input_ids=input_ids,
@@ -851,6 +915,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
             labels=input_ids,
             completion_mask=completion_mask,
             use_cache=False,
+            **forward_kwargs,
         )
         log_probs, entropy = outputs["log_probs"], outputs["entropy"]
         self._last_forward_time_s = time.time() - forward_start
@@ -1028,7 +1093,9 @@ class AsyncGRPOTrainer(_BaseTrainer):
         # FSDP ranks, then frees it once the generator advances — avoiding materializing the full model in memory.
         device = self.accelerator.device
         for name, param in self.model.named_parameters():
-            name = name.removeprefix("module.")  # DDP/FSDP1 wrapping
+            # Strip wrapper prefixes so names match the vLLM server's, consistent with the sync trainer's
+            # `_fix_param_name_to_vllm` (DDP `module.`, gradient-checkpointing `_checkpoint_wrapped_module.`).
+            name = name.removeprefix("module.").replace("_checkpoint_wrapped_module.", "")
             full = param.full_tensor() if isinstance(param, DTensor) else param.detach()
             if full.device != device:
                 full = full.to(device)
