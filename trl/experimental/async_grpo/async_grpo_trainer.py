@@ -13,6 +13,7 @@
 # limitations under the License.
 
 
+import contextvars
 import math
 import queue
 import textwrap
@@ -250,8 +251,10 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
 
     def _drain_traces(self):
         while True:
-            samples, step = self._trace_queue.get()
-            log_rollout_traces(samples, step=step, report_to=self.report_to)
+            samples, step, ctx = self._trace_queue.get()
+            # Replay the main-thread context captured at enqueue: trackio's run lives in a ContextVar this daemon
+            # thread wouldn't otherwise inherit, so trackio.log() would raise "call init() first".
+            ctx.run(log_rollout_traces, samples, step=step, report_to=self.report_to)
 
     def __iter__(self):
         while True:
@@ -276,7 +279,10 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
             self._trace_buf.append(sample)
             if len(self._trace_buf) >= self._trace_log_interval:
                 try:
-                    self._trace_queue.put_nowait((self._trace_buf, self.model_version_fn()))
+                    # Capture the main-thread context (holds trackio's run) so the drain thread can replay it.
+                    self._trace_queue.put_nowait(
+                        (self._trace_buf, self.model_version_fn(), contextvars.copy_context())
+                    )
                 except queue.Full:
                     pass
                 self._trace_buf = []
