@@ -537,6 +537,14 @@ class TestApplyChatTemplate(TrlTestCase):
                 reason="GLM4 tokenizer requires transformers>=5.0.0",
             ),
         ),
+        "trl-internal-testing/tiny-Lfm2ForCausalLM",
+        pytest.param(
+            "trl-internal-testing/tiny-Lfm2ForCausalLM-2.5",
+            marks=pytest.mark.skipif(
+                Version(transformers.__version__) < Version("5.0.0"),
+                reason="LFM2.5 tokenizer requires transformers>=5.0.0",
+            ),
+        ),
         "trl-internal-testing/tiny-LlamaForCausalLM-3.1",
         "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
         "trl-internal-testing/tiny-LlamaForCausalLM-3",
@@ -711,6 +719,33 @@ class TestApplyChatTemplate(TrlTestCase):
         """)
 
         assert result["prompt"] == expected
+
+    def test_apply_chat_template_preference_round_trips_with_generation_prompt_insertion(self):
+        # Regression test: when the generation prompt inserts extra tokens (e.g. an opening `<think>` tag, as in
+        # DeepSeek-R1-style templates), the prompt is reduced to the common prefix of the rendered prompt+chosen and
+        # prompt+rejected strings. The completions must be sliced against the *final* prompt; slicing `chosen` before
+        # the prompt shrinks again against `rejected` used to silently drop the leading `<think>` tag from `chosen`.
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM")
+        tokenizer.chat_template = (
+            "{% for message in messages %}"
+            "{{ message['role'] + ': ' + message['content'] + '\n' }}"
+            "{% endfor %}"
+            "{% if add_generation_prompt %}{{ 'assistant: <think>' }}{% endif %}"
+        )
+
+        example = {
+            "prompt": [{"role": "user", "content": "What is 2+2?"}],
+            # chosen keeps its reasoning trace, rejected doesn't: the common prefix of the two rendered strings ends
+            # before the `<think>` inserted by the generation prompt
+            "chosen": [{"role": "assistant", "content": "<think>2+2=4</think>It is 4."}],
+            "rejected": [{"role": "assistant", "content": "It is 4."}],
+        }
+        result = apply_chat_template(example, tokenizer)
+
+        expected_chosen = tokenizer.apply_chat_template(example["prompt"] + example["chosen"], tokenize=False)
+        expected_rejected = tokenizer.apply_chat_template(example["prompt"] + example["rejected"], tokenize=False)
+        assert result["prompt"] + result["chosen"] == expected_chosen
+        assert result["prompt"] + result["rejected"] == expected_rejected
 
     def test_apply_chat_template_with_tools(self):
         tokenizer = AutoProcessor.from_pretrained("trl-internal-testing/tiny-LlamaForCausalLM-3.2")
@@ -993,6 +1028,45 @@ class TestUnpairPreferenceDataset(TrlTestCase):
         assert unpaired_dataset.to_dict() == self.unpaired_dataset.to_dict(), (
             "The paired dataset should be converted to unpaired."
         )
+
+    def test_unpair_preference_dataset_extra_columns(self):
+        # Test that extra columns are preserved and duplicated for chosen and rejected rows
+        paired_dataset = Dataset.from_dict(
+            {
+                "prompt": ["The sky is", "The sun is"],
+                "chosen": [" blue.", " in the sky."],
+                "rejected": [" green.", " in the sea."],
+                "extra": [1, 2],
+            }
+        )
+        unpaired_dataset = unpair_preference_dataset(paired_dataset)
+        expected = {**self.unpaired_dataset.to_dict(), "extra": [1, 2, 1, 2]}
+        assert unpaired_dataset.to_dict() == expected
+
+    def test_unpair_preference_dataset_iterable(self):
+        # Test that an IterableDataset with extra columns is correctly unpaired
+        paired_dataset = self.paired_dataset.to_iterable_dataset()
+        unpaired_dataset = unpair_preference_dataset(paired_dataset)
+        assert list(unpaired_dataset) == [
+            dict(zip(self.unpaired_dataset.column_names, vals, strict=False))
+            for vals in zip(*self.unpaired_dataset.to_dict().values(), strict=False)
+        ]
+
+    def test_unpair_preference_dataset_iterable_extra_columns(self):
+        # Test that an IterableDataset with extra columns preserves and duplicates them
+        paired_iterable = Dataset.from_dict(
+            {
+                "prompt": ["The sky is", "The sun is"],
+                "chosen": [" blue.", " in the sky."],
+                "rejected": [" green.", " in the sea."],
+                "extra": [1, 2],
+            }
+        ).to_iterable_dataset()
+        unpaired_dataset = unpair_preference_dataset(paired_iterable)
+        expected = {**self.unpaired_dataset.to_dict(), "extra": [1, 2, 1, 2]}
+        assert list(unpaired_dataset) == [
+            dict(zip(expected.keys(), vals, strict=False)) for vals in zip(*expected.values(), strict=False)
+        ]
 
     def test_unpair_preference_dataset_dict(self):
         # Test that a paired dataset dict is correctly converted to unpaired

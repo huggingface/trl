@@ -17,13 +17,21 @@ import warnings
 from pathlib import Path
 from typing import TypeVar
 
+import transformers
 from jinja2 import TemplateError
+from packaging.version import Version
 from transformers import AddedToken, AutoTokenizer, PreTrainedModel, PreTrainedTokenizerBase, ProcessorMixin
 
 from .data_utils import prepare_multimodal_messages
 
 
 _CHAT_TEMPLATES_DIR = Path(__file__).parent / "chat_templates"
+
+# New-style `response_template` parsing (streamable chat parsing, with the `prefix=` argument to `parse_response`)
+# landed in transformers 5.13.0 (huggingface/transformers#45847). Earlier versions (>= 5.0.0) only ship the legacy
+# `response_schema` parser. We gate on `5.13.0.dev0` so the feature is also active on transformers `main` (which
+# reports a dev version) ahead of the 5.13.0 release.
+_SUPPORTS_RESPONSE_TEMPLATE = Version(transformers.__version__) >= Version("5.13.0.dev0")
 
 
 def has_generation_markers(chat_template: str) -> bool:
@@ -72,12 +80,12 @@ def clone_chat_template(
 
     Example:
     ```python
-    from transformers import AutoModelForCausalLM, AutoTokenizer
-    from trl import clone_chat_template
+    >>> from transformers import AutoModelForCausalLM, AutoTokenizer
+    >>> from trl import clone_chat_template
 
-    model = AutoModelForCausalLM.from_pretrained("meta-llama/Llama-3.2-1B")
-    tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-3.2-1B")
-    model, tokenizer, added_tokens = clone_chat_template(model, tokenizer, "Qwen/Qwen3-0.6B")
+    >>> model = AutoModelForCausalLM.from_pretrained("meta-llama/Llama-3.2-1B")
+    >>> tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-3.2-1B")
+    >>> model, tokenizer, added_tokens = clone_chat_template(model, tokenizer, "Qwen/Qwen3-0.6B")
     ```
     """
     # Load the source tokenizer containing the desired chat template
@@ -316,11 +324,218 @@ qwen3_5_schema = {
 }
 
 
+# New-style response templates (transformers >= 5.13 with PR huggingface/transformers#45847). These coexist with the
+# legacy `*_schema` dicts above; `add_response_schema` sets the template on transformers >= 5.13 and the schema on
+# older versions.
+qwen3_template = {
+    "defaults": {"role": "assistant"},
+    "start_anchor": "<|im_start|>assistant\n",
+    "fields": {
+        "reasoning_content": {
+            "open": "<think>",
+            "close_pattern": r"</think>\s*",
+            "content": "text",
+        },
+        "tool_calls": {
+            "open": "<tool_call>",
+            "close_pattern": r"</tool_call>\s*",
+            "repeats": True,
+            "content": "json",
+            "transform": {"type": "function", "function": "{content}"},
+        },
+        "content": {
+            "close_pattern": r"<\|im_end\|>\s*",
+            "content": "text",
+        },
+    },
+}
+
+qwen3_5_template = {
+    "defaults": {"role": "assistant"},
+    "start_anchor": "<|im_start|>assistant\n",
+    "fields": {
+        "reasoning_content": {
+            "open": "<think>",
+            "close_pattern": r"</think>\s*",
+            "content": "text",
+        },
+        "tool_calls": {
+            "open_pattern": r"<tool_call>\s*<function=(?P<name>[^\n>]+)>",
+            "close_pattern": r"</tool_call>\s*",
+            "repeats": True,
+            "content": "xml-inline",
+            "content_args": {
+                "tag_pattern": r"<parameter=(?P<key>[^>\n]+)>\s*(?P<value>.*?)\s*</parameter>",
+                "value_parser": {"name": "json", "args": {"allow_non_json": True}},
+            },
+            "transform": {"type": "function", "function": {"name": "{name}", "arguments": "{content}"}},
+        },
+        "content": {
+            "close_pattern": r"<\|im_end\|>\s*",
+            "content": "text",
+        },
+    },
+}
+
+glm4moe_template = {
+    "defaults": {"role": "assistant"},
+    "start_anchor": "<|assistant|>",
+    "fields": {
+        "reasoning_content": {
+            "open": "<think>",
+            "close_pattern": r"</think>\s*",
+            "content": "text",
+        },
+        "tool_calls": {
+            "open_pattern": r"<tool_call>(?P<name>\S+)\n?",
+            "close_pattern": r"</tool_call>\s*",
+            "repeats": True,
+            "content": "xml-inline",
+            "content_args": {
+                "tag_pattern": r"<arg_key>(?P<key>[^<]+)</arg_key>\s*\n<arg_value>(?P<value>.*?)</arg_value>",
+                "value_parser": {"name": "json", "args": {"allow_non_json": True}},
+            },
+            "transform": {"type": "function", "function": {"name": "{name}", "arguments": "{content}"}},
+        },
+        "content": {
+            "close_pattern": r"<\|user\|>\s*|$",
+            "content": "text",
+        },
+    },
+}
+
+llama3_template = {
+    "defaults": {"role": "assistant"},
+    "start_anchor": "<|start_header_id|>assistant<|end_header_id|>\n\n",
+    "fields": {
+        "tool_calls": {
+            "open_pattern": r'\{"name":\s*"(?P<name>[^"]+)",\s*"parameters":\s*',
+            "close_pattern": r"\}<\|eot_id\|>\s*",
+            "repeats": True,
+            "content": "json",
+            "transform": {"type": "function", "function": {"name": "{name}", "arguments": "{content}"}},
+        },
+        "content": {
+            "close_pattern": r"<\|eot_id\|>\s*",
+            "content": "text",
+        },
+    },
+}
+
+gptoss_template = {
+    "defaults": {"role": "assistant"},
+    "start_anchor": "<|start|>assistant",
+    "fields": {
+        "thinking": {
+            "open": "<|channel|>analysis<|message|>",
+            "close_pattern": r"<\|end\|>\s*",
+            "content": "text",
+        },
+        "content": {
+            "open": "<|channel|>final<|message|>",
+            "close_pattern": r"<\|return\|>\s*",
+            "content": "text",
+        },
+        "tool_calls": {
+            "open_pattern": r"to=functions\.(?P<name>\S+?)<\|channel\|>commentary\s+json<\|message\|>",
+            "close_pattern": r"<\|call\|>\s*",
+            "repeats": True,
+            "content": "json",
+            "transform": {"type": "function", "function": {"name": "{name}", "arguments": "{content}"}},
+        },
+    },
+}
+
+# An LFM2.5 argument value is either a single-quoted string, a JSON list/mapping, or a bare literal running up to the
+# next `,` or `)`. Lists and mappings contain those very separators, so the pattern has to consume balanced brackets,
+# which a regex can only do up to a fixed nesting depth. Three levels covers realistic tool arguments; deeper values
+# truncate.
+_LFM2_2_5_ATOM = r"[^\[\]{}'\"]|'[^']*'|\"[^\"]*\""
+_LFM2_2_5_NESTED = _LFM2_2_5_ATOM
+for _ in range(3):
+    _LFM2_2_5_NESTED = rf"{_LFM2_2_5_ATOM}|[\[{{](?:{_LFM2_2_5_NESTED})*[\]}}]"
+_LFM2_2_5_ARG_VALUE = rf"'[^']*'|[\[{{](?:{_LFM2_2_5_NESTED})*[\]}}]|[^,)]*"
+
+lfm2_2_5_template = {
+    # LFM2.5 renders every tool call of a turn into a single `<|tool_call_start|>[...]<|tool_call_end|>` block, as a
+    # comma-separated list of Python-style calls: `[get_weather(city='Paris', days=3), ping()]`. The `open_pattern`
+    # therefore matches either the opening bracket or the comma separating two calls, and `close_pattern` matches the
+    # closing paren plus, for the last call, the trailing `]<|tool_call_end|>`.
+    #
+    # Argument values are rendered by the template's `format_arg_value` macro: strings single-quoted, mappings as JSON,
+    # everything else via Jinja's `string` filter. `string_delims` turns the single-quoted strings back into JSON
+    # strings so they parse. Note that this round-trip is lossy for Python literals the `string` filter emits but JSON
+    # cannot express: `flag=False` parses back as the string `"False"`, not `False`. That's inherent to the upstream
+    # template, not something we can recover here.
+    #
+    # The thinking field is named `thinking` (not `reasoning_content` as in other families) to match what the LFM2.5
+    # template itself reads back off the message.
+    "defaults": {"role": "assistant"},
+    "start_anchor": "<|im_start|>assistant\n",
+    "fields": {
+        "thinking": {
+            "open": "<think>",
+            "close_pattern": r"</think>\s*",
+            "content": "text",
+        },
+        "tool_calls": {
+            "open_pattern": r"(?:<\|tool_call_start\|>\[|,\s*)(?P<name>\w+)\(",
+            "close_pattern": r"\)(?:\]<\|tool_call_end\|>)?\s*",
+            "repeats": True,
+            "content": "xml-inline",
+            "content_args": {
+                "tag_pattern": rf"(?P<key>\w+)=(?P<value>{_LFM2_2_5_ARG_VALUE})",
+                "value_parser": {"name": "json", "args": {"string_delims": [["'", "'"]], "allow_non_json": True}},
+            },
+            "transform": {"type": "function", "function": {"name": "{name}", "arguments": "{content}"}},
+        },
+        "content": {
+            "close_pattern": r"<\|im_end\|>\s*",
+            "content": "text",
+        },
+    },
+}
+
+nemotron_3_template = {
+    # Nemotron 3 always prefills the assistant turn with the `<think>` opener (and a trailing `\n` when thinking is
+    # enabled, or `</think>` when it is not), so the start anchor consumes it. Reasoning content is therefore not framed
+    # by a `<think>` open in the model output; the zero-width `open_pattern` only activates the reasoning field when a
+    # closing `</think>` is actually present, so a turn with no reasoning is parsed entirely as content. Tool calls use
+    # the same `<function=...>` / `<parameter=...>` XML as Qwen3.5.
+    "defaults": {"role": "assistant"},
+    "start_anchor_pattern": r"<\|im_start\|>assistant\n<think>(?:\n|</think>)?",
+    "fields": {
+        "reasoning_content": {
+            "open_pattern": r"(?=[\s\S]*?</think>)",
+            "close_pattern": r"</think>\s*",
+            "content": "text",
+        },
+        "tool_calls": {
+            "open_pattern": r"<tool_call>\s*<function=(?P<name>[^\n>]+)>",
+            "close_pattern": r"</tool_call>\s*",
+            "repeats": True,
+            "content": "xml-inline",
+            "content_args": {
+                "tag_pattern": r"<parameter=(?P<key>[^>\n]+)>\s*(?P<value>.*?)\s*</parameter>",
+                "value_parser": {"name": "json", "args": {"allow_non_json": True}},
+            },
+            "transform": {"type": "function", "function": {"name": "{name}", "arguments": "{content}"}},
+        },
+        "content": {
+            "close_pattern": r"<\|im_end\|>\s*",
+            "content": "text",
+        },
+    },
+}
+
+
 cohere_chat_template = (_CHAT_TEMPLATES_DIR / "cohere.jinja").read_text(encoding="utf-8")
 
 cohere2_chat_template = (_CHAT_TEMPLATES_DIR / "cohere2.jinja").read_text(encoding="utf-8")
 
 deepseekv3_chat_template = (_CHAT_TEMPLATES_DIR / "deepseekv3.jinja").read_text(encoding="utf-8")
+
+diffusion_gemma_chat_template = (_CHAT_TEMPLATES_DIR / "diffusion_gemma.jinja").read_text(encoding="utf-8")
 
 gemma_chat_template = (_CHAT_TEMPLATES_DIR / "gemma.jinja").read_text(encoding="utf-8")
 
@@ -329,6 +544,12 @@ gemma3_chat_template = (_CHAT_TEMPLATES_DIR / "gemma3.jinja").read_text(encoding
 glm4moe_chat_template = (_CHAT_TEMPLATES_DIR / "glm4moe.jinja").read_text(encoding="utf-8")
 
 gptoss_chat_template = (_CHAT_TEMPLATES_DIR / "gptoss.jinja").read_text(encoding="utf-8")
+
+idefics3_chat_template = (_CHAT_TEMPLATES_DIR / "idefics3.jinja").read_text(encoding="utf-8")
+
+lfm2_chat_template = (_CHAT_TEMPLATES_DIR / "lfm2.jinja").read_text(encoding="utf-8")
+
+lfm2_2_5_chat_template = (_CHAT_TEMPLATES_DIR / "lfm2_2_5.jinja").read_text(encoding="utf-8")
 
 llama3_chat_template = (_CHAT_TEMPLATES_DIR / "llama3.jinja").read_text(encoding="utf-8")
 
@@ -371,22 +592,23 @@ ProcessingClassT = TypeVar("ProcessingClassT", PreTrainedTokenizerBase, Processo
 
 def add_response_schema(processing_class: ProcessingClassT) -> ProcessingClassT:
     r"""
-    Adds the appropriate response schema to the given tokenizer based on its chat template.
+    Adds the appropriate response template (or legacy schema) to the given tokenizer based on its chat template.
 
-    At the time of initial implementation, most tokenizers do not have built-in support for response schemas. While
-    waiting for broader adoption, we provide this utility function to manually set the response schema for known chat
-    templates.
+    At the time of initial implementation, most tokenizers do not have built-in support for response parsing. While
+    waiting for broader adoption, we provide this utility function to manually set it for known chat templates. On
+    transformers >= 5.13 the new-style `response_template` is set; on older versions (which only understand it) the
+    legacy `response_schema` is set instead.
 
-    When given a VLM processor, the schema is set on the inner tokenizer, since `parse_response` is a tokenizer method
-    and reads `self.response_schema` from the tokenizer instance.
+    When given a VLM processor, it is set on the inner tokenizer, since `parse_response` is a tokenizer method that
+    reads `self.response_template` / `self.response_schema` from the tokenizer instance.
 
     Args:
         processing_class (`PreTrainedTokenizerBase` or `ProcessorMixin`):
-            Tokenizer or VLM processor to which the response schema will be added.
+            Tokenizer or VLM processor to which the response template or schema will be added.
 
     Returns:
         `PreTrainedTokenizerBase` or `ProcessorMixin`:
-            The same object that was passed in, with the response schema set on the underlying tokenizer.
+            The same object that was passed in, with the response template or schema set on the underlying tokenizer.
 
     Examples:
 
@@ -401,40 +623,43 @@ def add_response_schema(processing_class: ProcessingClassT) -> ProcessingClassT:
     {'role': 'assistant', 'content': '', 'tool_calls': [{'type': 'function', 'function': {'name': 'multiply', 'arguments': {'a': 3, 'b': 4}}}]}
     ```
     """
-    # For VLM processors, set the schema on the inner tokenizer (where `parse_response` reads it from).
-    # Match against the top-level chat_template, since that's what was used historically and processors
-    # may carry their own VLM-specific template separate from the inner tokenizer's.
+    # For VLM processors, set it on the inner tokenizer (where `parse_response` reads it from). Match against the
+    # top-level chat_template, since that's what was used historically and processors may carry their own VLM-specific
+    # template separate from the inner tokenizer's.
     chat_template = processing_class.chat_template
     if isinstance(processing_class, ProcessorMixin):
         tokenizer = processing_class.tokenizer
     else:
         tokenizer = processing_class
     if chat_template == glm4moe_chat_template:
-        tokenizer.response_schema = glm4moe_schema
+        schema, template = glm4moe_schema, glm4moe_template
     elif chat_template == gptoss_chat_template:
-        tokenizer.response_schema = gptoss_schema
+        schema, template = gptoss_schema, gptoss_template
     elif chat_template in [llama3_1_chat_template, llama3_2_chat_template]:
-        tokenizer.response_schema = llama3_schema
+        schema, template = llama3_schema, llama3_template
     elif chat_template in [
         qwen2_5_chat_template,
         qwen3_chat_template,
         qwen3_instruct_2507_chat_template,
         qwen3_vl_chat_template,
     ]:
-        tokenizer.response_schema = qwen3_schema
+        schema, template = qwen3_schema, qwen3_template
     elif chat_template in [
         qwen3_5_nothink_chat_template,
         qwen3_5_think_chat_template,
         qwen3_6_chat_template,
     ]:
-        tokenizer.response_schema = qwen3_5_schema
+        schema, template = qwen3_5_schema, qwen3_5_template
     elif chat_template in [
         nemotron_3_nano_chat_template,
         nemotron_3_super_chat_template,
         nemotron_3_ultra_chat_template,
     ]:
-        # Nemotron 3 renders tool calls in the same Hermes-style <function=...>/<parameter=...> format as Qwen3.5.
-        tokenizer.response_schema = qwen3_5_schema
+        schema, template = qwen3_5_schema, nemotron_3_template
+    elif chat_template == lfm2_2_5_chat_template:
+        # Only the new-style template; the legacy schema is on its way out, so it isn't worth adding for a family whose
+        # tokenizer already requires transformers >= 5.0.0.
+        schema, template = None, lfm2_2_5_template
     else:
         raise ValueError(
             "Unrecognized chat template, failed to add response schema. Please manually set the response schema on "
@@ -442,6 +667,19 @@ def add_response_schema(processing_class: ProcessingClassT) -> ProcessingClassT:
             "[docs](https://huggingface.co/docs/transformers/main/en/chat_response_parsing#response-parsing) for more "
             "details on response parsing."
         )
+    # New-style `response_template` is preferred where supported (transformers >= 5.13); older versions only understand
+    # the legacy `response_schema`. Set exactly the one the installed transformers can use, so the presence of the
+    # attribute reflects the parser actually in play.
+    if _SUPPORTS_RESPONSE_TEMPLATE:
+        tokenizer.response_template = template
+    elif schema is None:
+        raise ValueError(
+            f"Response parsing for this chat template is only provided as a new-style `response_template`, which "
+            f"requires transformers >= 5.13 (installed: {transformers.__version__}). Please upgrade transformers, or "
+            f"manually set a legacy `response_schema` on the tokenizer or processor."
+        )
+    else:
+        tokenizer.response_schema = schema
     return processing_class
 
 
@@ -647,6 +885,10 @@ cohere2_training_chat_template = (_CHAT_TEMPLATES_DIR / "cohere2_training.jinja"
 
 deepseekv3_training_chat_template = (_CHAT_TEMPLATES_DIR / "deepseekv3_training.jinja").read_text(encoding="utf-8")
 
+diffusion_gemma_training_chat_template = (_CHAT_TEMPLATES_DIR / "diffusion_gemma_training.jinja").read_text(
+    encoding="utf-8"
+)
+
 gemma_training_chat_template = (_CHAT_TEMPLATES_DIR / "gemma_training.jinja").read_text(encoding="utf-8")
 
 gemma3_training_chat_template = (_CHAT_TEMPLATES_DIR / "gemma3_training.jinja").read_text(encoding="utf-8")
@@ -654,6 +896,10 @@ gemma3_training_chat_template = (_CHAT_TEMPLATES_DIR / "gemma3_training.jinja").
 glm4moe_training_chat_template = (_CHAT_TEMPLATES_DIR / "glm4moe_training.jinja").read_text(encoding="utf-8")
 
 gptoss_training_chat_template = (_CHAT_TEMPLATES_DIR / "gptoss_training.jinja").read_text(encoding="utf-8")
+
+idefics3_training_chat_template = (_CHAT_TEMPLATES_DIR / "idefics3_training.jinja").read_text(encoding="utf-8")
+
+lfm2_training_chat_template = (_CHAT_TEMPLATES_DIR / "lfm2_training.jinja").read_text(encoding="utf-8")
 
 llama3_training_chat_template = (_CHAT_TEMPLATES_DIR / "llama3_training.jinja").read_text(encoding="utf-8")
 
@@ -707,9 +953,9 @@ def get_training_chat_template(
 
     Returns a patched chat template that is prefix-preserving and includes `{%% generation %%}` / `{%% endgeneration
     %%}` markers for assistant-only loss masking. Returns `None` if the template already satisfies both requirements.
-    Currently Cohere, Cohere 2, DeepSeek-V3, Gemma, Gemma 2, Gemma 3, GLM-4-MoE, GPT-OSS, LLaMA 3, Phi-3, Phi-3.5,
-    Qwen2-VL, Qwen2.5, Qwen2.5-VL, Qwen3 (including the Instruct-2507 variant), Qwen3-VL, Qwen3.5, and Qwen3.6 are
-    supported.
+    Currently Cohere, Cohere 2, DeepSeek-V3, Gemma, Gemma 2, Gemma 3, GLM-4-MoE, GPT-OSS, Idefics3, LFM2, LLaMA 3,
+    Phi-3, Phi-3.5, Qwen2-VL, Qwen2.5, Qwen2.5-VL, Qwen3 (including the Instruct-2507 variant), Qwen3-VL, Qwen3.5, and
+    Qwen3.6 are supported.
 
     Args:
         processing_class (`PreTrainedTokenizerBase` or `ProcessorMixin`):
@@ -784,6 +1030,9 @@ def get_training_chat_template(
     if processing_class.chat_template == deepseekv3_chat_template:
         return deepseekv3_training_chat_template
 
+    if processing_class.chat_template == diffusion_gemma_chat_template:
+        return diffusion_gemma_training_chat_template
+
     if processing_class.chat_template == gemma_chat_template:
         return gemma_training_chat_template
 
@@ -795,6 +1044,12 @@ def get_training_chat_template(
 
     if processing_class.chat_template == gptoss_chat_template:
         return gptoss_training_chat_template
+
+    if processing_class.chat_template == idefics3_chat_template:
+        return idefics3_training_chat_template
+
+    if processing_class.chat_template == lfm2_chat_template:
+        return lfm2_training_chat_template
 
     if processing_class.chat_template == llama3_chat_template:
         return llama3_training_chat_template
@@ -885,7 +1140,7 @@ def _validate_tool_calls(tool_calls: list | None) -> None:
                 tool_call["arguments"] = {}
 
 
-def parse_response(tokenizer: PreTrainedTokenizerBase, ids: list[int]) -> dict:
+def parse_response(tokenizer: PreTrainedTokenizerBase, ids: list[int], prefix: list[int] | None = None) -> dict:
     r"""
     Parse a token sequence into structured response dictionaries with fallback handling.
 
@@ -900,6 +1155,11 @@ def parse_response(tokenizer: PreTrainedTokenizerBase, ids: list[int]) -> dict:
             Tokenizer with a `parse_response()` method.
         ids (`list[int]`):
             List of token sequences.
+        prefix (`list[int]`, *optional*):
+            Token IDs of the chat-prompt context that came before `ids` (e.g. the rendered chat template up to and
+            including the assistant header / any template-emitted thinking opener). Only used when the tokenizer has a
+            new-style `response_template` set and the installed transformers supports it (>= 5.13); ignored for legacy
+            `response_schema`.
 
     Returns:
         `dict`:
@@ -919,7 +1179,18 @@ def parse_response(tokenizer: PreTrainedTokenizerBase, ids: list[int]) -> dict:
     ```
     """
     try:
-        parsed = tokenizer.parse_response(ids)
+        # `prefix=` is only supported by the new-style parser (transformers >= 5.13, when a `response_template` is set).
+        # Older transformers only ship the legacy `response_schema` parser, whose `parse_response` rejects the kwarg, so
+        # we gate on `_SUPPORTS_RESPONSE_TEMPLATE` (matching `add_response_schema`, which only sets `response_template`
+        # on those versions) and omit `prefix=` everywhere else, including the legacy `response_schema` path.
+        if (
+            prefix is not None
+            and _SUPPORTS_RESPONSE_TEMPLATE
+            and getattr(tokenizer, "response_template", None) is not None
+        ):
+            parsed = tokenizer.parse_response(ids, prefix=prefix)
+        else:
+            parsed = tokenizer.parse_response(ids)
         if parsed is None:  # this can happen if the response is heavily truncated and even the content is lost
             raise ValueError("parse_response returned None")
         # Hotfix: remove incorrectly appended EOS token from tool calls

@@ -178,6 +178,8 @@ class VLLMGeneration:
             - "vllm" will use the vLLM model implementation.
             - "transformers" will use the Transformers model implementation.
             - "terratorch" will use the TerraTorch model implementation.
+        trust_remote_code (`bool`, *optional*, defaults to `False`):
+            Trust remote code (e.g., from HuggingFace) when downloading the model and tokenizer.
 
         > Parameters for generation:
 
@@ -240,6 +242,7 @@ class VLLMGeneration:
         max_num_seqs: int | None = None,
         enable_sleep_mode: bool = False,
         model_impl: str = "auto",
+        trust_remote_code: bool = False,
         # Generation configuration
         repetition_penalty: float = 1.0,
         temperature: float = 1.0,
@@ -273,6 +276,7 @@ class VLLMGeneration:
         self.max_num_seqs = max_num_seqs
         self.enable_sleep_mode = enable_sleep_mode
         self.model_impl = model_impl
+        self.trust_remote_code = trust_remote_code
 
         # Generation configuration
         self.repetition_penalty = repetition_penalty
@@ -306,7 +310,7 @@ class VLLMGeneration:
                 self.vllm_client = VLLMClient(
                     base_url=base_url, group_port=self.group_port, connection_timeout=self.server_timeout
                 )
-                self.vllm_client.init_communicator(device=torch.cuda.current_device())
+                self.vllm_client.init_communicator(device=accelerator.device)
 
         elif self.mode == "colocate":
             # Make sure tensor_parallel_size group size evenly divides the world size - each group should have
@@ -360,6 +364,7 @@ class VLLMGeneration:
                 # Important so temperature scaling/logit tweaking affects the TIS log probs
                 logprobs_mode="processed_logprobs",
                 quantization=quantization,
+                trust_remote_code=self.trust_remote_code,
             )
             if self.enable_sleep_mode:
                 self.llm.sleep(level=2)
@@ -379,11 +384,16 @@ class VLLMGeneration:
             name = name.replace(prefix, "")
         return name
 
+    def _push_param_to_vllm(self, name: str, param) -> None:
+        """Push a single parameter tensor to the vLLM engine (server or colocate mode)."""
+        if self.mode == "server" and self.accelerator.is_main_process:
+            self.vllm_client.update_named_param(name, param)
+        elif self.mode == "colocate":
+            self.llm.llm_engine.model_executor.driver_worker.model_runner.model.load_weights([(name, param)])
+
     def _sync_fsdp1_params_to_vllm(self, module: nn.Module, prefix: str = "", visited: set[str] | None = None):
         """Memory-efficient post-order traversal of FSDP modules to extract full parameters and sync with vLLM."""
         # For FSDP1, we need to recurse into children and also use summon_full_params
-        accelerator = self.accelerator
-
         if visited is None:
             visited = set()
         for child_name, child_module in module.named_children():
@@ -402,16 +412,10 @@ class VLLMGeneration:
                         continue  # skip FSDP subtrees already traversed
                     visited.add(full_name)
 
-                    if self.mode == "server" and accelerator.is_main_process:
-                        self.vllm_client.update_named_param(full_name, param.data)
-                    elif self.mode == "colocate":
-                        llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
-                        llm_model.load_weights([(full_name, param.data)])
+                    self._push_param_to_vllm(full_name, param.data)
 
     def _sync_fsdp2_params_to_vllm(self, module: nn.Module):
         """FSDP2-specific parameter synchronization."""
-        accelerator = self.accelerator
-
         # For FSDP2, module.state_dict() already covers all parameters, so no need for recursion
         for name, param in module.state_dict().items():
             # When using PEFT, we need to recover the original parameter name
@@ -428,11 +432,7 @@ class VLLMGeneration:
                 param = param.to(torch.device("cuda"))
             param = param.full_tensor()
 
-            if self.mode == "server" and accelerator.is_main_process:
-                self.vllm_client.update_named_param(name, param)
-            elif self.mode == "colocate":
-                llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
-                llm_model.load_weights([(name, param)])
+            self._push_param_to_vllm(name, param)
 
     def _sync_fsdp_params_to_vllm(self, model: nn.Module):
         """Dispatch FSDP weight sync to the version-appropriate method."""
@@ -480,11 +480,7 @@ class VLLMGeneration:
                             continue
                         name = self._fix_param_name_to_vllm(name, extra_prefixes=["modules_to_save.default."])
 
-                        if self.mode == "server" and accelerator.is_main_process:
-                            self.vllm_client.update_named_param(name, param.data)
-                        elif self.mode == "colocate":
-                            llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
-                            llm_model.load_weights([(name, param.data)])
+                        self._push_param_to_vllm(name, param.data)
                 # Unmerge adapters while parameters are still gathered
                 model.unmerge_adapter()
                 # Parameters will automatically be repartitioned when exiting the context
@@ -496,11 +492,7 @@ class VLLMGeneration:
                 for name, param in model.named_parameters():
                     name = self._fix_param_name_to_vllm(name)
                     with self._dist.gather_params([param]):
-                        if self.mode == "server" and accelerator.is_main_process:
-                            self.vllm_client.update_named_param(name, param.data)
-                        elif self.mode == "colocate":
-                            llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
-                            llm_model.load_weights([(name, param.data)])
+                        self._push_param_to_vllm(name, param.data)
 
         # Reset cache on vLLM
         if self.mode == "server" and accelerator.is_main_process:
@@ -673,6 +665,16 @@ class VLLMGeneration:
                     vllm_prompts.append(row)
             else:
                 vllm_prompts = [{"prompt_token_ids": ids} for ids in all_prompts]
+
+            # When PEFT is used, DDP gradient all-reduce only covers the small LoRA parameters, so
+            # NCCL operations complete very quickly. On non-NVLink hardware (e.g. A40/A100), vLLM's
+            # TP NCCL collective can race with NCCL's internal P2P/SHM channel cleanup from that
+            # all-reduce, causing llm.generate() to hang. A barrier on the default process group
+            # forces NCCL to fully drain before vLLM's TP communication starts. We pass device_ids
+            # so NCCL uses this rank's device rather than guessing, which itself risks a hang.
+            # See https://github.com/huggingface/trl/issues/3671
+            if is_peft_model(self.model) and self.tensor_parallel_size > 1:
+                torch.distributed.barrier(device_ids=[accelerator.local_process_index])
 
             with profiler:
                 all_outputs = self.llm.generate(vllm_prompts, sampling_params=sampling_params, use_tqdm=False)

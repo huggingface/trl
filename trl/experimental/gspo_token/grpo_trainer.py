@@ -26,9 +26,10 @@ class GRPOTrainer(_GRPOTrainer):
         input_ids = torch.cat([prompt_ids, completion_ids], dim=1)
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
         logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
+        mask = completion_mask if "tool_mask" not in inputs else completion_mask * inputs["tool_mask"]
 
         # Compute the per_token_logps and the entropy at each position in the completion
-        per_token_logps, entropies = self._get_per_token_logps_and_entropies(
+        per_token_logps, entropies, _ = self._get_per_token_logps_and_entropies(
             model,
             input_ids,
             attention_mask,
@@ -43,7 +44,7 @@ class GRPOTrainer(_GRPOTrainer):
         )
 
         if self.top_entropy_quantile < 1.0:
-            entropy_mask = self.get_high_entropy_mask(entropies, completion_mask, 1 - self.top_entropy_quantile)
+            entropy_mask = self.get_high_entropy_mask(entropies, mask, 1 - self.top_entropy_quantile)
         else:
             entropy_mask = None
 
@@ -56,6 +57,10 @@ class GRPOTrainer(_GRPOTrainer):
 
         # Compute the loss
         advantages = inputs["advantages"]
+        # In the base GRPO implementation, advantages are expected to have shape (B,). To support subclasses that
+        # provide advantages with shape (B, T) (e.g., MiniLLM), we *conditionally* unsqueeze the tensor.
+        if advantages.dim() == 1:
+            advantages = advantages.unsqueeze(1)
         # When num_iterations == 1 and steps_per_generation <= gradient_accumulation_steps,
         # old_per_token_logps == per_token_logps. In this case we can skip its computation
         # (see _generate_and_score_completions) and instead use per_token_logps.detach().
@@ -68,11 +73,11 @@ class GRPOTrainer(_GRPOTrainer):
         if self.importance_sampling_level == "token":
             log_importance_weights = log_ratio
         elif self.importance_sampling_level == "sequence":
-            log_importance_weights = (log_ratio * completion_mask).sum(-1) / completion_mask.sum(-1).clamp(min=1.0)
+            log_importance_weights = (log_ratio * mask).sum(-1) / mask.sum(-1).clamp(min=1.0)
             log_importance_weights = log_importance_weights.unsqueeze(-1)
         elif self.importance_sampling_level == "sequence_token":
             # GSPO-token: sg[si(θ)] * πθ(yi,t)/sg[πθ(yi,t)]
-            seq_level_log_weight = (log_ratio * completion_mask).sum(-1) / completion_mask.sum(-1).clamp(min=1.0)
+            seq_level_log_weight = (log_ratio * mask).sum(-1) / mask.sum(-1).clamp(min=1.0)
             seq_level_log_weight = seq_level_log_weight.detach().unsqueeze(-1)  # Stop gradient
             log_importance_weights = per_token_logps - per_token_logps.detach() + seq_level_log_weight
         else:
@@ -90,8 +95,8 @@ class GRPOTrainer(_GRPOTrainer):
         if self.args.delta is not None:
             coef_1 = torch.clamp(coef_1, max=self.args.delta)
 
-        per_token_loss1 = coef_1 * advantages.unsqueeze(1)
-        per_token_loss2 = coef_2 * advantages.unsqueeze(1)
+        per_token_loss1 = coef_1 * advantages
+        per_token_loss2 = coef_2 * advantages
         per_token_loss = -torch.min(per_token_loss1, per_token_loss2)
         if entropy_mask is not None:
             per_token_loss = per_token_loss * entropy_mask
@@ -104,54 +109,51 @@ class GRPOTrainer(_GRPOTrainer):
 
         mode = "train" if self.model.training else "eval"
         if self.loss_type == "grpo":
-            loss = ((per_token_loss * completion_mask).sum(-1) / completion_mask.sum(-1).clamp(min=1.0)).mean()
+            loss = ((per_token_loss * mask).sum(-1) / mask.sum(-1).clamp(min=1.0)).mean()
             normalizer = self.current_gradient_accumulation_steps if mode == "train" else 1.0  # no accum in eval
             loss = loss / normalizer
         elif self.loss_type == "bnpo":
-            loss = (per_token_loss * completion_mask).sum() / completion_mask.sum().clamp(min=1.0)
+            loss = (per_token_loss * mask).sum() / mask.sum().clamp(min=1.0)
             normalizer = self.current_gradient_accumulation_steps if mode == "train" else 1.0  # no accum in eval
             loss = loss / normalizer
         elif self.loss_type == "dr_grpo":
-            loss = (per_token_loss * completion_mask).sum() / (per_token_loss.size(0) * self.max_completion_length)
+            loss = (per_token_loss * mask).sum() / (per_token_loss.size(0) * self.max_completion_length)
             normalizer = self.current_gradient_accumulation_steps if mode == "train" else 1.0  # no accum in eval
             loss = loss / normalizer
         elif self.loss_type == "dapo":
-            normalizer = inputs["num_items_in_batch"] / self.accelerator.num_processes
-            loss = (per_token_loss * completion_mask).sum() / normalizer
+            normalizer = inputs["num_items_in_batch"].clamp(min=1.0) / self.accelerator.num_processes
+            loss = (per_token_loss * mask).sum() / normalizer
         else:
             raise ValueError(f"Unknown loss type: {self.loss_type}")
 
         # Log the metrics
-        completion_token_count = completion_mask.sum().clamp(min=1.0)
+        def masked_seq_mean(x):
+            if x.shape[1] == 1:  # when importance_sampling_level == "sequence": already one value per sequence
+                return x.squeeze(1)
+            return (x * mask).sum(-1) / mask.sum(-1)
 
-        def masked_batch_mean(x):
-            if x.shape[1] == 1:  # when importance_sampling_level == "sequence"
-                return x.mean()
+        def global_masked_mean(x):
+            if x.shape[1] == 1:  # when importance_sampling_level == "sequence": one value per sequence
+                local_sum, local_count = x.sum(), torch.tensor(float(x.shape[0]), device=x.device)
             else:
-                return (x * completion_mask).sum() / completion_token_count
+                local_sum, local_count = (x * mask).sum(), mask.sum().float()
+            totals = self.accelerator.reduce(torch.stack([local_sum, local_count]), reduction="sum")
+            return (totals[0] / totals[1].clamp(min=1.0)).item()
 
         if self.beta != 0.0:
-            mean_kl = masked_batch_mean(per_token_kl)
-            self._metrics[mode]["kl"].append(self.accelerator.gather(mean_kl).nanmean().item())
+            self._metrics[mode]["kl"].append(global_masked_mean(per_token_kl))
 
-        mean_entropy = masked_batch_mean(entropies)
-        self._metrics[mode]["entropy"].append(self.accelerator.gather(mean_entropy).nanmean().item())
+        self._metrics[mode]["entropy"].append(global_masked_mean(entropies))
 
         # Compute the clipped probability ratios
-        is_low_clipped = (coef_1 < 1 - self.epsilon_low) & (advantages.unsqueeze(1) < 0)
-        is_high_clipped = (coef_1 > 1 + self.epsilon_high) & (advantages.unsqueeze(1) > 0)
+        is_low_clipped = (coef_1 < 1 - self.epsilon_low) & (advantages < 0)
+        is_high_clipped = (coef_1 > 1 + self.epsilon_high) & (advantages > 0)
         is_region_clipped = is_low_clipped | is_high_clipped
-
-        low_clip = masked_batch_mean(is_low_clipped.float())
-        high_clip = masked_batch_mean(is_high_clipped.float())
-        clip_ratio = masked_batch_mean(is_region_clipped.float())
-
-        gathered_low_clip = self.accelerator.gather(low_clip)
-        self._metrics[mode]["clip_ratio/low_mean"].append(gathered_low_clip.nanmean().item())
+        self._metrics[mode]["clip_ratio/low_mean"].append(global_masked_mean(is_low_clipped.float()))
+        self._metrics[mode]["clip_ratio/high_mean"].append(global_masked_mean(is_high_clipped.float()))
+        self._metrics[mode]["clip_ratio/region_mean"].append(global_masked_mean(is_region_clipped.float()))
+        gathered_low_clip = self.accelerator.gather(masked_seq_mean(is_low_clipped.float()))
         self._metrics[mode]["clip_ratio/low_min"].append(nanmin(gathered_low_clip).item())
-        gathered_high_clip = self.accelerator.gather(high_clip)
-        self._metrics[mode]["clip_ratio/high_mean"].append(gathered_high_clip.nanmean().item())
+        gathered_high_clip = self.accelerator.gather(masked_seq_mean(is_high_clipped.float()))
         self._metrics[mode]["clip_ratio/high_max"].append(nanmax(gathered_high_clip).item())
-        gathered_clip_ratio = self.accelerator.gather(clip_ratio)
-        self._metrics[mode]["clip_ratio/region_mean"].append(gathered_clip_ratio.nanmean().item())
         return loss
