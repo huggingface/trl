@@ -217,6 +217,12 @@ class ScriptArguments:
         speculative_config (`str`, *optional*):
             JSON string for vLLM speculative decoding config, forwarded to `LLM(speculative_config=...)`. When unset,
             speculative decoding is disabled. Example: `'{"method": "qwen3_next_mtp", "num_speculative_tokens": 5}'`.
+        mm_processor_cache_gb (`float`, *optional*):
+            Size of vLLM's multimodal processor cache in GiB. When unset, vLLM keeps its own default.
+        disable_chunked_mm_input (`bool`, *optional*, defaults to `False`):
+            Whether to disable vLLM chunking for multimodal inputs.
+        max_num_seqs (`int`, *optional*):
+            Maximum number of sequences scheduled by vLLM. When unset, vLLM keeps its own default.
     """
 
     model: str = field(
@@ -327,6 +333,18 @@ class ScriptArguments:
             'Example: \'{"method": "qwen3_next_mtp", "num_speculative_tokens": 5}\''
         },
     )
+    mm_processor_cache_gb: float | None = field(
+        default=None,
+        metadata={"help": "Size of vLLM's multimodal processor cache in GiB."},
+    )
+    disable_chunked_mm_input: bool = field(
+        default=False,
+        metadata={"help": "Disable vLLM chunking for multimodal inputs."},
+    )
+    max_num_seqs: int | None = field(
+        default=None,
+        metadata={"help": "Maximum number of sequences scheduled by vLLM."},
+    )
 
 
 def llm_worker(
@@ -339,6 +357,14 @@ def llm_worker(
     os.environ["VLLM_DP_RANK_LOCAL"] = str(data_parallel_rank)
     os.environ["VLLM_DP_SIZE"] = str(script_args.data_parallel_size)
     os.environ["VLLM_DP_MASTER_PORT"] = str(master_port)
+
+    extra_llm_kwargs = {}
+    if script_args.mm_processor_cache_gb is not None:
+        extra_llm_kwargs["mm_processor_cache_gb"] = script_args.mm_processor_cache_gb
+    if script_args.disable_chunked_mm_input:
+        extra_llm_kwargs["disable_chunked_mm_input"] = True
+    if script_args.max_num_seqs is not None:
+        extra_llm_kwargs["max_num_seqs"] = script_args.max_num_seqs
 
     llm = LLM(
         model=script_args.model,
@@ -360,6 +386,7 @@ def llm_worker(
         # Important so temperature scaling/logit tweaking affects the TIS log probs
         logprobs_mode="processed_logprobs",
         speculative_config=json.loads(script_args.speculative_config) if script_args.speculative_config else None,
+        **extra_llm_kwargs,
     )
 
     # Send ready signal to parent process
