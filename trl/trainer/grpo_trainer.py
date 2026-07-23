@@ -3137,7 +3137,15 @@ class GRPOTrainer(_BaseTrainer):
             policy_loss = loss.detach()
             loss = loss / normalizer
         elif self.loss_type in ["cispo", "dapo", "vespo"]:
+            # `num_items_in_batch` counts the completion tokens of the full generation batch, which spans
+            # `steps_per_generation` micro-steps, while gradients are only accumulated over
+            # `gradient_accumulation_steps` micro-steps. When the two differ, normalizing every micro-step by the
+            # generation-batch token count scales the accumulated loss by
+            # gradient_accumulation_steps / steps_per_generation. Rescale the normalizer to the token count
+            # expected in one accumulation window. See https://github.com/huggingface/trl/issues/5619.
             normalizer = inputs["num_items_in_batch"].clamp(min=1.0) / self.accelerator.num_processes
+            if mode == "train":  # in eval, the batch is neither split across steps nor accumulated
+                normalizer = normalizer * self.current_gradient_accumulation_steps / self.args.steps_per_generation
             loss = (per_token_loss * mask).sum() / normalizer
             policy_loss = loss.detach()
         elif self.loss_type == "luspo":
