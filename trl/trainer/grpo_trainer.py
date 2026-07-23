@@ -2893,6 +2893,7 @@ class GRPOTrainer(_BaseTrainer):
                 old_per_token_logps=inputs.get("old_per_token_logps"),
                 ref_per_token_logps=inputs.get("ref_per_token_logps"),
                 vllm_is_ratio=inputs.get("importance_sampling_ratio"),
+                num_items_in_batch=inputs.get("num_items_in_batch"),
             )
         # Extract metrics from the liger_grpo_loss output
         # KL divergence is the first metric when beta is non-zero
@@ -2903,7 +2904,16 @@ class GRPOTrainer(_BaseTrainer):
         if self.beta != 0.0:
             self._metrics[mode]["kl"].append(self.accelerator.gather(mean_kl).mean().item())
         self._metrics[mode]["clip_ratio"].append(self.accelerator.gather(clip_ratio).mean().item())
-        normalizer = self.current_gradient_accumulation_steps if mode == "train" else 1.0  # no accum in eval
+        # DAPO/CISPO/VESPO normalize by num_items_in_batch / num_processes (applied internally by
+        # the Liger loss), then need a `current_gradient_accumulation_steps / steps_per_generation`
+        # rescale to land on the per-window token-mean — matching the non-Liger path
+        # (see `_compute_loss`).
+        if self.loss_type in ["cispo", "dapo", "vespo"]:
+            normalizer = (
+                self.current_gradient_accumulation_steps / self.args.steps_per_generation if mode == "train" else 1.0
+            )
+        else:
+            normalizer = self.current_gradient_accumulation_steps if mode == "train" else 1.0  # no accum in eval
         return loss / normalizer
 
     @profiling_decorator

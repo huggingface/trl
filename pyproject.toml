@@ -57,7 +57,7 @@ kernels = [  # transformers renamed the "hub-kernels" extra to "kernels" in 5.1.
     "transformers[hub-kernels]",  # transformers < 5.1.0
 ]
 liger = [
-    "liger-kernel>=0.8.0,<0.8.1"  # temporary hotfix for #6516
+    "liger-kernel>=0.8.1"
 ]
 peft = [
     "peft>=0.8.0"
@@ -111,7 +111,7 @@ dev = [
     "transformers[kernels]",  # transformers >= 5.1.0
     "transformers[hub-kernels]",  # transformers < 5.1.0
     # liger
-    "liger-kernel>=0.8.0,<0.8.1",  # temporary hotfix for #6516
+    "liger-kernel>=0.8.1",
     # openreward (requires Python 3.11+)
     "openreward>=0.1.109; python_version >= '3.11'",
     # peft
@@ -209,7 +209,7 @@ filterwarnings = [
     # Liger's SAPO branch assigns per-token loss with boolean-mask indexing, which graph-breaks under
     # torch.compile and is traced by AOTAutograd under anomaly mode
     # Tracking issue: https://github.com/huggingface/trl/issues/6435
-    # Upstream fix (merged, unreleased as of liger-kernel 0.8.0): https://github.com/linkedin/Liger-Kernel/pull/1274
+    # Upstream fix (released in liger-kernel 0.8.1): https://github.com/linkedin/Liger-Kernel/pull/1274
     "ignore:Error detected in IndexPutBackward0:UserWarning",
 
     # bitsandbytes calls the deprecated torch._check_is_size in its CUDA quant ops (upstream, not actionable in TRL)
