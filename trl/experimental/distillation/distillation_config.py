@@ -67,11 +67,10 @@ class DistillationConfig(_BaseConfig):
             from a string.
         > Parameters that control on-policy generation
 
-        num_generations (`int`, *optional*, defaults to `1`):
-            Number of completions to generate per prompt during on-policy generation.
         generation_batch_size (`int` or `None`, *optional*):
-            Number of unique prompts per worker per optimizer step. If `None`, computed from
-            `(per_device_train_batch_size * gradient_accumulation_steps) // num_generations`.
+            Batch size to use for generation. If `None`, it defaults to the effective training batch size:
+            `per_device_train_batch_size * num_processes * gradient_accumulation_steps`. In other words, there is one
+            generation batch processed per optimization step.
         top_p (`float`, *optional*, defaults to `1.0`):
             Top-p (nucleus) sampling parameter for on-policy generation.
         top_k (`int`, *optional*, defaults to `0`):
@@ -209,15 +208,11 @@ class DistillationConfig(_BaseConfig):
     )
 
     # On-policy generation
-    num_generations: int = field(
-        default=1,
-        metadata={"help": "Number of completions to generate per prompt during on-policy generation."},
-    )
     generation_batch_size: int | None = field(
         default=None,
         metadata={
-            "help": "Number of unique prompts per worker per optimizer step. "
-            "If None, computed from (per_device_train_batch_size * gradient_accumulation_steps) // num_generations."
+            "help": "Batch size to use for generation. If None, it defaults to the effective training batch size: "
+            "per_device_train_batch_size * num_processes * gradient_accumulation_steps."
         },
     )
     top_p: float = field(
@@ -365,17 +360,13 @@ class DistillationConfig(_BaseConfig):
         if self.beta < 0.0 or self.beta > 1.0:
             raise ValueError(f"beta must be in [0.0, 1.0], got {self.beta}.")
 
-        if self.num_generations < 1:
-            raise ValueError(f"num_generations must be at least 1, got {self.num_generations}.")
-
-        local_sequence_batch_size = self.per_device_train_batch_size * self.gradient_accumulation_steps
+        num_processes = self.world_size
         if self.generation_batch_size is None:
-            self.generation_batch_size = local_sequence_batch_size // self.num_generations
-        if self.generation_batch_size < 1:
-            raise ValueError(f"generation_batch_size must be at least 1, got {self.generation_batch_size}.")
-        if self.generation_batch_size * self.num_generations != local_sequence_batch_size:
+            self.generation_batch_size = (
+                self.per_device_train_batch_size * num_processes * self.gradient_accumulation_steps
+            )
+        elif self.generation_batch_size % (self.per_device_train_batch_size * num_processes) != 0:
             raise ValueError(
-                "generation_batch_size * num_generations must equal per_device_train_batch_size * "
-                f"gradient_accumulation_steps. Got {self.generation_batch_size} * {self.num_generations} != "
-                f"{self.per_device_train_batch_size} * {self.gradient_accumulation_steps}."
+                f"generation_batch_size ({self.generation_batch_size}) must be divisible by the global batch size "
+                f"({self.per_device_train_batch_size * num_processes})."
             )
