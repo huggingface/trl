@@ -819,10 +819,11 @@ class DistillationTrainer(_BaseTrainer):
         num_items_in_batch = self.accelerator.gather(completion_mask.sum()).sum()
 
         # Log the prompt and completion texts
-        prompts_text = self.processing_class.batch_decode(prompt_ids, skip_special_tokens=True)
-        completions_text = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
-        self._textual_logs["prompt"].extend(gather_object(prompts_text))
-        self._textual_logs["completion"].extend(gather_object(completions_text))
+        if self.log_completions:
+            prompts_text = self.processing_class.batch_decode(prompt_ids, skip_special_tokens=True)
+            completions_text = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
+            self._textual_logs["prompt"].extend(gather_object(prompts_text))
+            self._textual_logs["completion"].extend(gather_object(completions_text))
 
         output = {
             "prompt_ids": prompt_ids,
