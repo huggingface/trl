@@ -617,7 +617,7 @@ TRL does not sample each turn here. The agent runs to completion on its own, and
 2. When the agent stops, TRL reads the proxy trace, rebuilds the per-turn training rows from the recorded ids, and scores the final workspace with the session's `verify()` method (a held-out verifier).
 3. GRPO trains on those rows. The reward is propagated to every trained token through the group-relative advantage.
 
-Each rollout runs in its own isolated session. In the example that means one sandbox directory, one proxy on its own port, and one agent process per rollout. The isolation matters for two reasons: the proxy has to capture exactly that rollout's tokens, and one rollout must not interfere with another. The `max_inflight` setting controls how many rollouts run at the same time.
+Each rollout runs in its own isolated session. In the example that means one sandbox directory, one proxy on its own port, and one agent process per rollout. The isolation matters for two reasons: the proxy has to capture exactly that rollout's tokens, and one rollout must not interfere with another. The `max_inflight_tasks` setting controls how many rollouts run at the same time.
 
 ### Wiring
 
