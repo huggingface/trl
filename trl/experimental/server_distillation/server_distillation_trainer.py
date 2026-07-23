@@ -284,21 +284,22 @@ class ServerDistillationTrainer(DistillationTrainer):
             return jsd
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
-        # Reconstruct the `input_ids` / `attention_mask` / `labels` layout this server path is built on from GRPO's
-        # `prompt_ids` / `completion_ids` / `completion_mask` keys, so it rides on the base's (evolving) generation. The
-        # teacher-server loss is migrated onto the stable base wholesale later (issue #6449, item 58).
-        input_ids = torch.cat([inputs["prompt_ids"], inputs["completion_ids"]], dim=1)
-        attention_mask = torch.cat([inputs["prompt_mask"], inputs["completion_mask"]], dim=1)
-        completion_labels = torch.where(
-            inputs["completion_mask"].bool(), inputs["completion_ids"], torch.full_like(inputs["completion_ids"], -100)
-        )
-        labels = torch.cat([torch.full_like(inputs["prompt_ids"], -100), completion_labels], dim=1)
+        # Reconstruct the old `input_ids` / `attention_mask` / `labels` layout this server path is built on from GRPO's
+        # keys, so it rides on the base's (evolving) generation. The teacher-server loss is migrated onto the stable
+        # base wholesale later (issue #6449, item 58). The first four lines mirror `DistillationTrainer.compute_loss`.
+        prompt_ids, prompt_mask = inputs["prompt_ids"], inputs["prompt_mask"]
+        completion_ids, completion_mask = inputs["completion_ids"], inputs["completion_mask"]
+        input_ids = torch.cat([prompt_ids, completion_ids], dim=1)
+        attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
+        # Server-only: the teacher-server loss masks on `labels`/`prompt_attention_mask`, so rebuild them too.
+        completion_labels = torch.where(completion_mask.bool(), completion_ids, torch.full_like(completion_ids, -100))
+        labels = torch.cat([torch.full_like(prompt_ids, -100), completion_labels], dim=1)
         inputs = {
             **inputs,
             "input_ids": input_ids,
             "attention_mask": attention_mask,
             "labels": labels,
-            "prompt_attention_mask": inputs["prompt_mask"],
+            "prompt_attention_mask": prompt_mask,
         }
 
         # Student forward pass
