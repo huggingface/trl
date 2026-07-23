@@ -34,7 +34,12 @@ generation_config = GenerationConfig.from_pretrained(MODEL_ID)
 config = DeepseekV3Config(
     vocab_size=len(tokenizer.vocab),
     hidden_size=8,
-    num_attention_heads=4,
+    # DeepSeek-V3 uses MLA, not GQA: kv_b_proj always reconstructs K/V with the full
+    # num_attention_heads, so num_key_value_heads must equal num_attention_heads (i.e.
+    # num_key_value_groups == 1). A mismatch (e.g. 4/2) is silently ignored by the KV
+    # projection but makes SDPA repeat_kv the already-full K/V heads, crashing with a
+    # head-count mismatch (see transformers#46960).
+    num_attention_heads=2,
     num_key_value_heads=2,
     num_hidden_layers=2,
     intermediate_size=32,

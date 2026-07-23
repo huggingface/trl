@@ -68,7 +68,6 @@ from trl import (
     SFTConfig,
     SFTTrainer,
     TrlParser,
-    get_kbit_device_map,
     get_peft_config,
     get_quantization_config,
 )
@@ -152,7 +151,6 @@ def main():
     quantization_config = get_quantization_config(model_args)
     if quantization_config is not None:
         # Passing None would not be treated the same as omitting the argument, so we include it only when valid.
-        model_kwargs["device_map"] = get_kbit_device_map()
         model_kwargs["quantization_config"] = quantization_config
 
     model = AutoModelForImageTextToText.from_pretrained(model_args.model_name_or_path, **model_kwargs)

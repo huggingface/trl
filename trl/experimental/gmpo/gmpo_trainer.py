@@ -121,32 +121,35 @@ class GMPOTrainer(GRPOTrainer):
         normalizer = self.current_gradient_accumulation_steps if mode == "train" else 1.0  # no accum in eval
         loss = loss / normalizer
 
-        # logging
-        completion_token_count = mask.sum().clamp(min=1.0)
+        # Log the metrics
+        def masked_seq_mean(x):
+            if x.shape[1] == 1:  # when importance_sampling_level == "sequence": already one value per sequence
+                return x.squeeze(1)
+            return (x * mask).sum(-1) / mask.sum(-1)
+
+        def global_masked_mean(x):
+            if x.shape[1] == 1:  # when importance_sampling_level == "sequence": one value per sequence
+                local_sum, local_count = x.sum(), torch.tensor(float(x.shape[0]), device=x.device)
+            else:
+                local_sum, local_count = (x * mask).sum(), mask.sum().float()
+            totals = self.accelerator.reduce(torch.stack([local_sum, local_count]), reduction="sum")
+            return (totals[0] / totals[1].clamp(min=1.0)).item()
 
         if self.beta != 0.0:
-            mean_kl = (per_token_kl * mask).sum() / completion_token_count
-            self._metrics[mode]["kl"].append(self.accelerator.gather(mean_kl).nanmean().item())
+            self._metrics[mode]["kl"].append(global_masked_mean(per_token_kl))
 
-        mean_entropy = (entropies * mask).sum() / completion_token_count
-        self._metrics[mode]["entropy"].append(self.accelerator.gather(mean_entropy).nanmean().item())
+        self._metrics[mode]["entropy"].append(global_masked_mean(entropies))
 
         # Fraction of the tokens pushed into the clipped region, in log-space.
-        is_high_clipped = (log_ratio > self.epsilon_high) & (advantages_col > 0)
         is_low_clipped = (log_ratio < -self.epsilon_low) & (advantages_col < 0)
-        is_region_clipped = is_high_clipped | is_low_clipped
-
-        low_clip = (is_low_clipped.float() * mask).sum() / completion_token_count
-        high_clip = (is_high_clipped.float() * mask).sum() / completion_token_count
-        clip_ratio = (is_region_clipped.float() * mask).sum() / completion_token_count
-
-        gathered_low_clip = self.accelerator.gather(low_clip)
-        self._metrics[mode]["clip_ratio/low_mean"].append(gathered_low_clip.nanmean().item())
+        is_high_clipped = (log_ratio > self.epsilon_high) & (advantages_col > 0)
+        is_region_clipped = is_low_clipped | is_high_clipped
+        self._metrics[mode]["clip_ratio/low_mean"].append(global_masked_mean(is_low_clipped.float()))
+        self._metrics[mode]["clip_ratio/high_mean"].append(global_masked_mean(is_high_clipped.float()))
+        self._metrics[mode]["clip_ratio/region_mean"].append(global_masked_mean(is_region_clipped.float()))
+        gathered_low_clip = self.accelerator.gather(masked_seq_mean(is_low_clipped.float()))
         self._metrics[mode]["clip_ratio/low_min"].append(nanmin(gathered_low_clip).item())
-        gathered_high_clip = self.accelerator.gather(high_clip)
-        self._metrics[mode]["clip_ratio/high_mean"].append(gathered_high_clip.nanmean().item())
+        gathered_high_clip = self.accelerator.gather(masked_seq_mean(is_high_clipped.float()))
         self._metrics[mode]["clip_ratio/high_max"].append(nanmax(gathered_high_clip).item())
-        gathered_clip_ratio = self.accelerator.gather(clip_ratio)
-        self._metrics[mode]["clip_ratio/region_mean"].append(gathered_clip_ratio.nanmean().item())
 
         return loss

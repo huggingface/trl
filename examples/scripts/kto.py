@@ -60,8 +60,7 @@ python trl/scripts/kto.py \
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser
 
-from trl import ModelConfig, ScriptArguments, get_peft_config
-from trl.experimental.kto import KTOConfig, KTOTrainer
+from trl import KTOConfig, KTOTrainer, ModelConfig, ScriptArguments, get_peft_config
 
 
 if __name__ == "__main__":

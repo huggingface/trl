@@ -108,7 +108,7 @@ Setting `tpo_alpha=0.0` disables the NLL term entirely (the reference response i
 
 ## Logged metrics
 
-While training and evaluating we record the following metrics:
+While training and evaluating, we record the following metrics:
 
 * `loss`: The total TPO loss (contrastive + `tpo_alpha` × NLL) averaged over the current logging interval.
 * `entropy`: The average entropy of the model's predicted token distribution over completion tokens.

@@ -17,7 +17,7 @@ from functools import partial
 import pytest
 import torch
 from accelerate import Accelerator
-from datasets import load_dataset
+from datasets import DatasetDict, load_dataset
 from transformers import AutoModel, AutoModelForCausalLM, AutoTokenizer
 from transformers.utils import is_peft_available
 
@@ -101,6 +101,78 @@ class TestBCOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             if param.sum() != 0:  # ignore 0 biases
                 assert not torch.equal(param.cpu(), new_param.cpu())
+
+    @pytest.mark.parametrize(
+        "eval_dataset_type",
+        [
+            "dataset",
+            "dataset_dict",
+            "none",
+        ],
+    )
+    @require_sklearn
+    def test_init_with_eval_dataset(self, eval_dataset_type):
+        # BCO tokenizes the eval dataset at init by calling `.map()` directly on it, so streaming (iterable) and
+        # plain dict-of-datasets eval datasets are not yet supported; only `Dataset` and `DatasetDict` are tested.
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
+        ref_model = AutoModelForCausalLM.from_pretrained(model_id)
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+
+        train_dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
+
+        if eval_dataset_type == "none":
+            eval_dataset = None
+        else:
+            eval_split = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="test")
+            if eval_dataset_type == "dataset":
+                eval_dataset = eval_split
+            else:  # "dataset_dict"
+                eval_dataset = DatasetDict({"data1": eval_split, "data2": eval_split})
+
+        training_args = BCOConfig(output_dir=self.tmp_dir, remove_unused_columns=False, report_to="none")
+        trainer = BCOTrainer(
+            model=model,
+            ref_model=ref_model,
+            args=training_args,
+            processing_class=tokenizer,
+            train_dataset=train_dataset,
+            eval_dataset=eval_dataset,
+        )
+
+        if eval_dataset_type == "none":
+            assert trainer.eval_dataset is None
+        elif isinstance(trainer.eval_dataset, dict):
+            assert set(trainer.eval_dataset.keys()) == {"data1", "data2"}
+            # Each split was tokenized independently.
+            assert "prompt_input_ids" in next(iter(trainer.eval_dataset["data1"]))
+            assert "prompt_input_ids" in next(iter(trainer.eval_dataset["data2"]))
+        else:
+            assert "prompt_input_ids" in next(iter(trainer.eval_dataset))
+
+    @require_sklearn
+    def test_train_processing_class_autoloaded(self):
+        # processing_class is documented as optional: when omitted it should be
+        # auto-loaded from the model, consistent with DPOTrainer / RewardTrainer.
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
+        ref_model = AutoModelForCausalLM.from_pretrained(model_id)
+        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
+        training_args = BCOConfig(
+            output_dir=self.tmp_dir,
+            remove_unused_columns=False,
+            learning_rate=0.1,
+            report_to="none",
+        )
+        trainer = BCOTrainer(
+            model=model,
+            ref_model=ref_model,
+            args=training_args,
+            train_dataset=dataset,
+        )
+        assert trainer.processing_class is not None
+        trainer.train()
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
     @require_sklearn
     def test_train_with_precompute(self):

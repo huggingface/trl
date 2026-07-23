@@ -18,6 +18,7 @@ from transformers import AutoModelForCausalLM
 from transformers.testing_utils import torch_device
 from transformers.utils import is_peft_available
 
+from trl.models import activation_offloading as activation_offloading_module
 from trl.models.activation_offloading import NoOpManager, OffloadActivations
 
 from .testing_utils import TrlTestCase, require_peft, require_torch_accelerator
@@ -193,6 +194,53 @@ class TestActivationOffloading(TrlTestCase):
             f"Deduplication should result in fewer storages ({unique_storages_offloaded}) "
             f"than total tensors ({total_tensor_ids})"
         )
+
+        loss.backward()
+
+    @require_torch_accelerator
+    def test_reused_storage_key_after_stash_reap_is_not_deduplicated(self):
+        """A reused allocator address should not be treated as a live view."""
+
+        class SaveTensor(torch.autograd.Function):
+            @staticmethod
+            def forward(ctx, tensor):
+                ctx.save_for_backward(tensor)
+                return tensor.sum()
+
+            @staticmethod
+            def backward(ctx, grad_output):
+                (tensor,) = ctx.saved_tensors
+                return torch.ones_like(tensor) * grad_output
+
+        first = torch.randn(4, 4, device=torch_device, requires_grad=True)
+        filler = torch.randn(4, 4, device=torch_device, requires_grad=True)
+        reused = torch.randn(4, 4, device=torch_device, requires_grad=True)
+
+        def fake_storage_key(tensor):
+            if id(tensor) in {id(first), id(reused)}:
+                return ("reused-storage-key", tensor.dtype)
+            return (id(tensor), tensor.dtype)
+
+        offload_ctx = OffloadActivations(
+            use_pin_memory=False,
+            use_streams=True,
+            min_offload_size=1,
+            max_fwd_stash_size=1,
+        )
+
+        original_get_unique_tensor_key = activation_offloading_module._get_unique_tensor_key
+        activation_offloading_module._get_unique_tensor_key = fake_storage_key
+        try:
+            with offload_ctx:
+                loss = SaveTensor.apply(first) + SaveTensor.apply(filler) + SaveTensor.apply(reused)
+        finally:
+            activation_offloading_module._get_unique_tensor_key = original_get_unique_tensor_key
+
+        offloaded_count = sum(1 for _, modified, _, _, _ in offload_ctx.tracker.values() if modified)
+        deduplicated_count = sum(1 for _, modified, _, _, _ in offload_ctx.tracker.values() if not modified)
+
+        assert offloaded_count == 3
+        assert deduplicated_count == 0
 
         loss.backward()
 
