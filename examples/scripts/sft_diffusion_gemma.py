@@ -16,17 +16,17 @@
 # dependencies = [
 #     "trl",
 #     "peft",
-#     "transformers>=5.12.0",
+#     "transformers @ git+https://github.com/huggingface/transformers.git",
 # ]
 # ///
 
 """
 Supervised fine-tuning of DiffusionGemma, a block-diffusion language model, on GSM8K with LoRA.
 
-DiffusionGemma ([`google/diffusiongemma-26B-A4B-it`](https://huggingface.co/google/diffusiongemma-26B-A4B-it), requires
-`transformers >= 5.12`) couples a causal encoder with a bidirectional decoder: the encoder reads clean context tokens
-into a KV cache, and the decoder denoises a block of response tokens (the "canvas") with bidirectional attention,
-cross-attending to that cache. Training therefore differs from autoregressive SFT:
+DiffusionGemma ([`google/diffusiongemma-26B-A4B-it`](https://huggingface.co/google/diffusiongemma-26B-A4B-it)) couples
+a causal encoder with a bidirectional decoder: the encoder reads clean context tokens into a KV cache, and the decoder
+denoises a block of response tokens (the "canvas") with bidirectional attention, cross-attending to that cache.
+Training therefore differs from autoregressive SFT:
 
 1. Per example, one response block of `canvas_length` tokens is selected at random; the encoder reads the full clean
    sequence, and the decoder mask restricts the canvas to the prompt plus the clean response blocks before it.
@@ -43,8 +43,8 @@ before the cross-entropy; the paper reports better generation this way, but the 
 posterior, so sampling must apply the same conversion. The default `mean` trains the plain denoiser, matching the
 released checkpoint.
 
-Requires transformers >= 5.12.0 (https://github.com/huggingface/transformers/pull/46568, for training support).
-Gradient checkpointing additionally needs https://github.com/huggingface/transformers/pull/46572.
+Requires transformers from source: gradient checkpointing support
+(https://github.com/huggingface/transformers/pull/46572) is merged but not released yet.
 
 The script trains with `assistant_only_loss`, so [`SFTTrainer`] swaps in TRL's DiffusionGemma training chat template
 (`trl/chat_templates/diffusion_gemma_training.jinja`), whose `{% generation %}` markers cover the assistant content
@@ -68,8 +68,7 @@ Drop `--use_peft` for full fine-tuning, which keeps the MoE router frozen like t
 
 Hardware: the 26B parameters do not fit on a single 80 GB GPU, so this needs at least 2 GPUs to shard them
 across ranks with ZeRO-3. Gradient checkpointing (`--gradient_checkpointing`) is required to keep activations within
-memory; it relies on https://github.com/huggingface/transformers/pull/46572. Two 80 GB H100s are enough for the
-defaults above; more GPUs increase throughput.
+memory. Two 80 GB H100s are enough for the defaults above; more GPUs increase throughput.
 """
 
 from dataclasses import dataclass, field
@@ -81,7 +80,7 @@ from peft import LoraConfig
 from transformers import AutoTokenizer, DiffusionGemmaForBlockDiffusion
 
 from trl import ModelConfig, ScriptArguments, SFTConfig, SFTTrainer, TrlParser
-from trl.trainer.sft_trainer import _maybe_gather_lm_head_ctx
+from trl.trainer.utils import maybe_gather_lm_head_ctx
 
 
 @dataclass
@@ -177,6 +176,12 @@ class DiffusionGemmaSFTTrainer(SFTTrainer):
         super().__init__(*args, **kwargs)
         if self.args.packing:
             raise ValueError("Packing is not supported: the diffusion loss needs per-example response spans.")
+
+        # Gradient accumulation requires scaled loss. Normally, loss scaling in the parent class depends on whether the
+        # model accepts loss-related kwargs. Since we compute our own loss, this check is irrelevant. We set
+        # self.model_accepts_loss_kwargs to False to enable scaling.
+        self.model_accepts_loss_kwargs = False
+
         config = self.model.config
         self.canvas_length = config.canvas_length
         self.vocab_size = config.text_config.vocab_size
@@ -233,8 +238,8 @@ class DiffusionGemmaSFTTrainer(SFTTrainer):
         random_tokens = torch.randint(self.vocab_size, (batch_size, block_size), device=device)
         canvas_ids = torch.where(corrupt, random_tokens, canvas_target)
 
-        cache_mask = (torch.arange(seq_len, device=device) < encoder_len[:, None]).long()
-        canvas_mask = torch.ones(batch_size, block_size, dtype=torch.long, device=device)
+        cache_mask = torch.arange(seq_len, device=device) < encoder_len[:, None]
+        canvas_mask = torch.ones(batch_size, block_size, dtype=torch.bool, device=device)
         model_kwargs = {
             "input_ids": input_ids,
             "attention_mask": attention_mask,
@@ -278,7 +283,7 @@ class DiffusionGemmaSFTTrainer(SFTTrainer):
         # Autoregressive co-loss on the encoder, over all valid next-token pairs
         lm_head = self.model.lm_head
         hidden_states = outputs.encoder_last_hidden_state.to(lm_head.weight.dtype)
-        with _maybe_gather_lm_head_ctx(lm_head.weight, lm_head.bias):
+        with maybe_gather_lm_head_ctx(lm_head.weight, lm_head.bias):
             encoder_logits = hidden_states @ lm_head.weight.t()
             if lm_head.bias is not None:
                 encoder_logits = encoder_logits + lm_head.bias
@@ -296,10 +301,11 @@ class DiffusionGemmaSFTTrainer(SFTTrainer):
 def main(script_args, training_args, model_args):
     model = DiffusionGemmaForBlockDiffusion.from_pretrained(
         model_args.model_name_or_path,
+        revision=model_args.model_revision,
         dtype=model_args.dtype,
         attn_implementation=model_args.attn_implementation,
     )
-    tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path)
+    tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path, revision=model_args.model_revision)
 
     if model_args.use_peft:
         # LoRA on the attention and dense-MLP linears of the encoder/decoder layers only; the MoE experts, the
