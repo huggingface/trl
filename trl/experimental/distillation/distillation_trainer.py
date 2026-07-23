@@ -419,7 +419,10 @@ class DistillationTrainer(_BaseTrainer):
         self.pad_to_multiple_of = args.pad_to_multiple_of
         self.shuffle_dataset = args.shuffle_dataset
 
+        # Tracks the number of iterations (forward + backward passes), including those within a grad accum cycle
         self._step = 0
+        # Buffer the batch to reuse generated outputs across multiple updates. For more details, see
+        # `_get_train_sampler` and `_prepare_inputs`.
         self._buffered_inputs = None
 
         # Ensure each process receives a unique seed so different processes generate different completions when
@@ -1058,7 +1061,10 @@ class DistillationTrainer(_BaseTrainer):
         inputs = self._prepare_inputs(inputs)
         with torch.no_grad():
             with self.compute_loss_context_manager():
-                loss = self.compute_loss(model, inputs)
+                # Gather the ZeRO-3-partitioned lm_head for the Liger loss path, matching training_step (removed with
+                # the Liger path).
+                with self._get_liger_zero3_lm_head_gather_ctx(model):
+                    loss = self.compute_loss(model, inputs)
             loss = loss.mean().detach()
         return loss, None, None
 
