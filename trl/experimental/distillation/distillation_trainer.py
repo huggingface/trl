@@ -528,16 +528,6 @@ class DistillationTrainer(_BaseTrainer):
             self.vllm_sync_frequency = args.vllm_sync_frequency
             self._last_vllm_sync_step = -1
 
-    def _compute_prompt_length(self, inputs: dict[str, torch.Tensor | Any]) -> int:
-        """Compute the earliest prompt boundary that still includes every completion token in the batch."""
-        if inputs.get("labels") is not None:
-            attention_mask = inputs["attention_mask"]
-            labels = inputs["labels"]
-            full_lengths = attention_mask.sum(dim=1)
-            completion_lengths = (labels != -100).sum(dim=1)
-            return int((full_lengths - completion_lengths).min().item())
-        return inputs["prompts"].shape[1]
-
     def _get_completion_lengths(self, generated_tokens: torch.Tensor, prompt_width: int) -> torch.Tensor:
         """Infer per-sample completion lengths from generated tokens."""
         completion_tokens = generated_tokens[:, prompt_width:]
