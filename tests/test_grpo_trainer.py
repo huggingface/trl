@@ -3935,7 +3935,7 @@ class TestGRPOTrainerVLM(TrlTestCase):
             img = PILImage.new("RGB", (64, 64), color="red")
             return [{"type": "image", "image": img}, {"type": "text", "text": "Here is the screenshot"}]
 
-        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
@@ -3970,6 +3970,8 @@ class TestGRPOTrainerVLM(TrlTestCase):
                 )
                 # fmt: on
             else:  # second call: 1 tool call succeeded
+                assert "image_grid_thw" in kwargs, "image_grid_thw must be passed to generate"
+                assert kwargs["image_grid_thw"].shape[0] == 2, f"Expected 2 images (1 original + 1 tool-returned), got {kwargs['image_grid_thw'].shape[0]}"
                 completion_ids = torch.tensor(
                     [
                         # 'Done!<|im_end|>'
