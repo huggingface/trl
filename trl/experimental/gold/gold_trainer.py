@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import copy
 import random
 import textwrap
 import warnings
@@ -890,6 +891,12 @@ class GOLDTrainer(SFTTrainer):
                 "drop them, causing pixel_values to be forwarded to the model with no corresponding visual "
                 "tokens in input_ids. Use truncation_mode='keep_start' (the default) or set max_length=None."
             )
+        if args.seq_kd and self._is_vision_dataset:
+            raise ValueError(
+                "seq_kd=True is not supported with vision datasets. Sequence-level KD requires the teacher to "
+                "generate completions from the prompts, and the teacher generation path does not handle image "
+                "inputs yet. Set seq_kd=False or use a text-only dataset."
+            )
 
         # Respect a user-provided data_collator for text; otherwise, pick the right collator based on modality.
         # For VLMs, always use identity collator to preserve raw PIL images in the dataloader.
@@ -1516,25 +1523,30 @@ class GOLDTrainer(SFTTrainer):
             on_policy_flags = [False] * buffer_steps
 
         on_policy_flags = broadcast_object_list(on_policy_flags, from_process=0)
-        on_policy_indices = [i for i, flag in enumerate(on_policy_flags) if flag]
 
         self._buffered_inputs = [None] * buffer_steps
         self._buffered_on_policy = on_policy_flags
         self._buffered_text_logs = [None] * buffer_steps
 
+        on_policy_indices: list[int] = []
+        seq_kd_indices: list[int] = []
         for i, flag in enumerate(on_policy_flags):
-            if not flag:
-                if self._vlm_collator is not None:
-                    # Extract raw images and prompts BEFORE collation, since the collator
-                    # mutates examples in place (pops "image", overwrites "prompt").
-                    slice_inputs = {"_gold_vlm_lazy_examples": raw_slices[i]}
-                    if self._teacher_processor is not None:
-                        raw_images, raw_prompts = self._extract_images_and_prompts(raw_slices[i])
-                        slice_inputs["_gold_vlm_raw_images"] = raw_images
-                        slice_inputs["_gold_vlm_raw_prompts"] = raw_prompts
-                    self._buffered_inputs[i] = slice_inputs
-                    continue
-
+            if flag:
+                on_policy_indices.append(i)
+            elif self._vlm_collator is not None:
+                # Extract raw images and prompts BEFORE collation, since the collator
+                # mutates examples in place (pops "image", overwrites "prompt").
+                slice_inputs = {"_gold_vlm_lazy_examples": raw_slices[i]}
+                if self._teacher_processor is not None:
+                    raw_images, raw_prompts = self._extract_images_and_prompts(raw_slices[i])
+                    slice_inputs["_gold_vlm_raw_images"] = raw_images
+                    slice_inputs["_gold_vlm_raw_prompts"] = raw_prompts
+                self._buffered_inputs[i] = slice_inputs
+            elif self.seq_kd:
+                # Off-policy slice with seq_kd: the teacher generates the completion instead of
+                # reusing the dataset one (sequence-level KD).
+                seq_kd_indices.append(i)
+            else:
                 slice_inputs = slices[i]
 
                 if (
@@ -1565,6 +1577,9 @@ class GOLDTrainer(SFTTrainer):
                 self._generate_on_policy_vlm_raw(raw_slices, on_policy_indices)
             else:
                 self._generate_on_policy_for_slices(slices, on_policy_indices)
+
+        if seq_kd_indices:
+            self._generate_seq_kd_for_slices(slices, seq_kd_indices)
 
     @profiling_decorator
     def _generate_on_policy_for_slices(
@@ -1682,6 +1697,119 @@ class GOLDTrainer(SFTTrainer):
 
                 self._buffered_inputs[slice_idx] = updated_slice
                 self._buffered_text_logs[slice_idx] = (prompt_texts, completion_texts)
+
+    @profiling_decorator
+    def _generate_seq_kd_for_slices(self, slices: list[dict[str, torch.Tensor | Any]], seq_kd_indices: list[int]):
+        """Teacher-generated completions for off-policy slices (sequence-level KD)."""
+        device = self.accelerator.device
+
+        prompt_ids_list: list[list[int]] = []
+        local_slice_indices: list[int] = []
+        # Budget the prompt to max_length - max_new_tokens before generation, keeping the END of the
+        # prompt (the generation marker), so the teacher generates from and trains on the same context
+        # and prompt + completion fit in max_length.
+        max_completion_length = self.generation_config.max_new_tokens
+        prompt_max_length = max(1, self.args.max_length - max_completion_length) if self.args.max_length else None
+        for slice_idx in seq_kd_indices:
+            slice_inputs = slices[slice_idx]
+            prompt_attention_mask = slice_inputs.get("prompt_attention_mask")
+            for prompt_idx, prompt in enumerate(slice_inputs["prompts"]):
+                if prompt_attention_mask is not None:
+                    prompt = prompt[prompt_attention_mask[prompt_idx].bool()]
+                prompt_ids = prompt.tolist()
+                if prompt_max_length is not None and len(prompt_ids) > prompt_max_length:
+                    prompt_ids = prompt_ids[-prompt_max_length:]
+                prompt_ids_list.append(prompt_ids)
+                local_slice_indices.append(slice_idx)
+
+        prompts_text = self.processing_class.batch_decode(prompt_ids_list, skip_special_tokens=False)
+
+        use_cross_tok = self.use_uld_loss and self.teacher_tokenizer is not None
+
+        if use_cross_tok:
+            # Keep the student chat markers so the teacher generates from the same prompt text it is scored on in compute_loss.
+            teacher_inputs = self.teacher_tokenizer(
+                prompts_text,
+                return_tensors="pt",
+                padding=True,
+                padding_side="left",
+                add_special_tokens=True,
+            )
+            teacher_prompt_ids = teacher_inputs["input_ids"].to(device)
+            teacher_attention_mask = teacher_inputs["attention_mask"].to(device)
+
+            teacher_gen_config = copy.deepcopy(self.generation_config)
+            teacher_eos = self.teacher_tokenizer.eos_token_id
+            teacher_gen_config.eos_token_id = teacher_eos
+            teacher_gen_config.pad_token_id = (
+                self.teacher_tokenizer.pad_token_id if self.teacher_tokenizer.pad_token_id is not None else teacher_eos
+            )
+        else:
+            pad_token_id = self.processing_class.pad_token_id if self.processing_class.pad_token_id is not None else 0
+            prompt_tensors = [torch.tensor(ids, device=device, dtype=torch.long) for ids in prompt_ids_list]
+            prompt_attn_tensors = [torch.ones(len(ids), device=device, dtype=torch.long) for ids in prompt_ids_list]
+            teacher_prompt_ids = pad(prompt_tensors, padding_side="left", padding_value=pad_token_id)
+            teacher_attention_mask = pad(prompt_attn_tensors, padding_side="left", padding_value=0)
+            teacher_gen_config = self.generation_config
+
+        with unwrap_model_for_generation(
+            self.teacher_model,
+            self.accelerator,
+            generation_kwargs=self.generation_kwargs,
+        ) as unwrapped_teacher:
+            teacher_outputs = unwrapped_teacher.generate(
+                input_ids=teacher_prompt_ids,
+                attention_mask=teacher_attention_mask,
+                generation_config=teacher_gen_config,
+                return_dict_in_generate=True,
+            )
+
+        teacher_prompt_len = teacher_prompt_ids.shape[1]
+        teacher_completion_ids = teacher_outputs.sequences[:, teacher_prompt_len:]
+
+        if use_cross_tok:
+            # Cross-tokenizer: must round-trip through text to map teacher tokens into the student vocab.
+            completion_texts_raw = self.teacher_tokenizer.batch_decode(
+                teacher_completion_ids, skip_special_tokens=True
+            )
+            student_eos_id = self.processing_class.eos_token_id
+            student_completion_ids: list[list[int]] = []
+            for row, text in zip(teacher_completion_ids, completion_texts_raw, strict=True):
+                ids = self.processing_class.encode(text, add_special_tokens=False)
+                # The decode above drops the teacher EOS (skip_special_tokens=True), so completions that
+                # terminated would lose their stop signal; restore it as the student EOS.
+                if student_eos_id is not None and teacher_eos is not None and (row == teacher_eos).any():
+                    ids.append(student_eos_id)
+                student_completion_ids.append(ids)
+        else:
+            # Same tokenizer: pass raw teacher ids straight through. The decode/re-encode round-trip
+            # would silently drop EOS (skip_special_tokens=True) and shift tokens at BPE boundaries,
+            # so the student would train on a sequence that differs from what the teacher emitted.
+            teacher_pad_id = teacher_gen_config.pad_token_id
+            if teacher_pad_id is None:
+                teacher_pad_id = self.processing_class.eos_token_id
+            eos_token_id = self.processing_class.eos_token_id
+            student_completion_ids: list[list[int]] = []
+            for row in teacher_completion_ids:
+                ids = row.tolist()
+                num_stripped = 0
+                while ids and ids[-1] == teacher_pad_id:
+                    ids.pop()
+                    num_stripped += 1
+                # pad == eos here, so the strip above also drops the trailing EOS; add it back.
+                if num_stripped and teacher_pad_id == eos_token_id:
+                    ids.append(eos_token_id)
+                student_completion_ids.append(ids)
+
+        self._process_completions_to_buffer(
+            slices,
+            seq_kd_indices,
+            local_slice_indices,
+            student_completion_ids,
+            prompt_ids_list,
+            prompts_text,
+            self.generation_config.max_new_tokens,
+        )
 
     def _generate_on_policy_vlm_raw(self, raw_slices: list[list[dict]], on_policy_indices: list[int]):
         """On-policy generation from raw VLM examples, preserving PIL images for vLLM."""
@@ -1858,6 +1986,8 @@ class GOLDTrainer(SFTTrainer):
     ):
         """
         Process vLLM completions and update buffered inputs for on-policy slices.
+
+        Also used for seq_kd off-policy slices, which reuse the same buffering path.
         """
         device = self.accelerator.device
         pad_token_id = self.processing_class.pad_token_id if self.processing_class.pad_token_id is not None else 0
@@ -1898,7 +2028,10 @@ class GOLDTrainer(SFTTrainer):
                 clean_up_tokenization_spaces=False,
             )
 
-            completion_ids_tensors = [torch.tensor(ids, device=device) for ids in completion_ids_for_slice]
+            # torch.tensor([]) defaults to float; force long so empty completions stay int
+            completion_ids_tensors = [
+                torch.tensor(ids, device=device, dtype=torch.long) for ids in completion_ids_for_slice
+            ]
             completion_ids_for_text: list[list[int]] = []
             padded_completion_ids_list = []
             completion_attention_masks = []
@@ -2778,7 +2911,8 @@ class GOLDTrainer(SFTTrainer):
 
         This method implements the on-policy learning approach described in the GOLD blog post. With probability
         `self.lmbda`, it generates new responses using the student model, which are then used for training instead of
-        the offline original inputs.
+        the offline original inputs. Otherwise, when `self.seq_kd` is enabled, off-policy slices use teacher-generated
+        sequences (sequence-level KD); without `seq_kd`, the original dataset inputs are kept.
         """
         buffer_steps = self.args.gradient_accumulation_steps
 
