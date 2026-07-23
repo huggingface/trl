@@ -443,8 +443,6 @@ class DistillationTrainer(_BaseTrainer):
         # self.model_accepts_loss_kwargs to False to enable scaling.
         self.model_accepts_loss_kwargs = False
 
-        set_seed(args.seed, device_specific=True)
-
         self._dist = DistributedBackend(self.accelerator)
 
         # Add tags to the model
@@ -490,6 +488,11 @@ class DistillationTrainer(_BaseTrainer):
         self._buffered_text_logs = None
         self._buffered_num_items = None
         self._buffer_step = 0
+
+        # Ensure each process receives a unique seed to prevent duplicate completions when generating with
+        # transformers if num_generations exceeds per_device_train_batch_size. We could skip it if we use vLLM, but
+        # it's safer to set it in all cases.
+        set_seed(args.seed, device_specific=True)
 
         # ── Generation config ──
         generation_kwargs = {
