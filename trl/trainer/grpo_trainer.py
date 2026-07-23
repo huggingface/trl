@@ -1341,6 +1341,7 @@ class GRPOTrainer(_BaseTrainer):
         logits_to_keep,
         pixel_values=None,
         image_grid_thw=None,
+        mm_token_type_ids=None,
         pixel_attention_mask=None,
         spatial_shapes=None,
         image_sizes=None,
@@ -1355,6 +1356,8 @@ class GRPOTrainer(_BaseTrainer):
         # For Qwen models:
         if image_grid_thw is not None and pixel_values is not None:
             model_inputs["image_grid_thw"] = image_grid_thw
+        if mm_token_type_ids is not None and pixel_values is not None:
+            model_inputs["mm_token_type_ids"] = mm_token_type_ids
         # For Gemma, SmolVLM2, LLaVa-Next etc.:
         if pixel_values is not None:
             model_inputs["pixel_values"] = pixel_values
@@ -2868,6 +2871,7 @@ class GRPOTrainer(_BaseTrainer):
             logits_to_keep,
             inputs.get("pixel_values"),
             inputs.get("image_grid_thw"),
+            inputs.get("mm_token_type_ids"),
             inputs.get("pixel_attention_mask"),
             inputs.get("spatial_shapes"),
             inputs.get("image_sizes"),

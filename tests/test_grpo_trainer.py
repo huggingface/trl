@@ -3761,6 +3761,13 @@ class TestGRPOTrainerVLM(TrlTestCase):
                     reason="Upstream issue tracked at https://github.com/linkedin/Liger-Kernel/issues/1117",
                 ),
             ),
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.2.0"),
+                    reason="Qwen3.5 models were introduced in transformers-5.2.0",
+                ),
+            ),
         ],
     )
     @require_liger_kernel
@@ -3798,6 +3805,74 @@ class TestGRPOTrainerVLM(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @pytest.mark.skipif(
+        Version(transformers.__version__) < Version("5.2.0"),
+        reason="Qwen3.5 models were introduced in transformers-5.2.0",
+    )
+    @require_liger_kernel
+    def test_get_last_hidden_state_passes_mm_token_type_ids(self):
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train").select(
+            range(1)
+        )
+
+        def reward_func(completions, **kwargs):
+            """Reward function that rewards longer completions."""
+            return [float(len(completion[0]["content"])) for completion in completions]
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=2,  # VLM training is memory intensive, reduce batch size to avoid OOM
+            num_generations=2,  # VLM training is memory intensive, reduce num_generations to avoid OOM
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            use_liger_kernel=True,
+            report_to="none",
+            logging_strategy="no",
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
+            reward_funcs=reward_func,
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        # One unique prompt repeated num_generations times, matching the generation batch layout.
+        generation_batch = [dataset[0] for _ in range(trainer.num_generations)]
+        inputs = trainer._generate_and_score_completions(generation_batch)
+        assert "mm_token_type_ids" in inputs, "Expected mm_token_type_ids in scored VLM batch for Qwen3.5"
+
+        unwrapped_model = trainer.accelerator.unwrap_model(trainer.model)
+        prompt_ids, prompt_mask = inputs["prompt_ids"], inputs["prompt_mask"]
+        completion_ids, completion_mask = inputs["completion_ids"], inputs["completion_mask"]
+        input_ids = torch.cat([prompt_ids, completion_ids], dim=1)
+        attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
+        logits_to_keep = completion_ids.size(1)
+
+        backbone = unwrapped_model.base_model
+        with patch.object(backbone, "forward", wraps=backbone.forward) as mock_forward:
+            trainer._get_last_hidden_state(
+                unwrapped_model,
+                input_ids,
+                attention_mask,
+                logits_to_keep,
+                inputs.get("pixel_values"),
+                inputs.get("image_grid_thw"),
+                inputs.get("mm_token_type_ids"),
+                inputs.get("pixel_attention_mask"),
+                inputs.get("spatial_shapes"),
+                inputs.get("image_sizes"),
+                inputs.get("image_position_ids"),
+            )
+
+            assert mock_forward.call_count > 0, "backbone.forward was never called"
+            mm_token_type_ids = mock_forward.call_args.kwargs.get("mm_token_type_ids")
+            assert mm_token_type_ids is not None, "mm_token_type_ids should be passed to backbone.forward"
+            assert torch.equal(mm_token_type_ids, inputs["mm_token_type_ids"]), (
+                "mm_token_type_ids passed to backbone.forward should match the scored batch"
+            )
+
+        release_memory(trainer.model, trainer)
 
     @pytest.mark.parametrize(
         "model_id",
