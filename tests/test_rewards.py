@@ -22,6 +22,7 @@ from trl.rewards import (
     get_cosine_scaled_reward,
     get_repetition_penalty_reward,
     get_soft_overlong_punishment,
+    ifeval_reward,
     reasoning_accuracy_reward,
     think_format_reward,
 )
@@ -302,6 +303,78 @@ class TestReasoningAccuracyReward:
         ]
         rewards = reasoning_accuracy_reward(completions, solutions)
         assert rewards[0] is None
+
+
+class TestIFEvalReward:
+    # (instruction_id, kwargs, satisfying_response, violating_response)
+    CASES = [
+        ("keywords:existence", {"keywords": ["AI"]}, "AI is great", "nothing here"),
+        ("keywords:frequency", {"keyword": "AI", "frequency": 2, "relation": "at least"}, "AI and AI", "only AI once"),
+        ("keywords:forbidden_words", {"forbidden_words": ["foo"]}, "bar baz", "a foo here"),
+        ("keywords:letter_frequency", {"letter": "a", "let_frequency": 3, "let_relation": "at least"}, "banana", "bb"),
+        ("length_constraints:number_words", {"num_words": 3, "relation": "at least"}, "one two three", "one two"),
+        ("length_constraints:number_paragraphs", {"num_paragraphs": 2}, "para one\n***\npara two", "single para"),
+        ("detectable_content:number_placeholders", {"num_placeholders": 2}, "[name] and [date]", "[name] only"),
+        ("detectable_content:postscript", {"postscript_marker": "P.S."}, "Body.\nP.S. extra", "Body only"),
+        ("detectable_format:number_bullet_lists", {"num_bullets": 2}, "* a\n* b", "* a only"),
+        ("detectable_format:number_highlighted_sections", {"num_highlights": 2}, "*a* and *b*", "*a* only"),
+        (
+            "detectable_format:multiple_sections",
+            {"section_spliter": "Section", "num_sections": 2},
+            "Section 1\nx\nSection 2\ny",
+            "Section 1\nx",
+        ),
+        ("detectable_format:title", {}, "<<My Title>>\nbody", "no title"),
+        ("detectable_format:json_format", {}, '{"a": 1}', "not json"),
+        ("detectable_format:constrained_response", {}, "My answer is yes.", "maybe not"),
+        ("startend:end_checker", {"end_phrase": "the end"}, "this is the end", "this is not"),
+        ("startend:quotation", {}, '"all quoted"', "not quoted"),
+        ("punctuation:no_comma", {}, "no commas here", "a, b, c"),
+    ]
+
+    @pytest.mark.parametrize("instruction_id, args, ok, bad", CASES)
+    def test_checker_satisfied(self, instruction_id, args, ok, bad):
+        rewards = ifeval_reward([[{"content": ok}]], [[instruction_id]], [[args]])
+        assert rewards == [1.0]
+
+    @pytest.mark.parametrize("instruction_id, args, ok, bad", CASES)
+    def test_checker_violated(self, instruction_id, args, ok, bad):
+        rewards = ifeval_reward([[{"content": bad}]], [[instruction_id]], [[args]])
+        assert rewards == [0.0]
+
+    def test_fraction_of_satisfied_constraints(self):
+        """The reward is the fraction of satisfied constraints."""
+        completions = [[{"content": "AI, but with a comma"}]]
+        instruction_id_list = [["keywords:existence", "punctuation:no_comma"]]
+        instruction_kwargs = [[{"keywords": ["AI"]}, {}]]
+        # existence satisfied, no_comma violated -> 1/2
+        assert ifeval_reward(completions, instruction_id_list, instruction_kwargs) == [0.5]
+
+    def test_all_constraints_satisfied(self):
+        completions = [[{"content": "AI is here"}]]
+        instruction_id_list = [["keywords:existence", "punctuation:no_comma"]]
+        instruction_kwargs = [[{"keywords": ["AI"]}, {}]]
+        assert ifeval_reward(completions, instruction_id_list, instruction_kwargs) == [1.0]
+
+    def test_no_constraints_yields_zero(self):
+        assert ifeval_reward([[{"content": "anything"}]], [[]], [[]]) == [0.0]
+
+    def test_missing_optional_arg_uses_default_relation(self):
+        """A missing/None `relation` defaults to 'at least'."""
+        completions = [[{"content": "one two three four"}]]
+        instruction_id_list = [["length_constraints:number_words"]]
+        instruction_kwargs = [[{"num_words": 3, "relation": None}]]  # None should be ignored -> "at least"
+        assert ifeval_reward(completions, instruction_id_list, instruction_kwargs) == [1.0]
+
+    def test_unsupported_instruction_id_raises(self):
+        with pytest.raises(ValueError):
+            ifeval_reward([[{"content": "x"}]], [["language:response_language"]], [[{"language": "en"}]])
+
+    def test_batch_of_completions(self):
+        completions = [[{"content": "AI is great"}], [{"content": "no keyword"}]]
+        instruction_id_list = [["keywords:existence"], ["keywords:existence"]]
+        instruction_kwargs = [[{"keywords": ["AI"]}], [{"keywords": ["AI"]}]]
+        assert ifeval_reward(completions, instruction_id_list, instruction_kwargs) == [1.0, 0.0]
 
 
 class TestCosineScaledReward:
