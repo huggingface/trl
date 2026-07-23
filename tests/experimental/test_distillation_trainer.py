@@ -290,9 +290,14 @@ class TestDistillationTrainer(TrlTestCase):
         recorded = []  # (denominator applied, completion tokens in this microbatch)
         original = DistillationTrainer._reduce_divergence_loss
 
-        def _recording(jsd, labels=None, reduction="batchmean", num_items_in_batch=None):
-            recorded.append((num_items_in_batch, int((labels != -100).sum())))
-            return original(jsd, labels=labels, reduction=reduction, num_items_in_batch=num_items_in_batch)
+        def _recording(jsd, completion_mask=None, reduction="batchmean", num_items_in_batch=None):
+            # `generalized_jsd_loss(reduction="none")` also routes through here with `completion_mask=None`; only the
+            # loss-reducing call (with a mask) carries the denominator under test.
+            if completion_mask is not None:
+                recorded.append((num_items_in_batch, int(completion_mask.sum())))
+            return original(
+                jsd, completion_mask=completion_mask, reduction=reduction, num_items_in_batch=num_items_in_batch
+            )
 
         monkeypatch.setattr(DistillationTrainer, "_reduce_divergence_loss", staticmethod(_recording))
 
@@ -385,6 +390,7 @@ class TestDistillationTrainer(TrlTestCase):
             "input_ids": input_ids,
             "attention_mask": torch.ones_like(input_ids),
             "labels": labels,
+            "completion_mask": (labels != -100).int(),
             "prompts": input_ids[:, :prompt_length],
             "prompt_attention_mask": torch.ones(2, prompt_length, dtype=torch.long, device=device),
         }
@@ -419,6 +425,27 @@ class TestDistillationTrainer(TrlTestCase):
         inputs = captured["inputs"]
         assert "completion_mask" in inputs
         assert torch.equal(inputs["completion_mask"].bool(), inputs["labels"] != -100)
+
+    def test_generated_batch_emits_prompt_and_completion_ids(self, monkeypatch):
+        """The generated batch emits GRPO-style `prompt_ids`/`prompt_mask`/`completion_ids` alongside the old keys."""
+        trainer = self._make_local_trainer()
+        captured = {}
+        original = DistillationTrainer.compute_loss
+
+        def _capturing(self, model, inputs, *args, **kwargs):
+            captured.setdefault("inputs", {k: v.clone() if torch.is_tensor(v) else v for k, v in inputs.items()})
+            return original(self, model, inputs, *args, **kwargs)
+
+        monkeypatch.setattr(DistillationTrainer, "compute_loss", _capturing)
+        trainer.train()
+
+        inputs = captured["inputs"]
+        for key in ("prompt_ids", "prompt_mask", "completion_ids"):
+            assert key in inputs
+        # cat(prompt_ids, completion_ids) reconstructs input_ids; the new keys mirror the existing prompt tensors.
+        assert torch.equal(torch.cat([inputs["prompt_ids"], inputs["completion_ids"]], dim=1), inputs["input_ids"])
+        assert torch.equal(inputs["prompt_ids"], inputs["prompts"])
+        assert torch.equal(inputs["prompt_mask"], inputs["prompt_attention_mask"])
 
     @require_liger_kernel
     @require_torch_accelerator

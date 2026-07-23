@@ -211,8 +211,12 @@ class _DistillationCollator:
             "input_ids": input_ids_t,
             "attention_mask": attention_mask_t,
             "labels": labels_t,
+            "completion_mask": (labels_t != self.ignore_index).int(),
             "prompts": prompts_t,
             "prompt_attention_mask": prompt_mask_t,
+            "prompt_ids": prompts_t,
+            "prompt_mask": prompt_mask_t,
+            "completion_ids": input_ids_t[:, prompts_t.shape[1] :],
         }
 
 
@@ -772,6 +776,9 @@ class DistillationTrainer(_BaseTrainer):
                 updated["attention_mask"] = new_attention_mask
                 updated["labels"] = new_labels
                 updated["completion_mask"] = new_completion_mask
+                updated["prompt_ids"] = slice_inputs["prompts"]
+                updated["prompt_mask"] = prompt_mask
+                updated["completion_ids"] = generated_tokens[:, prompt_width:]
 
                 self._buffered_inputs[slice_idx] = updated
                 self._buffered_text_logs[slice_idx] = (prompt_texts, completion_texts)
@@ -850,6 +857,9 @@ class DistillationTrainer(_BaseTrainer):
             updated["attention_mask"] = new_attention_mask
             updated["labels"] = new_labels
             updated["completion_mask"] = new_completion_mask
+            updated["prompt_ids"] = prompt_ids
+            updated["prompt_mask"] = prompt_attention_mask
+            updated["completion_ids"] = completion_ids_padded
             # Update prompts to match the new padding width so prompt_length is consistent
             updated["prompts"] = prompt_ids
             updated["prompt_attention_mask"] = prompt_attention_mask
@@ -882,16 +892,16 @@ class DistillationTrainer(_BaseTrainer):
     # ──────────────────────────────────────────────────────────────────────
 
     @staticmethod
-    def _reduce_divergence_loss(jsd, labels=None, reduction="batchmean", num_items_in_batch=None):
-        """Reduce a per-token divergence tensor using the trainer's label mask semantics.
+    def _reduce_divergence_loss(jsd, completion_mask=None, reduction="batchmean", num_items_in_batch=None):
+        """Reduce a per-token divergence tensor over the valid completion tokens.
 
         When `num_items_in_batch` is provided (as under gradient accumulation), the divergence is reduced as `sum /
         num_items_in_batch`, matching the gradient-accumulation-correct behavior of HF's default cross-entropy.
         Otherwise it falls back to the local `reduction` (default `batchmean`). See issue #4719.
         """
         mask = None
-        if labels is not None:
-            mask = labels != -100
+        if completion_mask is not None:
+            mask = completion_mask.bool()
             jsd = jsd[mask]
 
         if num_items_in_batch is not None:
@@ -904,7 +914,7 @@ class DistillationTrainer(_BaseTrainer):
             # clamp_min(1) avoids 0/0 -> nan when a sample has no unmasked positions
             # (e.g. completion fully truncated). jsd[mask] is empty -> jsd.sum() == 0,
             # so 0/1 == 0 with a valid grad path.
-            denom = mask.sum().clamp_min(1) if labels is not None else max(jsd.size(0), 1)
+            denom = mask.sum().clamp_min(1) if completion_mask is not None else max(jsd.size(0), 1)
             return jsd.sum() / denom
         elif reduction == "sum":
             return jsd.sum()
@@ -945,7 +955,10 @@ class DistillationTrainer(_BaseTrainer):
 
         jsd = _jsd_divergence(student_log_probs, teacher_log_probs, beta)
         return DistillationTrainer._reduce_divergence_loss(
-            jsd, labels=labels, reduction=reduction, num_items_in_batch=num_items_in_batch
+            jsd,
+            completion_mask=(labels != -100) if labels is not None else None,
+            reduction=reduction,
+            num_items_in_batch=num_items_in_batch,
         )
 
     def _get_teacher_logits(self, inputs: dict[str, torch.Tensor | Any]) -> torch.Tensor:
@@ -976,19 +989,20 @@ class DistillationTrainer(_BaseTrainer):
             attention_mask=inputs["attention_mask"],
         )
         prompt_length = self._compute_prompt_length(inputs)
-        labels = inputs["labels"][:, prompt_length:]
+        completion_mask = inputs["completion_mask"][:, prompt_length:]
 
-        # Local teacher: exact full-vocabulary (optionally top-k) generalized JSD/KL loss.
         teacher_logits = self._get_teacher_logits(inputs)
         student_logits = student_outputs.logits[:, prompt_length - 1 : -1, :]
         teacher_logits = teacher_logits[:, prompt_length - 1 : -1, :]
-        loss = self.generalized_jsd_loss(
+        jsd = self.generalized_jsd_loss(
             student_logits=student_logits,
             teacher_logits=teacher_logits,
-            labels=labels,
             beta=self.beta,
             temperature=self.temperature,
-            num_items_in_batch=num_items_in_batch,
+            reduction="none",
+        )
+        loss = self._reduce_divergence_loss(
+            jsd, completion_mask=completion_mask, num_items_in_batch=num_items_in_batch
         )
 
         return (loss, student_outputs) if return_outputs else loss
@@ -1036,8 +1050,10 @@ class DistillationTrainer(_BaseTrainer):
         student_hidden = student_hidden.reshape(-1, student_hidden.shape[-1])
         teacher_hidden = teacher_hidden.reshape(-1, teacher_hidden.shape[-1])
 
-        labels_mask = inputs["labels"] != -100
-        masked_input_ids = torch.where(labels_mask, inputs["input_ids"], torch.full_like(inputs["input_ids"], -100))
+        completion_mask = inputs["completion_mask"].bool()
+        masked_input_ids = torch.where(
+            completion_mask, inputs["input_ids"], torch.full_like(inputs["input_ids"], -100)
+        )
         true_labels = masked_input_ids[:, 1:].reshape(-1)
 
         student_head = unwrapped_student.get_output_embeddings()

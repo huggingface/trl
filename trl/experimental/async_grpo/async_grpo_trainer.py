@@ -13,9 +13,11 @@
 # limitations under the License.
 
 
+import contextvars
 import math
 import queue
 import textwrap
+import threading
 import time
 from collections import defaultdict
 from collections.abc import Callable, Iterator
@@ -31,14 +33,17 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenize
 from transformers.data.data_collator import DataCollatorMixin
 
 from ...trainer.base_trainer import _BaseTrainer
-from ...trainer.utils import get_config_model_id, nanmax, nanmin, pad, patch_chunked_lm_head
+from ...trainer.utils import get_config_model_id, is_trackio_available, nanmax, nanmin, pad, patch_chunked_lm_head
 from .async_grpo_config import AsyncGRPOConfig
-from .async_rollout_worker import AsyncRolloutWorker
+from .async_rollout_worker import AsyncRolloutWorker, RolloutSample
 from .vllm_client import VLLMClient
 from .weight_transfer import WeightTransferClient
 
 
 logger = get_logger(__name__)
+
+if is_trackio_available():
+    import trackio
 
 # A reward function is a callable that returns a list of floats (the rewards). The callable receives prompts,
 # completions, and additional arguments from the trainer (refer to the trainer's source for details). To ensure forward
@@ -179,6 +184,46 @@ class _EpochStopCallback(TrainerCallback):
             control.should_training_stop = True
 
 
+def log_rollout_traces(samples: list[RolloutSample], step: int, report_to: list[str], max_traces: int = 16) -> None:
+    """Log rollout samples to trackio as inspectable traces (prompt + completion + reward/advantage per sample).
+
+    Call from rank 0 during training, where the HF trackio callback has already initialised the run; the traces then
+    show up under the run's Traces tab so rollouts can be read directly instead of grepping logs. No-op unless trackio
+    is the active logging backend (installed and listed in `report_to`). Best-effort: a trackio hiccup must never break
+    training.
+
+    Args:
+        samples (`list[RolloutSample]`):
+            Consumed rollout samples to log; the first `max_traces` are recorded.
+        step (`int`):
+            Step value the traces are logged under (e.g. the policy version, so the UI groups by policy).
+        report_to (`list[str]`):
+            The training args' `report_to`; logging happens only when it contains `"trackio"`.
+        max_traces (`int`, *optional*, defaults to `16`):
+            Maximum number of traces to log per call.
+    """
+    if not samples or "trackio" not in report_to or not is_trackio_available():
+        return
+    try:
+        traces = [
+            trackio.Trace(
+                messages=list(sample.prompt) + list(sample.completion),
+                metadata={
+                    **sample.metrics,  # reward, reward_std, rewards/<func>, tools/call_frequency, tools/failure_frequency
+                    "advantage": float(sample.advantage),
+                    "group_id": int(sample.group_id),
+                    "model_version": int(sample.model_version),
+                    "prompt_tokens": len(sample.input_ids) - int(sum(sample.completion_mask)),
+                    "completion_tokens": int(sum(sample.completion_mask)),
+                },
+            )
+            for sample in samples[:max_traces]
+        ]
+        trackio.log({"rollouts": traces}, step=step)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"rollout trace logging skipped: {type(e).__name__}: {e}")
+
+
 class RolloutQueueDataset(torch.utils.data.IterableDataset):
     def __init__(
         self,
@@ -188,6 +233,7 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
         stale_after_s,
         max_staleness=3,
         poll_interval_s=5.0,
+        report_to=None,
     ):
         self.queue = rollout_queue
         self.model_version_fn = model_version_fn
@@ -195,18 +241,31 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
         self.stale_after_s = stale_after_s
         self.max_staleness = max_staleness
         self.poll_interval_s = poll_interval_s
+        self.report_to = report_to or []
+        self._trace_buf: list = []
+        self._trace_log_interval = 8
+        # Log traces off the training path: __iter__ enqueues, a daemon thread drains. Bounded + drop-on-full so a
+        # slow trackio backend never blocks sample delivery.
+        self._trace_queue: queue.Queue = queue.Queue(maxsize=4)
+        threading.Thread(target=self._drain_traces, name="rollout-trace-logger", daemon=True).start()
+
+    def _drain_traces(self):
+        while True:
+            samples, step, ctx = self._trace_queue.get()
+            # Replay the main-thread context captured at enqueue: trackio's run lives in a ContextVar this daemon
+            # thread wouldn't otherwise inherit, so trackio.log() would raise "call init() first".
+            ctx.run(log_rollout_traces, samples, step=step, report_to=self.report_to)
 
     def __iter__(self):
         while True:
             t0 = time.time()
-            if self.queue.qsize() == 0:
-                logger.info("queue empty, waiting for rollout samples...")
-            try:
-                sample = self.queue.get(timeout=self.poll_interval_s)
-            except queue.Empty:
-                # Returning here would broadcast None through accelerate's dispatch loop.
-                self.check_health_fn(self.stale_after_s)
-                continue
+            while True:
+                try:
+                    sample = self.queue.get(timeout=self.poll_interval_s)
+                    break
+                except queue.Empty:
+                    # Returning here would broadcast None through accelerate's dispatch loop.
+                    self.check_health_fn(self.stale_after_s)
             queue_wait_time_s = time.time() - t0
             if queue_wait_time_s > 1.0:
                 logger.info(f"waited {queue_wait_time_s:.1f}s for sample (qsize={self.queue.qsize()})")
@@ -215,6 +274,17 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
             if staleness > self.max_staleness:
                 logger.info(f"dropping stale sample (staleness={staleness}, max={self.max_staleness})")
                 continue  # drop stale, pull next
+
+            self._trace_buf.append(sample)
+            if len(self._trace_buf) >= self._trace_log_interval:
+                try:
+                    # Capture the main-thread context (holds trackio's run) so the drain thread can replay it.
+                    self._trace_queue.put_nowait(
+                        (self._trace_buf, self.model_version_fn(), contextvars.copy_context())
+                    )
+                except queue.Full:
+                    pass
+                self._trace_buf = []
 
             yield {
                 "input_ids": sample.input_ids,
@@ -779,6 +849,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 check_health_fn=self.rollout_worker.check_health,
                 stale_after_s=self.args.heartbeat_stale_after_s,
                 max_staleness=self.args.max_staleness,
+                report_to=self.args.report_to,
             )
             # Default the token budget to the vLLM server's max_model_len (the cap on prompt + completion), so no
             # rollout sample can exceed it. Wait for the server like weight sync does, so a still-loading vLLM doesn't
