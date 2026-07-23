@@ -38,9 +38,15 @@ class SFTConfig(_BaseConfig):
 
         model_init_kwargs (`dict[str, Any]`, *optional*):
             Keyword arguments for [`~transformers.AutoModelForCausalLM.from_pretrained`], used when the `model`
-            argument of the [`SFTTrainer`] is provided as a string. If you're training a MoE architecture and want to
-            include the load balancing/auxiliary loss as a part of the final loss, remember to set
-            `output_router_logits=True` in this dictionary.
+            argument of the [`SFTTrainer`] is provided as a string.
+        trust_remote_code (`bool`, *optional*, defaults to `False`):
+            Whether to allow loading models and tokenizers that ship custom Python code from the Hub. Forwarded to
+            [`~transformers.AutoModelForCausalLM.from_pretrained`] and
+            [`~transformers.AutoProcessor.from_pretrained`].
+        router_aux_loss_coef (`float`, *optional*, defaults to `0.001`):
+            Coefficient of the load-balancing auxiliary loss. Only has an effect when training a Mixture-of-Experts
+            (MoE) model; for other models it does nothing. The auxiliary loss is added to the training loss with this
+            weight. Set to `0.0` to disable it.
         chat_template_path (`str`, *optional*):
             If specified, sets the model's chat template. This can either be the path to a tokenizer (local directory
             or Hugging Face Hub model) or a direct path to a Jinja template file. When using a Jinja file, you must
@@ -107,9 +113,7 @@ class SFTConfig(_BaseConfig):
               [this paper](https://huggingface.co/papers/2508.05629).
             - `"chunked_nll"`: same math as `"nll"`, but the `lm_head` projection is computed on non-ignored tokens
               only (positions with `labels == -100` are dropped before the matmul) and the cross-entropy is processed
-              in chunks of tokens to reduce peak activation memory. Not compatible with `use_liger_kernel`. Under
-              FSDP2, set `fsdp_reshard_after_forward false` in the accelerate config — the chunked path otherwise
-              re-gathers `lm_head.weight` per chunk during backward, adding noticeable wall-time.
+              in chunks of tokens to reduce peak activation memory. Not compatible with `use_liger_kernel`.
 
         activation_offloading (`bool`, *optional*, defaults to `False`):
             Whether to offload the activations to the CPU.
@@ -146,9 +150,22 @@ class SFTConfig(_BaseConfig):
         default=None,
         metadata={
             "help": "Keyword arguments for `AutoModelForCausalLM.from_pretrained`, used when the `model` argument of "
-            "the `SFTTrainer` is provided as a string. If you're training a MoE architecture and want to include the "
-            "load balancing/auxiliary loss as a part of the final loss, remember to set `output_router_logits=True` "
-            "in this dictionary."
+            "the `SFTTrainer` is provided as a string."
+        },
+    )
+    router_aux_loss_coef: float = field(
+        default=0.001,
+        metadata={
+            "help": "Coefficient of the load-balancing auxiliary loss. Only has an effect when training a "
+            "Mixture-of-Experts (MoE) model; for other models it does nothing. The auxiliary loss is added to the "
+            "training loss with this weight. Set to `0.0` to disable it."
+        },
+    )
+    trust_remote_code: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to allow loading models and tokenizers that ship custom Python code from the Hub. "
+            "Forwarded to `AutoModelForCausalLM.from_pretrained` and `AutoProcessor.from_pretrained`."
         },
     )
     chat_template_path: str | None = field(
@@ -272,9 +289,7 @@ class SFTConfig(_BaseConfig):
             "`'chunked_nll'` (same math as `'nll'`, but the `lm_head` projection is computed on non-ignored tokens "
             "only — positions with `labels == -100` are dropped before the matmul — and the cross-entropy is "
             "processed in chunks of tokens to reduce peak activation memory; not compatible with `use_liger_kernel`; "
-            "under FSDP2, set `fsdp_reshard_after_forward false` in the accelerate config — the chunked path "
-            "otherwise re-gathers `lm_head.weight` per chunk during backward, adding noticeable wall-time; the "
-            "patched `lm_head` path covers standard causal LMs and VLMs whose language model exposes a top-level "
+            "the patched `lm_head` path covers standard causal LMs and VLMs whose language model exposes a top-level "
             "`lm_head`, architectures with a non-standard head are not supported)."
         },
     )

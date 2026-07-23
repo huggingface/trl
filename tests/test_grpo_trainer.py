@@ -24,7 +24,7 @@ import pytest
 import torch
 import transformers
 from accelerate.utils.memory import release_memory
-from datasets import Dataset, Image, load_dataset
+from datasets import Dataset, DatasetDict, Image, IterableDatasetDict, load_dataset
 from packaging.version import Version
 from transformers import (
     AutoModelForCausalLM,
@@ -39,7 +39,6 @@ from transformers.utils import is_peft_available
 
 from trl import GRPOConfig, GRPOTrainer
 from trl.import_utils import is_liger_kernel_available
-from trl.trainer.utils import get_kbit_device_map
 
 from .testing_utils import (
     TrlTestCase,
@@ -56,7 +55,9 @@ from .testing_utils import (
 
 
 if is_peft_available():
-    from peft import LoraConfig, PeftModel, get_peft_model
+    import peft
+    from peft import LoraConfig, PeftModel, PromptTuningConfig, get_peft_model
+    from peft.utils import TaskType
 
 
 def multiply_tool(a: int, b: int) -> int:
@@ -172,7 +173,7 @@ class TestGRPORolloutDispatch:
         trainer.state = SimpleNamespace(global_step=2, num_input_tokens_seen=0)
         trainer._last_loaded_step = 1
         trainer.use_vllm = False
-        trainer.use_transformers_paged = False
+        trainer.use_transformers_continuous_batching = False
         trainer.vllm_generation = SimpleNamespace(sync_weights=MagicMock())
         trainer.processing_class = SimpleNamespace(
             batch_decode=MagicMock(return_value=["decoded"]),
@@ -237,6 +238,42 @@ class TestGRPORolloutDispatch:
             trainer._generate(["prompt"])
 
 
+@pytest.mark.skipif(
+    Version(transformers.__version__) < Version("5.8.0"),
+    reason="transformers continuous batching requires transformers>=5.8.0",
+)
+class TestTransformersContinuousBatchingContract:
+    """Contract tests for the transformers CB API that GRPOTrainer depends on."""
+
+    def test_generation_output_has_logprobs_field(self):
+        from transformers.generation.continuous_batching.requests import GenerationOutput
+
+        output = GenerationOutput(request_id="req_0")
+        assert output.logprobs == [], "GenerationOutput.logprobs must default to an empty list"
+
+    def test_generation_output_logprobs_accepts_floats(self):
+        from transformers.generation.continuous_batching.requests import GenerationOutput
+
+        output = GenerationOutput(request_id="req_0", generated_tokens=[1, 2, 3], logprobs=[-0.1, -0.5, -0.3])
+        assert output.logprobs == [-0.1, -0.5, -0.3]
+
+    def test_continuous_batching_config_has_return_logprobs(self):
+        from transformers.generation import ContinuousBatchingConfig
+
+        cfg = ContinuousBatchingConfig(return_logprobs=True)
+        assert cfg.return_logprobs is True
+
+    def test_generate_batch_accepts_continuous_batching_config(self):
+        import inspect
+
+        from transformers.generation.continuous_batching.continuous_api import ContinuousMixin
+
+        sig = inspect.signature(ContinuousMixin.generate_batch)
+        assert "continuous_batching_config" in sig.parameters, (
+            "generate_batch() must accept a continuous_batching_config parameter"
+        )
+
+
 class TestGRPOTrainer(TrlTestCase):
     def test_init_minimal(self):
         # Test that GRPOTrainer can be instantiated with only model, reward_model and train_dataset
@@ -294,6 +331,10 @@ class TestGRPOTrainer(TrlTestCase):
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
+        # MoE models log the load-balancing auxiliary loss (on by default)
+        if trainer.aux_loss_enabled:
+            assert trainer.state.log_history[-1]["aux_loss"] is not None
+
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
@@ -328,6 +369,29 @@ class TestGRPOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    def test_trust_remote_code(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        model_id = "trl-internal-testing/tiny-RemoteForCausalLM"
+
+        def reward_func(completions, **kwargs):
+            return [0.0] * len(completions)
+
+        with pytest.raises(ValueError, match="custom code"):
+            GRPOTrainer(
+                model=model_id,
+                args=GRPOConfig(output_dir=self.tmp_dir, report_to="none"),
+                reward_funcs=reward_func,
+                train_dataset=dataset,
+            )
+
+        trainer = GRPOTrainer(
+            model=model_id,
+            args=GRPOConfig(output_dir=self.tmp_dir, report_to="none", trust_remote_code=True),
+            reward_funcs=reward_func,
+            train_dataset=dataset,
+        )
+        assert type(trainer.model).__name__ == "RemoteForCausalLM"
 
     @pytest.mark.parametrize("use_liger_kernel", [False, pytest.param(True, marks=require_liger_kernel)])
     @pytest.mark.parametrize("loss_type", ["bnpo", "dr_grpo", "dapo", "cispo", "sapo", "luspo", "vespo"])
@@ -410,6 +474,193 @@ class TestGRPOTrainer(TrlTestCase):
         )
 
         trainer.train()
+
+    def test_train_with_iterable_dataset(self):
+        # Iterable (streaming) datasets have no length, so `max_steps` is required.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train", streaming=True)
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            max_steps=4,
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        # Iterable datasets force `dispatch_batches=False` so the stream can be sharded per process.
+        assert trainer.args.accelerator_config.dispatch_batches is False
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @pytest.mark.parametrize(
+        "eval_dataset_type",
+        [
+            "dataset",
+            "iterable_dataset",
+            "dataset_dict",
+            "iterable_dataset_dict",
+            "dict_of_dataset",
+            "dict_of_iterable_dataset",
+            "none",
+        ],
+    )
+    def test_init_with_eval_dataset(self, eval_dataset_type):
+        train_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        if eval_dataset_type == "none":
+            eval_dataset = None
+        else:
+            streaming = "iterable" in eval_dataset_type
+            eval_split = load_dataset(
+                "trl-internal-testing/zen", "standard_prompt_only", split="test", streaming=streaming
+            )
+            if eval_dataset_type in ("dataset", "iterable_dataset"):
+                eval_dataset = eval_split
+            elif eval_dataset_type in ("dataset_dict", "iterable_dataset_dict"):
+                dataset_dict_cls = IterableDatasetDict if streaming else DatasetDict
+                eval_dataset = dataset_dict_cls({"data1": eval_split, "data2": eval_split})
+            else:  # "dict_of_dataset" or "dict_of_iterable_dataset"
+                eval_dataset = {"data1": eval_split, "data2": eval_split}
+
+        training_args = GRPOConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=train_dataset,
+            eval_dataset=eval_dataset,
+        )
+
+        if eval_dataset_type == "none":
+            assert trainer.eval_dataset is None
+        elif isinstance(trainer.eval_dataset, dict):
+            assert set(trainer.eval_dataset.keys()) == {"data1", "data2"}
+        else:
+            assert trainer.eval_dataset is eval_dataset
+
+    def test_iterable_dataset_requires_dispatch_batches_false(self):
+        # `dispatch_batches=True` is incompatible with iterable datasets (see get_train_dataloader).
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train", streaming=True)
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir, accelerator_config={"dispatch_batches": True}, report_to="none"
+        )
+        with pytest.raises(ValueError, match="Iterable datasets require `dispatch_batches=False`"):
+            GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
+            )
+
+    def test_iterable_dataset_forces_num_workers_zero(self):
+        # Multiple workers would shard and interleave the repeated stream, splitting num_generations groups, so
+        # `dataloader_num_workers` is forced to 0 for iterable datasets.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train", streaming=True)
+
+        training_args = GRPOConfig(output_dir=self.tmp_dir, dataloader_num_workers=4, max_steps=1, report_to="none")
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        assert trainer.args.dataloader_num_workers == 0
+
+    def test_iterable_eval_keeps_map_style_train_workers(self):
+        # A map-style train set keeps its workers even when the eval set is iterable; the single-worker restriction is
+        # scoped to the iterable eval loader and not persisted.
+        train_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        eval_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="test", streaming=True)
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            per_device_eval_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            dataloader_num_workers=4,
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=train_dataset,
+            eval_dataset=eval_dataset,
+        )
+
+        assert trainer.args.dataloader_num_workers == 4  # not disabled by the iterable eval set
+        assert trainer.get_train_dataloader().num_workers == 4  # map-style train keeps its workers
+        assert trainer.get_eval_dataloader().num_workers == 0  # iterable eval loader uses a single worker
+        assert trainer.args.dataloader_num_workers == 4  # override is scoped, not persisted
+
+    @pytest.mark.parametrize(
+        "eval_dataset_type",
+        [
+            "dataset",
+            "iterable_dataset",
+            "dataset_dict",
+            "iterable_dataset_dict",
+            "dict_of_dataset",
+            "dict_of_iterable_dataset",
+        ],
+    )
+    def test_evaluate_with_eval_dataset(self, eval_dataset_type):
+        # `evaluate` accepts a dataset passed directly, not only an `eval_dataset` set at init. Iterable datasets passed
+        # this way must still be configured for the iterable path, since they are absent at init.
+        train_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        streaming = "iterable" in eval_dataset_type
+        eval_split = load_dataset(
+            "trl-internal-testing/zen", "standard_prompt_only", split="test", streaming=streaming
+        )
+        if eval_dataset_type in ("dataset", "iterable_dataset"):
+            eval_dataset = eval_split
+        elif eval_dataset_type in ("dataset_dict", "iterable_dataset_dict"):
+            dataset_dict_cls = IterableDatasetDict if streaming else DatasetDict
+            eval_dataset = dataset_dict_cls({"data1": eval_split, "data2": eval_split})
+        else:  # "dict_of_dataset" or "dict_of_iterable_dataset"
+            eval_dataset = {"data1": eval_split, "data2": eval_split}
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            per_device_eval_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=train_dataset,
+        )
+
+        metrics = trainer.evaluate(eval_dataset=eval_dataset)
+        if eval_dataset_type in ("dataset", "iterable_dataset"):
+            assert metrics["eval_loss"] is not None
+        else:
+            assert metrics["eval_data1_loss"] is not None
+            assert metrics["eval_data2_loss"] is not None
 
     # Regression test for eval_on_start with loss_type="grpo" (one of the loss types that depends on
     # current_gradient_accumulation_steps): evaluation runs before the first training step, when that value is still
@@ -505,6 +756,101 @@ class TestGRPOTrainer(TrlTestCase):
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @require_peft
+    def test_liger_kernel_with_peft_lm_head_raises(self):
+        # The Liger fused GRPO loss reads `lm_head.weight` directly, so a LoRA adapter on `lm_head` is silently
+        # ignored and never trained. The trainer must fail fast instead of training a silently-frozen head (#4612).
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="float32")
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        training_args = GRPOConfig(output_dir=self.tmp_dir, use_liger_kernel=True, report_to="none")
+        # `ensure_weight_tying=True` silences PEFT's weight-tying warning fired when lm_head is in the adapter on a
+        # model with untied embeddings; once tying respects `tie_word_embeddings`, the flag itself warns that no tied
+        # modules were found, so it must only be set on the affected range.
+        # - Introduced in PEFT 0.19.0 (peft#2879); fixed on main, unreleased as of 0.19.2.dev0 (peft#3171)
+        needs_ensure_weight_tying = Version("0.19.0") <= Version(peft.__version__) < Version("0.19.2.dev0")
+        lora_config = LoraConfig(
+            target_modules=["q_proj", "v_proj", "lm_head"],
+            **({"ensure_weight_tying": True} if needs_ensure_weight_tying else {}),
+        )
+        with pytest.raises(ValueError, match="lm_head"):
+            GRPOTrainer(
+                model=model,
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
+                peft_config=lora_config,
+            )
+
+    @require_peft
+    def test_liger_kernel_with_peft_non_lm_head_target_allowed(self):
+        # The lm_head guard must only fire when the adapter actually wraps lm_head. An adapter that targets other
+        # modules (here q_proj/v_proj) leaves lm_head as a plain Linear, so Liger reads the real (frozen) head weight
+        # and there is nothing to silently drop. Guards against an over-broad regression.
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="float32")
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        training_args = GRPOConfig(output_dir=self.tmp_dir, use_liger_kernel=True, report_to="none")
+        kwargs = {
+            "model": model,
+            "reward_funcs": "trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            "args": training_args,
+            "train_dataset": dataset,
+            "peft_config": LoraConfig(target_modules=["q_proj", "v_proj"]),
+        }
+        if is_liger_kernel_available():
+            GRPOTrainer(**kwargs)  # must construct without raising
+        else:
+            # Liger isn't installed on this lane: the guard runs before the Liger-availability check, so the only
+            # acceptable failure is the missing-dependency ImportError, never the lm_head ValueError.
+            with pytest.raises(ImportError):
+                GRPOTrainer(**kwargs)
+
+    @require_peft
+    def test_liger_kernel_with_peft_modules_to_save_lm_head_allowed(self):
+        # `modules_to_save=["lm_head"]` makes the head a fully trained copy (ModulesToSaveWrapper, not a tuner layer),
+        # so `lm_head.weight` resolves to the trained weight and Liger trains it correctly. This is the documented
+        # workaround in the guard's error message, so it must stay unblocked.
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="float32")
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        training_args = GRPOConfig(output_dir=self.tmp_dir, use_liger_kernel=True, report_to="none")
+        # `ensure_weight_tying=True` silences PEFT's weight-tying warning fired when lm_head is in the adapter on a
+        # model with untied embeddings; once tying respects `tie_word_embeddings`, the flag itself warns that no tied
+        # modules were found, so it must only be set on the affected range.
+        # - Introduced in PEFT 0.19.0 (peft#2879); fixed on main, unreleased as of 0.19.2.dev0 (peft#3171)
+        needs_ensure_weight_tying = Version("0.19.0") <= Version(peft.__version__) < Version("0.19.2.dev0")
+        peft_config = LoraConfig(
+            target_modules=["q_proj", "v_proj"],
+            modules_to_save=["lm_head"],
+            **({"ensure_weight_tying": True} if needs_ensure_weight_tying else {}),
+        )
+        kwargs = {
+            "model": model,
+            "reward_funcs": "trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            "args": training_args,
+            "train_dataset": dataset,
+            "peft_config": peft_config,
+        }
+        if is_liger_kernel_available():
+            GRPOTrainer(**kwargs)  # must construct without raising
+        else:
+            with pytest.raises(ImportError):
+                GRPOTrainer(**kwargs)
+
+    @require_peft
+    def test_liger_kernel_with_peft_prompt_learning_raises(self):
+        # Prompt-learning methods inject virtual tokens via PeftModel.forward(), which the Liger GRPO loss bypasses.
+        # The trainer must fail fast to avoid computing the loss on the wrong (truncated) sequence.
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="float32")
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        training_args = GRPOConfig(output_dir=self.tmp_dir, use_liger_kernel=True, report_to="none")
+        with pytest.raises(ValueError, match="prompt-learning"):
+            GRPOTrainer(
+                model=model,
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
+                peft_config=PromptTuningConfig(task_type=TaskType.CAUSAL_LM, num_virtual_tokens=8),
+            )
+
+    @require_peft
     def test_train_peft_model(self):
         model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="float32")
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
@@ -539,6 +885,49 @@ class TestGRPOTrainer(TrlTestCase):
             if n in base_param_names:  # We expect the base model params to be the same
                 torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed.")
             elif "base_layer" not in n and "ref" not in n:  # and the peft params to be different (except base and ref)
+                assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @require_peft
+    def test_train_moe_peft_model(self):
+        # Regression test for https://github.com/huggingface/trl/issues/5222. PEFT only supports one adapter per model
+        # when the LoRA config uses `target_parameters` (see peft#3340), so no "ref" adapter can be created and the
+        # reference log probs are computed with adapters disabled instead.
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-GptOssForCausalLM", dtype="float32")
+        base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
+        lora_config = LoraConfig(target_parameters=["mlp.experts.down_proj", "mlp.experts.gate_up_proj"])
+        model = get_peft_model(model, lora_config)
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            beta=0.1,  # set beta to a non-zero value so that the trainer needs a reference model
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model=model,
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        assert "ref" not in trainer.model.peft_config
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the peft params have changed and the base model params have not changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            if n in base_param_names:  # We expect the base model params to be the same
+                torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed.")
+            elif "base_layer" not in n:  # We expect the peft params to be different (except for the base layer)
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     # In practice, this test is the same as `test_train_peft_config`, since gradient checkpointing is enabled by
@@ -1225,7 +1614,7 @@ class TestGRPOTrainer(TrlTestCase):
 
         with (
             patch.object(trainer, "_generate_and_score_completions", side_effect=gen_with_is_ratio),
-            patch.object(trainer.liger_grpo_loss, "forward", wraps=trainer.liger_grpo_loss.forward) as mock_forward,
+            patch.object(trainer.liger_loss, "forward", wraps=trainer.liger_loss.forward) as mock_forward,
         ):
             trainer.train()
 
@@ -1307,6 +1696,188 @@ class TestGRPOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    def test_train_with_static_entropy(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            report_to="none",
+            entropy_coef=0.1,
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+        assert trainer.state.log_history[-1]["policy_loss"] is not None
+        assert trainer.state.log_history[-1]["entropy_coef"] is not None
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    def test_train_with_adaptive_entropy(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            report_to="none",
+            entropy_coef=0.01,
+            use_adaptive_entropy=True,
+            entropy_target=15.0,  # above any realistic entropy → coef is always incremented
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+        assert trainer.state.log_history[-1]["policy_loss"] is not None
+        assert trainer.state.log_history[-1]["entropy_coef"] is not None
+        # Coefficient should have increased since entropy < target throughout training
+        assert trainer.entropy_coef > 0.01
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @pytest.mark.parametrize("loss_type", ["grpo", "dr_grpo", "dapo", "luspo"])
+    def test_entropy_bonus_scale(self, loss_type):
+        # Regression test: the entropy bonus is the mean per-token entropy H for every loss type (documented
+        # objective L = L_policy - entropy_coef * H), so it must not inherit any loss-type-specific policy
+        # normalization. A previous "unified" formula divided H by a global token count for the
+        # cispo/dapo/vespo family, making the bonus ~1/sequence_length too small; conversely, scaling the
+        # bonus like the dr_grpo (fixed budget) or luspo (sequence-weighted) policy term would also be wrong.
+        # With gradient_accumulation_steps=1 the per-step entropy contribution to the loss is
+        # contrib = policy_loss - loss = entropy_coef * entropy_loss, so contrib / entropy must equal
+        # entropy_coef for all loss types.
+        entropy_coef = 0.5
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            importance_sampling_level="sequence" if loss_type == "luspo" else "token",
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=16,  # reduce the completion length to reduce memory usage
+            gradient_accumulation_steps=1,  # so contrib == entropy_coef * entropy_loss holds per step
+            loss_type=loss_type,
+            logging_steps=1,
+            report_to="none",
+            entropy_coef=entropy_coef,
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        trainer.train()
+
+        logs = [h for h in trainer.state.log_history if "policy_loss" in h and "loss" in h and h.get("entropy")]
+        assert logs
+        ratios = sorted((h["policy_loss"] - h["loss"]) / h["entropy"] for h in logs)
+        ratio = ratios[len(ratios) // 2]  # median, robust to per-step noise
+        # Every loss type regularizes the mean per-token entropy, so contrib == entropy_coef * entropy.
+        assert ratio == pytest.approx(entropy_coef, rel=0.3)
+
+    def test_train_with_adaptive_entropy_gradient_accumulation(self):
+        # Adaptive entropy must behave correctly under gradient accumulation: the coefficient and gating are
+        # frozen across an accumulation window and the controller updates once per optimizer step (not once
+        # per micro-batch). With entropy_target above any realistic entropy the coefficient is incremented by
+        # entropy_coef_delta on every optimizer step, so the final value pins down the number of updates.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            gradient_accumulation_steps=2,  # exercise the accumulation window
+            report_to="none",
+            entropy_coef=0.01,
+            use_adaptive_entropy=True,
+            entropy_target=15.0,  # above any realistic entropy → coef incremented once per optimizer step
+            entropy_coef_delta=0.005,
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+        # Exactly one increment per optimizer step (global_step counts optimizer steps, not micro-batches);
+        # a per-micro-batch update would overshoot this.
+        expected_coef = min(0.01 + 0.005 * trainer.state.global_step, 1.0)
+        assert trainer.entropy_coef == pytest.approx(expected_coef, abs=1e-6)
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    def test_entropy_bonus_flows_gradients(self):
+        # Regression test: entropies were computed under torch.no_grad(), which made the entropy bonus a
+        # no-op for training — it lowered the reported loss but contributed no gradient. When the bonus is
+        # active (entropy_coef != 0 or use_adaptive_entropy), entropies must carry grad; otherwise they stay
+        # detached to save the memory of the full-vocab softmax graph (they only feed logging and the
+        # top_entropy_quantile mask, neither of which is differentiable).
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=GRPOConfig(output_dir=self.tmp_dir, report_to="none", entropy_coef=0.1),
+            train_dataset=dataset,
+        )
+        model = trainer.model
+        input_ids = torch.tensor([[0, 1, 2, 3, 4, 5, 6, 7]], device=model.device)
+        attention_mask = torch.ones_like(input_ids)
+
+        # Bonus active (entropy_coef=0.1 sets _entropy_bonus_enabled at init) → entropies must be
+        # differentiable so the term contributes gradients.
+        assert trainer._entropy_bonus_enabled
+        _, entropies, _ = trainer._get_per_token_logps_and_entropies(
+            model, input_ids, attention_mask, logits_to_keep=4, compute_entropy=True
+        )
+        assert entropies.requires_grad
+
+        # Bonus off → entropies stay detached (preserving the memory optimization).
+        trainer.entropy_coef = 0.0
+        trainer.use_adaptive_entropy = False
+        trainer._entropy_bonus_enabled = False  # self.entropy_coef != 0.0 or self.use_adaptive_entropy
+        _, entropies, _ = trainer._get_per_token_logps_and_entropies(
+            model, input_ids, attention_mask, logits_to_keep=4, compute_entropy=True
+        )
+        assert not entropies.requires_grad
 
     def test_train_with_entropy_filter(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
@@ -1637,6 +2208,7 @@ class TestGRPOTrainer(TrlTestCase):
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
             mask_truncated_completions=True,  # Enable masking of truncated completions
+            loss_type="dapo",  # we test specifically dapo because it normalizes by num_items_in_batch
             report_to="none",
         )
         trainer = GRPOTrainer(
@@ -1675,6 +2247,7 @@ class TestGRPOTrainer(TrlTestCase):
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
             mask_truncated_completions=True,  # Enable masking of truncated completions
+            loss_type="dapo",  # we test specifically dapo because it normalizes by num_items_in_batch
             report_to="none",
         )
         trainer = GRPOTrainer(
@@ -1688,7 +2261,7 @@ class TestGRPOTrainer(TrlTestCase):
 
         trainer.train()
 
-        assert trainer.state.log_history[-1]["train_loss"] is not None
+        assert trainer.state.log_history[-1]["train_loss"] == pytest.approx(0.0)
 
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
@@ -1723,6 +2296,35 @@ class TestGRPOTrainer(TrlTestCase):
 
         expected_warning = "All reward functions returned None for the following kwargs:"
         assert expected_warning in caplog.text
+
+    @pytest.mark.parametrize("loss_type", ["grpo", "bnpo", "dr_grpo", "dapo", "cispo"])
+    def test_warning_raised_sequence_level_with_token_summed_loss(self, caplog, loss_type):
+        """Test that a warning is raised when sequence-level importance sampling is combined with a loss type that
+        sums per-token contributions (length-weighting each sequence instead of following the GSPO objective)."""
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        def dummy_reward_func(completions, **kwargs):
+            return [0.0] * len(completions)
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            importance_sampling_level="sequence",
+            loss_type=loss_type,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            report_to="none",
+        )
+        with caplog.at_level("WARNING", logger="trl.trainer.grpo_trainer"):
+            GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs=dummy_reward_func,
+                args=training_args,
+                train_dataset=dataset,
+            )
+
+        expected_warning = "weights each sequence by its completion length"
+        assert (expected_warning in caplog.text) == (loss_type != "grpo")
 
     def test_train_num_generations_larger_than_batch_size(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
@@ -2144,13 +2746,187 @@ class TestGRPOTrainer(TrlTestCase):
     )
     @require_jmespath
     @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
+    def test_train_with_multiple_environments(self):
+        # When `environment_factory` is a dict, each rollout selects its environment via its `environment` field, and
+        # only that environment's tools are exposed. Here we build a mixed batch with both environments and check that
+        # a tool call from a "counter" example dispatches to the CounterEnvironment's `increment`, while a tool call
+        # from an "echo" example dispatches to the EchoEnvironment's `shout`. With `shuffle_dataset=False` and
+        # `num_generations=2`, every generation batch is [counter, counter, echo, echo].
+        dataset = Dataset.from_dict({"environment": ["counter", "echo"] * 8})
+
+        reset_kwargs_seen = {"counter": [], "echo": []}
+        tool_calls_made = {"increment": [], "shout": []}
+
+        class CounterEnvironment:
+            def reset(self, **kwargs):
+                reset_kwargs_seen["counter"].append(kwargs)
+                return "Count."
+
+            def increment(self, step: int) -> int:
+                """
+                Increment the internal counter.
+
+                Args:
+                    step: Value to add to the counter.
+
+                Returns:
+                    The updated counter value.
+                """
+                tool_calls_made["increment"].append(step)
+                return step
+
+        class EchoEnvironment:
+            def reset(self, **kwargs):
+                reset_kwargs_seen["echo"].append(kwargs)
+                return "Echo."
+
+            def shout(self, text: str) -> str:
+                """
+                Shout the given text.
+
+                Args:
+                    text: Text to shout.
+
+                Returns:
+                    The text in upper case.
+                """
+                tool_calls_made["shout"].append(text)
+                return text.upper()
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=4,  # 2 prompts x 2 generations, so a batch mixes both environments
+            num_generations=2,
+            shuffle_dataset=False,  # keep the [counter, counter, echo, echo] batch layout deterministic
+            report_to="none",
+        )
+
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+            environment_factory={"counter": CounterEnvironment, "echo": EchoEnvironment},
+        )
+
+        # Each environment exposes only its own tool.
+        assert [tool.__name__ for tool in trainer._env_tools["counter"]] == ["increment"]
+        assert [tool.__name__ for tool in trainer._env_tools["echo"]] == ["shout"]
+        # The probe instances seed the reuse pool, so they are not wasted.
+        assert len(trainer._environment_pool["counter"]) == 1
+        assert len(trainer._environment_pool["echo"]) == 1
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        def fake_generate(input_ids, **kwargs):
+            if input_ids.shape[0] == 4:  # first generation: batch is [counter, counter, echo, echo]
+                # fmt: off
+                completion_ids = torch.tensor(
+                    [
+                        # counter example: valid `increment` tool call (only CounterEnvironment exposes it)
+                        # '<tool_call>\n{"name": "increment", "arguments": {"step": 1}}\n</tool_call><|im_end|>' + pad
+                        [151657, 198, 4913, 606, 788, 330, 35744, 497, 330, 16370, 788, 5212, 9520, 788, 220, 16, 11248, 151658, 151645, 151643],
+                        # counter example: no tool call (gives reward variance within the group so gradients are non-zero)
+                        # "I won't<|im_end|>" + pad
+                        [40, 2765, 944, 151645, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643],
+                        # echo example: valid `shout` tool call (only EchoEnvironment exposes it)
+                        # '<tool_call>\n{"name": "shout", "arguments": {"text": "hi"}}\n</tool_call><|im_end|>'
+                        [151657, 198, 4913, 606, 788, 330, 927, 411, 497, 330, 16370, 788, 5212, 1318, 788, 330, 6023, 95642, 151658, 151645],
+                        # echo example: no tool call
+                        # "Done!<|im_end|>" + pad
+                        [17453, 0, 151645, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643],
+                    ],
+                    device=input_ids.device,
+                )
+                # fmt: on
+            else:  # regeneration after tool execution: only the two examples that issued a (valid) tool call
+                completion_ids = torch.tensor(
+                    [
+                        [17453, 0, 151645],  # 'Done!<|im_end|>'
+                        [17453, 0, 151645],
+                    ],
+                    device=input_ids.device,
+                )
+            return torch.cat([input_ids, completion_ids], dim=-1)
+
+        with patch.object(trainer.model, "generate", side_effect=fake_generate):
+            trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+        # The tool call from the counter example ran `increment` (defined only on CounterEnvironment) and the one from
+        # the echo example ran `shout` (defined only on EchoEnvironment): each rollout dispatched to its own tools.
+        assert tool_calls_made["increment"]
+        assert tool_calls_made["shout"]
+        # 2 of the 4 rollouts issued a tool call, and both calls succeeded.
+        assert trainer.state.log_history[-1]["tools/call_frequency"] == pytest.approx(2 / 4)
+        assert trainer.state.log_history[-1]["tools/failure_frequency"] == pytest.approx(0.0)
+        # Both environments were selected and reset, and `environment` is a control field not forwarded to `reset`.
+        assert reset_kwargs_seen["counter"] and reset_kwargs_seen["echo"]
+        assert all("environment" not in kwargs for kwargs in reset_kwargs_seen["counter"] + reset_kwargs_seen["echo"])
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @pytest.mark.xfail(
+        condition=Version(transformers.__version__) < Version("5.2.0"),
+        reason="Environment factory support is not available in transformers versions below 5.2.0",
+        strict=True,
+    )
+    @require_jmespath
+    @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
+    def test_train_with_unknown_environment_raises(self):
+        # With a dict `environment_factory`, an example whose `environment` field doesn't match any configured
+        # environment should fail with a clear error rather than a bare KeyError mid-rollout.
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        dataset = dataset.map(lambda example: {"environment": "unknown"})
+
+        class CounterEnvironment:
+            def reset(self, **kwargs): ...
+
+            def increment(self, step: int) -> int:
+                """
+                Increment the internal counter.
+
+                Args:
+                    step: Value to add to the counter.
+
+                Returns:
+                    The updated counter value.
+                """
+                return step
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            report_to="none",
+        )
+
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+            environment_factory={"counter": CounterEnvironment},
+        )
+
+        with pytest.raises(ValueError, match="not among the environments"):
+            trainer.train()
+
+    @pytest.mark.xfail(
+        condition=Version(transformers.__version__) < Version("5.2.0"),
+        reason="Environment factory support is not available in transformers versions below 5.2.0",
+        strict=True,
+    )
+    @require_jmespath
+    @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
     def test_train_with_environment_factory(self):
         # In this test, we define a simple tool that increments an internal counter. Regardless of the input prompt,
         # the model will generate 3 completions, 2 of which will be valid tool calls. Among the 2 tool calls, one will
         # succeed and the other will fail (because of a wrong tool name).
-
-        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
-
         class DummyEnvironment:
             def reset(self, **kwargs):
                 self._counter = 0
@@ -2173,6 +2949,7 @@ class TestGRPOTrainer(TrlTestCase):
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_steps=5,  # required with environment_factory
             report_to="none",
         )
 
@@ -2180,7 +2957,6 @@ class TestGRPOTrainer(TrlTestCase):
             model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
             args=training_args,
-            train_dataset=dataset,
             environment_factory=DummyEnvironment,
         )
 
@@ -2227,6 +3003,367 @@ class TestGRPOTrainer(TrlTestCase):
         assert trainer.environments[0]._counter == 1  # should have been incremented once
         assert trainer.environments[1]._counter == 0  # shouldn't have been incremented because the tool call failed
         assert trainer.environments[2]._counter == 0  # shouldn't have been incremented because no tool call was made
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @pytest.mark.xfail(
+        condition=Version(transformers.__version__) < Version("5.2.0"),
+        reason="Environment factory support is not available in transformers versions below 5.2.0",
+        strict=True,
+    )
+    @require_jmespath
+    @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
+    def test_train_with_environment_owned_reward(self):
+        # Same setup as `test_train_with_environment_factory`, but the environment owns the reward via a `get_reward`
+        # method and no `reward_funcs` is passed. The reward equals the final counter, so the 3 generations
+        # (counters 1, 0, 0) get rewards 1.0, 0.0, 0.0.
+
+        class DummyEnvironment:
+            def reset(self, **kwargs):
+                self._counter = 0
+
+            def increment(self, step: int) -> int:
+                """
+                Increment the internal counter.
+
+                Args:
+                    step: Value to add to the counter.
+
+                Returns:
+                    The updated counter value.
+                """
+                self._counter += step
+                return self._counter
+
+            def get_reward(self) -> float:
+                return float(self._counter)
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_steps=5,  # required with environment_factory
+            report_to="none",
+        )
+
+        # No `reward_funcs`: the reward is supplied entirely by the environment.
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            args=training_args,
+            environment_factory=DummyEnvironment,
+        )
+
+        # The env-owned reward is registered as the sole reward source (logged under the env class name) with weight 1,
+        # and `get_reward` is not exposed as a tool.
+        assert trainer.reward_func_names == ["DummyEnvironment"]
+        assert trainer.reward_weights.tolist() == [1.0]
+        tool_names = [tool.__name__ for tool in trainer.tools]
+        assert "increment" in tool_names
+        assert "get_reward" not in tool_names
+        assert "reset" not in tool_names
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        def fake_generate(input_ids, **kwargs):
+            if input_ids.shape[0] == 3:  # first call
+                # fmt: off
+                completion_ids = torch.tensor(
+                    [
+                        # '<tool_call>\n{"name": "increment", "arguments": {"step": 1}}\n</tool_call><|im_end|>'
+                        [151657, 198, 4913, 606, 788, 330, 35744, 497, 330, 16370, 788, 5212, 9520, 788, 220, 16, 11248, 151658, 151645, 151643],
+                        # an invalid tool call with wrong tool name
+                        # '<tool_call>\n{"name": "decrement", "arguments": {"step": 2}}\n</tool_call><|im_end|>'
+                        [151657, 198, 4913, 606, 788, 330, 450, 13477, 497, 330, 16370, 788, 5212, 9520, 788, 220, 17, 11248, 151658, 151645],
+                        # "I won't increment<|im_end|>"
+                        [40, 2765, 944, 16252, 151645, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643],
+                    ],
+                    device=input_ids.device,
+                )
+                # fmt: on
+            else:  # second call will only have two inputs in the batch, because two examples have a tool call.
+                completion_ids = torch.tensor(
+                    [
+                        # 'Done!<|im_end|>'
+                        [17453, 0, 151645],
+                        # 'Done!<|im_end|>'
+                        [17453, 0, 151645],
+                    ],
+                    device=input_ids.device,
+                )
+            return torch.cat([input_ids, completion_ids], dim=-1)
+
+        with patch.object(trainer.model, "generate", side_effect=fake_generate):
+            trainer.train()
+
+        # The environment-owned reward is logged like any reward func, under the env class name. Counters are 1, 0, 0
+        # -> rewards 1.0, 0.0, 0.0.
+        assert trainer.state.log_history[-1]["rewards/DummyEnvironment/mean"] == pytest.approx(1 / 3)
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @pytest.mark.xfail(
+        condition=Version(transformers.__version__) < Version("5.2.0"),
+        reason="Environment factory support is not available in transformers versions below 5.2.0",
+        strict=True,
+    )
+    @require_jmespath
+    @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
+    def test_environment_owned_reward_coexists_with_reward_funcs(self):
+        # When both `reward_funcs` and an environment-owned `get_reward` are present, `get_reward` is appended as an
+        # extra reward source (weight 1) after the trainer-owned reward functions.
+        class DummyEnvironment:
+            def reset(self, **kwargs):
+                self._solved = False
+
+            def guess(self, word: str) -> str:
+                """
+                Submit a guess.
+
+                Args:
+                    word: The guessed word.
+
+                Returns:
+                    Feedback about the guess.
+                """
+                return "nope"
+
+            def get_reward(self) -> float:
+                return 1.0 if self._solved else 0.0
+
+        def format_reward(completions, **kwargs):
+            return [0.0 for _ in completions]
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_steps=5,  # required with environment_factory
+            reward_weights=[0.5],  # weight only applies to the trainer-owned reward func
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            reward_funcs=format_reward,
+            args=training_args,
+            environment_factory=DummyEnvironment,
+        )
+
+        # The env-owned reward is appended after the trainer-owned reward func (logged under the env class name), with
+        # a fixed weight of 1.
+        assert trainer.reward_func_names == ["format_reward", "DummyEnvironment"]
+        assert trainer.reward_weights.tolist() == [0.5, 1.0]
+        assert len(trainer.reward_funcs) == 2
+        # `get_reward` is not exposed as a tool; `guess` is.
+        tool_names = [tool.__name__ for tool in trainer.tools]
+        assert "guess" in tool_names
+        assert "get_reward" not in tool_names
+
+    @pytest.mark.xfail(
+        condition=Version(transformers.__version__) < Version("5.2.0"),
+        reason="Environment factory support is not available in transformers versions below 5.2.0",
+        strict=True,
+    )
+    @require_jmespath
+    @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
+    def test_environment_owned_reward_mixed_environments(self):
+        # With a dict `environment_factory`, only some environments may own their reward via `get_reward`. Each such
+        # env *class* contributes one reward column (named after its class); a rollout is scored only when its
+        # environment is that class, so mixing a reward-owning env with a plain one must not raise. Reward columns are
+        # deduplicated by class: two names mapping to the same `get_reward` class share a single column (no
+        # double-counting).
+        class ScoredEnvironment:  # owns its reward
+            def reset(self, **kwargs): ...
+
+            def act(self, x: int) -> int:
+                """
+                Act.
+
+                Args:
+                    x: A value.
+
+                Returns:
+                    The value.
+                """
+                return x
+
+            def get_reward(self) -> float:
+                return 1.0
+
+        class PlainEnvironment:  # no `get_reward`; scored by `reward_funcs`
+            def reset(self, **kwargs): ...
+
+            def play(self, x: int) -> int:
+                """
+                Play.
+
+                Args:
+                    x: A value.
+
+                Returns:
+                    The value.
+                """
+                return x
+
+        def format_reward(completions, **kwargs):
+            return [0.0 for _ in completions]
+
+        # A dict `environment_factory` routes each example via its `environment` column, so a dataset is required.
+        dataset = Dataset.from_dict({"environment": ["scored", "scored2", "plain"]})
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            reward_funcs=format_reward,
+            args=training_args,
+            train_dataset=dataset,
+            # `scored` and `scored2` both build `ScoredEnvironment`, so they must collapse to a single reward column.
+            environment_factory={"scored": ScoredEnvironment, "scored2": ScoredEnvironment, "plain": PlainEnvironment},
+        )
+
+        # Only `ScoredEnvironment` owns a reward, and despite two names mapping to it, a single (deduplicated) env-reward
+        # column is appended after the trainer-owned reward func, with a fixed weight of 1.
+        assert trainer.reward_func_names == ["format_reward", "ScoredEnvironment"]
+        assert trainer.reward_weights.tolist() == [1.0, 1.0]
+
+        # The env-reward func scores only rollouts bound to `ScoredEnvironment`; a `PlainEnvironment` rollout returns
+        # `None` (turned into NaN and ignored) instead of raising `AttributeError`.
+        env_reward_func = trainer.reward_funcs[-1]
+        rewards = env_reward_func(environments=[ScoredEnvironment(), PlainEnvironment()])
+        assert rewards == [1.0, None]
+
+    def test_no_reward_source_raises(self):
+        # `reward_funcs` is optional, but a reward must come from somewhere: with neither `reward_funcs` nor an
+        # environment-owned `get_reward`, construction fails fast instead of training on an all-zero reward.
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        training_args = GRPOConfig(output_dir=self.tmp_dir, report_to="none")
+        with pytest.raises(ValueError, match="No reward source provided"):
+            GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen3ForCausalLM",
+                args=training_args,
+                train_dataset=dataset,
+            )
+
+    def test_dataset_required_without_environment(self):
+        # The data has to come from somewhere: an external `train_dataset`, or an environment that owns it. With
+        # neither, construction fails fast.
+        training_args = GRPOConfig(output_dir=self.tmp_dir, report_to="none")
+        with pytest.raises(ValueError, match="`train_dataset` is required"):
+            GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen3ForCausalLM",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+            )
+
+    @pytest.mark.xfail(
+        condition=Version(transformers.__version__) < Version("5.2.0"),
+        reason="Environment factory support is not available in transformers versions below 5.2.0",
+        strict=True,
+    )
+    @require_jmespath
+    @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
+    def test_environment_owned_data_requires_max_steps(self):
+        # When the environment owns the data and no external `train_dataset` is provided, `max_steps` must set the
+        # training length.
+        class DummyEnvironment:
+            def reset(self, **kwargs):
+                return "Guess the 5-letter word."
+
+        training_args = GRPOConfig(output_dir=self.tmp_dir, report_to="none")  # max_steps unset
+        with pytest.raises(ValueError, match="max_steps"):
+            GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen3ForCausalLM",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                environment_factory=DummyEnvironment,
+            )
+
+    @pytest.mark.xfail(
+        condition=Version(transformers.__version__) < Version("5.2.0"),
+        reason="Environment factory support is not available in transformers versions below 5.2.0",
+        strict=True,
+    )
+    @require_jmespath
+    @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
+    def test_multiple_environments_without_dataset_raises(self):
+        # Multiple environments (a `dict` factory) need a `train_dataset` with an `environment` column to route each
+        # example. Without one, there is no per-rollout selector, so construction fails fast with a clear message.
+        class EnvA:
+            def reset(self, **kwargs): ...
+
+        class EnvB:
+            def reset(self, **kwargs): ...
+
+        training_args = GRPOConfig(output_dir=self.tmp_dir, max_steps=1, report_to="none")
+        with pytest.raises(ValueError, match="requires a `train_dataset`"):
+            GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen3ForCausalLM",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                environment_factory={"a": EnvA, "b": EnvB},
+            )
+
+    @pytest.mark.xfail(
+        condition=Version(transformers.__version__) < Version("5.2.0"),
+        reason="Environment factory support is not available in transformers versions below 5.2.0",
+        strict=True,
+    )
+    @require_jmespath
+    @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
+    def test_train_with_environment_owned_data(self):
+        # The environment owns the data — no external `train_dataset` is needed. `reset()` returns the prompt, and
+        # `max_steps` drives the training loop. A placeholder dataset is built internally.
+        class GuessTheWordEnvironment:
+            def reset(self, **kwargs):
+                return "Guess the 5-letter word."  # the env owns the data and returns the prompt
+
+        # Distinct-length completions within the group give reward variance, so advantages are non-zero.
+        def fake_generate(input_ids, **kwargs):
+            rows = [
+                [17453, 0, 151645, 151643, 151643, 151643],  # 'Done!' + eos + pad
+                [17453, 17453, 0, 151645, 151643, 151643],  # 'DoneDone!' + eos + pad
+                [17453, 17453, 17453, 0, 151645, 151643],  # 'DoneDoneDone!' + eos + pad
+            ]
+            completion_ids = torch.tensor([rows[i % 3] for i in range(input_ids.shape[0])], device=input_ids.device)
+            return torch.cat([input_ids, completion_ids], dim=-1)
+
+        def reward_len(completions, **kwargs):
+            return [float(len(completion[-1]["content"])) for completion in completions]
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_steps=5,  # the environment owns the data, so `max_steps` sets the training length
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            report_to="none",
+        )
+
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen3ForCausalLM",
+            reward_funcs=reward_len,
+            args=training_args,
+            environment_factory=GuessTheWordEnvironment,
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        with patch.object(trainer.model, "generate", side_effect=fake_generate):
+            trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
@@ -2752,6 +3889,31 @@ class TestGRPOTrainerVLM(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    def test_train_vlm_log_multimodal_false(self):
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
+
+        def reward_func(completions, **kwargs):
+            """Reward function that rewards longer completions."""
+            return [float(len(completion[0]["content"])) for completion in completions]
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,  # VLM training is memory intensive, reduce batch size to avoid OOM
+            num_generations=2,  # VLM training is memory intensive, reduce num_generations to avoid OOM
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            report_to="none",
+            log_completions=True,
+            log_multimodal=False,
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
+            reward_funcs=reward_func,
+            args=training_args,
+            train_dataset=dataset,
+        )
+        trainer.train()
+        assert len(trainer._logs["images"]) == 0
+
     @pytest.mark.xfail(
         condition=Version(transformers.__version__) < Version("5.2.0"),
         reason="Qwen3.5 models were introduced in transformers-5.2.0",
@@ -2877,7 +4039,7 @@ class TestGRPOTrainerSlow(TrlTestCase):
         )
         from liger_kernel.chunked_loss import LigerFusedLinearGRPOLoss
 
-        assert isinstance(trainer.liger_grpo_loss, LigerFusedLinearGRPOLoss)
+        assert isinstance(trainer.liger_loss, LigerFusedLinearGRPOLoss)
 
         previous_trainable_params = {n: param.clone() for n, param in model.named_parameters()}
 
@@ -2936,7 +4098,7 @@ class TestGRPOTrainerSlow(TrlTestCase):
         )
         from liger_kernel.chunked_loss import LigerFusedLinearGRPOLoss
 
-        assert isinstance(trainer.liger_grpo_loss, LigerFusedLinearGRPOLoss)
+        assert isinstance(trainer.liger_loss, LigerFusedLinearGRPOLoss)
 
         # Verify PEFT adapter is properly initialized
         from peft import PeftModel
@@ -2987,7 +4149,7 @@ class TestGRPOTrainerSlow(TrlTestCase):
         )
         from liger_kernel.chunked_loss import LigerFusedLinearGRPOLoss
 
-        assert isinstance(trainer.liger_grpo_loss, LigerFusedLinearGRPOLoss)
+        assert isinstance(trainer.liger_loss, LigerFusedLinearGRPOLoss)
 
         previous_trainable_params = {n: param.clone() for n, param in model.named_parameters()}
 
@@ -3006,17 +4168,17 @@ class TestGRPOTrainerSlow(TrlTestCase):
             "trl-internal-testing/tiny-MistralForCausalLM-0.2",
         ],
     )
-    def test_train_with_transformers_paged(self, model_name):
-        """Test that training works with transformers paged implementation (requires GPU)."""
-        if Version(transformers.__version__) < Version("4.57.0"):
-            pytest.xfail("Bug in transformers solved in GH#40692, released in 4.57.0.")
+    def test_train_with_transformers_continuous_batching(self, model_name):
+        """Test that training works with transformers continuous batching (requires GPU)."""
+        if not Version(transformers.__version__) >= Version("5.8.0"):
+            pytest.skip("transformers continuous batching requires transformers>=5.8.0.")
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
-            use_transformers_paged=True,  # Enable transformers paged implementation
+            use_transformers_continuous_batching=True,
             report_to="none",
             logging_strategy="no",
         )
@@ -3096,7 +4258,6 @@ class TestGRPOTrainerSlow(TrlTestCase):
             model_name,
             attn_implementation="kernels-community/flash-attn2",
             dtype="bfloat16",
-            device_map=get_kbit_device_map(),
             quantization_config=quantization_config,
         )
 
@@ -3180,7 +4341,6 @@ class TestGRPOTrainerSlow(TrlTestCase):
         - LoRA (Low-Rank Adaptation) with minimal rank (r=4)
         - 4-bit quantization with BitsAndBytesConfig
         - Gradient checkpointing
-        - bfloat16 precision
         - Minimal batch sizes and sequence lengths
         - Very low GPU memory utilization (5%)
         """
@@ -3195,7 +4355,7 @@ class TestGRPOTrainerSlow(TrlTestCase):
             use_vllm=True,  # Enable vLLM
             vllm_mode="colocate",  # Use colocate mode to avoid server dependency
             vllm_gpu_memory_utilization=0.05,  # Use minimal GPU memory (5%)
-            bf16=True,  # Use bfloat16 to reduce memory
+            bf16=False,  # bf16=True raises on devices without bf16 support; this test never calls train(), so it is unused
             report_to="none",
             logging_strategy="no",
         )

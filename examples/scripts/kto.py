@@ -60,8 +60,7 @@ python trl/scripts/kto.py \
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser
 
-from trl import ModelConfig, ScriptArguments, get_peft_config
-from trl.experimental.kto import KTOConfig, KTOTrainer
+from trl import KTOConfig, KTOTrainer, ModelConfig, ScriptArguments, get_peft_config
 
 
 if __name__ == "__main__":
@@ -69,16 +68,10 @@ if __name__ == "__main__":
     script_args, training_args, model_args = parser.parse_args_into_dataclasses()
 
     # Load a pretrained model
-    model = AutoModelForCausalLM.from_pretrained(
-        model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code
-    )
-    ref_model = AutoModelForCausalLM.from_pretrained(
-        model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code
-    )
+    model = AutoModelForCausalLM.from_pretrained(model_args.model_name_or_path)
+    ref_model = AutoModelForCausalLM.from_pretrained(model_args.model_name_or_path)
 
-    tokenizer = AutoTokenizer.from_pretrained(
-        model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code
-    )
+    tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 

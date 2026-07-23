@@ -11,6 +11,10 @@ This guide covers **how to integrate OpenEnv with TRL**. For more on OpenEnv its
 
 [`GRPOTrainer`] can be used to train agents. For agentic tasks, it supports two modes: **tools**, where the model can call external functions but each call is stateless and independent, and **environments**, which maintain state across turns, enabling genuine multi-turn interaction where the agent's actions shape future observations. Use environments when continuity matters — for example, navigating a game, browsing a web page, or any task where what the agent sees next depends on what it did before.
 
+## Choosing an environment integration
+
+OpenEnv is the native path documented here. Two further integrations — [OpenReward](openreward) and [Harbor](harbor) — conform to the same `environment_factory` contract and are interchangeable at the TRL level. See the [comparison of environment integrations](grpo_trainer#agent-training) in the GRPO guide to pick the one whose ecosystem fits your task.
+
 ## Installation
 
 OpenEnv environments are hosted as Hugging Face Spaces, which are also pip-installable Git repositories:
@@ -593,67 +597,3 @@ app = create_app(
 - **`rollout_func`**: You write the entire generation and environment interaction loop yourself. This gives full control over how completions are produced, how tools are executed, and how rewards are computed.
 
 Use `rollout_func` when `environment_factory` doesn't fit your use case. For example, **external agent servers** where an external server owns the generation loop and manages its own agent-environment interaction protocol.
-
-### Migrating from `rollout_func` to `environment_factory`
-
-If you have existing `rollout_func` code and want to migrate, here's the mapping:
-
-| `rollout_func` pattern | `environment_factory` equivalent |
-|------------------------|----------------------------------|
-| Manual generation loop | Handled automatically by the trainer |
-| `generate_rollout_completions()` | Not needed, trainer generates internally |
-| `env.step(Action(...))` in rollout | Wrap in a tool method on the environment class |
-| Reward via `kwargs["env_reward"]` | Reward via `environments` parameter |
-| `env_mask` construction | Automatic, trainer builds `tool_mask` |
-| Token concatenation | Automatic, trainer manages token sequences |
-
-**Before** (`rollout_func`):
-
-```python
-def rollout_func(prompts, trainer):
-    outputs = generate_rollout_completions(trainer, prompts)
-    env_rewards = []
-    for out in outputs:
-        text = tokenizer.decode(out["completion_ids"], skip_special_tokens=True)
-        result = client.step(EchoAction(message=text))
-        env_rewards.append(result.reward)
-    return {
-        "prompt_ids": [out["prompt_ids"] for out in outputs],
-        "completion_ids": [out["completion_ids"] for out in outputs],
-        "logprobs": [out["logprobs"] for out in outputs],
-        "env_reward": env_rewards,
-    }
-
-trainer = GRPOTrainer(..., rollout_func=rollout_func)
-```
-
-**After** (`environment_factory`):
-
-```python
-class EchoToolEnv:
-    def __init__(self):
-        self.env = EchoEnv(base_url=url)
-        self.reward = 0.0
-
-    def reset(self, **kwargs) -> str | None:
-        self.reward = 0.0
-        return None
-
-    def echo(self, message: str) -> str:
-        """Echo the message back.
-
-        Args:
-            message: The message to echo
-
-        Returns:
-            The echoed message.
-        """
-        result = self.env.step(EchoAction(message=message))
-        self.reward = result.observation.reward
-        return result.observation.echoed_message
-
-def reward_func(environments, **kwargs):
-    return [env.reward for env in environments]
-
-trainer = GRPOTrainer(..., environment_factory=EchoToolEnv, reward_funcs=reward_func)
-```
