@@ -64,7 +64,7 @@ from ..data_utils import (
     pack_dataset,
     prepare_multimodal_messages,
 )
-from ..models import get_act_offloading_ctx_manager
+from ..models import enable_selective_activation_checkpointing, get_act_offloading_ctx_manager
 from .base_trainer import _BaseTrainer
 from .sft_config import SFTConfig
 from .utils import (
@@ -1105,6 +1105,12 @@ class SFTTrainer(_BaseTrainer):
             and args.deepspeed_plugin.zero_stage == 3
             and args.gradient_checkpointing
         ):
+            # SAC requires non-reentrant checkpointing, which this configuration forbids, so the two are incompatible.
+            if args.selective_activation_checkpointing:
+                raise ValueError(
+                    "`selective_activation_checkpointing=True` is not supported with PEFT + DeepSpeed ZeRO-3, which "
+                    "requires reentrant gradient checkpointing while SAC requires non-reentrant checkpointing."
+                )
             args.gradient_checkpointing_kwargs = args.gradient_checkpointing_kwargs or {}
             use_reentrant = args.gradient_checkpointing_kwargs.get("use_reentrant")
             if use_reentrant is False:
@@ -1332,6 +1338,15 @@ class SFTTrainer(_BaseTrainer):
         if args.gradient_checkpointing and Version(transformers.__version__) < Version("5.0.0"):
             args.gradient_checkpointing_kwargs = args.gradient_checkpointing_kwargs or {}
             args.gradient_checkpointing_kwargs.setdefault("use_reentrant", False)
+
+        if args.selective_activation_checkpointing and not args.gradient_checkpointing:
+            raise ValueError("`selective_activation_checkpointing=True` requires `gradient_checkpointing=True`.")
+
+        # Enable selective activation checkpointing (SAC): save attention, recompute the rest. Wrap the model's
+        # `gradient_checkpointing_enable` before `super().__init__()` so the injected SAC context function is already in
+        # place when the Trainer turns gradient checkpointing on in `train()`.
+        if args.selective_activation_checkpointing:
+            enable_selective_activation_checkpointing(model)
 
         super().__init__(
             model=model,

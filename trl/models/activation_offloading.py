@@ -20,6 +20,7 @@
 
 
 import sys
+from functools import partial
 
 import psutil
 import torch
@@ -27,6 +28,7 @@ from accelerate.logging import get_logger
 from accelerate.utils.versions import is_torch_version
 from torch import nn
 from torch.autograd.graph import saved_tensors_hooks
+from torch.utils.checkpoint import CheckpointPolicy, create_selective_checkpoint_contexts
 from transformers import is_torch_npu_available
 
 
@@ -222,11 +224,11 @@ class OffloadActivations(saved_tensors_hooks):
             num_bytes = get_num_bytes_tensor(activation)
             tensor_id = get_tensor_id()
 
-            # Check for tensor deduplication using storage pointer
+            # Check for tensor deduplication using storage pointer in streams mode.
             # If this storage is already being tracked, we still create a new tensor_id
-            # but don't offload again (just keep the tensor in GPU)
+            # but don't offload again (just keep the tensor in GPU).
             storage_key = _get_unique_tensor_key(activation)
-            if storage_key in self.storage_to_tensor_id:
+            if self.use_streams and storage_key in self.storage_to_tensor_id:
                 # Storage already offloaded - don't offload again, just track the reference
                 self.tracker[tensor_id] = (activation, False, None, None, None)  # Keep on GPU, don't offload
                 track_storage_key(storage_key, tensor_id)
@@ -779,3 +781,52 @@ def get_act_offloading_ctx_manager(
             module.register_forward_hook(lambda *args: noop_ctx.__exit__(), always_call=True)
 
     return activations_handling_ctx
+
+
+# Substrings identifying the attention op in the dispatcher. Covers the SDPA backend overloads
+# (`_scaled_dot_product_flash_attention`, `..._efficient_attention`, `..._cudnn_attention`, `..._math`, and the CPU
+# variant) as well as flash-attn custom ops, which register under hashed namespaces (e.g.
+# `_flash_attn2_cuda_f12afc9::varlen_fwd`) and so can only be matched by name.
+_ATTENTION_OP_MARKERS = ("scaled_dot_product", "flash_attn", "efficient_attention")
+
+
+def enable_selective_activation_checkpointing(model: nn.Module) -> None:
+    """
+    Enable eager selective activation checkpointing (SAC) on the model.
+
+    Plain (full) activation checkpointing recomputes every op in the checkpointed region during the backward pass,
+    including attention. Attention *backward* is irreducible, but its recompute is not: at long context, saving the
+    attention output during the forward pass instead of recomputing it recovers most of the checkpointing slowdown for
+    one extra hidden-state-sized tensor per layer.
+
+    This wraps the model's `gradient_checkpointing_enable` so that, whenever gradient checkpointing is turned on (by
+    the trainer, PEFT preparation, etc.), a policy-based [SAC context
+    function](https://pytorch.org/docs/main/checkpoint.html#torch.utils.checkpoint.create_selective_checkpoint_contexts)
+    is injected. The policy saves the attention op and recomputes everything else. Matching happens at the dispatcher
+    level, so custom kernels that are not registered as torch ops are simply recomputed as usual. It runs fully eager
+    (no `torch.compile` required) and forces non-reentrant checkpointing, which SAC relies on.
+
+    Wrapping the model instance's method (rather than passing a `context_fn` through the config) keeps the
+    non-serializable callable out of [`~transformers.TrainingArguments`] and covers every enable call site.
+
+    Args:
+        model (`nn.Module`):
+            Model on which to enable selective activation checkpointing. Must support `gradient_checkpointing_enable`.
+    """
+
+    def policy_fn(ctx, op, *args, **kwargs):
+        if any(marker in str(op) for marker in _ATTENTION_OP_MARKERS):
+            return CheckpointPolicy.MUST_SAVE
+        return CheckpointPolicy.PREFER_RECOMPUTE
+
+    context_fn = partial(create_selective_checkpoint_contexts, policy_fn)
+    original_gradient_checkpointing_enable = model.gradient_checkpointing_enable
+
+    def gradient_checkpointing_enable(gradient_checkpointing_kwargs: dict | None = None):
+        gradient_checkpointing_kwargs = dict(gradient_checkpointing_kwargs or {})
+        # SAC intercepts saved tensors, which only happens under non-reentrant checkpointing.
+        gradient_checkpointing_kwargs["use_reentrant"] = False
+        gradient_checkpointing_kwargs["context_fn"] = context_fn
+        return original_gradient_checkpointing_enable(gradient_checkpointing_kwargs=gradient_checkpointing_kwargs)
+
+    model.gradient_checkpointing_enable = gradient_checkpointing_enable

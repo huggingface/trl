@@ -14,6 +14,7 @@
 
 import torch
 from torch import nn
+from torch.utils._python_dispatch import TorchDispatchMode
 from transformers import AutoModelForCausalLM
 from transformers.testing_utils import torch_device
 from transformers.utils import is_peft_available
@@ -283,3 +284,50 @@ class TestActivationOffloading(TrlTestCase):
 
         param_ptrs = {p.data.untyped_storage().data_ptr() for p in model.parameters()}
         assert offload_ctx.param_storages == param_ptrs, "Tracked storages should match parameter storages"
+
+
+class _SdpaCounter(TorchDispatchMode):
+    """Counts how many times an attention (scaled-dot-product) op executes at the dispatcher level."""
+
+    def __init__(self) -> None:
+        self.count = 0
+
+    def __torch_dispatch__(self, func, types, args=(), kwargs=None):
+        if "scaled_dot_product" in str(func):
+            self.count += 1
+        return func(*args, **(kwargs or {}))
+
+
+class TestSelectiveActivationCheckpointing(TrlTestCase):
+    model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+
+    def _forward_backward(self, model):
+        torch.manual_seed(42)
+        inp = torch.randint(0, model.config.vocab_size, (2, 32), device=torch_device)
+        counter = _SdpaCounter()
+        with counter:
+            model(input_ids=inp, labels=inp).loss.backward()
+        grads = torch.cat([p.grad.flatten() for p in model.parameters() if p.grad is not None])
+        model.zero_grad(set_to_none=True)
+        return grads, counter.count
+
+    def test_matches_full_checkpointing_and_skips_attention_recompute(self):
+        """SAC must produce identical gradients to full checkpointing while not recomputing attention."""
+        # Full (non-selective) gradient checkpointing baseline.
+        model_full = AutoModelForCausalLM.from_pretrained(self.model_id, attn_implementation="sdpa").to(torch_device)
+        model_full.train()
+        model_full.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
+        grads_full, sdpa_full = self._forward_backward(model_full)
+
+        # Selective activation checkpointing: our wrapper injects the SAC context function.
+        model_sac = AutoModelForCausalLM.from_pretrained(self.model_id, attn_implementation="sdpa").to(torch_device)
+        model_sac.train()
+        activation_offloading_module.enable_selective_activation_checkpointing(model_sac)
+        model_sac.gradient_checkpointing_enable()
+        grads_sac, sdpa_sac = self._forward_backward(model_sac)
+
+        # Gradients must match the full-checkpointing baseline.
+        torch.testing.assert_close(grads_sac, grads_full, rtol=1e-4, atol=1e-5)
+
+        # Full checkpointing recomputes attention in the backward pass; SAC saves it, so it runs fewer times.
+        assert sdpa_sac < sdpa_full
