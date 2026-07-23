@@ -1882,7 +1882,8 @@ class GRPOTrainer(_BaseTrainer):
         """Get token IDs for tool result formatting by using a minimal dummy conversation."""
         # Use the real tool name instead of a dummy: some templates (e.g. GPT-OSS) derive the tool response
         # header from the assistant's tool call name.
-        dummy_tool_calls = [{"type": "function", "function": {"name": tool_messages[0]["name"], "arguments": {}}}]
+        tool_name = next(message["name"] for message in tool_messages if message["role"] == "tool")
+        dummy_tool_calls = [{"type": "function", "function": {"name": tool_name, "arguments": {}}}]
         dummy_messages = [
             {"role": "user", "content": "dummy"},
             {
@@ -1926,9 +1927,20 @@ class GRPOTrainer(_BaseTrainer):
         if eos_positions:
             prefix_ids = prefix_ids[: eos_positions[-1] + 1]
 
-        if full_ids[: len(prefix_ids)] != prefix_ids:
-            raise ValueError("Unexpected tokenization: the EOS-trimmed prefix IDs are not a prefix of the full IDs.")
-        return full_ids[len(prefix_ids) :]
+        if full_ids[: len(prefix_ids)] == prefix_ids:
+            return full_ids[len(prefix_ids) :]
+
+        # Some templates render assistant-final scaffolding (for example a thinking prelude) only when the assistant
+        # message is the last message. Once tool/user result messages are appended, that scaffolding disappears, so the
+        # full prefix is no longer an exact prefix. In that case, align on the longest rendered suffix of the assistant
+        # tool-call block and return the tool-result tokens after it.
+        for suffix_len in range(len(prefix_ids) - 1, 0, -1):
+            prefix_suffix = prefix_ids[-suffix_len:]
+            for start in range(0, len(full_ids) - suffix_len + 1):
+                if full_ids[start : start + suffix_len] == prefix_suffix:
+                    return full_ids[start + suffix_len :]
+
+        raise ValueError("Unexpected tokenization: could not align the tool-call prefix with the full IDs.")
 
     def _tool_call_loop(self, prompts, prompt_ids, completion_ids, completions, logprobs, images, multimodal_fields):
         # Tool execution loop: execute tools, then regenerate completions with tool results appended to the prompt
@@ -2000,27 +2012,38 @@ class GRPOTrainer(_BaseTrainer):
                             tool_call_results.append((name, result))
 
                 for name, result in tool_call_results:
-                    # Support multimodal tool responses: if the tool returns a list of content blocks
-                    # (e.g., [{"type": "image", "image": ...}, {"type": "text", "text": "..."}]),
-                    # pass them through directly so _tokenize_prompts can extract images for VLMs.
+                    # Many VLM chat templates render image placeholders for user messages only. Keep the textual
+                    # tool result in the tool message, and surface tool-rendered images as a synthetic user message
+                    # so the tokenized suffix contains image tokens matching the collected image features.
                     content = result if isinstance(result, list) else str(result)
-                    tool_message = {"role": "tool", "name": name, "content": content}
-                    # Collect images from multimodal tool responses
+                    image_parts = []
                     if isinstance(content, list):
+                        text_parts = []
                         for part in content:
                             if isinstance(part, dict) and part.get("type") == "image":
+                                image_parts.append(part)
                                 tool_images[idx_with_tool].append(part["image"])
+                            else:
+                                text_parts.append(part)
+                        tool_content = text_parts if text_parts else ""
+                    else:
+                        tool_content = content
+                    tool_message = {"role": "tool", "name": name, "content": tool_content}
                     prompt_completion_tool.append(tool_message)
                     completions[idx_with_tool].append(tool_message)
+                    if image_parts:
+                        image_message = {"role": "user", "content": image_parts}
+                        prompt_completion_tool.append(image_message)
 
             # Build token IDs by concatenation: prompt + completion + tool_suffix.
             prompt_completion_tool_ids = []
             for idx in range(len(idxs_with_tool)):
                 idx_with_tool = idxs_with_tool[idx]
-                # Extract trailing tool messages from completions
+                # Extract trailing tool results and any synthetic user image messages from the prompt transcript.
                 tool_messages = []
-                for message in reversed(completions[idx_with_tool]):
-                    if message["role"] == "tool":
+                prompt_completion_tool = prompt_completion_tools[idx]
+                for message in reversed(prompt_completion_tool):
+                    if message["role"] in {"tool", "user"}:
                         tool_messages.insert(0, message)
                     else:
                         break

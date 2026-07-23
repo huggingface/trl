@@ -14,6 +14,7 @@
 
 import gc
 import os
+import textwrap
 import warnings
 from collections.abc import Callable
 from types import SimpleNamespace
@@ -3510,6 +3511,82 @@ class TestGRPOTrainer(TrlTestCase):
 
 @require_vision
 class TestGRPOTrainerVLM(TrlTestCase):
+    @pytest.mark.xfail(
+        condition=Version(transformers.__version__) < Version("5.2.0"),
+        reason="Qwen3.5 models were introduced in transformers-5.2.0",
+        strict=True,
+    )
+    def test_tool_suffix_ids_include_user_image_from_tool_response(self):
+        from PIL import Image as PILImage
+
+        processor = AutoProcessor.from_pretrained("trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink")
+        # This mirrors VLM templates that render image placeholders for user messages while keeping tool messages
+        # text-only.
+        processor.chat_template = textwrap.dedent(r"""
+        {%- for message in messages %}
+            {%- if message.role == 'user' %}
+                {{- '<|im_start|>user\n' }}
+                {%- if message.content is string %}
+                    {{- message.content }}
+                {%- else %}
+                    {%- for content in message.content %}
+                        {%- if content.type == 'image' or 'image' in content %}
+                            {{- '<|vision_start|><|image_pad|><|vision_end|>' }}
+                        {%- elif 'text' in content %}
+                            {{- content.text }}
+                        {%- endif %}
+                    {%- endfor %}
+                {%- endif %}
+                {{- '<|im_end|>\n' }}
+            {%- elif message.role == 'assistant' %}
+                {{- '<|im_start|>assistant\n' }}
+                {%- if message.tool_calls %}
+                    {%- for tool_call in message.tool_calls %}
+                        {%- if tool_call.function %}
+                            {%- set tool_call = tool_call.function %}
+                        {%- endif %}
+                        {{- '<tool_call>' + tool_call.name + '</tool_call>' }}
+                    {%- endfor %}
+                {%- endif %}
+                {{- '<|im_end|>\n' }}
+            {%- elif message.role == 'tool' %}
+                {{- '<|im_start|>tool\n' }}
+                {%- if message.content is string %}
+                    {{- message.content }}
+                {%- else %}
+                    {%- for content in message.content %}
+                        {%- if 'text' in content %}
+                            {{- content.text }}
+                        {%- endif %}
+                    {%- endfor %}
+                {%- endif %}
+                {{- '<|im_end|>\n' }}
+            {%- endif %}
+        {%- endfor %}
+        {%- if add_generation_prompt %}
+            {{- '<|im_start|>assistant\n' }}
+        {%- endif %}""")
+
+        trainer = object.__new__(GRPOTrainer)
+        trainer._is_vlm = True
+        trainer.processing_class = processor
+        trainer._tokenizer = processor.tokenizer
+        trainer.chat_template = None
+        trainer.chat_template_kwargs = {}
+
+        suffix_ids = trainer._get_tool_suffix_ids(
+            [
+                {"role": "tool", "name": "screenshot_tool", "content": [{"type": "text", "text": "Rendered"}]},
+                {
+                    "role": "user",
+                    "content": [{"type": "image", "image": PILImage.new("RGB", (8, 8), color="red")}],
+                },
+            ]
+        )
+
+        image_pad_token_id = processor.tokenizer.convert_tokens_to_ids("<|image_pad|>")
+        assert image_pad_token_id in suffix_ids
+
     @pytest.mark.parametrize(
         "model_id",
         [
