@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import asyncio
+import base64
 import enum
 import inspect
 import multiprocessing as mp
@@ -26,6 +27,7 @@ import uuid
 import warnings
 from collections.abc import Awaitable, Callable, Iterator
 from dataclasses import dataclass, field
+from io import BytesIO
 from multiprocessing.queues import Queue as MPQueue
 from multiprocessing.sharedctypes import Synchronized as MPValue
 from multiprocessing.synchronize import Event as MPEvent
@@ -35,7 +37,7 @@ import aiohttp
 import numpy as np
 from accelerate.logging import get_logger
 from datasets import Dataset
-from transformers import PreTrainedTokenizerBase
+from transformers import PreTrainedTokenizerBase, ProcessorMixin
 
 from ...chat_template_utils import (
     _SUPPORTS_RESPONSE_TEMPLATE,
@@ -44,8 +46,41 @@ from ...chat_template_utils import (
     is_chat_template_prefix_preserving,
     parse_response,
 )
+from ...data_utils import prepare_multimodal_messages
 from ...import_utils import is_vllm_available
 from ...trainer.utils import get_callable_name, print_prompt_completions_sample
+
+
+def _pil_to_base64(image) -> str:
+    """Encode a PIL image as a base64 PNG string (mirrors `trl.generation.vllm_client.pil_to_base64`)."""
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    return base64.b64encode(buffer.getvalue()).decode("utf-8")
+
+
+def _messages_to_openai_mm(messages: "Messages") -> list[dict]:
+    """Convert internal messages to OpenAI chat format with `image_url` data-URIs.
+
+    Filled image parts (`{"type": "image", "image": <PIL>}`) become OpenAI `image_url` parts so the vLLM chat
+    endpoint can consume the images; text parts and plain-string content pass through unchanged. Only needed for
+    the VLM generation path (stock vLLM `/v1/completions` cannot carry images).
+    """
+    out = []
+    for message in messages:
+        content = message["content"]
+        if not isinstance(content, list):
+            out.append({"role": message["role"], "content": content})
+            continue
+        parts = []
+        for part in content:
+            if isinstance(part, dict) and part.get("type") == "image" and "image" in part:
+                parts.append(
+                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{_pil_to_base64(part['image'])}"}}
+                )
+            elif isinstance(part, dict) and part.get("type") == "text":
+                parts.append({"type": "text", "text": part["text"]})
+        out.append({"role": message["role"], "content": parts})
+    return out
 
 
 logger = get_logger(__name__)
@@ -180,6 +215,7 @@ class RolloutGroup:
     model_version: int
     group_id: int
     env_rewards: list[tuple[type, float] | None]
+    multimodal_inputs: list[dict[str, Any] | None]  # per conversation, its CPU pixel tensors (VLM), else None
     queued_at: float = 0.0
 
 
@@ -194,6 +230,7 @@ class RolloutSample:
     model_version: int
     group_id: int
     metrics: dict[str, float]
+    multimodal_inputs: dict[str, Any] | None  # CPU pixel tensors for VLM rollouts, else None
 
 
 # Env vars the child must drop so accelerate's `PartialState()` initialises in
@@ -311,12 +348,30 @@ class _AsyncRolloutLoop:
         self._dataset_iter = iter(dataset)
         self.reward_funcs = reward_funcs
         self.reward_func_names = [get_callable_name(f) for f in reward_funcs]
+        # A `ProcessorMixin` (VLM) wraps a tokenizer + image processor; a bare tokenizer is used directly. `tok` is the
+        # text tokenizer (template rendering / response parsing); `self._is_vlm` gates every multimodal branch so
+        # text-only rollouts are unchanged. Mirrors the sync `GRPOTrainer`.
+        self._is_vlm = isinstance(processing_class, ProcessorMixin)
+        if self._is_vlm:
+            self.processor = processing_class
+            tok = processing_class.tokenizer
+        else:
+            self.processor = None
+            tok = processing_class
         # `add_response_schema` sets the response template (transformers >= 5.13) or legacy schema for known chat
         # templates, so tool calls can be parsed. Skip if one is already set; warn if it's a migratable legacy schema.
-        has_template = getattr(processing_class, "response_template", None) is not None
-        has_schema = getattr(processing_class, "response_schema", None) is not None
+        has_template = getattr(tok, "response_template", None) is not None
+        has_schema = getattr(tok, "response_schema", None) is not None
+        uses_tools = bool(tools) or environment_factory is not None
         if not has_template and not has_schema:
-            processing_class = add_response_schema(processing_class)
+            try:
+                tok = add_response_schema(tok)
+            except ValueError:
+                # Response parsing only matters for extracting tool calls. Some chat templates (notably several
+                # VLMs) aren't recognized by `add_response_schema`; a plain reward-function run never parses tool
+                # calls, so skip it there and re-raise only when tools/environments are actually in play.
+                if uses_tools:
+                    raise
         elif has_schema and not has_template and _SUPPORTS_RESPONSE_TEMPLATE:
             warnings.warn(
                 "The tokenizer has a legacy `response_schema` set but no `response_template`. The installed "
@@ -324,7 +379,13 @@ class _AsyncRolloutLoop:
                 "support will eventually be removed. See the Transformers response-parsing docs.",
                 FutureWarning,
             )
-        self.tokenizer = processing_class
+        self.tokenizer = tok
+        # `parse_response` needs a response template/schema to structure completions (and extract tool calls). Some
+        # VLM chat templates aren't recognized by `add_response_schema`; without one, fall back to a plain-text
+        # decode of the completion (valid when there are no tool calls to parse — see `_generate_one`).
+        self._can_parse_response = (
+            getattr(tok, "response_template", None) is not None or getattr(tok, "response_schema", None) is not None
+        )
         self.rollout_buffer = rollout_buffer  # shared mp.Queue
         self._model_version_value = model_version_value  # shared mp.Value
         self._heartbeat_value = heartbeat_value  # shared mp.Value('d'); wall-clock seconds
@@ -463,7 +524,7 @@ class _AsyncRolloutLoop:
     async def _generate_loop(self, stop_event: asyncio.Event) -> None:
         pending_groups: dict[int, RolloutGroup] = {}
         pending_completed: dict[int, int] = {}
-        inflight_tasks: dict[asyncio.Task, tuple[int, int, Any, object, Messages]] = {}
+        inflight_tasks: dict[asyncio.Task, tuple[int, int, Any, object, Messages, Any]] = {}
         free_slots = set(range(self.max_inflight_tasks))
         work_iter = self._repeat_iterator()
 
@@ -520,6 +581,24 @@ class _AsyncRolloutLoop:
                             observation = [{"type": "text", "text": observation}]
                         prompt = prompt[:-1] + [{**last, "content": content + observation}]
 
+                    # VLM: gather this rollout's images the same way GRPOTrainer does (dataset `images`/`image`
+                    # columns), insert `{"type": "image"}` placeholders so the chat template expands them, then collect
+                    # every image embedded in the prompt — the dataset images just inserted plus any the environment's
+                    # `reset()` observation folded in as filled image parts. Text-only rollouts skip this entirely and
+                    # keep `images=None`.
+                    images = None
+                    if self._is_vlm:
+                        dataset_images = row.get("images") or ([row["image"]] if row.get("image") else None)
+                        if dataset_images:
+                            prompt = prepare_multimodal_messages(prompt, images=dataset_images)
+                        images = [
+                            part["image"]
+                            for message in prompt
+                            if isinstance(message["content"], list)
+                            for part in message["content"]
+                            if isinstance(part, dict) and part.get("type") == "image" and "image" in part
+                        ] or None
+
                     # Build this rollout's tool dict: the standalone tools plus the methods of its environment.
                     methods = []
                     if environment is not None:
@@ -547,11 +626,14 @@ class _AsyncRolloutLoop:
                             model_version=self.model_version,
                             group_id=group_id,
                             env_rewards=[],
+                            multimodal_inputs=[],
                         )
                         pending_completed[group_id] = 0
 
-                    task = asyncio.create_task(self._generate_one(prompt, tool_dict=tool_dict, tools=tools))
-                    inflight_tasks[task] = (group_id, slot, name, environment, prompt)
+                    task = asyncio.create_task(
+                        self._generate_one(prompt, tool_dict=tool_dict, tools=tools, images=images)
+                    )
+                    inflight_tasks[task] = (group_id, slot, name, environment, prompt, images)
 
                 if not inflight_tasks:
                     if stop_event.is_set():
@@ -564,7 +646,7 @@ class _AsyncRolloutLoop:
                     continue
 
                 for task in done:
-                    group_id, slot, name, environment, prompt = inflight_tasks.pop(task)
+                    group_id, slot, name, environment, prompt, images = inflight_tasks.pop(task)
                     free_slots.add(slot)
                     if task.exception() is not None:
                         raise task.exception()
@@ -575,6 +657,7 @@ class _AsyncRolloutLoop:
                         sequences,
                         tool_call_count,
                         tool_failure_count,
+                        multimodal_inputs,
                     ) = task.result()
                     group = pending_groups[group_id]
                     group.prompts.append(prompt)
@@ -583,6 +666,7 @@ class _AsyncRolloutLoop:
                     group.completions_sequences.append(sequences)
                     group.tool_call_counts.append(tool_call_count)
                     group.tool_failure_counts.append(tool_failure_count)
+                    group.multimodal_inputs.append(multimodal_inputs)
                     # The environment owns the reward: score it now, while this rollout's environment still holds its
                     # final state and before returning it to the pool. `get_reward` may be async awaiting yields to
                     # inflight requests instead of halting them. The env is returned to the pool only after scoring, so
@@ -698,8 +782,8 @@ class _AsyncRolloutLoop:
             group_id += 1
 
     async def _generate_one(
-        self, prompt: Messages, tool_dict: dict[str, Callable], tools: list[Callable]
-    ) -> tuple[list[dict[str, str]], list[int], list[TrainingSequence], int, int]:
+        self, prompt: Messages, tool_dict: dict[str, Callable], tools: list[Callable], images: list | None = None
+    ) -> tuple[list[dict[str, str]], list[int], list[TrainingSequence], int, int, dict[str, Any] | None]:
         """Roll out one conversation, re-tokenizing the whole message list each turn and reconciling drift.
 
         Every turn renders the full conversation through the chat template, generates, records the turn, and feeds the
@@ -707,8 +791,8 @@ class _AsyncRolloutLoop:
         `_chain_to_sequences` reconciles re-tokenization drift into one or more training rows: a clean append stays one
         row, a rewrite (dropped reasoning, summarized history) forks a new row. Rebuilding `prompt_ids` from the
         message list each turn (instead of gluing tokens on the end and never looking back) is what lets the reconciler
-        catch rewrites. Returns the completion messages, their token ids, and the reconciled training rows (each row
-        carries its own `input_ids`).
+        catch rewrites. Returns the completion messages, their token ids, the reconciled training rows (each row
+        carries its own `input_ids`), and — for VLM rollouts — the prompt's CPU pixel tensors (`multimodal_inputs`).
         """
         messages = list(prompt)  # a MESSAGE list, not a token list
         rollout_id = uuid.uuid4().hex
@@ -718,17 +802,43 @@ class _AsyncRolloutLoop:
         tool_failure_count = 0
         iteration_num = 0
         max_iterations = self.max_tool_calling_iterations
+        multimodal_inputs = None
         while True:
-            prompt_ids = self.tokenizer.apply_chat_template(  # re-tokenize the WHOLE conversation
-                messages,
-                return_dict=False,
-                add_generation_prompt=True,
-                tools=tools or None,
-                chat_template=self.chat_template,
-                **self.chat_template_kwargs,
-            )
-            turn_ids, turn_logprobs = await self._generate_one_turn(prompt_ids)
-            assistant_message = parse_response(self.tokenizer, turn_ids, prefix=prompt_ids)
+            if self._is_vlm and images:
+                # Tokenize through the PROCESSOR so image placeholders are expanded to match the pixel tensors, and
+                # keep those tensors (`multimodal_inputs`) for the training forward. `prompt_ids` MUST come from the
+                # processor (not vLLM's server-side render) so the image-pad token count aligns with `pixel_values`.
+                enc = self.processor.apply_chat_template(
+                    conversation=[messages],
+                    add_generation_prompt=True,
+                    tools=tools or None,
+                    chat_template=self.chat_template,
+                    tokenize=True,
+                    return_dict=True,
+                    return_tensors="pt",
+                    **self.chat_template_kwargs,
+                )
+                prompt_ids = enc["input_ids"][0].tolist()
+                multimodal_inputs = {
+                    k: enc[k]
+                    for k in ("pixel_values", "image_grid_thw", "image_sizes", "spatial_shapes", "pixel_attention_mask")
+                    if k in enc
+                }
+            else:
+                prompt_ids = self.tokenizer.apply_chat_template(  # re-tokenize the WHOLE conversation
+                    messages,
+                    return_dict=False,
+                    add_generation_prompt=True,
+                    tools=tools or None,
+                    chat_template=self.chat_template,
+                    **self.chat_template_kwargs,
+                )
+            turn_ids, turn_logprobs = await self._generate_one_turn(prompt_ids, messages=messages, images=images)
+            if self._can_parse_response:
+                assistant_message = parse_response(self.tokenizer, turn_ids, prefix=prompt_ids)
+            else:
+                # No response template: the completion is plain text (no tool calls to parse).
+                assistant_message = {"role": "assistant", "content": self.tokenizer.decode(turn_ids, skip_special_tokens=True)}
             completion.append(assistant_message)
             completion_ids.extend(turn_ids)
             messages.append(assistant_message)
@@ -743,7 +853,7 @@ class _AsyncRolloutLoop:
             messages.extend(tool_messages)  # tool result goes back as a MESSAGE, re-tokenized next turn
             iteration_num += 1
         sequences = _chain_to_sequences(turns, rollout_id, self._fork_threshold_tokens)  # >= 1 row per conversation
-        return completion, completion_ids, sequences, tool_call_count, tool_failure_count
+        return completion, completion_ids, sequences, tool_call_count, tool_failure_count, multimodal_inputs
 
     def _execute_tool_calls(
         self, tool_calls: list[dict[str, Any]], tool_dict: dict[str, Callable]
@@ -764,7 +874,32 @@ class _AsyncRolloutLoop:
             tool_messages.append({"role": "tool", "name": name, "content": str(result)})
         return tool_messages, n_calls, n_failures
 
-    async def _generate_one_turn(self, prompt_ids: list[int]) -> tuple[list[int], list[float]]:
+    async def _generate_one_turn(
+        self, prompt_ids: list[int], *, messages: "Messages | None" = None, images: list | None = None
+    ) -> tuple[list[int], list[float]]:
+        # VLM branch: stock vLLM `/v1/completions` cannot carry images, so images go through the chat endpoint as
+        # OpenAI `image_url` parts. `return_token_ids` returns the completion token ids and `logprobs` the per-token
+        # logprobs; training still uses the processor-rendered `prompt_ids` (aligned with `pixel_values`).
+        if self._is_vlm and images:
+            payload = {
+                "model": self.model_name,
+                "messages": _messages_to_openai_mm(messages),
+                "max_tokens": self.max_tokens,
+                "temperature": self.temperature,
+                "n": 1,
+                "return_token_ids": True,
+                "logprobs": True,
+                "chat_template_kwargs": self.chat_template_kwargs,
+            }
+            output = await _retry_on_http_error(
+                lambda: self._post("/v1/chat/completions", payload, self.request_timeout),
+                max_attempts=30,
+                label="vllm /v1/chat/completions",
+            )
+            choice = output["choices"][0]
+            return choice["token_ids"], [c["logprob"] for c in choice["logprobs"]["content"]]
+
+        # Text-only path (unchanged).
         payload = {
             "model": self.model_name,
             "prompt": prompt_ids,
@@ -845,7 +980,7 @@ class _AsyncRolloutLoop:
         # Under TRL's global token-mean loss a fork is invisible to the loss (see slime_research.md B.5),
         # so we do not split the reward or the advantage across a conversation's rows.
         samples = []
-        for i, (prompt, completion, sequences, advantage, reward, tm) in enumerate(
+        for i, (prompt, completion, sequences, advantage, reward, tm, mm) in enumerate(
             zip(
                 group.prompts,
                 group.completions,
@@ -853,6 +988,7 @@ class _AsyncRolloutLoop:
                 advantages,
                 rewards,
                 tool_metrics,
+                group.multimodal_inputs,
                 strict=True,
             )
         ):
@@ -877,6 +1013,7 @@ class _AsyncRolloutLoop:
                         model_version=group.model_version,
                         group_id=group.group_id,
                         metrics=dict(metrics),  # own copy per row; _compute_rollout_metrics mutates it
+                        multimodal_inputs=mm,  # same prompt pixel tensors on every row this conversation forked into
                     )
                 )
         return samples
