@@ -21,6 +21,7 @@ from contextlib import nullcontext
 from functools import partial
 from typing import Any, Optional
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -41,7 +42,7 @@ from transformers.utils import is_liger_kernel_available, is_peft_available, is_
 
 from ...data_utils import is_conversational
 from ...distributed import DistributedBackend
-from ...extras.profiling import profiling_decorator
+from ...extras.profiling import profiling_context, profiling_decorator
 from ...generation.vllm_generation import VLLMGeneration
 from ...import_utils import is_vllm_available
 from ...models import prepare_deepspeed
@@ -673,6 +674,73 @@ class DistillationTrainer(_BaseTrainer):
             multimodal_fields = {}
         images = None  # extracted from the messages once VLM support lands
         return prompt_ids, images, multimodal_fields
+
+    def _generate_single_turn(self, prompt_ids, images, multimodal_fields):
+        device = self.accelerator.device
+
+        # Generate completions using either vLLM or regular generation
+        if self.use_vllm:
+            # Sync weights if training step changed
+            if self.state.global_step != self._last_loaded_step:
+                with profiling_context(self, "sync_weights"):
+                    self.vllm_generation.sync_weights()
+                self._last_loaded_step = self.state.global_step
+
+            # Generate using vLLM with raw token IDs. Distillation is n=1 and uses the teacher distribution rather than
+            # sampled logprobs, so we request one completion per prompt and discard vLLM's logprobs.
+            _, completion_ids, _, _ = self.vllm_generation.generate(
+                prompts=prompt_ids,
+                images=images,
+                num_generations=1,
+                profiler=profiling_context(self, "vLLM.generate"),
+            )
+
+        else:
+            # Regular generation path: left-pad token IDs into tensors
+            prompt_tensors = [torch.tensor(ids) for ids in prompt_ids]
+            padded_ids = pad(prompt_tensors, padding_value=self._tokenizer.pad_token_id, padding_side="left")
+            attention_mask = pad([torch.ones_like(t) for t in prompt_tensors], padding_value=0, padding_side="left")
+            generate_inputs = {"input_ids": padded_ids, "attention_mask": attention_mask}
+            # For VLMs, include multimodal fields as tensors (pixel_values, image_grid_thw, etc.)
+            for k, v in multimodal_fields.items():
+                if isinstance(v, torch.Tensor):
+                    generate_inputs[k] = v
+                elif isinstance(v, list) and v and isinstance(v[0], list):
+                    # Per-token field (e.g., token_type_ids): left-pad like input_ids
+                    generate_inputs[k] = pad([torch.tensor(x) for x in v], padding_value=0, padding_side="left")
+                else:
+                    generate_inputs[k] = torch.tensor(np.array(v))
+            generate_inputs = super()._prepare_inputs(generate_inputs)
+
+            with (
+                profiling_context(self, "transformers.generate"),
+                unwrap_model_for_generation(
+                    self.model_wrapped,
+                    self.accelerator,
+                    gather_deepspeed3_params=self.args.ds3_gather_for_generation,
+                    generation_kwargs=self.generation_kwargs,  # Override model.generation_config with generation_kwargs to fix transformers#42762
+                ) as unwrapped_model,
+                torch.no_grad(),
+                self._dist.summon_full_params(self.model_wrapped, recurse=False),
+            ):
+                prompt_completion_ids = unwrapped_model.generate(
+                    **generate_inputs, generation_config=self.generation_config
+                )
+            # Compute prompt length and extract completion ids
+            prompt_length = generate_inputs["input_ids"].size(1)
+            completion_ids = prompt_completion_ids[:, prompt_length:]
+
+            # Mask everything after the first EOS token
+            is_eos = completion_ids == self._tokenizer.eos_token_id
+            eos_idx = torch.full((is_eos.size(0),), is_eos.size(1), dtype=torch.long, device=device)
+            eos_idx[is_eos.any(dim=1)] = is_eos.int().argmax(dim=1)[is_eos.any(dim=1)]
+            sequence_indices = torch.arange(is_eos.size(1), device=device).expand(is_eos.size(0), -1)
+            completion_mask = (sequence_indices <= eos_idx.unsqueeze(1)).int()
+            completion_ids = [
+                c[m].tolist() for c, m in zip(completion_ids.cpu(), completion_mask.bool().cpu(), strict=True)
+            ]
+
+        return completion_ids
 
     # ──────────────────────────────────────────────────────────────────────
     #  Buffering across gradient accumulation steps
