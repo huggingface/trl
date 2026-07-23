@@ -33,6 +33,7 @@ import pandas as pd
 import torch
 import torch.nn.functional as F
 import transformers
+from accelerate import PartialState
 from accelerate.logging import get_logger
 from datasets import IterableDataset
 from huggingface_hub import ModelCard, ModelCardData
@@ -1151,7 +1152,10 @@ def create_model_from_path(
             "Invalid `dtype` passed to the config. Expected either 'auto' or a string representing "
             f"a valid `torch.dtype` (e.g., 'float32'), but got {dtype}."
         )
-    kwargs["device_map"] = kwargs.get("device_map", "auto")
+    # Respect CPU-only execution: device_map="auto" dispatches the model to the GPU even when the user requested
+    # use_cpu=True, which later splits models across devices (e.g. a teacher placed on CPU vs. a student on GPU).
+    if "device_map" not in kwargs:
+        kwargs["device_map"] = None if PartialState().device.type == "cpu" else "auto"
     if architecture is None:
         # Best effort to infer architecture from config, but we fall back to AutoModelForCausalLM if we can't find it
         config = AutoConfig.from_pretrained(model_id, trust_remote_code=kwargs.get("trust_remote_code", False))
