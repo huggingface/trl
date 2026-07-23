@@ -198,7 +198,6 @@ class TestDistillationTrainer(TrlTestCase):
             "disable_tqdm": True,
             "use_cpu": True,
             "bf16": False,
-            "max_length": 128,
             "max_completion_length": 32,
             "model_init_kwargs": {"dtype": "float32", "device_map": None},
             "teacher_model_init_kwargs": {"dtype": "float32", "device_map": None},
@@ -207,7 +206,7 @@ class TestDistillationTrainer(TrlTestCase):
         return DistillationConfig(**args)
 
     def _make_local_trainer(self, **kwargs):
-        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
         return DistillationTrainer(
             model=self.model_id,
             teacher_model=self.model_id,
@@ -215,14 +214,6 @@ class TestDistillationTrainer(TrlTestCase):
             train_dataset=dataset,
             processing_class=self.tokenizer,
         )
-
-    def _make_batch(self, trainer):
-        examples = [trainer.train_dataset[i] for i in range(2)]
-        return trainer.data_collator(examples)
-
-    @staticmethod
-    def _move_batch_to_device(batch, device):
-        return {key: value.to(device) for key, value in batch.items()}
 
     def test_distillation_trainer_train_runs_with_local_teacher(self):
         training_args = self._make_args(
@@ -234,7 +225,7 @@ class TestDistillationTrainer(TrlTestCase):
             save_steps=2,
             per_device_eval_batch_size=2,
         )
-        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only")
         trainer = DistillationTrainer(
             model=self.model_id,
             teacher_model=self.model_id,
@@ -274,12 +265,21 @@ class TestDistillationTrainer(TrlTestCase):
         for name, param in previous_params.items():
             assert not torch.equal(param, trainer.model.get_parameter(name)), f"Parameter {name} has not changed."
 
-    @pytest.mark.xfail(
-        reason="On-policy, num_items_in_batch is computed by transformers from the raw dataloader labels before "
-        "generation replaces the completions, and _RepeatBatchDataLoader repeats one generation batch across the "
-        "accumulation window, so the denominator the loss divides by does not equal the completion tokens actually "
-        "trained on. Un-xfail when the count moves to the GRPO-style _prepare_inputs (plan 5.6).",
-    )
+    def test_train_runs_with_prompt_only_dataset(self):
+        """The forward-looking prompt-only format trains end to end: the student generates, the teacher scores."""
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        trainer = DistillationTrainer(
+            model=self.model_id,
+            teacher_model=self.model_id,
+            args=self._make_args(max_steps=1, learning_rate=0.1),
+            train_dataset=dataset,
+            processing_class=self.tokenizer,
+        )
+
+        trainer.train()
+
+        assert all(torch.isfinite(param).all() for param in trainer.model.parameters())
+
     def test_num_items_in_batch_counts_the_tokens_trained_on(self, monkeypatch):
         """`num_items_in_batch` is the loss denominator, so it must count the completion tokens actually trained on.
 
@@ -290,13 +290,18 @@ class TestDistillationTrainer(TrlTestCase):
         recorded = []  # (denominator applied, completion tokens in this microbatch)
         original = DistillationTrainer._reduce_divergence_loss
 
-        def _recording(jsd, labels=None, reduction="batchmean", num_items_in_batch=None):
-            recorded.append((num_items_in_batch, int((labels != -100).sum())))
-            return original(jsd, labels=labels, reduction=reduction, num_items_in_batch=num_items_in_batch)
+        def _recording(jsd, completion_mask=None, reduction="batchmean", num_items_in_batch=None):
+            # `generalized_jsd_loss(reduction="none")` also routes through here with `completion_mask=None`; only the
+            # loss-reducing call (with a mask) carries the denominator under test.
+            if completion_mask is not None:
+                recorded.append((num_items_in_batch, int(completion_mask.sum())))
+            return original(
+                jsd, completion_mask=completion_mask, reduction=reduction, num_items_in_batch=num_items_in_batch
+            )
 
         monkeypatch.setattr(DistillationTrainer, "_reduce_divergence_loss", staticmethod(_recording))
 
-        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
         trainer = DistillationTrainer(
             model=self.model_id,
             teacher_model=self.model_id,
@@ -326,14 +331,14 @@ class TestDistillationTrainer(TrlTestCase):
         ],
     )
     def test_init_with_eval_dataset(self, eval_dataset_type):
-        train_dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
+        train_dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
 
         if eval_dataset_type == "none":
             eval_dataset = None
         else:
             streaming = "iterable" in eval_dataset_type
             eval_split = load_dataset(
-                "trl-internal-testing/zen", "conversational_language_modeling", split="test", streaming=streaming
+                "trl-internal-testing/zen", "conversational_prompt_only", split="test", streaming=streaming
             )
             if eval_dataset_type in ("dataset", "iterable_dataset"):
                 eval_dataset = eval_split
@@ -373,11 +378,25 @@ class TestDistillationTrainer(TrlTestCase):
             for p in trainer.teacher_model.parameters():
                 p.add_(0.5 * torch.randn_like(p))
 
-        batch = self._move_batch_to_device(self._make_batch(trainer), trainer.accelerator.device)
+        # The collator is prompt-only (completions come from on-policy generation); build a batch with completion
+        # tokens directly to exercise the loss reduction.
+        device = trainer.accelerator.device
+        prompt_length, completion_length = 4, 3
+        seq_length = prompt_length + completion_length
+        input_ids = torch.randint(0, trainer.model.config.vocab_size, (2, seq_length), device=device)
+        labels = input_ids.clone()
+        labels[:, :prompt_length] = -100
+        batch = {
+            "input_ids": input_ids,
+            "attention_mask": torch.ones_like(input_ids),
+            "labels": labels,
+            "completion_mask": (labels != -100).int(),
+            "prompts": input_ids[:, :prompt_length],
+            "prompt_attention_mask": torch.ones(2, prompt_length, dtype=torch.long, device=device),
+        }
 
         # Number of valid (non-ignored) tokens in the local batch, sliced the same way `compute_loss` does.
-        prompt_length = trainer._compute_prompt_length(batch)
-        num_valid = (batch["labels"][:, prompt_length:] != -100).sum()
+        num_valid = (labels[:, prompt_length:] != -100).sum()
 
         trainer.model.eval()
         with torch.no_grad():
@@ -390,13 +409,51 @@ class TestDistillationTrainer(TrlTestCase):
         # Doubling the global count exactly halves the loss (sum / num_items is linear in 1/num_items).
         torch.testing.assert_close(loss_double, loss_mean / 2, rtol=1e-4, atol=1e-6)
 
+    def test_generated_batch_emits_completion_mask(self, monkeypatch):
+        """The generated batch emits `completion_mask`, equal to `labels != -100` (added ahead of the loss switch)."""
+        trainer = self._make_local_trainer()
+        captured = {}
+        original = DistillationTrainer.compute_loss
+
+        def _capturing(self, model, inputs, *args, **kwargs):
+            captured.setdefault("inputs", {k: v.clone() if torch.is_tensor(v) else v for k, v in inputs.items()})
+            return original(self, model, inputs, *args, **kwargs)
+
+        monkeypatch.setattr(DistillationTrainer, "compute_loss", _capturing)
+        trainer.train()
+
+        inputs = captured["inputs"]
+        assert "completion_mask" in inputs
+        assert torch.equal(inputs["completion_mask"].bool(), inputs["labels"] != -100)
+
+    def test_generated_batch_emits_prompt_and_completion_ids(self, monkeypatch):
+        """The generated batch emits GRPO-style `prompt_ids`/`prompt_mask`/`completion_ids` alongside the old keys."""
+        trainer = self._make_local_trainer()
+        captured = {}
+        original = DistillationTrainer.compute_loss
+
+        def _capturing(self, model, inputs, *args, **kwargs):
+            captured.setdefault("inputs", {k: v.clone() if torch.is_tensor(v) else v for k, v in inputs.items()})
+            return original(self, model, inputs, *args, **kwargs)
+
+        monkeypatch.setattr(DistillationTrainer, "compute_loss", _capturing)
+        trainer.train()
+
+        inputs = captured["inputs"]
+        for key in ("prompt_ids", "prompt_mask", "completion_ids"):
+            assert key in inputs
+        # cat(prompt_ids, completion_ids) reconstructs input_ids; the new keys mirror the existing prompt tensors.
+        assert torch.equal(torch.cat([inputs["prompt_ids"], inputs["completion_ids"]], dim=1), inputs["input_ids"])
+        assert torch.equal(inputs["prompt_ids"], inputs["prompts"])
+        assert torch.equal(inputs["prompt_mask"], inputs["prompt_attention_mask"])
+
     @require_liger_kernel
     @require_torch_accelerator
     def test_distillation_trainer_with_liger(self):
         import importlib
 
         training_args = self._make_args(use_liger_kernel=True, use_cpu=False)
-        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
 
         trainer = DistillationTrainer(
             model=self.model_id,
@@ -448,7 +505,7 @@ class TestDistillationTrainer(TrlTestCase):
     def test_teacher_vocab_size_mismatch_raises(self):
         # The local-teacher loss compares full next-token distributions, so student and teacher must share a
         # vocabulary. A teacher with a different vocab_size is rejected (use GOLD for cross-tokenizer distillation).
-        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
         with pytest.raises(ValueError, match="vocab_size"):
             DistillationTrainer(
                 model=self.model_id,
@@ -461,7 +518,7 @@ class TestDistillationTrainer(TrlTestCase):
     def test_teacher_model_init_kwargs_with_instantiated_teacher_raises(self):
         # `teacher_model_init_kwargs` only applies when the teacher is a model id; passing it alongside an already
         # instantiated teacher is a mistake worth surfacing.
-        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
         with pytest.raises(ValueError, match="teacher_model_init_kwargs"):
             DistillationTrainer(
                 model=self.model_id,

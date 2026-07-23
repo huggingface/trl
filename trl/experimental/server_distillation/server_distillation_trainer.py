@@ -191,7 +191,7 @@ class ServerDistillationTrainer(DistillationTrainer):
 
         jsd = _jsd_divergence(student_sparse_log_probs, teacher_sparse_log_probs, self.beta, support_mask)
         return self._reduce_divergence_loss(
-            jsd, labels=labels, reduction="batchmean", num_items_in_batch=num_items_in_batch
+            jsd, completion_mask=labels != -100, reduction="batchmean", num_items_in_batch=num_items_in_batch
         )
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
@@ -231,6 +231,12 @@ class ServerDistillationTrainer(DistillationTrainer):
                 student_log_probs=student_log_probs[:, :comp_len, :],
                 labels=trimmed_labels,
             )
+
+        # The base trainer disables Trainer's built-in grad-accum loss scaling (via `compute_loss_func`) because it
+        # normalizes by the global completion-token count. The server path normalizes locally with `batchmean` and does
+        # not consume `num_items_in_batch`, so it must re-apply that scaling itself.
+        if self.model.training:
+            loss = loss / self.current_gradient_accumulation_steps
 
         return (loss, student_outputs) if return_outputs else loss
 
@@ -429,4 +435,4 @@ class ServerDistillationTrainer(DistillationTrainer):
         )
         # See `_compute_server_sparse_top_1_divergence_loss`: the server path normalizes locally, not by
         # num_items_in_batch, because the teacher window may not cover every student completion token.
-        return self._reduce_divergence_loss(jsd, labels=labels, reduction="batchmean")
+        return self._reduce_divergence_loss(jsd, completion_mask=labels != -100, reduction="batchmean")
