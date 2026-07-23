@@ -149,6 +149,7 @@ class SuccessfulRolloutTeacherContextBuilder:
     def __init__(self, trainer):
         self.trainer = trainer
         self.last_metrics: dict[str, float] = {}
+        self._warned_feedback_ignored = False
 
     def _build_reprompt_text(self, prompt_text: str, solution_text: str, feedback_text: str) -> str:
         return self.trainer.args.reprompt_template.format(
@@ -257,6 +258,18 @@ class SuccessfulRolloutTeacherContextBuilder:
                 self_distillation_mask[i] = 1.0
             if has_solution:
                 num_with_solution += 1
+
+        if (
+            num_with_feedback_available > 0
+            and not self.trainer.args.include_environment_feedback
+            and not self._warned_feedback_ignored
+        ):
+            logger.warning(
+                "SDPO received environment feedback (`privileged_context`) in the batch, but "
+                "`include_environment_feedback=False`, so it is being ignored (no reprompting from feedback). "
+                "Set `include_environment_feedback=True` to use it."
+            )
+            self._warned_feedback_ignored = True
 
         local_teacher_messages = []
         local_self_distillation_mask = self_distillation_mask[process_slice]
