@@ -2886,17 +2886,19 @@ class GRPOTrainer(_BaseTrainer):
         # Accumulate completions and per-function rewards for compute_metrics. Each eval batch appends
         # to the buffers; log() drains them once per eval cycle after all batches have run.
         if mode == "eval" and self.compute_metrics is not None:
-            # gather_object is a collective: must be called on all processes, returns full list everywhere
+            # gather_object is a collective: it must be called on all processes and returns the full list on
+            # every rank. rewards_per_func is likewise already globally gathered, so both quantities are
+            # identical across ranks. Accumulate on all ranks (not only the main process) so that log()
+            # computes the same custom metrics everywhere and the resulting eval_<name> keys are present in
+            # the logs of every process rather than only the main one.
             all_completions = gather_object(completions)
-            if self.accelerator.is_main_process:
-                self._completions_for_compute_metrics.extend(all_completions)
-                # rewards_per_func is already globally gathered (line ~1316); use it directly
-                if self._rewards_for_compute_metrics is None:
-                    self._rewards_for_compute_metrics = rewards_per_func.cpu()
-                else:
-                    self._rewards_for_compute_metrics = torch.cat(
-                        [self._rewards_for_compute_metrics, rewards_per_func.cpu()], dim=0
-                    )
+            self._completions_for_compute_metrics.extend(all_completions)
+            if self._rewards_for_compute_metrics is None:
+                self._rewards_for_compute_metrics = rewards_per_func.cpu()
+            else:
+                self._rewards_for_compute_metrics = torch.cat(
+                    [self._rewards_for_compute_metrics, rewards_per_func.cpu()], dim=0
+                )
 
         return output
 
