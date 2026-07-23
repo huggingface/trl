@@ -54,6 +54,7 @@ from ...trainer.utils import (
     get_callable_name,
     get_config_model_id,
     identity,
+    nanstd,
     pad,
     selective_log_softmax,
     split_tensor_dict,
@@ -863,29 +864,55 @@ class SDPOTrainer(_BaseTrainer):
 
         # Compute rewards over the globally gathered rollout batch
         rewards_per_func = self._calculate_rewards(inputs, prompts, completions, completion_ids_list)
+        num_generations = self.num_generations if mode == "train" else self.num_generations_eval
         if rewards_per_func.numel() == 0:
             rewards = torch.zeros(self.accelerator.num_processes * len(prompts), device=device)
+            unscorable_mask = torch.zeros(rewards.shape[0], dtype=torch.bool, device=device)
         else:
+            # A completion for which every reward function returned None is unscorable. nansum would collapse it to 0,
+            # which both biases the per-group baseline and hands the completion a spurious advantage. Mark these rows
+            # NaN so they're excluded from the (nan-aware) baseline below; their advantage is forced to 0 afterwards.
+            # This mirrors the defense in `GRPOTrainer._prepare_training_batch`.
+            unscorable_mask = torch.isnan(rewards_per_func).all(dim=1)
             rewards = (rewards_per_func * self.reward_weights.to(device).unsqueeze(0)).nansum(dim=1)
+            rewards[unscorable_mask] = torch.nan
 
         # Normalize rewards within generation groups to produce local policy advantages
-        num_generations = self.num_generations if mode == "train" else self.num_generations_eval
-        mean_grouped_rewards = rewards.view(-1, num_generations).mean(dim=1).repeat_interleave(num_generations, dim=0)
+        mean_grouped_rewards = torch.nanmean(rewards.view(-1, num_generations), dim=1).repeat_interleave(
+            num_generations, dim=0
+        )
         if self.scale_rewards == "batch":
-            std_rewards = rewards.std().expand_as(rewards) if rewards.numel() > 1 else torch.zeros_like(rewards)
-            group_std_rewards = rewards.view(-1, num_generations).std(dim=1)
+            std_rewards = nanstd(rewards).expand_as(rewards) if rewards.numel() > 1 else torch.zeros_like(rewards)
+            group_std_rewards = nanstd(rewards.view(-1, num_generations), dim=1)
         elif self.scale_rewards == "none":
             std_rewards = torch.ones_like(rewards)
             group_std_rewards = torch.ones(rewards.numel() // num_generations, device=device, dtype=rewards.dtype)
         else:
-            group_std_rewards = rewards.view(-1, num_generations).std(dim=1)
+            group_std_rewards = nanstd(rewards.view(-1, num_generations), dim=1)
             std_rewards = group_std_rewards.repeat_interleave(num_generations, dim=0)
         advantages = (rewards - mean_grouped_rewards) / (std_rewards + 1e-4)
+
+        # Unscorable completions (every reward func returned None) carry no learning signal: their reward is NaN here,
+        # so zero their advantage to keep them from moving the policy.
+        advantages = torch.nan_to_num(advantages, nan=0.0)
         local_batch_size = batch["completion_ids"].size(0)
         process_start = self.accelerator.process_index * local_batch_size
         process_slice = slice(process_start, process_start + local_batch_size)
         local_rewards = rewards[process_slice]
         local_advantages = advantages[process_slice]
+
+        # Warn if any completion was unscorable (every reward function returned None for it). This is a silent
+        # reward-hacking vector: without the unscorable_mask above, nansum collapses the row to a reward of 0,
+        # which can produce a spurious positive advantage that reinforces the completion. Mirrors GRPO's warning.
+        if rewards_per_func.numel() > 0 and unscorable_mask.any():
+            unscorable_frac = unscorable_mask.float().mean().item()
+            logger.warning(
+                "%d/%d completions (%.1f%%) were unscorable (all reward functions returned None). "
+                "Their advantages have been zeroed; check that reward functions cover all completion types.",
+                int(unscorable_mask.sum()),
+                unscorable_mask.numel(),
+                unscorable_frac * 100,
+            )
 
         self._record_reward_diagnostics(mode, rewards, rewards_per_func, group_std_rewards)
         self._record_completion_metrics(mode, batch)
@@ -1696,10 +1723,14 @@ class SDPOTrainer(_BaseTrainer):
     ) -> None:
         tolerance = self.args.diagnostics_flat_tolerance
 
-        reward_mean = rewards.mean() if rewards.numel() > 0 else torch.tensor(0.0, device=self.accelerator.device)
-        reward_std = rewards.std() if rewards.numel() > 1 else torch.tensor(0.0, device=self.accelerator.device)
-        reward_min = rewards.min() if rewards.numel() > 0 else torch.tensor(0.0, device=self.accelerator.device)
-        reward_max = rewards.max() if rewards.numel() > 0 else torch.tensor(0.0, device=self.accelerator.device)
+        reward_mean = torch.nanmean(rewards) if rewards.numel() > 0 else torch.tensor(0.0, device=self.accelerator.device)
+        reward_std = nanstd(rewards) if rewards.numel() > 1 else torch.tensor(0.0, device=self.accelerator.device)
+        reward_min = torch.where(
+            torch.isnan(rewards), torch.tensor(float("inf"), device=rewards.device), rewards
+        ).min() if rewards.numel() > 0 else torch.tensor(0.0, device=self.accelerator.device)
+        reward_max = torch.where(
+            torch.isnan(rewards), torch.tensor(float("-inf"), device=rewards.device), rewards
+        ).max() if rewards.numel() > 0 else torch.tensor(0.0, device=self.accelerator.device)
         flat_group_fraction = (
             (group_std_rewards <= tolerance).float().mean()
             if group_std_rewards.numel() > 0
