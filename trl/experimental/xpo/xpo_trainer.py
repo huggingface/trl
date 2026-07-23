@@ -504,3 +504,25 @@ class XPOTrainer(OnlineDPOTrainer):
         self.accelerator.backward(loss, **kwargs)
 
         return loss.detach() / self.args.gradient_accumulation_steps
+
+    def prediction_step(
+        self,
+        model: nn.Module,
+        inputs: dict[str, torch.Tensor | Any],
+        prediction_loss_only: bool,
+        ignore_keys: list[str] | None = None,
+    ) -> tuple[torch.Tensor | None, torch.Tensor | None, torch.Tensor | None]:
+        """Not implemented for XPOTrainer.
+
+        ``XPOTrainer`` uses a different training-step logic (XPO loss with reference-model completions) that is not
+        compatible with the base :meth:`OnlineDPOTrainer.prediction_step`. This override prevents silent inheritance
+        of the wrong eval logic.
+
+        Raises:
+            NotImplementedError: Always. Evaluation is not yet supported for ``XPOTrainer``.
+        """
+        raise NotImplementedError(
+            "Evaluation is not yet supported for XPOTrainer. "
+            "Set eval_strategy='no' in your training arguments, or implement a "
+            "prediction_step override tailored to the XPO loss."
+        )

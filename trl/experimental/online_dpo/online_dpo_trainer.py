@@ -1102,13 +1102,13 @@ class OnlineDPOTrainer(_BaseTrainer):
         without code duplication.
 
         Args:
-            model: The policy model.
-            inputs: A batch dict that must contain at minimum a ``"prompt"`` key with raw
-                prompt strings (or conversation lists). Other keys (e.g. ``"image"``) are forwarded to the reward
-                functions as extra kwargs.
+            model (`nn.Module`): The policy model.
+            inputs (`dict[str, torch.Tensor | Any]`): A batch dict that must contain at minimum a ``"prompt"`` key
+                with raw prompt strings (or conversation lists). Other keys (e.g. ``"image"``) are forwarded to the
+                reward functions as extra kwargs.
 
         Returns:
-            A scalar loss tensor (not yet divided by ``gradient_accumulation_steps``).
+            `torch.Tensor`: A scalar loss tensor (not yet divided by ``gradient_accumulation_steps``).
         """
         prompts = inputs["prompt"]
         batch_size = len(prompts)
@@ -1333,11 +1333,25 @@ class OnlineDPOTrainer(_BaseTrainer):
         optimises.
 
         See https://github.com/huggingface/trl/issues/2228
+
+        Args:
+            model (`nn.Module`): The model to evaluate.
+            inputs (`dict[str, torch.Tensor | Any]`): Batch from the eval dataloader; must contain a ``"prompt"`` key.
+            prediction_loss_only (`bool`): Unused; kept for API compatibility with
+                :meth:`~transformers.Trainer.prediction_step`.
+            ignore_keys (`list[str] | None`): Unused; kept for API compatibility.
+
+        Returns:
+            `tuple[torch.Tensor | None, None, None]`: ``(eval_loss, None, None)``.
         """
         inputs = self._prepare_inputs(inputs)
         model.eval()
+        # Snapshot training stats so that eval batches don't pollute the accumulators
+        # that _maybe_log_save_evaluate reads and resets at each logging step.
+        saved_stats = {k: list(v) for k, v in self.stats.items()}
         with torch.no_grad():
             loss = self._compute_online_dpo_loss(model, inputs)
+        self.stats = saved_stats  # restore; discard the eval-time stat entries
         return loss.detach(), None, None
 
     # Same as Trainer._maybe_log_save_evaluate but log our metrics

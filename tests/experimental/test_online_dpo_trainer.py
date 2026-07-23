@@ -440,6 +440,79 @@ class TestOnlineDPOTrainer(TrlTestCase):
         assert round(abs(trainer.reward_weights[0].item() - 0.7), 5) == 0
         assert round(abs(trainer.reward_weights[1].item() - 0.3), 5) == 0
 
+    def test_eval_strategy_steps_does_not_crash(self):
+        """Regression test for https://github.com/huggingface/trl/issues/2228.
+
+        eval_strategy="steps" used to crash with
+          TypeError: forward() got an unexpected keyword argument 'prompt'
+        because the default Trainer.prediction_step passed raw dataset columns
+        directly to model(**inputs). OnlineDPOTrainer.prediction_step now
+        intercepts eval and reuses _compute_online_dpo_loss instead.
+        """
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        training_args = OnlineDPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            max_steps=3,
+            eval_strategy="steps",
+            eval_steps=2,
+            learning_rate=5.0e-7,
+            report_to="none",
+        )
+        trainer = OnlineDPOTrainer(
+            model=self.model,
+            reward_funcs=self.reward_model,
+            args=training_args,
+            train_dataset=dataset,
+            eval_dataset=dataset,
+            processing_class=self.tokenizer,
+            reward_processing_classes=self.reward_tokenizer,
+        )
+        trainer.train()  # must not raise
+
+        assert "train_loss" in trainer.state.log_history[-1]
+        # verify that eval ran at least once
+        eval_entries = [e for e in trainer.state.log_history if "eval_loss" in e]
+        assert len(eval_entries) > 0, "eval did not run during training"
+
+    def test_eval_stats_not_polluted_during_eval(self):
+        """Eval batches must not corrupt self.stats used for training metrics.
+
+        _compute_online_dpo_loss appends to self.stats. prediction_step must
+        save and restore stats so that training log metrics (computed as
+        mean over the training accumulation window) are not diluted by eval steps.
+        """
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        training_args = OnlineDPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            max_steps=2,
+            eval_strategy="steps",
+            eval_steps=1,
+            learning_rate=5.0e-7,
+            report_to="none",
+        )
+        trainer = OnlineDPOTrainer(
+            model=self.model,
+            reward_funcs=self.reward_model,
+            args=training_args,
+            train_dataset=dataset,
+            eval_dataset=dataset,
+            processing_class=self.tokenizer,
+            reward_processing_classes=self.reward_tokenizer,
+        )
+        # Snapshot stats length before eval; verify it is unchanged afterwards.
+        # We do this by running a single prediction_step and checking that
+        # self.stats lists are the same length before and after.
+        trainer.model.eval()
+        batch = next(iter(trainer.get_eval_dataloader()))
+        stats_lengths_before = {k: len(v) for k, v in trainer.stats.items()}
+        trainer.prediction_step(trainer.model, batch, prediction_loss_only=True)
+        stats_lengths_after = {k: len(v) for k, v in trainer.stats.items()}
+        assert stats_lengths_before == stats_lengths_after, (
+            "prediction_step mutated self.stats; eval batches are polluting training metrics"
+        )
+
 
 @require_vision
 class TestOnlineDPOVisionTrainer(TrlTestCase):
