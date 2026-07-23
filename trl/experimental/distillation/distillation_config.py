@@ -127,8 +127,6 @@ class DistillationConfig(_BaseConfig):
             Model implementation backend for vLLM. Use `"vllm"` or `"transformers"`.
         vllm_structured_outputs_regex (`str` or `None`, *optional*):
             Regex pattern for vLLM structured outputs.
-        vllm_sync_frequency (`int`, *optional*, defaults to `1`):
-            Frequency (in training steps) to synchronize student model weights to the vLLM engine.
         vllm_enable_sleep_mode (`bool`, *optional*, defaults to `False`):
             Enable vLLM sleep mode to offload student weights during the optimizer step.
 
@@ -325,10 +323,6 @@ class DistillationConfig(_BaseConfig):
         default=None,
         metadata={"help": "Regex pattern for vLLM structured outputs."},
     )
-    vllm_sync_frequency: int = field(
-        default=1,
-        metadata={"help": "Frequency (in training steps) to synchronize student weights to the vLLM engine."},
-    )
     vllm_enable_sleep_mode: bool = field(
         default=False,
         metadata={"help": "Enable vLLM sleep mode to offload student weights during the optimizer step."},
@@ -361,12 +355,14 @@ class DistillationConfig(_BaseConfig):
             raise ValueError(f"beta must be in [0.0, 1.0], got {self.beta}.")
 
         num_processes = self.world_size
+        effective_batch_size = self.per_device_train_batch_size * num_processes * self.gradient_accumulation_steps
         if self.generation_batch_size is None:
-            self.generation_batch_size = (
-                self.per_device_train_batch_size * num_processes * self.gradient_accumulation_steps
-            )
-        elif self.generation_batch_size % (self.per_device_train_batch_size * num_processes) != 0:
+            self.generation_batch_size = effective_batch_size
+        elif self.generation_batch_size != effective_batch_size:
+            # Without `steps_per_generation` (deferred), the sampler/dataloader/`_prepare_inputs` buffering all key off
+            # `gradient_accumulation_steps`, so the only supported generation batch is the effective training batch.
             raise ValueError(
-                f"generation_batch_size ({self.generation_batch_size}) must be divisible by the global batch size "
-                f"({self.per_device_train_batch_size * num_processes})."
+                f"generation_batch_size ({self.generation_batch_size}) must equal per_device_train_batch_size * "
+                f"num_processes * gradient_accumulation_steps ({effective_batch_size}); a different value would require "
+                f"steps_per_generation, which is not supported yet."
             )

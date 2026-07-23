@@ -25,6 +25,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from accelerate.logging import get_logger
 from accelerate.utils import gather_object, set_seed
 from datasets import Dataset, IterableDataset
 from packaging.version import Version
@@ -83,6 +84,9 @@ if is_trackio_available():
 
 if is_wandb_available():
     import wandb
+
+
+logger = get_logger(__name__)
 
 
 def _print_completions_sample(prompts: list[str], completions: list[str], step: int, num_samples: int = None) -> None:
@@ -318,6 +322,36 @@ class DistillationTrainer(_BaseTrainer):
                     "You passed teacher_model_init_kwargs to the config, but your teacher_model is already "
                     "instantiated."
                 )
+
+        # Iterable datasets can't be indexed, so the RepeatSampler can't be attached to them. Instead, the sampler's
+        # ordering is reproduced by streaming (see `get_train_dataloader`/`get_eval_dataloader` and
+        # `repeat_iterable_dataset`). This requires `dispatch_batches=False`: with the default dispatch path, batches
+        # are collated on the main process and Accelerate tries to concatenate the string `prompt` column, which fails;
+        # `dispatch_batches=False` also lets each process shard the stream into contiguous slices, as the sampler does.
+        # See https://github.com/huggingface/trl/issues/3213
+        uses_iterable_dataset = (
+            isinstance(train_dataset, IterableDataset)
+            or isinstance(eval_dataset, IterableDataset)
+            or (
+                isinstance(eval_dataset, dict) and any(isinstance(ds, IterableDataset) for ds in eval_dataset.values())
+            )
+        )
+        if uses_iterable_dataset:
+            if args.accelerator_config.dispatch_batches:
+                raise ValueError(
+                    "Iterable datasets require `dispatch_batches=False`, but it is set to `True` in "
+                    "`accelerator_config`. Please set it to `False`."
+                )
+            args.accelerator_config.dispatch_batches = False
+        # An iterable train set bakes the generation-batch repeats into the stream, so it must be read by a single
+        # worker: multiple workers would shard and interleave it, breaking the generation-batch ordering that
+        # `_prepare_inputs` relies on. Map-style train keeps its workers.
+        if isinstance(train_dataset, IterableDataset) and args.dataloader_num_workers != 0:
+            logger.warning(
+                f"Iterable datasets require `dataloader_num_workers=0` to preserve prompt grouping; overriding the "
+                f"provided value ({args.dataloader_num_workers})."
+            )
+            args.dataloader_num_workers = 0
 
         # Trainer does not need to remove unused columns — the collator handles raw data
         args.remove_unused_columns = False
