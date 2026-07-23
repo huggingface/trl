@@ -67,10 +67,6 @@ class DistillationConfig(_BaseConfig):
             from a string.
         > Parameters that control on-policy generation
 
-        generation_batch_size (`int` or `None`, *optional*):
-            Batch size to use for generation. If `None`, it defaults to the effective training batch size:
-            `per_device_train_batch_size * num_processes * gradient_accumulation_steps`. In other words, there is one
-            generation batch processed per optimization step.
         top_p (`float`, *optional*, defaults to `1.0`):
             Top-p (nucleus) sampling parameter for on-policy generation.
         top_k (`int`, *optional*, defaults to `0`):
@@ -206,13 +202,6 @@ class DistillationConfig(_BaseConfig):
     )
 
     # On-policy generation
-    generation_batch_size: int | None = field(
-        default=None,
-        metadata={
-            "help": "Batch size to use for generation. If None, it defaults to the effective training batch size: "
-            "per_device_train_batch_size * num_processes * gradient_accumulation_steps."
-        },
-    )
     top_p: float = field(
         default=1.0,
         metadata={"help": "Top-p (nucleus) sampling parameter for on-policy generation."},
@@ -353,16 +342,3 @@ class DistillationConfig(_BaseConfig):
 
         if self.beta < 0.0 or self.beta > 1.0:
             raise ValueError(f"beta must be in [0.0, 1.0], got {self.beta}.")
-
-        num_processes = self.world_size
-        effective_batch_size = self.per_device_train_batch_size * num_processes * self.gradient_accumulation_steps
-        if self.generation_batch_size is None:
-            self.generation_batch_size = effective_batch_size
-        elif self.generation_batch_size != effective_batch_size:
-            # Without `steps_per_generation` (deferred), the sampler/dataloader/`_prepare_inputs` buffering all key off
-            # `gradient_accumulation_steps`, so the only supported generation batch is the effective training batch.
-            raise ValueError(
-                f"generation_batch_size ({self.generation_batch_size}) must equal per_device_train_batch_size * "
-                f"num_processes * gradient_accumulation_steps ({effective_batch_size}); a different value would require "
-                f"steps_per_generation, which is not supported yet."
-            )

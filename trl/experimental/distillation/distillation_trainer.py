@@ -509,10 +509,16 @@ class DistillationTrainer(_BaseTrainer):
             # RepeatSampler becomes a buffered shuffle here.
             if self.shuffle_dataset:
                 dataset = dataset.shuffle(seed=self.args.seed)
+            # Effective training batch = the generation batch (the deferred `generation_batch_size` slot-in).
+            generation_batch_size = (
+                self.args.per_device_train_batch_size
+                * self.accelerator.num_processes
+                * self.args.gradient_accumulation_steps
+            )
             dataset = repeat_iterable_dataset(
                 dataset,
                 mini_repeat_count=1,
-                batch_size=self.args.generation_batch_size,
+                batch_size=generation_batch_size,
                 repeat_count=self.args.gradient_accumulation_steps,
             )
         return self._get_dataloader(
@@ -529,10 +535,17 @@ class DistillationTrainer(_BaseTrainer):
         # so there is no per-prompt repeat (`mini_repeat_count=1`).
         if dataset is None:
             dataset = self.train_dataset
+        # The generation batch is the full effective training batch. GRPO names it `generation_batch_size` (paired with
+        # the deferred `steps_per_generation`); both are deferred here, so derive it inline — slot-in point.
+        generation_batch_size = (
+            self.args.per_device_train_batch_size
+            * self.accelerator.num_processes
+            * self.args.gradient_accumulation_steps
+        )
         return RepeatSampler(
             data_source=dataset,
             mini_repeat_count=1,
-            batch_size=self.args.generation_batch_size,
+            batch_size=generation_batch_size,
             repeat_count=self.args.gradient_accumulation_steps,
             shuffle=self.shuffle_dataset,
             seed=self.args.seed,
