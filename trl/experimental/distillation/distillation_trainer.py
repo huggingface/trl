@@ -415,6 +415,7 @@ class DistillationTrainer(_BaseTrainer):
         self.top_k = args.top_k
         self.min_p = args.min_p
         self.repetition_penalty = args.repetition_penalty
+        self.max_completion_length = args.max_completion_length
         self.chat_template_kwargs = args.chat_template_kwargs or {}
         self.pad_to_multiple_of = args.pad_to_multiple_of
         self.shuffle_dataset = args.shuffle_dataset
@@ -431,20 +432,23 @@ class DistillationTrainer(_BaseTrainer):
 
         # ── Generation config ──
         generation_kwargs = {
-            "max_new_tokens": args.max_completion_length,
-            "temperature": args.temperature,
-            "top_p": args.top_p,
+            "max_new_tokens": self.max_completion_length,
             "do_sample": True,
-            "top_k": args.top_k,
-            "pad_token_id": self.processing_class.pad_token_id,
+            "pad_token_id": self._tokenizer.pad_token_id,
+            "bos_token_id": self._tokenizer.bos_token_id,
+            "eos_token_id": self._tokenizer.eos_token_id,
+            "temperature": self.temperature,
+            "top_p": self.top_p,
+            "top_k": self.top_k,
+            "min_p": self.min_p,
+            "repetition_penalty": self.repetition_penalty,
+            "cache_implementation": args.cache_implementation,
         }
-        self.generation_config = GenerationConfig(**generation_kwargs)
+        if args.generation_kwargs is not None:
+            generation_kwargs.update(args.generation_kwargs)
+        self.generation_config = GenerationConfig(**generation_kwargs, disable_compile=True)
+        # Keep training-specific generation kwargs to overwrite model's original generation config
         self.generation_kwargs = generation_kwargs
-        if (
-            hasattr(self.model.generation_config, "eos_token_id")
-            and self.model.generation_config.eos_token_id is not None
-        ):
-            self.generation_config.eos_token_id = self.model.generation_config.eos_token_id
 
         # ── Metrics & Logging ──
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
