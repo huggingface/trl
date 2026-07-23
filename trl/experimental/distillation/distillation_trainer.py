@@ -664,6 +664,7 @@ class DistillationTrainer(_BaseTrainer):
                 add_generation_prompt=True,
                 tokenize=True,
                 return_dict=True,
+                **self.chat_template_kwargs,
             )
             prompt_ids = tokenized["input_ids"]
             # For VLMs, the processor returns extra multimodal fields (pixel_values, image_grid_thw, etc.)
