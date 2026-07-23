@@ -72,9 +72,6 @@ class DistillationConfig(_BaseConfig):
         generation_batch_size (`int` or `None`, *optional*):
             Number of unique prompts per worker per optimizer step. If `None`, computed from
             `(per_device_train_batch_size * gradient_accumulation_steps) // num_generations`.
-        steps_per_generation (`int`, *optional*):
-            Number of steps per generation. If `None`, it defaults to `gradient_accumulation_steps`. Mutually exclusive
-            with `generation_batch_size`.
         top_p (`float`, *optional*, defaults to `1.0`):
             Top-p (nucleus) sampling parameter for on-policy generation.
         top_k (`int`, *optional*, defaults to `0`):
@@ -222,10 +219,6 @@ class DistillationConfig(_BaseConfig):
             "help": "Number of unique prompts per worker per optimizer step. "
             "If None, computed from (per_device_train_batch_size * gradient_accumulation_steps) // num_generations."
         },
-    )
-    steps_per_generation: int | None = field(
-        default=None,
-        metadata={"help": "Number of steps per generation. If `None`, it defaults to `gradient_accumulation_steps`."},
     )
     top_p: float = field(
         default=1.0,
