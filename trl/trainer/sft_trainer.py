@@ -15,6 +15,7 @@
 import contextlib
 import inspect
 import json
+import math
 import os
 import types
 import warnings
@@ -94,6 +95,61 @@ class _ChunkedCELMHeadOutput(CausalLMOutputWithPast):
     entropy_sum: torch.Tensor | None = None
     num_valid_tokens: torch.Tensor | None = None
     aux_loss: torch.Tensor | None = None
+    expert_usage_counts: torch.Tensor | None = None
+
+
+def _get_expert_usage_counts(
+    router_logits: tuple[torch.Tensor, ...] | list[torch.Tensor] | torch.Tensor,
+    num_experts_per_tok: int,
+    attention_mask: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Count top-k router assignments for each layer, excluding padding tokens."""
+    if isinstance(router_logits, torch.Tensor):
+        router_logits = (router_logits,)
+
+    flat_mask = attention_mask.reshape(-1).bool() if attention_mask is not None else None
+    layer_counts = []
+    for layer_idx, layer_router_logits in enumerate(router_logits):
+        num_experts = layer_router_logits.shape[-1]
+        flattened_logits = layer_router_logits.reshape(-1, num_experts)
+        if flat_mask is not None:
+            if flattened_logits.shape[0] != flat_mask.numel():
+                raise ValueError(
+                    f"Router logits for layer {layer_idx} contain {flattened_logits.shape[0]} token rows, but the "
+                    f"attention mask contains {flat_mask.numel()} positions."
+                )
+            valid_mask = flat_mask.to(flattened_logits.device)
+            flattened_logits = flattened_logits[valid_mask]
+
+        selected_experts = flattened_logits.topk(num_experts_per_tok, dim=-1).indices
+        counts = torch.bincount(selected_experts.reshape(-1), minlength=num_experts)
+        layer_counts.append(counts)
+
+    return torch.stack(layer_counts)
+
+
+def _summarize_expert_usage(counts: torch.Tensor) -> dict[str, float]:
+    """Summarize a `[num_layers, num_experts]` assignment-count matrix."""
+    totals = counts.sum(dim=-1)
+    valid_layers = totals > 0
+    if not valid_layers.any():
+        return {}
+
+    counts = counts[valid_layers].float()
+    probabilities = counts / counts.sum(dim=-1, keepdim=True)
+    entropy = torch.where(probabilities > 0, -probabilities * probabilities.log(), 0.0).sum(dim=-1)
+    if counts.shape[-1] > 1:
+        entropy = entropy / math.log(counts.shape[-1])
+    max_share = probabilities.max(dim=-1).values
+    active_fraction = (counts > 0).float().mean(dim=-1)
+
+    return {
+        "expert_usage/normalized_entropy_mean": entropy.mean().item(),
+        "expert_usage/normalized_entropy_min": entropy.min().item(),
+        "expert_usage/max_share_mean": max_share.mean().item(),
+        "expert_usage/max_share_max": max_share.max().item(),
+        "expert_usage/active_fraction_mean": active_fraction.mean().item(),
+    }
 
 
 def _chunk(h, w, b, lbl, logit_scale, final_logit_softcapping):
@@ -234,7 +290,9 @@ def _chunked_cross_entropy_loss(
     return loss, correct, entropy_sum, n_valid_tensor
 
 
-def _patch_chunked_ce_lm_head(model: torch.nn.Module, chunk_size: int, is_vlm: bool = False) -> None:
+def _patch_chunked_ce_lm_head(
+    model: torch.nn.Module, chunk_size: int, is_vlm: bool = False, log_expert_usage: bool = False
+) -> None:
     """
     Patch `model.forward` to compute the LM loss via [`_chunked_cross_entropy_loss`].
 
@@ -258,6 +316,8 @@ def _patch_chunked_ce_lm_head(model: torch.nn.Module, chunk_size: int, is_vlm: b
         is_vlm (`bool`):
             Set to `True` for VLMs. Only used to read `logit_scale` / `final_logit_softcapping` /
             `output_router_logits` from `model.config.text_config` instead of the top-level config.
+        log_expert_usage (`bool`):
+            Whether to return compact expert-assignment counts during evaluation when router logits are requested.
     """
     # VLM scaling configs (`logit_scale`, `final_logit_softcapping`, MoE `output_router_logits`) live on `text_config`;
     # text-only models keep them on the top-level config.
@@ -333,6 +393,7 @@ def _patch_chunked_ce_lm_head(model: torch.nn.Module, chunk_size: int, is_vlm: b
         )
 
         aux_loss = None
+        expert_usage_counts = None
         if output_router_logits:
             # Mirror the per-family MoE forward: add `router_aux_loss_coef * load_balancing_loss_func(...)` to
             # the main loss. Mixtral is the source of truth — every MoE family (Qwen3Moe, GptOss, OLMoE,
@@ -358,6 +419,10 @@ def _patch_chunked_ce_lm_head(model: torch.nn.Module, chunk_size: int, is_vlm: b
                 outputs.router_logits, num_experts, num_experts_per_tok, attention_mask
             )
             loss = loss + router_aux_loss_coef * aux_loss.to(loss.device)
+            if log_expert_usage and not self.training:
+                expert_usage_counts = _get_expert_usage_counts(
+                    outputs.router_logits, num_experts_per_tok, attention_mask
+                )
 
         return _ChunkedCELMHeadOutput(
             loss=loss,
@@ -369,6 +434,7 @@ def _patch_chunked_ce_lm_head(model: torch.nn.Module, chunk_size: int, is_vlm: b
             entropy_sum=entropy_sum,
             num_valid_tokens=num_valid_tokens,
             aux_loss=aux_loss,
+            expert_usage_counts=expert_usage_counts,
         )
 
     # Keep the original forward signature so `generate`'s `_validate_model_kwargs` still sees the
@@ -1316,7 +1382,12 @@ class SFTTrainer(_BaseTrainer):
                             "`lm_head` from `target_modules`, or switch to `loss_type='nll'`. If this is a real use "
                             "case for you, please open an issue at https://github.com/huggingface/trl/issues."
                         )
-                _patch_chunked_ce_lm_head(target, chunk_size=_CHUNKED_LM_HEAD_CHUNK_SIZE, is_vlm=self._is_vlm)
+                _patch_chunked_ce_lm_head(
+                    target,
+                    chunk_size=_CHUNKED_LM_HEAD_CHUNK_SIZE,
+                    is_vlm=self._is_vlm,
+                    log_expert_usage=args.log_expert_usage,
+                )
             else:
                 raise ValueError(
                     f"Invalid `loss_type` {args.loss_type} passed. Supported values are 'nll', 'dft', and "
@@ -1358,15 +1429,23 @@ class SFTTrainer(_BaseTrainer):
         text_config = model.config.get_text_config()
         is_moe = getattr(text_config, "output_router_logits", None) is not None
         self.aux_loss_enabled = is_moe and self.args.router_aux_loss_coef != 0.0
+        self.expert_usage_enabled = is_moe and self.args.log_expert_usage
+        if self.args.log_expert_usage and not is_moe:
+            raise ValueError("`log_expert_usage=True` requires a Mixture-of-Experts model with router logits.")
+        self._num_experts_per_tok = text_config.num_experts_per_tok if self.expert_usage_enabled else None
         if is_moe:
             # The native and chunked forwards add the aux loss from the model config, so keep the config in sync with
             # the coef: enable it (and propagate the coef) when non-zero, disable it otherwise. This overrides any
             # `output_router_logits` the model was loaded with, so `router_aux_loss_coef=0.0` reliably turns it off.
             text_config.output_router_logits = self.aux_loss_enabled
             text_config.router_aux_loss_coef = self.args.router_aux_loss_coef
+            if self.expert_usage_enabled:
+                target = model.get_base_model() if is_peft_model(model) else model
+                target.router_aux_loss_coef = self.args.router_aux_loss_coef
 
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
+        self._expert_usage_counts = None
         self._total_train_tokens = 0
 
         # Add tags to the model
@@ -1699,6 +1778,7 @@ class SFTTrainer(_BaseTrainer):
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         mode = "train" if self.model.training else "eval"
+        collect_expert_usage = self.expert_usage_enabled and mode == "eval"
         prediction_loss_only = inputs.pop("_prediction_loss_only", None)
 
         # Set aside labels as it will be dropped by super().compute_loss() if a custom `compute_loss_func` is used.
@@ -1711,7 +1791,7 @@ class SFTTrainer(_BaseTrainer):
 
         # MoE models: request router logits so the model returns `outputs.aux_loss`. VLM wrappers honor this only
         # as a forward kwarg (not from the model config), so it must be passed here.
-        if self.aux_loss_enabled:
+        if self.aux_loss_enabled or collect_expert_usage:
             inputs["output_router_logits"] = True
 
         # Request token accuracy from Liger kernel and set token scaling if using DFT loss
@@ -1748,6 +1828,27 @@ class SFTTrainer(_BaseTrainer):
                     f"Please increase `max_length` or set it to `None` to disable truncation."
                 ) from e
             raise
+
+        if collect_expert_usage:
+            if self.args.loss_type == "chunked_nll":
+                expert_usage_counts = outputs.expert_usage_counts
+            else:
+                router_logits = outputs.router_logits
+                if router_logits is None:
+                    raise ValueError(
+                        "The model did not return `router_logits` while `log_expert_usage=True`. "
+                        "This model family is not compatible with expert-usage logging."
+                    )
+                expert_usage_counts = _get_expert_usage_counts(
+                    router_logits, self._num_experts_per_tok, inputs.get("attention_mask")
+                )
+            if expert_usage_counts is None:
+                raise ValueError("Expert-usage counts were not returned by the model forward pass.")
+            expert_usage_counts = self.accelerator.reduce(expert_usage_counts, reduction="sum").detach()
+            if self._expert_usage_counts is None:
+                self._expert_usage_counts = expert_usage_counts
+            else:
+                self._expert_usage_counts += expert_usage_counts
 
         # Compute entropy
         if self.args.loss_type == "chunked_nll":
@@ -1844,6 +1945,8 @@ class SFTTrainer(_BaseTrainer):
     def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
         mode = "train" if self.model.training else "eval"
         metrics = {key: sum(val) / len(val) for key, val in self._metrics[mode].items()}  # average the metrics
+        if mode == "eval" and self._expert_usage_counts is not None:
+            metrics.update(_summarize_expert_usage(self._expert_usage_counts))
 
         # This method can be called both in training and evaluation. When called in evaluation, the keys in `logs`
         # start with "eval_". We need to add the prefix "eval_" to the keys in `metrics` to match the format.
@@ -1853,6 +1956,8 @@ class SFTTrainer(_BaseTrainer):
         logs.update(metrics)
         super().log(logs, start_time)
         self._metrics[mode].clear()
+        if mode == "eval":
+            self._expert_usage_counts = None
 
     # Ensure the model card is saved along with the checkpoint
     def _save_checkpoint(self, model, trial):
