@@ -513,3 +513,25 @@ class NashMDTrainer(OnlineDPOTrainer):
         self.accelerator.backward(loss, **kwargs)
 
         return loss.detach() / self.args.gradient_accumulation_steps
+
+    def prediction_step(
+        self,
+        model: nn.Module,
+        inputs: dict[str, torch.Tensor | Any],
+        prediction_loss_only: bool,
+        ignore_keys: list[str] | None = None,
+    ) -> tuple[torch.Tensor | None, torch.Tensor | None, torch.Tensor | None]:
+        """Not implemented for NashMDTrainer.
+
+        ``NashMDTrainer`` uses a different training-step logic (mixture sampling + per-trainer loss) that is not
+        compatible with the base :meth:`OnlineDPOTrainer.prediction_step`. This override prevents silent inheritance
+        of the wrong eval logic.
+
+        Raises:
+            NotImplementedError: Always. Evaluation is not yet supported for ``NashMDTrainer``.
+        """
+        raise NotImplementedError(
+            "Evaluation is not yet supported for NashMDTrainer. "
+            "Set eval_strategy='no' in your training arguments, or implement a "
+            "prediction_step override tailored to the Nash-MD loss."
+        )
