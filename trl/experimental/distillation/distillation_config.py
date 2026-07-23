@@ -72,10 +72,35 @@ class DistillationConfig(_BaseConfig):
         generation_batch_size (`int` or `None`, *optional*):
             Number of unique prompts per worker per optimizer step. If `None`, computed from
             `(per_device_train_batch_size * gradient_accumulation_steps) // num_generations`.
-        top_p (`float`, *optional*, defaults to `0.95`):
+        top_p (`float`, *optional*, defaults to `1.0`):
             Top-p (nucleus) sampling parameter for on-policy generation.
         top_k (`int`, *optional*, defaults to `0`):
             Top-k sampling parameter for on-policy generation. `0` disables top-k filtering.
+        min_p (`float`, *optional*):
+            Minimum token probability, which will be scaled by the probability of the most likely token. It must be a
+            value between `0.0` and `1.0`. Typical values are in the `0.01-0.2` range.
+        generation_kwargs (`dict[str, Any]`, *optional*):
+            Additional keyword arguments to pass to [`~transformers.GenerationConfig`] (if using transformers) or
+            `SamplingParams` (if using vLLM) when sampling completions. This can be used to further customize the
+            generation behavior, such as setting `suppress_tokens`, `num_beams`, etc. If it contains keys that conflict
+            with the other generation parameters (like `min_p`, `top_p`, etc.), they will override them.
+        chat_template_kwargs (`dict[str, Any]`, *optional*):
+            Additional keyword arguments to pass to the `apply_chat_template` function when generating completions.
+        repetition_penalty (`float`, *optional*, defaults to `1.0`):
+            Float that penalizes new tokens based on whether they appear in the prompt and the generated text so far.
+            Values > `1.0` encourage the model to use new tokens, while values < `1.0` encourage the model to repeat
+            tokens.
+        cache_implementation (`str`, *optional*):
+            Implementation of the cache method for faster generation when `use_vllm` is set to `False`.
+        pad_to_multiple_of (`int`, *optional*):
+            If set, the prompts ids and completions ids will be padded to a multiple of this value.
+        shuffle_dataset (`bool`, *optional*, defaults to `True`):
+            Whether to shuffle the training dataset.
+        ds3_gather_for_generation (`bool`, *optional*, defaults to `True`):
+            This setting applies to DeepSpeed ZeRO-3. If enabled, the policy model weights are gathered for generation,
+            improving generation speed. However, disabling this option allows training models that exceed the VRAM
+            capacity of a single GPU, albeit at the cost of slower generation. Disabling this option is not compatible
+            with vLLM generation.
 
         > Parameters that control vLLM for student generation
 
@@ -87,7 +112,7 @@ class DistillationConfig(_BaseConfig):
             Base URL for the student vLLM server. If provided, `vllm_server_host` and `vllm_server_port` are ignored.
         vllm_server_host (`str`, *optional*, defaults to `"0.0.0.0"`):
             Host of the student vLLM server.
-        vllm_server_port (`int`, *optional*, defaults to `8001`):
+        vllm_server_port (`int`, *optional*, defaults to `8000`):
             Port of the student vLLM server.
         vllm_server_timeout (`float`, *optional*, defaults to `240.0`):
             Timeout for connecting to the student vLLM server.
@@ -196,12 +221,64 @@ class DistillationConfig(_BaseConfig):
         },
     )
     top_p: float = field(
-        default=0.95,
+        default=1.0,
         metadata={"help": "Top-p (nucleus) sampling parameter for on-policy generation."},
     )
     top_k: int = field(
         default=0,
         metadata={"help": "Top-k sampling parameter for on-policy generation. 0 disables top-k filtering."},
+    )
+    min_p: float | None = field(
+        default=None,
+        metadata={
+            "help": "Minimum token probability, which will be scaled by the probability of the most likely token. It "
+            "must be a value between 0.0 and 1.0. Typical values are in the 0.01-0.2 range."
+        },
+    )
+    generation_kwargs: dict | None = field(
+        default=None,
+        metadata={
+            "help": "Additional keyword arguments to pass to `GenerationConfig` (if using transformers) or "
+            "`SamplingParams` (if using vLLM) when sampling completions. This can be used to further customize the "
+            "generation behavior, such as setting `suppress_tokens`, `num_beams`, etc. If it contains keys that "
+            "conflict with the other generation parameters (like `min_p`, `top_p`, etc.), they will override them."
+        },
+    )
+    chat_template_kwargs: dict | None = field(
+        default=None,
+        metadata={
+            "help": "Additional keyword arguments to pass to the `apply_chat_template` function when generating "
+            "completions."
+        },
+    )
+    repetition_penalty: float = field(
+        default=1.0,
+        metadata={
+            "help": "Float that penalizes new tokens based on whether they appear in the prompt and the generated "
+            "text so far. Values > 1.0 encourage the model to use new tokens, while values < 1.0 encourage the model "
+            "to repeat tokens."
+        },
+    )
+    cache_implementation: str | None = field(
+        default=None,
+        metadata={"help": "Implementation of the cache method for faster generation when use_vllm is set to False."},
+    )
+    pad_to_multiple_of: int | None = field(
+        default=None,
+        metadata={"help": "If set, the prompts ids and completions ids will be padded to a multiple of this value."},
+    )
+    shuffle_dataset: bool | None = field(
+        default=True,
+        metadata={"help": "Whether to shuffle the training dataset."},
+    )
+    ds3_gather_for_generation: bool = field(
+        default=True,
+        metadata={
+            "help": "This setting applies to DeepSpeed ZeRO-3. If enabled, the policy model weights are gathered for "
+            "generation, improving generation speed. However, disabling this option allows training models that "
+            "exceed the VRAM capacity of a single GPU, albeit at the cost of slower generation. Disabling this option "
+            "is not compatible with vLLM generation."
+        },
     )
 
     # vLLM for student generation
@@ -222,7 +299,7 @@ class DistillationConfig(_BaseConfig):
         metadata={"help": "Host of the student vLLM server."},
     )
     vllm_server_port: int = field(
-        default=8001,
+        default=8000,
         metadata={"help": "Port of the student vLLM server."},
     )
     vllm_server_timeout: float = field(
