@@ -18,6 +18,7 @@ from functools import wraps
 
 import pytest
 import torch
+from transformers.utils import is_torch_xpu_available
 
 
 @pytest.hookimpl(hookwrapper=True)
@@ -121,19 +122,48 @@ def apply_model_revisions(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def force_use_cpu_without_accelerator(monkeypatch):
+    """Force `use_cpu=True` on all TRL configs when no accelerator is available.
+
+    TRL configs default `bf16` to `True` (see `_BaseConfig.__post_init__`), which makes
+    `transformers.TrainingArguments.__post_init__` raise `ValueError: Your setup doesn't support bf16/gpu. You need to
+    assign use_cpu ...` on machines without a GPU. Setting `use_cpu=True` before that validation runs lets the whole
+    suite run on CPU without editing every individual config in the tests. On a machine with an accelerator (CUDA, XPU,
+    NPU, ...) this fixture is a no-op, so on-device tests and explicit `use_cpu=False` are left untouched.
+    """
+    from transformers.testing_utils import torch_device
+
+    if torch_device is not None and torch_device != "cpu":
+        return
+
+    from trl.trainer.base_config import _BaseConfig
+
+    original_post_init = _BaseConfig.__post_init__
+
+    def patched_post_init(self):
+        self.use_cpu = True
+        original_post_init(self)
+
+    monkeypatch.setattr(_BaseConfig, "__post_init__", patched_post_init)
+
+
+@pytest.fixture(autouse=True)
 def cleanup_gpu():
     """
-    Automatically cleanup GPU memory after each test.
+    Automatically cleanup accelerator memory after each test.
 
-    This fixture helps prevent CUDA out of memory errors when running tests in parallel with pytest-xdist by ensuring
-    models and tensors are properly garbage collected and GPU memory caches are cleared between tests.
+    This fixture helps prevent accelerator out of memory errors when running tests in parallel with pytest-xdist by
+    ensuring models and tensors are properly garbage collected and accelerator memory caches are cleared between tests.
     """
     yield
     # Cleanup after test
     gc.collect()
     if torch.cuda.is_available():
-        torch.cuda.empty_cache()
         torch.cuda.synchronize()
+        torch.cuda.empty_cache()
+    if is_torch_xpu_available():
+        torch.xpu.synchronize()
+        torch.xpu.empty_cache()
 
 
 @pytest.fixture(autouse=True)

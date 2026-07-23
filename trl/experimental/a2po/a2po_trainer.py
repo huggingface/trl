@@ -31,9 +31,10 @@ from transformers import (
 )
 
 from ...data_utils import maybe_apply_chat_template
-from ...models import create_reference_model, unwrap_model_for_generation
+from ...models import unwrap_model_for_generation
 from ...trainer.base_trainer import _BaseTrainer
 from ...trainer.utils import selective_log_softmax
+from ..utils import create_reference_model
 from .a2po_config import A2POConfig
 
 
