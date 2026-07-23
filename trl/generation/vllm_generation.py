@@ -456,10 +456,14 @@ class VLLMGeneration:
         model = self.model
         accelerator = self.accelerator
 
-        if is_peft_model(model):
-            # With PEFT and FSDP/DeepSpeed ZeRO Stage 3, we must gather the full model at once before merging, as
-            # merging adapters in a sharded manner is not supported.
-            # TODO: does this work with FSDP?
+        if self.mode == "server":
+            # Server mode streams every parameter through the client's bulk `update_weights`. The selected client
+            # encapsulates the transport — the native client (vLLM >= 0.22.0) sends a single NCCL transfer, the custom
+            # client forwards each parameter to `update_named_param` — so this path needs no version branching.
+            self._sync_weights_bulk()
+        elif is_peft_model(model):
+            # Colocate + PEFT: with FSDP/DeepSpeed ZeRO Stage 3, we must gather the full model at once before merging,
+            # as merging adapters in a sharded manner is not supported.
             with self._dist.gather_params(list(model.parameters())):
                 model.merge_adapter()
 
@@ -484,21 +488,84 @@ class VLLMGeneration:
                 # Unmerge adapters while parameters are still gathered
                 model.unmerge_adapter()
                 # Parameters will automatically be repartitioned when exiting the context
+        elif self._dist.is_fsdp:
+            # Colocate + FSDP: memory-efficient post-order traversal, loaded per parameter.
+            self._sync_fsdp_params_to_vllm(model)
         else:
-            # For non-PEFT models, simply gather (if needed) and update each parameter individually.
-            if self._dist.is_fsdp:
-                self._sync_fsdp_params_to_vllm(model)
-            else:
-                for name, param in model.named_parameters():
-                    name = self._fix_param_name_to_vllm(name)
-                    with self._dist.gather_params([param]):
-                        self._push_param_to_vllm(name, param.data)
+            # Colocate, non-FSDP: gather (if needed) and load each parameter individually.
+            for name, param in model.named_parameters():
+                name = self._fix_param_name_to_vllm(name)
+                with self._dist.gather_params([param]):
+                    self._push_param_to_vllm(name, param.data)
 
         # Reset cache on vLLM
         if self.mode == "server" and accelerator.is_main_process:
             self.vllm_client.reset_prefix_cache()
         elif self.mode == "colocate":
             self.llm.reset_prefix_cache()
+
+    def _sync_weights_bulk(self):
+        """Stream weights to the vLLM server (server mode) through the client's bulk `update_weights`.
+
+        Parameter metadata (names, dtypes, shapes) is collected without gathering, then full tensors are produced
+        lazily so that, under FSDP2/ZeRO-3, only a single parameter is materialized at a time. All ranks iterate so
+        they participate in the collective gathers; only the main process sends to vLLM. The transfer is delegated to
+        the client's `update_weights`: the native client (vLLM >= 0.22.0) streams a single bulk NCCL transfer, while
+        the custom client forwards each parameter to `update_named_param` — this method is the same for both.
+        """
+        from torch.distributed.tensor import DTensor
+
+        model = self.model
+        if self._dist.fsdp_version == 1:
+            raise NotImplementedError("vLLM server-mode weight sync does not support FSDP1; use FSDP2 or DeepSpeed.")
+
+        peft = is_peft_model(model)
+
+        def named_params():
+            for name, param in model.named_parameters():
+                if peft:
+                    # Recover the original parameter name and skip adapter / saved-module duplicates.
+                    name = name.removeprefix("base_model.model.").replace(".base_layer", "")
+                    if model.prefix in name:  # adapter layers: merged already, absent from vLLM
+                        continue
+                    if "original_module" in name:  # modules_to_save: keep only the saved copy
+                        continue
+                    name = self._fix_param_name_to_vllm(name, extra_prefixes=["modules_to_save.default."])
+                else:
+                    name = self._fix_param_name_to_vllm(name)
+                yield name, param
+
+        # PEFT requires the whole model gathered to merge adapters (sharded merge is unsupported); the merge stays
+        # active for the entire transfer. Non-PEFT gathers lazily, one parameter at a time.
+        with self._dist.gather_params(list(model.parameters())) if peft else nullcontext():
+            if peft:
+                model.merge_adapter()
+
+            # Metadata, collected without gathering for the lazy path: full (unsharded) shapes come from `ds_shape`
+            # under ZeRO-3, and directly otherwise (DTensor exposes the logical full shape; PEFT params are gathered).
+            names, dtype_names, shapes = [], [], []
+            for name, param in named_params():
+                names.append(name)
+                dtype_names.append(str(param.dtype).split(".")[-1])
+                shapes.append(list(param.ds_shape) if self._dist.is_zero3 and not peft else list(param.shape))
+
+            def weights():
+                for name, param in named_params():
+                    # PEFT already holds the full model; otherwise gather one parameter at a time (ZeRO-3 all-gather,
+                    # no-op elsewhere), freed as the generator advances.
+                    with nullcontext() if peft else self._dist.gather_params([param]):
+                        full = param.full_tensor() if isinstance(param, DTensor) else param.data
+                        yield name, full.detach()
+
+            if self.accelerator.is_main_process:
+                self.vllm_client.update_weights(names, dtype_names, shapes, weights())
+            else:
+                # Other ranks don't talk to vLLM but must still participate in the collective gathers.
+                for _ in weights():
+                    pass
+
+            if peft:
+                model.unmerge_adapter()
 
     def generate(
         self,
