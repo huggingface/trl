@@ -368,6 +368,9 @@ class VLLMGeneration:
             )
             if self.enable_sleep_mode:
                 self.llm.sleep(level=2)
+                self._llm_weights_sleeping = True
+            else:
+                self._llm_weights_sleeping = False
         else:
             raise ValueError(f"vllm_mode must be either 'server' or 'colocate', got '{self.mode}'.")
 
@@ -452,6 +455,7 @@ class VLLMGeneration:
         if self.mode == "colocate" and self.enable_sleep_mode:
             empty_cache()  # required to avoid OOM in some cases
             self.llm.wake_up(tags=["weights"])
+            self._llm_weights_sleeping = False
 
         model = self.model
         accelerator = self.accelerator
@@ -536,16 +540,9 @@ class VLLMGeneration:
         repetition_penalty = self.repetition_penalty
         max_completion_length = self.max_completion_length
 
-        # Wake up colocated vLLM weights if needed (idempotent if already awake from sync_weights)
-        if self.mode == "colocate" and self.enable_sleep_mode:
-            empty_cache()  # required to avoid OOM in some cases
-            self.llm.wake_up(tags=["weights"])
-            # Work around for https://github.com/vllm-project/vllm/issues/29341
-            try:
-                self.llm.collective_rpc("reload_weights")
-            except NotImplementedError:
-                # Non-CUDA vLLM backends (e.g., vllm-ascend's NPUWorkerV1), don't implement reload_weights
-                pass
+        # Since vLLM sleep level 2 discards weights, we need to sync weights to wake up the engine
+        if self.mode == "colocate" and self.enable_sleep_mode and self._llm_weights_sleeping:
+            self.sync_weights()
 
         # Generate completions using vLLM: gather all prompts and use them in a single call in the main process
         if self.mode == "server":
@@ -700,5 +697,6 @@ class VLLMGeneration:
 
             if self.enable_sleep_mode:
                 self.llm.sleep(level=2)
+                self._llm_weights_sleeping = True
 
         return prompt_ids, completion_ids, logprobs, logprob_token_ids
