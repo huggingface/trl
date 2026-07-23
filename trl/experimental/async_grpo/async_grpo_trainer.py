@@ -232,7 +232,7 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
         stale_after_s,
         max_staleness=3,
         poll_interval_s=5.0,
-        report_to=(),
+        report_to=None,
     ):
         self.queue = rollout_queue
         self.model_version_fn = model_version_fn
@@ -240,7 +240,7 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
         self.stale_after_s = stale_after_s
         self.max_staleness = max_staleness
         self.poll_interval_s = poll_interval_s
-        self.report_to = report_to
+        self.report_to = report_to or []
         self._trace_buf: list = []
         self._trace_log_interval = 8
         # Log traces off the training path: __iter__ enqueues, a daemon thread drains. Bounded + drop-on-full so a
