@@ -199,14 +199,13 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
     def __iter__(self):
         while True:
             t0 = time.time()
-            if self.queue.qsize() == 0:
-                logger.info("queue empty, waiting for rollout samples...")
-            try:
-                sample = self.queue.get(timeout=self.poll_interval_s)
-            except queue.Empty:
-                # Returning here would broadcast None through accelerate's dispatch loop.
-                self.check_health_fn(self.stale_after_s)
-                continue
+            while True:
+                try:
+                    sample = self.queue.get(timeout=self.poll_interval_s)
+                    break
+                except queue.Empty:
+                    # Returning here would broadcast None through accelerate's dispatch loop.
+                    self.check_health_fn(self.stale_after_s)
             queue_wait_time_s = time.time() - t0
             if queue_wait_time_s > 1.0:
                 logger.info(f"waited {queue_wait_time_s:.1f}s for sample (qsize={self.queue.qsize()})")
