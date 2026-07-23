@@ -19,17 +19,17 @@ import textwrap
 from collections import defaultdict
 from collections.abc import Callable
 from contextlib import nullcontext
-from functools import partial
 from typing import Any, Optional
 
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from accelerate.logging import get_logger
 from accelerate.utils import gather_object, set_seed
-from datasets import Dataset
+from datasets import Dataset, IterableDataset
 from packaging.version import Version
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Sampler
 from transformers import AutoTokenizer, TrainerCallback, is_trackio_available, is_wandb_available
 from transformers.data.data_collator import DataCollator
 from transformers.feature_extraction_utils import FeatureExtractionMixin
@@ -38,7 +38,7 @@ from transformers.image_processing_utils import BaseImageProcessor
 from transformers.modeling_utils import PreTrainedModel
 from transformers.processing_utils import ProcessorMixin
 from transformers.tokenization_utils_base import PreTrainedTokenizerBase
-from transformers.trainer_utils import EvalPrediction, seed_worker
+from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_liger_kernel_available, is_peft_available, is_rich_available
 
 from ...data_utils import is_conversational
@@ -49,7 +49,16 @@ from ...import_utils import is_vllm_available
 from ...models import prepare_deepspeed
 from ...models.utils import _ForwardRedirection, unwrap_model_for_generation
 from ...trainer.base_trainer import _BaseTrainer
-from ...trainer.utils import RepeatSampler, create_model_from_path, disable_dropout_in_model, pad, split_tensor_dict
+from ...trainer.utils import (
+    RepeatSampler,
+    create_model_from_path,
+    disable_dropout_in_model,
+    identity,
+    pad,
+    repeat_iterable_dataset,
+    shuffle_sequence_dict,
+    split_tensor_dict,
+)
 from .distillation_config import DistillationConfig
 
 
@@ -75,6 +84,9 @@ if is_trackio_available():
 
 if is_wandb_available():
     import wandb
+
+
+logger = get_logger(__name__)
 
 
 def _print_completions_sample(prompts: list[str], completions: list[str], step: int, num_samples: int = None) -> None:
@@ -148,109 +160,6 @@ def _jsd_divergence(student_log_probs, teacher_log_probs, beta, support_mask=Non
             kl_teacher = F.kl_div(mixture_log_probs, teacher_log_probs, reduction="none", log_target=True)
             kl_student = F.kl_div(mixture_log_probs, student_log_probs, reduction="none", log_target=True)
             return beta_t * kl_teacher + (1 - beta_t) * kl_student
-
-
-class _DistillationCollator:
-    """Data collator for the distillation trainer.
-
-    Accepts a prompt-only dataset (a ``prompt`` column, the format shared with GRPO): the student generates the
-    completion on-policy, so there is nothing to train on in the dataset.
-    """
-
-    def __init__(
-        self,
-        tokenizer: "PreTrainedTokenizerBase",
-        ignore_index: int = -100,
-    ):
-        self.tokenizer = tokenizer
-        self.ignore_index = ignore_index
-
-        if tokenizer.pad_token_id is None:
-            raise ValueError("The tokenizer does not have a pad token. Please set `pad_token_id` in the tokenizer.")
-
-    def __call__(self, examples: list[dict[str, Any]]) -> dict[str, torch.Tensor]:
-        all_input_ids: list[list[int]] = []
-        all_labels: list[list[int]] = []
-        all_prompt_ids: list[list[int]] = []
-
-        for example in examples:
-            formatted_prompt = self.tokenizer.apply_chat_template(
-                example["prompt"], tokenize=False, add_generation_prompt=True
-            )
-            prompt_ids = self.tokenizer(formatted_prompt, padding=False, add_special_tokens=False)["input_ids"]
-
-            # Prompt-only: no completion to train on (on-policy will generate one)
-            all_input_ids.append(list(prompt_ids))
-            all_labels.append([self.ignore_index] * len(prompt_ids))
-            all_prompt_ids.append(list(prompt_ids))
-
-        # Convert to tensors and left-pad
-        pad_id = self.tokenizer.pad_token_id
-        input_ids_t = pad(
-            [torch.tensor(ids, dtype=torch.long) for ids in all_input_ids],
-            padding_side="left",
-            padding_value=pad_id,
-        )
-        attention_mask_t = pad(
-            [torch.ones(len(ids), dtype=torch.long) for ids in all_input_ids],
-            padding_side="left",
-            padding_value=0,
-        )
-        labels_t = pad(
-            [torch.tensor(lab, dtype=torch.long) for lab in all_labels],
-            padding_side="left",
-            padding_value=self.ignore_index,
-        )
-        prompts_t = pad(
-            [torch.tensor(ids, dtype=torch.long) for ids in all_prompt_ids],
-            padding_side="left",
-            padding_value=pad_id,
-        )
-        prompt_mask_t = pad(
-            [torch.ones(len(ids), dtype=torch.long) for ids in all_prompt_ids],
-            padding_side="left",
-            padding_value=0,
-        )
-
-        return {
-            "input_ids": input_ids_t,
-            "attention_mask": attention_mask_t,
-            "labels": labels_t,
-            "prompts": prompts_t,
-            "prompt_attention_mask": prompt_mask_t,
-            "prompt_ids": prompts_t,
-            "prompt_mask": prompt_mask_t,
-            "completion_ids": input_ids_t[:, prompts_t.shape[1] :],
-            "completion_mask": torch.ones_like(input_ids_t[:, prompts_t.shape[1] :]),
-        }
-
-
-class _RepeatBatchDataLoader:
-    """Repeats each collated batch ``repeat_count`` times without re-collation.
-
-    ``RepeatSampler`` with ``repeat_count > 1`` causes the DataLoader to re-collate (re-tokenize) the same examples on
-    every repeat, which is wasteful. This wrapper instead keeps ``repeat_count=1`` in the sampler and repeats the
-    already-collated tensor dict, avoiding redundant tokenization.
-    """
-
-    def __init__(self, dataloader, repeat_count: int):
-        self.dataloader = dataloader
-        self.repeat_count = repeat_count
-
-    def __iter__(self):
-        for batch in self.dataloader:
-            for _ in range(self.repeat_count):
-                yield batch
-
-    def __len__(self):
-        return len(self.dataloader) * self.repeat_count
-
-    def set_epoch(self, epoch: int):
-        if hasattr(self.dataloader, "set_epoch"):
-            self.dataloader.set_epoch(epoch)
-
-    def __getattr__(self, attr):
-        return getattr(self.dataloader, attr)
 
 
 class DistillationTrainer(_BaseTrainer):
@@ -381,10 +290,6 @@ class DistillationTrainer(_BaseTrainer):
                 get_peft_model_kwargs["autocast_adapter_dtype"] = False
             model = get_peft_model(model, peft_config, **get_peft_model_kwargs)
 
-        # ── Data collator ──
-        if data_collator is None:
-            data_collator = _DistillationCollator(tokenizer=processing_class)
-
         # ── Liger fused JSD loss ──
         self.use_liger_loss = False
         if args.use_liger_kernel:
@@ -418,13 +323,43 @@ class DistillationTrainer(_BaseTrainer):
                     "instantiated."
                 )
 
+        # Iterable datasets can't be indexed, so the RepeatSampler can't be attached to them. Instead, the sampler's
+        # ordering is reproduced by streaming (see `get_train_dataloader`/`get_eval_dataloader` and
+        # `repeat_iterable_dataset`). This requires `dispatch_batches=False`: with the default dispatch path, batches
+        # are collated on the main process and Accelerate tries to concatenate the string `prompt` column, which fails;
+        # `dispatch_batches=False` also lets each process shard the stream into contiguous slices, as the sampler does.
+        # See https://github.com/huggingface/trl/issues/3213
+        uses_iterable_dataset = (
+            isinstance(train_dataset, IterableDataset)
+            or isinstance(eval_dataset, IterableDataset)
+            or (
+                isinstance(eval_dataset, dict) and any(isinstance(ds, IterableDataset) for ds in eval_dataset.values())
+            )
+        )
+        if uses_iterable_dataset:
+            if args.accelerator_config.dispatch_batches:
+                raise ValueError(
+                    "Iterable datasets require `dispatch_batches=False`, but it is set to `True` in "
+                    "`accelerator_config`. Please set it to `False`."
+                )
+            args.accelerator_config.dispatch_batches = False
+        # An iterable train set bakes the generation-batch repeats into the stream, so it must be read by a single
+        # worker: multiple workers would shard and interleave it, breaking the generation-batch ordering that
+        # `_prepare_inputs` relies on. Map-style train keeps its workers.
+        if isinstance(train_dataset, IterableDataset) and args.dataloader_num_workers != 0:
+            logger.warning(
+                f"Iterable datasets require `dataloader_num_workers=0` to preserve prompt grouping; overriding the "
+                f"provided value ({args.dataloader_num_workers})."
+            )
+            args.dataloader_num_workers = 0
+
         # Trainer does not need to remove unused columns — the collator handles raw data
         args.remove_unused_columns = False
 
         super().__init__(
             model=model,
             args=args,
-            data_collator=data_collator,
+            data_collator=identity,  # No data collation is needed in distillation
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
             processing_class=processing_class,
@@ -483,17 +418,15 @@ class DistillationTrainer(_BaseTrainer):
         self.chat_template_kwargs = args.chat_template_kwargs or {}
         self.pad_to_multiple_of = args.pad_to_multiple_of
         self.shuffle_dataset = args.shuffle_dataset
-        self.num_generations = args.num_generations
 
-        # ── Buffer state ──
+        # Tracks the number of iterations (forward + backward passes), including those within a grad accum cycle
+        self._step = 0
+        # Buffer the batch to reuse generated outputs across multiple updates. For more details, see
+        # `_get_train_sampler` and `_prepare_inputs`.
         self._buffered_inputs = None
-        self._buffered_text_logs = None
-        self._buffered_num_items = None
-        self._buffer_step = 0
 
-        # Ensure each process receives a unique seed to prevent duplicate completions when generating with
-        # transformers if num_generations exceeds per_device_train_batch_size. We could skip it if we use vLLM, but
-        # it's safer to set it in all cases.
+        # Ensure each process receives a unique seed so different processes generate different completions when
+        # generating with transformers. We could skip it if we use vLLM, but it's safer to set it in all cases.
         set_seed(args.seed, device_specific=True)
 
         # ── Generation config ──
@@ -557,39 +490,7 @@ class DistillationTrainer(_BaseTrainer):
                 max_completion_length=args.max_completion_length,
                 logprobs=None,
             )
-            self.vllm_sync_frequency = args.vllm_sync_frequency
             self._last_loaded_step = -1
-
-    def _get_completion_lengths(self, generated_tokens: torch.Tensor, prompt_width: int) -> torch.Tensor:
-        """Infer per-sample completion lengths from generated tokens."""
-        completion_tokens = generated_tokens[:, prompt_width:]
-        pad_token_id = self.processing_class.pad_token_id
-        eos_token_id = self.generation_config.eos_token_id
-        if eos_token_id is None:
-            eos_token_ids = set()
-        elif isinstance(eos_token_id, int):
-            eos_token_ids = {eos_token_id}
-        else:
-            eos_token_ids = set(eos_token_id)
-        pad_equals_eos = pad_token_id is not None and pad_token_id in eos_token_ids
-
-        completion_lengths = []
-        for row in completion_tokens.tolist():
-            if pad_equals_eos and eos_token_ids:
-                completion_length = len(row)
-                for idx, token_id in enumerate(row):
-                    if token_id in eos_token_ids:
-                        completion_length = idx + 1
-                        break
-            elif pad_token_id is not None:
-                completion_length = len(row)
-                while completion_length > 0 and row[completion_length - 1] == pad_token_id:
-                    completion_length -= 1
-            else:
-                completion_length = len(row)
-            completion_lengths.append(completion_length)
-
-        return torch.tensor(completion_lengths, device=generated_tokens.device, dtype=torch.long)
 
     # ──────────────────────────────────────────────────────────────────────
     #  Dataset / Dataloader
@@ -603,53 +504,117 @@ class DistillationTrainer(_BaseTrainer):
         if self._signature_columns is None:
             self._signature_columns = ["prompt", "image", "images"]
 
-    def _get_train_sampler(self, dataset=None):
+    def get_train_dataloader(self):
+        dataset = self.train_dataset
+        if isinstance(dataset, IterableDataset):
+            # Iterable datasets can't be indexed, so RepeatSampler can't be attached. Reproduce its ordering by
+            # transforming the stream instead (see `repeat_iterable_dataset`). The full permutation done by
+            # RepeatSampler becomes a buffered shuffle here.
+            if self.shuffle_dataset:
+                dataset = dataset.shuffle(seed=self.args.seed)
+            # Effective training batch = the generation batch (the deferred `generation_batch_size` slot-in).
+            generation_batch_size = (
+                self.args.per_device_train_batch_size
+                * self.accelerator.num_processes
+                * self.args.gradient_accumulation_steps
+            )
+            dataset = repeat_iterable_dataset(
+                dataset,
+                mini_repeat_count=1,
+                batch_size=generation_batch_size,
+                repeat_count=self.args.gradient_accumulation_steps,
+            )
+        return self._get_dataloader(
+            dataset=dataset,
+            description="Training",
+            batch_size=self._train_batch_size * self.args.gradient_accumulation_steps,  # < this is the change
+            sampler_fn=self._get_train_sampler,
+            is_training=True,
+        )
+
+    def _get_train_sampler(self, dataset: Dataset | None = None) -> Sampler:
+        # Repeat each generation batch `gradient_accumulation_steps` times so the completions generated once per
+        # generation batch (see `_prepare_inputs`) are reused across the accumulation window. Distillation is n=1,
+        # so there is no per-prompt repeat (`mini_repeat_count=1`).
         if dataset is None:
             dataset = self.train_dataset
+        # The generation batch is the full effective training batch. GRPO names it `generation_batch_size` (paired with
+        # the deferred `steps_per_generation`); both are deferred here, so derive it inline — slot-in point.
+        generation_batch_size = (
+            self.args.per_device_train_batch_size
+            * self.accelerator.num_processes
+            * self.args.gradient_accumulation_steps
+        )
         return RepeatSampler(
             data_source=dataset,
-            mini_repeat_count=self.num_generations,
-            batch_size=self.args.generation_batch_size * self.accelerator.num_processes,
-            repeat_count=1,
-            shuffle=True,
+            mini_repeat_count=1,
+            batch_size=generation_batch_size,
+            repeat_count=self.args.gradient_accumulation_steps,
+            shuffle=self.shuffle_dataset,
             seed=self.args.seed,
         )
 
-    def get_train_dataloader(self):
-        """
-        Override to load one generation batch per optimizer window.
+    def _get_eval_sampler(self, eval_dataset) -> Sampler:
+        # See _get_train_sampler for an explanation of the sampler.
+        return RepeatSampler(
+            data_source=eval_dataset,
+            mini_repeat_count=1,
+            seed=self.args.seed,
+        )
 
-        The dataloader yields batches of size `per_device_train_batch_size * gradient_accumulation_steps`.
-        RepeatSampler ensures each generation batch is repeated `gradient_accumulation_steps` times so the Trainer's
-        loop iterates the correct number of times.
-        """
-        if self.train_dataset is None:
-            raise ValueError("Trainer: training requires a train_dataset.")
+    # This method overrides `Trainer.get_eval_dataloader` to wrap iterable eval datasets, reproducing the
+    # RepeatSampler ordering that can't be attached to them (see `get_train_dataloader`). Map-style datasets keep the
+    # default path via `_get_eval_sampler`, which shuffles with `seed`, so the iterable wrap shuffles too (buffered)
+    # to walk prompts in a matching order.
+    # Maintenance note: this method is a copy-paste of the original `Trainer.get_eval_dataloader`, with the iterable
+    # wrapping as the only addition.
+    def get_eval_dataloader(self, eval_dataset: str | Dataset | IterableDataset | None = None) -> DataLoader:
+        if eval_dataset is None and self.eval_dataset is None:
+            raise ValueError("Trainer: evaluation requires an eval_dataset.")
 
-        train_dataset = self.train_dataset
-        data_collator = self.data_collator
+        # If we have persistent workers, don't do a fork bomb especially as eval datasets
+        # don't change during training
+        dataloader_key = eval_dataset if isinstance(eval_dataset, str) else "eval"
+        if (
+            hasattr(self, "_eval_dataloaders")
+            and dataloader_key in self._eval_dataloaders
+            and self.args.dataloader_persistent_workers
+        ):
+            return self._eval_dataloaders[dataloader_key]
 
-        dataloader_params = {
-            "batch_size": self._train_batch_size * self.args.gradient_accumulation_steps,
-            "collate_fn": data_collator,
-            "num_workers": self.args.dataloader_num_workers,
-            "pin_memory": self.args.dataloader_pin_memory,
-            "persistent_workers": self.args.dataloader_persistent_workers,
-        }
+        eval_dataset = (
+            self.eval_dataset[eval_dataset]
+            if isinstance(eval_dataset, str)
+            else eval_dataset
+            if eval_dataset is not None
+            else self.eval_dataset
+        )
 
-        if not isinstance(train_dataset, torch.utils.data.IterableDataset):
-            dataloader_params["sampler"] = self._get_train_sampler()
-            dataloader_params["drop_last"] = self.args.dataloader_drop_last
-            dataloader_params["worker_init_fn"] = partial(
-                seed_worker,
-                num_workers=self.args.dataloader_num_workers,
-                rank=self.args.process_index,
+        if isinstance(eval_dataset, IterableDataset):
+            # Apply the `__init__` iterable config here too
+            if self.args.accelerator_config.dispatch_batches:
+                raise ValueError(
+                    "Iterable datasets require `dispatch_batches=False`, but it is set to `True` in "
+                    "`accelerator_config`. Please set it to `False`."
+                )
+            self.accelerator.dataloader_config.dispatch_batches = False
+            eval_dataset = eval_dataset.shuffle(seed=self.args.seed)
+            eval_dataset = repeat_iterable_dataset(eval_dataset, mini_repeat_count=1)
+            # Force a single worker for this loader only, without persisting the change
+            num_workers = self.args.dataloader_num_workers
+            self.args.dataloader_num_workers = 0
+
+        try:
+            return self._get_dataloader(
+                dataset=eval_dataset,
+                description="Evaluation",
+                batch_size=self.args.eval_batch_size,
+                sampler_fn=self._get_eval_sampler,
+                dataloader_key=dataloader_key,
             )
-            if self.args.dataloader_num_workers > 0:
-                dataloader_params["prefetch_factor"] = self.args.dataloader_prefetch_factor
-
-        base_dataloader = self.accelerator.prepare(DataLoader(train_dataset, **dataloader_params))
-        return _RepeatBatchDataLoader(base_dataloader, repeat_count=self.args.gradient_accumulation_steps)
+        finally:
+            if isinstance(eval_dataset, IterableDataset):
+                self.args.dataloader_num_workers = num_workers
 
     def _tokenize_prompts(self, prompts: list):
         """Tokenize prompts and extract multimodal fields for generation.
@@ -840,255 +805,32 @@ class DistillationTrainer(_BaseTrainer):
 
     @profiling_decorator
     def _prepare_inputs(self, generation_batch: dict[str, torch.Tensor | Any]) -> dict[str, torch.Tensor | Any]:
-        if not self.model.training:
-            return generation_batch
+        # Prepares inputs for model training/evaluation by managing completion generation and batch handling.
+        # During training:
+        #   - Receives the local generation batch (Per-GPU batch size × gradient accumulation steps)
+        #     from the modified training dataloader instead of the standard local batch
+        #   - Generates completions once for the entire generation batch and splits it into batches of size
+        #     `per_device_train_batch_size`
+        #   - Buffers these completions and returns the appropriate slice for the current accumulation step
+        #   - Optimizes by regenerating completions only periodically (every gradient_accumulation_steps)
+        # During evaluation:
+        #   - The input is treated as a standard local batch (no accumulation)
+        #   - Completions are generated for each batch without buffering or reuse
+        # Returns a single local batch in both cases.
 
-        buffer_steps = self.args.gradient_accumulation_steps
-        if self._buffer_step % buffer_steps == 0 or self._buffered_inputs is None:
-            self._fill_buffer(generation_batch, buffer_steps)
-
-        slice_idx = self._buffer_step % buffer_steps
-        inputs = self._buffered_inputs[slice_idx]
-        self._buffer_step += 1
+        mode = "train" if self.model.training else "eval"
+        if mode == "train":
+            generate_every = self.args.gradient_accumulation_steps
+            if self._step % generate_every == 0 or self._buffered_inputs is None:
+                # self._buffered_inputs=None can occur when resuming from a checkpoint
+                generation_batch = self._generate_and_score_completions(generation_batch)
+                generation_batch = shuffle_sequence_dict(generation_batch)
+                generation_batches = split_tensor_dict(generation_batch, self.args.gradient_accumulation_steps)
+                self._buffered_inputs = generation_batches
+            inputs = self._buffered_inputs[self._step % self.args.gradient_accumulation_steps]
+        else:
+            inputs = self._generate_and_score_completions(generation_batch)
         return inputs
-
-    @profiling_decorator
-    def _fill_buffer(self, generation_batch: dict[str, torch.Tensor | Any], buffer_steps: int):
-        """Split the batch into slices and generate student completions for each (always on-policy)."""
-        slices = split_tensor_dict(generation_batch, buffer_steps)
-
-        self._buffered_inputs = [None] * buffer_steps
-        self._buffered_text_logs = [None] * buffer_steps
-
-        # Generate student completions for every slice
-        self._generate_student_completions(slices, list(range(buffer_steps)))
-
-        # Loss denominator (`num_items_in_batch`): the global number of completion tokens actually trained on this
-        # optimizer step. transformers derives its own count from the *raw dataloader* labels — before generation
-        # replaces the completions — which is wrong for on-policy training and zero for prompt-only datasets (dividing
-        # the loss by zero). Recompute it here from the generated labels, gathered across processes (issue #4719).
-        local_completion_tokens = sum(int(s["completion_mask"].sum()) for s in self._buffered_inputs if s is not None)
-        self._buffered_num_items = self.accelerator.gather(
-            torch.tensor(local_completion_tokens, device=self.accelerator.device)
-        ).sum()
-
-        # Gather text logs once per optimizer step (all processes must participate)
-        if self.log_completions:
-            prompts_all = []
-            completions_all = []
-            for entry in self._buffered_text_logs:
-                if entry is not None:
-                    prompts, completions = entry
-                    prompts_all.extend(prompts)
-                    completions_all.extend(completions)
-            self._textual_logs["prompt"].extend(gather_object(prompts_all))
-            self._textual_logs["completion"].extend(gather_object(completions_all))
-
-    @profiling_decorator
-    def _generate_student_completions(self, slices: list[dict[str, torch.Tensor | Any]], on_policy_indices: list[int]):
-        """Generate completions from the student model for on-policy training."""
-        if not self.use_vllm:
-            self._generate_with_model(slices, on_policy_indices)
-            return
-
-        # Collect all prompts across on-policy slices, stripping left-padding so vLLM
-        # receives only real prompt token IDs (like GRPO trainer).
-        local_prompts = []
-        local_slice_indices = []
-        pad_token_id = self.processing_class.pad_token_id
-        for slice_idx in on_policy_indices:
-            prompt_mask = slices[slice_idx].get("prompt_attention_mask")
-            for i, prompt in enumerate(slices[slice_idx]["prompts"]):
-                if prompt_mask is not None:
-                    prompt = prompt[prompt_mask[i].bool()]
-                elif pad_token_id is not None:
-                    first_non_pad = (prompt != pad_token_id).nonzero(as_tuple=True)[0]
-                    if len(first_non_pad) > 0:
-                        prompt = prompt[first_non_pad[0] :]
-                local_prompts.append(prompt)
-                local_slice_indices.append(slice_idx)
-
-        # Sync student weights to vLLM if needed
-        if self.state.global_step != self._last_loaded_step and self.state.global_step % self.vllm_sync_frequency == 0:
-            self.vllm_generation.sync_weights()
-            self._last_loaded_step = self.state.global_step
-
-        # Generate completions — pass token IDs directly, no text decoding
-        prompt_ids_list = [p.tolist() for p in local_prompts]
-        _, completion_ids, _, _ = self.vllm_generation.generate(
-            prompts=prompt_ids_list, images=None, num_generations=self.num_generations
-        )
-
-        # Process completions into the buffer
-        self._store_completions_in_buffer(
-            slices, on_policy_indices, local_slice_indices, local_prompts, completion_ids
-        )
-
-    def _generate_with_model(self, slices: list[dict[str, torch.Tensor | Any]], on_policy_indices: list[int]):
-        """Fallback generation using model.generate() (no vLLM)."""
-        with unwrap_model_for_generation(
-            self.model, self.accelerator, generation_kwargs=self.generation_kwargs
-        ) as unwrapped_model:
-            for slice_idx in on_policy_indices:
-                slice_inputs = slices[slice_idx]
-                generated_outputs = unwrapped_model.generate(
-                    input_ids=slice_inputs["prompts"],
-                    attention_mask=slice_inputs.get("prompt_attention_mask", None),
-                    generation_config=self.generation_config,
-                    return_dict_in_generate=True,
-                )
-                generated_tokens = generated_outputs.sequences
-                batch_size = generated_tokens.size(0)
-                device = generated_tokens.device
-                pad_token_id = self.processing_class.pad_token_id
-                prompt_width = slice_inputs["prompts"].shape[1]
-                prompt_mask = slice_inputs.get("prompt_attention_mask")
-                if prompt_mask is not None:
-                    prompt_token_lengths = prompt_mask.sum(dim=1)
-                else:
-                    prompt_token_lengths = torch.full((batch_size,), prompt_width, dtype=torch.long, device=device)
-                completion_lengths = self._get_completion_lengths(generated_tokens, prompt_width)
-                new_attention_mask, new_labels, new_completion_mask = self._build_sequence_batch(
-                    generated_tokens, prompt_width, prompt_token_lengths, completion_lengths
-                )
-
-                # Decode for logging
-                prompt_texts = []
-                completion_texts = []
-                for idx in range(batch_size):
-                    prompt_tokens = slice_inputs["prompts"][idx]
-                    if prompt_mask is not None:
-                        prompt_tokens = prompt_tokens[prompt_mask[idx].bool()]
-                    elif pad_token_id is not None:
-                        prompt_tokens = prompt_tokens[prompt_tokens != pad_token_id]
-                    prompt_texts.append(
-                        self.processing_class.decode(prompt_tokens.tolist(), skip_special_tokens=False)
-                    )
-                    length = prompt_width
-                    completion_length = int(completion_lengths[idx].item())
-                    completion_texts.append(
-                        self.processing_class.decode(
-                            generated_tokens[idx, length : length + completion_length].tolist(),
-                            skip_special_tokens=False,
-                        )
-                    )
-
-                updated = dict(slice_inputs)
-                updated["input_ids"] = generated_tokens
-                updated["attention_mask"] = new_attention_mask
-                updated["labels"] = new_labels
-                updated["completion_mask"] = new_completion_mask
-                updated["prompt_ids"] = slice_inputs["prompts"]
-                updated["prompt_mask"] = prompt_mask
-                updated["completion_ids"] = generated_tokens[:, prompt_width:]
-
-                self._buffered_inputs[slice_idx] = updated
-                self._buffered_text_logs[slice_idx] = (prompt_texts, completion_texts)
-
-    def _store_completions_in_buffer(
-        self,
-        slices: list[dict[str, torch.Tensor | Any]],
-        on_policy_indices: list[int],
-        local_slice_indices: list[int],
-        local_prompts: list[torch.Tensor],
-        completion_ids: list,
-    ):
-        """Process vLLM completions and store them in the buffer.
-
-        Uses original prompt token IDs directly (no decode/re-encode roundtrip), following the same approach as
-        GRPOTrainer.
-        """
-        device = self.accelerator.device
-        pad_token_id = self.processing_class.pad_token_id if self.processing_class.pad_token_id is not None else 0
-        max_completion_length = self.generation_config.max_new_tokens
-
-        # Group completions and prompt token IDs by slice
-        slice_completions = {idx: [] for idx in on_policy_indices}
-        slice_prompt_ids = {idx: [] for idx in on_policy_indices}
-        for i, slice_idx in enumerate(local_slice_indices):
-            slice_completions[slice_idx].append(completion_ids[i])
-            slice_prompt_ids[slice_idx].append(local_prompts[i])
-
-        for slice_idx in on_policy_indices:
-            slice_inputs = slices[slice_idx]
-            prompt_id_tensors = slice_prompt_ids[slice_idx]
-            prompt_width = max(len(p) for p in prompt_id_tensors)
-            prompt_token_lengths = torch.tensor([len(p) for p in prompt_id_tensors], device=device, dtype=torch.long)
-            prompt_attention_mask = (
-                torch.arange(prompt_width, device=device).unsqueeze(0)
-                >= (prompt_width - prompt_token_lengths).unsqueeze(1)
-            ).long()
-
-            # Left-pad prompt token IDs to the longest prompt in this slice
-            prompt_ids = torch.stack(
-                [F.pad(p, (prompt_width - len(p), 0), value=pad_token_id) for p in prompt_id_tensors]
-            ).to(device)
-
-            # Pad/truncate completions (right-pad to max_completion_length)
-            completion_tensors = []
-            completion_ids_for_text = []
-            completion_lengths = []
-            for comp_ids in slice_completions[slice_idx]:
-                t = torch.tensor(comp_ids, device=device)
-                if len(t) > max_completion_length:
-                    t = t[:max_completion_length]
-                completion_ids_for_text.append(t.tolist())
-                completion_lengths.append(len(t))
-                if len(t) < max_completion_length:
-                    padding = torch.full((max_completion_length - len(t),), pad_token_id, device=device, dtype=t.dtype)
-                    t = torch.cat([t, padding])
-                completion_tensors.append(t)
-
-            completion_ids_padded = torch.stack(completion_tensors)
-            new_input_ids = torch.cat([prompt_ids, completion_ids_padded], dim=1)
-            completion_lengths = torch.tensor(completion_lengths, device=device, dtype=torch.long)
-            new_attention_mask, new_labels, new_completion_mask = self._build_sequence_batch(
-                new_input_ids, prompt_width, prompt_token_lengths, completion_lengths
-            )
-
-            # Decode for logging only
-            prompt_texts = self.processing_class.batch_decode(
-                prompt_id_tensors, skip_special_tokens=False, clean_up_tokenization_spaces=False
-            )
-            completion_texts = self.processing_class.batch_decode(
-                completion_ids_for_text, skip_special_tokens=False, clean_up_tokenization_spaces=False
-            )
-
-            updated = dict(slice_inputs)
-            updated["input_ids"] = new_input_ids
-            updated["attention_mask"] = new_attention_mask
-            updated["labels"] = new_labels
-            updated["completion_mask"] = new_completion_mask
-            updated["prompt_ids"] = prompt_ids
-            updated["prompt_mask"] = prompt_attention_mask
-            updated["completion_ids"] = completion_ids_padded
-            # Update prompts to match the new padding width so prompt_length is consistent
-            updated["prompts"] = prompt_ids
-            updated["prompt_attention_mask"] = prompt_attention_mask
-
-            self._buffered_inputs[slice_idx] = updated
-            self._buffered_text_logs[slice_idx] = (prompt_texts, completion_texts)
-
-    @staticmethod
-    def _build_sequence_batch(
-        new_input_ids: torch.Tensor,
-        prompt_width: int,
-        prompt_token_lengths: torch.Tensor,
-        completion_lengths: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Build attention mask, labels, and completion mask from prompt/completion lengths."""
-        prompt_token_lengths = prompt_token_lengths.to(device=new_input_ids.device, dtype=torch.long)
-        completion_lengths = completion_lengths.to(device=new_input_ids.device, dtype=torch.long)
-        positions = torch.arange(new_input_ids.shape[1], device=new_input_ids.device).unsqueeze(0)
-        prompt_mask = (positions < prompt_width) & (positions >= (prompt_width - prompt_token_lengths).unsqueeze(1))
-        completion_mask = (positions >= prompt_width) & (positions < (prompt_width + completion_lengths).unsqueeze(1))
-        new_attention_mask = (prompt_mask | completion_mask).long()
-
-        new_labels = torch.full_like(new_input_ids, -100)
-        new_labels[completion_mask] = new_input_ids[completion_mask]
-
-        # Region-shaped completion mask (B, completion_width), aligned with `completion_ids`, as GRPO emits it.
-        return new_attention_mask, new_labels, completion_mask[:, prompt_width:].long()
 
     # ──────────────────────────────────────────────────────────────────────
     #  Loss computation
@@ -1174,10 +916,11 @@ class DistillationTrainer(_BaseTrainer):
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         # transformers computes `num_items_in_batch` from the raw dataloader labels, before on-policy generation
-        # replaces the completions; use the count over the generated completions instead (computed in `_fill_buffer`).
-        # Divide by the process count so the per-process loss compensates for DDP gradient averaging (as GRPO does).
-        if self.model.training and self._buffered_num_items is not None:
-            num_items_in_batch = self._buffered_num_items.clamp(min=1.0) / self.accelerator.num_processes
+        # replaces the completions; use the count over the generated completions instead (computed in
+        # `_generate_and_score_completions`). Divide by the process count so the per-process loss compensates for DDP
+        # gradient averaging (as GRPO does).
+        if self.model.training and inputs.get("num_items_in_batch") is not None:
+            num_items_in_batch = inputs["num_items_in_batch"].clamp(min=1.0) / self.accelerator.num_processes
 
         if self.use_liger_loss:
             loss = self._compute_liger_loss(model, inputs, num_items_in_batch=num_items_in_batch)
@@ -1309,32 +1052,23 @@ class DistillationTrainer(_BaseTrainer):
     def training_step(
         self, model: nn.Module, inputs: dict[str, torch.Tensor | Any], num_items_in_batch: int | None = None
     ) -> torch.Tensor:
-        """Training step: generate on-policy, then run the parent step, tracking completion stats."""
-        buffer_steps = self.args.gradient_accumulation_steps
-
         with self._get_liger_zero3_lm_head_gather_ctx(model):
-            loss = super().training_step(model, inputs, num_items_in_batch)
+            output = super().training_step(model, inputs, num_items_in_batch)
+        self._step += 1
+        return output
 
-        slice_idx = (self._buffer_step - 1) % buffer_steps
-
-        # Track completion length stats — read from buffered inputs (which reflect the generated completions)
-        actual_inputs = self._buffered_inputs[slice_idx] if self._buffered_inputs is not None else inputs
-        labels = actual_inputs.get("labels")
-        if labels is not None:
-            completion_lengths = (labels != -100).sum(dim=1).float()
-            gathered_lengths = self.accelerator.gather(completion_lengths)
-            mode = "train"
-            self._metrics[mode]["completions/mean_length"].append(gathered_lengths.mean().item())
-            self._metrics[mode]["completions/max_length"].append(gathered_lengths.max().item())
-            self._metrics[mode]["completions/min_length"].append(gathered_lengths.min().item())
-
-            # Log fraction of completions that hit max_completion_length (truncated)
-            max_comp_len = getattr(self.generation_config, "max_new_tokens", None)
-            if max_comp_len is not None:
-                truncated_frac = (gathered_lengths >= max_comp_len).float().mean().item()
-                self._metrics[mode]["completions/truncated_fraction"].append(truncated_frac)
-
-        return loss
+    # During eval, Trainer calls prediction_step. If no labels are present in the inputs, it only runs forward and
+    # returns logits. We override prediction_step to force compute_loss, because this trainer doesn't involve labels.
+    def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys: list[str] | None = None):
+        inputs = self._prepare_inputs(inputs)
+        with torch.no_grad():
+            with self.compute_loss_context_manager():
+                # Gather the ZeRO-3-partitioned lm_head for the Liger loss path, matching training_step (removed with
+                # the Liger path).
+                with self._get_liger_zero3_lm_head_gather_ctx(model):
+                    loss = self.compute_loss(model, inputs)
+            loss = loss.mean().detach()
+        return loss, None, None
 
     def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
         mode = "train" if self.model.training else "eval"

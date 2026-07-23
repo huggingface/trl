@@ -67,11 +67,6 @@ class DistillationConfig(_BaseConfig):
             from a string.
         > Parameters that control on-policy generation
 
-        num_generations (`int`, *optional*, defaults to `1`):
-            Number of completions to generate per prompt during on-policy generation.
-        generation_batch_size (`int` or `None`, *optional*):
-            Number of unique prompts per worker per optimizer step. If `None`, computed from
-            `(per_device_train_batch_size * gradient_accumulation_steps) // num_generations`.
         top_p (`float`, *optional*, defaults to `1.0`):
             Top-p (nucleus) sampling parameter for on-policy generation.
         top_k (`int`, *optional*, defaults to `0`):
@@ -128,8 +123,6 @@ class DistillationConfig(_BaseConfig):
             Model implementation backend for vLLM. Use `"vllm"` or `"transformers"`.
         vllm_structured_outputs_regex (`str` or `None`, *optional*):
             Regex pattern for vLLM structured outputs.
-        vllm_sync_frequency (`int`, *optional*, defaults to `1`):
-            Frequency (in training steps) to synchronize student model weights to the vLLM engine.
         vllm_enable_sleep_mode (`bool`, *optional*, defaults to `False`):
             Enable vLLM sleep mode to offload student weights during the optimizer step.
 
@@ -209,17 +202,6 @@ class DistillationConfig(_BaseConfig):
     )
 
     # On-policy generation
-    num_generations: int = field(
-        default=1,
-        metadata={"help": "Number of completions to generate per prompt during on-policy generation."},
-    )
-    generation_batch_size: int | None = field(
-        default=None,
-        metadata={
-            "help": "Number of unique prompts per worker per optimizer step. "
-            "If None, computed from (per_device_train_batch_size * gradient_accumulation_steps) // num_generations."
-        },
-    )
     top_p: float = field(
         default=1.0,
         metadata={"help": "Top-p (nucleus) sampling parameter for on-policy generation."},
@@ -330,10 +312,6 @@ class DistillationConfig(_BaseConfig):
         default=None,
         metadata={"help": "Regex pattern for vLLM structured outputs."},
     )
-    vllm_sync_frequency: int = field(
-        default=1,
-        metadata={"help": "Frequency (in training steps) to synchronize student weights to the vLLM engine."},
-    )
     vllm_enable_sleep_mode: bool = field(
         default=False,
         metadata={"help": "Enable vLLM sleep mode to offload student weights during the optimizer step."},
@@ -364,18 +342,3 @@ class DistillationConfig(_BaseConfig):
 
         if self.beta < 0.0 or self.beta > 1.0:
             raise ValueError(f"beta must be in [0.0, 1.0], got {self.beta}.")
-
-        if self.num_generations < 1:
-            raise ValueError(f"num_generations must be at least 1, got {self.num_generations}.")
-
-        local_sequence_batch_size = self.per_device_train_batch_size * self.gradient_accumulation_steps
-        if self.generation_batch_size is None:
-            self.generation_batch_size = local_sequence_batch_size // self.num_generations
-        if self.generation_batch_size < 1:
-            raise ValueError(f"generation_batch_size must be at least 1, got {self.generation_batch_size}.")
-        if self.generation_batch_size * self.num_generations != local_sequence_batch_size:
-            raise ValueError(
-                "generation_batch_size * num_generations must equal per_device_train_batch_size * "
-                f"gradient_accumulation_steps. Got {self.generation_batch_size} * {self.num_generations} != "
-                f"{self.per_device_train_batch_size} * {self.gradient_accumulation_steps}."
-            )
