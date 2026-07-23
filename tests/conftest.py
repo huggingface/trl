@@ -13,12 +13,29 @@
 # limitations under the License.
 
 import gc
+import logging
 import traceback
 from functools import wraps
 
 import pytest
 import torch
 from transformers.utils import is_torch_xpu_available
+
+
+# ============================================================================
+# Silence transformers "LOAD REPORT" tables
+# ============================================================================
+# transformers >= 5 prints a "LOAD REPORT" table whenever a checkpoint has missing/mismatched/unexpected keys
+# (transformers/utils/loading_report.py). TRL's tiny test models don't serialize the tied `lm_head.weight`, so
+# this fires on nearly every model load and floods the test output. It is emitted through `logging` at WARNING
+# level from three loggers; we drop only these records, keeping all other warnings visible.
+class _DropLoadReport(logging.Filter):
+    def filter(self, record):
+        return "LOAD REPORT" not in record.getMessage()
+
+
+for _logger_name in ("transformers.modeling_utils", "transformers.modeling_layers", "transformers.integrations.peft"):
+    logging.getLogger(_logger_name).addFilter(_DropLoadReport())
 
 
 @pytest.hookimpl(hookwrapper=True)
