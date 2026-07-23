@@ -125,6 +125,22 @@ class DPOConfig(_BaseConfig):
             τ parameter from the TR-DPO paper, which determines how frequently the current policy is synchronized with
             the reference policy. To use this parameter, you must set `sync_ref_model=True`.
 
+        adaptive_beta (`str`, *optional*):
+            Strategy for adaptive per-batch β scaling. Set to ``"beta-dpo"`` to enable the
+            β-DPO algorithm from `arXiv:2407.08639 <https://arxiv.org/abs/2407.08639>`__.  When
+            enabled, β is adjusted each batch as β_batch = [1 + α(M_batch − M₀)] × β₀, where
+            M_batch is the mean chosen-vs-rejected log-ratio margin for the current batch, M₀ is
+            the reference margin (a running EMA of past batch margins, or a user-supplied fixed
+            value), and β₀ is the base ``beta``.  ``"beta-dpo"`` is orthogonal to ``loss_type``
+            and can be combined with any DPO variant (e.g. IPO, SPPO).
+        beta_alpha (`float`, *optional*):
+            Scaling factor α for adaptive β. Required when ``adaptive_beta="beta-dpo"``.
+            Controls how strongly the observed batch margin deviation shifts β.
+        beta_reference_margin (`float`, *optional*):
+            Fixed reference margin M₀ used when ``adaptive_beta="beta-dpo"``. When ``None``
+            (default), M₀ is maintained as an exponential moving average (momentum 0.9) of
+            per-batch margins observed during training.
+
         > Deprecated parameters
 
         pad_token:
@@ -329,6 +345,30 @@ class DPOConfig(_BaseConfig):
         metadata={
             "help": "τ parameter from the TR-DPO paper, which determines how frequently the current policy is "
             "synchronized with the reference policy. To use this parameter, you must set `sync_ref_model=True`."
+        },
+    )
+
+    adaptive_beta: str | None = field(
+        default=None,
+        metadata={
+            "help": "Strategy for adaptive per-batch β scaling. Set to `'beta-dpo'` to enable the β-DPO algorithm "
+            "(arXiv:2407.08639). β_batch = [1 + α(M_batch − M₀)] × β₀, where M_batch is the mean margin for the "
+            "current batch, M₀ is the reference margin, α is `beta_alpha`, and β₀ is the base `beta`. Compatible "
+            "with any `loss_type` (IPO, sigmoid, SPPO, …)."
+        },
+    )
+    beta_alpha: float | None = field(
+        default=None,
+        metadata={
+            "help": "Scaling factor α for adaptive β. Required when `adaptive_beta='beta-dpo'`. Controls how "
+            "strongly the observed batch margin deviation shifts β."
+        },
+    )
+    beta_reference_margin: float | None = field(
+        default=None,
+        metadata={
+            "help": "Fixed reference margin M₀ for adaptive β. When `None`, M₀ is maintained as an exponential "
+            "moving average (momentum 0.9) of per-batch margins observed during training."
         },
     )
 
