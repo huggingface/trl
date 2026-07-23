@@ -1580,8 +1580,9 @@ class IWOPDTrainer(_BaseTrainer):
         self._raise_if_local_teacher_tokenizer_mismatch()
 
         if self.use_liger_loss:
-            loss = self._compute_liger_loss(model, inputs, num_items_in_batch=num_items_in_batch)
-            return (loss, None) if return_outputs else loss
+            return self._compute_liger_loss(
+                model, inputs, num_items_in_batch=num_items_in_batch, return_outputs=return_outputs
+            )
 
         # Student forward pass
         student_outputs = model(
@@ -1695,7 +1696,7 @@ class IWOPDTrainer(_BaseTrainer):
             use_cache=False,
         )
 
-    def _compute_liger_loss(self, model, inputs, num_items_in_batch=None):
+    def _compute_liger_loss(self, model, inputs, num_items_in_batch=None, return_outputs=False):
         """Memory-efficient JSD using Liger kernel (operates on hidden states, not full logits)."""
         # Route through the DDP/FSDP wrapper via _forward_redirection so that
         # DDP.forward() is called and prepare_for_backward() fires correctly.
@@ -1721,7 +1722,7 @@ class IWOPDTrainer(_BaseTrainer):
 
         student_hidden = student_outputs.last_hidden_state[:, :-1]
         teacher_hidden = teacher_outputs.last_hidden_state[:, :-1]
-        del student_outputs, teacher_outputs
+        del teacher_outputs
 
         student_hidden = student_hidden.reshape(-1, student_hidden.shape[-1])
         teacher_hidden = teacher_hidden.reshape(-1, teacher_hidden.shape[-1])
@@ -1752,7 +1753,7 @@ class IWOPDTrainer(_BaseTrainer):
             loss = loss * num_valid_local / num_items_in_batch
 
         del student_hidden, teacher_hidden, true_labels
-        return loss
+        return (loss, student_outputs) if return_outputs else loss
 
     def _get_liger_zero3_lm_head_gather_ctx(self, model: nn.Module):
         """Context manager for gathering lm_head parameters under Liger + ZeRO-3."""

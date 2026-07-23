@@ -619,6 +619,7 @@ class TestIWOPDTrainer(TrlTestCase):
             teacher_model=self.model_id,
             args=training_args,
             train_dataset=dataset,
+            eval_dataset=dataset,
             processing_class=self.tokenizer,
         )
 
@@ -626,6 +627,7 @@ class TestIWOPDTrainer(TrlTestCase):
             assert trainer.use_liger_loss is True
             trainer.train()
             assert trainer.state.log_history[-1]["train_loss"] is not None
+            assert trainer.evaluate()["eval_loss"] is not None
         finally:
             importlib.reload(importlib.import_module(trainer.model.__module__))
 

@@ -460,6 +460,7 @@ class TestDistillationTrainer(TrlTestCase):
             teacher_model=self.model_id,
             args=training_args,
             train_dataset=dataset,
+            eval_dataset=dataset,
             processing_class=self.tokenizer,
         )
 
@@ -467,40 +468,9 @@ class TestDistillationTrainer(TrlTestCase):
             assert trainer.use_liger_loss is True
             trainer.train()
             assert trainer.state.log_history[-1]["train_loss"] is not None
+            assert trainer.evaluate()["eval_loss"] is not None
         finally:
             importlib.reload(importlib.import_module(trainer.model.__module__))
-
-    @require_liger_kernel
-    @require_torch_accelerator
-    def test_compute_loss_return_outputs_with_liger(self):
-        """`Trainer.prediction_step` (there is no `DistillationTrainer` override) calls
-        `compute_loss(model, inputs, return_outputs=True)` during `evaluate()`, then indexes into the returned
-        `outputs`. The Liger branch of `compute_loss` used to return a bare `None` for `outputs`, which crashed
-        with `TypeError: 'NoneType' object is not subscriptable`. See #4688 for the identical bug in GKDTrainer.
-        """
-        training_args = self._make_args(
-            use_liger_kernel=True,
-            use_cpu=False,
-            eval_strategy="steps",
-            eval_steps=1,
-            per_device_eval_batch_size=2,
-        )
-        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling")
-
-        trainer = DistillationTrainer(
-            model=self.model_id,
-            teacher_model=self.model_id,
-            args=training_args,
-            train_dataset=dataset["train"],
-            eval_dataset=dataset["test"],
-            processing_class=self.tokenizer,
-        )
-
-        assert trainer.use_liger_loss is True
-        # evaluate() calls compute_loss with return_outputs=True; must not raise TypeError
-        eval_results = trainer.evaluate()
-        assert "eval_loss" in eval_results
-        assert eval_results["eval_loss"] is not None
 
     def test_teacher_vocab_size_mismatch_raises(self):
         # The local-teacher loss compares full next-token distributions, so student and teacher must share a
