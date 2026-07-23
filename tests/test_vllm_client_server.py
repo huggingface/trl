@@ -124,6 +124,28 @@ class TestExtractLogprobs(TrlTestCase):
         assert all_token_ids is None
 
 
+class TestUpdateWeights(TrlTestCase):
+    def test_update_weights_forwards_each_param_to_update_named_param(self):
+        # The bulk `update_weights` entry point streams a lazy `(name, tensor)` iterator to the per-parameter server,
+        # forwarding every pair to `update_named_param` in order. The up-front metadata is unused by this client.
+        import torch
+
+        client = VLLMClient.__new__(VLLMClient)  # bypass __init__: no server needed for this unit test
+        forwarded = []
+        client.update_named_param = lambda name, weights: forwarded.append((name, weights))
+
+        params = [("model.w1", torch.zeros(2)), ("model.w2", torch.ones(3))]
+        client.update_weights(
+            names=[name for name, _ in params],
+            dtype_names=["float32", "float32"],
+            shapes=[[2], [3]],
+            weights=iter(params),  # lazy iterator, as produced by the trainer's gather loop
+        )
+
+        assert [name for name, _ in forwarded] == ["model.w1", "model.w2"]
+        assert all(forwarded[i][1] is params[i][1] for i in range(len(params)))  # tensors passed through unchanged
+
+
 @pytest.mark.slow
 @require_torch_multi_accelerator
 @require_vllm
