@@ -535,6 +535,8 @@ cohere2_chat_template = (_CHAT_TEMPLATES_DIR / "cohere2.jinja").read_text(encodi
 
 deepseekv3_chat_template = (_CHAT_TEMPLATES_DIR / "deepseekv3.jinja").read_text(encoding="utf-8")
 
+diffusion_gemma_chat_template = (_CHAT_TEMPLATES_DIR / "diffusion_gemma.jinja").read_text(encoding="utf-8")
+
 gemma_chat_template = (_CHAT_TEMPLATES_DIR / "gemma.jinja").read_text(encoding="utf-8")
 
 gemma3_chat_template = (_CHAT_TEMPLATES_DIR / "gemma3.jinja").read_text(encoding="utf-8")
@@ -883,6 +885,10 @@ cohere2_training_chat_template = (_CHAT_TEMPLATES_DIR / "cohere2_training.jinja"
 
 deepseekv3_training_chat_template = (_CHAT_TEMPLATES_DIR / "deepseekv3_training.jinja").read_text(encoding="utf-8")
 
+diffusion_gemma_training_chat_template = (_CHAT_TEMPLATES_DIR / "diffusion_gemma_training.jinja").read_text(
+    encoding="utf-8"
+)
+
 gemma_training_chat_template = (_CHAT_TEMPLATES_DIR / "gemma_training.jinja").read_text(encoding="utf-8")
 
 gemma3_training_chat_template = (_CHAT_TEMPLATES_DIR / "gemma3_training.jinja").read_text(encoding="utf-8")
@@ -1023,6 +1029,9 @@ def get_training_chat_template(
 
     if processing_class.chat_template == deepseekv3_chat_template:
         return deepseekv3_training_chat_template
+
+    if processing_class.chat_template == diffusion_gemma_chat_template:
+        return diffusion_gemma_training_chat_template
 
     if processing_class.chat_template == gemma_chat_template:
         return gemma_training_chat_template

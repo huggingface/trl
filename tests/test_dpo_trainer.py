@@ -36,6 +36,7 @@ from .testing_utils import (
 
 
 if is_peft_available():
+    import peft
     from peft import LoraConfig, PromptTuningConfig, get_peft_model
     from peft.utils import TaskType
 
@@ -269,6 +270,59 @@ class TestDPOTrainer(TrlTestCase):
 
         metrics = trainer.evaluate(eval_dataset=eval_dataset)
         if eval_dataset_type in ("dataset", "iterable_dataset"):
+            assert metrics["eval_loss"] is not None
+        else:
+            assert metrics["eval_data1_loss"] is not None
+            assert metrics["eval_data2_loss"] is not None
+
+    def test_evaluate_precompute_ref_log_probs_after_training_raises(self):
+        # Full fine-tuning with `precompute_ref_log_probs=True` and no `ref_model` uses `self.model` as the reference.
+        # That's valid only before training; a dataset passed to `evaluate()` afterwards can't get a correct reference.
+        train_dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        eval_dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="test")
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir, max_steps=1, precompute_ref_log_probs=True, report_to="none"
+        )
+        trainer = DPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=train_dataset
+        )
+
+        # Before training the reference is available, so evaluating a new dataset works.
+        assert trainer.evaluate(eval_dataset=eval_dataset)["eval_loss"] is not None
+
+        trainer.train()
+
+        with pytest.raises(ValueError, match="Cannot compute reference log-probs for a dataset passed to"):
+            trainer.evaluate(eval_dataset=eval_dataset)
+
+    @pytest.mark.parametrize("eval_dataset_type", ["dataset", "dataset_dict", "dict_of_dataset"])
+    def test_evaluate_precompute_ref_log_probs_at_init_after_training(self, eval_dataset_type):
+        # Regression for the guard above: an `eval_dataset` set at init has its reference log-probs precomputed once
+        # (against the untrained reference) and stored, so no-arg `evaluate()` reuses those stored values and must not
+        # raise after training, even with full fine-tuning and `precompute_ref_log_probs=True`.
+        train_dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        eval_split = load_dataset("trl-internal-testing/zen", "standard_preference", split="test")
+        if eval_dataset_type == "dataset":
+            eval_dataset = eval_split
+        elif eval_dataset_type == "dataset_dict":
+            eval_dataset = DatasetDict({"data1": eval_split, "data2": eval_split})
+        else:  # "dict_of_dataset"
+            eval_dataset = {"data1": eval_split, "data2": eval_split}
+
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir, max_steps=1, precompute_ref_log_probs=True, report_to="none"
+        )
+        trainer = DPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=train_dataset,
+            eval_dataset=eval_dataset,
+        )
+
+        trainer.train()
+
+        metrics = trainer.evaluate()
+        if eval_dataset_type == "dataset":
             assert metrics["eval_loss"] is not None
         else:
             assert metrics["eval_data1_loss"] is not None
@@ -866,12 +920,21 @@ class TestDPOTrainer(TrlTestCase):
         # ignored and never trained. The trainer must fail fast instead of training a silently-frozen head.
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
         training_args = DPOConfig(output_dir=self.tmp_dir, use_liger_kernel=True, report_to="none")
+        # `ensure_weight_tying=True` silences PEFT's weight-tying warning fired when lm_head is in the adapter on a
+        # model with untied embeddings; once tying respects `tie_word_embeddings`, the flag itself warns that no tied
+        # modules were found, so it must only be set on the affected range.
+        # - Introduced in PEFT 0.19.0 (peft#2879); fixed on main, unreleased as of 0.19.2.dev0 (peft#3171)
+        needs_ensure_weight_tying = Version("0.19.0") <= Version(peft.__version__) < Version("0.19.2.dev0")
+        lora_config = LoraConfig(
+            target_modules=["q_proj", "v_proj", "lm_head"],
+            **({"ensure_weight_tying": True} if needs_ensure_weight_tying else {}),
+        )
         with pytest.raises(ValueError, match="lm_head"):
             DPOTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
                 args=training_args,
                 train_dataset=dataset,
-                peft_config=LoraConfig(target_modules=["q_proj", "v_proj", "lm_head"]),
+                peft_config=lora_config,
             )
 
     @require_liger_kernel
@@ -1139,6 +1202,11 @@ class TestDPOTrainer(TrlTestCase):
 
         assert trainer.state.log_history[-3]["eval_data1_loss"] is not None
         assert trainer.state.log_history[-2]["eval_data2_loss"] is not None
+
+    def test_train_dataset_required(self):
+        training_args = DPOConfig(output_dir=self.tmp_dir, report_to="none")
+        with pytest.raises(ValueError, match="`train_dataset` is required"):
+            DPOTrainer(model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args)
 
     @pytest.mark.parametrize(
         "eval_dataset_type",
