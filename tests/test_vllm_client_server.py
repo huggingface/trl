@@ -15,14 +15,16 @@
 import os
 import subprocess
 from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 import pytest
 from packaging.version import Version
 from transformers import AutoModelForCausalLM, AutoProcessor, AutoTokenizer
+from transformers.image_processing_utils import BaseImageProcessor
 from transformers.testing_utils import torch_device
 
 from trl.generation.vllm_client import VLLMClient
-from trl.generation.vllm_generation import extract_logprobs
+from trl.generation.vllm_generation import VLLMGeneration, extract_logprobs
 from trl.import_utils import is_vllm_available
 from trl.scripts.vllm_serve import chunk_list
 
@@ -122,6 +124,46 @@ class TestExtractLogprobs(TrlTestCase):
 
         assert all_logprobs is None
         assert all_token_ids is None
+
+
+class TestVLLMGeneration(TrlTestCase):
+    @require_vision
+    def test_generate_loads_image_paths(self, tmp_path):
+        from PIL import Image
+
+        image_path = tmp_path / "image.png"
+        Image.new("RGB", (8, 8), color="red").save(image_path)
+        generation = object.__new__(VLLMGeneration)
+        generation.mode = "server"
+        generation.processing_class = SimpleNamespace(image_processor=BaseImageProcessor())
+        generation.accelerator = SimpleNamespace(is_main_process=True, process_index=0)
+        generation.temperature = 1.0
+        generation.top_p = 1.0
+        generation.top_k = 0
+        generation.min_p = 0.0
+        generation.repetition_penalty = 1.0
+        generation.max_completion_length = 16
+        generation.logprobs = 0
+        generation.structured_outputs_regex = None
+        generation.generation_kwargs = {}
+        generation.vllm_client = MagicMock()
+        generation.vllm_client.generate.return_value = {
+            "prompt_ids": [[1], [2]],
+            "completion_ids": [[3], [4]],
+            "logprobs": [[[-0.1]], [[-0.2]]],
+            "logprob_token_ids": [[[3]], [[4]]],
+        }
+
+        with (
+            patch("trl.generation.vllm_generation.gather_object", side_effect=lambda value: value),
+            patch("trl.generation.vllm_generation.broadcast_object_list"),
+        ):
+            generation.generate(prompts=[[1], [2]], images=[[str(image_path)], None], num_generations=1)
+
+        images = generation.vllm_client.generate.call_args.kwargs["images"]
+        assert isinstance(images[0][0], Image.Image)
+        assert images[0][0].getpixel((0, 0)) == (255, 0, 0)
+        assert images[1] is None
 
 
 @pytest.mark.slow
