@@ -16,12 +16,26 @@ import json
 import os
 from unittest.mock import call, patch
 
+import torch
 from datasets import load_dataset
-from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig, Trainer, TrainingArguments
+from transformers import (
+    AutoModelForCausalLM,
+    AutoTokenizer,
+    GenerationConfig,
+    Trainer,
+    TrainerControl,
+    TrainerState,
+    TrainingArguments,
+)
+from transformers.utils import is_peft_available
 
-from trl import BEMACallback, LogCompletionsCallback
+from trl import BEMACallback, LogCompletionsCallback, SFTConfig, SFTTrainer
 
-from .testing_utils import TrlTestCase, require_comet, require_wandb
+from .testing_utils import TrlTestCase, require_comet, require_peft, require_wandb
+
+
+if is_peft_available():
+    from peft import LoraConfig, get_peft_model
 
 
 class TestLogCompletionsCallback(TrlTestCase):
@@ -236,3 +250,58 @@ class TestBEMACallback(TrlTestCase):
             callbacks=[bema_callback],
         )
         trainer.train()
+
+    @require_peft
+    def test_peft_model_checkpoint_has_merged_adapter_weights(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir, report_to="none", use_cpu=True, bf16=False, max_steps=1, save_strategy="no"
+        )
+        bema_callback = BEMACallback(update_freq=1)
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset,
+            peft_config=LoraConfig(),
+            callbacks=[bema_callback],
+        )
+
+        captured = {}
+        real_on_train_end = BEMACallback.on_train_end
+
+        def spy_on_train_end(self, *args, **kwargs):
+            input_ids = torch.arange(4).reshape(1, 4) % self.running_model.config.vocab_size
+            self.running_model.eval()
+            with torch.no_grad():
+                logits = type(self.running_model).forward(self.running_model, input_ids=input_ids).logits
+                captured["expected_logits"] = logits.clone()
+            captured["input_ids"] = input_ids
+            return real_on_train_end(self, *args, **kwargs)
+
+        with patch.object(BEMACallback, "on_train_end", spy_on_train_end):
+            trainer.train()
+
+        bema_path = os.path.join(self.tmp_dir, "bema")
+        reloaded = AutoModelForCausalLM.from_pretrained(bema_path)
+        reloaded.eval()
+        with torch.no_grad():
+            actual_logits = reloaded(input_ids=captured["input_ids"]).logits
+
+        torch.testing.assert_close(captured["expected_logits"], actual_logits, atol=1e-3, rtol=1e-3)
+
+    @require_peft
+    def test_peft_model_copy_does_not_alias_source(self):
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
+        peft_model = get_peft_model(model, LoraConfig())
+        bema_callback = BEMACallback(device="cpu")
+        args = TrainingArguments(output_dir=self.tmp_dir, report_to="none")
+        bema_callback.on_train_begin(args, TrainerState(), TrainerControl(), model=peft_model)
+
+        source_param = next(peft_model.get_base_model().parameters())
+        copied_param = next(bema_callback.running_model.parameters())
+        assert source_param.data_ptr() != copied_param.data_ptr()
+
+        source_value = source_param.detach().clone()
+        with torch.no_grad():
+            copied_param.add_(1)
+        torch.testing.assert_close(source_param, source_value)

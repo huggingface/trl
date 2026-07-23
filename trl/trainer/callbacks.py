@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import copy
 import logging
 
 import pandas as pd
@@ -30,13 +31,16 @@ from transformers import (
     TrainingArguments,
 )
 from transformers.trainer_utils import has_length
-from transformers.utils import is_rich_available
+from transformers.utils import is_peft_available, is_rich_available
 
 from ..data_utils import maybe_apply_chat_template
 from ..import_utils import is_weave_available
 from ..models.utils import unwrap_model_for_generation
 from .utils import log_table_to_comet_experiment
 
+
+if is_peft_available():
+    from peft import PeftModel
 
 if is_rich_available():
     from rich.columns import Columns
@@ -665,6 +669,8 @@ class BEMACallback(TrainerCallback):
         self.theta0_params = []  # θ₀ buffers (on self.device)
         self.ema_params = []  # EMA buffers (on self.device)
         self.running_model = None  # a copy of the model to run BEMA on
+        self.is_peft_model = False
+        self.running_peft_model = None
 
     @staticmethod
     def _unwrap_model(model):
@@ -693,14 +699,26 @@ class BEMACallback(TrainerCallback):
         self, args: TrainingArguments, state: TrainerState, control: TrainerControl, model: PreTrainedModel, **kwargs
     ):
         model = self._unwrap_model(model)
+        self.is_peft_model = is_peft_available() and isinstance(model, PeftModel)
 
-        # Create a new instance and load state_dict
-        self.running_model = type(model)(model.config).to(self.device)
-        self.running_model.load_state_dict(model.state_dict())
+        if self.is_peft_model:
+            base_model = model.get_base_model()
+            memo = {
+                id(p): torch.nn.Parameter(p.detach().to(self.device, copy=True), requires_grad=p.requires_grad)
+                for p in base_model.parameters()
+            }
+            memo.update({id(b): b.detach().to(self.device, copy=True) for b in base_model.buffers()})
+            self.running_peft_model = copy.deepcopy(model, memo)
+            self.running_model = self.running_peft_model.get_base_model()
+            model = base_model
+        else:
+            # Create a new instance and load state_dict
+            self.running_model = type(model)(model.config).to(self.device)
+            self.running_model.load_state_dict(model.state_dict())
 
         # Cache trainable parameters once in a fixed order
         for name, param in model.named_parameters():
-            if not param.requires_grad:
+            if not self.is_peft_model and not param.requires_grad:
                 continue
             self.param_names.append(name)
             self.thetat_params.append(param)
@@ -757,6 +775,8 @@ class BEMACallback(TrainerCallback):
     @torch.no_grad()
     def on_train_end(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs):
         if state.is_world_process_zero:
+            if self.is_peft_model:
+                self.running_model = self.running_peft_model.merge_and_unload()
             save_directory = f"{args.output_dir}/bema"
             self.running_model.save_pretrained(save_directory)
             logger.info(f"Saved BEMA model to {save_directory}")

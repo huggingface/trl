@@ -176,15 +176,21 @@ class BEMACallback(_BEMACallback):
 
             # Get the current BEMA state dict
             bema_state_dict = self.running_model.state_dict()
+            main_model = self._unwrap_model(model)
+            if hasattr(main_model, "get_base_model"):
+                main_base_model = main_model.get_base_model()
+                excluded_keys = {name for name, param in main_base_model.named_parameters() if param.requires_grad}
+            else:
+                excluded_keys = set()
 
             # Handle the case where ref_model is None (PEFT case)
             if ref_model is None:
                 # In PEFT case, ref_model is None and we need to update the base model of the main model
-                main_model = self._unwrap_model(model)
                 if hasattr(main_model, "get_base_model"):
-                    # This is a PEFT model, update the base model
                     base_model = main_model.get_base_model()
-                    self._update_model_with_bema_weights(base_model, bema_state_dict, is_peft_base=True)
+                    self._update_model_with_bema_weights(
+                        base_model, bema_state_dict, is_peft_base=True, excluded_keys=excluded_keys
+                    )
                 else:
                     # Regular model, update directly
                     self._update_model_with_bema_weights(main_model, bema_state_dict, is_peft_base=False)
@@ -194,29 +200,23 @@ class BEMACallback(_BEMACallback):
                 if hasattr(ref_model, "get_base_model"):
                     # This is a PEFT model, update the base model
                     base_model = ref_model.get_base_model()
-                    self._update_model_with_bema_weights(base_model, bema_state_dict, is_peft_base=True)
+                    self._update_model_with_bema_weights(
+                        base_model, bema_state_dict, is_peft_base=True, excluded_keys=excluded_keys
+                    )
                 else:
                     # Regular model, update directly
                     self._update_model_with_bema_weights(ref_model, bema_state_dict, is_peft_base=False)
 
             logger.info("BEMACallback: Updated reference model with BEMA weights")
 
-    def _update_model_with_bema_weights(self, model, bema_state_dict, is_peft_base=False):
+    def _update_model_with_bema_weights(self, model, bema_state_dict, is_peft_base=False, excluded_keys=None):
         """Helper method to update a model with BEMA weights, handling PEFT and distributed scenarios."""
         if is_peft_base:
-            # For PEFT base models, filter out adapter parameters
-            filtered_state_dict = {}
-            for key, value in bema_state_dict.items():
-                # Skip adapter parameters
-                if not key.startswith("lora_") and not key.startswith("adapter_"):
-                    # Remove 'base_model.' prefix if it exists
-                    if key.startswith("base_model."):
-                        base_key = key[len("base_model.") :]
-                    else:
-                        base_key = key
-                    filtered_state_dict[base_key] = value
-
-            # Update the base model
+            excluded_keys = excluded_keys or set()
+            target_keys = model.state_dict().keys()
+            filtered_state_dict = {
+                key: value for key, value in bema_state_dict.items() if key in target_keys and key not in excluded_keys
+            }
             model.load_state_dict(filtered_state_dict, strict=False)
         else:
             # Regular model, update directly
