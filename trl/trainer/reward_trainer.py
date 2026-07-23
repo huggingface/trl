@@ -365,6 +365,11 @@ class RewardTrainer(_BaseTrainer):
                     "`dispatch_batches` in `RewardConfig` or set it to `False`."
                 )
             args.accelerator_config.dispatch_batches = False
+        elif isinstance(train_dataset, dict):
+            raise TypeError(
+                "`train_dataset` doesn't support `DatasetDict`, `IterableDatasetDict`, or a `dict` of datasets: "
+                f"training runs over a single dataset. Got `{type(train_dataset).__name__}`."
+            )
 
         # Model
         # As AutoModelForSequenceClassification.from_pretrained() will add a random head for the model, set_seed must
