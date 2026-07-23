@@ -624,8 +624,9 @@ class DistillationTrainer(_BaseTrainer):
         """Tokenize prompts and extract multimodal fields for generation.
 
         Conversational prompts (a list of chat messages) are rendered with the chat template and a trailing generation
-        prompt; standard prompts (plain strings) are tokenized directly. The per-example tools/environments path and the
-        image extraction are added with VLM support later (issue #6449). Unwired until the GRPO generation stack lands.
+        prompt; standard prompts (plain strings) are tokenized directly. The per-example tools/environments path and
+        the image extraction are added with VLM support later (issue #6449). Unwired until the GRPO generation stack
+        lands.
         """
         if is_conversational({"prompt": prompts[0]}):
             tokenized = self.processing_class.apply_chat_template(
