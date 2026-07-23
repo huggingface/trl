@@ -1631,6 +1631,68 @@ class TestGRPOTrainer(TrlTestCase):
 
         release_memory(trainer.model, trainer)
 
+    @require_liger_kernel
+    def test_compute_liger_loss_dapo_normalizer(self):
+        """DAPO/CISPO/VESPO must normalize by num_items_in_batch / num_processes (the total
+        active tokens across the whole generation batch) rather than the current micro-batch.
+
+        This requires ``compute_liger_loss`` to (1) forward ``num_items_in_batch`` to the Liger loss and (2) NOT
+        re-divide the returned loss by ``gradient_accumulation_steps`` for these loss types, matching the non-Liger
+        ``_compute_loss`` path. Regression test for the Liger/non-Liger GRPO normalizer mismatch
+        (linkedin/Liger-Kernel#1082).
+        """
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            loss_type="dapo",
+            gradient_accumulation_steps=2,  # >1 so the (incorrect) /grad_accum division would be visible
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            use_liger_kernel=True,
+            report_to="none",
+            logging_strategy="no",
+        )
+
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        raw_calls = []
+        original_forward = trainer.liger_loss.forward
+
+        def forward_capture(*args, **kwargs):
+            out = original_forward(*args, **kwargs)
+            raw_calls.append((kwargs.get("num_items_in_batch"), out[0].detach().clone()))
+            return out
+
+        final_losses = []
+        original_cll = trainer.compute_liger_loss
+
+        def cll_capture(*args, **kwargs):
+            out = original_cll(*args, **kwargs)
+            final_losses.append(out.detach().clone())
+            return out
+
+        with (
+            patch.object(trainer.liger_loss, "forward", side_effect=forward_capture),
+            patch.object(trainer, "compute_liger_loss", side_effect=cll_capture),
+        ):
+            trainer.train()
+
+        assert len(raw_calls) > 0, "liger_loss.forward was never called"
+        assert len(final_losses) == len(raw_calls)
+        for (num_items, raw_loss), final_loss in zip(raw_calls, final_losses, strict=True):
+            assert num_items is not None, "num_items_in_batch should be passed to liger_loss for dapo"
+            torch.testing.assert_close(final_loss, raw_loss)
+
+        release_memory(trainer.model, trainer)
+
     @pytest.mark.parametrize("use_liger_kernel", [False, pytest.param(True, marks=require_liger_kernel)])
     def test_train_with_bias_correction_kl(self, use_liger_kernel):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
