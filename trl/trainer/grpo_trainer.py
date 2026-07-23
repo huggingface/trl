@@ -3080,7 +3080,7 @@ class GRPOTrainer(_BaseTrainer):
         if self.loss_type == "cispo":
             clamped_ratios = torch.clamp(coef_1, max=self.epsilon_high).detach()
             per_token_loss = -clamped_ratios * advantages * per_token_logps
-        elif self.loss_type in ["grpo", "bnpo", "dr_grpo", "dapo", "luspo"]:
+        elif self.loss_type in ["grpo", "bnpo", "dr_grpo", "dapo", "luspo", "dapo_prompt_mean"]:
             coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
             # Two-sided clipping
             if self.args.delta is not None:
@@ -3135,6 +3135,14 @@ class GRPOTrainer(_BaseTrainer):
             loss = (per_token_loss * mask).sum() / (per_token_loss.size(0) * self.max_completion_length)
             normalizer = self.current_gradient_accumulation_steps if mode == "train" else 1.0  # no accum in eval
             policy_loss = loss.detach()
+            loss = loss / normalizer
+        elif self.loss_type == "dapo_prompt_mean":
+            row_token = mask.sum(dim=1).clamp(min=1.0)
+            row_loss = (per_token_loss * mask).sum(dim=1) / row_token
+            num_generations = self.num_generations if mode == "train" else self.num_generations_eval
+            prompt_loss = row_loss.view(-1, num_generations).mean(dim=1)
+            loss = prompt_loss.mean()        
+            normalizer = self.current_gradient_accumulation_steps if mode == "train" else 1.0  # no accum in eval
             loss = loss / normalizer
         elif self.loss_type in ["cispo", "dapo", "vespo"]:
             normalizer = inputs["num_items_in_batch"].clamp(min=1.0) / self.accelerator.num_processes
