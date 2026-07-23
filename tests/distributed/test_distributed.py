@@ -148,6 +148,45 @@ class TestDistributed(TrlTestCase):
         )
         # fmt: on
 
+    @pytest.mark.parametrize(
+        "config",
+        [
+            "ddp",
+            pytest.param(
+                "zero2",
+                marks=pytest.mark.xfail(
+                    Version(transformers.__version__) == Version("5.1.0"),
+                    reason="Upstream incompatibility: deepspeed and transformers==5.1.0 (see transformers#43780)",
+                ),
+            ),
+            pytest.param(
+                "zero3",
+                marks=pytest.mark.xfail(
+                    Version(transformers.__version__) == Version("5.1.0"),
+                    reason="Upstream incompatibility: deepspeed and transformers==5.1.0 (see transformers#43780)",
+                ),
+            ),
+        ],
+    )
+    def test_dpo_precompute_ref_log_probs(self, config, get_config_path):
+        # `--eval_strategy epoch` passes an eval dataset, so reference log-probs are precomputed for both the train and
+        # eval splits (two passes), which is what previously broke multi-GPU precompute (fingerprint cache mismatch, and
+        # a corrupted ZeRO-3 parameter coordinator from re-initializing DeepSpeed on the policy model per pass).
+        # fmt: off
+        run_command(
+            [
+                "accelerate", "launch", "--config_file", get_config_path(config), "trl/scripts/dpo.py",
+                "--output_dir", self.tmp_dir,
+                "--model_name_or_path", "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                "--dataset_name", "trl-internal-testing/zen",
+                "--dataset_config", "standard_preference",
+                "--precompute_ref_log_probs",
+                "--eval_strategy", "epoch",
+            ],
+            os.environ.copy(),
+        )
+        # fmt: on
+
     @require_liger_kernel
     @pytest.mark.parametrize(
         "config",
