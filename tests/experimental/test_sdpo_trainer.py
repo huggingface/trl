@@ -531,6 +531,78 @@ class TestSDPOTrainer(TrlTestCase):
         assert "Observed flat SDPO rewards across all sampled generations" in caplog.text
         assert "SDPO self-distillation is inactive because no reprompted samples were constructed" in caplog.text
 
+    def test_unscorable_completions_get_zero_advantage(self, caplog):
+        """A completion for which all reward functions return None must not receive a spurious advantage.
+
+        Without the unscorable_mask defense, `nansum` collapses the row to a reward of 0, which can produce a
+        positive advantage when siblings in the generation group have negative rewards. That would reinforce the
+        model for producing unscorable output — a reward-hacking gradient.
+        """
+        dataset = Dataset.from_dict({"prompt": ["Solve 2+2."]})
+
+        training_args = SDPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,
+            per_device_train_batch_size=1,
+            generation_batch_size=3,
+            num_generations=3,
+            max_completion_length=8,
+            max_steps=1,
+            report_to="none",
+        )
+
+        # Return None for the first completion (unscorable) and valid negative rewards for the others.
+        call_count = [0]
+
+        def partially_none_reward(**kwargs):
+            n = len(kwargs["prompts"])
+            rewards = []
+            for _ in range(n):
+                if call_count[0] % 3 == 0:
+                    rewards.append(None)  # unscorable
+                else:
+                    rewards.append(-1.0)  # valid negative reward
+                call_count[0] += 1
+            return rewards
+
+        trainer = SDPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs=partially_none_reward,
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        # Capture the advantages computed during _prepare_training_batch
+        original_compute = trainer._compute_policy_loss
+
+        captured_advantages = []
+
+        def capture_loss(model, inputs, **kwargs):
+            if "advantages" in inputs:
+                captured_advantages.append(inputs["advantages"].clone())
+            return original_compute(model, inputs, **kwargs)
+
+        trainer._compute_policy_loss = capture_loss
+
+        with caplog.at_level(logging.WARNING):
+            trainer.train()
+
+        assert len(captured_advantages) > 0, "No training step was executed"
+        advantages = captured_advantages[0]
+
+        # No NaN should leak into advantages (the unscorable rows are zeroed).
+        assert not torch.isnan(advantages).any(), "NaN found in advantages — unscorable defense failed"
+
+        # The unscorable advantage should be exactly 0, not a spurious positive value.
+        # With 3 generations: one None (unscorable → 0), two -1.0. Before the fix, the unscorable
+        # row would get reward 0 via nansum, producing a positive advantage over its -1.0 siblings.
+        # After the fix, it gets advantage 0.
+        zero_advantages = (advantages.abs() < 1e-6)
+        assert zero_advantages.any(), f"Expected at least one zeroed (unscorable) advantage, got: {advantages}"
+
+        # Verify the warning was emitted
+        assert "unscorable" in caplog.text.lower(), "Expected unscorable warning in logs"
+
     def test_train_preserves_teacher_completion_attention_mask(self):
         dataset = Dataset.from_dict({"prompt": ["Solve 2+2."]})
 
