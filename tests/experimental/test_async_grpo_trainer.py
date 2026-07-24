@@ -111,8 +111,8 @@ class _StubRolloutWorker:
     def start(self):
         self._fill_queue()
 
-    def update_model_version(self, version):
-        self._model_version = version
+    def update_model_version(self, model_version):
+        self._model_version = model_version
         self._fill_queue()
 
     def stop(self):
@@ -738,13 +738,13 @@ def _run(monkeypatch, *, prompt_ids, turns, assistants, fork_threshold=1024, max
     loop._generate_one_turn = _generate_one_turn
     loop._execute_tool_calls = lambda tool_calls, tool_dict: ([{"role": "tool", "name": "t", "content": "ok"}], 1, 0)
 
-    # _generate_one returns (completion, completion_ids, sequences, n_calls, n_failures).
+    # _generate_one returns (completion, completion_ids, sequences, n_calls, n_failures, rollout_reward).
     return asyncio.run(loop._generate_one([{"role": "user", "content": "hi"}], {}, []))
 
 
 class TestRolloutLoop(TrlTestCase):
     def test_single_turn_no_tool_call(self, monkeypatch):
-        completion, completion_ids, sequences, n_calls, n_failures = _run(
+        completion, completion_ids, sequences, n_calls, n_failures, _ = _run(
             monkeypatch,
             prompt_ids=[[1, 2, 3]],
             turns=[([10, 11], [-0.1, -0.2])],
@@ -760,7 +760,7 @@ class TestRolloutLoop(TrlTestCase):
 
     def test_clean_two_turns_stay_one_row(self, monkeypatch):
         # Turn 2's re-tokenized prompt starts with what we held (gen tokens + tool tokens) -> CLEAN.
-        completion, completion_ids, sequences, n_calls, n_failures = _run(
+        completion, completion_ids, sequences, n_calls, n_failures, _ = _run(
             monkeypatch,
             prompt_ids=[[1, 2, 3], [1, 2, 3, 10, 11, 20, 21]],
             turns=[([10, 11], [-0.1, -0.2]), ([30, 31], [-0.3, -0.4])],
@@ -776,7 +776,7 @@ class TestRolloutLoop(TrlTestCase):
 
     def test_history_rewrite_forks_into_two_rows(self, monkeypatch):
         # Turn 2's prompt diverges inside turn 1's answer and the new turn is >= fork_threshold -> FORK.
-        _, _, sequences, _, _ = _run(
+        _, _, sequences, _, _, _ = _run(
             monkeypatch,
             prompt_ids=[[1, 2, 3], [1, 2, 3, 99, 88, 77]],
             turns=[([10, 11, 12, 13], [-0.1] * 4), ([30, 31, 32], [-0.2] * 3)],
@@ -793,7 +793,7 @@ class TestRolloutLoop(TrlTestCase):
 
     def test_max_tool_calling_iterations_caps_turns(self, monkeypatch):
         # max_iters=0: even though turn 1 is a tool call, the loop breaks before executing it.
-        completion, _, sequences, n_calls, _ = _run(
+        completion, _, sequences, n_calls, _, _ = _run(
             monkeypatch,
             prompt_ids=[[1, 2, 3]],
             turns=[([10, 11], [-0.1, -0.2])],
@@ -833,6 +833,7 @@ def _group(completions_sequences, completions_ids):
         model_version=7,
         group_id=0,
         env_rewards=[None] * n,
+        rollout_rewards=[None] * n,
     )
 
 

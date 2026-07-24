@@ -84,6 +84,7 @@ Scripts are maintained in the [`trl/scripts`](https://github.com/huggingface/trl
 | [`examples/scripts/sdft.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/sdft.py) | This script shows how to use the [`experimental.sdft.SDFTTrainer`] for self-distillation fine-tuning (SDFT). |
 | [`examples/scripts/sdpo.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/sdpo.py) | This script shows how to use the [`experimental.sdpo.SDPOTrainer`] to fine-tune a model with verifiable math rewards and optional environment feedback using the [openai/gsm8k](https://huggingface.co/datasets/openai/gsm8k) dataset. |
 | [`trl/scripts/sft.py`](https://github.com/huggingface/trl/blob/main/trl/scripts/sft.py) | This script shows how to use the [`SFTTrainer`] to fine-tune a model. |
+| [`examples/scripts/sft_diffusion_gemma.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/sft_diffusion_gemma.py) | This script shows how to extend the [`SFTTrainer`] with a block-diffusion objective to fine-tune the DiffusionGemma language model on GSM8K. |
 | [`examples/scripts/sft_gemma3.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/sft_gemma3.py) | This script shows how to use the [`SFTTrainer`] to fine-tune a Gemma 3 model. |
 | [`examples/scripts/sft_nemotron_3.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/sft_nemotron_3.py) | This script shows how to use the [`SFTTrainer`] to fine-tune an NVIDIA Nemotron 3 model. |
 | [`examples/scripts/sft_tiny_aya_tool_calling.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/sft_tiny_aya_tool_calling.py) | This script shows how to use the [`SFTTrainer`] to teach tool calling to a model without native tool-calling support using the [bebechien/SimpleToolCalling](https://huggingface.co/datasets/bebechien/SimpleToolCalling) dataset. |
@@ -111,6 +112,7 @@ These scripts demonstrate how to train models with [OpenEnv](openenv) environmen
 | [`examples/scripts/openenv/carla.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/openenv/carla.py) | GRPO training with the CARLA environment for autonomous driving. |
 | [`examples/scripts/openenv/carla_vlm.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/openenv/carla_vlm.py) | GRPO training with CARLA for VLMs with multimodal tool responses (camera images). |
 | [`examples/scripts/openenv/carla_vlm_gemma.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/openenv/carla_vlm_gemma.py) | GRPO training with CARLA for Gemma 4 with multimodal tool responses (camera images). |
+| [`examples/scripts/openenv/opencode.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/openenv/opencode.py) | AsyncGRPO training of the real `opencode` coding agent (loop-owning: the external agent runs its own tool loop and TRL trains on its captured proxy trace) with a local subprocess sandbox. |
 
 ## Distributed Training (for scripts)
 

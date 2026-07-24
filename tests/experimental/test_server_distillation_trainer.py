@@ -21,13 +21,12 @@ import torch.nn.functional as F
 from datasets import Dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from trl.experimental.distillation.distillation_trainer import _jsd_divergence
 from trl.experimental.server_distillation import (
     ServerDistillationConfig,
     ServerDistillationTrainer,
     build_teacher_request_inputs,
 )
-from trl.experimental.server_distillation.server_distillation_trainer import _add_tail_bucket
+from trl.experimental.server_distillation.server_distillation_trainer import _add_tail_bucket, _jsd_divergence
 
 from ..testing_utils import TrlTestCase
 
@@ -69,16 +68,8 @@ def _canned_teacher_logprobs(**kwargs):
 def _variable_length_dataset():
     return Dataset.from_list(
         [
-            {"messages": [{"role": "user", "content": "What's 2+2?"}, {"role": "assistant", "content": "4."}]},
-            {
-                "messages": [
-                    {"role": "user", "content": "Name three primary colors."},
-                    {
-                        "role": "assistant",
-                        "content": "Red, green, and blue are the three primary colors commonly used in additive color mixing.",
-                    },
-                ]
-            },
+            {"prompt": [{"role": "user", "content": "What's 2+2?"}]},
+            {"prompt": [{"role": "user", "content": "Name three primary colors."}]},
         ]
     )
 
@@ -272,8 +263,6 @@ class TestServerDistillationTrainerRaggedGrad(TrlTestCase):
             per_device_train_batch_size=bs,
             gradient_accumulation_steps=ga,
             learning_rate=1e-4,
-            max_length=64,
-            max_prompt_length=32,
             max_completion_length=32,
             teacher_model_server_url="http://fake-teacher.invalid:8000",
             loss_top_k=1,
