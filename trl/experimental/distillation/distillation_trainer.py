@@ -26,7 +26,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from accelerate.logging import get_logger
-from accelerate.utils import gather_object, set_seed
+from accelerate.utils import gather_object, is_peft_model, set_seed
 from datasets import Dataset, IterableDataset
 from packaging.version import Version
 from torch.utils.data import DataLoader, Sampler
@@ -761,6 +761,62 @@ class DistillationTrainer(_BaseTrainer):
         self._metrics[mode]["completions/max_terminated_length"].append(term_completion_lengths.float().max().item())
 
         return prompt_ids, completion_ids
+
+    @profiling_decorator
+    def _get_last_hidden_state(
+        self,
+        unwrapped_model,
+        input_ids,
+        attention_mask,
+        logits_to_keep,
+        pixel_values=None,
+        image_grid_thw=None,
+        pixel_attention_mask=None,
+        spatial_shapes=None,
+        image_sizes=None,
+        image_position_ids=None,
+    ):
+        if is_peft_model(unwrapped_model):
+            unwrapped_model = unwrapped_model.base_model.model
+
+        # Build model inputs - check if the model supports logits_to_keep (some models and VLMs don't)
+        model_inputs = {"input_ids": input_ids, "attention_mask": attention_mask}
+
+        # For Qwen models:
+        if image_grid_thw is not None and pixel_values is not None:
+            model_inputs["image_grid_thw"] = image_grid_thw
+        # For Gemma, SmolVLM2, LLaVa-Next etc.:
+        if pixel_values is not None:
+            model_inputs["pixel_values"] = pixel_values
+        # For SmolVLM2
+        if pixel_attention_mask is not None:
+            model_inputs["pixel_attention_mask"] = pixel_attention_mask
+        # For LFM2-VL
+        if spatial_shapes is not None:
+            model_inputs["spatial_shapes"] = spatial_shapes
+        # For LLaVa-Next
+        if image_sizes is not None:
+            model_inputs["image_sizes"] = image_sizes
+        if image_position_ids is not None:
+            model_inputs["image_position_ids"] = image_position_ids
+
+        # Only add logits_to_keep if the model supports it
+        if "logits_to_keep" in self.model_kwarg_keys:
+            # We add 1 to `logits_to_keep` because the last logits of the sequence is later excluded
+            model_inputs["logits_to_keep"] = logits_to_keep + 1
+
+        model_inputs["use_cache"] = False  # only used in generation; set False to suppress warnings
+
+        # `base_model` gives the backbone model (skipping `lm_head`) — text decoder for LMs, multimodal wrapper for
+        # VLMs (so vision-token injection runs before the text decoder). `get_decoder()` won't do: on VLMs it
+        # returns just the text stack and feeds image-placeholder IDs through it.
+        backbone = unwrapped_model.base_model
+        last_hidden_state = backbone(**model_inputs).last_hidden_state
+        # Exclude the last value: it corresponds to the next token pred
+        last_hidden_state = last_hidden_state[:, :-1, :]  # (B, L-1, H)
+        # Only keep the last logits_to_keep. For model that support logits_to_keep, this is a no-op.
+        last_hidden_state = last_hidden_state[:, -logits_to_keep:, :]  # (B, logits_to_keep, H)
+        return last_hidden_state
 
     # Name kept aligned with GRPO/RLOO for consistency; distillation has no rewards, so nothing is actually scored.
     def _generate_and_score_completions(self, inputs: list[dict[str, torch.Tensor | Any]]) -> dict[str, Any]:
