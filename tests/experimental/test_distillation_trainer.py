@@ -21,6 +21,7 @@ from datasets import DatasetDict, IterableDatasetDict, load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from trl.experimental.distillation import DistillationConfig, DistillationTrainer
+from trl.experimental.distillation.distillation_trainer import _chunked_divergence_loss
 from trl.experimental.gkd.gkd_trainer import GKDTrainer
 
 from ..testing_utils import TrlTestCase, require_liger_kernel, require_torch_accelerator
@@ -51,6 +52,30 @@ def _reference_generalized_jsd(student_logits, teacher_logits, labels=None, beta
         return per_element.sum() / max(per_element.size(0), 1)
     mask = labels != -100
     return per_element[mask].sum() / mask.sum().clamp(min=1)
+
+
+def _reference_chunked_divergence(
+    student_hidden, teacher_hidden, student_w, teacher_w, completion_mask, beta, num_items_in_batch=None
+):
+    """Naive full-vocab reference for `_chunked_divergence_loss`: project the whole batch at once (no chunking) and
+    build the JSD straight from the definition, so it shares neither the chunking nor `F.kl_div`'s argument order."""
+    student_log_probs = torch.log_softmax(student_hidden.float() @ student_w.float().t(), dim=-1)
+    teacher_log_probs = torch.log_softmax(teacher_hidden.float() @ teacher_w.float().t(), dim=-1)
+    student_probs, teacher_probs = student_log_probs.exp(), teacher_log_probs.exp()
+
+    if beta == 0.0:  # forward KL: KL(teacher || student)
+        per_element = teacher_probs * (teacher_log_probs - student_log_probs)
+    elif beta == 1.0:  # reverse KL: KL(student || teacher)
+        per_element = student_probs * (student_log_probs - teacher_log_probs)
+    else:  # generalized JSD against the mixture M = (1 - beta) * student + beta * teacher
+        mixture_log_probs = ((1 - beta) * student_probs + beta * teacher_probs).log()
+        per_element = beta * (teacher_probs * (teacher_log_probs - mixture_log_probs)) + (1 - beta) * (
+            student_probs * (student_log_probs - mixture_log_probs)
+        )
+
+    per_token = per_element.sum(dim=-1) * completion_mask  # (B, K)
+    denom = completion_mask.sum() if num_items_in_batch is None else num_items_in_batch
+    return per_token.sum() / denom
 
 
 class TestGeneralizedJSDLossIsPinned(TrlTestCase):
@@ -178,6 +203,90 @@ class TestGeneralizedJSDLoss(TrlTestCase):
         identical_logits = torch.randn(self.batch_size, self.seq_length, self.vocab_size)
         loss = DistillationTrainer.generalized_jsd_loss(identical_logits, identical_logits)
         assert round(abs(loss.item() - 0), 6) == 0
+
+
+class TestChunkedDivergenceLoss(TrlTestCase):
+    """Unit tests for the memory-efficient chunked JSD loss (`_chunked_divergence_loss`)."""
+
+    def _inputs(self, B=2, K=6, H=8, V=17, n_masked=3, seed=0):
+        g = torch.Generator().manual_seed(seed)
+        student_hidden = torch.randn(B, K, H, generator=g)
+        teacher_hidden = torch.randn(B, K, H, generator=g)
+        student_w = torch.randn(V, H, generator=g)
+        teacher_w = torch.randn(V, H, generator=g)
+        completion_mask = torch.ones(B, K)
+        # Mask a few scattered positions so the packed masked tail is exercised.
+        completion_mask.reshape(-1)[torch.randperm(B * K, generator=g)[:n_masked]] = 0
+        return student_hidden, teacher_hidden, student_w, teacher_w, completion_mask
+
+    @pytest.mark.parametrize("beta", [0.0, 0.5, 1.0])
+    @pytest.mark.parametrize("chunk_size", [3, 4, 100])  # divides / doesn't divide / exceeds n_valid (= 9)
+    def test_matches_naive_full_vocab(self, beta, chunk_size):
+        sh, th, sw, tw, mask = self._inputs()
+        loss, _, n_valid = _chunked_divergence_loss(sh, th, sw, tw, mask, beta, chunk_size)
+        expected = _reference_chunked_divergence(sh, th, sw, tw, mask, beta)
+        torch.testing.assert_close(loss, expected)
+        assert n_valid.item() == int(mask.sum().item())
+
+    def test_beta_1_is_reverse_kl(self):
+        sh, th, sw, tw, mask = self._inputs()
+        loss, _, _ = _chunked_divergence_loss(sh, th, sw, tw, mask, beta=1.0, chunk_size=4)
+        # Hand-rolled reverse KL: sum_x p_s * (log p_s - log p_t) over valid positions, normalized by n_valid.
+        student_log_probs = torch.log_softmax(sh @ sw.t(), dim=-1)
+        teacher_log_probs = torch.log_softmax(th @ tw.t(), dim=-1)
+        per_token = (student_log_probs.exp() * (student_log_probs - teacher_log_probs)).sum(dim=-1) * mask
+        expected = per_token.sum() / mask.sum()
+        torch.testing.assert_close(loss, expected)
+
+    @pytest.mark.parametrize("beta", [0.0, 0.5, 1.0])
+    def test_parity_with_gkd(self, beta):
+        # Identity lm_head so hidden states are the logits, then compare against GKD's full-vocab JSD (sum reduction).
+        B, K, V = 2, 5, 11
+        g = torch.Generator().manual_seed(1)
+        student_logits = torch.randn(B, K, V, generator=g)
+        teacher_logits = torch.randn(B, K, V, generator=g)
+        eye = torch.eye(V)
+        mask = torch.ones(B, K)
+        mask[0, -1] = 0
+        labels = torch.where(mask.bool(), torch.ones_like(mask, dtype=torch.long), torch.full_like(mask, -100).long())
+        loss, _, _ = _chunked_divergence_loss(
+            student_logits, teacher_logits, eye, eye, mask, beta, chunk_size=4, num_items_in_batch=1
+        )
+        gkd = GKDTrainer.generalized_jsd_loss(
+            student_logits, teacher_logits, labels=labels, beta=beta, reduction="sum"
+        )
+        torch.testing.assert_close(loss, gkd)
+
+    def test_masked_positions_ignored(self):
+        sh, th, sw, tw, mask = self._inputs()
+        loss_a, _, _ = _chunked_divergence_loss(sh, th, sw, tw, mask, beta=0.5, chunk_size=4)
+        # Perturbing the hidden states at masked positions only must not change the loss.
+        masked = mask.reshape(-1) == 0
+        sh2, th2 = sh.clone().reshape(-1, sh.size(-1)), th.clone().reshape(-1, th.size(-1))
+        sh2[masked] += 5.0
+        th2[masked] += 5.0
+        loss_b, _, _ = _chunked_divergence_loss(sh2.view_as(sh), th2.view_as(th), sw, tw, mask, beta=0.5, chunk_size=4)
+        torch.testing.assert_close(loss_a, loss_b)
+
+    def test_grads_flow_and_zero_at_masked(self):
+        sh, th, sw, tw, mask = self._inputs()
+        sh = sh.clone().requires_grad_(True)
+        loss, _, _ = _chunked_divergence_loss(sh, th, sw, tw, mask, beta=0.5, chunk_size=4)
+        loss.backward()
+        grad = sh.grad.reshape(-1, sh.size(-1))
+        valid = mask.reshape(-1) != 0
+        assert (grad[valid].abs().sum(dim=-1) > 0).all()  # valid positions receive gradient
+        assert torch.equal(grad[~valid], torch.zeros_like(grad[~valid]))  # masked positions get none
+
+    def test_fully_masked_batch_keeps_graph(self):
+        sh, th, sw, tw, _ = self._inputs()
+        sh = sh.clone().requires_grad_(True)
+        mask = torch.zeros(sh.size(0), sh.size(1))
+        loss, _, n_valid = _chunked_divergence_loss(sh, th, sw, tw, mask, beta=0.5, chunk_size=4)
+        assert n_valid.item() == 0
+        assert torch.isfinite(loss)
+        loss.backward()  # must not raise: the graph stays connected through the student hidden states + lm_head
+        assert sh.grad is not None
 
 
 class TestDistillationTrainer(TrlTestCase):

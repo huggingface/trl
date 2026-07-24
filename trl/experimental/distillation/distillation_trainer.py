@@ -54,6 +54,7 @@ from ...trainer.utils import (
     create_model_from_path,
     disable_dropout_in_model,
     identity,
+    maybe_gather_lm_head_ctx,
     pad,
     repeat_iterable_dataset,
     shuffle_sequence_dict,
@@ -160,6 +161,150 @@ def _jsd_divergence(student_log_probs, teacher_log_probs, beta, support_mask=Non
             kl_teacher = F.kl_div(mixture_log_probs, teacher_log_probs, reduction="none", log_target=True)
             kl_student = F.kl_div(mixture_log_probs, student_log_probs, reduction="none", log_target=True)
             return beta_t * kl_teacher + (1 - beta_t) * kl_student
+
+
+# Number of valid completion positions projected through the `lm_head` per chunk in the memory-efficient JSD loss
+# (mirrors SFT's `_CHUNKED_LM_HEAD_CHUNK_SIZE`).
+_CHUNKED_LM_HEAD_CHUNK_SIZE = 256
+
+
+def _chunk(h_s, w_s, b_s, h_t, w_t, b_t, beta, valid):
+    # Project both hidden states to vocab logits inside the checkpointed body so only `(chunk, H)` is retained across
+    # the backward, never `(chunk, V)`. ZeRO-3 shards the `lm_head`, so gather it tightly around each projection.
+    with maybe_gather_lm_head_ctx(w_s, b_s):
+        student_logits = h_s.float() @ w_s.float().t()
+        if b_s is not None:
+            student_logits = student_logits + b_s.float()
+    with maybe_gather_lm_head_ctx(w_t, b_t):
+        teacher_logits = h_t.float() @ w_t.float().t()
+        if b_t is not None:
+            teacher_logits = teacher_logits + b_t.float()
+
+    student_log_probs = F.log_softmax(student_logits, dim=-1)
+    teacher_log_probs = F.log_softmax(teacher_logits, dim=-1)
+
+    # beta: 0 = forward KL, 1 = reverse KL, else generalized JSD. `F.kl_div(input, target)` computes
+    # `target * (log target - input)`, hence the swapped argument order relative to the KL written in the paper.
+    if beta == 0.0:
+        jsd = F.kl_div(student_log_probs, teacher_log_probs, reduction="none", log_target=True)
+    elif beta == 1.0:
+        jsd = F.kl_div(teacher_log_probs, student_log_probs, reduction="none", log_target=True)
+    else:
+        beta_t = torch.tensor(beta, dtype=student_log_probs.dtype, device=student_log_probs.device)
+        mixture_log_probs = torch.logsumexp(
+            torch.stack([student_log_probs + torch.log1p(-beta_t), teacher_log_probs + torch.log(beta_t)]), dim=0
+        )
+        kl_teacher = F.kl_div(mixture_log_probs, teacher_log_probs, reduction="none", log_target=True)
+        kl_student = F.kl_div(mixture_log_probs, student_log_probs, reduction="none", log_target=True)
+        jsd = beta_t * kl_teacher + (1 - beta_t) * kl_student
+
+    # A chunk's tail may hold positions packed out of the valid prefix; zero those rows before summing.
+    per_token_jsd = jsd.sum(dim=-1) * valid
+    per_token_entropy = -(student_log_probs.exp() * student_log_probs).sum(dim=-1) * valid
+    return per_token_jsd.sum(), per_token_entropy.sum()
+
+
+def _chunked_divergence_loss(
+    student_hidden_states: torch.Tensor,
+    teacher_hidden_states: torch.Tensor,
+    student_lm_head_weight: torch.Tensor,
+    teacher_lm_head_weight: torch.Tensor,
+    completion_mask: torch.Tensor,
+    beta: float,
+    chunk_size: int,
+    num_items_in_batch: torch.Tensor | int | None = None,
+    student_lm_head_bias: torch.Tensor | None = None,
+    teacher_lm_head_bias: torch.Tensor | None = None,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """
+    Memory-efficient generalized JSD over student/teacher hidden states and their `lm_head` weights.
+
+    The full `lm_head` projections are never materialized. Valid (unmasked) completion positions are packed to the
+    front (via `argsort` on the completion mask, a static-shape op) and processed in chunks of `chunk_size`, rounding
+    the count up to a whole chunk so masked positions land in a skippable tail. Each chunk's `[chunk_size, vocab_size]`
+    logits (for both models) are kept alive only during its own forward/backward via gradient checkpointing, so peak
+    logits memory is `2 * chunk_size * vocab_size` instead of `2 * batch_size * seq_len * vocab_size`.
+
+    Args:
+        student_hidden_states (`torch.Tensor`):
+            Student backbone output of shape `(B, K, H)`, aligned to the completion tokens (before the `lm_head`).
+        teacher_hidden_states (`torch.Tensor`):
+            Teacher backbone output of shape `(B, K, H)`, aligned to the same completion tokens.
+        student_lm_head_weight (`torch.Tensor`):
+            Student `lm_head` weight of shape `(V, H)`.
+        teacher_lm_head_weight (`torch.Tensor`):
+            Teacher `lm_head` weight of shape `(V, H)`.
+        completion_mask (`torch.Tensor`):
+            Binary mask of shape `(B, K)`; `1` marks completion positions included in the loss.
+        beta (`float`):
+            Interpolation coefficient. `0.0` = forward KL, `1.0` = reverse KL, else generalized JSD.
+        chunk_size (`int`):
+            Number of valid positions processed per chunk. Peak memory scales linearly with this.
+        num_items_in_batch (`torch.Tensor`, `int` or `None`, *optional*):
+            Total number of valid tokens across the global batch. When provided, the loss is reduced as
+            `sum / num_items_in_batch` (gradient-accumulation-correct); when `None`, reduction is `mean` over local
+            valid positions.
+        student_lm_head_bias (`torch.Tensor`, *optional*):
+            Student `lm_head` bias of shape `(V,)`, added to each chunk's logits when provided.
+        teacher_lm_head_bias (`torch.Tensor`, *optional*):
+            Teacher `lm_head` bias of shape `(V,)`, added to each chunk's logits when provided.
+
+    Returns:
+        `tuple[torch.Tensor, torch.Tensor, torch.Tensor]`: scalar loss, sum of per-token student entropy (in nats),
+        and number of valid completion positions — all over the local batch. Raw sums are returned so callers can
+        reduce correctly across ranks.
+    """
+    hidden_size = student_hidden_states.size(-1)
+    h_s = student_hidden_states.reshape(-1, hidden_size)
+    h_t = teacher_hidden_states.reshape(-1, hidden_size)
+    valid = completion_mask.reshape(-1) != 0
+    n_valid_tensor = valid.sum()
+
+    entropy_sum = h_s.new_zeros((), dtype=torch.float32)
+    if n_valid_tensor == 0:
+        # Whole micro-batch masked. Keep the loss connected to the autograd graph through every trainable parameter so
+        # `.backward()` succeeds and DDP / FSDP gradient sync doesn't hang on a missing param. Only the student carries
+        # gradients (the teacher is frozen).
+        with maybe_gather_lm_head_ctx(student_lm_head_weight, student_lm_head_bias):
+            loss = (h_s.float().sum() + student_lm_head_weight.float().sum()) * 0.0
+            if student_lm_head_bias is not None:
+                loss = loss + student_lm_head_bias.float().sum() * 0.0
+        return loss, entropy_sum, n_valid_tensor
+
+    # Pack valid positions to the front so masked ones form whole trailing chunks. `argsort` on the boolean mask is a
+    # static-shape op (unlike `h_s[valid]`, whose output shape is data-dependent and poisons XLA compilation).
+    order = valid.to(torch.int8).argsort(descending=True, stable=True)
+    h_s = h_s[order]
+    h_t = h_t[order]
+    valid = valid[order]
+
+    # Process only the whole chunks covering the valid prefix: bounds XLA recompiles and drops fully-masked chunks on GPU.
+    n_padded = (n_valid_tensor / chunk_size).ceil().to(torch.int64) * chunk_size
+
+    loss = h_s.new_zeros((), dtype=torch.float32)
+    for start in range(0, n_padded, chunk_size):
+        chunk_loss, chunk_entropy = torch.utils.checkpoint.checkpoint(
+            _chunk,
+            h_s[start : start + chunk_size],
+            student_lm_head_weight,
+            student_lm_head_bias,
+            h_t[start : start + chunk_size],
+            teacher_lm_head_weight,
+            teacher_lm_head_bias,
+            beta,
+            valid[start : start + chunk_size].float(),
+            use_reentrant=False,
+        )
+        loss = loss + chunk_loss
+        entropy_sum = entropy_sum + chunk_entropy
+
+    if num_items_in_batch is None:
+        loss = loss / n_valid_tensor
+    else:
+        if isinstance(num_items_in_batch, torch.Tensor):
+            num_items_in_batch = num_items_in_batch.to(loss.device)
+        loss = loss / num_items_in_batch
+    return loss, entropy_sum, n_valid_tensor
 
 
 class DistillationTrainer(_BaseTrainer):
