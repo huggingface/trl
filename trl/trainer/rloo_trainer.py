@@ -523,6 +523,10 @@ class RLOOTrainer(_BaseTrainer):
 
         if train_dataset is None:
             raise ValueError("`train_dataset` is required")
+        elif not isinstance(train_dataset, (Dataset, IterableDataset)):
+            raise TypeError(
+                f"`train_dataset` must be a `Dataset` or `IterableDataset`, got `{type(train_dataset).__name__}`."
+            )
 
         # Iterable datasets can't be indexed, so the RepeatSampler can't be attached to them. Instead, the sampler's
         # ordering is reproduced by streaming (see `get_train_dataloader`/`get_eval_dataloader` and
