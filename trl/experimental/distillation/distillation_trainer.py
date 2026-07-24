@@ -762,6 +762,7 @@ class DistillationTrainer(_BaseTrainer):
 
         return prompt_ids, completion_ids
 
+    @profiling_decorator
     def _get_last_hidden_state(
         self,
         unwrapped_model,
