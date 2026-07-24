@@ -523,10 +523,9 @@ class RLOOTrainer(_BaseTrainer):
 
         if train_dataset is None:
             raise ValueError("`train_dataset` is required")
-        elif isinstance(train_dataset, dict):
+        elif not isinstance(train_dataset, (Dataset, IterableDataset)):
             raise TypeError(
-                "`train_dataset` doesn't support `DatasetDict`, `IterableDatasetDict`, or a `dict` of datasets: "
-                f"training runs over a single dataset. Got `{type(train_dataset).__name__}`."
+                f"`train_dataset` must be a `Dataset` or `IterableDataset`, got `{type(train_dataset).__name__}`."
             )
 
         # Iterable datasets can't be indexed, so the RepeatSampler can't be attached to them. Instead, the sampler's
