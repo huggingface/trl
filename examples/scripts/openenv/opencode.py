@@ -78,7 +78,7 @@ from datasets import Dataset, load_dataset
 from opencode_env import harness as oc_harness
 from opencode_env.config import OpenCodeConfig
 from opencode_env.harness import OpenCodeSessionFactory
-from opencode_env.sandbox.base import ExecResult, SandboxHandle
+from openenv.core.sandbox import ExecResult, SandboxHandle
 from opencode_env.task import OpenCodeTask
 from openenv.core.harness import ResourceSession, ResourceSessionFactory, VerifyResult
 from transformers import AutoTokenizer
