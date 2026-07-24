@@ -684,37 +684,6 @@ training_args = GRPOConfig(
 )
 ```
 
-
-### Rethinking the Trust Region in LLM Reinforcement Learning
-
-**📜 Paper**: https://huggingface.co/papers/2602.04879
-
-DPPO replaces PPO/GRPO's heuristic ratio-clipping with a principled trust region based on direct policy divergence estimates. PPO-style clipping masks tokens based on the probability ratio π/μ, which over-penalizes low-probability tokens and under-penalizes high-probability ones. DPPO instead masks based on direct approximations of policy divergence (TV or KL), ensuring updates stay within a theoretically grounded trust region. Four divergence approximations are supported: `binary_tv`, `binary_kl`, `topk_tv`, and `topk_kl`.
-
-```python
-from trl.experimental.dppo import DPPOConfig, DPPOTrainer
-
-training_args = DPPOConfig(
-    divergence_type="binary_tv",  # divergence approximation
-    divergence_topk=20,  # K for top-K divergence modes (Section 7 / Appendix G.2 of the paper)
-    epsilon=0.15,  # δ_low threshold (Appendix F of the paper)
-    epsilon_high=0.15,  # δ_high threshold (Appendix F of the paper)
-    clip_ratio_c=20.0,  # IS ratio upper bound C (Section 5.4 of the paper)
-    beta=0.0,  # KL regularization coefficient
-    use_vllm=True,
-)
-
-trainer = DPPOTrainer(
-    model="your-model",
-    reward_funcs=[...],
-    args=training_args,
-    train_dataset=dataset,
-)
-trainer.train()
-```
-
-The official code [sail-sg/Stable-RL](https://github.com/sail-sg/Stable-RL)
-
 ## Optimal Advantage Regression
 
 Papers relating to the [`experimental.a2po.A2POTrainer`].
@@ -1342,6 +1311,27 @@ training_args = SFTConfig(
 )
 ```
 
+### Reparameterizing Uniform Diffusion Models: the Leave-One-Out Denoiser
+
+**📜 Paper**: https://huggingface.co/papers/2605.22765
+
+For uniform discrete diffusion models, the usual plug-in cross-entropy does not learn the plain denoiser \\( \mathbb{E}[X_0 \mid X_t] \\) but the leave-one-out (LOO) posterior, which predicts each token without using its own corrupted value. The paper derives exact conversions between the denoiser, the LOO posterior, and the score, so a network can be trained as either parameterization with the same cross-entropy. Given logits \\( f_\theta \\) whose softmax parameterizes the LOO posterior, the denoiser used in the loss is
+
+$$
+d_\theta(x_t, t)^\ell = \mathrm{softmax}\!\left( f_\theta(x_t, t)^\ell + \log\!\left(1 + \frac{K\,\alpha_t}{1 - \alpha_t}\, x_t^\ell\right) \right),
+$$
+
+i.e. an additive correction on the logit of the observed token, where \\( K \\) is the vocabulary size and \\( \alpha_t \\) the probability the uniform forward keeps the clean token. The paper reports that the LOO parameterization consistently improves generation. The block-diffusion SFT example [`examples/scripts/sft_diffusion_gemma.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/sft_diffusion_gemma.py) exposes both parameterizations via `--model_prediction_type` (`mean` for the plain denoiser, matching the released checkpoint, or `mean_loo` for the LOO posterior):
+
+```bash
+accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
+    examples/scripts/sft_diffusion_gemma.py \
+    --use_peft \
+    --gradient_checkpointing \
+    --model_prediction_type mean_loo \
+    --output_dir diffusiongemma-26B-A4B-it-gsm8k-lora
+```
+
 ## Parameter-Efficient Fine-Tuning (PEFT)
 
 For general details on using PEFT with TRL, please refer to the [PEFT Integration](peft_integration) guide.
@@ -1665,13 +1655,13 @@ Papers relating to training a student model with the help of a teacher model.
 
 **📜 Paper**: https://huggingface.co/papers/2306.13649
 
-Introduces Generalized Knowledge Distillation (GKD), which addresses distribution mismatch in KD for auto-regressive models by training the student on its own generated outputs with teacher feedback, instead of a fixed set of sequences. GKD supports flexible loss functions (e.g. beyond KL when the student cannot match the teacher) and integrates with RL fine-tuning (RLHF). The paper reports results on summarization, translation, arithmetic reasoning, and instruction-tuning. Used in TRL via [`experimental.distillation.DistillationTrainer`] and [`experimental.gkd.GKDTrainer`]. To reproduce the paper's setting, use this configuration:
+Introduces Generalized Knowledge Distillation (GKD), which addresses distribution mismatch in KD for auto-regressive models by training the student on its own generated outputs with teacher feedback, instead of a fixed set of sequences. GKD supports flexible loss functions (e.g. beyond KL when the student cannot match the teacher) and integrates with RL fine-tuning (RLHF). The paper reports results on summarization, translation, arithmetic reasoning, and instruction-tuning. Used in TRL via [`experimental.gkd.GKDTrainer`], which exposes the paper's on/off-policy mixing (`lmbda`). [`experimental.distillation.DistillationTrainer`] implements the same generalized-JSD objective for the always-on-policy case. To reproduce the paper's setting, use this configuration:
 
 ```python
-from trl.experimental.distillation import DistillationConfig
+from trl.experimental.gkd import GKDConfig
 
 # XSum summarization task (Table A.1 of the paper)
-training_args = DistillationConfig(
+training_args = GKDConfig(
     lmbda=0.5,  # λ student data fraction (Section 3 of the paper)
     beta=0.5,  # β Generalized JSD interpolation, 0=KL, 1=reverse KL (Section 3 of the paper)
     temperature=1.0,  # student training temperature (Appendix A of the paper)
@@ -1679,7 +1669,7 @@ training_args = DistillationConfig(
     learning_rate=3e-4,  # learning rate (Table A.1 of the paper)
     per_device_train_batch_size=32,  # batch size (Table A.1 of the paper)
     warmup_steps=2000,  # warm-up steps (Table A.1 of the paper)
-    max_completion_length=64,  # max output tokens (Table A.1 of the paper)
+    max_new_tokens=64,  # max output tokens (Table A.1 of the paper)
 )
 ```
 
@@ -1687,15 +1677,15 @@ training_args = DistillationConfig(
 
 **📜 Paper**: https://huggingface.co/papers/2606.22600
 
-Introduces Importance-Weighted On-Policy Distillation (IW-OPD), which addresses the position bias in OPD by reweighting sampled-token distillation updates according to accumulated teacher-student prefix discrepancy. Early tokens keep larger weights, while later tokens after high drift are downweighted. Used in TRL via [`experimental.distillation.DistillationTrainer`] with `distillation_objective="iw_opd"`.
+Introduces Importance-Weighted On-Policy Distillation (IW-OPD), which addresses the position bias in OPD by reweighting sampled-token distillation updates according to accumulated teacher-student prefix discrepancy. Early tokens keep larger weights, while later tokens after high drift are downweighted. Used in TRL via [`experimental.iw_opd.IWOPDTrainer`] with `distillation_objective="iw_opd"`.
 
-The paper reports its main experiments with a verl PPO trainer and vLLM rollouts. `DistillationTrainer` exposes the matching distillation and rollout settings below; PPO-specific settings from the paper such as clipping range `0.2`, dual-clip constant `3.0`, PPO epochs, entropy coefficient, KL reward penalty, auxiliary KL, and rollout importance correction are not `DistillationConfig` parameters.
+The paper optimizes IW-OPD with a clipped policy-gradient setup (verl) and vLLM rollouts. `IWOPDTrainer` exposes the matching distillation and rollout settings below; policy-optimization settings from the paper such as clipping range `0.2`, dual-clip constant `3.0`, inner PPO epochs, entropy coefficient, KL reward penalty, auxiliary KL, and rollout importance correction are not `IWOPDConfig` parameters.
 
 ```python
-from trl.experimental.distillation import DistillationConfig
+from trl.experimental.iw_opd import IWOPDConfig
 
-# Table 6 and Algorithm 1 of the paper, mapped to DistillationConfig where available.
-training_args = DistillationConfig(
+# Table 6 and Algorithm 1 of the paper, mapped to IWOPDConfig where available.
+training_args = IWOPDConfig(
     distillation_objective="iw_opd",
     iw_opd_gamma=0.5,  # γ amplification, Algorithm 1 and Appendix C.3
     lmbda=1.0,  # fully on-policy rollouts
