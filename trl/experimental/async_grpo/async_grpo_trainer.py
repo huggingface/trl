@@ -22,6 +22,7 @@ import time
 from collections import defaultdict
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
+from multiprocessing.queues import Queue as MPQueue
 from typing import Any, Protocol
 
 import torch
@@ -66,11 +67,14 @@ class RolloutWorkerProtocol(Protocol):
     runs reward models on their own GPUs.
 
     Attributes:
-        rollout_buffer (`queue.Queue`):
-            Queue the trainer drains; the worker pushes scored `RolloutSample`s onto it.
+        rollout_buffer (`queue.Queue` or `multiprocessing.queues.Queue`):
+            Queue the trainer drains; the worker pushes scored `RolloutSample`s onto it. The two queue types are
+            structurally identical (`get` / `put_nowait` / `qsize`) but nominally unrelated, so both are allowed: the
+            default [`AsyncRolloutWorker`] runs its loop in a spawned process and uses `multiprocessing.Queue`, while
+            an in-process worker uses `queue.Queue`.
     """
 
-    rollout_buffer: queue.Queue
+    rollout_buffer: queue.Queue | MPQueue
 
     def start(self) -> None:
         """Begin producing rollouts. Called once on train begin, after the initial weight sync."""
@@ -80,7 +84,7 @@ class RolloutWorkerProtocol(Protocol):
         """Stop the worker and release its resources. Called on train end."""
         ...
 
-    def update_model_version(self, version: int) -> None:
+    def update_model_version(self, model_version: int) -> None:
         """Tell the worker which policy version is now live, so it can tag or discard stale samples."""
         ...
 
