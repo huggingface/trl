@@ -302,6 +302,13 @@ class VLLMGeneration:
             )
 
         if self.mode == "server":
+            if is_peft_model(model) and is_bitsandbytes_available():
+                if any(isinstance(module, bnb.nn.Linear4bit) for _, module in model.named_modules()):
+                    raise ValueError(
+                        "QLoRA is not supported with `vllm_mode='server'` because adapter merging dequantizes the "
+                        "4-bit weights before synchronization. Use an unquantized server or `vllm_mode='colocate'`."
+                    )
+
             if accelerator.is_main_process:
                 if self.server_base_url is not None:
                     base_url = self.server_base_url

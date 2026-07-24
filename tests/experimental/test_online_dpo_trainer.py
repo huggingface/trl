@@ -12,14 +12,25 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from unittest.mock import MagicMock, patch
+
 import pytest
+import torch
 from datasets import Dataset, DatasetDict, features, load_dataset
-from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer, BitsAndBytesConfig
 from transformers.utils import is_peft_available, is_vision_available
 
 from trl.experimental.online_dpo import OnlineDPOConfig, OnlineDPOTrainer
 
-from ..testing_utils import TrlTestCase, require_peft, require_torch_accelerator, require_vision, require_vllm
+from ..testing_utils import (
+    TrlTestCase,
+    require_bitsandbytes,
+    require_peft,
+    require_torch_accelerator,
+    require_torch_gpu_if_bnb_not_multi_backend_enabled,
+    require_vision,
+    require_vllm,
+)
 
 
 if is_peft_available():
@@ -346,6 +357,55 @@ class TestOnlineDPOTrainer(TrlTestCase):
         trainer.train()
 
         assert "train_loss" in trainer.state.log_history[-1]
+
+    @require_bitsandbytes
+    @require_peft
+    @require_torch_gpu_if_bnb_not_multi_backend_enabled
+    def test_server_mode_rejects_bnb_4bit_peft_model(self):
+        quantization_config = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_compute_dtype=torch.float16)
+        model = AutoModelForCausalLM.from_pretrained(
+            self.model_id, dtype="float32", quantization_config=quantization_config
+        )
+        args = OnlineDPOConfig(output_dir=self.tmp_dir, use_vllm=True, vllm_mode="server", report_to="none")
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        with (
+            patch("trl.experimental.online_dpo.online_dpo_trainer.is_vllm_available", return_value=True),
+            pytest.raises(ValueError, match="QLoRA is not supported"),
+        ):
+            OnlineDPOTrainer(
+                model=model,
+                reward_funcs=self.reward_model,
+                args=args,
+                train_dataset=dataset,
+                processing_class=self.tokenizer,
+                reward_processing_classes=self.reward_tokenizer,
+                peft_config=LoraConfig(),
+            )
+
+    @require_peft
+    def test_server_mode_allows_non_quantized_peft_model(self):
+        args = OnlineDPOConfig(output_dir=self.tmp_dir, use_vllm=True, vllm_mode="server", report_to="none")
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        with (
+            patch("trl.experimental.online_dpo.online_dpo_trainer.is_vllm_available", return_value=True),
+            patch("trl.experimental.online_dpo.online_dpo_trainer.VLLMClient", return_value=MagicMock()),
+            patch("trl.experimental.online_dpo.online_dpo_trainer.SamplingParams", MagicMock(), create=True),
+            patch("torch.accelerator.current_accelerator", return_value=MagicMock(type="cuda")),
+            patch("torch.cuda.current_device", return_value=0),
+        ):
+            trainer = OnlineDPOTrainer(
+                model=self.model,
+                reward_funcs=self.reward_model,
+                args=args,
+                train_dataset=dataset,
+                processing_class=self.tokenizer,
+                reward_processing_classes=self.reward_tokenizer,
+                peft_config=LoraConfig(),
+            )
+
+        assert trainer.vllm_client is not None
 
     def test_vllm_config_validation(self):
         """Test vLLM configuration validation"""
