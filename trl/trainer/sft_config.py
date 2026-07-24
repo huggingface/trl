@@ -47,6 +47,10 @@ class SFTConfig(_BaseConfig):
             Coefficient of the load-balancing auxiliary loss. Only has an effect when training a Mixture-of-Experts
             (MoE) model; for other models it does nothing. The auxiliary loss is added to the training loss with this
             weight. Set to `0.0` to disable it.
+        log_expert_usage (`bool`, *optional*, defaults to `False`):
+            Whether to log aggregate expert-usage statistics during evaluation of Mixture-of-Experts (MoE) models.
+            Enabling this option requests router logits during evaluation and may increase evaluation time and memory
+            usage. It is not currently supported with Liger kernels.
         chat_template_path (`str`, *optional*):
             If specified, sets the model's chat template. This can either be the path to a tokenizer (local directory
             or Hugging Face Hub model) or a direct path to a Jinja template file. When using a Jinja file, you must
@@ -159,6 +163,13 @@ class SFTConfig(_BaseConfig):
             "help": "Coefficient of the load-balancing auxiliary loss. Only has an effect when training a "
             "Mixture-of-Experts (MoE) model; for other models it does nothing. The auxiliary loss is added to the "
             "training loss with this weight. Set to `0.0` to disable it."
+        },
+    )
+    log_expert_usage: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to log aggregate expert-usage statistics during evaluation of Mixture-of-Experts "
+            "(MoE) models. Enabling this option may increase evaluation time and memory usage."
         },
     )
     trust_remote_code: bool = field(
@@ -308,6 +319,8 @@ class SFTConfig(_BaseConfig):
 
     def __post_init__(self):
         super().__post_init__()
+        if self.log_expert_usage and self.use_liger_kernel:
+            raise ValueError("`log_expert_usage=True` is not currently supported with `use_liger_kernel=True`.")
         if self.pad_token is not None:
             warnings.warn(
                 "`pad_token` is deprecated and will be removed in v2.0.0. "
