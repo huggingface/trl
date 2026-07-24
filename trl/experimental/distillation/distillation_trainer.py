@@ -118,50 +118,6 @@ def _print_completions_sample(prompts: list[str], completions: list[str], step: 
     console.print(panel)
 
 
-def _jsd_divergence(student_log_probs, teacher_log_probs, beta, support_mask=None):
-    """Compute JSD (or forward/reverse KL) from log-probability tensors.
-
-    When *support_mask* is not None, uses manual computation with masked positions zeroed. When None, uses
-    ``F.kl_div``.
-    """
-    if support_mask is not None:
-        safe_student = torch.where(support_mask, student_log_probs, torch.zeros_like(student_log_probs))
-        safe_teacher = torch.where(support_mask, teacher_log_probs, torch.zeros_like(teacher_log_probs))
-        student_probs = torch.where(support_mask, student_log_probs.exp(), torch.zeros_like(student_log_probs))
-        teacher_probs = torch.where(support_mask, teacher_log_probs.exp(), torch.zeros_like(teacher_log_probs))
-
-        if beta == 0:
-            return torch.nan_to_num(teacher_probs * (safe_teacher - safe_student), nan=0.0)
-        elif beta == 1:
-            return torch.nan_to_num(student_probs * (safe_student - safe_teacher), nan=0.0)
-        else:
-            beta_t = torch.tensor(beta, dtype=student_log_probs.dtype, device=student_log_probs.device)
-            tiny = torch.finfo(student_probs.dtype).tiny
-            mixture_probs = (1 - beta_t) * student_probs + beta_t * teacher_probs
-            safe_mixture = torch.where(
-                support_mask,
-                torch.log(mixture_probs.clamp_min(tiny)),
-                torch.zeros_like(student_log_probs),
-            )
-            kl_teacher = torch.nan_to_num(teacher_probs * (safe_teacher - safe_mixture), nan=0.0)
-            kl_student = torch.nan_to_num(student_probs * (safe_student - safe_mixture), nan=0.0)
-            return beta_t * kl_teacher + (1 - beta_t) * kl_student
-    else:
-        if beta == 0:
-            return F.kl_div(student_log_probs, teacher_log_probs, reduction="none", log_target=True)
-        elif beta == 1:
-            return F.kl_div(teacher_log_probs, student_log_probs, reduction="none", log_target=True)
-        else:
-            beta_t = torch.tensor(beta, dtype=student_log_probs.dtype, device=student_log_probs.device)
-            mixture_log_probs = torch.logsumexp(
-                torch.stack([student_log_probs + torch.log1p(-beta_t), teacher_log_probs + torch.log(beta_t)]),
-                dim=0,
-            )
-            kl_teacher = F.kl_div(mixture_log_probs, teacher_log_probs, reduction="none", log_target=True)
-            kl_student = F.kl_div(mixture_log_probs, student_log_probs, reduction="none", log_target=True)
-            return beta_t * kl_teacher + (1 - beta_t) * kl_student
-
-
 # Number of valid completion positions projected through the `lm_head` per chunk in the memory-efficient JSD loss
 # (mirrors SFT's `_CHUNKED_LM_HEAD_CHUNK_SIZE`).
 _CHUNKED_LM_HEAD_CHUNK_SIZE = 256
@@ -459,6 +415,10 @@ class DistillationTrainer(_BaseTrainer):
                 get_peft_model_kwargs["autocast_adapter_dtype"] = False
             model = get_peft_model(model, peft_config, **get_peft_model_kwargs)
 
+        # The chunked JSD loss (and the Liger path) call the student backbone directly, bypassing the DDP/FSDP
+        # wrapper's forward; route them through `_forward_redirection` so `prepare_for_backward()` still fires.
+        self._forward_redirection = _ForwardRedirection()
+
         # ── Liger fused JSD loss ──
         self.use_liger_loss = False
         if args.use_liger_kernel:
@@ -471,7 +431,6 @@ class DistillationTrainer(_BaseTrainer):
                 weight_soft_loss=1.0,
             )
             self.use_liger_loss = True
-            self._forward_redirection = _ForwardRedirection()
 
         # ── Teacher model setup ──
         # `teacher_model` may be None: subclasses (e.g. ServerDistillationTrainer) supply the teacher another way.
@@ -1084,84 +1043,6 @@ class DistillationTrainer(_BaseTrainer):
     #  Loss computation
     # ──────────────────────────────────────────────────────────────────────
 
-    @staticmethod
-    def _reduce_divergence_loss(jsd, completion_mask=None, reduction="batchmean", num_items_in_batch=None):
-        """Reduce a per-token divergence tensor over the valid completion tokens.
-
-        When `num_items_in_batch` is provided (as under gradient accumulation), the divergence is reduced as `sum /
-        num_items_in_batch`, matching the gradient-accumulation-correct behavior of HF's default cross-entropy.
-        Otherwise it falls back to the local `reduction` (default `batchmean`). See issue #4719.
-        """
-        mask = None
-        if completion_mask is not None:
-            mask = completion_mask.bool()
-            jsd = jsd[mask]
-
-        if num_items_in_batch is not None:
-            # Normalize by the global number of valid tokens for gradient-accumulation-correct loss.
-            jsd_sum = jsd.sum()
-            if isinstance(num_items_in_batch, torch.Tensor):
-                num_items_in_batch = num_items_in_batch.to(jsd_sum.device)
-            return jsd_sum / num_items_in_batch
-        if reduction == "batchmean":
-            # clamp_min(1) avoids 0/0 -> nan when a sample has no unmasked positions
-            # (e.g. completion fully truncated). jsd[mask] is empty -> jsd.sum() == 0,
-            # so 0/1 == 0 with a valid grad path.
-            denom = mask.sum().clamp_min(1) if completion_mask is not None else max(jsd.size(0), 1)
-            return jsd.sum() / denom
-        elif reduction == "sum":
-            return jsd.sum()
-        elif reduction == "mean":
-            return jsd.mean()
-        else:
-            return jsd
-
-    @staticmethod
-    def generalized_jsd_loss(
-        student_logits,
-        teacher_logits,
-        labels=None,
-        beta=0.5,
-        temperature=1.0,
-        reduction="batchmean",
-        num_items_in_batch=None,
-    ):
-        """
-        Compute the generalized Jensen-Shannon Divergence loss for knowledge distillation over the full vocabulary.
-
-        Args:
-            student_logits: Tensor of shape (batch_size, sequence_length, vocab_size).
-            teacher_logits: Tensor of shape (batch_size, sequence_length, vocab_size).
-            labels: Tensor of shape (batch_size, sequence_length) with -100 for positions to ignore.
-            beta: Interpolation coefficient. 0.0 = forward KL, 1.0 = reverse KL.
-            temperature: Softmax temperature.
-            reduction: 'batchmean', 'sum', 'mean', or 'none'.
-
-        Returns:
-            Scalar loss tensor.
-        """
-        student_logits = student_logits / temperature
-        teacher_logits = teacher_logits / temperature
-
-        student_log_probs = F.log_softmax(student_logits, dim=-1)
-        teacher_log_probs = F.log_softmax(teacher_logits, dim=-1)
-
-        jsd = _jsd_divergence(student_log_probs, teacher_log_probs, beta)
-        return DistillationTrainer._reduce_divergence_loss(
-            jsd,
-            completion_mask=(labels != -100) if labels is not None else None,
-            reduction=reduction,
-            num_items_in_batch=num_items_in_batch,
-        )
-
-    def _get_teacher_logits(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
-        """Get logits from the local teacher model."""
-        if self.teacher_model is None:
-            raise ValueError("No teacher model configured.")
-        self.teacher_model.eval()
-        with torch.no_grad():
-            return self.teacher_model(input_ids=input_ids, attention_mask=attention_mask).logits
-
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         # transformers computes `num_items_in_batch` from the raw dataloader labels, before on-policy generation
         # replaces the completions; use the count over the generated completions instead (computed in
@@ -1174,30 +1055,56 @@ class DistillationTrainer(_BaseTrainer):
             loss = self._compute_liger_loss(model, inputs, num_items_in_batch=num_items_in_batch)
             return (loss, None) if return_outputs else loss
 
-        prompt_ids, prompt_mask = inputs["prompt_ids"], inputs["prompt_mask"]
-        completion_ids, completion_mask = inputs["completion_ids"], inputs["completion_mask"]
-        input_ids = torch.cat([prompt_ids, completion_ids], dim=1)
-        attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
-        logits_to_keep = completion_ids.size(1)  # only the completion tokens are trained on
+        # Chunked JSD path: project the teacher/student hidden states to vocab logits one chunk at a time inside the
+        # loss (never materializing the full `(B, C, V)` logits), so the teacher's dense distribution can be matched
+        # without buffering it.
+        input_ids = torch.cat([inputs["prompt_ids"], inputs["completion_ids"]], dim=1)
+        attention_mask = torch.cat([inputs["prompt_mask"], inputs["completion_mask"]], dim=1)
+        completion_mask = inputs["completion_mask"]
+        logits_to_keep = inputs["completion_ids"].size(1)  # only the completion tokens are trained on
 
-        # Student forward pass
-        student_outputs = model(input_ids=input_ids, attention_mask=attention_mask)
-
-        teacher_logits = self._get_teacher_logits(input_ids, attention_mask)
-        student_logits = student_outputs.logits[:, -logits_to_keep - 1 : -1, :]
-        teacher_logits = teacher_logits[:, -logits_to_keep - 1 : -1, :]
-        jsd = self.generalized_jsd_loss(
-            student_logits=student_logits,
-            teacher_logits=teacher_logits,
-            beta=self.beta,
-            temperature=self.temperature,
-            reduction="none",
-        )
-        loss = self._reduce_divergence_loss(
-            jsd, completion_mask=completion_mask, num_items_in_batch=num_items_in_batch
+        # Route the student backbone through the DDP/FSDP wrapper via `_forward_redirection` so that DDP.forward() is
+        # called and prepare_for_backward() fires correctly.
+        unwrapped_student = self.accelerator.unwrap_model(model)
+        student_hidden_states = self._forward_redirection(
+            model,
+            unwrapped_student,
+            self._get_last_hidden_state,
+            unwrapped_student,
+            input_ids,
+            attention_mask,
+            logits_to_keep,
         )
 
-        return (loss, student_outputs) if return_outputs else loss
+        self.teacher_model.eval()
+        unwrapped_teacher = self.accelerator.unwrap_model(self.teacher_model)
+        with torch.no_grad():
+            teacher_hidden_states = self._get_last_hidden_state(
+                unwrapped_teacher, input_ids, attention_mask, logits_to_keep
+            )
+
+        student_lm_head = unwrapped_student.get_output_embeddings()
+        teacher_lm_head = unwrapped_teacher.get_output_embeddings()
+        student_config, teacher_config = unwrapped_student.config, unwrapped_teacher.config
+
+        loss, _, _ = _chunked_divergence_loss(
+            student_hidden_states,
+            teacher_hidden_states,
+            student_lm_head.weight,
+            teacher_lm_head.weight,
+            completion_mask,
+            self.beta,
+            _CHUNKED_LM_HEAD_CHUNK_SIZE,
+            num_items_in_batch=num_items_in_batch,
+            student_lm_head_bias=student_lm_head.bias,
+            teacher_lm_head_bias=teacher_lm_head.bias,
+            student_logit_scale=getattr(student_config, "logit_scale", 1.0),
+            teacher_logit_scale=getattr(teacher_config, "logit_scale", 1.0),
+            student_final_logit_softcapping=getattr(student_config, "final_logit_softcapping", None),
+            teacher_final_logit_softcapping=getattr(teacher_config, "final_logit_softcapping", None),
+        )
+
+        return (loss, None) if return_outputs else loss
 
     def _liger_student_forward(self, student, inputs):
         """Decoder-only forward used by the Liger JSD path (skips lm_head to save memory)."""

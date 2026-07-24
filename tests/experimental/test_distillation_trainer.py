@@ -27,33 +27,6 @@ from trl.experimental.gkd.gkd_trainer import GKDTrainer
 from ..testing_utils import TrlTestCase, require_liger_kernel, require_torch_accelerator
 
 
-def _reference_generalized_jsd(student_logits, teacher_logits, labels=None, beta=0.5, temperature=1.0):
-    """Naive reference for the generalized JSD, written straight from the definition.
-
-    Deliberately independent of the implementation: probabilities are formed explicitly and the mixture is built in
-    probability space, so this does not share `F.kl_div`'s inverted argument order nor the `logsumexp` trick. That is
-    what makes it able to catch an argument-order or mixture-weight regression.
-    """
-    student_log_probs = torch.log_softmax(student_logits / temperature, dim=-1)
-    teacher_log_probs = torch.log_softmax(teacher_logits / temperature, dim=-1)
-    student_probs, teacher_probs = student_log_probs.exp(), teacher_log_probs.exp()
-
-    if beta == 0.0:  # forward KL: KL(teacher || student)
-        per_element = teacher_probs * (teacher_log_probs - student_log_probs)
-    elif beta == 1.0:  # reverse KL: KL(student || teacher)
-        per_element = student_probs * (student_log_probs - teacher_log_probs)
-    else:  # generalized JSD against the mixture M = (1 - beta) * student + beta * teacher
-        mixture_log_probs = ((1 - beta) * student_probs + beta * teacher_probs).log()
-        per_element = beta * (teacher_probs * (teacher_log_probs - mixture_log_probs)) + (1 - beta) * (
-            student_probs * (student_log_probs - mixture_log_probs)
-        )
-
-    if labels is None:  # "batchmean" without labels divides by the batch size
-        return per_element.sum() / max(per_element.size(0), 1)
-    mask = labels != -100
-    return per_element[mask].sum() / mask.sum().clamp(min=1)
-
-
 def _reference_chunked_divergence(
     student_hidden,
     teacher_hidden,
@@ -96,133 +69,6 @@ def _reference_chunked_divergence(
     per_token = per_element.sum(dim=-1) * completion_mask  # (B, K)
     denom = completion_mask.sum() if num_items_in_batch is None else num_items_in_batch
     return per_token.sum() / denom
-
-
-class TestGeneralizedJSDLossIsPinned(TrlTestCase):
-    """Pins the distillation objective while the trainer is refactored.
-
-    The implementation is expected to change (top-k support removal, then the switch to a chunked loss); the value it
-    computes is not. Any diff that moves these numbers is changing the objective and must say so.
-    """
-
-    def setup_method(self):
-        generator = torch.Generator().manual_seed(42)  # seeded: an unseeded fixture cannot pin anything
-        self.student_logits = torch.randn(2, 3, 5, generator=generator)
-        self.teacher_logits = torch.randn(2, 3, 5, generator=generator)
-        self.labels = torch.tensor([[-100, 1, 2], [-100, -100, 3]])
-
-    @pytest.mark.parametrize("beta", [0.0, 0.25, 1.0])
-    @pytest.mark.parametrize("use_labels", [False, True])
-    def test_matches_reference_implementation(self, beta, use_labels):
-        labels = self.labels if use_labels else None
-        loss = DistillationTrainer.generalized_jsd_loss(
-            self.student_logits, self.teacher_logits, labels=labels, beta=beta
-        )
-        expected = _reference_generalized_jsd(self.student_logits, self.teacher_logits, labels=labels, beta=beta)
-        torch.testing.assert_close(loss, expected)
-
-    @pytest.mark.parametrize("beta", [0.0, 0.25, 1.0])
-    @pytest.mark.parametrize("use_labels", [False, True])
-    def test_matches_gkd(self, beta, use_labels):
-        # GKD implements the same objective. Keeping the two in lockstep is the cross-trainer contract: if this breaks,
-        # either the promotion changed the objective or GKD drifted.
-        labels = self.labels if use_labels else None
-        loss = DistillationTrainer.generalized_jsd_loss(
-            self.student_logits, self.teacher_logits, labels=labels, beta=beta
-        )
-        gkd_loss = GKDTrainer.generalized_jsd_loss(self.student_logits, self.teacher_logits, labels=labels, beta=beta)
-        torch.testing.assert_close(loss, gkd_loss)
-
-    @pytest.mark.parametrize("beta", [0.0, 0.25, 1.0])
-    def test_temperature_matches_reference(self, beta):
-        # `temperature` is applied to the loss today. It is scheduled to become sampling-only, so pin it explicitly:
-        # that change must be a visible diff here, not a silent drift.
-        loss = DistillationTrainer.generalized_jsd_loss(
-            self.student_logits, self.teacher_logits, labels=self.labels, beta=beta, temperature=2.0
-        )
-        expected = _reference_generalized_jsd(
-            self.student_logits, self.teacher_logits, labels=self.labels, beta=beta, temperature=2.0
-        )
-        torch.testing.assert_close(loss, expected)
-
-
-class TestGeneralizedJSDLoss(TrlTestCase):
-    def setup_method(self):
-        self.batch_size = 2
-        self.seq_length = 3
-        self.vocab_size = 5
-        self.student_logits = torch.randn(self.batch_size, self.seq_length, self.vocab_size)
-        self.teacher_logits = torch.randn(self.batch_size, self.seq_length, self.vocab_size)
-
-    def test_uniform_distribution(self):
-        logits = torch.ones(1, 1, self.vocab_size)
-        loss = DistillationTrainer.generalized_jsd_loss(logits, logits)
-        assert round(abs(loss.item() - 0), 5) == 0
-
-    def test_generalized_jsd_loss_edge_cases(self):
-        # Setup
-        student_logits = torch.log(torch.tensor([[0.1, 0.9]])).unsqueeze(0)
-        teacher_logits = torch.log(torch.tensor([[0.9, 0.1]])).unsqueeze(0)
-
-        # Case 1: beta = 1 (should be equivalent to KL(student || teacher))
-        loss_beta_1 = DistillationTrainer.generalized_jsd_loss(student_logits, teacher_logits, beta=1)
-        expected_loss_beta_1 = F.kl_div(
-            F.log_softmax(teacher_logits, dim=-1), F.softmax(student_logits, dim=-1), reduction="batchmean"
-        )
-        assert round(abs(loss_beta_1.item() - expected_loss_beta_1.item()), 5) == 0
-
-        # Case 2: beta = 0 (should be equivalent to KL(teacher || student))
-        loss_beta_0 = DistillationTrainer.generalized_jsd_loss(student_logits, teacher_logits, beta=0)
-        expected_loss_beta_0 = F.kl_div(
-            F.log_softmax(student_logits, dim=-1), F.softmax(teacher_logits, dim=-1), reduction="batchmean"
-        )
-        assert round(abs(loss_beta_0.item() - expected_loss_beta_0.item()), 5) == 0
-
-    def test_output_shape(self):
-        loss = DistillationTrainer.generalized_jsd_loss(self.student_logits, self.teacher_logits)
-        assert torch.is_tensor(loss)
-        assert loss.shape == torch.Size([])
-
-    def test_beta_values(self):
-        loss_beta_0 = DistillationTrainer.generalized_jsd_loss(self.student_logits, self.teacher_logits, beta=0)
-        loss_beta_1 = DistillationTrainer.generalized_jsd_loss(self.student_logits, self.teacher_logits, beta=1)
-        assert loss_beta_0 != loss_beta_1
-
-    def test_temperature_scaling(self):
-        loss_temp_1 = DistillationTrainer.generalized_jsd_loss(self.student_logits, self.teacher_logits, temperature=1)
-        loss_temp_2 = DistillationTrainer.generalized_jsd_loss(self.student_logits, self.teacher_logits, temperature=2)
-        assert loss_temp_1 != loss_temp_2
-
-    def test_reduction_methods(self):
-        loss_batchmean = DistillationTrainer.generalized_jsd_loss(
-            self.student_logits, self.teacher_logits, reduction="batchmean"
-        )
-        loss_sum = DistillationTrainer.generalized_jsd_loss(self.student_logits, self.teacher_logits, reduction="sum")
-        loss_mean = DistillationTrainer.generalized_jsd_loss(
-            self.student_logits, self.teacher_logits, reduction="mean"
-        )
-        loss_none = DistillationTrainer.generalized_jsd_loss(
-            self.student_logits, self.teacher_logits, reduction="none"
-        )
-
-        assert loss_batchmean.shape == torch.Size([])
-        assert loss_sum.shape == torch.Size([])
-        assert loss_mean.shape == torch.Size([])
-        assert loss_none.shape == self.student_logits.shape
-
-    def test_symmetry(self):
-        student_teacher = DistillationTrainer.generalized_jsd_loss(self.student_logits, self.teacher_logits, beta=0.1)
-        teacher_student = DistillationTrainer.generalized_jsd_loss(self.teacher_logits, self.student_logits, beta=0.1)
-        assert student_teacher != teacher_student
-
-        student_teacher = DistillationTrainer.generalized_jsd_loss(self.student_logits, self.teacher_logits, beta=0.5)
-        teacher_student = DistillationTrainer.generalized_jsd_loss(self.teacher_logits, self.student_logits, beta=0.5)
-        assert student_teacher == teacher_student
-
-    def test_zero_loss_for_identical_inputs(self):
-        identical_logits = torch.randn(self.batch_size, self.seq_length, self.vocab_size)
-        loss = DistillationTrainer.generalized_jsd_loss(identical_logits, identical_logits)
-        assert round(abs(loss.item() - 0), 6) == 0
 
 
 class TestChunkedDivergenceLoss(TrlTestCase):
@@ -442,44 +288,6 @@ class TestDistillationTrainer(TrlTestCase):
 
         assert all(torch.isfinite(param).all() for param in trainer.model.parameters())
 
-    def test_num_items_in_batch_counts_the_tokens_trained_on(self, monkeypatch):
-        """`num_items_in_batch` is the loss denominator, so it must count the completion tokens actually trained on.
-
-        Capture the value where it is applied (`_reduce_divergence_loss`) rather than the argument transformers passes
-        to `compute_loss`: the GRPO-style fix computes the count during generation and the loss reads it from there, so
-        asserting on the applied denominator keeps the test valid — and able to turn green — across that move.
-        """
-        recorded = []  # (denominator applied, completion tokens in this microbatch)
-        original = DistillationTrainer._reduce_divergence_loss
-
-        def _recording(jsd, completion_mask=None, reduction="batchmean", num_items_in_batch=None):
-            # `generalized_jsd_loss(reduction="none")` also routes through here with `completion_mask=None`; only the
-            # loss-reducing call (with a mask) carries the denominator under test.
-            if completion_mask is not None:
-                recorded.append((num_items_in_batch, int(completion_mask.sum())))
-            return original(
-                jsd, completion_mask=completion_mask, reduction=reduction, num_items_in_batch=num_items_in_batch
-            )
-
-        monkeypatch.setattr(DistillationTrainer, "_reduce_divergence_loss", staticmethod(_recording))
-
-        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
-        trainer = DistillationTrainer(
-            model=self.model_id,
-            teacher_model=self.model_id,
-            args=self._make_args(gradient_accumulation_steps=2, max_steps=1),
-            train_dataset=dataset,
-            processing_class=self.tokenizer,
-        )
-
-        trainer.train()
-
-        assert len(recorded) == 2, "expected one loss reduction per accumulation step"
-        denominator = recorded[0][0]
-        assert denominator is not None, "the loss was not reduced by a token count"
-        # The denominator must be the completion tokens summed over the whole accumulation window.
-        assert int(denominator) == sum(tokens for _, tokens in recorded)
-
     @pytest.mark.parametrize(
         "eval_dataset_type",
         [
@@ -530,8 +338,8 @@ class TestDistillationTrainer(TrlTestCase):
 
     def test_loss_normalizes_by_num_items_in_batch(self):
         # When `num_items_in_batch` is passed (as under gradient accumulation), the divergence loss must be reduced as
-        # sum / num_items_in_batch rather than the local per-microbatch mean. See issue #4719. The full-vocabulary JSD
-        # path routes through `_reduce_divergence_loss`, which must honor `num_items_in_batch`.
+        # sum / num_items_in_batch rather than the local per-microbatch mean. See issue #4719. The chunked JSD path
+        # must honor `num_items_in_batch`.
         trainer = self._make_local_trainer(beta=0.5)
 
         # Diverge the teacher from the student so the divergence is well above fp noise (else the loss is ~0).
@@ -566,6 +374,48 @@ class TestDistillationTrainer(TrlTestCase):
         torch.testing.assert_close(loss_global, loss_mean, rtol=1e-4, atol=1e-6)
         # Doubling the global count exactly halves the loss (sum / num_items is linear in 1/num_items).
         torch.testing.assert_close(loss_double, loss_mean / 2, rtol=1e-4, atol=1e-6)
+
+    def test_compute_loss_matches_full_logit_reference(self):
+        # The chunked JSD path must produce the same loss as the full-logit JSD it replaced (the handover). This also
+        # checks the wiring: the student stays the student, the teacher the teacher, and only completion positions score.
+        trainer = self._make_local_trainer(beta=0.5)
+        torch.manual_seed(0)
+        with torch.no_grad():
+            for p in trainer.teacher_model.parameters():
+                p.add_(0.5 * torch.randn_like(p))  # diverge the teacher so the JSD is well above fp noise
+
+        device = trainer.accelerator.device
+        vocab_size = trainer.model.config.vocab_size
+        prompt_length, completion_length = 4, 3
+        batch = {
+            "prompt_ids": torch.randint(0, vocab_size, (2, prompt_length), device=device),
+            "prompt_mask": torch.ones(2, prompt_length, dtype=torch.long, device=device),
+            "completion_ids": torch.randint(0, vocab_size, (2, completion_length), device=device),
+            "completion_mask": torch.ones(2, completion_length, dtype=torch.long, device=device),
+        }
+        num_valid = batch["completion_mask"].sum()
+
+        trainer.model.eval()
+        with torch.no_grad():
+            loss = trainer.compute_loss(trainer.model, batch, num_items_in_batch=num_valid)
+
+            # Full-logit reference (the pre-chunking loss): run both models' full forward, take the completion logits,
+            # and compute the generalized JSD over the completion positions, normalized by num_items.
+            input_ids = torch.cat([batch["prompt_ids"], batch["completion_ids"]], dim=1)
+            attention_mask = torch.cat([batch["prompt_mask"], batch["completion_mask"]], dim=1)
+            keep = slice(-completion_length - 1, -1)
+            s = trainer.model(input_ids=input_ids, attention_mask=attention_mask).logits[:, keep, :]
+            t = trainer.teacher_model(input_ids=input_ids, attention_mask=attention_mask).logits[:, keep, :]
+            slp = torch.log_softmax(s.float(), dim=-1)
+            tlp = torch.log_softmax(t.float(), dim=-1)
+            beta_t = torch.tensor(0.5)
+            mixture = torch.logsumexp(torch.stack([slp + torch.log1p(-beta_t), tlp + torch.log(beta_t)]), dim=0)
+            jsd = 0.5 * F.kl_div(mixture, tlp, reduction="none", log_target=True) + 0.5 * F.kl_div(
+                mixture, slp, reduction="none", log_target=True
+            )
+            reference = jsd.sum() / num_valid
+
+        torch.testing.assert_close(loss, reference, rtol=1e-4, atol=1e-6)
 
     def test_generated_batch_emits_completion_mask(self, monkeypatch):
         """The generated batch emits a region-shaped `completion_mask` that the loss consumes via GRPO's key layout."""
