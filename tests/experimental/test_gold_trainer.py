@@ -26,6 +26,7 @@ from trl.experimental.gold import gold_trainer as gold_trainer_module
 from trl.experimental.gold.gold_trainer import (
     GOLDTrainer,
     ULDLoss,
+    build_teacher_inputs_from_completion_ids,
     build_teacher_inputs_from_texts,
 )
 from trl.experimental.utils import (
@@ -260,6 +261,27 @@ def build_config(**overrides):
     )
     base.update(overrides)
     return SimpleNamespace(**base)
+
+
+def test_gold_config_validates_privileged_context_scope():
+    config = GOLDConfig(output_dir="test", bf16=False, use_privileged_context=True, lmbda=0.0)
+    assert config.teacher_prompt_template is None
+    assert config.privileged_context_column == "privileged_context"
+
+    with pytest.raises(ValueError, match="requires `lmbda=0`"):
+        GOLDConfig(output_dir="test", bf16=False, use_privileged_context=True)
+    with pytest.raises(ValueError, match="seq_kd=True"):
+        GOLDConfig(output_dir="test", bf16=False, use_privileged_context=True, lmbda=0.0, seq_kd=True)
+    with pytest.raises(ValueError, match="use_uld_loss=True"):
+        GOLDConfig(output_dir="test", bf16=False, use_privileged_context=True, lmbda=0.0, use_uld_loss=True)
+    with pytest.raises(ValueError, match="`\\{prompt\\}`"):
+        GOLDConfig(
+            output_dir="test",
+            bf16=False,
+            use_privileged_context=True,
+            lmbda=0.0,
+            teacher_prompt_template="Context: {privileged_context}",
+        )
 
 
 @pytest.fixture(scope="session")
@@ -1078,6 +1100,236 @@ def test_prepare_dataset_messages_uses_last_assistant_turn(qwen_tokenizer):
         completion_ids, skip_special_tokens=False, clean_up_tokenization_spaces=False
     )
     assert decoded_completion == row["original_completion_text"]
+
+
+def test_privileged_context_rewrites_last_user_turn(llama_tokenizer):
+    prompt = [
+        {"role": "system", "content": "Be concise."},
+        {"role": "user", "content": "Earlier question"},
+        {"role": "assistant", "content": "Earlier answer"},
+        {"role": "user", "content": "What caused the outage?"},
+    ]
+
+    teacher_prompt = GOLDTrainer._build_privileged_teacher_prompt(
+        llama_tokenizer,
+        prompt,
+        "The timeout changed immediately before the errors.",
+        "Question: {prompt}\n\nEvidence: {privileged_context}",
+        "privileged_context",
+        {},
+    )
+    expected_messages = prompt[:-1] + [
+        {
+            "role": "user",
+            "content": "Question: What caused the outage?\n\nEvidence: The timeout changed immediately before the errors.",
+        }
+    ]
+    expected = llama_tokenizer.apply_chat_template(expected_messages, add_generation_prompt=True, tokenize=False)
+
+    assert teacher_prompt == expected
+    assert "Earlier answer" in teacher_prompt
+    assert "Evidence: The timeout changed immediately before the errors." in teacher_prompt
+
+
+def test_privileged_context_preparation_preserves_shared_completion_tokens(llama_tokenizer):
+    context = "private evidence " * 64 + "END_OF_PRIVATE_CONTEXT"
+    dataset = Dataset.from_dict(
+        {
+            "prompt": [[{"role": "user", "content": "What caused the outage?"}]],
+            "completion": [[{"role": "assistant", "content": "The timeout change caused it."}]],
+            "privileged_context": [context],
+        }
+    )
+    args = SimpleNamespace(
+        dataset_num_proc=None,
+        dataset_text_field="text",
+        max_length=32,
+        packing_strategy="bfd",
+        use_liger_kernel=False,
+    )
+    trainer = GOLDTrainer.__new__(GOLDTrainer)
+    trainer.use_privileged_context = True
+    trainer.teacher_prompt_template = "{prompt}\n\n{privileged_context}"
+    trainer.privileged_context_column = "privileged_context"
+
+    prepared = trainer._prepare_dataset_with_original_text(
+        dataset,
+        llama_tokenizer,
+        args,
+        packing=False,
+        formatting_func=None,
+        dataset_name="train",
+    )
+    row = prepared[0]
+    batch = DataCollatorForChatML(tokenizer=llama_tokenizer, max_length=32)([row])
+    completion_ids = [batch["input_ids"][0][batch["labels"][0] != -100]]
+    teacher_input_ids, teacher_labels, _ = build_teacher_inputs_from_completion_ids(
+        llama_tokenizer,
+        [row["teacher_prompt_text"]],
+        completion_ids,
+    )
+
+    assert "END_OF_PRIVATE_CONTEXT" in row["teacher_prompt_text"]
+    assert len(row["input_ids"]) <= 32
+    assert teacher_input_ids.shape[1] > 32
+    assert batch["teacher_prompt_text"] == [row["teacher_prompt_text"]]
+    assert torch.equal(
+        batch["input_ids"][batch["labels"] != -100],
+        teacher_input_ids[teacher_labels != -100],
+    )
+
+
+def test_privileged_context_preparation_requires_context_column(llama_tokenizer):
+    dataset = Dataset.from_dict(
+        {
+            "prompt": [[{"role": "user", "content": "Question"}]],
+            "completion": [[{"role": "assistant", "content": "Answer"}]],
+        }
+    )
+    args = SimpleNamespace(
+        dataset_num_proc=None,
+        dataset_text_field="text",
+        max_length=64,
+        packing_strategy="bfd",
+        use_liger_kernel=False,
+    )
+    trainer = GOLDTrainer.__new__(GOLDTrainer)
+    trainer.use_privileged_context = True
+    trainer.teacher_prompt_template = "{prompt}\n\n{privileged_context}"
+    trainer.privileged_context_column = "privileged_context"
+
+    with pytest.raises(ValueError, match="missing the `privileged_context` column"):
+        trainer._prepare_dataset_with_original_text(
+            dataset,
+            llama_tokenizer,
+            args,
+            packing=False,
+            formatting_func=None,
+            dataset_name="train",
+        )
+
+
+def test_privileged_context_preparation_custom_column(llama_tokenizer):
+    dataset = Dataset.from_dict(
+        {
+            "prompt": [[{"role": "user", "content": "Question"}]],
+            "completion": [[{"role": "assistant", "content": "Answer"}]],
+            "my_context": ["Custom context"],
+        }
+    )
+    args = SimpleNamespace(
+        dataset_num_proc=None,
+        dataset_text_field="text",
+        max_length=64,
+        packing_strategy="bfd",
+        use_liger_kernel=False,
+    )
+    trainer = GOLDTrainer.__new__(GOLDTrainer)
+    trainer.use_privileged_context = True
+    trainer.teacher_prompt_template = "{prompt}\n\n{privileged_context}"
+    trainer.privileged_context_column = "my_context"
+
+    prepared = trainer._prepare_dataset_with_original_text(
+        dataset,
+        llama_tokenizer,
+        args,
+        packing=False,
+        formatting_func=None,
+        dataset_name="train",
+    )
+    assert "Custom context" in prepared[0]["teacher_prompt_text"]
+
+
+def test_privileged_context_default_behavior_unchanged(llama_tokenizer):
+    dataset = Dataset.from_dict(
+        {
+            "prompt": [[{"role": "user", "content": "Question"}]],
+            "completion": [[{"role": "assistant", "content": "Answer"}]],
+        }
+    )
+    args = SimpleNamespace(
+        dataset_num_proc=None,
+        dataset_text_field="text",
+        max_length=64,
+        packing_strategy="bfd",
+        use_liger_kernel=False,
+    )
+    trainer = GOLDTrainer.__new__(GOLDTrainer)
+    trainer.use_privileged_context = False
+    trainer.teacher_prompt_template = "{prompt}\n\n{privileged_context}"
+    trainer.privileged_context_column = "privileged_context"
+
+    prepared = trainer._prepare_dataset_with_original_text(
+        dataset,
+        llama_tokenizer,
+        args,
+        packing=False,
+        formatting_func=None,
+        dataset_name="train",
+    )
+    
+    assert "teacher_prompt_text" not in prepared.column_names
+
+
+def test_privileged_context_loss_uses_enriched_teacher_prompt(llama_tokenizer):
+    class RecordingModel:
+        def __init__(self, logit_bias):
+            self.logit_bias = logit_bias
+            self.last_input_ids = None
+
+        def eval(self):
+            return self
+
+        def __call__(self, input_ids, attention_mask, use_cache=False):
+            self.last_input_ids = input_ids.clone()
+            logits = torch.zeros((*input_ids.shape, 7), dtype=torch.float, device=input_ids.device)
+            logits[..., 0] = self.logit_bias
+            return SimpleNamespace(logits=logits)
+
+    dataset = Dataset.from_dict(
+        {
+            "prompt": [[{"role": "user", "content": "What caused the outage?"}]],
+            "completion": [[{"role": "assistant", "content": "The timeout changed."}]],
+            "privileged_context": ["The deployment changed the timeout immediately before the errors."],
+        }
+    )
+    args = SimpleNamespace(
+        dataset_num_proc=None,
+        dataset_text_field="text",
+        max_length=64,
+        packing_strategy="bfd",
+        use_liger_kernel=False,
+    )
+    trainer = GOLDTrainer.__new__(GOLDTrainer)
+    trainer.use_privileged_context = True
+    trainer.use_uld_loss = False
+    trainer.teacher_tokenizer = None
+    trainer.teacher_prompt_template = "{prompt}\n\n{privileged_context}"
+    trainer.privileged_context_column = "privileged_context"
+    trainer._tokenizer = llama_tokenizer
+    trainer.accelerator = SimpleNamespace(device=torch.device("cpu"))
+    trainer.teacher_model = RecordingModel(logit_bias=2.0)
+    trainer.beta = 0.5
+    trainer.temperature = 1.0
+
+    prepared = trainer._prepare_dataset_with_original_text(
+        dataset,
+        llama_tokenizer,
+        args,
+        packing=False,
+        formatting_func=None,
+        dataset_name="train",
+    )
+    batch = DataCollatorForChatML(tokenizer=llama_tokenizer, max_length=64)([prepared[0]])
+    student_model = RecordingModel(logit_bias=1.0)
+
+    loss = trainer.compute_loss(student_model, batch)
+
+    assert torch.isfinite(loss)
+    assert trainer.teacher_model.last_input_ids.shape[1] > student_model.last_input_ids.shape[1]
+    assert "deployment changed the timeout" in llama_tokenizer.decode(
+        trainer.teacher_model.last_input_ids[0], skip_special_tokens=False
+    )
 
 
 def test_alignment_groups_cover_all_tokens(llama_tokenizer, qwen_tokenizer):
@@ -3075,6 +3327,7 @@ def test_vlm_uld_custom_collator_missing_raw_fields_raises_clear_error():
     trainer.use_uld_loss = True
     trainer.teacher_tokenizer = object()
     trainer._teacher_processor = object()
+    trainer.use_privileged_context = False
 
     inputs = {
         "input_ids": torch.ones(1, 2, dtype=torch.long),

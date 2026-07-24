@@ -64,6 +64,14 @@ class GOLDConfig(SFTConfig):
         seq_kd (`bool`, *optional*, defaults to `False`):
             Seq_kd parameter that controls whether to perform Sequence-Level KD (can be viewed as supervised FT on
             teacher-generated output).
+        use_privileged_context (`bool`, *optional*, defaults to `False`):
+            Whether to condition the teacher on per-example privileged context while leaving the student prompt
+            unchanged. This is supported only for text, off-policy standard JSD distillation.
+        teacher_prompt_template (`str` or `None`, *optional*, defaults to `None`):
+            Template used to construct the teacher prompt. It must contain `{prompt}` and may contain
+            `{privileged_context}`. When `None`, defaults to `"{prompt}\n\n{privileged_context}"`.
+        privileged_context_column (`str`, *optional*, defaults to `"privileged_context"`):
+            Dataset column containing the per-example privileged context used to construct the teacher prompt.
         num_generations (`int`, *optional*, defaults to `1`):
             Number of generations per prompt. Each prompt is repeated this many times in the generation batch.
         generation_batch_size (`int` or `None`, *optional*, defaults to `None`):
@@ -254,6 +262,24 @@ class GOLDConfig(SFTConfig):
             "help": "Seq_kd parameter that controls whether to perform Sequence-Level KD (can be viewed as supervised "
             "FT on teacher-generated output)."
         },
+    )
+    use_privileged_context: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to condition the teacher on per-example privileged context while leaving the student "
+            "prompt unchanged. Only supported for text, off-policy standard JSD distillation."
+        },
+    )
+    teacher_prompt_template: str | None = field(
+        default=None,
+        metadata={
+            "help": "Template used to construct the teacher prompt. Must contain `{prompt}` and may contain "
+            "`{privileged_context}`. If None, defaults to `{prompt}\\n\\n{privileged_context}`."
+        },
+    )
+    privileged_context_column: str = field(
+        default="privileged_context",
+        metadata={"help": "Dataset column containing the per-example privileged context for the teacher prompt."},
     )
     num_generations: int = field(
         default=1,
@@ -467,6 +493,18 @@ class GOLDConfig(SFTConfig):
             raise ValueError("lmbda must be in the range [0.0, 1.0].")
         if self.beta < 0.0 or self.beta > 1.0:
             raise ValueError("beta must be in the range [0.0, 1.0].")
+
+        if self.use_privileged_context:
+            if self.lmbda > 0:
+                raise ValueError("`use_privileged_context=True` requires `lmbda=0` (off-policy training only).")
+            if self.seq_kd:
+                raise ValueError("`use_privileged_context=True` cannot be combined with `seq_kd=True`.")
+            if self.use_uld_loss:
+                raise ValueError("`use_privileged_context=True` cannot be combined with `use_uld_loss=True`.")
+            if self.use_liger_kernel:
+                raise ValueError("`use_privileged_context=True` cannot be combined with `use_liger_kernel=True`.")
+            if self.teacher_prompt_template is not None and "{prompt}" not in self.teacher_prompt_template:
+                raise ValueError("`teacher_prompt_template` must contain the `{prompt}` placeholder.")
 
         # Validate that max_length is sufficient for max_completion_length
         if self.max_length is not None and self.max_completion_length >= self.max_length:
