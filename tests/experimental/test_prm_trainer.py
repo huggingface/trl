@@ -347,6 +347,30 @@ class TestPRMTrainer(TrlTestCase):
             if param.sum() != 0:  # ignore 0 biases
                 assert not torch.equal(param, new_param)
 
+    def test_processing_class_autoloaded(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_stepwise_supervision", split="train")
+        args = PRMConfig(output_dir=self.tmp_dir, max_steps=1, save_strategy="no", report_to="none")
+        trainer = PRMTrainer(model=self.model, args=args, train_dataset=dataset)
+
+        assert trainer.processing_class is not None
+        trainer.train()
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+    @pytest.mark.parametrize("pretokenized", [False, True])
+    def test_processing_class_autoloaded_with_custom_collator(self, pretokenized):
+        if pretokenized:
+            dataset = Dataset.from_dict({"input_ids": [[0, 1]], "labels": [[-100, 1]]})
+        else:
+            dataset = load_dataset("trl-internal-testing/zen", "standard_stepwise_supervision", split="train")
+
+        trainer = PRMTrainer(
+            model=self.model,
+            args=PRMConfig(output_dir=self.tmp_dir, report_to="none"),
+            data_collator=object(),
+            train_dataset=dataset,
+        )
+        assert trainer.processing_class is not None
+
     @require_peft
     def test_train_lora(self):
         peft_config = LoraConfig(
