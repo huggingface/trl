@@ -42,6 +42,8 @@ class PRMConfig(_BaseConfig):
             Separator used to separate each step of the reasoning process.
         train_on_last_step_only (`bool`, *optional*, defaults to `False`):
             Whether to train only on the last step.
+        trust_remote_code (`bool`, *optional*, defaults to `False`):
+            Whether to allow loading tokenizers that ship custom Python code from the Hub.
         dataset_num_proc (`int`, *optional*):
             Number of processes to use for processing the dataset.
 
@@ -81,6 +83,10 @@ class PRMConfig(_BaseConfig):
     train_on_last_step_only: bool = field(
         default=False,
         metadata={"help": "Whether to train only on the last step."},
+    )
+    trust_remote_code: bool = field(
+        default=False,
+        metadata={"help": "Whether to allow loading tokenizers that ship custom Python code from the Hub."},
     )
     dataset_num_proc: int | None = field(
         default=None,
