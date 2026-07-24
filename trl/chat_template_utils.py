@@ -478,6 +478,34 @@ nemotron_3_template = {
     },
 }
 
+# Gemma 4 frames each field with its own sentinels (`<|channel>thought\n...<channel|>`, one
+# `<|tool_call>call:<name>{...}<tool_call|>` block per call, content up to `<turn|>`/`<|tool_response>`/`<eos>`). Tool
+# arguments are JSON with unquoted keys and `<|"|>`-delimited strings, hence the `json` parser config. Mirrors the
+# new-style `response_template` recent Gemma 4 repos ship natively, but with `\s*`-tolerant close patterns.
+gemma4_template = {
+    "defaults": {"role": "assistant"},
+    "start_anchor_pattern": r"(?:<\|turn>model\n|<tool_response\|>)",
+    "fields": {
+        "reasoning_content": {
+            "open": "<|channel>thought\n",
+            "close_pattern": r"<channel\|>\s*",
+            "content": "text",
+        },
+        "tool_calls": {
+            "open_pattern": r"<\|tool_call>call:(?P<name>\w+)",
+            "close_pattern": r"<tool_call\|>\s*",
+            "repeats": True,
+            "content": "json",
+            "content_args": {"string_delims": [['<|"|>', '<|"|>']], "unquoted_keys": True},
+            "transform": {"type": "function", "function": {"name": "{name}", "arguments": "{content}"}},
+        },
+        "content": {
+            "close_pattern": r"(?:<turn\|>|<\|tool_response>|<eos>)\s*|$",
+            "content": "text",
+        },
+    },
+}
+
 
 cohere_chat_template = (_CHAT_TEMPLATES_DIR / "cohere.jinja").read_text(encoding="utf-8")
 
@@ -488,6 +516,8 @@ deepseekv3_chat_template = (_CHAT_TEMPLATES_DIR / "deepseekv3.jinja").read_text(
 gemma_chat_template = (_CHAT_TEMPLATES_DIR / "gemma.jinja").read_text(encoding="utf-8")
 
 gemma3_chat_template = (_CHAT_TEMPLATES_DIR / "gemma3.jinja").read_text(encoding="utf-8")
+
+gemma4_chat_template = (_CHAT_TEMPLATES_DIR / "gemma4.jinja").read_text(encoding="utf-8")
 
 glm4moe_chat_template = (_CHAT_TEMPLATES_DIR / "glm4moe.jinja").read_text(encoding="utf-8")
 
@@ -600,6 +630,10 @@ def add_response_schema(processing_class: ProcessingClassT) -> ProcessingClassT:
         nemotron_3_ultra_chat_template,
     ]:
         schema, template = qwen3_5_schema, nemotron_3_template
+    elif chat_template == gemma4_chat_template:
+        # Only the new-style template; recent Gemma 4 repos ship a `response_template` natively, and the legacy
+        # `response_schema` is being removed upstream (huggingface/transformers#47320).
+        schema, template = None, gemma4_template
     else:
         raise ValueError(
             "Unrecognized chat template, failed to add response schema. Please manually set the response schema on "
