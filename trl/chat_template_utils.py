@@ -536,7 +536,7 @@ gemma4_template = {
     "defaults": {"role": "assistant"},
     "start_anchor_pattern": r"(?:<\|turn>model\n|<tool_response\|>)",
     "fields": {
-        "thinking": {
+        "reasoning_content": {
             "open": "<|channel>thought\n",
             "close_pattern": r"<channel\|>\s*",
             "content": "text",
