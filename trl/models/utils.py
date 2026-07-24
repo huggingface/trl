@@ -263,6 +263,12 @@ def prepare_deepspeed(model: "Module", accelerator: "Accelerator"):
                 }
             )
 
+    # No optimizer is passed below, so drop the training-only blocks (as transformers does for inference-mode
+    # deepspeed_init). Otherwise DeepSpeed builds a CPUAdam on GPU params from `optimizer` + `offload_optimizer`, or
+    # an LR scheduler with no optimizer to attach to from `scheduler`, and the run dies before training.
+    config_kwargs.pop("optimizer", None)
+    config_kwargs.pop("scheduler", None)
+    config_kwargs["zero_optimization"].pop("offload_optimizer", None)
     # If ZeRO-3 is used, we shard both the active and reference model.
     # Otherwise, we assume the reference model fits in memory and is initialized on each device with ZeRO
     # disabled (stage 0)
