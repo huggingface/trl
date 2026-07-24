@@ -466,26 +466,54 @@ class TestDistillationTrainer(TrlTestCase):
 
     @require_liger_kernel
     @require_torch_accelerator
-    def test_distillation_trainer_with_liger(self):
-        import importlib
+    def test_liger_loss_agrees_with_chunked(self):
+        # The Liger fused path and the default chunked path compute the same JSD objective (they share the hidden-state
+        # extraction and differ only in the final loss call), so they must agree on a fixed batch. Toggling
+        # `use_liger_loss` on one trainer keeps the same (un-patched) model, so only the loss kernel differs.
+        from liger_kernel.chunked_loss import LigerFusedLinearJSDLoss
 
-        training_args = self._make_args(use_liger_kernel=True, use_cpu=False)
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
-
         trainer = DistillationTrainer(
             model=self.model_id,
             teacher_model=self.model_id,
-            args=training_args,
+            args=self._make_args(beta=0.5, use_cpu=False),
             train_dataset=dataset,
             processing_class=self.tokenizer,
         )
 
-        try:
-            assert trainer.use_liger_loss is True
-            trainer.train()
-            assert trainer.state.log_history[-1]["train_loss"] is not None
-        finally:
-            importlib.reload(importlib.import_module(trainer.model.__module__))
+        # Diverge the teacher so the JSD is well above fp noise.
+        torch.manual_seed(0)
+        with torch.no_grad():
+            for p in trainer.teacher_model.parameters():
+                p.add_(0.5 * torch.randn_like(p))
+
+        device = trainer.accelerator.device
+        vocab_size = trainer.model.config.vocab_size
+        gen = torch.Generator().manual_seed(1)
+        prompt_length, completion_length = 4, 3
+        batch = {
+            "prompt_ids": torch.randint(0, vocab_size, (2, prompt_length), generator=gen).to(device),
+            "prompt_mask": torch.ones(2, prompt_length, dtype=torch.long, device=device),
+            "completion_ids": torch.randint(0, vocab_size, (2, completion_length), generator=gen).to(device),
+            "completion_mask": torch.ones(2, completion_length, dtype=torch.long, device=device),
+        }
+        num_valid = batch["completion_mask"].sum()
+
+        trainer.model.eval()
+        with torch.no_grad():
+            chunked_loss = trainer.compute_loss(trainer.model, batch, num_items_in_batch=num_valid)
+            trainer.use_liger_loss = True
+            trainer.liger_loss = LigerFusedLinearJSDLoss(
+                beta=trainer.beta,
+                ignore_index=-100,
+                temperature=trainer.temperature,
+                compiled=False,
+                weight_hard_loss=0.0,
+                weight_soft_loss=1.0,
+            )
+            liger_loss = trainer.compute_loss(trainer.model, batch, num_items_in_batch=num_valid)
+
+        torch.testing.assert_close(liger_loss, chunked_loss, rtol=1e-3, atol=1e-4)
 
     def test_teacher_vocab_size_mismatch_raises(self):
         # The local-teacher loss compares full next-token distributions, so student and teacher must share a
