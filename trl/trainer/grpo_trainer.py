@@ -858,6 +858,10 @@ class GRPOTrainer(_BaseTrainer):
                 )
             num_placeholder_rows = args.generation_batch_size // args.num_generations
             train_dataset = Dataset.from_dict({"prompt": [[{"role": "user", "content": ""}]] * num_placeholder_rows})
+        elif not isinstance(train_dataset, (Dataset, IterableDataset)):
+            raise TypeError(
+                f"`train_dataset` must be a `Dataset` or `IterableDataset`, got `{type(train_dataset).__name__}`."
+            )
 
         # Iterable datasets can't be indexed, so the RepeatSampler can't be attached to them. Instead, the sampler's
         # ordering is reproduced by streaming (see `get_train_dataloader`/`get_eval_dataloader` and
