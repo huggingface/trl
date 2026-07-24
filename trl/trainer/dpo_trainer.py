@@ -88,6 +88,63 @@ FLASH_ATTENTION_VARIANTS = {
 }
 
 
+def flatten_batch_for_padding_free(
+    input_ids: torch.Tensor, attention_mask: torch.Tensor
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """
+    Flattens a right-padded batch for padding-free attention.
+
+    Args:
+        input_ids (`torch.Tensor`):
+            Tensor of token IDs with shape `(batch_size, sequence_length)`.
+        attention_mask (`torch.Tensor`):
+            Tensor with shape `(batch_size, sequence_length)` where non-padding tokens are marked with `1`.
+
+    Returns:
+        `tuple[torch.Tensor, torch.Tensor]`:
+            A tuple `(flat_input_ids, flat_position_ids)` where:
+            - `flat_input_ids` has shape `(1, total_non_padding_tokens)` and contains all non-padding tokens.
+            - `flat_position_ids` has shape `(1, total_non_padding_tokens)` and resets positions at each sequence
+              boundary.
+    """
+    non_padding_mask = attention_mask.bool()
+    position_ids = attention_mask.cumsum(dim=1) - 1
+    position_ids = position_ids.masked_fill(~non_padding_mask, 0)
+    flat_input_ids = input_ids[non_padding_mask].unsqueeze(0)
+    flat_position_ids = position_ids[non_padding_mask].unsqueeze(0)
+    return flat_input_ids, flat_position_ids
+
+
+def restore_padding_from_flattened(
+    tensor: torch.Tensor, flat_position_ids: torch.Tensor, padding_value: int = 0
+) -> torch.Tensor:
+    """
+    Restores per-example padding from a flattened tensor produced in padding-free mode.
+
+    This helper is designed for shifted next-token tensors (for example, logits computed with `[..., :-1, :]`), so the
+    restored sequence length is derived from `flat_position_ids` and corresponds to `sequence_lengths - 1`.
+
+    Args:
+        tensor (`torch.Tensor`):
+            Flattened tensor with shape `(1, total_non_padding_tokens - 1, ...)`.
+        flat_position_ids (`torch.Tensor`):
+            Flattened position IDs returned by [`flatten_batch_for_padding_free`] with shape `(1,
+            total_non_padding_tokens)`.
+        padding_value (`int`, *optional*, defaults to `0`):
+            Value used to pad restored sequences to a common length.
+
+    Returns:
+        `torch.Tensor`:
+            Restored tensor with shape `(batch_size, max(sequence_lengths - 1), ...)`.
+    """
+    keep_mask = flat_position_ids[:, 1:].ne(0).squeeze(0)
+    tensor = tensor.squeeze(0)[keep_mask]
+    starts = flat_position_ids.squeeze(0).eq(0).nonzero(as_tuple=True)[0]
+    ends = torch.cat((starts[1:], starts.new_tensor([flat_position_ids.size(1)])))
+    split_lengths = (ends - starts - 1).clamp_min(0).tolist()
+    return pad(list(tensor.split(split_lengths, dim=0)), padding_value=padding_value)
+
+
 @dataclass
 class DataCollatorForPreference(DataCollatorMixin):
     """
@@ -704,13 +761,17 @@ class DPOTrainer(_BaseTrainer):
 
         # Data collator
         self.padding_free = args.padding_free
-        if self.padding_free:
+        use_flash_attention = model.config._attn_implementation in FLASH_ATTENTION_VARIANTS
+        if self.padding_free and not use_flash_attention:
             logger.warning(
-                "`padding_free=True` is temporarily unavailable after a refactor and is currently disabled. Falling "
-                "back to standard padding (`padding_free=False`). This feature is planned to return in a future "
-                "update; for now, please set `padding_free=False` explicitly."
+                "Padding-free training is enabled, but the attention implementation is not set to a supported flash "
+                "attention variant. Padding-free training flattens batches into a single sequence, and only the "
+                "following implementations are known to reliably support this: "
+                f"{', '.join(sorted(FLASH_ATTENTION_VARIANTS))}. Using other implementations may lead to unexpected "
+                "behavior. To ensure compatibility, set `attn_implementation` in the model configuration to one of "
+                "these supported options or verify that your attention mechanism can handle flattened sequences."
             )
-            self.padding_free = False
+
         dataset_sample = next(iter(train_dataset))
         self._is_vision_dataset = "image" in dataset_sample or "images" in dataset_sample
         if self._is_vision_dataset and not self._is_vlm:
@@ -718,6 +779,10 @@ class DPOTrainer(_BaseTrainer):
                 "The dataset appears to be vision-related (contains 'image' or 'images' keys), but the provided "
                 "model does not seem to be a vision-language model. Please check your model and dataset."
             )
+        if self.padding_free and self._is_vision_dataset:
+            raise ValueError(
+                "Padding-free training is not supported for vision-language preference data. Please set "
+                "`padding_free=False`."
         if self._is_vision_dataset and args.max_length is not None and args.truncation_mode == "keep_end":
             raise ValueError(
                 "truncation_mode='keep_end' is not supported for vision-language models. Image tokens reside "
@@ -1179,9 +1244,24 @@ class DPOTrainer(_BaseTrainer):
         """Computes reference log probabilities for a single padded batch."""
         device = self.accelerator.device
 
-        _non_model_keys = {"completion_mask", "ref_chosen_logps", "ref_rejected_logps"}
-        model_kwargs = {k: v for k, v in inputs.items() if k not in _non_model_keys}
-        model_kwargs["use_cache"] = False
+        input_ids = inputs["input_ids"]
+        attention_mask = inputs["attention_mask"]
+        completion_mask = inputs["completion_mask"]
+        input_ids, attention_mask, completion_mask = self._truncate_inputs(input_ids, attention_mask, completion_mask)
+
+        shift_labels = input_ids[..., 1:].contiguous()
+        shift_completion_mask = completion_mask[..., 1:].contiguous()
+        if self.padding_free:
+            flat_input_ids, flat_position_ids = flatten_batch_for_padding_free(input_ids, attention_mask)
+            model_kwargs = {"input_ids": flat_input_ids, "position_ids": flat_position_ids, "use_cache": False}
+        else:
+            model_kwargs = {"input_ids": input_ids, "attention_mask": attention_mask, "use_cache": False}
+        for key in ("pixel_values", "pixel_attention_mask", "image_grid_thw", "image_sizes", "token_type_ids"):
+            if key in inputs:
+                if self.padding_free and key == "token_type_ids":
+                    model_kwargs[key] = inputs[key][attention_mask.bool()].unsqueeze(0)
+                else:
+                    model_kwargs[key] = inputs[key]
 
         with torch.no_grad(), disable_gradient_checkpointing(self.model, self.args.gradient_checkpointing_kwargs):
             if self.ref_model is None and is_peft_model(self.model):
@@ -1198,6 +1278,8 @@ class DPOTrainer(_BaseTrainer):
         shift_labels = input_ids[..., 1:]
         shift_completion_mask = completion_mask[..., 1:]
         ref_shift_logits = ref_outputs.logits[..., :-1, :]
+        if self.padding_free:
+            ref_shift_logits = restore_padding_from_flattened(ref_shift_logits, flat_position_ids)
         ref_per_token_logps = selective_log_softmax(ref_shift_logits, shift_labels)
         ref_per_token_logps[shift_completion_mask == 0] = 0.0
 
@@ -1244,8 +1326,16 @@ class DPOTrainer(_BaseTrainer):
         else:
             backbone = model.base_model
 
-        outputs = backbone(**model_kwargs)
+        if self.padding_free:
+            flat_input_ids, flat_position_ids = flatten_batch_for_padding_free(input_ids, attention_mask)
+            decoder_kwargs = {"input_ids": flat_input_ids, "position_ids": flat_position_ids, "use_cache": False}
+        else:
+            decoder_kwargs = {"input_ids": input_ids, "attention_mask": attention_mask, "use_cache": False}
+
+        outputs = backbone(**decoder_kwargs)
         hidden_states = outputs.last_hidden_state[:, :-1].contiguous()
+        if self.padding_free:
+            hidden_states = restore_padding_from_flattened(hidden_states, flat_position_ids)
         lm_head = model.get_output_embeddings()
         weight = lm_head.weight
         bias = lm_head.bias
@@ -1274,6 +1364,8 @@ class DPOTrainer(_BaseTrainer):
                 ref_outputs = ref_backbone(**model_kwargs)
                 ref_lm_head = self.ref_model.get_output_embeddings()
             ref_hidden_states = ref_outputs.last_hidden_state[:, :-1].contiguous()
+            if self.padding_free:
+                ref_hidden_states = restore_padding_from_flattened(ref_hidden_states, flat_position_ids)
             ref_weight = ref_lm_head.weight
             ref_bias = ref_lm_head.bias
 
@@ -1341,9 +1433,26 @@ class DPOTrainer(_BaseTrainer):
 
         input_ids = inputs["input_ids"]
         completion_mask = inputs["completion_mask"]
-        shift_logits = outputs.logits[..., :-1, :]
-        shift_labels = input_ids[..., 1:]
-        shift_completion_mask = completion_mask[..., 1:]
+        input_ids, attention_mask, completion_mask = self._truncate_inputs(input_ids, attention_mask, completion_mask)
+
+        if self.padding_free:
+            flat_input_ids, flat_position_ids = flatten_batch_for_padding_free(input_ids, attention_mask)
+            model_kwargs = {"input_ids": flat_input_ids, "position_ids": flat_position_ids, "use_cache": False}
+        else:
+            model_kwargs = {"input_ids": input_ids, "attention_mask": attention_mask, "use_cache": False}
+        for key in ("pixel_values", "pixel_attention_mask", "image_grid_thw", "image_sizes", "token_type_ids"):
+            if key in inputs:
+                if self.padding_free and key == "token_type_ids":
+                    model_kwargs[key] = inputs[key][attention_mask.bool()].unsqueeze(0)
+                else:
+                    model_kwargs[key] = inputs[key]
+
+        outputs = model(**model_kwargs)
+        shift_logits = outputs.logits[..., :-1, :].contiguous()
+        if self.padding_free:
+            shift_logits = restore_padding_from_flattened(shift_logits, flat_position_ids)
+        shift_labels = input_ids[..., 1:].contiguous()
+        shift_completion_mask = completion_mask[..., 1:].contiguous()
         per_token_logps = selective_log_softmax(shift_logits, shift_labels)
         per_token_logps[shift_completion_mask == 0] = 0.0  # mask out non-completion tokens
         if self.ld_alpha is None:
@@ -1382,6 +1491,8 @@ class DPOTrainer(_BaseTrainer):
                     ref_outputs = self.ref_model(**ref_model_kwargs)
 
             ref_shift_logits = ref_outputs.logits[..., :-1, :]
+            if self.padding_free:
+                ref_shift_logits = restore_padding_from_flattened(ref_shift_logits, flat_position_ids)
             ref_per_token_logps = selective_log_softmax(ref_shift_logits, shift_labels)
             ref_per_token_logps[shift_completion_mask == 0] = 0.0  # mask out non-completion tokens
             if self.ld_alpha is None:
