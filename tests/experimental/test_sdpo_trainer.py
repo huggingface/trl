@@ -264,6 +264,44 @@ class TestSDPOTrainer(TrlTestCase):
             atol=1e-6,
         )
 
+    def test_prediction_step_gathers_liger_zero3_lm_head_like_training_step(self, monkeypatch):
+        eval_dataset = Dataset.from_dict({"prompt": ["Alpha prompt", "Beta prompt", "Gamma prompt", "Delta prompt"]})
+
+        training_args = SDPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=1,
+            per_device_eval_batch_size=4,
+            generation_batch_size=3,
+            num_generations=3,
+            num_generations_eval=2,
+            max_completion_length=8,
+            distillation_is_clip=None,
+            max_steps=1,
+            report_to="none",
+            use_cpu=True,
+            bf16=False,
+        )
+        trainer = SDPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs=lambda **kwargs: [0.0] * len(kwargs["prompts"]),
+            args=training_args,
+            train_dataset=eval_dataset.select(range(1)),
+            eval_dataset=eval_dataset,
+        )
+
+        call_count = 0
+        original_gather_ctx = trainer._get_liger_zero3_lm_head_gather_ctx
+
+        def counting_gather_ctx(model):
+            nonlocal call_count
+            call_count += 1
+            return original_gather_ctx(model)
+
+        monkeypatch.setattr(trainer, "_get_liger_zero3_lm_head_gather_ctx", counting_gather_ctx)
+
+        trainer.evaluate()
+        assert call_count > 0
+
     def test_train_without_successful_rollouts(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 

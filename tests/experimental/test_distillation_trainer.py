@@ -473,6 +473,59 @@ class TestDistillationTrainer(TrlTestCase):
         finally:
             importlib.reload(importlib.import_module(trainer.model.__module__))
 
+    def test_prediction_step_gathers_liger_zero3_lm_head_like_training_step(self, monkeypatch):
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        training_args = self._make_args(
+            eval_strategy="no",
+            per_device_eval_batch_size=2,
+        )
+        trainer = DistillationTrainer(
+            model=self.model_id,
+            teacher_model=self.model_id,
+            args=training_args,
+            train_dataset=dataset,
+            eval_dataset=dataset,
+            processing_class=self.tokenizer,
+        )
+
+        call_count = 0
+        original_gather_ctx = trainer._get_liger_zero3_lm_head_gather_ctx
+
+        def counting_gather_ctx(model):
+            nonlocal call_count
+            call_count += 1
+            return original_gather_ctx(model)
+
+        monkeypatch.setattr(trainer, "_get_liger_zero3_lm_head_gather_ctx", counting_gather_ctx)
+
+        trainer.evaluate()
+        assert call_count > 0
+
+    @require_liger_kernel
+    @require_torch_accelerator
+    def test_compute_loss_return_outputs_with_liger(self):
+        training_args = self._make_args(
+            use_liger_kernel=True,
+            use_cpu=False,
+            eval_strategy="steps",
+            eval_steps=1,
+            per_device_eval_batch_size=2,
+        )
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling")
+        trainer = DistillationTrainer(
+            model=self.model_id,
+            teacher_model=self.model_id,
+            args=training_args,
+            train_dataset=dataset["train"],
+            eval_dataset=dataset["test"],
+            processing_class=self.tokenizer,
+        )
+
+        assert trainer.use_liger_loss is True
+        eval_results = trainer.evaluate()
+        assert "eval_loss" in eval_results
+        assert eval_results["eval_loss"] is not None
+
     def test_teacher_vocab_size_mismatch_raises(self):
         # The local-teacher loss compares full next-token distributions, so student and teacher must share a
         # vocabulary. A teacher with a different vocab_size is rejected (use GOLD for cross-tokenizer distillation).
