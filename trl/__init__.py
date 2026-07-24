@@ -54,6 +54,8 @@ _import_structure = {
         "DPOTrainer",
         "GRPOConfig",
         "GRPOTrainer",
+        "JEPOConfig",
+        "JEPOTrainer",
         "KTOConfig",
         "KTOTrainer",
         "LogCompletionsCallback",
