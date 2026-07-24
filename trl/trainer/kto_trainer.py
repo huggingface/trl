@@ -603,10 +603,9 @@ class KTOTrainer(_BaseTrainer):
                     "`dispatch_batches` in `KTOConfig` or set it to `False`."
                 )
             args.accelerator_config.dispatch_batches = False
-        elif isinstance(train_dataset, dict):
+        elif not isinstance(train_dataset, Dataset):
             raise TypeError(
-                "`train_dataset` doesn't support `DatasetDict`, `IterableDatasetDict`, or a `dict` of datasets: "
-                f"training runs over a single dataset. Got `{type(train_dataset).__name__}`."
+                f"`train_dataset` must be a `Dataset` or `IterableDataset`, got `{type(train_dataset).__name__}`."
             )
 
         # Model
