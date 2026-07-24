@@ -546,7 +546,7 @@ gemma4_template = {
             "close_pattern": r"<tool_call\|>\s*",
             "repeats": True,
             "content": "json",
-            "content_args": {"string_delims": [["<|\"|>", "<|\"|>"]], "unquoted_keys": True},
+            "content_args": {"string_delims": [['<|"|>', '<|"|>']], "unquoted_keys": True},
             "transform": {"type": "function", "function": {"name": "{name}", "arguments": "{content}"}},
         },
         "content": {
