@@ -39,6 +39,7 @@ def _reference_chunked_divergence(
     t_scale=1.0,
     s_softcap=None,
     t_softcap=None,
+    temperature=1.0,
 ):
     """Naive full-vocab reference for `_chunked_divergence_loss`: project the whole batch at once (no chunking) and
     build the JSD straight from the definition, so it shares neither the chunking nor `F.kl_div`'s argument order."""
@@ -52,6 +53,8 @@ def _reference_chunked_divergence(
         teacher_logits = teacher_logits * t_scale
     if t_softcap is not None:
         teacher_logits = t_softcap * torch.tanh(teacher_logits / t_softcap)
+    student_logits = student_logits / temperature
+    teacher_logits = teacher_logits / temperature
     student_log_probs = torch.log_softmax(student_logits, dim=-1)
     teacher_log_probs = torch.log_softmax(teacher_logits, dim=-1)
     student_probs, teacher_probs = student_log_probs.exp(), teacher_log_probs.exp()
@@ -126,6 +129,14 @@ class TestChunkedDivergenceLoss(TrlTestCase):
         expected = _reference_chunked_divergence(
             sh, th, sw, tw, mask, beta, s_scale=0.7, t_scale=1.3, s_softcap=50.0, t_softcap=30.0
         )
+        torch.testing.assert_close(loss, expected)
+
+    @pytest.mark.parametrize("beta", [0.0, 0.5, 1.0])
+    def test_applies_temperature(self, beta):
+        # Softmax temperature softens both distributions before the divergence.
+        sh, th, sw, tw, mask = self._inputs()
+        loss, _, _ = _chunked_divergence_loss(sh, th, sw, tw, mask, beta, chunk_size=4, temperature=2.0)
+        expected = _reference_chunked_divergence(sh, th, sw, tw, mask, beta, temperature=2.0)
         torch.testing.assert_close(loss, expected)
 
     def test_beta_1_is_reverse_kl(self):

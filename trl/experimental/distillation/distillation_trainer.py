@@ -123,7 +123,7 @@ def _print_completions_sample(prompts: list[str], completions: list[str], step: 
 _CHUNKED_LM_HEAD_CHUNK_SIZE = 256
 
 
-def _chunk(h_s, w_s, b_s, s_scale, s_softcap, h_t, w_t, b_t, t_scale, t_softcap, beta, valid):
+def _chunk(h_s, w_s, b_s, s_scale, s_softcap, h_t, w_t, b_t, t_scale, t_softcap, beta, temperature, valid):
     # Project both hidden states to vocab logits inside the checkpointed body so only `(chunk, H)` is retained across
     # the backward, never `(chunk, V)`. ZeRO-3 shards the `lm_head`, so gather it tightly around each projection.
     # `logit_scale` (Cohere) / `final_logit_softcapping` (Gemma) are applied per model to match its full forward.
@@ -143,6 +143,11 @@ def _chunk(h_s, w_s, b_s, s_scale, s_softcap, h_t, w_t, b_t, t_scale, t_softcap,
         teacher_logits = teacher_logits * t_scale
     if t_softcap is not None:
         teacher_logits = t_softcap * torch.tanh(teacher_logits / t_softcap)
+    # Distillation (softmax) temperature: soften both distributions before the divergence, applied after any
+    # per-model scaling/softcapping (matching the model's full forward, then the loss's temperature).
+    if temperature != 1.0:
+        student_logits = student_logits / temperature
+        teacher_logits = teacher_logits / temperature
 
     student_log_probs = F.log_softmax(student_logits, dim=-1)
     teacher_log_probs = F.log_softmax(teacher_logits, dim=-1)
@@ -183,6 +188,7 @@ def _chunked_divergence_loss(
     teacher_logit_scale: float = 1.0,
     student_final_logit_softcapping: float | None = None,
     teacher_final_logit_softcapping: float | None = None,
+    temperature: float = 1.0,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Memory-efficient generalized JSD over student/teacher hidden states and their `lm_head` weights.
@@ -224,6 +230,8 @@ def _chunked_divergence_loss(
             If set, applies `softcap * tanh(logits / softcap)` to the student's logits (Gemma-style), after the scale.
         teacher_final_logit_softcapping (`float`, *optional*):
             If set, applies `softcap * tanh(logits / softcap)` to the teacher's logits, after the scale.
+        temperature (`float`, *optional*, defaults to `1.0`):
+            Softmax temperature applied to both distributions before the divergence, after any scale/softcapping.
 
     Returns:
         `tuple[torch.Tensor, torch.Tensor, torch.Tensor]`: scalar loss, sum of per-token student entropy (in nats), and
@@ -273,6 +281,7 @@ def _chunked_divergence_loss(
             teacher_logit_scale,
             teacher_final_logit_softcapping,
             beta,
+            temperature,
             valid[start : start + chunk_size].float(),
             use_reentrant=False,
         )
@@ -1110,6 +1119,7 @@ class DistillationTrainer(_BaseTrainer):
             teacher_logit_scale=getattr(teacher_config, "logit_scale", 1.0),
             student_final_logit_softcapping=getattr(student_config, "final_logit_softcapping", None),
             teacher_final_logit_softcapping=getattr(teacher_config, "final_logit_softcapping", None),
+            temperature=self.temperature,
         )
 
         return (loss, None) if return_outputs else loss
