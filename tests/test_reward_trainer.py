@@ -770,10 +770,7 @@ class TestRewardTrainer(TrlTestCase):
                     train_dataset=train_dataset,
                 )
         elif train_dataset_type == "unsupported_dataset_dict":
-            with pytest.raises(
-                TypeError,
-                match="`train_dataset` doesn't support `DatasetDict`, `IterableDatasetDict`, or a `dict` of datasets",
-            ):
+            with pytest.raises(TypeError, match="`train_dataset` must be a `Dataset` or `IterableDataset`"):
                 RewardTrainer(
                     model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
                     args=training_args,
