@@ -508,6 +508,14 @@ class DistillationTrainer(_BaseTrainer):
         if self._signature_columns is None:
             self._signature_columns = ["prompt", "image", "images"]
 
+    # Instead of returning a standard per-step batch (i.e., `per_device_batch_size), our dataloader loads an
+    # *generation* batch (i.e., `per_device_batch_size × gradient_accumulation_steps`). This allows us to generate
+    # completions once every gradient_accumulation_steps step—rather than once per accumulation step—which is
+    # significantly more efficient. Thus, `_prepare_inputs` is called with this *generation* batch, and it handles the
+    # splitting internally.
+    # Maintenance note: this method is a copy-paste of the original `Trainer.get_train_dataloader` with two changes: the
+    # batch size is multiplied by `gradient_accumulation_steps`, and iterable datasets are wrapped (see
+    # `repeat_iterable_dataset`).
     def get_train_dataloader(self):
         dataset = self.train_dataset
         if isinstance(dataset, IterableDataset):
@@ -833,6 +841,8 @@ class DistillationTrainer(_BaseTrainer):
                 self._buffered_inputs = generation_batches
             inputs = self._buffered_inputs[self._step % self.args.gradient_accumulation_steps]
         else:
+            # In evaluation, there is neither batch grouping for generation, nor multiple iterations, hence
+            # local generation batch == local eval batch
             inputs = self._generate_and_score_completions(generation_batch)
         return inputs
 
