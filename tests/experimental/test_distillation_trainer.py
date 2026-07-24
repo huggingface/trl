@@ -463,6 +463,7 @@ class TestDistillationTrainer(TrlTestCase):
             teacher_model=self.model_id,
             args=training_args,
             train_dataset=dataset,
+            eval_dataset=dataset,
             processing_class=self.tokenizer,
         )
 
@@ -470,8 +471,37 @@ class TestDistillationTrainer(TrlTestCase):
             assert trainer.use_liger_loss is True
             trainer.train()
             assert trainer.state.log_history[-1]["train_loss"] is not None
+            assert trainer.evaluate()["eval_loss"] is not None
         finally:
             importlib.reload(importlib.import_module(trainer.model.__module__))
+
+    def test_prediction_step_gathers_liger_zero3_lm_head_like_training_step(self, monkeypatch):
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        training_args = self._make_args(
+            eval_strategy="no",
+            per_device_eval_batch_size=2,
+        )
+        trainer = DistillationTrainer(
+            model=self.model_id,
+            teacher_model=self.model_id,
+            args=training_args,
+            train_dataset=dataset,
+            eval_dataset=dataset,
+            processing_class=self.tokenizer,
+        )
+
+        call_count = 0
+        original_gather_ctx = trainer._get_liger_zero3_lm_head_gather_ctx
+
+        def counting_gather_ctx(model):
+            nonlocal call_count
+            call_count += 1
+            return original_gather_ctx(model)
+
+        monkeypatch.setattr(trainer, "_get_liger_zero3_lm_head_gather_ctx", counting_gather_ctx)
+
+        trainer.evaluate()
+        assert call_count > 0
 
     def test_teacher_vocab_size_mismatch_raises(self):
         # The local-teacher loss compares full next-token distributions, so student and teacher must share a

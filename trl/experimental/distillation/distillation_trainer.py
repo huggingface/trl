@@ -968,8 +968,9 @@ class DistillationTrainer(_BaseTrainer):
             num_items_in_batch = self._buffered_num_items.clamp(min=1.0) / self.accelerator.num_processes
 
         if self.use_liger_loss:
-            loss = self._compute_liger_loss(model, inputs, num_items_in_batch=num_items_in_batch)
-            return (loss, None) if return_outputs else loss
+            return self._compute_liger_loss(
+                model, inputs, num_items_in_batch=num_items_in_batch, return_outputs=return_outputs
+            )
 
         prompt_ids, prompt_mask = inputs["prompt_ids"], inputs["prompt_mask"]
         completion_ids, completion_mask = inputs["completion_ids"], inputs["completion_mask"]
@@ -1006,7 +1007,7 @@ class DistillationTrainer(_BaseTrainer):
         attention_mask = torch.cat([inputs["prompt_mask"], inputs["completion_mask"]], dim=1)
         return decoder(input_ids=input_ids, attention_mask=attention_mask, use_cache=False)
 
-    def _compute_liger_loss(self, model, inputs, num_items_in_batch=None):
+    def _compute_liger_loss(self, model, inputs, num_items_in_batch=None, return_outputs=False):
         """Memory-efficient JSD using Liger kernel (operates on hidden states, not full logits)."""
         # Route through the DDP/FSDP wrapper via _forward_redirection so that
         # DDP.forward() is called and prepare_for_backward() fires correctly.
@@ -1034,7 +1035,7 @@ class DistillationTrainer(_BaseTrainer):
 
         student_hidden = student_outputs.last_hidden_state[:, :-1]
         teacher_hidden = teacher_outputs.last_hidden_state[:, :-1]
-        del student_outputs, teacher_outputs
+        del teacher_outputs
 
         student_hidden = student_hidden.reshape(-1, student_hidden.shape[-1])
         teacher_hidden = teacher_hidden.reshape(-1, teacher_hidden.shape[-1])
@@ -1065,7 +1066,7 @@ class DistillationTrainer(_BaseTrainer):
             loss = loss * num_valid_local / num_items_in_batch
 
         del student_hidden, teacher_hidden, true_labels
-        return loss
+        return (loss, student_outputs) if return_outputs else loss
 
     def _get_liger_zero3_lm_head_gather_ctx(self, model: nn.Module):
         """Context manager for gathering lm_head parameters under Liger + ZeRO-3."""
@@ -1123,6 +1124,16 @@ class DistillationTrainer(_BaseTrainer):
                 self._metrics[mode]["completions/truncated_fraction"].append(truncated_frac)
 
         return loss
+
+    def prediction_step(
+        self,
+        model: nn.Module,
+        inputs: dict[str, torch.Tensor | Any],
+        prediction_loss_only: bool,
+        ignore_keys: list[str] | None = None,
+    ) -> tuple[torch.Tensor | None, torch.Tensor | None, torch.Tensor | None]:
+        with self._get_liger_zero3_lm_head_gather_ctx(model):
+            return super().prediction_step(model, inputs, prediction_loss_only, ignore_keys=ignore_keys)
 
     def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
         mode = "train" if self.model.training else "eval"

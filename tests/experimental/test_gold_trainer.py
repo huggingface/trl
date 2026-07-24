@@ -3683,3 +3683,84 @@ class TestGOLDTrainerLoss(TrlTestCase):
             assert "input_ids" in next(iter(trainer.eval_dataset["data2"]))
         else:
             assert "input_ids" in next(iter(trainer.eval_dataset))
+
+
+class TestGOLDTrainerLigerEvalPathBugs(TrlTestCase):
+    def setup_method(self):
+        self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
+        self.tokenizer.pad_token = self.tokenizer.eos_token
+        self.dataset = Dataset.from_dict(
+            {
+                "messages": [
+                    [{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello there!"}],
+                    [{"role": "user", "content": "2+2?"}, {"role": "assistant", "content": "It is 4."}],
+                ]
+            }
+        )
+
+    def test_prediction_step_gathers_liger_zero3_lm_head_like_training_step(self, monkeypatch):
+        trainer = GOLDTrainer(
+            model=self.model_id,
+            teacher_model=self.model_id,
+            args=GOLDConfig(
+                output_dir=self.tmp_dir,
+                report_to="none",
+                per_device_train_batch_size=2,
+                per_device_eval_batch_size=2,
+                max_length=64,
+                max_completion_length=20,
+                max_steps=1,
+                lmbda=0.0,
+                use_cpu=True,
+                bf16=False,
+                save_strategy="no",
+                eval_strategy="no",
+                logging_strategy="no",
+            ),
+            train_dataset=self.dataset,
+            eval_dataset=self.dataset,
+            processing_class=self.tokenizer,
+        )
+
+        call_count = 0
+        original_gather_ctx = trainer._get_liger_zero3_lm_head_gather_ctx
+
+        def counting_gather_ctx(model):
+            nonlocal call_count
+            call_count += 1
+            return original_gather_ctx(model)
+
+        monkeypatch.setattr(trainer, "_get_liger_zero3_lm_head_gather_ctx", counting_gather_ctx)
+
+        trainer.evaluate()
+        assert call_count > 0
+
+    def test_compute_loss_return_outputs_with_liger_does_not_raise(self):
+        trainer = GOLDTrainer(
+            model=self.model_id,
+            teacher_model=self.model_id,
+            args=GOLDConfig(
+                output_dir=self.tmp_dir,
+                report_to="none",
+                per_device_train_batch_size=2,
+                max_length=64,
+                max_completion_length=20,
+                use_cpu=True,
+                bf16=False,
+            ),
+            train_dataset=self.dataset,
+            processing_class=self.tokenizer,
+        )
+
+        trainer.use_liger_gkd_loss = True
+        trainer._forward_redirection = gold_trainer_module._ForwardRedirection()
+        trainer.liger_loss = lambda **kwargs: (kwargs["student_input"] - kwargs["teacher_input"]).pow(2).mean()
+
+        device = next(trainer.model.parameters()).device
+        batch = trainer.data_collator([trainer.train_dataset[i] for i in range(2)])
+        batch = {k: v.to(device) for k, v in batch.items() if isinstance(v, torch.Tensor)}
+
+        loss, outputs = trainer.compute_loss(trainer.model, batch, return_outputs=True)
+        assert torch.isfinite(loss)
+        assert outputs is not None

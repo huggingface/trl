@@ -2500,7 +2500,7 @@ class GOLDTrainer(SFTTrainer):
                 # Route through the DDP/FSDP wrapper via _forward_redirection so that
                 # DDP.forward() is called and prepare_for_backward() fires correctly.
                 unwrapped_student = self.accelerator.unwrap_model(model)
-                student_outputs = self._forward_redirection(
+                outputs_student = self._forward_redirection(
                     model,
                     unwrapped_student,
                     self._liger_student_forward,
@@ -2519,10 +2519,10 @@ class GOLDTrainer(SFTTrainer):
                         **student_forward_kwargs,
                     )
 
-                student_hidden = student_outputs.last_hidden_state[:, :-1]
+                student_hidden = outputs_student.last_hidden_state[:, :-1]
                 teacher_hidden = teacher_outputs.last_hidden_state[:, :-1]
 
-                del student_outputs, teacher_outputs
+                del teacher_outputs
 
                 student_hidden = student_hidden.reshape(-1, student_hidden.shape[-1])
                 teacher_hidden = teacher_hidden.reshape(-1, teacher_hidden.shape[-1])
@@ -2762,7 +2762,8 @@ class GOLDTrainer(SFTTrainer):
         inputs = self._prepare_inputs(inputs)
         with torch.no_grad():
             with self.compute_loss_context_manager():
-                loss = self.compute_loss(model, inputs)
+                with self._get_liger_zero3_lm_head_gather_ctx(model):
+                    loss = self.compute_loss(model, inputs)
             loss = loss.mean().detach()
         return loss, None, None
 

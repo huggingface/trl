@@ -619,6 +619,7 @@ class TestIWOPDTrainer(TrlTestCase):
             teacher_model=self.model_id,
             args=training_args,
             train_dataset=dataset,
+            eval_dataset=dataset,
             processing_class=self.tokenizer,
         )
 
@@ -626,8 +627,33 @@ class TestIWOPDTrainer(TrlTestCase):
             assert trainer.use_liger_loss is True
             trainer.train()
             assert trainer.state.log_history[-1]["train_loss"] is not None
+            assert trainer.evaluate()["eval_loss"] is not None
         finally:
             importlib.reload(importlib.import_module(trainer.model.__module__))
+
+    def test_prediction_step_gathers_liger_zero3_lm_head(self, monkeypatch):
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling")
+        trainer = IWOPDTrainer(
+            model=self.model_id,
+            teacher_model=self.model_id,
+            args=self._make_args(per_device_eval_batch_size=2),
+            train_dataset=dataset["train"],
+            eval_dataset=dataset["test"],
+            processing_class=self.tokenizer,
+        )
+
+        call_count = 0
+        original_gather_ctx = trainer._get_liger_zero3_lm_head_gather_ctx
+
+        def counting_gather_ctx(model):
+            nonlocal call_count
+            call_count += 1
+            return original_gather_ctx(model)
+
+        monkeypatch.setattr(trainer, "_get_liger_zero3_lm_head_gather_ctx", counting_gather_ctx)
+
+        trainer.evaluate()
+        assert call_count > 0
 
     def test_sampled_mode_matches_between_local_and_external_teachers(self, monkeypatch):
         import trl.generation.vllm_client as vllm_client_module

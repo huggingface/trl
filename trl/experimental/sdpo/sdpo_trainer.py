@@ -822,7 +822,8 @@ class SDPOTrainer(_BaseTrainer):
             inputs = self._prepare_inputs(inputs)
         with torch.no_grad():
             with self.compute_loss_context_manager():
-                loss = self.compute_loss(model, inputs)
+                with self._get_liger_zero3_lm_head_gather_ctx(model):
+                    loss = self.compute_loss(model, inputs)
         return loss.detach(), None, None
 
     def _prepare_inputs(self, generation_batch):
