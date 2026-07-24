@@ -13,8 +13,10 @@
 # limitations under the License.
 
 
+import json
 import contextvars
 import math
+import os
 import queue
 import textwrap
 import threading
@@ -167,6 +169,17 @@ class _StartRolloutWorkerCallback(TrainerCallback):
             self._trainer.rollout_worker.start()
 
 
+class _SaveRolloutStateCallback(TrainerCallback):
+    """Saves the current prompt index to rollout_state.json on each checkpoint."""
+
+    def __init__(self, trainer: "AsyncGRPOTrainer"):
+        self._trainer = trainer
+
+    def on_save(self, args, state, _control, **_kwargs):
+        if self._trainer.accelerator.is_main_process and isinstance(self._trainer.rollout_worker, AsyncRolloutWorker):
+            checkpoint_dir = os.path.join(args.output_dir, f"checkpoint-{state.global_step}")
+            with open(os.path.join(checkpoint_dir, "rollout_state.json"), "w") as f:
+                json.dump({"prompt_index": self._trainer.rollout_worker.prompt_index}, f)
 class _EpochStopCallback(TrainerCallback):
     """Stop after `num_train_epochs` full passes over the prompt dataset.
 
@@ -772,6 +785,15 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 f"(max_staleness={self.args.max_staleness} × samples_per_step={samples_per_step})"
             )
 
+        # The base Trainer's data-skip replay loop doesn't apply to AsyncGRPO's live rollout queue;
+        # force it off regardless of what the user passed.
+        if not self.args.ignore_data_skip:
+            logger.warning(
+                "`ignore_data_skip` is forced to `True` for AsyncGRPO because the base Trainer's skip-and-replay "
+                "loop does not apply to a live rollout queue."
+            )
+        self.args.ignore_data_skip = True
+
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
         self._train_tokens_start_time = None
@@ -841,6 +863,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
         self.add_callback(_InitialWeightSyncCallback(self))
         self.add_callback(_StartRolloutWorkerCallback(self))
         self.add_callback(StepIntervalCallback(self._sync_weight, self.args.weight_sync_steps))
+        self.add_callback(_SaveRolloutStateCallback(self))
         if self._epoch_stop_groups is not None:
             self.add_callback(_EpochStopCallback(self, self._epoch_stop_groups))
 
@@ -1144,6 +1167,22 @@ class AsyncGRPOTrainer(_BaseTrainer):
         logger.info(f"Weight sync: done. Total {weight_sync_time_s:.1f}s")
 
     def _inner_training_loop(self, *args, **kwargs):
+        # When resuming, pass the saved prompt position to the worker before _StartRolloutWorkerCallback fires.
+        # Skipped for IterableDataset since len() isn't available on streaming datasets.
+        # Always reset first so a stale value from a prior train() call is never carried over.
+        if isinstance(self.rollout_worker, AsyncRolloutWorker):
+            self.rollout_worker._loop_kwargs["dataset_start_index"] = 0
+        resume_from_checkpoint = kwargs.get("resume_from_checkpoint")
+        if resume_from_checkpoint is not None and isinstance(self.rollout_worker, AsyncRolloutWorker):
+            rollout_state_file = os.path.join(resume_from_checkpoint, "rollout_state.json")
+            if os.path.isfile(rollout_state_file) and isinstance(self.train_dataset, Dataset):
+                with open(rollout_state_file) as f:
+                    prompt_index = json.load(f)["prompt_index"]
+                self.rollout_worker._loop_kwargs["dataset_start_index"] = prompt_index
+            elif not os.path.isfile(rollout_state_file):
+                logger.warning(
+                    "rollout_state.json not found in the checkpoint; the rollout worker will restart from prompt 0."
+                )
         try:
             return super()._inner_training_loop(*args, **kwargs)
         finally:
