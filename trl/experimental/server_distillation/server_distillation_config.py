@@ -29,6 +29,9 @@ class ServerDistillationConfig(DistillationConfig):
     Parameters:
         teacher_model_server_url (`str` or `None`, *optional*):
             Base URL of a vLLM server hosting the teacher model (e.g., `"http://localhost:8000"`). Required.
+        vllm_server_port (`int`, *optional*, defaults to `8001`):
+            Port of the student vLLM server. Overrides the base default of `8000` to stay distinct from the teacher
+            server, which commonly runs on `8000`.
         loss_top_k (`int`, *optional*, defaults to `1`):
             Number of top tokens the teacher server returns and over which the divergence is computed. For `beta == 0`
             (pure forward KL) this must be positive; for `beta > 0` it must be `1` (top-1 support). `0` (full
@@ -47,6 +50,13 @@ class ServerDistillationConfig(DistillationConfig):
         default=None,
         metadata={
             "help": 'Base URL of a vLLM server hosting the teacher model (e.g., "http://localhost:8000"). Required.'
+        },
+    )
+    vllm_server_port: int = field(
+        default=8001,
+        metadata={
+            "help": "Port of the student vLLM server. Overrides the base default of 8000 to stay distinct from the "
+            "teacher server, which commonly runs on 8000."
         },
     )
     loss_top_k: int = field(

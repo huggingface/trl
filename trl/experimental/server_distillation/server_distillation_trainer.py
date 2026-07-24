@@ -17,8 +17,55 @@ from typing import Any
 import torch
 import torch.nn.functional as F
 
-from ..distillation.distillation_trainer import DistillationTrainer, _jsd_divergence
+from ..distillation.distillation_trainer import DistillationTrainer
 from .server_distillation_config import ServerDistillationConfig
+
+
+# Self-contained copy of the base trainer's `_jsd_divergence` (together with the `_compute_prompt_length` /
+# `_reduce_divergence_loss` methods below). The base deletes these while migrating to the chunked loss, but this
+# quarantined server path still depends on them; it is re-pointed at the stable base wholesale later (issue #6449).
+def _jsd_divergence(student_log_probs, teacher_log_probs, beta, support_mask=None):
+    """Compute JSD (or forward/reverse KL) from log-probability tensors.
+
+    When *support_mask* is not None, uses manual computation with masked positions zeroed. When None, uses
+    ``F.kl_div``.
+    """
+    if support_mask is not None:
+        safe_student = torch.where(support_mask, student_log_probs, torch.zeros_like(student_log_probs))
+        safe_teacher = torch.where(support_mask, teacher_log_probs, torch.zeros_like(teacher_log_probs))
+        student_probs = torch.where(support_mask, student_log_probs.exp(), torch.zeros_like(student_log_probs))
+        teacher_probs = torch.where(support_mask, teacher_log_probs.exp(), torch.zeros_like(teacher_log_probs))
+
+        if beta == 0:
+            return torch.nan_to_num(teacher_probs * (safe_teacher - safe_student), nan=0.0)
+        elif beta == 1:
+            return torch.nan_to_num(student_probs * (safe_student - safe_teacher), nan=0.0)
+        else:
+            beta_t = torch.tensor(beta, dtype=student_log_probs.dtype, device=student_log_probs.device)
+            tiny = torch.finfo(student_probs.dtype).tiny
+            mixture_probs = (1 - beta_t) * student_probs + beta_t * teacher_probs
+            safe_mixture = torch.where(
+                support_mask,
+                torch.log(mixture_probs.clamp_min(tiny)),
+                torch.zeros_like(student_log_probs),
+            )
+            kl_teacher = torch.nan_to_num(teacher_probs * (safe_teacher - safe_mixture), nan=0.0)
+            kl_student = torch.nan_to_num(student_probs * (safe_student - safe_mixture), nan=0.0)
+            return beta_t * kl_teacher + (1 - beta_t) * kl_student
+    else:
+        if beta == 0:
+            return F.kl_div(student_log_probs, teacher_log_probs, reduction="none", log_target=True)
+        elif beta == 1:
+            return F.kl_div(teacher_log_probs, student_log_probs, reduction="none", log_target=True)
+        else:
+            beta_t = torch.tensor(beta, dtype=student_log_probs.dtype, device=student_log_probs.device)
+            mixture_log_probs = torch.logsumexp(
+                torch.stack([student_log_probs + torch.log1p(-beta_t), teacher_log_probs + torch.log(beta_t)]),
+                dim=0,
+            )
+            kl_teacher = F.kl_div(mixture_log_probs, teacher_log_probs, reduction="none", log_target=True)
+            kl_student = F.kl_div(mixture_log_probs, student_log_probs, reduction="none", log_target=True)
+            return beta_t * kl_teacher + (1 - beta_t) * kl_student
 
 
 def _add_tail_bucket(log_probs, valid_mask):
@@ -194,7 +241,67 @@ class ServerDistillationTrainer(DistillationTrainer):
             jsd, completion_mask=labels != -100, reduction="batchmean", num_items_in_batch=num_items_in_batch
         )
 
+    def _compute_prompt_length(self, inputs: dict[str, torch.Tensor | Any]) -> int:
+        """Compute the earliest prompt boundary that still includes every completion token in the batch."""
+        if inputs.get("labels") is not None:
+            attention_mask = inputs["attention_mask"]
+            labels = inputs["labels"]
+            full_lengths = attention_mask.sum(dim=1)
+            completion_lengths = (labels != -100).sum(dim=1)
+            return int((full_lengths - completion_lengths).min().item())
+        return inputs["prompts"].shape[1]
+
+    @staticmethod
+    def _reduce_divergence_loss(jsd, completion_mask=None, reduction="batchmean", num_items_in_batch=None):
+        """Reduce a per-token divergence tensor over the valid completion tokens.
+
+        When `num_items_in_batch` is provided (as under gradient accumulation), the divergence is reduced as `sum /
+        num_items_in_batch`, matching the gradient-accumulation-correct behavior of HF's default cross-entropy.
+        Otherwise it falls back to the local `reduction` (default `batchmean`). See issue #4719.
+        """
+        mask = None
+        if completion_mask is not None:
+            mask = completion_mask.bool()
+            jsd = jsd[mask]
+
+        if num_items_in_batch is not None:
+            # Normalize by the global number of valid tokens for gradient-accumulation-correct loss.
+            jsd_sum = jsd.sum()
+            if isinstance(num_items_in_batch, torch.Tensor):
+                num_items_in_batch = num_items_in_batch.to(jsd_sum.device)
+            return jsd_sum / num_items_in_batch
+        if reduction == "batchmean":
+            # clamp_min(1) avoids 0/0 -> nan when a sample has no unmasked positions
+            # (e.g. completion fully truncated). jsd[mask] is empty -> jsd.sum() == 0,
+            # so 0/1 == 0 with a valid grad path.
+            denom = mask.sum().clamp_min(1) if completion_mask is not None else max(jsd.size(0), 1)
+            return jsd.sum() / denom
+        elif reduction == "sum":
+            return jsd.sum()
+        elif reduction == "mean":
+            return jsd.mean()
+        else:
+            return jsd
+
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+        # Reconstruct the old `input_ids` / `attention_mask` / `labels` layout this server path is built on from GRPO's
+        # keys, so it rides on the base's (evolving) generation. The teacher-server loss is migrated onto the stable
+        # base wholesale later (issue #6449, item 58). The first four lines mirror `DistillationTrainer.compute_loss`.
+        prompt_ids, prompt_mask = inputs["prompt_ids"], inputs["prompt_mask"]
+        completion_ids, completion_mask = inputs["completion_ids"], inputs["completion_mask"]
+        input_ids = torch.cat([prompt_ids, completion_ids], dim=1)
+        attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
+        # Server-only: the teacher-server loss masks on `labels`/`prompt_attention_mask`, so rebuild them too.
+        completion_labels = torch.where(completion_mask.bool(), completion_ids, torch.full_like(completion_ids, -100))
+        labels = torch.cat([torch.full_like(prompt_ids, -100), completion_labels], dim=1)
+        inputs = {
+            **inputs,
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
+            "labels": labels,
+            "prompt_attention_mask": prompt_mask,
+        }
+
         # Student forward pass
         student_outputs = model(
             input_ids=inputs["input_ids"],
