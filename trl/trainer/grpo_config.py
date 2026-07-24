@@ -218,6 +218,21 @@ class GRPOConfig(_BaseConfig):
             log-probability ratios across valid tokens to produce a single ratio per sequence. The [GSPO
             paper](https://huggingface.co/papers/2507.18071) shows that sequence-level sampling often yields more
             stable training and better alignment with sequence-level rewards.
+        mgpo_reward_base (`float`, *optional*):
+            Success threshold for MaxEnt-Guided Policy Optimization (MGPO). A rollout counts as successful when its
+            reward is greater than or equal to this value. This is a configurable cutoff (not necessarily the maximum
+            reward) and should be set to match your reward function's scale—for example, `1.0` for binary verifiable
+            rewards. If `None`, MGPO reweighting is disabled and standard GRPO advantages are used. MGPO is introduced
+            in [Tiny Model, Big Logic](https://huggingface.co/papers/2511.06221).
+        mgpo_lambda (`float`, *optional*, defaults to `0.5`):
+            Entropy deviation regularization coefficient (λ) for MGPO. Must be greater than `0.0`. Controls the
+            sharpness of the advantage reweighting; larger values focus training more aggressively on prompts near the
+            target success rate. To disable MGPO, set `mgpo_reward_base=None`. See section 3.4 of the
+            [VibeThinker paper](https://huggingface.co/papers/2511.06221).
+        mgpo_target_success_rate (`float`, *optional*, defaults to `0.5`):
+            Target group success rate (p₀) for MGPO. Prompt groups whose empirical success rate is closest to this
+            value receive the highest advantage weight, following the maximum-entropy principle for binary outcomes.
+            See section 3.4 of the [VibeThinker paper](https://huggingface.co/papers/2511.06221).
         reward_weights (`list[float]`, *optional*):
             Weights for each reward function. Must match the number of reward functions. If `None`, all rewards are
             weighted equally with weight `1.0`.
@@ -757,6 +772,22 @@ class GRPOConfig(_BaseConfig):
             "sequence-level rewards."
         },
     )
+    mgpo_reward_base: float | None = field(
+        default=None,
+        metadata={
+            "help": "Success threshold for MGPO. A rollout counts as successful when reward >= this value. If `None`: no MGPO reweighting is applied."
+        },
+    )
+    mgpo_lambda: float = field(
+        default=0.5,
+        metadata={
+            "help": "Entropy deviation regularization coefficient (λ) for MGPO. Must be greater than 0.0."
+        },
+    )
+    mgpo_target_success_rate: float = field(
+        default=0.5,
+        metadata={"help": "Target group success rate (p₀) for MGPO advantage reweighting."},
+    )
     reward_weights: list[float] | None = field(
         default=None,
         metadata={
@@ -1117,6 +1148,12 @@ class GRPOConfig(_BaseConfig):
             raise ValueError(
                 "GRPO requires at least 2 generations per prompt to calculate the advantages. You provided "
                 f"{self.num_generations}, which is less than the minimum required."
+            )
+
+        if self.mgpo_lambda <= 0:
+            raise ValueError(
+                f"`mgpo_lambda` must be greater than 0, got {self.mgpo_lambda}. "
+                "To disable MGPO, set `mgpo_reward_base=None` instead."
             )
 
         if self.vllm_importance_sampling_cap is not None:
