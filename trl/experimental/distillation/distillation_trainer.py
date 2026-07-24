@@ -1064,25 +1064,26 @@ class DistillationTrainer(_BaseTrainer):
             loss = self._compute_liger_loss(model, inputs, num_items_in_batch=num_items_in_batch)
             return (loss, None) if return_outputs else loss
 
-        # Chunked JSD path: project the teacher/student hidden states to vocab logits one chunk at a time inside the
-        # loss (never materializing the full `(B, C, V)` logits), so the teacher's dense distribution can be matched
-        # without buffering it.
+        # Route the whole chunked loss (backbone + `lm_head` projection + JSD) through the DDP/FSDP wrapper via
+        # `_forward_redirection`, so DDP.forward() fires `prepare_for_backward()` and FSDP/DeepSpeed keep the student's
+        # sharded parameters (including the `lm_head`) materialized for the projection. Mirrors GRPO's `compute_liger_loss`.
+        unwrapped_student = self.accelerator.unwrap_model(model)
+        loss = self._forward_redirection(
+            model, unwrapped_student, self._compute_loss, unwrapped_student, inputs, num_items_in_batch
+        )
+        return (loss, None) if return_outputs else loss
+
+    def _compute_loss(self, unwrapped_student, inputs, num_items_in_batch):
+        # Chunked JSD path: project the teacher/student hidden states to vocab logits one chunk at a time (never
+        # materializing the full `(B, C, V)` logits), so the teacher's dense distribution can be matched without
+        # buffering it. Runs inside the student wrapper's forward (see `compute_loss`).
         input_ids = torch.cat([inputs["prompt_ids"], inputs["completion_ids"]], dim=1)
         attention_mask = torch.cat([inputs["prompt_mask"], inputs["completion_mask"]], dim=1)
         completion_mask = inputs["completion_mask"]
         logits_to_keep = inputs["completion_ids"].size(1)  # only the completion tokens are trained on
 
-        # Route the student backbone through the DDP/FSDP wrapper via `_forward_redirection` so that DDP.forward() is
-        # called and prepare_for_backward() fires correctly.
-        unwrapped_student = self.accelerator.unwrap_model(model)
-        student_hidden_states = self._forward_redirection(
-            model,
-            unwrapped_student,
-            self._get_last_hidden_state,
-            unwrapped_student,
-            input_ids,
-            attention_mask,
-            logits_to_keep,
+        student_hidden_states = self._get_last_hidden_state(
+            unwrapped_student, input_ids, attention_mask, logits_to_keep
         )
 
         # Route the teacher backbone through its own wrapper via `_forward_redirection` too, so FSDP/DeepSpeed
@@ -1121,8 +1122,7 @@ class DistillationTrainer(_BaseTrainer):
             teacher_final_logit_softcapping=getattr(teacher_config, "final_logit_softcapping", None),
             temperature=self.temperature,
         )
-
-        return (loss, None) if return_outputs else loss
+        return loss
 
     def _liger_student_forward(self, student, inputs):
         """Decoder-only forward used by the Liger JSD path (skips lm_head to save memory)."""
