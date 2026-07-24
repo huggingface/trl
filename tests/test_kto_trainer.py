@@ -410,7 +410,6 @@ class TestKTOTrainer(TrlTestCase):
         eval_dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="test")
         training_args = KTOConfig(
             output_dir=self.tmp_dir,
-            loss_type="apo_zero_unpaired",
             max_steps=1,
             precompute_ref_log_probs=True,
             report_to="none",
