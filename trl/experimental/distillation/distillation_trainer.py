@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import copy
 import inspect
 import random
 import textwrap
@@ -741,6 +742,97 @@ class DistillationTrainer(_BaseTrainer):
             ]
 
         return completion_ids
+
+    def _generate(self, prompts: list):
+        device = self.accelerator.device
+        mode = "train" if self.model.training else "eval"
+
+        # Copy the prompts to avoid modifying the original list
+        prompts = copy.deepcopy(prompts)
+
+        prompt_ids, images, multimodal_fields = self._tokenize_prompts(prompts)
+        completion_ids = self._generate_single_turn(prompt_ids, images, multimodal_fields)
+
+        # Get completion length per sequence, used for logging
+        prompt_lengths = torch.tensor([len(ids) for ids in prompt_ids], device=device)
+        completion_lengths = torch.tensor([len(ids) for ids in completion_ids], device=device)
+        agg_prompt_lengths = self.accelerator.gather(prompt_lengths)
+        agg_completion_lengths = self.accelerator.gather(completion_lengths)
+        total_prompt_tokens = agg_prompt_lengths.sum()
+
+        # Log the metrics
+        if mode == "train":
+            self.state.num_input_tokens_seen += (total_prompt_tokens + agg_completion_lengths.sum()).item()
+        self._metrics[mode]["num_tokens"] = [self.state.num_input_tokens_seen]
+
+        # Log completion lengths, mean, min, max
+        self._metrics[mode]["completions/mean_length"].append(agg_completion_lengths.float().mean().item())
+        self._metrics[mode]["completions/min_length"].append(agg_completion_lengths.float().min().item())
+        self._metrics[mode]["completions/max_length"].append(agg_completion_lengths.float().max().item())
+
+        # Identify sequences that terminated with EOS and log their lengths
+        eos_and_pad = [self._tokenizer.eos_token_id, self._tokenizer.pad_token_id]
+        is_truncated = torch.tensor([ids[-1] not in eos_and_pad for ids in completion_ids], device=device)
+        agg_is_truncated = self.accelerator.gather(is_truncated)
+        self._metrics[mode]["completions/clipped_ratio"].append(agg_is_truncated.float().mean().item())
+        term_completion_lengths = agg_completion_lengths[~agg_is_truncated]
+        if len(term_completion_lengths) == 0:  # edge case where no terminated sequences are found
+            term_completion_lengths = torch.zeros(1, device=device)
+        self._metrics[mode]["completions/mean_terminated_length"].append(term_completion_lengths.float().mean().item())
+        self._metrics[mode]["completions/min_terminated_length"].append(term_completion_lengths.float().min().item())
+        self._metrics[mode]["completions/max_terminated_length"].append(term_completion_lengths.float().max().item())
+
+        return prompt_ids, completion_ids
+
+    # Name kept aligned with GRPO/RLOO for consistency; distillation has no rewards, so nothing is actually scored.
+    def _generate_and_score_completions(self, inputs: list[dict[str, torch.Tensor | Any]]) -> dict[str, Any]:
+        device = self.accelerator.device
+
+        prompts = [x["prompt"] for x in inputs]
+
+        prompt_ids_list, completion_ids_list = self._generate(prompts)
+
+        # Convert lists of token IDs to padded tensors
+        prompt_ids = [torch.tensor(ids) for ids in prompt_ids_list]
+        prompt_mask = [torch.ones_like(ids, dtype=torch.long) for ids in prompt_ids]
+        prompt_ids = pad(
+            prompt_ids,
+            padding_value=self._tokenizer.pad_token_id,
+            padding_side="left",
+            pad_to_multiple_of=self.pad_to_multiple_of,
+        ).to(device=device)
+        prompt_mask = pad(
+            prompt_mask, padding_value=0, padding_side="left", pad_to_multiple_of=self.pad_to_multiple_of
+        ).to(device=device)
+        completion_ids = [torch.tensor(ids) for ids in completion_ids_list]
+        completion_mask = [torch.ones_like(ids, dtype=torch.long) for ids in completion_ids]
+        completion_ids = pad(
+            completion_ids,
+            padding_value=self._tokenizer.pad_token_id,
+            padding_side="right",
+            pad_to_multiple_of=self.pad_to_multiple_of,
+        ).to(device=device)
+        completion_mask = pad(
+            completion_mask, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
+        ).to(device=device)
+
+        num_items_in_batch = self.accelerator.gather(completion_mask.sum()).sum()
+
+        # Log the prompt and completion texts
+        if self.log_completions:
+            prompts_text = self.processing_class.batch_decode(prompt_ids, skip_special_tokens=True)
+            completions_text = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
+            self._textual_logs["prompt"].extend(gather_object(prompts_text))
+            self._textual_logs["completion"].extend(gather_object(completions_text))
+
+        output = {
+            "prompt_ids": prompt_ids,
+            "prompt_mask": prompt_mask,
+            "completion_ids": completion_ids,
+            "completion_mask": completion_mask,
+            "num_items_in_batch": num_items_in_batch,
+        }
+        return output
 
     # ──────────────────────────────────────────────────────────────────────
     #  Buffering across gradient accumulation steps

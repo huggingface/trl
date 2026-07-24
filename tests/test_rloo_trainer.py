@@ -236,14 +236,46 @@ class TestRLOOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    def test_train_dataset_required(self):
-        training_args = RLOOConfig(output_dir=self.tmp_dir, report_to="none")
-        with pytest.raises(ValueError, match="`train_dataset` is required"):
-            RLOOTrainer(
+    @pytest.mark.parametrize("train_dataset_type", ["dataset", "iterable_dataset", "none", "unsupported_dataset_dict"])
+    def test_init_with_train_dataset(self, train_dataset_type):
+        streaming = "iterable" in train_dataset_type
+        if train_dataset_type == "none":
+            train_dataset = None
+        else:
+            train_dataset = load_dataset(
+                "trl-internal-testing/zen", "standard_prompt_only", split="train", streaming=streaming
+            )
+            if train_dataset_type == "unsupported_dataset_dict":
+                # `DatasetDict` is representative of any unsupported type here; not exhaustive
+                train_dataset = DatasetDict({"train": train_dataset})
+
+        # Iterable (streaming) datasets have no length, so `max_steps` is required.
+        training_args = RLOOConfig(output_dir=self.tmp_dir, max_steps=4 if streaming else -1, report_to="none")
+
+        if train_dataset_type == "none":
+            with pytest.raises(ValueError, match="`train_dataset` is required"):
+                RLOOTrainer(
+                    model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                    reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                    args=training_args,
+                    train_dataset=train_dataset,
+                )
+        elif train_dataset_type == "unsupported_dataset_dict":
+            with pytest.raises(TypeError, match="`train_dataset` must be a `Dataset` or `IterableDataset`"):
+                RLOOTrainer(
+                    model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                    reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                    args=training_args,
+                    train_dataset=train_dataset,
+                )
+        else:
+            trainer = RLOOTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
                 reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
                 args=training_args,
+                train_dataset=train_dataset,
             )
+            assert trainer.train_dataset is train_dataset
 
     @pytest.mark.parametrize(
         "eval_dataset_type",
