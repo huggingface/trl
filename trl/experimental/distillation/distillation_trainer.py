@@ -146,25 +146,18 @@ def _jsd_divergence(student_log_probs, teacher_log_probs, beta, support_mask=Non
 
 
 class _DistillationCollator:
-    """Data collator for the distillation trainer with independent prompt/completion budgets.
+    """Data collator for the distillation trainer.
 
-    Unlike ``DataCollatorForChatML``, this collator tokenizes prompts and completions separately so that long
-    completions can never truncate the prompt to empty. It also handles prompt-only data (no assistant completions),
-    which is what on-policy distillation uses.
+    Accepts a prompt-only dataset (a ``prompt`` column, the format shared with GRPO): the student generates the
+    completion on-policy, so there is nothing to train on in the dataset.
     """
 
     def __init__(
         self,
         tokenizer: "PreTrainedTokenizerBase",
-        max_length: int,
-        max_prompt_length: int,
-        messages_key: str = "messages",
         ignore_index: int = -100,
     ):
         self.tokenizer = tokenizer
-        self.max_length = max_length
-        self.max_prompt_length = max_prompt_length
-        self.messages_key = messages_key
         self.ignore_index = ignore_index
 
         if tokenizer.pad_token_id is None:
@@ -176,56 +169,14 @@ class _DistillationCollator:
         all_prompt_ids: list[list[int]] = []
 
         for example in examples:
-            messages = example[self.messages_key]
-
-            # Split: prompt = everything before the last assistant turn, completion = last assistant turn
-            has_completion = len(messages) > 1 and messages[-1].get("role") == "assistant"
-            prompt_messages = messages[:-1] if has_completion else messages
-
-            # Tokenize prompt with its own budget using the tokenizer's truncation side
             formatted_prompt = self.tokenizer.apply_chat_template(
-                prompt_messages, tokenize=False, add_generation_prompt=True
+                example["prompt"], tokenize=False, add_generation_prompt=True
             )
-            prompt_ids = self.tokenizer(
-                formatted_prompt,
-                truncation=True,
-                max_length=self.max_prompt_length,
-                padding=False,
-                add_special_tokens=False,
-            )["input_ids"]
+            prompt_ids = self.tokenizer(formatted_prompt, padding=False, add_special_tokens=False)["input_ids"]
 
-            if has_completion:
-                # Tokenize the full message (prompt + completion) without truncation first
-                formatted_full = self.tokenizer.apply_chat_template(
-                    messages, tokenize=False, add_generation_prompt=False
-                )
-                full_ids = self.tokenizer(formatted_full, truncation=False, padding=False, add_special_tokens=False)[
-                    "input_ids"
-                ]
-
-                # Identify completion tokens: everything after the prompt in the full sequence.
-                # Use the un-truncated prompt length as the split point.
-                formatted_prompt_ids = self.tokenizer(
-                    formatted_prompt, truncation=False, padding=False, add_special_tokens=False
-                )["input_ids"]
-                completion_ids = full_ids[len(formatted_prompt_ids) :]
-
-                # Trim completion so prompt + completion <= max_length
-                max_comp = self.max_length - len(prompt_ids)
-                if max_comp > 0 and len(completion_ids) > max_comp:
-                    completion_ids = completion_ids[:max_comp]
-                elif max_comp <= 0:
-                    completion_ids = []
-
-                input_ids = prompt_ids + completion_ids
-                labels = [self.ignore_index] * len(prompt_ids) + list(completion_ids)
-            else:
-                # Prompt-only: no completion to train on (on-policy will generate one)
-                input_ids = list(prompt_ids)
-                labels = [self.ignore_index] * len(prompt_ids)
-
-            all_input_ids.append(input_ids)
-            all_labels.append(labels)
+            # Prompt-only: no completion to train on (on-policy will generate one)
+            all_input_ids.append(list(prompt_ids))
+            all_labels.append([self.ignore_index] * len(prompt_ids))
             all_prompt_ids.append(list(prompt_ids))
 
         # Convert to tensors and left-pad
@@ -262,6 +213,10 @@ class _DistillationCollator:
             "labels": labels_t,
             "prompts": prompts_t,
             "prompt_attention_mask": prompt_mask_t,
+            "prompt_ids": prompts_t,
+            "prompt_mask": prompt_mask_t,
+            "completion_ids": input_ids_t[:, prompts_t.shape[1] :],
+            "completion_mask": torch.ones_like(input_ids_t[:, prompts_t.shape[1] :]),
         }
 
 
@@ -412,11 +367,7 @@ class DistillationTrainer(_BaseTrainer):
 
         # ── Data collator ──
         if data_collator is None:
-            data_collator = _DistillationCollator(
-                tokenizer=processing_class,
-                max_length=args.max_length,
-                max_prompt_length=args.max_prompt_length,
-            )
+            data_collator = _DistillationCollator(tokenizer=processing_class)
 
         # ── Liger fused JSD loss ──
         self.use_liger_loss = False
@@ -465,7 +416,18 @@ class DistillationTrainer(_BaseTrainer):
             callbacks=callbacks,
             optimizers=optimizers,
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
+            # In Trainer, `training_step` scales the loss by `gradient_accumulation_steps` only if `compute_loss_func`
+            # is None. Here, loss scaling instead depends on the total number of completion tokens across the global
+            # accumulated batch. To control scaling ourselves, we must disable Trainer's built-in scaling. The simplest
+            # (though a bit hacky) way is to set `compute_loss_func` to any non-None value, which bypasses that behavior
+            # without rewriting `training_step`.
+            compute_loss_func="non-None value to disable scaling",
         )
+
+        # Gradient accumulation requires scaled loss. Normally, loss scaling in the parent class depends on whether the
+        # model accepts loss-related kwargs. Since we compute our own loss, this check is irrelevant. We set
+        # self.model_accepts_loss_kwargs to False to enable scaling.
+        self.model_accepts_loss_kwargs = False
 
         # ── Prepare teacher model (after super().__init__ so accelerator is ready) ──
         if teacher_model is not None:
@@ -499,6 +461,7 @@ class DistillationTrainer(_BaseTrainer):
         # ── Buffer state ──
         self._buffered_inputs = None
         self._buffered_text_logs = None
+        self._buffered_num_items = None
         self._buffer_step = 0
 
         # ── Generation config ──
@@ -565,16 +528,6 @@ class DistillationTrainer(_BaseTrainer):
             self.vllm_sync_frequency = args.vllm_sync_frequency
             self._last_vllm_sync_step = -1
 
-    def _compute_prompt_length(self, inputs: dict[str, torch.Tensor | Any]) -> int:
-        """Compute the earliest prompt boundary that still includes every completion token in the batch."""
-        if inputs.get("labels") is not None:
-            attention_mask = inputs["attention_mask"]
-            labels = inputs["labels"]
-            full_lengths = attention_mask.sum(dim=1)
-            completion_lengths = (labels != -100).sum(dim=1)
-            return int((full_lengths - completion_lengths).min().item())
-        return inputs["prompts"].shape[1]
-
     def _get_completion_lengths(self, generated_tokens: torch.Tensor, prompt_width: int) -> torch.Tensor:
         """Infer per-sample completion lengths from generated tokens."""
         completion_tokens = generated_tokens[:, prompt_width:]
@@ -611,14 +564,12 @@ class DistillationTrainer(_BaseTrainer):
     # ──────────────────────────────────────────────────────────────────────
 
     def _set_signature_columns_if_needed(self):
-        super()._set_signature_columns_if_needed()
-        extra_columns = ["prompts", "prompt_attention_mask", "messages", "chat_template_kwargs", "tools"]
+        # If `self.args.remove_unused_columns` is True, non-signature columns are removed.
+        # By default, this method sets `self._signature_columns` to the model's expected inputs (usually, "input_ids"
+        # and "attention_mask"). In DistillationTrainer, we preprocess data, so using the model's signature columns
+        # doesn't work. Instead, we set them to the columns expected by the `training_step` method, hence the override.
         if self._signature_columns is None:
-            self._signature_columns = extra_columns
-        else:
-            for col in extra_columns:
-                if col not in self._signature_columns:
-                    self._signature_columns.append(col)
+            self._signature_columns = ["prompt", "image", "images"]
 
     def _get_train_sampler(self, dataset=None):
         if dataset is None:
@@ -696,6 +647,15 @@ class DistillationTrainer(_BaseTrainer):
 
         # Generate student completions for every slice
         self._generate_student_completions(slices, list(range(buffer_steps)))
+
+        # Loss denominator (`num_items_in_batch`): the global number of completion tokens actually trained on this
+        # optimizer step. transformers derives its own count from the *raw dataloader* labels — before generation
+        # replaces the completions — which is wrong for on-policy training and zero for prompt-only datasets (dividing
+        # the loss by zero). Recompute it here from the generated labels, gathered across processes (issue #4719).
+        local_completion_tokens = sum(int(s["completion_mask"].sum()) for s in self._buffered_inputs if s is not None)
+        self._buffered_num_items = self.accelerator.gather(
+            torch.tensor(local_completion_tokens, device=self.accelerator.device)
+        ).sum()
 
         # Gather text logs once per optimizer step (all processes must participate)
         if self.log_completions:
@@ -776,7 +736,7 @@ class DistillationTrainer(_BaseTrainer):
                 else:
                     prompt_token_lengths = torch.full((batch_size,), prompt_width, dtype=torch.long, device=device)
                 completion_lengths = self._get_completion_lengths(generated_tokens, prompt_width)
-                new_attention_mask, new_labels = self._build_sequence_batch(
+                new_attention_mask, new_labels, new_completion_mask = self._build_sequence_batch(
                     generated_tokens, prompt_width, prompt_token_lengths, completion_lengths
                 )
 
@@ -805,6 +765,10 @@ class DistillationTrainer(_BaseTrainer):
                 updated["input_ids"] = generated_tokens
                 updated["attention_mask"] = new_attention_mask
                 updated["labels"] = new_labels
+                updated["completion_mask"] = new_completion_mask
+                updated["prompt_ids"] = slice_inputs["prompts"]
+                updated["prompt_mask"] = prompt_mask
+                updated["completion_ids"] = generated_tokens[:, prompt_width:]
 
                 self._buffered_inputs[slice_idx] = updated
                 self._buffered_text_logs[slice_idx] = (prompt_texts, completion_texts)
@@ -866,7 +830,7 @@ class DistillationTrainer(_BaseTrainer):
             completion_ids_padded = torch.stack(completion_tensors)
             new_input_ids = torch.cat([prompt_ids, completion_ids_padded], dim=1)
             completion_lengths = torch.tensor(completion_lengths, device=device, dtype=torch.long)
-            new_attention_mask, new_labels = self._build_sequence_batch(
+            new_attention_mask, new_labels, new_completion_mask = self._build_sequence_batch(
                 new_input_ids, prompt_width, prompt_token_lengths, completion_lengths
             )
 
@@ -882,6 +846,10 @@ class DistillationTrainer(_BaseTrainer):
             updated["input_ids"] = new_input_ids
             updated["attention_mask"] = new_attention_mask
             updated["labels"] = new_labels
+            updated["completion_mask"] = new_completion_mask
+            updated["prompt_ids"] = prompt_ids
+            updated["prompt_mask"] = prompt_attention_mask
+            updated["completion_ids"] = completion_ids_padded
             # Update prompts to match the new padding width so prompt_length is consistent
             updated["prompts"] = prompt_ids
             updated["prompt_attention_mask"] = prompt_attention_mask
@@ -895,8 +863,8 @@ class DistillationTrainer(_BaseTrainer):
         prompt_width: int,
         prompt_token_lengths: torch.Tensor,
         completion_lengths: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Build attention mask and labels from prompt/completion lengths."""
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Build attention mask, labels, and completion mask from prompt/completion lengths."""
         prompt_token_lengths = prompt_token_lengths.to(device=new_input_ids.device, dtype=torch.long)
         completion_lengths = completion_lengths.to(device=new_input_ids.device, dtype=torch.long)
         positions = torch.arange(new_input_ids.shape[1], device=new_input_ids.device).unsqueeze(0)
@@ -907,23 +875,24 @@ class DistillationTrainer(_BaseTrainer):
         new_labels = torch.full_like(new_input_ids, -100)
         new_labels[completion_mask] = new_input_ids[completion_mask]
 
-        return new_attention_mask, new_labels
+        # Region-shaped completion mask (B, completion_width), aligned with `completion_ids`, as GRPO emits it.
+        return new_attention_mask, new_labels, completion_mask[:, prompt_width:].long()
 
     # ──────────────────────────────────────────────────────────────────────
     #  Loss computation
     # ──────────────────────────────────────────────────────────────────────
 
     @staticmethod
-    def _reduce_divergence_loss(jsd, labels=None, reduction="batchmean", num_items_in_batch=None):
-        """Reduce a per-token divergence tensor using the trainer's label mask semantics.
+    def _reduce_divergence_loss(jsd, completion_mask=None, reduction="batchmean", num_items_in_batch=None):
+        """Reduce a per-token divergence tensor over the valid completion tokens.
 
         When `num_items_in_batch` is provided (as under gradient accumulation), the divergence is reduced as `sum /
         num_items_in_batch`, matching the gradient-accumulation-correct behavior of HF's default cross-entropy.
         Otherwise it falls back to the local `reduction` (default `batchmean`). See issue #4719.
         """
         mask = None
-        if labels is not None:
-            mask = labels != -100
+        if completion_mask is not None:
+            mask = completion_mask.bool()
             jsd = jsd[mask]
 
         if num_items_in_batch is not None:
@@ -936,7 +905,7 @@ class DistillationTrainer(_BaseTrainer):
             # clamp_min(1) avoids 0/0 -> nan when a sample has no unmasked positions
             # (e.g. completion fully truncated). jsd[mask] is empty -> jsd.sum() == 0,
             # so 0/1 == 0 with a valid grad path.
-            denom = mask.sum().clamp_min(1) if labels is not None else max(jsd.size(0), 1)
+            denom = mask.sum().clamp_min(1) if completion_mask is not None else max(jsd.size(0), 1)
             return jsd.sum() / denom
         elif reduction == "sum":
             return jsd.sum()
@@ -977,44 +946,52 @@ class DistillationTrainer(_BaseTrainer):
 
         jsd = _jsd_divergence(student_log_probs, teacher_log_probs, beta)
         return DistillationTrainer._reduce_divergence_loss(
-            jsd, labels=labels, reduction=reduction, num_items_in_batch=num_items_in_batch
+            jsd,
+            completion_mask=(labels != -100) if labels is not None else None,
+            reduction=reduction,
+            num_items_in_batch=num_items_in_batch,
         )
 
-    def _get_teacher_logits(self, inputs: dict[str, torch.Tensor | Any]) -> torch.Tensor:
-        """Get teacher logits — dispatches between local model and external server."""
+    def _get_teacher_logits(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
+        """Get logits from the local teacher model."""
         if self.teacher_model is None:
             raise ValueError("No teacher model configured.")
         self.teacher_model.eval()
         with torch.no_grad():
-            return self.teacher_model(
-                input_ids=inputs["input_ids"],
-                attention_mask=inputs["attention_mask"],
-            ).logits
+            return self.teacher_model(input_ids=input_ids, attention_mask=attention_mask).logits
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+        # transformers computes `num_items_in_batch` from the raw dataloader labels, before on-policy generation
+        # replaces the completions; use the count over the generated completions instead (computed in `_fill_buffer`).
+        # Divide by the process count so the per-process loss compensates for DDP gradient averaging (as GRPO does).
+        if self.model.training and self._buffered_num_items is not None:
+            num_items_in_batch = self._buffered_num_items.clamp(min=1.0) / self.accelerator.num_processes
+
         if self.use_liger_loss:
             loss = self._compute_liger_loss(model, inputs, num_items_in_batch=num_items_in_batch)
             return (loss, None) if return_outputs else loss
 
-        # Student forward pass
-        student_outputs = model(
-            input_ids=inputs["input_ids"],
-            attention_mask=inputs["attention_mask"],
-        )
-        prompt_length = self._compute_prompt_length(inputs)
-        labels = inputs["labels"][:, prompt_length:]
+        prompt_ids, prompt_mask = inputs["prompt_ids"], inputs["prompt_mask"]
+        completion_ids, completion_mask = inputs["completion_ids"], inputs["completion_mask"]
+        input_ids = torch.cat([prompt_ids, completion_ids], dim=1)
+        attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
+        logits_to_keep = completion_ids.size(1)  # only the completion tokens are trained on
 
-        # Local teacher: exact full-vocabulary (optionally top-k) generalized JSD/KL loss.
-        teacher_logits = self._get_teacher_logits(inputs)
-        student_logits = student_outputs.logits[:, prompt_length - 1 : -1, :]
-        teacher_logits = teacher_logits[:, prompt_length - 1 : -1, :]
-        loss = self.generalized_jsd_loss(
+        # Student forward pass
+        student_outputs = model(input_ids=input_ids, attention_mask=attention_mask)
+
+        teacher_logits = self._get_teacher_logits(input_ids, attention_mask)
+        student_logits = student_outputs.logits[:, -logits_to_keep - 1 : -1, :]
+        teacher_logits = teacher_logits[:, -logits_to_keep - 1 : -1, :]
+        jsd = self.generalized_jsd_loss(
             student_logits=student_logits,
             teacher_logits=teacher_logits,
-            labels=labels,
             beta=self.beta,
             temperature=self.temperature,
-            num_items_in_batch=num_items_in_batch,
+            reduction="none",
+        )
+        loss = self._reduce_divergence_loss(
+            jsd, completion_mask=completion_mask, num_items_in_batch=num_items_in_batch
         )
 
         return (loss, student_outputs) if return_outputs else loss
@@ -1025,11 +1002,9 @@ class DistillationTrainer(_BaseTrainer):
             decoder = student.get_decoder()
         else:
             decoder = getattr(student, getattr(student, "base_model_prefix", "model"), student)
-        return decoder(
-            input_ids=inputs["input_ids"],
-            attention_mask=inputs["attention_mask"],
-            use_cache=False,
-        )
+        input_ids = torch.cat([inputs["prompt_ids"], inputs["completion_ids"]], dim=1)
+        attention_mask = torch.cat([inputs["prompt_mask"], inputs["completion_mask"]], dim=1)
+        return decoder(input_ids=input_ids, attention_mask=attention_mask, use_cache=False)
 
     def _compute_liger_loss(self, model, inputs, num_items_in_batch=None):
         """Memory-efficient JSD using Liger kernel (operates on hidden states, not full logits)."""
@@ -1048,10 +1023,12 @@ class DistillationTrainer(_BaseTrainer):
             base_teacher = getattr(
                 unwrapped_teacher, getattr(unwrapped_teacher, "base_model_prefix", "model"), unwrapped_teacher
             )
+        input_ids = torch.cat([inputs["prompt_ids"], inputs["completion_ids"]], dim=1)
+        attention_mask = torch.cat([inputs["prompt_mask"], inputs["completion_mask"]], dim=1)
         with torch.no_grad():
             teacher_outputs = base_teacher(
-                input_ids=inputs["input_ids"],
-                attention_mask=inputs["attention_mask"],
+                input_ids=input_ids,
+                attention_mask=attention_mask,
                 use_cache=False,
             )
 
@@ -1062,8 +1039,8 @@ class DistillationTrainer(_BaseTrainer):
         student_hidden = student_hidden.reshape(-1, student_hidden.shape[-1])
         teacher_hidden = teacher_hidden.reshape(-1, teacher_hidden.shape[-1])
 
-        labels_mask = inputs["labels"] != -100
-        masked_input_ids = torch.where(labels_mask, inputs["input_ids"], torch.full_like(inputs["input_ids"], -100))
+        completion_mask = torch.cat([torch.zeros_like(inputs["prompt_mask"]), inputs["completion_mask"]], dim=1).bool()
+        masked_input_ids = torch.where(completion_mask, input_ids, torch.full_like(input_ids, -100))
         true_labels = masked_input_ids[:, 1:].reshape(-1)
 
         student_head = unwrapped_student.get_output_embeddings()

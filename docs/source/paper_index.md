@@ -1311,6 +1311,27 @@ training_args = SFTConfig(
 )
 ```
 
+### Reparameterizing Uniform Diffusion Models: the Leave-One-Out Denoiser
+
+**📜 Paper**: https://huggingface.co/papers/2605.22765
+
+For uniform discrete diffusion models, the usual plug-in cross-entropy does not learn the plain denoiser \\( \mathbb{E}[X_0 \mid X_t] \\) but the leave-one-out (LOO) posterior, which predicts each token without using its own corrupted value. The paper derives exact conversions between the denoiser, the LOO posterior, and the score, so a network can be trained as either parameterization with the same cross-entropy. Given logits \\( f_\theta \\) whose softmax parameterizes the LOO posterior, the denoiser used in the loss is
+
+$$
+d_\theta(x_t, t)^\ell = \mathrm{softmax}\!\left( f_\theta(x_t, t)^\ell + \log\!\left(1 + \frac{K\,\alpha_t}{1 - \alpha_t}\, x_t^\ell\right) \right),
+$$
+
+i.e. an additive correction on the logit of the observed token, where \\( K \\) is the vocabulary size and \\( \alpha_t \\) the probability the uniform forward keeps the clean token. The paper reports that the LOO parameterization consistently improves generation. The block-diffusion SFT example [`examples/scripts/sft_diffusion_gemma.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/sft_diffusion_gemma.py) exposes both parameterizations via `--model_prediction_type` (`mean` for the plain denoiser, matching the released checkpoint, or `mean_loo` for the LOO posterior):
+
+```bash
+accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
+    examples/scripts/sft_diffusion_gemma.py \
+    --use_peft \
+    --gradient_checkpointing \
+    --model_prediction_type mean_loo \
+    --output_dir diffusiongemma-26B-A4B-it-gsm8k-lora
+```
+
 ## Parameter-Efficient Fine-Tuning (PEFT)
 
 For general details on using PEFT with TRL, please refer to the [PEFT Integration](peft_integration) guide.
