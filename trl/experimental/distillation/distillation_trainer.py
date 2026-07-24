@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import inspect
 import random
 import textwrap
 from collections import defaultdict
@@ -20,10 +21,11 @@ from contextlib import nullcontext
 from functools import partial
 from typing import Any, Optional
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from accelerate.utils import gather_object
+from accelerate.utils import gather_object, set_seed
 from datasets import Dataset
 from packaging.version import Version
 from torch.utils.data import DataLoader
@@ -38,7 +40,9 @@ from transformers.tokenization_utils_base import PreTrainedTokenizerBase
 from transformers.trainer_utils import EvalPrediction, seed_worker
 from transformers.utils import is_liger_kernel_available, is_peft_available, is_rich_available
 
-from ...extras.profiling import profiling_decorator
+from ...data_utils import is_conversational
+from ...distributed import DistributedBackend
+from ...extras.profiling import profiling_context, profiling_decorator
 from ...generation.vllm_generation import VLLMGeneration
 from ...import_utils import is_vllm_available
 from ...models import prepare_deepspeed
@@ -320,6 +324,14 @@ class DistillationTrainer(_BaseTrainer):
         else:
             model_name_or_path = model.config._name_or_path if model is not None else None
 
+        # Some models (SmolVLM/Idefics3) don't support `logits_to_keep` argument and error out if we pass it
+        # Inspect the forward method before we wrap the model with PEFT
+        self.model_kwarg_keys = (
+            inspect.signature(model.forward).parameters.keys()
+            if not hasattr(model, "get_base_model")
+            else inspect.signature(model.get_base_model().forward).parameters.keys()
+        )
+
         # ── Processing class (tokenizer) ──
         if processing_class is None and model_name_or_path is not None:
             processing_class = AutoTokenizer.from_pretrained(
@@ -328,6 +340,9 @@ class DistillationTrainer(_BaseTrainer):
         if processing_class is not None:
             if getattr(processing_class, "pad_token", None) is None:
                 processing_class.pad_token = processing_class.eos_token
+        self._tokenizer = (
+            processing_class.tokenizer if isinstance(processing_class, ProcessorMixin) else processing_class
+        )
 
         # ── PEFT ──
         if peft_config is not None:
@@ -429,6 +444,11 @@ class DistillationTrainer(_BaseTrainer):
         # self.model_accepts_loss_kwargs to False to enable scaling.
         self.model_accepts_loss_kwargs = False
 
+        self._dist = DistributedBackend(self.accelerator)
+
+        # Add tags to the model
+        self.model.add_model_tags(self._tag_names)
+
         # ── Prepare teacher model (after super().__init__ so accelerator is ready) ──
         if teacher_model is not None:
             # The divergence compares the full next-token distribution of the student against the teacher's, so both
@@ -456,6 +476,12 @@ class DistillationTrainer(_BaseTrainer):
         self.beta = args.beta
         self.temperature = args.temperature
         self.top_p = args.top_p
+        self.top_k = args.top_k
+        self.min_p = args.min_p
+        self.repetition_penalty = args.repetition_penalty
+        self.chat_template_kwargs = args.chat_template_kwargs or {}
+        self.pad_to_multiple_of = args.pad_to_multiple_of
+        self.shuffle_dataset = args.shuffle_dataset
         self.num_generations = args.num_generations
 
         # ── Buffer state ──
@@ -463,6 +489,11 @@ class DistillationTrainer(_BaseTrainer):
         self._buffered_text_logs = None
         self._buffered_num_items = None
         self._buffer_step = 0
+
+        # Ensure each process receives a unique seed to prevent duplicate completions when generating with
+        # transformers if num_generations exceeds per_device_train_batch_size. We could skip it if we use vLLM, but
+        # it's safer to set it in all cases.
+        set_seed(args.seed, device_specific=True)
 
         # ── Generation config ──
         generation_kwargs = {
@@ -526,17 +557,7 @@ class DistillationTrainer(_BaseTrainer):
                 logprobs=None,
             )
             self.vllm_sync_frequency = args.vllm_sync_frequency
-            self._last_vllm_sync_step = -1
-
-    def _compute_prompt_length(self, inputs: dict[str, torch.Tensor | Any]) -> int:
-        """Compute the earliest prompt boundary that still includes every completion token in the batch."""
-        if inputs.get("labels") is not None:
-            attention_mask = inputs["attention_mask"]
-            labels = inputs["labels"]
-            full_lengths = attention_mask.sum(dim=1)
-            completion_lengths = (labels != -100).sum(dim=1)
-            return int((full_lengths - completion_lengths).min().item())
-        return inputs["prompts"].shape[1]
+            self._last_loaded_step = -1
 
     def _get_completion_lengths(self, generated_tokens: torch.Tensor, prompt_width: int) -> torch.Tensor:
         """Infer per-sample completion lengths from generated tokens."""
@@ -629,6 +650,98 @@ class DistillationTrainer(_BaseTrainer):
         base_dataloader = self.accelerator.prepare(DataLoader(train_dataset, **dataloader_params))
         return _RepeatBatchDataLoader(base_dataloader, repeat_count=self.args.gradient_accumulation_steps)
 
+    def _tokenize_prompts(self, prompts: list):
+        """Tokenize prompts and extract multimodal fields for generation.
+
+        Conversational prompts (a list of chat messages) are rendered with the chat template and a trailing generation
+        prompt; standard prompts (plain strings) are tokenized directly. The per-example tools/environments path and
+        the image extraction are added with VLM support later (issue #6449). Unwired until the GRPO generation stack
+        lands.
+        """
+        if is_conversational({"prompt": prompts[0]}):
+            tokenized = self.processing_class.apply_chat_template(
+                conversation=prompts,
+                add_generation_prompt=True,
+                tokenize=True,
+                return_dict=True,
+                **self.chat_template_kwargs,
+            )
+            prompt_ids = tokenized["input_ids"]
+            # For VLMs, the processor returns extra multimodal fields (pixel_values, image_grid_thw, etc.)
+            multimodal_fields = {k: v for k, v in tokenized.items() if k not in ("input_ids", "attention_mask")}
+        else:
+            prompt_ids = self.processing_class(text=prompts)["input_ids"]
+            multimodal_fields = {}
+        images = None  # extracted from the messages once VLM support lands
+        return prompt_ids, images, multimodal_fields
+
+    def _generate_single_turn(self, prompt_ids, images, multimodal_fields):
+        device = self.accelerator.device
+
+        # Generate completions using either vLLM or regular generation
+        if self.use_vllm:
+            # Sync weights if training step changed
+            if self.state.global_step != self._last_loaded_step:
+                with profiling_context(self, "sync_weights"):
+                    self.vllm_generation.sync_weights()
+                self._last_loaded_step = self.state.global_step
+
+            # Generate using vLLM with raw token IDs. Distillation is n=1 and uses the teacher distribution rather than
+            # sampled logprobs, so we request one completion per prompt and discard vLLM's logprobs.
+            _, completion_ids, _, _ = self.vllm_generation.generate(
+                prompts=prompt_ids,
+                images=images,
+                num_generations=1,
+                profiler=profiling_context(self, "vLLM.generate"),
+            )
+
+        else:
+            # Regular generation path: left-pad token IDs into tensors
+            prompt_tensors = [torch.tensor(ids) for ids in prompt_ids]
+            padded_ids = pad(prompt_tensors, padding_value=self._tokenizer.pad_token_id, padding_side="left")
+            attention_mask = pad([torch.ones_like(t) for t in prompt_tensors], padding_value=0, padding_side="left")
+            generate_inputs = {"input_ids": padded_ids, "attention_mask": attention_mask}
+            # For VLMs, include multimodal fields as tensors (pixel_values, image_grid_thw, etc.)
+            for k, v in multimodal_fields.items():
+                if isinstance(v, torch.Tensor):
+                    generate_inputs[k] = v
+                elif isinstance(v, list) and v and isinstance(v[0], list):
+                    # Per-token field (e.g., token_type_ids): left-pad like input_ids
+                    generate_inputs[k] = pad([torch.tensor(x) for x in v], padding_value=0, padding_side="left")
+                else:
+                    generate_inputs[k] = torch.tensor(np.array(v))
+            generate_inputs = super()._prepare_inputs(generate_inputs)
+
+            with (
+                profiling_context(self, "transformers.generate"),
+                unwrap_model_for_generation(
+                    self.model_wrapped,
+                    self.accelerator,
+                    gather_deepspeed3_params=self.args.ds3_gather_for_generation,
+                    generation_kwargs=self.generation_kwargs,  # Override model.generation_config with generation_kwargs to fix transformers#42762
+                ) as unwrapped_model,
+                torch.no_grad(),
+                self._dist.summon_full_params(self.model_wrapped, recurse=False),
+            ):
+                prompt_completion_ids = unwrapped_model.generate(
+                    **generate_inputs, generation_config=self.generation_config
+                )
+            # Compute prompt length and extract completion ids
+            prompt_length = generate_inputs["input_ids"].size(1)
+            completion_ids = prompt_completion_ids[:, prompt_length:]
+
+            # Mask everything after the first EOS token
+            is_eos = completion_ids == self._tokenizer.eos_token_id
+            eos_idx = torch.full((is_eos.size(0),), is_eos.size(1), dtype=torch.long, device=device)
+            eos_idx[is_eos.any(dim=1)] = is_eos.int().argmax(dim=1)[is_eos.any(dim=1)]
+            sequence_indices = torch.arange(is_eos.size(1), device=device).expand(is_eos.size(0), -1)
+            completion_mask = (sequence_indices <= eos_idx.unsqueeze(1)).int()
+            completion_ids = [
+                c[m].tolist() for c, m in zip(completion_ids.cpu(), completion_mask.bool().cpu(), strict=True)
+            ]
+
+        return completion_ids
+
     # ──────────────────────────────────────────────────────────────────────
     #  Buffering across gradient accumulation steps
     # ──────────────────────────────────────────────────────────────────────
@@ -704,12 +817,9 @@ class DistillationTrainer(_BaseTrainer):
                 local_slice_indices.append(slice_idx)
 
         # Sync student weights to vLLM if needed
-        if (
-            self.state.global_step != self._last_vllm_sync_step
-            and self.state.global_step % self.vllm_sync_frequency == 0
-        ):
+        if self.state.global_step != self._last_loaded_step and self.state.global_step % self.vllm_sync_frequency == 0:
             self.vllm_generation.sync_weights()
-            self._last_vllm_sync_step = self.state.global_step
+            self._last_loaded_step = self.state.global_step
 
         # Generate completions — pass token IDs directly, no text decoding
         prompt_ids_list = [p.tolist() for p in local_prompts]
