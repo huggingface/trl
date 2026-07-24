@@ -241,18 +241,18 @@ def _chunked_divergence_loss(
         chunk_size (`int`):
             Number of valid positions processed per chunk. Peak memory scales linearly with this.
         num_items_in_batch (`torch.Tensor`, `int` or `None`, *optional*):
-            Total number of valid tokens across the global batch. When provided, the loss is reduced as
-            `sum / num_items_in_batch` (gradient-accumulation-correct); when `None`, reduction is `mean` over local
-            valid positions.
+            Total number of valid tokens across the global batch. When provided, the loss is reduced as `sum /
+            num_items_in_batch` (gradient-accumulation-correct); when `None`, reduction is `mean` over local valid
+            positions.
         student_lm_head_bias (`torch.Tensor`, *optional*):
             Student `lm_head` bias of shape `(V,)`, added to each chunk's logits when provided.
         teacher_lm_head_bias (`torch.Tensor`, *optional*):
             Teacher `lm_head` bias of shape `(V,)`, added to each chunk's logits when provided.
 
     Returns:
-        `tuple[torch.Tensor, torch.Tensor, torch.Tensor]`: scalar loss, sum of per-token student entropy (in nats),
-        and number of valid completion positions — all over the local batch. Raw sums are returned so callers can
-        reduce correctly across ranks.
+        `tuple[torch.Tensor, torch.Tensor, torch.Tensor]`: scalar loss, sum of per-token student entropy (in nats), and
+        number of valid completion positions — all over the local batch. Raw sums are returned so callers can reduce
+        correctly across ranks.
     """
     hidden_size = student_hidden_states.size(-1)
     h_s = student_hidden_states.reshape(-1, hidden_size)
