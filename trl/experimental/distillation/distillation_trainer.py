@@ -1076,11 +1076,19 @@ class DistillationTrainer(_BaseTrainer):
             logits_to_keep,
         )
 
+        # Route the teacher backbone through its own wrapper via `_forward_redirection` too, so FSDP/DeepSpeed
+        # materialize its sharded parameters before the forward runs (the backbone call would otherwise see shards).
         self.teacher_model.eval()
         unwrapped_teacher = self.accelerator.unwrap_model(self.teacher_model)
         with torch.no_grad():
-            teacher_hidden_states = self._get_last_hidden_state(
-                unwrapped_teacher, input_ids, attention_mask, logits_to_keep
+            teacher_hidden_states = self._forward_redirection(
+                self.teacher_model,
+                unwrapped_teacher,
+                self._get_last_hidden_state,
+                unwrapped_teacher,
+                input_ids,
+                attention_mask,
+                logits_to_keep,
             )
 
         student_lm_head = unwrapped_student.get_output_embeddings()
