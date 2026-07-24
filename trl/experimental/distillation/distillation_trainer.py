@@ -474,27 +474,36 @@ class DistillationTrainer(_BaseTrainer):
                 model=self.model,
                 accelerator=self.accelerator,
                 processing_class=self.processing_class,
+                # vLLM configuration
                 mode=args.vllm_mode,
                 structured_outputs_regex=args.vllm_structured_outputs_regex,
+                # Server mode configuration
                 server_base_url=args.vllm_server_base_url,
                 server_host=args.vllm_server_host,
                 server_port=args.vllm_server_port,
                 group_port=args.vllm_group_port,
                 server_timeout=args.vllm_server_timeout,
+                # Colocate mode configuration
                 tensor_parallel_size=args.vllm_tensor_parallel_size,
                 gpu_memory_utilization=args.vllm_gpu_memory_utilization,
                 max_model_length=args.vllm_max_model_length,
-                max_num_seqs=args.per_device_train_batch_size * args.gradient_accumulation_steps,
+                max_num_seqs=args.per_device_train_batch_size
+                * args.vllm_tensor_parallel_size
+                * args.gradient_accumulation_steps,
                 enable_sleep_mode=args.vllm_enable_sleep_mode,
                 model_impl=args.vllm_model_impl,
                 trust_remote_code=args.trust_remote_code,
-                temperature=args.temperature,
-                top_p=args.top_p,
-                top_k=args.top_k,
-                max_completion_length=args.max_completion_length,
-                logprobs=None,
+                # Generation configuration
+                repetition_penalty=self.repetition_penalty,
+                temperature=self.temperature,
+                top_p=self.top_p,
+                top_k=self.top_k,
+                min_p=self.min_p,
+                max_completion_length=self.max_completion_length,
+                logprobs=None,  # distillation trains on the teacher distribution, not sampled logprobs
+                generation_kwargs=args.generation_kwargs,
             )
-            self._last_loaded_step = -1
+            self._last_loaded_step = -1  # tag to avoid useless loading during grad accumulation
 
     # ──────────────────────────────────────────────────────────────────────
     #  Dataset / Dataloader
