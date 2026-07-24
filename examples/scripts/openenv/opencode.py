@@ -17,7 +17,7 @@
 #     "trl",
 #     "trackio",
 #     "datasets",
-#     "openenv-opencode @ git+https://github.com/meta-pytorch/OpenEnv.git#subdirectory=envs/opencode_env",
+#     "openenv-opencode @ git+https://github.com/huggingface/OpenEnv.git#subdirectory=envs/opencode_env",
 # ]
 # ///
 
@@ -37,7 +37,7 @@ rollout worker can pickle the factory + verifier into its spawned child process.
 Requirements:
   - An OpenAI-compatible vLLM server (see below) reachable at `--vllm-url`.
   - Internet on this node the first time: `warmup()` installs the `opencode` CLI into a template dir once.
-  - `pip install git+https://github.com/meta-pytorch/OpenEnv.git#subdirectory=envs/opencode_env`
+  - `pip install git+https://github.com/huggingface/OpenEnv.git#subdirectory=envs/opencode_env`
 
 Run (2 GPUs: vLLM on one, trainer on the other):
 
