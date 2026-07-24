@@ -168,17 +168,26 @@ def _jsd_divergence(student_log_probs, teacher_log_probs, beta, support_mask=Non
 _CHUNKED_LM_HEAD_CHUNK_SIZE = 256
 
 
-def _chunk(h_s, w_s, b_s, h_t, w_t, b_t, beta, valid):
+def _chunk(h_s, w_s, b_s, s_scale, s_softcap, h_t, w_t, b_t, t_scale, t_softcap, beta, valid):
     # Project both hidden states to vocab logits inside the checkpointed body so only `(chunk, H)` is retained across
     # the backward, never `(chunk, V)`. ZeRO-3 shards the `lm_head`, so gather it tightly around each projection.
+    # `logit_scale` (Cohere) / `final_logit_softcapping` (Gemma) are applied per model to match its full forward.
     with maybe_gather_lm_head_ctx(w_s, b_s):
         student_logits = h_s.float() @ w_s.float().t()
         if b_s is not None:
             student_logits = student_logits + b_s.float()
+    if s_scale != 1.0:
+        student_logits = student_logits * s_scale
+    if s_softcap is not None:
+        student_logits = s_softcap * torch.tanh(student_logits / s_softcap)
     with maybe_gather_lm_head_ctx(w_t, b_t):
         teacher_logits = h_t.float() @ w_t.float().t()
         if b_t is not None:
             teacher_logits = teacher_logits + b_t.float()
+    if t_scale != 1.0:
+        teacher_logits = teacher_logits * t_scale
+    if t_softcap is not None:
+        teacher_logits = t_softcap * torch.tanh(teacher_logits / t_softcap)
 
     student_log_probs = F.log_softmax(student_logits, dim=-1)
     teacher_log_probs = F.log_softmax(teacher_logits, dim=-1)
@@ -215,6 +224,10 @@ def _chunked_divergence_loss(
     num_items_in_batch: torch.Tensor | int | None = None,
     student_lm_head_bias: torch.Tensor | None = None,
     teacher_lm_head_bias: torch.Tensor | None = None,
+    student_logit_scale: float = 1.0,
+    teacher_logit_scale: float = 1.0,
+    student_final_logit_softcapping: float | None = None,
+    teacher_final_logit_softcapping: float | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Memory-efficient generalized JSD over student/teacher hidden states and their `lm_head` weights.
@@ -248,15 +261,24 @@ def _chunked_divergence_loss(
             Student `lm_head` bias of shape `(V,)`, added to each chunk's logits when provided.
         teacher_lm_head_bias (`torch.Tensor`, *optional*):
             Teacher `lm_head` bias of shape `(V,)`, added to each chunk's logits when provided.
+        student_logit_scale (`float`, *optional*, defaults to `1.0`):
+            Multiplier applied to the student's logits before the softmax (Cohere-style `logit_scale`).
+        teacher_logit_scale (`float`, *optional*, defaults to `1.0`):
+            Multiplier applied to the teacher's logits before the softmax.
+        student_final_logit_softcapping (`float`, *optional*):
+            If set, applies `softcap * tanh(logits / softcap)` to the student's logits (Gemma-style), after the scale.
+        teacher_final_logit_softcapping (`float`, *optional*):
+            If set, applies `softcap * tanh(logits / softcap)` to the teacher's logits, after the scale.
 
     Returns:
         `tuple[torch.Tensor, torch.Tensor, torch.Tensor]`: scalar loss, sum of per-token student entropy (in nats), and
         number of valid completion positions — all over the local batch. Raw sums are returned so callers can reduce
         correctly across ranks.
     """
-    hidden_size = student_hidden_states.size(-1)
-    h_s = student_hidden_states.reshape(-1, hidden_size)
-    h_t = teacher_hidden_states.reshape(-1, hidden_size)
+    # Each model flattens with its own hidden width: the teacher may be wider/narrower than the student (only the
+    # vocabulary must match), and each projects through its own `lm_head`.
+    h_s = student_hidden_states.reshape(-1, student_hidden_states.size(-1))
+    h_t = teacher_hidden_states.reshape(-1, teacher_hidden_states.size(-1))
     valid = completion_mask.reshape(-1) != 0
     n_valid_tensor = valid.sum()
 
@@ -288,9 +310,13 @@ def _chunked_divergence_loss(
             h_s[start : start + chunk_size],
             student_lm_head_weight,
             student_lm_head_bias,
+            student_logit_scale,
+            student_final_logit_softcapping,
             h_t[start : start + chunk_size],
             teacher_lm_head_weight,
             teacher_lm_head_bias,
+            teacher_logit_scale,
+            teacher_final_logit_softcapping,
             beta,
             valid[start : start + chunk_size].float(),
             use_reentrant=False,
