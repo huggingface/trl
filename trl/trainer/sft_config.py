@@ -36,7 +36,7 @@ class SFTConfig(_BaseConfig):
     Parameters:
         > Parameters that control the model
 
-        model_init_kwargs (`dict[str, Any]`, *optional*):
+        model_init_kwargs (`dict[str, Any]` or `str`, *optional*):
             Keyword arguments for [`~transformers.AutoModelForCausalLM.from_pretrained`], used when the `model`
             argument of the [`SFTTrainer`] is provided as a string.
         trust_remote_code (`bool`, *optional*, defaults to `False`):
