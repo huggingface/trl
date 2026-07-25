@@ -23,6 +23,7 @@ import pytest
 import torch
 import torch.nn.functional as F
 import transformers
+from accelerate.hooks import AlignDevicesHook, add_hook_to_module
 from accelerate.utils.memory import release_memory
 from datasets import Dataset, DatasetDict, IterableDatasetDict, load_dataset
 from packaging.version import Version
@@ -2965,3 +2966,34 @@ class TestPatchChunkedCELMHead:
         assert out.num_valid_tokens.item() == unpadded + B
         # Accuracy denominator from the patched output keeps numerator/denominator aligned, so accuracy ≤ 1.
         assert out.num_correct_tokens.item() <= out.num_valid_tokens.item()
+
+
+class TestPatchChunkedCELMHeadWithAccelerateHook:
+    """Regression test for #6483: `original_forward` is not always a plain bound method. `device_map="auto"`
+    (and other accelerate dispatch/offload configurations) replace `model.forward` with a `functools.partial`
+    via `accelerate.hooks.add_hook_to_module`, which has no `__func__` and used to make
+    `_patch_chunked_ce_lm_head` crash with `AttributeError: 'functools.partial' object has no attribute
+    '__func__'`. Runs on CPU: the crash is in signature introspection, not model computation."""
+
+    def test_patch_succeeds_when_forward_is_wrapped_by_accelerate_hook(self):
+        model_id = "trl-internal-testing/tiny-CohereForCausalLM"
+        ref_model = AutoModelForCausalLM.from_pretrained(model_id, dtype=torch.float32)
+        chunked_model = copy.deepcopy(ref_model)
+
+        # Simulates what `device_map="auto"` does when accelerate needs to dispatch/offload the model.
+        add_hook_to_module(chunked_model, AlignDevicesHook())
+        assert not hasattr(chunked_model.forward, "__func__")
+
+        _patch_chunked_ce_lm_head(chunked_model, chunk_size=5)
+
+        B, S = 2, 16
+        input_ids = torch.randint(0, ref_model.config.vocab_size, (B, S))
+        labels = input_ids.clone()
+        labels[:, :4] = -100
+        num_items = int((labels[..., 1:] != -100).sum())
+
+        with torch.no_grad():
+            ref_out = ref_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items)
+            out = chunked_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items)
+
+        torch.testing.assert_close(out.loss, ref_out.loss, atol=1e-5, rtol=1e-5)

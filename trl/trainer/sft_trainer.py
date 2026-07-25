@@ -372,9 +372,16 @@ def _patch_chunked_ce_lm_head(model: torch.nn.Module, chunk_size: int, is_vlm: b
         )
 
     # Keep the original forward signature so `generate`'s `_validate_model_kwargs` still sees the
-    # model's real inputs (e.g. VLM `pixel_values`, `spatial_shapes`) and doesn't reject them. The
-    # unbound `__func__` signature makes `MethodType`'s `self`-stripping land correctly.
-    _chunked_ce_forward.__signature__ = inspect.signature(original_forward.__func__)
+    # model's real inputs (e.g. VLM `pixel_values`, `spatial_shapes`) and doesn't reject them. We need
+    # the unbound signature (with `self` as the first parameter) since `_chunked_ce_forward` declares
+    # `self` explicitly and gets bound via `MethodType` below.
+    # `original_forward` is not always a plain bound method: `device_map="auto"` (and other accelerate
+    # dispatch/offload hooks) replace it with a `functools.partial` built via `functools.update_wrapper`,
+    # and `transformers` decorators (e.g. `can_return_tuple`) wrap the real forward with `functools.wraps`
+    # too. Both set `__wrapped__`, and both make the bound method's implicit `self`-stripping not apply
+    # (a `functools.partial`/`@wraps`-wrapped function has no `__func__`). `inspect.unwrap` follows the
+    # full `__wrapped__` chain in either case, landing on the innermost unbound function with `self` intact.
+    _chunked_ce_forward.__signature__ = inspect.signature(inspect.unwrap(original_forward))
     model.forward = types.MethodType(_chunked_ce_forward, model)
 
 
