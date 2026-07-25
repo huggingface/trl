@@ -858,6 +858,10 @@ class GRPOTrainer(_BaseTrainer):
                 )
             num_placeholder_rows = args.generation_batch_size // args.num_generations
             train_dataset = Dataset.from_dict({"prompt": [[{"role": "user", "content": ""}]] * num_placeholder_rows})
+        elif not isinstance(train_dataset, (Dataset, IterableDataset)):
+            raise TypeError(
+                f"`train_dataset` must be a `Dataset` or `IterableDataset`, got `{type(train_dataset).__name__}`."
+            )
 
         # Iterable datasets can't be indexed, so the RepeatSampler can't be attached to them. Instead, the sampler's
         # ordering is reproduced by streaming (see `get_train_dataloader`/`get_eval_dataloader` and
@@ -1661,6 +1665,12 @@ class GRPOTrainer(_BaseTrainer):
                     )
                     # Convert None values to NaN
                     output_reward_func = [reward if reward is not None else torch.nan for reward in output_reward_func]
+                    if len(output_reward_func) != len(prompts):
+                        raise ValueError(
+                            f"The reward function '{reward_func_name}' returned {len(output_reward_func)} rewards, but "
+                            f"{len(prompts)} were expected (one per prompt-completion pair). Make sure the reward "
+                            f"function returns exactly one reward per completion."
+                        )
                     rewards_per_func[:, i] = torch.tensor(output_reward_func, dtype=torch.float32, device=device)
 
         # Execute async custom functions in parallel using asyncio.gather
@@ -1672,6 +1682,12 @@ class GRPOTrainer(_BaseTrainer):
                         prompts=prompts, completions=completions, completion_ids=completion_ids_list, **reward_kwargs
                     )
                     output = [r if r is not None else torch.nan for r in output]
+                    if len(output) != len(prompts):
+                        raise ValueError(
+                            f"The reward function '{func_name}' returned {len(output)} rewards, but {len(prompts)} "
+                            f"were expected (one per prompt-completion pair). Make sure the reward function returns "
+                            f"exactly one reward per completion."
+                        )
                     return index, output
 
             async def _run_async_funcs():
