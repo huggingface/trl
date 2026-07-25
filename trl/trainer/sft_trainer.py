@@ -101,31 +101,36 @@ class _ChunkedCELMHeadOutput(CausalLMOutputWithPast):
 def _get_expert_usage_counts(
     router_logits: tuple[torch.Tensor, ...] | list[torch.Tensor] | torch.Tensor,
     num_experts_per_tok: int,
-    attention_mask: torch.Tensor | None = None,
+    attention_mask: torch.Tensor,
 ) -> torch.Tensor:
-    """Count top-k router assignments for each layer, excluding padding tokens."""
+    """Count top-k router assignments per sample and layer, excluding padding tokens."""
     if isinstance(router_logits, torch.Tensor):
         router_logits = (router_logits,)
 
-    flat_mask = attention_mask.reshape(-1).bool() if attention_mask is not None else None
+    batch_size = attention_mask.shape[0]
+    flat_mask = attention_mask.reshape(batch_size, -1).bool()
     layer_counts = []
     for layer_idx, layer_router_logits in enumerate(router_logits):
         num_experts = layer_router_logits.shape[-1]
         flattened_logits = layer_router_logits.reshape(-1, num_experts)
-        if flat_mask is not None:
-            if flattened_logits.shape[0] != flat_mask.numel():
-                raise ValueError(
-                    f"Router logits for layer {layer_idx} contain {flattened_logits.shape[0]} token rows, but the "
-                    f"attention mask contains {flat_mask.numel()} positions."
-                )
-            valid_mask = flat_mask.to(flattened_logits.device)
-            flattened_logits = flattened_logits[valid_mask]
+        if flattened_logits.shape[0] != flat_mask.numel():
+            raise ValueError(
+                f"Router logits for layer {layer_idx} contain {flattened_logits.shape[0]} token rows, but the "
+                f"attention mask contains {flat_mask.numel()} positions."
+            )
 
-        selected_experts = flattened_logits.topk(num_experts_per_tok, dim=-1).indices
-        counts = torch.bincount(selected_experts.reshape(-1), minlength=num_experts)
+        selected_experts = (
+            flattened_logits.reshape(batch_size, -1, num_experts).topk(num_experts_per_tok, dim=-1).indices
+        )
+        sample_offsets = torch.arange(batch_size, device=selected_experts.device).reshape(-1, 1, 1) * num_experts
+        selected_experts = selected_experts + sample_offsets
+        valid_mask = flat_mask.to(selected_experts.device).unsqueeze(-1).expand_as(selected_experts)
+        counts = torch.bincount(selected_experts[valid_mask], minlength=batch_size * num_experts).reshape(
+            batch_size, num_experts
+        )
         layer_counts.append(counts)
 
-    return torch.stack(layer_counts)
+    return torch.stack(layer_counts, dim=1)
 
 
 def _summarize_expert_usage(counts: torch.Tensor) -> dict[str, float]:
@@ -420,6 +425,8 @@ def _patch_chunked_ce_lm_head(
             )
             loss = loss + router_aux_loss_coef * aux_loss.to(loss.device)
             if log_expert_usage and not self.training:
+                if attention_mask is None:
+                    attention_mask = torch.ones(hidden_states.shape[:2], dtype=torch.bool, device=hidden_states.device)
                 expert_usage_counts = _get_expert_usage_counts(
                     outputs.router_logits, num_experts_per_tok, attention_mask
                 )
@@ -1843,12 +1850,15 @@ class SFTTrainer(_BaseTrainer):
                         "The model did not return `router_logits` while `log_expert_usage=True`. "
                         "This model family is not compatible with expert-usage logging."
                     )
+                attention_mask = inputs.get("attention_mask")
+                if attention_mask is None:
+                    attention_mask = torch.ones_like(inputs["input_ids"], dtype=torch.bool)
                 expert_usage_counts = _get_expert_usage_counts(
-                    router_logits, self._num_experts_per_tok, inputs.get("attention_mask")
+                    router_logits, self._num_experts_per_tok, attention_mask
                 )
             if expert_usage_counts is None:
                 raise ValueError("Expert-usage counts were not returned by the model forward pass.")
-            expert_usage_counts = self.accelerator.reduce(expert_usage_counts, reduction="sum").detach()
+            expert_usage_counts = self.accelerator.gather_for_metrics(expert_usage_counts).sum(dim=0).detach()
             if self._expert_usage_counts is None:
                 self._expert_usage_counts = expert_usage_counts
             else:

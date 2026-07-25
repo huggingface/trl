@@ -42,7 +42,16 @@ def test_expert_usage_counts_use_top_k_and_ignore_padding():
 
     counts = _get_expert_usage_counts(router_logits, num_experts_per_tok=2, attention_mask=attention_mask)
 
-    torch.testing.assert_close(counts, torch.tensor([[1, 3, 3, 1], [2, 2, 3, 1]]))
+    torch.testing.assert_close(
+        counts,
+        torch.tensor(
+            [
+                [[1, 2, 1, 0], [1, 1, 2, 0]],
+                [[0, 1, 2, 1], [1, 1, 1, 1]],
+            ]
+        ),
+    )
+    torch.testing.assert_close(counts.sum(dim=0), torch.tensor([[1, 3, 3, 1], [2, 2, 3, 1]]))
     assert counts.sum().item() == 2 * 4 * 2  # layers * valid tokens * selected experts
 
 
