@@ -1324,17 +1324,10 @@ class TestKTOTrainer(TrlTestCase):
         # Check that the peft params have changed and the base model params have not changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            # In bitsandbytes, bias parameters are automatically cast to the input dtype during the forward pass if
-            # their dtype doesn’t match. This causes the module to change unexpectedly during the first forward pass of
-            # the training. To handle this, we cast these specific bias parameters to float32 before comparison.
-            # https://github.com/bitsandbytes-foundation/bitsandbytes/blob/45553f7392e524eacf400b132cfe01261f6477be/bitsandbytes/nn/modules.py#L518
-            # We still need to investigate why the compute dtype ends up being different than for these parameters.
-            if n in [
-                "base_model.model.model.layers.1.self_attn.k_proj.bias",
-                "base_model.model.model.layers.1.self_attn.q_proj.base_layer.bias",
-                "base_model.model.model.layers.1.self_attn.v_proj.base_layer.bias",
-            ]:
-                param = param.float()
+            # bitsandbytes casts 4-bit layer biases to the compute dtype during the first forward pass. As of
+            # bitsandbytes 0.50.0, this applies to all Linear4bit biases, so align dtypes before comparing values.
+            if n.endswith(".bias") and param.dtype != new_param.dtype:
+                param = param.to(new_param.dtype)
 
             if "lora" not in n:  # We expect the base model params to be the same
                 torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed.")
