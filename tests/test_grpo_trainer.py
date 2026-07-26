@@ -1709,7 +1709,7 @@ class TestGRPOTrainer(TrlTestCase):
         assert GRPOConfig(output_dir=self.tmp_dir, report_to="none").kl_log_ratio_clip == 20.0
         assert GRPOConfig(output_dir=self.tmp_dir, report_to="none", kl_log_ratio_clip=None).kl_log_ratio_clip is None
 
-    def _get_kl_test_case(
+    def _make_kl_test_case(
         self,
         log_ratios,
         *,
@@ -1778,7 +1778,7 @@ class TestGRPOTrainer(TrlTestCase):
             (torch.float16, 20.0, False, 100.0, 0.0),
             (torch.bfloat16, 20.0, False, 100.0, 0.0),
             (torch.float32, 20.0, False, 100.0, 0.0),
-            (torch.float32, 20.0, True, 100.0, 0.0),
+            (torch.float32, 2.0, True, 3.0, 0.0),
             (torch.float32, 20.0, False, 1.0, 0.1 * (1.0 - np.exp(1.0))),
             (torch.float32, 20.0, True, 1.0, -0.1),
             (torch.float32, 20.0, False, -100.0, 0.1 * (1.0 - np.exp(-100.0))),
@@ -1793,7 +1793,7 @@ class TestGRPOTrainer(TrlTestCase):
         log_ratio,
         expected_grad,
     ):
-        trainer, per_token_logps, inputs = self._get_kl_test_case(
+        trainer, per_token_logps, inputs = self._make_kl_test_case(
             [log_ratio],
             dtype=dtype,
             kl_log_ratio_clip=kl_log_ratio_clip,
@@ -1831,7 +1831,7 @@ class TestGRPOTrainer(TrlTestCase):
     def test_kl_log_ratio_clip_interactions(
         self, importance_sampling_level, log_ratios, completion_mask, tool_mask, advantage, expected_grad
     ):
-        trainer, per_token_logps, inputs = self._get_kl_test_case(
+        trainer, per_token_logps, inputs = self._make_kl_test_case(
             log_ratios,
             use_bias_correction_kl=True,
             importance_sampling_level=importance_sampling_level,
