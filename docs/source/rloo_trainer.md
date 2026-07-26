@@ -629,7 +629,7 @@ Below is a summary of the key changes for [`RLOOConfig`]:
 | `total_episodes` | use `max_steps=total_episodes / gradient_accumulation_steps` instead |
 | `local_rollout_forward_batch_size` | **removed** – now automatically set to `per_device_train_batch_size` (or `per_device_eval_batch_size` during evaluation) |
 | `num_sample_generations` | **removed** – use `logging_steps` to control generation logging frequency |
-| `response_length` | renamed to `max_completion_length` (default: `256`) |
+| `response_length` | renamed to `max_completion_length` (default: `512`) |
 | `stop_token` | **removed** |
 | `stop_token_id` | **removed** – use `processing_class.eos_token_id` instead |
 | `missing_eos_penalty` | **removed** – replicate with a custom reward function checking if `eos_token_id` is in `completion_ids` |
