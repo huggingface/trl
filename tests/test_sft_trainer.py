@@ -2073,7 +2073,6 @@ class TestSFTTrainer(TrlTestCase):
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             packing=True,
-            max_length=32,
             report_to="none",
         )
         trainer = SFTTrainer(
