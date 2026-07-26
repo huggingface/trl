@@ -51,9 +51,10 @@ class GRPOTrainer(_GRPOTrainer):
         # Compute the KL divergence between the model and the reference model
         if self.beta != 0.0:
             ref_per_token_logps = inputs["ref_per_token_logps"]
-            per_token_kl = (
-                torch.exp(ref_per_token_logps - per_token_logps) - (ref_per_token_logps - per_token_logps) - 1
-            )
+            ref_log_ratio = ref_per_token_logps.float() - per_token_logps.float()
+            if self.kl_log_ratio_clip is not None:
+                ref_log_ratio = ref_log_ratio.clamp(max=self.kl_log_ratio_clip)
+            per_token_kl = torch.exp(ref_log_ratio) - ref_log_ratio - 1
 
         # Compute the loss
         advantages = inputs["advantages"]

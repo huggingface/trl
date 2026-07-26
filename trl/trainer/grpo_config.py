@@ -180,6 +180,10 @@ class GRPOConfig(_BaseConfig):
             KL coefficient. If `0.0` (default), the reference model is not loaded, reducing memory usage and improving
             training speed. [DeepSeek-R1 incentivizes reasoning in LLMs through reinforcement
             learning](https://huggingface.co/papers/2501.12948) use a value of `0.001`.
+        kl_log_ratio_clip (`float` or `None`, *optional*, defaults to `20.0`):
+            Maximum reference-to-model log-ratio used by the native GRPO KL estimator. Values above the limit
+            contribute no gradient through the KL term. Set to `None` to disable clipping. Ignored when
+            `use_liger_kernel=True`.
         num_iterations (`int`, *optional*, defaults to `1`):
             Number of iterations per batch (denoted as μ in the algorithm).
         epsilon (`float`, *optional*, defaults to `0.2`):
@@ -674,6 +678,14 @@ class GRPOConfig(_BaseConfig):
             "help": "KL coefficient. If `0.0` (default), the reference model is not loaded, reducing memory usage and "
             "improving training speed. [DeepSeek-R1 incentivizes reasoning in LLMs through reinforcement "
             "learning](https://huggingface.co/papers/2501.12948) use a value of `0.001`."
+        },
+    )
+    kl_log_ratio_clip: float | None = field(
+        default=20.0,
+        metadata={
+            "help": "Maximum reference-to-model log-ratio used by the native GRPO KL estimator. Values above the "
+            "limit contribute no gradient through the KL term. Set to `None` to disable clipping. Ignored when "
+            "`use_liger_kernel=True`."
         },
     )
     num_iterations: int = field(

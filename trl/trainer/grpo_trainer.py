@@ -956,6 +956,7 @@ class GRPOTrainer(_BaseTrainer):
 
         # Reference model
         self.beta = args.beta
+        self.kl_log_ratio_clip = args.kl_log_ratio_clip
         if self.beta == 0.0:
             # If beta is 0.0, the reference model is not needed
             self.ref_model = None
@@ -3084,12 +3085,25 @@ class GRPOTrainer(_BaseTrainer):
         # Compute the KL divergence between the model and the reference model
         if self.beta != 0.0:
             ref_per_token_logps = inputs["ref_per_token_logps"]
-            per_token_kl = (
-                torch.exp(ref_per_token_logps - per_token_logps) - (ref_per_token_logps - per_token_logps) - 1
-            )
+            ref_log_ratio = ref_per_token_logps.float() - per_token_logps.float()
+            if self.kl_log_ratio_clip is not None:
+                is_kl_log_ratio_clipped = ref_log_ratio > self.kl_log_ratio_clip
+                ref_log_ratio = ref_log_ratio.clamp(max=self.kl_log_ratio_clip)
+            else:
+                is_kl_log_ratio_clipped = None
+            per_token_kl = torch.exp(ref_log_ratio) - ref_log_ratio - 1
             # Importance sampling correction for the KL divergence
             if self.args.use_bias_correction_kl:
-                per_token_kl = per_token_kl * coef_1
+                kl_coef = coef_1
+                if is_kl_log_ratio_clipped is not None:
+                    detach_kl_coef = is_kl_log_ratio_clipped & mask.bool()
+                    if self.importance_sampling_level == "sequence":
+                        # The sequence-level KL coefficient is shared across all active tokens.
+                        # Detach it if any active token is clipped to prevent capped KL values from
+                        # contributing to other tokens' gradients through the shared coefficient.
+                        detach_kl_coef = detach_kl_coef.any(dim=-1, keepdim=True)
+                    kl_coef = torch.where(detach_kl_coef, coef_1.detach(), coef_1)
+                per_token_kl = per_token_kl * kl_coef
 
         # From here, log_importance_weights (and all subsequent tensors, coef_1, coef_2, etc.) shape depends on
         # importance_sampling_level: "token" level: (B, T); "sequence" level: (B, 1)

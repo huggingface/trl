@@ -15,6 +15,7 @@
 import gc
 import os
 import warnings
+from collections import defaultdict
 from collections.abc import Callable
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -1703,6 +1704,155 @@ class TestGRPOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    def test_kl_log_ratio_clip_config(self):
+        assert GRPOConfig(output_dir=self.tmp_dir, report_to="none").kl_log_ratio_clip == 20.0
+        assert GRPOConfig(output_dir=self.tmp_dir, report_to="none", kl_log_ratio_clip=None).kl_log_ratio_clip is None
+
+    def _get_kl_test_case(
+        self,
+        log_ratios,
+        *,
+        dtype=torch.float32,
+        kl_log_ratio_clip=20.0,
+        use_bias_correction_kl=False,
+        importance_sampling_level="token",
+        completion_mask=None,
+        tool_mask=None,
+        advantage=0.0,
+    ):
+        trainer = object.__new__(GRPOTrainer)
+        trainer.beta = 0.1
+        trainer.kl_log_ratio_clip = kl_log_ratio_clip
+        trainer.top_entropy_quantile = 1.0
+        trainer.off_policy_mask_threshold = None
+        trainer.importance_sampling_level = importance_sampling_level
+        trainer.loss_type = "grpo"
+        trainer.epsilon_low = 0.2
+        trainer.epsilon_high = 0.2
+        trainer.use_vllm = False
+        trainer.vllm_importance_sampling_correction = False
+        trainer.current_gradient_accumulation_steps = 1
+        trainer._entropy_bonus_enabled = False
+        trainer.aux_loss_enabled = False
+        trainer.args = SimpleNamespace(use_bias_correction_kl=use_bias_correction_kl, delta=None)
+        trainer.accelerator = SimpleNamespace(reduce=lambda tensor, reduction: tensor, gather=lambda tensor: tensor)
+        trainer._metrics = {"train": defaultdict(list)}
+
+        log_ratios = torch.tensor(log_ratios, dtype=dtype)
+        if log_ratios.ndim == 1:
+            log_ratios = log_ratios.unsqueeze(0)
+        batch_size, num_tokens = log_ratios.shape
+        per_token_logps = torch.full_like(log_ratios, -100.0, requires_grad=True)
+        trainer._get_per_token_logps_and_entropies = MagicMock(
+            return_value=(per_token_logps, torch.zeros_like(per_token_logps), None)
+        )
+        trainer.model = torch.nn.Identity()
+        if completion_mask is None:
+            completion_mask = torch.ones_like(log_ratios, dtype=torch.long)
+        else:
+            completion_mask = torch.tensor(completion_mask).reshape(batch_size, num_tokens)
+        advantages = torch.tensor(advantage, dtype=dtype).reshape(-1).expand(batch_size)
+        inputs = {
+            "prompt_ids": torch.zeros((batch_size, 1), dtype=torch.long),
+            "prompt_mask": torch.ones((batch_size, 1), dtype=torch.long),
+            "completion_ids": torch.arange(1, num_tokens + 1).expand(batch_size, -1),
+            "completion_mask": completion_mask,
+            "advantages": advantages,
+            "ref_per_token_logps": per_token_logps.detach() + log_ratios,
+        }
+        if tool_mask is not None:
+            inputs["tool_mask"] = torch.tensor(tool_mask).reshape(batch_size, num_tokens)
+
+        return trainer, per_token_logps, inputs
+
+    @pytest.mark.parametrize(
+        (
+            "dtype",
+            "kl_log_ratio_clip",
+            "use_bias_correction_kl",
+            "log_ratio",
+            "expected_grad",
+        ),
+        [
+            (torch.float16, 20.0, False, 100.0, 0.0),
+            (torch.bfloat16, 20.0, False, 100.0, 0.0),
+            (torch.float32, 20.0, False, 100.0, 0.0),
+            (torch.float32, 20.0, True, 100.0, 0.0),
+            (torch.float32, 20.0, False, 1.0, 0.1 * (1.0 - np.exp(1.0))),
+            (torch.float32, 20.0, True, 1.0, -0.1),
+            (torch.float32, 20.0, False, -100.0, 0.1 * (1.0 - np.exp(-100.0))),
+            (torch.float32, None, False, 25.0, 0.1 * (1.0 - np.exp(25.0))),
+        ],
+    )
+    def test_kl_log_ratio_clip(
+        self,
+        dtype,
+        kl_log_ratio_clip,
+        use_bias_correction_kl,
+        log_ratio,
+        expected_grad,
+    ):
+        trainer, per_token_logps, inputs = self._get_kl_test_case(
+            [log_ratio],
+            dtype=dtype,
+            kl_log_ratio_clip=kl_log_ratio_clip,
+            use_bias_correction_kl=use_bias_correction_kl,
+        )
+
+        loss = trainer._compute_loss(trainer.model, inputs)
+
+        assert torch.isfinite(loss)
+        expected_log_ratio = min(log_ratio, kl_log_ratio_clip) if kl_log_ratio_clip is not None else log_ratio
+        expected_kl = np.exp(expected_log_ratio) - expected_log_ratio - 1
+        assert trainer._metrics["train"]["kl"][-1] == pytest.approx(expected_kl)
+        loss.backward()
+        assert torch.isfinite(per_token_logps.grad).all()
+        assert per_token_logps.grad.item() == pytest.approx(expected_grad, rel=1e-4, abs=1e-6)
+
+    @pytest.mark.parametrize(
+        ("importance_sampling_level", "log_ratios", "completion_mask", "tool_mask", "advantage", "expected_grad"),
+        [
+            (
+                "sequence",
+                [[100.0, 1.0], [1.0, 1.0]],
+                None,
+                None,
+                [0.0, 0.0],
+                [[0.0, 0.025 * (1.0 - np.exp(1.0))], [-0.025, -0.025]],
+            ),
+            ("sequence", [1.0, 100.0], [1, 0], None, 0.0, [-0.1, 0.0]),
+            ("sequence", [1.0, 100.0], [1, 1], [1, 0], 0.0, [-0.1, 0.0]),
+            ("sequence", [1.0, 100.0], [0, 0], None, 0.0, [0.0, 0.0]),
+            ("sequence", [1.0, 100.0], [1, 1], [0, 0], 0.0, [0.0, 0.0]),
+            ("token", [100.0], None, None, 1.0, [-1.0]),
+        ],
+    )
+    def test_kl_log_ratio_clip_interactions(
+        self, importance_sampling_level, log_ratios, completion_mask, tool_mask, advantage, expected_grad
+    ):
+        trainer, per_token_logps, inputs = self._get_kl_test_case(
+            log_ratios,
+            use_bias_correction_kl=True,
+            importance_sampling_level=importance_sampling_level,
+            completion_mask=completion_mask,
+            tool_mask=tool_mask,
+            advantage=advantage,
+        )
+
+        loss = trainer._compute_loss(trainer.model, inputs)
+
+        assert torch.isfinite(loss)
+        loss.backward()
+
+        assert torch.isfinite(per_token_logps.grad).all()
+        expected_grad = torch.tensor(expected_grad, dtype=per_token_logps.dtype).reshape_as(per_token_logps)
+        torch.testing.assert_close(
+            per_token_logps.grad,
+            expected_grad,
+            rtol=1e-4,
+            atol=1e-6,
+        )
 
     def test_reward_func_wrong_number_of_rewards(self):
         # A reward function that returns the wrong number of rewards should raise a clear error instead of silently
