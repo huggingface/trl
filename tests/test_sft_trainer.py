@@ -2062,6 +2062,77 @@ class TestSFTTrainer(TrlTestCase):
             else:
                 assert not torch.equal(param, new_param), f"Param {n} is not updated"
 
+    @pytest.mark.parametrize(
+        "config_kwargs",
+        [
+            {"packing": True, "max_length": 32},
+            {"packing": True, "packing_strategy": "wrapped", "max_length": 32},
+            {"padding_free": True, "max_length": None},
+            {"assistant_only_loss": True},
+            {"truncation_mode": "keep_end", "max_length": 32},
+        ],
+    )
+    @ignore_warnings(message="You are using packing, but the attention implementation is not.*", category=UserWarning)
+    @ignore_warnings(message="Padding-free training is enabled, but the attention.*", category=UserWarning)
+    @ignore_warnings(message="The `'keep_end'` truncation mode is deprecated.*", category=FutureWarning)
+    @require_vision
+    def test_train_vlm_text_only_data_uses_text_pipeline(self, config_kwargs):
+        # These options are incompatible with on-the-fly image processing, not with VLMs. A text-only dataset goes
+        # through the regular text pipeline, so they must be available on a VLM checkpoint too. Regression test
+        # for #6545.
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
+
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            report_to="none",
+            **config_kwargs,
+        )
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            if n.startswith("model.visual"):
+                torch.testing.assert_close(param, new_param, rtol=1e-12, atol=1e-12, msg=f"Param {n} is updated")
+            else:
+                assert not torch.equal(param, new_param), f"Param {n} is not updated"
+
+    @pytest.mark.parametrize(
+        ("config_kwargs", "error_match"),
+        [
+            ({"packing": True}, "Packing is not supported for vision datasets"),
+            ({"padding_free": True}, "Padding-free training is yet not supported for vision datasets"),
+            ({"assistant_only_loss": True}, "Assistant-only loss is not yet supported for vision datasets"),
+            (
+                {"truncation_mode": "keep_end", "max_length": 32},
+                "truncation_mode='keep_end' is not supported for vision datasets",
+            ),
+        ],
+    )
+    @ignore_warnings(message="The `'keep_end'` truncation mode is deprecated.*", category=FutureWarning)
+    @require_vision
+    def test_vision_dataset_unsupported_options_raise(self, config_kwargs, error_match):
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_language_modeling", split="train")
+
+        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none", **config_kwargs)
+        with pytest.raises(ValueError, match=error_match):
+            SFTTrainer(
+                model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+                args=training_args,
+                train_dataset=dataset,
+            )
+
     @require_vision
     def test_vision_dataset_with_text_model_raises(self):
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_language_modeling", split="train")
