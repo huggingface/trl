@@ -822,11 +822,13 @@ def enable_selective_activation_checkpointing(model: nn.Module) -> None:
     context_fn = partial(create_selective_checkpoint_contexts, policy_fn)
     original_gradient_checkpointing_enable = model.gradient_checkpointing_enable
 
-    def gradient_checkpointing_enable(gradient_checkpointing_kwargs: dict | None = None):
+    def gradient_checkpointing_enable(gradient_checkpointing_kwargs: dict | None = None, **kwargs):
         gradient_checkpointing_kwargs = dict(gradient_checkpointing_kwargs or {})
         # SAC intercepts saved tensors, which only happens under non-reentrant checkpointing.
         gradient_checkpointing_kwargs["use_reentrant"] = False
         gradient_checkpointing_kwargs["context_fn"] = context_fn
-        return original_gradient_checkpointing_enable(gradient_checkpointing_kwargs=gradient_checkpointing_kwargs)
+        return original_gradient_checkpointing_enable(
+            gradient_checkpointing_kwargs=gradient_checkpointing_kwargs, **kwargs
+        )
 
     model.gradient_checkpointing_enable = gradient_checkpointing_enable
