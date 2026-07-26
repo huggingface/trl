@@ -422,6 +422,12 @@ class _EmptyIterableDataset(torch.utils.data.IterableDataset):
         return iter([])
 
 
+# Multimodal fields that are per-TOKEN rather than per-image: the mask marking which positions hold image
+# placeholders. Models spell it differently (Gemma 3 `token_type_ids`, Gemma 4 / Qwen `mm_token_type_ids`), so the
+# rollout carries whichever its processor emits and the collator recomputes the value over its packed row.
+_PER_TOKEN_MM_KEYS = ("token_type_ids", "mm_token_type_ids")
+
+
 @dataclass
 class DataCollatorForRollout(DataCollatorMixin):
     """
@@ -446,6 +452,8 @@ class DataCollatorForRollout(DataCollatorMixin):
     num_processes: int = 1
     return_tensors: str = "pt"
     is_vlm: bool = False
+    # VLM only: id of the image placeholder token, used to rebuild the per-token image mask over a packed row.
+    image_token_id: int | None = None
     # Distinct prompt-group ids, it counts exactly the prompt-groups that get trained
     groups_trained: set[int] = field(default_factory=set)
     # VLM only: a FIFO of each micro-batch's per-row pixel tensors, kept OUT of the returned batch because
@@ -530,12 +538,25 @@ class DataCollatorForRollout(DataCollatorMixin):
         # `pixel_values`; `compute_loss` reads `self.multimodal_rows[rank]`. Rows with no images contribute `None`.
         if self.is_vlm:
             multimodal_rows = []
-            for group in groups:
+            for group, row_ids in zip(groups, input_ids, strict=True):
                 row_mm = [ex["multimodal_inputs"] for ex in group if ex.get("multimodal_inputs")]
-                if row_mm:
-                    multimodal_rows.append({k: torch.cat([m[k] for m in row_mm], dim=0) for k in row_mm[0]})
-                else:
+                if not row_mm:
                     multimodal_rows.append(None)
+                    continue
+                row = {}
+                for key in row_mm[0]:
+                    if key in _PER_TOKEN_MM_KEYS:
+                        # Per-token image mask (Gemma's `token_type_ids`, Gemma 4 / Qwen's `mm_token_type_ids`).
+                        # The rollout's copy covers one PROMPT, but this row packs several re-tokenized
+                        # prompt+completion sequences, so concatenating it would misalign. Rebuild it from the
+                        # packed ids instead — the placeholders are already in there, which is what the mask marks.
+                        # Mirrors `GRPOTrainer`'s tool-image branch.
+                        row[key] = (row_ids == self.image_token_id).long().unsqueeze(0)
+                    else:
+                        # Per-image / per-patch field (`pixel_values`, `image_position_ids`, `image_grid_thw`, ...):
+                        # concatenate in sample order, matching the order their placeholders appear in `row_ids`.
+                        row[key] = torch.cat([m[key] for m in row_mm], dim=0)
+                multimodal_rows.append(row)
             self.multimodal_queue.append(multimodal_rows)
 
         return batch
@@ -738,9 +759,13 @@ class AsyncGRPOTrainer(_BaseTrainer):
         if isinstance(processing_class, ProcessorMixin):
             self._tokenizer = processing_class.tokenizer
             self._is_vlm = True
+            # Placeholder token the processor expands images into. The collator marks these positions to rebuild
+            # the per-token image mask over a packed row (see `DataCollatorForRollout`).
+            self._image_token_id = processing_class.image_token_id
         elif isinstance(processing_class, PreTrainedTokenizerBase):
             self._tokenizer = processing_class
             self._is_vlm = False
+            self._image_token_id = None
         else:
             raise TypeError("The `processing_class` must be either a `PreTrainedTokenizerBase` or a `ProcessorMixin`")
         if self._tokenizer.pad_token is None:
@@ -930,7 +955,11 @@ class AsyncGRPOTrainer(_BaseTrainer):
         # Keep a handle on the collator so `compute_loss` can read the current batch's stashed VLM pixel tensors
         # (they can't ride in the dispatched batch dict — see `DataCollatorForRollout.multimodal_rows`).
         self._rollout_collator = DataCollatorForRollout(
-            self._tokenizer.pad_token_id, num_processes, is_vlm=self._is_vlm, groups_trained=self._trained_groups
+            self._tokenizer.pad_token_id,
+            num_processes,
+            is_vlm=self._is_vlm,
+            image_token_id=self._image_token_id,
+            groups_trained=self._trained_groups,
         )
         return self.accelerator.prepare(
             DataLoader(

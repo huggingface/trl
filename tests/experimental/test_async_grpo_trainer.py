@@ -458,6 +458,38 @@ class TestPackingAwareBatching(TrlTestCase):
         assert batch["global_n_tokens"].tolist() == [6.0, 6.0]  # a:2 + c:1 + b:1 + d:2 completion tokens
         assert batch["metrics"]["reward"].tolist() == [[0.5, 0.25], [0.75, 0.5]]  # one row per rank, per sample
 
+    def test_collator_merges_vlm_multimodal_fields(self):
+        # Per-image fields concatenate over samples; the per-token image mask is rebuilt over the packed row.
+        # Carrying the rollout's prompt-shaped mask instead would misalign, since a row packs several
+        # prompt+completion sequences. IMAGE_TOKEN_ID is the placeholder the processor expanded images into.
+        image_token_id = 99
+        collator = DataCollatorForRollout(pad_token_id=0, num_processes=1, is_vlm=True, image_token_id=image_token_id)
+        a = _rollout_sample(3, advantage=1.0)
+        b = _rollout_sample(2, advantage=2.0)
+        a["input_ids"] = [image_token_id, 5, 6]  # placeholder, then two generated tokens
+        b["input_ids"] = [7, image_token_id]
+        # What the rollout worker carries: a prompt-shaped per-token mask plus per-image tensors.
+        a["multimodal_inputs"] = {
+            "pixel_values": torch.ones(1, 4),
+            "mm_token_type_ids": torch.tensor([[1, 0]]),  # shorter than the packed row on purpose
+        }
+        b["multimodal_inputs"] = {"pixel_values": torch.full((1, 4), 2.0), "mm_token_type_ids": torch.tensor([[0, 1]])}
+
+        collator([[[a, b]]])
+        (row,) = collator.multimodal_queue.popleft()
+
+        assert row["pixel_values"].shape == (2, 4)  # one entry per image, in sample order
+        assert row["pixel_values"][0].tolist() == [1.0] * 4
+        # Rebuilt over the packed row [99, 5, 6, 7, 99] -> marks exactly the placeholder positions.
+        assert row["mm_token_type_ids"].tolist() == [[1, 0, 0, 0, 1]]
+
+    def test_collator_skips_multimodal_for_rows_without_images(self):
+        collator = DataCollatorForRollout(pad_token_id=0, num_processes=1, is_vlm=True, image_token_id=99)
+
+        collator([[[_rollout_sample(3)]]])
+
+        assert collator.multimodal_queue.popleft() == [None]
+
 
 def _finalize(turns, rollout_id="r0", fork_threshold=1024):
     return _chain_to_sequences(turns, rollout_id, fork_threshold)

@@ -839,17 +839,13 @@ class _AsyncRolloutLoop:
                     **self.chat_template_kwargs,
                 )
                 prompt_ids = enc["input_ids"][0].tolist()
-                multimodal_inputs = {
-                    k: enc[k]
-                    for k in (
-                        "pixel_values",
-                        "image_grid_thw",
-                        "image_sizes",
-                        "spatial_shapes",
-                        "pixel_attention_mask",
-                    )
-                    if k in enc
-                }
+                # Keep every non-text field the processor returned, like `GRPOTrainer` does when it builds
+                # `forward_kwargs`. A fixed whitelist silently drops model-specific keys — Gemma 4 needs
+                # `image_position_ids` (its vision tower dereferences it unconditionally) and Qwen needs
+                # `image_grid_thw`. The per-token `*token_type_ids` fields ride along only so the collator learns
+                # which name this model uses; their values describe THIS prompt, so the collator recomputes them
+                # over the packed row (see `_PER_TOKEN_MM_KEYS` there).
+                multimodal_inputs = {k: v for k, v in enc.items() if k not in ("input_ids", "attention_mask")}
             else:
                 prompt_ids = self.tokenizer.apply_chat_template(  # re-tokenize the WHOLE conversation
                     messages,
