@@ -20,7 +20,11 @@ from transformers.testing_utils import torch_device
 from transformers.utils import is_peft_available
 
 from trl.models import activation_offloading as activation_offloading_module
-from trl.models.activation_offloading import NoOpManager, OffloadActivations
+from trl.models.activation_offloading import (
+    NoOpManager,
+    OffloadActivations,
+    enable_selective_activation_checkpointing,
+)
 
 from .testing_utils import TrlTestCase, require_peft, require_torch_accelerator
 
@@ -322,7 +326,7 @@ class TestSelectiveActivationCheckpointing(TrlTestCase):
         # Selective activation checkpointing: our wrapper injects the SAC context function.
         model_sac = AutoModelForCausalLM.from_pretrained(self.model_id, attn_implementation="sdpa").to(torch_device)
         model_sac.train()
-        activation_offloading_module.enable_selective_activation_checkpointing(model_sac)
+        enable_selective_activation_checkpointing(model_sac)
         model_sac.gradient_checkpointing_enable()
         grads_sac, sdpa_sac = self._forward_backward(model_sac)
 
