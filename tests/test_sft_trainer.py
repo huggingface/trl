@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import collections
 import copy
 import gc
 import json
@@ -23,7 +24,7 @@ import torch
 import torch.nn.functional as F
 import transformers
 from accelerate.utils.memory import release_memory
-from datasets import Dataset, load_dataset
+from datasets import Dataset, DatasetDict, IterableDatasetDict, load_dataset
 from packaging.version import Version
 from transformers import (
     AutoModelForCausalLM,
@@ -238,71 +239,6 @@ class TestDataCollatorForLanguageModeling(TrlTestCase):
         torch.testing.assert_close(result["attention_mask"], torch.tensor([[1, 1, 1], [1, 1, 0]]))
         torch.testing.assert_close(result["labels"], torch.tensor([[1, 2, 3], [4, 5, -100]]))
 
-    def test_max_length_keep_start(self):
-        """Test that sequences longer than max_length are truncated from the start."""
-        collator = DataCollatorForLanguageModeling(pad_token_id=0, max_length=3)
-        examples = [
-            {"input_ids": [1, 2, 3, 4, 5], "labels": [1, 2, 3, 4, 5]},
-            {"input_ids": [6, 7, 8], "labels": [6, 7, 8]},
-        ]
-
-        result = collator(examples)
-
-        assert set(result.keys()) == {"input_ids", "attention_mask", "labels"}
-        torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3], [6, 7, 8]]))
-        torch.testing.assert_close(result["attention_mask"], torch.tensor([[1, 1, 1], [1, 1, 1]]))
-        torch.testing.assert_close(result["labels"], torch.tensor([[1, 2, 3], [6, 7, 8]]))
-
-    def test_max_length_keep_end(self):
-        """Test that sequences longer than max_length are truncated from the end (keeping last tokens)."""
-        collator = DataCollatorForLanguageModeling(pad_token_id=0, max_length=3, truncation_mode="keep_end")
-        examples = [
-            {"input_ids": [1, 2, 3, 4, 5], "labels": [1, 2, 3, 4, 5]},
-            {"input_ids": [6, 7, 8], "labels": [6, 7, 8]},
-        ]
-
-        result = collator(examples)
-
-        assert set(result.keys()) == {"input_ids", "attention_mask", "labels"}
-        torch.testing.assert_close(result["input_ids"], torch.tensor([[3, 4, 5], [6, 7, 8]]))
-        torch.testing.assert_close(result["attention_mask"], torch.tensor([[1, 1, 1], [1, 1, 1]]))
-        torch.testing.assert_close(result["labels"], torch.tensor([[3, 4, 5], [6, 7, 8]]))
-
-    def test_max_length_no_truncation_needed(self):
-        """Test that max_length larger than sequences does not alter the output."""
-        collator = DataCollatorForLanguageModeling(pad_token_id=0, max_length=10)
-        examples = [{"input_ids": [1, 2, 3], "labels": [1, 2, 3]}, {"input_ids": [4, 5], "labels": [4, 5]}]
-
-        result = collator(examples)
-
-        assert set(result.keys()) == {"input_ids", "attention_mask", "labels"}
-        torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3], [4, 5, 0]]))
-        torch.testing.assert_close(result["attention_mask"], torch.tensor([[1, 1, 1], [1, 1, 0]]))
-        torch.testing.assert_close(result["labels"], torch.tensor([[1, 2, 3], [4, 5, -100]]))
-
-    def test_max_length_without_labels(self):
-        """Truncation without labels: labels default to the input IDs and are truncated with the same window."""
-        collator = DataCollatorForLanguageModeling(pad_token_id=0, max_length=3)
-        examples = [{"input_ids": [1, 2, 3, 4, 5]}, {"input_ids": [6, 7, 8]}]
-
-        result = collator(examples)
-
-        assert set(result.keys()) == {"input_ids", "attention_mask", "labels"}
-        torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3], [6, 7, 8]]))
-        torch.testing.assert_close(result["attention_mask"], torch.tensor([[1, 1, 1], [1, 1, 1]]))
-        torch.testing.assert_close(result["labels"], torch.tensor([[1, 2, 3], [6, 7, 8]]))
-
-    def test_max_length_invalid_truncation_mode(self):
-        """Test that an invalid truncation_mode raises ValueError."""
-        collator = DataCollatorForLanguageModeling(pad_token_id=0, max_length=3, truncation_mode="invalid")
-        examples = [
-            {"input_ids": [1, 2, 3, 4, 5], "labels": [1, 2, 3, 4, 5]},
-            {"input_ids": [6, 7, 8], "labels": [6, 7, 8]},
-        ]
-
-        with pytest.raises(ValueError, match="Unsupported truncation mode"):
-            collator(examples)
-
     def test_single_example_single_doc(self):
         batch_seq_lengths = [[5]]
         result = DataCollatorForLanguageModeling.get_position_ids_from_packed_seq_lengths(batch_seq_lengths)
@@ -356,6 +292,14 @@ class TestSFTTrainer(TrlTestCase):
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("4.57.0"),
                     reason="Olmo 3 requires transformers>=4.57.0",
+                ),
+            ),
+            "trl-internal-testing/tiny-Lfm2ForCausalLM",
+            pytest.param(
+                "trl-internal-testing/tiny-Lfm2ForCausalLM-2.5",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.0.0"),
+                    reason="LFM2.5 tokenizer requires transformers>=5.0.0",
                 ),
             ),
         ],
@@ -950,7 +894,7 @@ class TestSFTTrainer(TrlTestCase):
             captured["skip_logits"] = inputs.get("skip_logits")
             dummy_loss = torch.tensor(1.0, requires_grad=True)
             dummy_outputs = MagicMock()
-            dummy_outputs.token_accuracy = None
+            dummy_outputs.token_accuracy = torch.tensor(0.5)
             dummy_outputs.logits = torch.randn(1, 5, trainer.model.config.vocab_size)
             return (dummy_loss, dummy_outputs)
 
@@ -994,7 +938,12 @@ class TestSFTTrainer(TrlTestCase):
         def mock_super_compute_loss(model, inputs, return_outputs=False, num_items_in_batch=None):
             captured["skip_logits"] = inputs.get("skip_logits")
             dummy_loss = torch.tensor(1.0, requires_grad=True)
-            dummy_outputs = (dummy_loss, torch.randn(1, 5, trainer.model.config.vocab_size))
+            DummyOutput = collections.namedtuple("DummyOutput", ["loss", "logits", "token_accuracy"])
+            dummy_outputs = DummyOutput(
+                loss=dummy_loss,
+                logits=torch.randn(1, 5, trainer.model.config.vocab_size),
+                token_accuracy=torch.tensor(0.5),
+            )
             return (dummy_loss, dummy_outputs)
 
         with patch("transformers.Trainer.compute_loss", side_effect=mock_super_compute_loss):
@@ -1051,25 +1000,6 @@ class TestSFTTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
-
-    def test_skip_prepare_dataset_passes_truncation_to_text_collator(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train[:2]")
-        with pytest.warns(FutureWarning, match="keep_end.*deprecated"):
-            training_args = SFTConfig(
-                output_dir=self.tmp_dir,
-                max_length=16,
-                truncation_mode="keep_end",
-                dataset_kwargs={"skip_prepare_dataset": True},
-                report_to="none",
-            )
-
-        trainer = SFTTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
-        )
-
-        assert isinstance(trainer.data_collator, DataCollatorForLanguageModeling)
-        assert trainer.data_collator.max_length == 16
-        assert trainer.data_collator.truncation_mode == "keep_end"
 
     def test_dataset_with_transform_requires_skip_prepare_dataset(self):
         dataset = Dataset.from_dict({"text": ["hello world"]})
@@ -1304,7 +1234,7 @@ class TestSFTTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    def test_dataset_prep_builds_labels_for_assistant_only_loss(self):
+    def test_dataset_preparation_builds_labels_for_assistant_only_loss(self):
         """Dataset preparation must bake the assistant masks into a labels column."""
         dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
 
@@ -1315,35 +1245,44 @@ class TestSFTTrainer(TrlTestCase):
 
         assert "labels" in trainer.train_dataset.column_names
         for example in trainer.train_dataset:
-            assert len(example["labels"]) == len(example["input_ids"])
-            expected = [
-                token_id if mask else -100
-                for token_id, mask in zip(example["input_ids"], example["assistant_masks"], strict=True)
+            labels, input_ids = example["labels"], example["input_ids"]
+            assert len(labels) == len(input_ids)
+            # Labels are input_ids with non-assistant tokens masked to -100.
+            assert all(label == -100 or label == token_id for label, token_id in zip(labels, input_ids, strict=True))
+            assert any(label != -100 for label in labels)  # assistant tokens contribute to the loss
+            assert any(label == -100 for label in labels)  # non-assistant tokens are masked
+
+    def test_fully_masked_examples_dropped_after_truncation(self):
+        # Example 0's assistant tokens all lie beyond `max_length=3`, so keep_start truncation leaves it fully masked;
+        # example 1 keeps a trainable token and survives.
+        dataset = Dataset.from_list(
+            [
+                {"input_ids": [1, 2, 3, 4, 5], "assistant_masks": [0, 0, 0, 1, 1]},
+                {"input_ids": [6, 7, 8], "assistant_masks": [1, 1, 1]},
             ]
-            assert example["labels"] == expected
-
-    def test_labels_all_masked_after_truncation(self):
-        """Regression test for #3927: when the assistant response lies beyond `max_length`, dataset preparation
-        builds labels that still hold real token IDs, but the slice surviving the collator's truncation is all -100
-        (the prompt). The bug was masking happening after truncation; building labels before truncation makes this
-        surfaceable."""
-        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
-
-        # `max_length` is small enough that the kept prefix is entirely prompt tokens (the assistant turn comes later).
-        training_args = SFTConfig(output_dir=self.tmp_dir, assistant_only_loss=True, max_length=4, report_to="none")
-        trainer = SFTTrainer(
-            model="trl-internal-testing/tiny-Qwen3ForCausalLM", args=training_args, train_dataset=dataset
         )
 
-        # Before truncation, the prepared labels contain real (non -100) assistant token IDs.
-        labels = trainer.train_dataset[0]["labels"]
-        assert any(token_id != -100 for token_id in labels)
+        training_args = SFTConfig(output_dir=self.tmp_dir, max_length=3, report_to="none")
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
 
-        # After the collator truncates to `max_length` (keep_start), the surviving labels are all -100.
-        batch = trainer.data_collator([trainer.train_dataset[0]])
-        assert batch["labels"].eq(-100).all()
+        assert trainer.train_dataset[:]["labels"] == [[6, 7, 8]]
 
-    def test_dataset_prep_builds_labels_for_completion_only(self):
+    def test_dataset_truncated_to_max_length(self):
+        """Dataset preparation truncates every example to `max_length`."""
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+
+        training_args = SFTConfig(output_dir=self.tmp_dir, max_length=4, report_to="none")
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
+
+        for example in trainer.train_dataset:
+            assert len(example["input_ids"]) <= 4
+            assert len(example["labels"]) <= 4
+
+    def test_dataset_preparation_builds_labels_for_completion_only(self):
         """Dataset preparation must bake the completion mask into a labels column when completion_only_loss
         resolves to True (the default for prompt-completion datasets)."""
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_completion", split="train")
@@ -1355,13 +1294,14 @@ class TestSFTTrainer(TrlTestCase):
 
         assert "labels" in trainer.train_dataset.column_names
         for example in trainer.train_dataset:
-            expected = [
-                token_id if mask else -100
-                for token_id, mask in zip(example["input_ids"], example["completion_mask"], strict=True)
-            ]
-            assert example["labels"] == expected
+            labels, input_ids = example["labels"], example["input_ids"]
+            assert len(labels) == len(input_ids)
+            # Labels are input_ids with prompt tokens masked to -100.
+            assert all(label == -100 or label == token_id for label, token_id in zip(labels, input_ids, strict=True))
+            assert any(label != -100 for label in labels)  # completion tokens contribute to the loss
+            assert any(label == -100 for label in labels)  # prompt tokens are masked
 
-    def test_dataset_prep_respects_existing_labels(self):
+    def test_dataset_preparation_respects_existing_labels(self):
         """A user-provided labels column must be taken as is, even when mask columns are also present."""
         dataset = Dataset.from_list(
             [
@@ -1377,7 +1317,7 @@ class TestSFTTrainer(TrlTestCase):
 
         assert trainer.train_dataset[:]["labels"] == [[1, -100, 3, -100], [-100, 6]]
 
-    def test_dataset_prep_builds_labels_for_pretokenized_with_masks(self):
+    def test_dataset_preparation_builds_labels_for_pretokenized_with_masks(self):
         """Pre-tokenized datasets that carry mask columns but no labels must get labels built at preparation."""
         dataset = Dataset.from_list(
             [
@@ -1637,35 +1577,44 @@ class TestSFTTrainer(TrlTestCase):
 
         assert trainer.state.log_history[0]["eval_loss"] is not None
 
-    def test_evaluate_with_raw_dataset(self):
-        # `evaluate` should accept the same (unprocessed) dataset types as the trainer, e.g. a held-out test set
-        # passed directly to `evaluate`. See https://github.com/huggingface/trl/issues/6115.
-        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_completion")
+    @pytest.mark.parametrize(
+        "eval_dataset_type",
+        [
+            "dataset",
+            "iterable_dataset",
+            "dataset_dict",
+            "iterable_dataset_dict",
+            "dict_of_dataset",
+            "dict_of_iterable_dataset",
+        ],
+    )
+    def test_evaluate_with_eval_dataset(self, eval_dataset_type):
+        # `evaluate` accepts a raw (unprepared) dataset passed directly, not only a preprocessed `eval_dataset` set
+        # at init. See https://github.com/huggingface/trl/issues/6115.
+        train_dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        streaming = "iterable" in eval_dataset_type
+        eval_split = load_dataset(
+            "trl-internal-testing/zen", "standard_language_modeling", split="test", streaming=streaming
+        )
+        if eval_dataset_type in ("dataset", "iterable_dataset"):
+            eval_dataset = eval_split
+        elif eval_dataset_type in ("dataset_dict", "iterable_dataset_dict"):
+            dataset_dict_cls = IterableDatasetDict if streaming else DatasetDict
+            eval_dataset = dataset_dict_cls({"data1": eval_split, "data2": eval_split})
+        else:  # "dict_of_dataset" or "dict_of_iterable_dataset"
+            eval_dataset = {"data1": eval_split, "data2": eval_split}
 
         training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
         trainer = SFTTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            args=training_args,
-            train_dataset=dataset["train"],
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=train_dataset
         )
 
-        metrics = trainer.evaluate(eval_dataset=dataset["test"])
-        assert metrics["eval_loss"] is not None
-
-    def test_evaluate_with_raw_dataset_dict(self):
-        # Same as above, but passing a dict of raw datasets to `evaluate`.
-        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_completion")
-
-        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
-        trainer = SFTTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            args=training_args,
-            train_dataset=dataset["train"],
-        )
-
-        metrics = trainer.evaluate(eval_dataset={"data1": dataset["test"], "data2": dataset["test"]})
-        assert metrics["eval_data1_loss"] is not None
-        assert metrics["eval_data2_loss"] is not None
+        metrics = trainer.evaluate(eval_dataset=eval_dataset)
+        if eval_dataset_type in ("dataset", "iterable_dataset"):
+            assert metrics["eval_loss"] is not None
+        else:
+            assert metrics["eval_data1_loss"] is not None
+            assert metrics["eval_data2_loss"] is not None
 
     def test_train_with_metric_for_best_model(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling")
@@ -1702,6 +1651,90 @@ class TestSFTTrainer(TrlTestCase):
 
         assert trainer.state.log_history[-3]["eval_data1_loss"] is not None
         assert trainer.state.log_history[-2]["eval_data2_loss"] is not None
+
+    @pytest.mark.parametrize("train_dataset_type", ["dataset", "iterable_dataset", "none", "unsupported_dataset_dict"])
+    def test_init_with_train_dataset(self, train_dataset_type):
+        streaming = "iterable" in train_dataset_type
+        if train_dataset_type == "none":
+            train_dataset = None
+        else:
+            train_dataset = load_dataset(
+                "trl-internal-testing/zen", "standard_language_modeling", split="train", streaming=streaming
+            )
+            if train_dataset_type == "unsupported_dataset_dict":
+                # `DatasetDict` is representative of any unsupported type here; not exhaustive
+                train_dataset = DatasetDict({"train": train_dataset})
+
+        # Iterable (streaming) datasets have no length, so `max_steps` is required.
+        training_args = SFTConfig(output_dir=self.tmp_dir, max_steps=3 if streaming else -1, report_to="none")
+
+        if train_dataset_type == "none":
+            with pytest.raises(ValueError, match="`train_dataset` is required"):
+                SFTTrainer(
+                    model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                    args=training_args,
+                    train_dataset=train_dataset,
+                )
+        elif train_dataset_type == "unsupported_dataset_dict":
+            with pytest.raises(TypeError, match="`train_dataset` must be a `Dataset` or `IterableDataset`"):
+                SFTTrainer(
+                    model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                    args=training_args,
+                    train_dataset=train_dataset,
+                )
+        else:
+            trainer = SFTTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=train_dataset
+            )
+            assert "input_ids" in next(iter(trainer.train_dataset))
+
+    @pytest.mark.parametrize(
+        "eval_dataset_type",
+        [
+            "dataset",
+            "iterable_dataset",
+            "dataset_dict",
+            "iterable_dataset_dict",
+            "dict_of_dataset",
+            "dict_of_iterable_dataset",
+            "none",
+        ],
+    )
+    def test_init_with_eval_dataset(self, eval_dataset_type):
+        train_dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+
+        if eval_dataset_type == "none":
+            eval_dataset = None
+        else:
+            streaming = "iterable" in eval_dataset_type
+            eval_split = load_dataset(
+                "trl-internal-testing/zen", "standard_language_modeling", split="test", streaming=streaming
+            )
+            if eval_dataset_type in ("dataset", "iterable_dataset"):
+                eval_dataset = eval_split
+            elif eval_dataset_type in ("dataset_dict", "iterable_dataset_dict"):
+                dataset_dict_cls = IterableDatasetDict if streaming else DatasetDict
+                eval_dataset = dataset_dict_cls({"data1": eval_split, "data2": eval_split})
+            else:  # "dict_of_dataset" or "dict_of_iterable_dataset"
+                eval_dataset = {"data1": eval_split, "data2": eval_split}
+
+        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=train_dataset,
+            eval_dataset=eval_dataset,
+        )
+
+        if eval_dataset_type == "none":
+            assert trainer.eval_dataset is None
+        elif isinstance(trainer.eval_dataset, dict):
+            assert set(trainer.eval_dataset.keys()) == {"data1", "data2"}
+            # Each split was tokenized independently.
+            assert "input_ids" in next(iter(trainer.eval_dataset["data1"]))
+            assert "input_ids" in next(iter(trainer.eval_dataset["data2"]))
+        else:
+            assert "input_ids" in next(iter(trainer.eval_dataset))
 
     def test_train_with_compute_metrics(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling")
@@ -2011,6 +2044,39 @@ class TestSFTTrainer(TrlTestCase):
         training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
         trainer = SFTTrainer(
             model=model_id,
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            if n.startswith("model.visual"):
+                torch.testing.assert_close(param, new_param, rtol=1e-12, atol=1e-12, msg=f"Param {n} is updated")
+            else:
+                assert not torch.equal(param, new_param), f"Param {n} is not updated"
+
+    @ignore_warnings(message="You are using packing, but the attention implementation is not.*", category=UserWarning)
+    @require_vision
+    def test_train_vlm_text_only_data_packing(self):
+        # Packing is incompatible with on-the-fly image processing, not with VLMs. A text-only dataset goes through
+        # the regular text pipeline, so packing must be available on a VLM checkpoint too. Regression test for #6545.
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
+
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            packing=True,
+            report_to="none",
+        )
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
             args=training_args,
             train_dataset=dataset,
         )
@@ -2468,6 +2534,14 @@ _CHUNKED_CE_MODEL_IDS = [
     "trl-internal-testing/tiny-GemmaForCausalLM",
     "trl-internal-testing/tiny-Glm4MoeForCausalLM",
     "trl-internal-testing/tiny-GptOssForCausalLM",
+    "trl-internal-testing/tiny-Lfm2ForCausalLM",
+    pytest.param(
+        "trl-internal-testing/tiny-Lfm2ForCausalLM-2.5",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("5.0.0"),
+            reason="LFM2.5 tokenizer requires transformers>=5.0.0",
+        ),
+    ),
     "trl-internal-testing/tiny-LlamaForCausalLM-3.1",
     "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
     "trl-internal-testing/tiny-LlamaForCausalLM-3",
