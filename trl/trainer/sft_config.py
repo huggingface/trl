@@ -321,13 +321,6 @@ class SFTConfig(_BaseConfig):
         super().__post_init__()
         if self.log_expert_usage and self.use_liger_kernel:
             raise ValueError("`log_expert_usage=True` is not currently supported with `use_liger_kernel=True`.")
-        if self.log_expert_usage and (
-            self.padding_free or (self.packing and self.packing_strategy in {"bfd", "bfd_split"})
-        ):
-            raise ValueError(
-                "`log_expert_usage=True` is not currently supported with padding-free batches, including "
-                "`packing=True` with `packing_strategy='bfd'` or `'bfd_split'`."
-            )
         if self.pad_token is not None:
             warnings.warn(
                 "`pad_token` is deprecated and will be removed in v2.0.0. "
@@ -350,6 +343,13 @@ class SFTConfig(_BaseConfig):
                 stacklevel=3,
             )
             self.packing_strategy = "bfd_split"
+        if self.log_expert_usage and (
+            self.padding_free or (self.packing and self.packing_strategy in {"bfd", "bfd_split"})
+        ):
+            raise ValueError(
+                "`log_expert_usage=True` is not currently supported with padding-free batches, including "
+                "`packing=True` with `packing_strategy='bfd'` or `'bfd_split'`."
+            )
 
         # When unset, default to "chunked_nll" unless `use_liger_kernel=True`, in which case default to "nll".
         if self.loss_type is None:

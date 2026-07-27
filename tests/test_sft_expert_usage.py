@@ -98,6 +98,18 @@ def test_expert_usage_rejects_padding_free(tmp_path, padding_free_config):
         SFTConfig(output_dir=str(tmp_path), bf16=False, log_expert_usage=True, **padding_free_config)
 
 
+def test_expert_usage_rejects_deprecated_padding_free_packing_alias(tmp_path):
+    with pytest.warns(FutureWarning, match="has been renamed to `bfd_split`"):
+        with pytest.raises(ValueError, match="not currently supported with padding-free batches"):
+            SFTConfig(
+                output_dir=str(tmp_path),
+                bf16=False,
+                log_expert_usage=True,
+                packing=True,
+                packing_strategy="bfd-requeue",
+            )
+
+
 def test_expert_usage_allows_non_padding_free_packing(tmp_path):
     args = SFTConfig(
         output_dir=str(tmp_path),
