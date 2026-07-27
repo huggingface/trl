@@ -17,7 +17,7 @@
 #     "trl",
 #     "trackio",
 #     "datasets",
-#     "openenv-opencode @ git+https://github.com/meta-pytorch/OpenEnv.git#subdirectory=envs/opencode_env",
+#     "openenv-opencode-env @ git+https://github.com/meta-pytorch/OpenEnv.git#subdirectory=envs/opencode_env",
 # ]
 # ///
 
