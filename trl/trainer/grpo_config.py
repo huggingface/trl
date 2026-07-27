@@ -361,6 +361,9 @@ class GRPOConfig(_BaseConfig):
             KL divergence estimate by multiplying it with the importance sampling ratio. This is described in the
             [DeepSeek-V3.2 paper](https://huggingface.co/papers/2512.02556).
 
+        activation_offloading (`bool`, *optional*, defaults to `False`):
+            Whether to offload the activations to the CPU.
+
         > Parameters that control the logging
 
         log_completions (`bool`, *optional*, defaults to `False`):
@@ -966,6 +969,10 @@ class GRPOConfig(_BaseConfig):
             "corrects the KL divergence estimate by multiplying it with the importance sampling ratio. "
             "This is described in the [DeepSeek-V3.2 paper](https://huggingface.co/papers/2512.02556)."
         },
+    )
+    activation_offloading: bool = field(
+        default=False,
+        metadata={"help": "Whether to offload the activations to the CPU."},
     )
 
     # Parameters that control the logging
