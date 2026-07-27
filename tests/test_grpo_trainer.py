@@ -35,7 +35,7 @@ from transformers import (
     BitsAndBytesConfig,
 )
 from transformers.testing_utils import backend_empty_cache, torch_device
-from transformers.utils import is_kernels_available, is_peft_available
+from transformers.utils import is_peft_available
 
 from trl import GRPOConfig, GRPOTrainer
 from trl.import_utils import is_liger_kernel_available
@@ -300,20 +300,10 @@ class TestGRPOTrainer(TrlTestCase):
             "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             pytest.param(
                 "trl-internal-testing/tiny-NemotronHForCausalLM-nano",
-                marks=[
-                    pytest.mark.skipif(
-                        Version(transformers.__version__) < Version("5.7.0"),
-                        reason="Nemotron 3 gradient checkpointing requires transformers>=5.7.0 (see transformers#45625)",
-                    ),
-                    pytest.mark.xfail(
-                        Version(transformers.__version__).is_devrelease and is_kernels_available(),
-                        reason=(
-                            "transformers' NemotronHMamba2Mixer.cuda_kernels_forward breaks generation when Hub kernels "
-                            "are available (see #6541)."
-                        ),
-                        strict=True,
-                    ),
-                ],
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.7.0"),
+                    reason="Nemotron 3 gradient checkpointing requires transformers>=5.7.0 (see transformers#45625)",
+                ),
             ),
         ],
     )
