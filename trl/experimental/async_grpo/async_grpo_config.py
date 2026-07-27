@@ -123,6 +123,7 @@ class AsyncGRPOConfig(_BaseConfig):
     > - `bf16`: Defaults to `True` if `fp16` is not set, instead of `False`.
     > - `learning_rate`: Defaults to `1e-6` instead of `5e-5`.
     > - `lr_scheduler_type`: Defaults to `constant` instead of `linear` (see below).
+    > - `ignore_data_skip`: Always forced to `True`; the base Trainer's skip-and-replay loop does not apply to the async rollout queue.
 
     > [!NOTE]
     > Training duration and learning rate under message-mode reconciliation:
