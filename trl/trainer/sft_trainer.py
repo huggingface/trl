@@ -81,7 +81,7 @@ from .utils import (
 
 if is_peft_available():
     import peft
-    from peft import PeftConfig, PeftModel, PeftType, get_peft_model
+    from peft import PeftConfig, PeftModel, get_peft_model
 
 
 _CHUNKED_LM_HEAD_CHUNK_SIZE = 256
@@ -296,7 +296,10 @@ def _chunked_cross_entropy_loss(
 
 
 def _patch_chunked_ce_lm_head(
-    model: torch.nn.Module, chunk_size: int, is_vlm: bool = False, log_expert_usage: bool = False
+    model: torch.nn.Module,
+    chunk_size: int,
+    is_vlm: bool = False,
+    log_expert_usage: bool = False,
 ) -> None:
     """
     Patch `model.forward` to compute the LM loss via [`_chunked_cross_entropy_loss`].
@@ -1214,13 +1217,23 @@ class SFTTrainer(_BaseTrainer):
                 if param.requires_grad:
                     param.data = param.data.to(torch.bfloat16)
 
-        # In Prompt Tuning a small set of trainable virtual tokens (continuous prompt embeddings) is prepended to the
-        # input. We store the number of these tokens so we can account for them correctly when calculating accuracy.
+        # Prompt-learning methods either prepend virtual-token embeddings or add a prefix KV cache. Store both the
+        # virtual-token count and which representation is used so token-level metrics can align their masks.
         self.num_virtual_tokens = 0
+        self._peft_uses_prefix_cache = False
         if is_peft_model(model):
             if model.active_adapter in model.peft_config:
                 peft_model_config = model.peft_config[model.active_adapter]
                 self.num_virtual_tokens = getattr(peft_model_config, "num_virtual_tokens", 0)
+                self._peft_uses_prefix_cache = (
+                    peft_model_config.is_prompt_learning
+                    and peft_model_config.peft_type.value in {"PREFIX_TUNING", "CARTRIDGE"}
+                )
+        if args.log_expert_usage and self._peft_uses_prefix_cache:
+            raise ValueError(
+                "`log_expert_usage=True` is not currently supported with prefix-cache PEFT methods such as "
+                "Prefix Tuning or Cartridge."
+            )
 
         # Data collator
         # BFD packing requires padding-free mode; otherwise, the collator outputs padded attention masks, causing
@@ -1853,6 +1866,9 @@ class SFTTrainer(_BaseTrainer):
                 attention_mask = inputs.get("attention_mask")
                 if attention_mask is None:
                     attention_mask = torch.ones_like(inputs["input_ids"], dtype=torch.bool)
+                if self.num_virtual_tokens > 0 and not self._peft_uses_prefix_cache:
+                    virtual_token_mask = attention_mask.new_ones((attention_mask.shape[0], self.num_virtual_tokens))
+                    attention_mask = torch.cat((virtual_token_mask, attention_mask), dim=1)
                 expert_usage_counts = _get_expert_usage_counts(
                     router_logits, self._num_experts_per_tok, attention_mask
                 )
@@ -1885,10 +1901,7 @@ class SFTTrainer(_BaseTrainer):
                     shift_labels = labels[..., 1:]
 
                 # Prompt Tuning and P-Tuning output logits for virtual tokens but Prefix-Tuning does not.
-                if (
-                    self.num_virtual_tokens > 0
-                    and model.peft_config[model.active_adapter].peft_type != PeftType.PREFIX_TUNING
-                ):
+                if self.num_virtual_tokens > 0 and not self._peft_uses_prefix_cache:
                     shift_logits = shift_logits[:, self.num_virtual_tokens :, :]
 
                 per_token_entropy = entropy_from_logits(shift_logits)

@@ -18,9 +18,50 @@ from datasets import Dataset
 from tokenizers import Tokenizer
 from tokenizers.models import WordLevel
 from transformers import PreTrainedTokenizerFast, Qwen3MoeConfig, Qwen3MoeForCausalLM
+from transformers.utils import is_peft_available
 
 from trl import SFTConfig, SFTTrainer
 from trl.trainer.sft_trainer import _get_expert_usage_counts, _summarize_expert_usage
+
+from .testing_utils import require_peft
+
+
+if is_peft_available():
+    from peft import PrefixTuningConfig, PromptTuningConfig, TaskType, get_peft_model
+
+
+def _make_tiny_moe_components():
+    backend_tokenizer = Tokenizer(
+        WordLevel(
+            {"[PAD]": 0, "[UNK]": 1, "[EOS]": 2, "monitor": 3, "moe": 4, "routing": 5, "padding": 6},
+            unk_token="[UNK]",
+        )
+    )
+    tokenizer = PreTrainedTokenizerFast(
+        tokenizer_object=backend_tokenizer, pad_token="[PAD]", unk_token="[UNK]", eos_token="[EOS]"
+    )
+    model = Qwen3MoeForCausalLM(
+        Qwen3MoeConfig(
+            vocab_size=len(tokenizer),
+            hidden_size=16,
+            intermediate_size=32,
+            num_hidden_layers=2,
+            num_attention_heads=2,
+            num_key_value_heads=1,
+            moe_intermediate_size=16,
+            num_experts_per_tok=2,
+            num_experts=4,
+            pad_token_id=tokenizer.pad_token_id,
+            eos_token_id=tokenizer.eos_token_id,
+        )
+    )
+    dataset = Dataset.from_dict(
+        {
+            "input_ids": [[3, 4, 5, 2], [6, 5, 4, 2]],
+            "labels": [[3, 4, 5, 2], [6, 5, 4, 2]],
+        }
+    )
+    return tokenizer, model, dataset
 
 
 def test_expert_usage_counts_use_top_k_and_ignore_padding():
@@ -124,36 +165,7 @@ def test_expert_usage_allows_non_padding_free_packing(tmp_path):
 
 @pytest.mark.parametrize("loss_type", ["nll", "chunked_nll"])
 def test_sft_trainer_logs_bounded_expert_usage_metrics(tmp_path, loss_type):
-    backend_tokenizer = Tokenizer(
-        WordLevel(
-            {"[PAD]": 0, "[UNK]": 1, "[EOS]": 2, "monitor": 3, "moe": 4, "routing": 5, "padding": 6},
-            unk_token="[UNK]",
-        )
-    )
-    tokenizer = PreTrainedTokenizerFast(
-        tokenizer_object=backend_tokenizer, pad_token="[PAD]", unk_token="[UNK]", eos_token="[EOS]"
-    )
-    model = Qwen3MoeForCausalLM(
-        Qwen3MoeConfig(
-            vocab_size=len(tokenizer),
-            hidden_size=16,
-            intermediate_size=32,
-            num_hidden_layers=2,
-            num_attention_heads=2,
-            num_key_value_heads=1,
-            moe_intermediate_size=16,
-            num_experts_per_tok=2,
-            num_experts=4,
-            pad_token_id=tokenizer.pad_token_id,
-            eos_token_id=tokenizer.eos_token_id,
-        )
-    )
-    dataset = Dataset.from_dict(
-        {
-            "input_ids": [[3, 4, 5, 2], [6, 5, 4, 2]],
-            "labels": [[3, 4, 5, 2], [6, 5, 4, 2]],
-        }
-    )
+    tokenizer, model, dataset = _make_tiny_moe_components()
     args = SFTConfig(
         output_dir=str(tmp_path),
         per_device_eval_batch_size=2,
@@ -184,3 +196,68 @@ def test_sft_trainer_logs_bounded_expert_usage_metrics(tmp_path, loss_type):
         "eval_expert_usage/max_share_max",
         "eval_expert_usage/active_fraction_mean",
     }
+
+
+@require_peft
+@pytest.mark.parametrize("loss_type", ["nll", "chunked_nll"])
+def test_sft_trainer_logs_expert_usage_with_prompt_tuning(tmp_path, loss_type):
+    tokenizer, model, dataset = _make_tiny_moe_components()
+    peft_config = PromptTuningConfig(task_type=TaskType.CAUSAL_LM, num_virtual_tokens=2)
+    model = get_peft_model(model, peft_config)
+    args = SFTConfig(
+        output_dir=str(tmp_path),
+        per_device_eval_batch_size=2,
+        max_length=16,
+        loss_type=loss_type,
+        log_expert_usage=True,
+        router_aux_loss_coef=0.0,
+        gradient_checkpointing=False,
+        dataloader_pin_memory=False,
+        bf16=False,
+        report_to="none",
+    )
+    trainer = SFTTrainer(
+        model=model,
+        args=args,
+        train_dataset=dataset,
+        eval_dataset=dataset,
+        processing_class=tokenizer,
+    )
+
+    metrics = trainer.evaluate()
+
+    assert {key for key in metrics if key.startswith("eval_expert_usage/")} == {
+        "eval_expert_usage/normalized_entropy_mean",
+        "eval_expert_usage/normalized_entropy_min",
+        "eval_expert_usage/max_share_mean",
+        "eval_expert_usage/max_share_max",
+        "eval_expert_usage/active_fraction_mean",
+    }
+
+
+@require_peft
+@pytest.mark.parametrize("loss_type", ["nll", "chunked_nll"])
+def test_sft_trainer_rejects_expert_usage_with_prefix_tuning(tmp_path, loss_type):
+    tokenizer, model, dataset = _make_tiny_moe_components()
+    model = get_peft_model(model, PrefixTuningConfig(task_type=TaskType.CAUSAL_LM, num_virtual_tokens=2))
+    args = SFTConfig(
+        output_dir=str(tmp_path),
+        per_device_eval_batch_size=2,
+        max_length=16,
+        loss_type=loss_type,
+        log_expert_usage=True,
+        router_aux_loss_coef=0.0,
+        gradient_checkpointing=False,
+        dataloader_pin_memory=False,
+        bf16=False,
+        report_to="none",
+    )
+
+    with pytest.raises(ValueError, match="not currently supported with prefix-cache PEFT methods"):
+        SFTTrainer(
+            model=model,
+            args=args,
+            train_dataset=dataset,
+            eval_dataset=dataset,
+            processing_class=tokenizer,
+        )

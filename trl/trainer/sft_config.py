@@ -50,7 +50,8 @@ class SFTConfig(_BaseConfig):
         log_expert_usage (`bool`, *optional*, defaults to `False`):
             Whether to log aggregate expert-usage statistics during evaluation of Mixture-of-Experts (MoE) models.
             Enabling this option requests router logits during evaluation and may increase evaluation time and memory
-            usage. It is not currently supported with Liger kernels or padding-free batches.
+            usage. It is not currently supported with Liger kernels, padding-free batches, or prefix-cache PEFT
+            methods such as Prefix Tuning.
         chat_template_path (`str`, *optional*):
             If specified, sets the model's chat template. This can either be the path to a tokenizer (local directory
             or Hugging Face Hub model) or a direct path to a Jinja template file. When using a Jinja file, you must
@@ -170,7 +171,7 @@ class SFTConfig(_BaseConfig):
         metadata={
             "help": "Whether to log aggregate expert-usage statistics during evaluation of Mixture-of-Experts "
             "(MoE) models. Enabling this option may increase evaluation time and memory usage. It is not currently "
-            "supported with Liger kernels or padding-free batches."
+            "supported with Liger kernels, padding-free batches, or prefix-cache PEFT methods such as Prefix Tuning."
         },
     )
     trust_remote_code: bool = field(
