@@ -85,6 +85,31 @@ def test_expert_usage_rejects_liger(tmp_path):
         SFTConfig(output_dir=str(tmp_path), bf16=False, log_expert_usage=True, use_liger_kernel=True)
 
 
+@pytest.mark.parametrize(
+    "padding_free_config",
+    [
+        {"padding_free": True},
+        {"packing": True, "packing_strategy": "bfd"},
+        {"packing": True, "packing_strategy": "bfd_split"},
+    ],
+)
+def test_expert_usage_rejects_padding_free(tmp_path, padding_free_config):
+    with pytest.raises(ValueError, match="not currently supported with padding-free batches"):
+        SFTConfig(output_dir=str(tmp_path), bf16=False, log_expert_usage=True, **padding_free_config)
+
+
+def test_expert_usage_allows_non_padding_free_packing(tmp_path):
+    args = SFTConfig(
+        output_dir=str(tmp_path),
+        bf16=False,
+        log_expert_usage=True,
+        packing=True,
+        packing_strategy="wrapped",
+    )
+
+    assert args.log_expert_usage is True
+
+
 @pytest.mark.parametrize("loss_type", ["nll", "chunked_nll"])
 def test_sft_trainer_logs_bounded_expert_usage_metrics(tmp_path, loss_type):
     backend_tokenizer = Tokenizer(
