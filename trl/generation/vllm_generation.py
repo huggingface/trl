@@ -511,8 +511,8 @@ class VLLMGeneration:
 
         Args:
             prompts: List of token ID lists, one per prompt (already tokenized).
-            images: Optional list of image lists for VLM support. Each element is a list of PIL images for the
-                corresponding prompt, or `None` if no images for that prompt. `None` if no images at all.
+            images: Optional list of image-source lists for VLM support. Each element is a list of images, paths, or
+                URLs for the corresponding prompt, or `None` if no images for that prompt. `None` if no images at all.
             num_generations: Number of generations per prompt.
             profiler: Optional profiler for performance tracking.
 
@@ -535,6 +535,12 @@ class VLLMGeneration:
         min_p = self.min_p
         repetition_penalty = self.repetition_penalty
         max_completion_length = self.max_completion_length
+
+        if images is not None:
+            images = [
+                self.processing_class.image_processor.fetch_images(image_list) if image_list is not None else None
+                for image_list in images
+            ]
 
         # Wake up colocated vLLM weights if needed (idempotent if already awake from sync_weights)
         if self.mode == "colocate" and self.enable_sleep_mode:
