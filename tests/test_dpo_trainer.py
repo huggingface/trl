@@ -586,6 +586,25 @@ class TestDPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @pytest.mark.parametrize("loss_type", ["apo_zero", "apo_down", "aot", "aot_unpaired", "nca_pair", "sppo_hard"])
+    def test_init_fails_with_f_divergence_and_unsupported_loss(self, loss_type):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+
+        # These losses are not built on the chosen-rejected reward difference, so a non-default value is rejected.
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            loss_type=loss_type,
+            f_divergence_type="js_divergence",
+            report_to="none",
+        )
+
+        with pytest.raises(ValueError, match="is only supported for the following loss types"):
+            DPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                args=training_args,
+                train_dataset=dataset,
+            )
+
     def test_train_with_explicit_ref_model(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
 

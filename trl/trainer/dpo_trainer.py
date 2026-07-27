@@ -768,6 +768,15 @@ class DPOTrainer(_BaseTrainer):
         self.ld_alpha = args.ld_alpha
         self.f_divergence_type = args.f_divergence_type
         self.f_alpha_divergence_coef = args.f_alpha_divergence_coef
+        # The f-DPO reparameterization leaves a β·log Z(x) term that only cancels in the chosen-rejected reward
+        # difference, so the other losses have no valid f-divergence generalization.
+        f_divergence_loss_types = {"sigmoid", "sigmoid_norm", "hinge", "ipo", "exo_pair", "robust", "discopop", "sft"}
+        if self.f_divergence_type != "reverse_kl" and not set(self.loss_types) <= f_divergence_loss_types:
+            raise ValueError(
+                f"`f_divergence_type='{self.f_divergence_type}'` is only supported for the following loss types: "
+                f"{sorted(f_divergence_loss_types)}. You provided {self.loss_types}. Use the default "
+                "`f_divergence_type='reverse_kl'` with these losses."
+            )
         self.label_smoothing = args.label_smoothing
         self.use_weighting = args.use_weighting
         if self.use_weighting and any(loss_type in {"aot", "aot_unpaired"} for loss_type in self.loss_types):
@@ -1472,8 +1481,8 @@ class DPOTrainer(_BaseTrainer):
                 per_sequence_loss = qw * (log_qw - log_pw) + ql * (log_ql - log_pl)
 
             elif loss_type == "nca_pair":
-                chosen_rewards = self.beta * chosen_scores
-                rejected_rewards = self.beta * rejected_scores
+                chosen_rewards = self.beta * chosen_logratios
+                rejected_rewards = self.beta * rejected_logratios
                 per_sequence_loss = (
                     -F.logsigmoid(chosen_rewards)
                     - 0.5 * F.logsigmoid(-chosen_rewards)
@@ -1486,8 +1495,8 @@ class DPOTrainer(_BaseTrainer):
                 per_sequence_loss = (clean_loss_term - flipped_loss_term) / (1 - 2 * self.label_smoothing)
 
             elif loss_type == "bco_pair":
-                chosen_rewards = self.beta * chosen_scores
-                rejected_rewards = self.beta * rejected_scores
+                chosen_rewards = self.beta * chosen_logratios
+                rejected_rewards = self.beta * rejected_logratios
                 per_sequence_loss = -F.logsigmoid(chosen_rewards) - F.logsigmoid(-rejected_rewards)
 
             elif loss_type == "sppo_hard":
@@ -1495,8 +1504,8 @@ class DPOTrainer(_BaseTrainer):
                 # estimated using the PairRM score. The probability calculation is conducted outside of the trainer
                 # class. The version described here is the hard probability version, where P in Equation (4.7) of
                 # Algorithm 1 is set to 1 for the winner and 0 for the loser.
-                winner_margin_error = (chosen_scores - 0.5 / self.beta) ** 2
-                loser_margin_error = (rejected_scores + 0.5 / self.beta) ** 2
+                winner_margin_error = (chosen_logratios - 0.5 / self.beta) ** 2
+                loser_margin_error = (rejected_logratios + 0.5 / self.beta) ** 2
                 per_sequence_loss = winner_margin_error + loser_margin_error
 
             elif loss_type == "aot":
@@ -1532,7 +1541,7 @@ class DPOTrainer(_BaseTrainer):
                 # Use this loss when you believe the chosen outputs are worse than your model's default output.
                 # Decrease chosen likelihood and decrease rejected likelihood more
                 losses_chosen = torch.sigmoid(self.beta * chosen_logratios)
-                losses_rejected = 1 - torch.sigmoid(self.beta * delta_score)
+                losses_rejected = 1 - torch.sigmoid(self.beta * (chosen_logratios - rejected_logratios))
                 per_sequence_loss = losses_chosen + losses_rejected
 
             elif loss_type == "discopop":
