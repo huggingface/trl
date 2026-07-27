@@ -1175,6 +1175,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
         resume_from_checkpoint = kwargs.get("resume_from_checkpoint")
         if resume_from_checkpoint is not None and isinstance(self.rollout_worker, AsyncRolloutWorker):
             rollout_state_file = os.path.join(resume_from_checkpoint, "rollout_state.json")
+            # IterableDataset is skipped deliberately: streaming datasets have no len() and can't be repositioned.
             if os.path.isfile(rollout_state_file) and isinstance(self.train_dataset, Dataset):
                 with open(rollout_state_file) as f:
                     prompt_index = json.load(f)["prompt_index"]
