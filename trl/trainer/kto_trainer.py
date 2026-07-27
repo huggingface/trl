@@ -950,6 +950,8 @@ class KTOTrainer(_BaseTrainer):
         # Add tags to the model
         self.model.add_model_tags(self._tag_names)
 
+        self._precompute_model_hash = hash_module(self.ref_model or self.model) if self.precompute_ref_logps else None
+
         if self.ref_model is not None:
             if self.is_deepspeed_enabled:
                 self.ref_model = prepare_deepspeed(self.ref_model, self.accelerator)
@@ -1183,7 +1185,7 @@ class KTOTrainer(_BaseTrainer):
                 "`precompute_ref_log_probs=True` is not supported with IterableDataset. Please use a map-style "
                 "Dataset or set `precompute_ref_log_probs=False`."
             )
-        model_hash = hash_module(self.ref_model or self.model)
+        model_hash = self._precompute_model_hash or hash_module(self.ref_model or self.model)
         # Both inputs are rank-dependent under distributed training (ZeRO-3 shards the model), so broadcast rank 0's
         # value so all ranks share one cache file.
         fingerprint = [Hasher.hash((dataset._fingerprint, model_hash, self.calculate_KL))]

@@ -15,11 +15,14 @@
 import types
 from unittest.mock import patch
 
+import accelerate
 import pytest
+from packaging.version import Version
+from torch import nn
 from transformers import AutoModelForCausalLM
 
 from trl.import_utils import is_deepspeed_available
-from trl.models.utils import disable_gradient_checkpointing, prepare_deepspeed
+from trl.models.utils import disable_gradient_checkpointing, prepare_deepspeed, prepare_fsdp
 
 
 @pytest.mark.skipif(not is_deepspeed_available(), reason="deepspeed is not installed")
@@ -56,6 +59,19 @@ def test_prepare_deepspeed_strips_optimizer_for_cpu_offload(stage):
     assert "optimizer" not in captured["config"]
     assert "scheduler" not in captured["config"]
     assert "offload_optimizer" not in captured["config"]["zero_optimization"]
+
+
+@pytest.mark.skipif(Version(accelerate.__version__) < Version("1.6.0"), reason="requires accelerate>=1.6.0")
+def test_prepare_fsdp2_uses_accelerate_auto_wrap():
+    model = nn.Linear(2, 2)
+    accelerator = types.SimpleNamespace(state=types.SimpleNamespace(fsdp_plugin=types.SimpleNamespace(fsdp_version=2)))
+
+    with patch("trl.models.utils.fsdp2_prepare_model", return_value=model) as prepare_model:
+        result = prepare_fsdp(model, accelerator)
+
+    prepare_model.assert_called_once_with(accelerator, model)
+    assert result is model
+    assert result.training is False
 
 
 class TestDisableGradientCheckpointing:
