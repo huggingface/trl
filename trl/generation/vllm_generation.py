@@ -368,9 +368,8 @@ class VLLMGeneration:
             )
             if self.enable_sleep_mode:
                 self.llm.sleep(level=2)
-                self._llm_weights_sleeping = True
-            else:
-                self._llm_weights_sleeping = False
+            # Sleep level 2 discards the weights; track it so that generate() knows it must re-push them
+            self._llm_weights_sleeping = self.enable_sleep_mode
         else:
             raise ValueError(f"vllm_mode must be either 'server' or 'colocate', got '{self.mode}'.")
 
@@ -540,7 +539,9 @@ class VLLMGeneration:
         repetition_penalty = self.repetition_penalty
         max_completion_length = self.max_completion_length
 
-        # Since vLLM sleep level 2 discards weights, we need to sync weights to wake up the engine
+        # Sleep level 2 discards the weights, so waking up isn't enough: they must be re-pushed from the training
+        # model. vLLM's `reload_weights` can't be used here, as it reloads the initial checkpoint from disk rather
+        # than the current training weights. See https://github.com/vllm-project/vllm/issues/29341
         if self.mode == "colocate" and self.enable_sleep_mode and self._llm_weights_sleeping:
             self.sync_weights()
 
