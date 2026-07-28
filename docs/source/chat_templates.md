@@ -55,6 +55,17 @@ Split the unified assistant output so that the `<start_of_turn>model\n` header (
 
 Patched Gemma 3 template. Same diff as `gemma_training.jinja` (split the unified output line into role-specific branches so the `<start_of_turn>model\n` prompt cue sits outside the generation block, and wrap the assistant content with `&#123;% generation %&#125;` / `&#123;% endgeneration %&#125;`), applied to the Gemma 3 base template that supports system messages and multimodal content blocks.
 
+### `gemma4_training.jinja`
+
+Patched Gemma 4 template. Diff vs `gemma4.jinja`:
+
+Gemma 4 renders an assistant turn as a `<|turn>model\n` header, an optional `<|channel>thought ... <channel|>` block, tool calls, tool responses, the message content, and a `<turn|>\n` terminator. Only some of that is produced by the model, so the generation markers are placed in two spans rather than one:
+
+- The `<|turn>model\n` header is a prompt cue and stays outside the generation block.
+- The thinking channel and the assistant's tool calls are wrapped in the first generation block.
+- Tool responses are rendered inside the assistant turn by this template but are environment output, so they sit between the two blocks and are excluded from the loss.
+- The message content and the `<turn|>\n` terminator are wrapped in the second generation block, so the model is trained to end its own turn. Because Jinja block tags cannot be opened conditionally, this tail is duplicated for non-assistant roles without the markers.
+
 ### `glm4moe_training.jinja`
 
 Patched GLM-4-MoE template. Diff vs `glm4moe.jinja`:

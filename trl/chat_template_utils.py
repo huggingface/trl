@@ -927,6 +927,8 @@ gemma_training_chat_template = (_CHAT_TEMPLATES_DIR / "gemma_training.jinja").re
 
 gemma3_training_chat_template = (_CHAT_TEMPLATES_DIR / "gemma3_training.jinja").read_text(encoding="utf-8")
 
+gemma4_training_chat_template = (_CHAT_TEMPLATES_DIR / "gemma4_training.jinja").read_text(encoding="utf-8")
+
 glm4moe_training_chat_template = (_CHAT_TEMPLATES_DIR / "glm4moe_training.jinja").read_text(encoding="utf-8")
 
 gptoss_training_chat_template = (_CHAT_TEMPLATES_DIR / "gptoss_training.jinja").read_text(encoding="utf-8")
@@ -987,9 +989,9 @@ def get_training_chat_template(
 
     Returns a patched chat template that is prefix-preserving and includes `{%% generation %%}` / `{%% endgeneration
     %%}` markers for assistant-only loss masking. Returns `None` if the template already satisfies both requirements.
-    Currently Cohere, Cohere 2, DeepSeek-V3, Gemma, Gemma 2, Gemma 3, GLM-4-MoE, GPT-OSS, Idefics3, LFM2, LLaMA 3,
-    Phi-3, Phi-3.5, Qwen2-VL, Qwen2.5, Qwen2.5-VL, Qwen3 (including the Instruct-2507 variant), Qwen3-VL, Qwen3.5, and
-    Qwen3.6 are supported.
+    Currently Cohere, Cohere 2, DeepSeek-V3, Gemma, Gemma 2, Gemma 3, Gemma 4, GLM-4-MoE, GPT-OSS, Idefics3, LFM2,
+    LLaMA 3, Phi-3, Phi-3.5, Qwen2-VL, Qwen2.5, Qwen2.5-VL, Qwen3 (including the Instruct-2507 variant), Qwen3-VL,
+    Qwen3.5, and Qwen3.6 are supported.
 
     Args:
         processing_class (`PreTrainedTokenizerBase` or `ProcessorMixin`):
@@ -1072,6 +1074,9 @@ def get_training_chat_template(
 
     if processing_class.chat_template == gemma3_chat_template:
         return gemma3_training_chat_template
+
+    if processing_class.chat_template == gemma4_chat_template:
+        return gemma4_training_chat_template
 
     if processing_class.chat_template == glm4moe_chat_template:
         return glm4moe_training_chat_template
