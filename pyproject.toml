@@ -67,7 +67,7 @@ quality = [
     "hf-doc-builder"
 ]
 quantization = [
-    "bitsandbytes<0.50.0",  # temporary hotfix for #6543
+    "bitsandbytes"
 ]
 scikit = [
     "scikit-learn"
@@ -120,7 +120,7 @@ dev = [
     "pre-commit",
     "hf-doc-builder",
     # quantization
-    "bitsandbytes<0.50.0",  # temporary hotfix for #6543
+    "bitsandbytes",
     # scikit: included in bco
     # test
     "pytest-cov",
