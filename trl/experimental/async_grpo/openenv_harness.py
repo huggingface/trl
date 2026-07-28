@@ -158,11 +158,16 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
     async def _run_loops(self, stop_event) -> None:
         async def _close_live_sessions_on_stop() -> None:
             await stop_event.wait()
-            for session in list(self._live_sessions):
+
+            def _close(session):
                 try:
                     session.close()
                 except Exception:
                     logger.warning("closing in-flight harness session on stop failed", exc_info=True)
+
+            # Close concurrently: for a remote backend each close() is a network teardown, so closing them in
+            # series can exceed the shutdown window and orphan the rest.
+            await asyncio.gather(*(asyncio.to_thread(_close, session) for session in list(self._live_sessions)))
 
         try:
             await asyncio.gather(super()._run_loops(stop_event), _close_live_sessions_on_stop())
