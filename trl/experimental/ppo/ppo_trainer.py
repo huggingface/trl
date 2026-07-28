@@ -1012,7 +1012,12 @@ class PPOTrainer(_BaseTrainer):
                 import wandb
 
                 if wandb.run is not None:
-                    wandb.log({"completions": wandb.Table(dataframe=df)})
+                    table_key = (
+                        f"completions_step={self.state.global_step}"
+                        if args.wandb_log_completions_by_step
+                        else "completions"
+                    )
+                    wandb.log({table_key: wandb.Table(dataframe=df)})
 
             if "comet_ml" in args.report_to:
                 log_table_to_comet_experiment(

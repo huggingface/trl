@@ -43,6 +43,9 @@ class PPOConfig(_BaseConfig):
             Per rank no grad forward pass in the rollout phase.
         num_sample_generations (`int`, *optional*, defaults to `10`):
             Number of debugging samples generations (i.e., `generate_completions` calls) throughout training.
+        wandb_log_completions_by_step (`bool`, *optional*, defaults to `False`):
+            Whether to log completion tables to W&B under a separate key for each step. When enabled, the table key
+            includes the global step. When disabled, all tables use the `completions` key.
         response_length (`int`, *optional*, defaults to `53`):
             Length of the response.
         stop_token (`str`, *optional*):
@@ -146,6 +149,13 @@ class PPOConfig(_BaseConfig):
         default=10,
         metadata={
             "help": "Number of debugging samples generations (i.e., `generate_completions` calls) throughout training."
+        },
+    )
+    wandb_log_completions_by_step: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to log completion tables to W&B under a separate key for each step. When enabled, the "
+            "table key includes the global step. When disabled, all tables use the `completions` key."
         },
     )
     response_length: int = field(

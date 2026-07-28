@@ -15,6 +15,7 @@
 import gc
 import os
 import warnings
+from collections import defaultdict
 from collections.abc import Callable
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -236,6 +237,55 @@ class TestGRPORolloutDispatch:
 
         with pytest.raises(ValueError, match="rollout_func must return keys"):
             trainer._generate(["prompt"])
+
+
+class TestGRPOCompletionLogging(TrlTestCase):
+    def test_wandb_log_completions_by_step_defaults_to_false(self):
+        config = GRPOConfig(output_dir=self.tmp_dir)
+
+        assert config.wandb_log_completions_by_step is False
+
+    @pytest.mark.parametrize(
+        ("wandb_log_completions_by_step", "expected_key"),
+        [(False, "completions"), (True, "completions_step=7")],
+    )
+    def test_wandb_completion_table_key(self, wandb_log_completions_by_step, expected_key):
+        trainer = object.__new__(GRPOTrainer)
+        trainer.model = SimpleNamespace(training=True)
+        trainer.accelerator = SimpleNamespace(is_main_process=True)
+        trainer.args = SimpleNamespace(
+            output_dir=self.tmp_dir,
+            report_to=["wandb", "trackio"],
+            wandb_log_completions_by_step=wandb_log_completions_by_step,
+        )
+        trainer.state = SimpleNamespace(global_step=7)
+        trainer._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
+        trainer.log_completions = True
+        trainer.log_unique_prompts = False
+        trainer.num_completions_to_print = None
+        trainer._logs = {
+            "images": [],
+            "prompt": ["prompt"],
+            "completion": ["completion"],
+            "rewards": {"reward": [1.0]},
+            "advantages": [0.5],
+            "extra": {},
+        }
+
+        wandb_mock = MagicMock()
+        wandb_mock.run = object()
+        trackio_mock = MagicMock()
+        with (
+            patch("trl.trainer.grpo_trainer.wandb", wandb_mock, create=True),
+            patch("trl.trainer.grpo_trainer.trackio", trackio_mock, create=True),
+            patch("trl.trainer.grpo_trainer.is_rich_available", return_value=False),
+            patch("transformers.Trainer.log"),
+            patch("pandas.DataFrame.to_parquet"),
+        ):
+            trainer.log({})
+
+        assert set(wandb_mock.log.call_args.args[0]) == {expected_key}
+        assert set(trackio_mock.log.call_args.args[0]) == {"completions"}
 
 
 @pytest.mark.skipif(

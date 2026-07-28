@@ -213,6 +213,9 @@ class RLOOConfig(_BaseConfig):
             Whether to log a sample of (prompt, completion) pairs every `logging_steps` steps. If `rich` is installed,
             it prints the sample. If `wandb` and/or `trackio` logging is enabled, it logs it to `wandb` and/or
             `trackio`.
+        wandb_log_completions_by_step (`bool`, *optional*, defaults to `False`):
+            Whether to log completion tables to W&B under a separate key for each step. When enabled, the table key
+            includes the global step. When disabled, all tables use the `completions` key.
         log_multimodal (`bool`, *optional*, defaults to `True`):
             Whether to log multimodal content (images, videos, etc.) together with completions. Disable this to reduce
             log size when using high-resolution multimodal data.
@@ -568,6 +571,13 @@ class RLOOConfig(_BaseConfig):
         metadata={
             "help": "Whether to log a sample of (prompt, completion) pairs every `logging_steps` steps. If `rich` is "
             "installed, it prints the sample. If `wandb` logging is enabled, it logs it to `wandb`."
+        },
+    )
+    wandb_log_completions_by_step: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to log completion tables to W&B under a separate key for each step. When enabled, the "
+            "table key includes the global step. When disabled, all tables use the `completions` key."
         },
     )
     log_multimodal: bool = field(

@@ -1814,7 +1814,10 @@ class RLOOTrainer(_BaseTrainer):
                 if self.log_unique_prompts:
                     df = df.drop_duplicates(subset=["prompt"])
 
-                logging_backend.log({"completions": logging_backend.Table(dataframe=df)})
+                table_key = "completions"
+                if logging_backend is wandb and self.args.wandb_log_completions_by_step:
+                    table_key = f"completions_step={self.state.global_step}"
+                logging_backend.log({table_key: logging_backend.Table(dataframe=df)})
 
     # Ensure the model card is saved along with the checkpoint
     def _save_checkpoint(self, model, trial):

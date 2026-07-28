@@ -12,7 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from unittest.mock import patch
+from collections import defaultdict
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 import pytest
 import torch
@@ -34,6 +36,53 @@ from .testing_utils import TrlTestCase, require_peft, require_vision, require_vl
 
 if is_peft_available():
     from peft import LoraConfig, get_peft_model
+
+
+class TestRLOOCompletionLogging(TrlTestCase):
+    def test_wandb_log_completions_by_step_defaults_to_false(self):
+        config = RLOOConfig(output_dir=self.tmp_dir)
+
+        assert config.wandb_log_completions_by_step is False
+
+    @pytest.mark.parametrize(
+        ("wandb_log_completions_by_step", "expected_key"),
+        [(False, "completions"), (True, "completions_step=7")],
+    )
+    def test_wandb_completion_table_key(self, wandb_log_completions_by_step, expected_key):
+        trainer = object.__new__(RLOOTrainer)
+        trainer.model = SimpleNamespace(training=True)
+        trainer.accelerator = SimpleNamespace(is_main_process=True)
+        trainer.args = SimpleNamespace(
+            report_to=["wandb", "trackio"],
+            wandb_log_completions_by_step=wandb_log_completions_by_step,
+        )
+        trainer.state = SimpleNamespace(global_step=7)
+        trainer._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
+        trainer.log_completions = True
+        trainer.log_unique_prompts = False
+        trainer.num_completions_to_print = None
+        trainer._logs = {
+            "images": [],
+            "prompt": ["prompt"],
+            "completion": ["completion"],
+            "rewards": {"reward": [1.0]},
+            "advantages": [0.5],
+            "extra": {},
+        }
+
+        wandb_mock = MagicMock()
+        wandb_mock.run = object()
+        trackio_mock = MagicMock()
+        with (
+            patch("trl.trainer.rloo_trainer.wandb", wandb_mock, create=True),
+            patch("trl.trainer.rloo_trainer.trackio", trackio_mock, create=True),
+            patch("trl.trainer.rloo_trainer.is_rich_available", return_value=False),
+            patch("transformers.Trainer.log"),
+        ):
+            trainer.log({})
+
+        assert set(wandb_mock.log.call_args.args[0]) == {expected_key}
+        assert set(trackio_mock.log.call_args.args[0]) == {"completions"}
 
 
 class TestRLOOTrainer(TrlTestCase):
