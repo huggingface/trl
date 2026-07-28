@@ -91,6 +91,8 @@ This ensures that future patch releases (`v{major}.{minor}.1`, `v{major}.{minor}
 1. Create a branch `bump-dev-version-{major}.{minor+1}` from `main` and checkout to it.
 
   ```shell
+  git checkout main
+  git pull origin main
   git checkout -b bump-dev-version-{major}.{minor+1}
   ```
 
