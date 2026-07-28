@@ -22,6 +22,7 @@ import time
 from collections import defaultdict
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
+from multiprocessing.queues import Queue as MPQueue
 from typing import Any, Protocol
 
 import torch
@@ -66,11 +67,14 @@ class RolloutWorkerProtocol(Protocol):
     runs reward models on their own GPUs.
 
     Attributes:
-        rollout_buffer (`queue.Queue`):
-            Queue the trainer drains; the worker pushes scored `RolloutSample`s onto it.
+        rollout_buffer (`queue.Queue` or `multiprocessing.queues.Queue`):
+            Queue the trainer drains; the worker pushes scored `RolloutSample`s onto it. The two queue types are
+            structurally identical (`get` / `put_nowait` / `qsize`) but nominally unrelated, so both are allowed: the
+            default [`AsyncRolloutWorker`] runs its loop in a spawned process and uses `multiprocessing.Queue`, while
+            an in-process worker uses `queue.Queue`.
     """
 
-    rollout_buffer: queue.Queue
+    rollout_buffer: queue.Queue | MPQueue
 
     def start(self) -> None:
         """Begin producing rollouts. Called once on train begin, after the initial weight sync."""
@@ -80,7 +84,7 @@ class RolloutWorkerProtocol(Protocol):
         """Stop the worker and release its resources. Called on train end."""
         ...
 
-    def update_model_version(self, version: int) -> None:
+    def update_model_version(self, model_version: int) -> None:
         """Tell the worker which policy version is now live, so it can tag or discard stale samples."""
         ...
 
@@ -771,6 +775,10 @@ class AsyncGRPOTrainer(_BaseTrainer):
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
         self._train_tokens_start_time = None
+        # Tracks the number of iterations (forward + backward passes), including those within a grad accum cycle
+        self._step = 0
+        self._current_train_step_time = 0.0
+        self._last_step_end_time = None
         self.model_version = 0
         # Create worker and queue on rank 0
         if self.accelerator.is_main_process:
@@ -1073,6 +1081,22 @@ class AsyncGRPOTrainer(_BaseTrainer):
             # NOTE: in dynamic mbs setup, we would need to agg across DP ranks.
             self._metrics["train"]["train_seq_len"].append(float(position_ids.max() + 1))
         return loss
+
+    def training_step(self, model, inputs, num_items_in_batch):
+        time_before = time.perf_counter()
+        output = super().training_step(model, inputs, num_items_in_batch)
+        self._step += 1
+        time_after = time.perf_counter()
+        self._current_train_step_time += time_after - time_before
+        if self._step % self.current_gradient_accumulation_steps == 0:
+            self._metrics["train"]["step_time"].append(self._current_train_step_time)
+            self._current_train_step_time = 0.0
+            # Async-only end-to-end latency: unlike the fwd+bwd-only `step_time`, this also covers the optimizer
+            # step, weight sync, and rollout-queue waits.
+            if self._last_step_end_time is not None:
+                self._metrics["train"]["iteration_time_s"].append(time_after - self._last_step_end_time)
+            self._last_step_end_time = time_after
+        return output
 
     def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
         mode = "train" if self.model.training else "eval"

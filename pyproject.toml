@@ -67,7 +67,7 @@ quality = [
     "hf-doc-builder"
 ]
 quantization = [
-    "bitsandbytes"
+    "bitsandbytes<0.50.0",  # temporary hotfix for #6543
 ]
 scikit = [
     "scikit-learn"
@@ -120,7 +120,7 @@ dev = [
     "pre-commit",
     "hf-doc-builder",
     # quantization
-    "bitsandbytes",
+    "bitsandbytes<0.50.0",  # temporary hotfix for #6543
     # scikit: included in bco
     # test
     "pytest-cov",
@@ -223,4 +223,10 @@ filterwarnings = [
     # Tracking issue: https://github.com/huggingface/trl/issues/6466
     # Upstream issue: https://github.com/triton-lang/triton/issues/10981
     "ignore:AnnAssign.__init__ missing 1 required positional argument:DeprecationWarning",
+
+    # kernels-community/mamba-ssm (a Hub-hosted build of state-spaces/mamba) calls the deprecated
+    # torch.get_autocast_gpu_dtype() in its Triton ssd_combined.py kernel (upstream, not actionable in TRL)
+    # Triggered by the NemotronH (Nemotron 3) Mamba2 mixer fast path during training under CUDA autocast
+    # Tracking issue: https://github.com/huggingface/trl/issues/6555
+    "ignore:torch.get_autocast_gpu_dtype\\(\\) is deprecated:DeprecationWarning",
 ]
