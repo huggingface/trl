@@ -434,6 +434,29 @@ class TestSFTTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @pytest.mark.parametrize("loss_type", ["chunked_nll", "nll"])
+    def test_train_compute_token_metrics_false(self, loss_type):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir, loss_type=loss_type, compute_token_metrics=False, report_to="none"
+        )
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+        assert not any("entropy" in log or "mean_token_accuracy" in log for log in trainer.state.log_history)
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
     def test_train_nll_loss(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
 

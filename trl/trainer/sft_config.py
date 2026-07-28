@@ -117,6 +117,10 @@ class SFTConfig(_BaseConfig):
 
         activation_offloading (`bool`, *optional*, defaults to `False`):
             Whether to offload the activations to the CPU.
+        compute_token_metrics (`bool`, *optional*, defaults to `True`):
+            Whether to compute and log the `entropy` and `mean_token_accuracy` metrics. Both are derived from the
+            per-token distribution over the vocabulary, which is expensive to compute for large vocabularies. Set to
+            `False` to skip this computation and speed up training.
 
         > Deprecated parameters
 
@@ -296,6 +300,14 @@ class SFTConfig(_BaseConfig):
     activation_offloading: bool = field(
         default=False,
         metadata={"help": "Whether to offload the activations to the CPU."},
+    )
+    compute_token_metrics: bool = field(
+        default=True,
+        metadata={
+            "help": "Whether to compute and log the `entropy` and `mean_token_accuracy` metrics. Both are derived "
+            "from the per-token distribution over the vocabulary, which is expensive to compute for large "
+            "vocabularies. Set to `False` to skip this computation and speed up training."
+        },
     )
 
     # Deprecated parameters

@@ -129,6 +129,9 @@ While training and evaluating, we record the following metrics:
 * `learning_rate`: The current learning rate, which may change dynamically if a scheduler is used.
 * `grad_norm`: The L2 norm of the gradients, computed before gradient clipping.
 
+> [!TIP]
+> `entropy` and `mean_token_accuracy` require an extra pass over the per-token distribution on top of the loss computation. If this overhead is not worth it for your use case, set `compute_token_metrics=False` in the [`SFTConfig`] to skip it.
+
 ## Customization
 
 ### Model initialization
