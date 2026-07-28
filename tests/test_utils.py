@@ -1127,6 +1127,15 @@ class TestSplitPixelValuesByGrid(TrlTestCase):
         assert torch.equal(result["image_sizes"][0], batch["image_sizes"][:1])
         assert torch.equal(result["image_sizes"][1], batch["image_sizes"][1:])
 
+    def test_no_split_when_padded_by_sample(self):
+        # Idefics-style: pixel_values is padded to (num_samples, max_num_images, ...), already sample-indexed
+        batch = {
+            "num_images": [1, 2],
+            "pixel_values": torch.arange(2 * 2 * 4).reshape(2, 2, 4),
+        }
+        result = split_pixel_values_by_grid(batch)
+        assert result == batch
+
 
 class TestUnsplitPixelValuesByGrid(TrlTestCase):
     def test_unsplit_correctly(self):

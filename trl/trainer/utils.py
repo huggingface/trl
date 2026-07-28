@@ -1041,7 +1041,11 @@ def split_pixel_values_by_grid(batch: dict[str, torch.Tensor]) -> dict[str, torc
             "spatial_shapes": split_spatial_shapes,
         }
 
-    # Models without extra metadata (e.g. LLaVA): pixel_values and image_sizes are indexed by image.
+    # Models without extra metadata store pixel_values either flat, one row per image (e.g. LLaVA), or already
+    # padded to one row per sample (e.g. Idefics, SmolVLM). Only the flat layout needs splitting.
+    if pixel_values.size(0) != sum(num_images):
+        return batch
+
     batch = {**batch, "pixel_values": list(torch.split(pixel_values, num_images, dim=0))}
     if "image_sizes" in batch:
         batch = {**batch, "image_sizes": list(torch.split(batch["image_sizes"], num_images, dim=0))}
