@@ -315,6 +315,67 @@ class TestBCOTrainer(TrlTestCase):
         assert processed_dataset["completion_attention_mask"][0] == [1, 1, 1, 1, 1, 1, 1]
         assert processed_dataset["completion_labels"][0] == [-100, -100, -100, -100, 27261, 13, 151645]
 
+    @pytest.mark.parametrize(
+        ("prompt_length", "answer_length"),
+        [
+            (4, 6),  # everything fits, nothing is truncated
+            (28, 10),  # answer truncated, budget still positive
+            (31, 1),  # prompt one token short of max_length: bound goes negative by one
+            (60, 10),  # prompt alone exceeds max_length
+            (1000, 10),  # prompt exceeds max_length by a lot
+        ],
+    )
+    def test_process_tokens_truncation_respects_max_length(self, prompt_length, answer_length):
+        """`_process_tokens` must keep the sequence within `max_length` and only ever truncate prefixes.
+
+        The response budget is `max_length` minus the prompt, so a prompt longer than `max_length` used to make
+        that bound negative. `answer[:negative]` slices from the *end* of the answer, which empties it outright
+        whenever the answer is shorter than the overflow, and the resulting sequence stayed over `max_length`
+        because the prompt was never truncated.
+        """
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
+        max_length = 32
+        # Synthetic ids: the branch under test only looks at lengths and at the BOS/EOS ids.
+        prompt_input_ids = list(range(100, 100 + prompt_length))
+        answer_input_ids = list(range(200, 200 + answer_length))
+        example = {
+            "prompt": "prompt",
+            "completion": "completion",
+            "label": True,
+            "prompt_input_ids": prompt_input_ids,
+            "prompt_attention_mask": [1] * prompt_length,
+            "answer_input_ids": answer_input_ids,
+            "answer_attention_mask": [1] * answer_length,
+        }
+
+        processed = _process_tokens(
+            example,
+            prefix="",
+            is_encoder_decoder=False,
+            tokenizer=tokenizer,
+            max_length=max_length,
+        )
+
+        completion_input_ids = processed["completion_input_ids"]
+        assert len(completion_input_ids) <= max_length
+        assert len(processed["completion_attention_mask"]) == len(completion_input_ids)
+        assert len(processed["completion_labels"]) == len(completion_input_ids)
+
+        # Both halves must stay prefixes of what went in. A negative slice bound cuts from the end instead.
+        kept_prompt = processed["prompt_input_ids"]
+        if tokenizer.bos_token_id is not None and kept_prompt and kept_prompt[0] == tokenizer.bos_token_id:
+            kept_prompt = kept_prompt[1:]
+        assert kept_prompt == prompt_input_ids[: len(kept_prompt)]
+
+        kept_answer = completion_input_ids[len(processed["prompt_input_ids"]) :]
+        if kept_answer and kept_answer[-1] == tokenizer.eos_token_id:
+            kept_answer = kept_answer[:-1]
+        assert kept_answer == answer_input_ids[: len(kept_answer)]
+
+        # The completion must survive as long as the prompt leaves room for it.
+        if prompt_length + answer_length <= max_length - 2:
+            assert kept_answer == answer_input_ids
+
     @require_sklearn
     def test_train_without_providing_ref_model(self):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"

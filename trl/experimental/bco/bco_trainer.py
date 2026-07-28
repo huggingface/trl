@@ -293,10 +293,18 @@ def _process_tokens(example: dict[str, Any], model: "PreTrainedModel" = None, **
         if eos_token_id != all_tokens["answer_input_ids"][-1]:
             max_length -= 1
 
-        # if combined sequence is too long (> max_length - 1 for BOS token - 1 for EOS), truncate the response
+        # if combined sequence is too long (> max_length - 1 for BOS token - 1 for EOS), truncate it. The prompt
+        # is truncated first, then the response gets whatever budget is left. Truncating only the response with
+        # `max_length - len(prompt_input_ids)` breaks down once the prompt alone exceeds `max_length`: the bound
+        # goes negative, `answer[:negative]` slices from the *end* of the response and empties it entirely
+        # whenever the response is shorter than the overflow, and the sequence stays over `max_length` anyway.
+        # This matches `KTOTrainer`, which truncates the concatenated sequence with `full_ids[:max_length]`.
         if len(all_tokens["prompt_input_ids"]) + len(all_tokens["answer_input_ids"]) > max_length:
+            for k in ["prompt_input_ids", "prompt_attention_mask"]:
+                all_tokens[k] = all_tokens[k][:max_length]
+            answer_budget = max_length - len(all_tokens["prompt_input_ids"])
             for k in ["answer_input_ids", "answer_attention_mask"]:
-                all_tokens[k] = all_tokens[k][: max_length - len(all_tokens["prompt_input_ids"])]
+                all_tokens[k] = all_tokens[k][:answer_budget]
 
         # all input_ids and attention mask as is. We then check if we need to add BOS/EOS tokens
         batch[f"{kwargs['prefix']}prompt_input_ids"] = all_tokens["prompt_input_ids"]
