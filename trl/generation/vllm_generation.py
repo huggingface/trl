@@ -310,7 +310,7 @@ class VLLMGeneration:
                 self.vllm_client = VLLMClient(
                     base_url=base_url, group_port=self.group_port, connection_timeout=self.server_timeout
                 )
-                self.vllm_client.init_communicator(device=torch.cuda.current_device())
+                self.vllm_client.init_communicator(device=accelerator.device)
 
         elif self.mode == "colocate":
             # Make sure tensor_parallel_size group size evenly divides the world size - each group should have

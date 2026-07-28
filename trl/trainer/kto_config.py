@@ -22,7 +22,7 @@ from .base_config import _BaseConfig
 class KTOConfig(_BaseConfig):
     # docstyle-ignore
     r"""
-    Configuration class for the [`experimental.kto.KTOTrainer`].
+    Configuration class for the [`KTOTrainer`].
 
     This class includes only the parameters that are specific to KTO training. For a full list of training arguments,
     please refer to the [`~transformers.TrainingArguments`] documentation. Note that default values in this class may

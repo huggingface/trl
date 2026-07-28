@@ -48,7 +48,7 @@ python examples/scripts/sdft.py \
     --max_completion_length 512 \
     --teacher_model_kind ema \
     --teacher_sync_steps 1 \
-    --teacher_update_rate 0.01 \
+    --teacher_update_rate 0.05 \
     --eval_strategy steps \
     --eval_steps 50 \
     --report_to wandb

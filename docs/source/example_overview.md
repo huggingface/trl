@@ -42,13 +42,12 @@ These notebooks are easier to run and are designed for quick experimentation wit
 
 ### OpenEnv Notebooks
 
-These notebooks demonstrate how to train models with [OpenEnv](openenv) environments using [`GRPOTrainer`]'s `environment_factory`. The BrowserGym notebook uses the lower-level `rollout_func` API instead. See the [OpenEnv Integration](openenv) guide for more details.
+These notebooks demonstrate how to train models with [OpenEnv](openenv) environments using [`GRPOTrainer`]'s `environment_factory`. See the [OpenEnv Integration](openenv) guide for more details.
 
 | Notebook | Description | Open in Colab |
 |----------|-------------|---------------|
 | [`openenv_wordle_grpo.ipynb`](https://github.com/huggingface/trl/tree/main/examples/notebooks/openenv_wordle_grpo.ipynb) | GRPO to play Wordle on an OpenEnv environment | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/huggingface/trl/blob/main/examples/notebooks/openenv_wordle_grpo.ipynb) |
 | [`openenv_sudoku_grpo.ipynb`](https://github.com/huggingface/trl/tree/main/examples/notebooks/openenv_sudoku_grpo.ipynb) | GRPO to play Sudoku on an OpenEnv environment | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/huggingface/trl/blob/main/examples/notebooks/openenv_sudoku_grpo.ipynb) |
-| [`grpo_functiongemma_browsergym_openenv.ipynb`](https://github.com/huggingface/trl/tree/main/examples/notebooks/grpo_functiongemma_browsergym_openenv.ipynb) | GRPO on FunctionGemma in the BrowserGym environment | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/huggingface/trl/blob/main/examples/notebooks/grpo_functiongemma_browsergym_openenv.ipynb) |
 
 ## Scripts
 
@@ -56,7 +55,7 @@ Scripts are maintained in the [`trl/scripts`](https://github.com/huggingface/trl
 
 | File | Description |
 | --- | --- |
-| [`examples/scripts/bco.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/bco.py) | This script shows how to use the [`experimental.kto.KTOTrainer`] with the BCO loss to fine-tune a model to increase instruction-following, truthfulness, honesty, and helpfulness using the [openbmb/UltraFeedback](https://huggingface.co/datasets/openbmb/UltraFeedback) dataset. |
+| [`examples/scripts/bco.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/bco.py) | This script shows how to use the [`KTOTrainer`] with the BCO loss to fine-tune a model to increase instruction-following, truthfulness, honesty, and helpfulness using the [openbmb/UltraFeedback](https://huggingface.co/datasets/openbmb/UltraFeedback) dataset. |
 | [`examples/scripts/cpo.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/cpo.py) | This script shows how to use the [`experimental.cpo.CPOTrainer`] to fine-tune a model to increase helpfulness and harmlessness using the [Anthropic/hh-rlhf](https://huggingface.co/datasets/Anthropic/hh-rlhf) dataset. |
 | [`examples/scripts/distillation.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/distillation.py) | This script shows how to use the [`experimental.distillation.DistillationTrainer`] to distill a teacher model into a student, supporting full training, mixed on/off-policy, and LoRA. |
 | [`trl/scripts/dpo.py`](https://github.com/huggingface/trl/blob/main/trl/scripts/dpo.py) | This script shows how to use the [`DPOTrainer`] to fine-tune a model. |
@@ -69,7 +68,7 @@ Scripts are maintained in the [`trl/scripts`](https://github.com/huggingface/trl
 | [`examples/scripts/grpo_continuous_batching.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/grpo_continuous_batching.py) | This script shows how to use the [`GRPOTrainer`] with transformers' continuous batching engine for faster generation on large batches with variable completion lengths. |
 | [`examples/scripts/gspo.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/gspo.py) | This script shows how to use GSPO via the [`GRPOTrainer`] to fine-tune model for reasoning using the [AI-MO/NuminaMath-TIR](https://huggingface.co/datasets/AI-MO/NuminaMath-TIR) dataset. |
 | [`examples/scripts/gspo_vlm.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/gspo_vlm.py) | This script shows how to use GSPO via the [`GRPOTrainer`] to fine-tune a multimodal model for reasoning using the [lmms-lab/multimodal-open-r1-8k-verified](https://huggingface.co/datasets/lmms-lab/multimodal-open-r1-8k-verified) dataset. |
-| [`examples/scripts/kto.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/kto.py) | This script shows how to use the [`experimental.kto.KTOTrainer`] to fine-tune a model. |
+| [`examples/scripts/kto.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/kto.py) | This script shows how to use the [`KTOTrainer`] to fine-tune a model. |
 | [`examples/scripts/mpo_vlm.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/mpo_vlm.py) | This script shows how to use MPO via the [`DPOTrainer`] to align a model based on preferences using the [HuggingFaceH4/rlaif-v_formatted](https://huggingface.co/datasets/HuggingFaceH4/rlaif-v_formatted) dataset and a set of loss weights with weights. |
 | [`examples/scripts/nash_md.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/nash_md.py) | This script shows how to use the [`experimental.nash_md.NashMDTrainer`] to fine-tune a model. |
 | [`examples/scripts/online_dpo.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/online_dpo.py) | This script shows how to use the [`experimental.online_dpo.OnlineDPOTrainer`] to fine-tune a model. |
@@ -85,6 +84,7 @@ Scripts are maintained in the [`trl/scripts`](https://github.com/huggingface/trl
 | [`examples/scripts/sdft.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/sdft.py) | This script shows how to use the [`experimental.sdft.SDFTTrainer`] for self-distillation fine-tuning (SDFT). |
 | [`examples/scripts/sdpo.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/sdpo.py) | This script shows how to use the [`experimental.sdpo.SDPOTrainer`] to fine-tune a model with verifiable math rewards and optional environment feedback using the [openai/gsm8k](https://huggingface.co/datasets/openai/gsm8k) dataset. |
 | [`trl/scripts/sft.py`](https://github.com/huggingface/trl/blob/main/trl/scripts/sft.py) | This script shows how to use the [`SFTTrainer`] to fine-tune a model. |
+| [`examples/scripts/sft_diffusion_gemma.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/sft_diffusion_gemma.py) | This script shows how to extend the [`SFTTrainer`] with a block-diffusion objective to fine-tune the DiffusionGemma language model on GSM8K. |
 | [`examples/scripts/sft_gemma3.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/sft_gemma3.py) | This script shows how to use the [`SFTTrainer`] to fine-tune a Gemma 3 model. |
 | [`examples/scripts/sft_nemotron_3.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/sft_nemotron_3.py) | This script shows how to use the [`SFTTrainer`] to fine-tune an NVIDIA Nemotron 3 model. |
 | [`examples/scripts/sft_tiny_aya_tool_calling.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/sft_tiny_aya_tool_calling.py) | This script shows how to use the [`SFTTrainer`] to teach tool calling to a model without native tool-calling support using the [bebechien/SimpleToolCalling](https://huggingface.co/datasets/bebechien/SimpleToolCalling) dataset. |
@@ -112,6 +112,7 @@ These scripts demonstrate how to train models with [OpenEnv](openenv) environmen
 | [`examples/scripts/openenv/carla.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/openenv/carla.py) | GRPO training with the CARLA environment for autonomous driving. |
 | [`examples/scripts/openenv/carla_vlm.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/openenv/carla_vlm.py) | GRPO training with CARLA for VLMs with multimodal tool responses (camera images). |
 | [`examples/scripts/openenv/carla_vlm_gemma.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/openenv/carla_vlm_gemma.py) | GRPO training with CARLA for Gemma 4 with multimodal tool responses (camera images). |
+| [`examples/scripts/openenv/opencode.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/openenv/opencode.py) | AsyncGRPO training of the real `opencode` coding agent (loop-owning: the external agent runs its own tool loop and TRL trains on its captured proxy trace) with a local subprocess sandbox. |
 
 ## Distributed Training (for scripts)
 

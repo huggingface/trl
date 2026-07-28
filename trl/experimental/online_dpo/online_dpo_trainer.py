@@ -54,7 +54,7 @@ from ...generation.vllm_client import VLLMClient
 from ...import_utils import is_vllm_available
 from ...models.utils import prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
 from ...trainer.base_trainer import _BaseTrainer
-from ...trainer.utils import disable_dropout_in_model, ensure_master_addr_port, get_config_model_id
+from ...trainer.utils import disable_dropout_in_model, ensure_master_addr_port, get_callable_name, get_config_model_id
 from ..utils import DPODataCollatorWithPadding, create_reference_model, empty_cache, prepare_peft_model, truncate_right
 from .online_dpo_config import OnlineDPOConfig
 
@@ -217,7 +217,7 @@ class OnlineDPOTrainer(_BaseTrainer):
             if isinstance(reward_funcs[i], nn.Module):
                 self.reward_func_names.append(get_config_model_id(reward_funcs[i].config).split("/")[-1])
             else:
-                self.reward_func_names.append(reward_funcs[i].__name__)
+                self.reward_func_names.append(get_callable_name(reward_funcs[i]))
         self.reward_funcs = reward_funcs
 
         # Handle reward processing classes for reward_funcs

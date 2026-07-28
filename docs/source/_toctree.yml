@@ -61,8 +61,6 @@
     title: OpenReward
   - local: peft_integration
     title: PEFT
-  - local: ptt_integration
-    title: Post Training Toolkit
   - local: rapidfire_integration
     title: RapidFire AI
   - local: trackio_integration
@@ -109,8 +107,6 @@
     title: CPO
   - local: distillation_trainer
     title: Distillation
-  - local: gfpo
-    title: GFPO
   - local: gkd_trainer
     title: GKD
   - local: gmpo

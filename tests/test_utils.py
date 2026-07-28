@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import copy
+import functools
 import textwrap
 from io import StringIO
 from unittest.mock import patch
@@ -22,6 +23,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import transformers
+from datasets import IterableDataset
 from packaging.version import Version
 from transformers import AutoConfig, AutoModelForCausalLM
 from transformers.testing_utils import torch_device
@@ -37,12 +39,14 @@ from trl.trainer.utils import (
     entropy_from_logits,
     flush_left,
     generate_model_card,
+    get_callable_name,
     get_peft_config,
     hash_module,
     nanstd,
     pad,
     patch_chunked_lm_head,
     print_prompt_completions_sample,
+    repeat_iterable_dataset,
     selective_log_softmax,
     shuffle_sequence_dict,
     split_pixel_values_by_grid,
@@ -279,6 +283,36 @@ class TestGetPEFTConfig(TrlTestCase):
             assert getattr(peft_config, arg) == value
 
 
+class TestGetCallableName(TrlTestCase):
+    def test_function(self):
+        def accuracy_reward(completions):
+            return [0.0] * len(completions)
+
+        assert get_callable_name(accuracy_reward) == "accuracy_reward"
+
+    def test_partial(self):
+        def reward(completions, threshold):
+            return [0.0] * len(completions)
+
+        assert get_callable_name(functools.partial(reward, threshold=0.5)) == "reward"
+
+    def test_nested_partial(self):
+        def reward(completions, threshold):
+            return [0.0] * len(completions)
+
+        assert get_callable_name(functools.partial(functools.partial(reward), threshold=0.5)) == "reward"
+
+    def test_callable_instance(self):
+        class LengthReward:
+            def __call__(self, completions):
+                return [0.0] * len(completions)
+
+        assert get_callable_name(LengthReward()) == "LengthReward"
+
+    def test_lambda(self):
+        assert get_callable_name(lambda completions: [0.0] * len(completions)) == "<lambda>"
+
+
 class TestNanStd(TrlTestCase):
     def test_nanstd_ignores_nans(self):
         x = torch.tensor([1.0, 2.0, 3.0, float("nan")])
@@ -500,6 +534,82 @@ class TestRepeatRandomSampler(TrlTestCase):
         assert sampled[0:4] == sampled[4:8] == sampled[8:12]
         assert sampled[12:16] == sampled[16:20] == sampled[20:24]
         assert sampled[24:28] == sampled[28:32] == sampled[32:36]
+
+
+class TestRepeatIterableDataset(TrlTestCase):
+    @staticmethod
+    def _make_dataset(n):
+        return IterableDataset.from_generator(lambda: ({"x": i} for i in range(n)))
+
+    @pytest.mark.parametrize("mini_repeat_count,batch_size,repeat_count", [(1, 1, 1), (2, 3, 4), (3, 2, 2), (2, 2, 3)])
+    def test_matches_repeat_sampler(self, mini_repeat_count, batch_size, repeat_count):
+        # The streaming transform must yield records in exactly the same order as RepeatSampler yields indices for a
+        # map-style dataset (unshuffled), across a representative range of arguments.
+        n = 12
+        expected = list(
+            RepeatSampler(
+                list(range(n)),
+                mini_repeat_count=mini_repeat_count,
+                batch_size=batch_size,
+                repeat_count=repeat_count,
+                shuffle=False,
+            )
+        )
+        actual = [
+            record["x"]
+            for record in repeat_iterable_dataset(
+                self._make_dataset(n),
+                mini_repeat_count=mini_repeat_count,
+                batch_size=batch_size,
+                repeat_count=repeat_count,
+            )
+        ]
+        assert actual == expected
+
+    def test_default_arguments(self):
+        dataset = self._make_dataset(4)
+        sampled = [record["x"] for record in repeat_iterable_dataset(dataset, mini_repeat_count=2)]
+        assert sampled == [0, 0, 1, 1, 2, 2, 3, 3]
+
+    def test_drops_incomplete_batch(self):
+        dataset = self._make_dataset(7)
+        sampled = [record["x"] for record in repeat_iterable_dataset(dataset, mini_repeat_count=1, batch_size=2)]
+        # The last element is dropped because it can't form a full batch of size 2.
+        assert sampled == [0, 1, 2, 3, 4, 5]
+
+    def test_preserves_all_columns(self):
+        dataset = IterableDataset.from_generator(lambda: ({"x": i, "answer": str(i)} for i in range(2)))
+        sampled = list(repeat_iterable_dataset(dataset, mini_repeat_count=2))
+        assert sampled == [
+            {"x": 0, "answer": "0"},
+            {"x": 0, "answer": "0"},
+            {"x": 1, "answer": "1"},
+            {"x": 1, "answer": "1"},
+        ]
+
+    def test_repeats_are_independent_objects(self):
+        # Repeated records must be independent objects (like the map-style path, where the dataset re-materializes a
+        # fresh object per access), so an in-place edit to one repeat doesn't corrupt the others.
+        dataset = IterableDataset.from_generator(lambda: ({"prompt": [{"content": "hi"}]} for _ in range(1)))
+        sampled = list(repeat_iterable_dataset(dataset, mini_repeat_count=2))
+        assert sampled[0] is not sampled[1]
+        assert sampled[0]["prompt"] is not sampled[1]["prompt"]
+        sampled[0]["prompt"][-1]["content"] += " there"
+        assert sampled[1]["prompt"][-1]["content"] == "hi"
+
+    def test_reshuffles_across_epochs(self):
+        # The transform stays chained to the source, so `set_epoch` reaches an upstream `shuffle` and the order is
+        # reshuffled every epoch, matching RepeatSampler (whose RNG advances on each `__iter__`).
+        dataset = IterableDataset.from_generator(lambda: ({"x": i} for i in range(8))).shuffle(seed=42)
+        repeated = repeat_iterable_dataset(dataset, mini_repeat_count=1, batch_size=8)
+
+        repeated.set_epoch(0)
+        epoch_0 = [record["x"] for record in repeated]
+        repeated.set_epoch(1)
+        epoch_1 = [record["x"] for record in repeated]
+
+        assert sorted(epoch_0) == sorted(epoch_1) == list(range(8))  # same content
+        assert epoch_0 != epoch_1  # different order
 
 
 class TestEntropyFromLogits(TrlTestCase):
@@ -1172,6 +1282,14 @@ _CHUNKED_LM_HEAD_MODEL_IDS = [
     "trl-internal-testing/tiny-GemmaForCausalLM",
     "trl-internal-testing/tiny-Glm4MoeForCausalLM",
     "trl-internal-testing/tiny-GptOssForCausalLM",
+    "trl-internal-testing/tiny-Lfm2ForCausalLM",
+    pytest.param(
+        "trl-internal-testing/tiny-Lfm2ForCausalLM-2.5",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("5.0.0"),
+            reason="LFM2.5 tokenizer requires transformers>=5.0.0",
+        ),
+    ),
     "trl-internal-testing/tiny-LlamaForCausalLM-3.1",
     "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
     "trl-internal-testing/tiny-LlamaForCausalLM-3",
@@ -1310,7 +1428,13 @@ class TestPatchChunkedLMHead:
     @pytest.mark.parametrize("model_id", _CHUNKED_LM_HEAD_MODEL_IDS)
     @pytest.mark.parametrize("temperature", [1.0, 0.7])
     def test_backward(self, model_id, temperature):
-        model_ref = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch.bfloat16).to(torch_device)
+        # Run in float32, not bfloat16. For models that tie their embeddings, `lm_head.weight.grad` is the sum of the
+        # LM-head projection and the input-embedding lookup, so its absolute error is set by the larger of the two
+        # rather than by the element's own value. In bfloat16 that error (~1 ULP at the gradient's scale) swamps the
+        # assertion: every untied model lands on the same ~1.6e-2 bf16 quantum, and the tied ones range up to ~4e-1,
+        # which no useful tolerance can separate from a real bug. float32 drops the worst case to ~3e-5 and makes the
+        # test sensitive to the thing it is meant to check: that the chunked gradient matches the reference.
+        model_ref = AutoModelForCausalLM.from_pretrained(model_id, dtype=torch.float32).to(torch_device)
         model_chunked = copy.deepcopy(model_ref)
 
         B, S, chunk_size = 2, 8, 32
@@ -1332,7 +1456,7 @@ class TestPatchChunkedLMHead:
         out["log_probs"].sum().backward()
         chunked_grad = model_chunked.lm_head.weight.grad.clone()
 
-        torch.testing.assert_close(chunked_grad, ref_grad, atol=5e-2, rtol=5e-2)
+        torch.testing.assert_close(chunked_grad, ref_grad, atol=1e-3, rtol=1e-3)
 
 
 class TestComputeFlopsPerToken(TrlTestCase):
