@@ -158,7 +158,7 @@ git tag -a v{major}.{minor}.{patch} -m 'Adds tag v{major}.{minor}.{patch} for Py
 git push origin v{major}.{minor}.{patch}
 ```
 
-#### 7. Create a GitHub Release
+### 7. Create a GitHub Release
 
 1. Go to the repo’s [releases section](https://github.com/huggingface/trl/releases) on GitHub.
 2. Click **Draft a new release**.
