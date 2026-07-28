@@ -120,8 +120,9 @@ This ensures that future patch releases (`v{major}.{minor}.1`, `v{major}.{minor}
 ### 1. Ensure your local repository is up to date with the upstream repository
 
 ```bash
+git fetch origin
 git checkout v{major}.{minor}-release
-git pull origin main
+git pull origin v{major}.{minor}-release
 ```
 
 ### 2. Cherry-pick the changes you want to include in the patch release
