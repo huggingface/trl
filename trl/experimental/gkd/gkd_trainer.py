@@ -43,11 +43,12 @@ from ..utils import DataCollatorForChatML, empty_cache
 from .gkd_config import GKDConfig
 
 
-if is_peft_available():
-    from peft import PeftConfig
-
 if is_liger_kernel_available():
     from liger_kernel.chunked_loss import LigerFusedLinearJSDLoss
+
+
+if is_peft_available():
+    from peft import PeftConfig
 
 
 class GKDTrainer(SFTTrainer):
@@ -145,7 +146,7 @@ class GKDTrainer(SFTTrainer):
         if args.use_liger_kernel:
             # Match the non-Liger path: pure JSD (no hard CE component) and no temperature
             # scaling, since `generalized_jsd_loss` is called without a `temperature` argument.
-            self.liger_jsd_loss = LigerFusedLinearJSDLoss(
+            self.liger_loss = LigerFusedLinearJSDLoss(
                 beta=args.beta,
                 ignore_index=-100,
                 compiled=False,
@@ -185,7 +186,18 @@ class GKDTrainer(SFTTrainer):
             )
 
         if isinstance(teacher_model, str):
+            teacher_model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
             teacher_model = AutoModelForCausalLM.from_pretrained(teacher_model, **teacher_model_init_kwargs)
+
+        student_vocab_size = self.model.config.get_text_config().vocab_size
+        teacher_vocab_size = teacher_model.config.get_text_config().vocab_size
+        if student_vocab_size != teacher_vocab_size:
+            raise ValueError(
+                f"The student model has vocab_size {student_vocab_size} but the teacher model has "
+                f"vocab_size {teacher_vocab_size}. GKD compares the teacher's full next-token "
+                f"distribution, which requires a shared vocabulary. Use a teacher with the same vocab_size, or "
+                f"GOLD for cross-tokenizer distillation."
+            )
 
         # Disable dropout in the model
         if args.disable_dropout:
@@ -206,6 +218,7 @@ class GKDTrainer(SFTTrainer):
             "temperature": args.temperature,
             "do_sample": True,
             "top_k": 0,
+            "top_p": 1.0,
             "use_cache": False if args.gradient_checkpointing else True,
             "pad_token_id": self.processing_class.pad_token_id,
         }
@@ -224,7 +237,13 @@ class GKDTrainer(SFTTrainer):
 
     @staticmethod
     def generalized_jsd_loss(
-        student_logits, teacher_logits, labels=None, beta=0.5, temperature=1.0, reduction="batchmean"
+        student_logits,
+        teacher_logits,
+        labels=None,
+        beta=0.5,
+        temperature=1.0,
+        reduction="batchmean",
+        num_items_in_batch=None,
     ):
         """
         Compute the generalized Jensen-Shannon Divergence loss for knowledge distillation using F.kl_div. See Eq. (1)
@@ -284,6 +303,12 @@ class GKDTrainer(SFTTrainer):
             jsd = jsd[mask]
 
         # Apply reduction
+        if num_items_in_batch is not None:
+            # Normalize by the global number of valid tokens for gradient-accumulation-correct loss (see issue #4719).
+            jsd_sum = jsd.sum()
+            if isinstance(num_items_in_batch, torch.Tensor):
+                num_items_in_batch = num_items_in_batch.to(jsd_sum.device)
+            return jsd_sum / num_items_in_batch
         if reduction == "batchmean":
             # clamp_min(1) avoids 0/0 -> nan when a sample has no unmasked positions
             # (e.g. completion fully truncated). jsd[mask] is empty -> jsd.sum() == 0,
@@ -344,7 +369,7 @@ class GKDTrainer(SFTTrainer):
             teacher_head = unwrapped_teacher.get_output_embeddings()
 
             # liger fused jsd loss
-            loss = self.liger_jsd_loss(
+            loss = self.liger_loss(
                 student_input=student_hidden,
                 student_weight=student_head.weight,
                 teacher_input=teacher_hidden,
@@ -353,6 +378,14 @@ class GKDTrainer(SFTTrainer):
                 student_bias=getattr(student_head, "bias", None),
                 teacher_bias=getattr(teacher_head, "bias", None),
             )
+
+            # The Liger JSD loss normalizes by the local number of valid tokens. Under gradient accumulation we want
+            # the global normalization, so rescale by `num_valid_local / num_items_in_batch`.
+            if num_items_in_batch is not None:
+                num_valid_local = (true_labels != -100).sum().clamp_min(1)
+                if isinstance(num_items_in_batch, torch.Tensor):
+                    num_items_in_batch = num_items_in_batch.to(loss.device)
+                loss = loss * num_valid_local / num_items_in_batch
 
             # Release hidden states after loss computation
             del student_hidden, teacher_hidden, true_labels
@@ -376,11 +409,14 @@ class GKDTrainer(SFTTrainer):
                     attention_mask=inputs["attention_mask"],
                 )
 
-            # slice the logits for the generated tokens using the inputs["prompts"] lengths
-            prompt_lengths = inputs["prompts"].shape[1]
-            shifted_student_logits = student_outputs.logits[:, prompt_lengths - 1 : -1, :]
-            shifted_teacher_logits = teacher_outputs.logits[:, prompt_lengths - 1 : -1, :]
-            shifted_labels = inputs["labels"][:, prompt_lengths:]
+            # Standard causal shift: logits at position i predict the token at i + 1. The `labels != -100` mask
+            # inside `generalized_jsd_loss` already excludes prompt (and padding) positions, so we do not slice by
+            # prompt length. Slicing by `inputs["prompts"].shape[1]` (the batch-max prompt width) would drop real
+            # completion tokens for samples whose prompt is shorter than the batch maximum, since `labels` is padded
+            # to the full-sequence width independently of `prompts`.
+            shifted_student_logits = student_outputs.logits[:, :-1, :]
+            shifted_teacher_logits = teacher_outputs.logits[:, :-1, :]
+            shifted_labels = inputs["labels"][:, 1:]
 
             # compute loss
             loss = self.generalized_jsd_loss(
@@ -388,6 +424,7 @@ class GKDTrainer(SFTTrainer):
                 teacher_logits=shifted_teacher_logits,
                 labels=shifted_labels,
                 beta=self.beta,
+                num_items_in_batch=num_items_in_batch,
             )
 
         # empty cache
@@ -409,25 +446,45 @@ class GKDTrainer(SFTTrainer):
         )
 
     @staticmethod
-    def generate_on_policy_outputs(model, inputs, generation_config, pad_token_id=None):
+    def generate_on_policy_outputs(model, inputs, generation_config):
         # Generate output with respect to the prompt-only
         generated_outputs = model.generate(
             input_ids=inputs["prompts"],
-            attention_mask=inputs.get("prompt_attention_mask", None),
+            attention_mask=inputs["prompt_attention_mask"],
             generation_config=generation_config,
             return_dict_in_generate=True,
         )
 
         # Get the generated token IDs
         generated_tokens = generated_outputs.sequences
-        # Calculate new attention mask
-        new_attention_mask = torch.ones_like(generated_tokens)
-        new_labels = generated_tokens.clone()
+        device = generated_tokens.device
+        prompt_mask = inputs["prompt_attention_mask"]
+        prompt_length = inputs["prompts"].shape[1]
+        completion_ids = generated_tokens[:, prompt_length:]
 
-        # If there's pad_token_id, set attention mask to 0 for padding tokens
-        if pad_token_id is not None:
-            new_labels[new_labels == pad_token_id] = -100
-            new_attention_mask[generated_tokens == pad_token_id] = 0
+        # Mask everything after the first EOS token. eos_token_id can be a list of stop tokens (Llama 3),
+        # so match with torch.isin; with no eos id nothing stops early, so keep the whole completion.
+        if generation_config.eos_token_id is None:
+            completion_mask = torch.ones_like(completion_ids)
+        else:
+            is_eos = torch.isin(completion_ids, torch.tensor(generation_config.eos_token_id, device=device))
+            eos_idx = torch.full((is_eos.size(0),), is_eos.size(1), dtype=torch.long, device=device)
+            eos_idx[is_eos.any(dim=1)] = is_eos.int().argmax(dim=1)[is_eos.any(dim=1)]
+            sequence_indices = torch.arange(is_eos.size(1), device=device).expand(is_eos.size(0), -1)
+            completion_mask = (sequence_indices <= eos_idx.unsqueeze(1)).int()
+
+        # Pad ids can appear inside real prompt text, so use the prompt mask instead of matching ids
+        new_attention_mask = torch.ones_like(generated_tokens)
+        new_attention_mask[:, prompt_length:] = completion_mask
+        new_attention_mask[:, :prompt_length] = prompt_mask
+
+        new_labels = generated_tokens.clone()
+        new_labels[new_attention_mask == 0] = -100
+
+        # Mask the prompt so only the generated completion contributes to the loss. `generate` echoes
+        # the prompt back as the first `prompt_length` columns, so masking them with -100 matches the
+        # collator convention (`labels[:len(prompt)] = -100`) that `compute_loss` relies on.
+        new_labels[:, :prompt_length] = -100
 
         return generated_tokens, new_attention_mask, new_labels
 
@@ -450,7 +507,7 @@ class GKDTrainer(SFTTrainer):
                 ) as unwrapped_model
             ):
                 new_input_ids, new_attention_mask, new_labels = self.generate_on_policy_outputs(
-                    unwrapped_model, inputs, self.generation_config, self.processing_class.pad_token_id
+                    unwrapped_model, inputs, self.generation_config
                 )
             inputs["input_ids"] = new_input_ids
             inputs["attention_mask"] = new_attention_mask
@@ -464,7 +521,7 @@ class GKDTrainer(SFTTrainer):
                 ) as unwrapped_model
             ):
                 new_input_ids, new_attention_mask, new_labels = self.generate_on_policy_outputs(
-                    unwrapped_model, inputs, self.generation_config, self.processing_class.pad_token_id
+                    unwrapped_model, inputs, self.generation_config
                 )
             inputs["input_ids"] = new_input_ids
             inputs["attention_mask"] = new_attention_mask

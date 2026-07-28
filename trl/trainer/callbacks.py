@@ -46,8 +46,10 @@ if is_rich_available():
     from rich.progress import Progress
     from rich.table import Table
 
+
 if is_wandb_available():
     import wandb
+
 
 if is_weave_available():
     import weave
@@ -76,7 +78,7 @@ def _generate_completions(
         tokenizer (PreTrainedTokenizerBase): The tokenizer to be used for encoding and decoding.
         accelerator (Accelerator): The accelerator to be used for model execution.
         generation_config (GenerationConfig): Configuration for text generation.
-        batch_size (int, optional): The number of prompts to process in each batch. Default is 1.
+        batch_size (int, *optional*): The number of prompts to process in each batch. Default is 1.
 
     Returns:
         list[str]: A list of generated text completions corresponding to the input prompts.
@@ -257,9 +259,9 @@ class LogCompletionsCallback(TrainerCallback):
 
     Usage:
     ```python
-    trainer = DPOTrainer(...)
-    completions_callback = LogCompletionsCallback(trainer=trainer)
-    trainer.add_callback(completions_callback)
+    >>> trainer = DPOTrainer(...)
+    >>> completions_callback = LogCompletionsCallback(trainer=trainer)
+    >>> trainer.add_callback(completions_callback)
     ```
 
     Args:
@@ -611,7 +613,9 @@ class BEMACallback(TrainerCallback):
         ema_power (`float`, *optional*, defaults to `0.5`):
             Power for the EMA decay factor. Denoted  \\( \kappa \\) in the paper. To disable EMA, set this to `0.0`.
         bias_power (`float`, *optional*, defaults to `0.2`):
-            Power for the BEMA scaling factor. Denoted  \\( \eta \\) in the paper. To disable BEMA, set this to `0.0`.
+            Power for the BEMA scaling factor. Denoted  \\( \eta \\) in the paper. A large value (e.g.
+            `8.0`) makes  \\( \alpha_t \\) decay to `0`, approximating disabled bias-correction; `0.0`
+            instead pins  \\( \alpha_t \\) at `1` for every step (maximum, undecayed correction).
         lag (`int`, *optional*, defaults to `10`):
             Initial offset in the weight decay schedule that controls early-stage smoothness by acting as a virtual
             starting age for the updates. Denoted as  \\( \rho \\) in the paper.
@@ -628,9 +632,9 @@ class BEMACallback(TrainerCallback):
     Example:
 
     ```python
-    from trl import BEMACallback
+    >>> from trl import BEMACallback
 
-    trainer = Trainer(..., callbacks=[BEMACallback()])
+    >>> trainer = Trainer(..., callbacks=[BEMACallback()])
     ```
     """
 

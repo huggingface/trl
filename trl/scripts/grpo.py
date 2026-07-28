@@ -66,10 +66,10 @@ class GRPOScriptArguments(ScriptArguments):
 
 
 def main(script_args, training_args, model_args, dataset_args):
-    from accelerate import logging
+    from accelerate.logging import get_logger
     from datasets import load_dataset
 
-    from trl import GRPOTrainer, get_dataset, get_kbit_device_map, get_peft_config, get_quantization_config
+    from trl import GRPOTrainer, get_dataset, get_peft_config, get_quantization_config
     from trl.rewards import (
         accuracy_reward,
         get_soft_overlong_punishment,
@@ -77,7 +77,7 @@ def main(script_args, training_args, model_args, dataset_args):
         think_format_reward,
     )
 
-    logger = logging.get_logger(__name__)
+    logger = get_logger(__name__)
 
     reward_funcs_registry = {
         "accuracy_reward": accuracy_reward,
@@ -109,15 +109,10 @@ def main(script_args, training_args, model_args, dataset_args):
 
     training_args.model_init_kwargs = dict(
         revision=model_args.model_revision,
-        trust_remote_code=model_args.trust_remote_code,
+        trust_remote_code=training_args.trust_remote_code,
         attn_implementation=model_args.attn_implementation,
         dtype=model_args.dtype,
     )
-    quantization_config = get_quantization_config(model_args)
-    if quantization_config is not None:
-        # Passing None would not be treated the same as omitting the argument, so we include it only when valid.
-        training_args.model_init_kwargs["device_map"] = get_kbit_device_map()
-        training_args.model_init_kwargs["quantization_config"] = quantization_config
 
     # Load the dataset
     if dataset_args.datasets and script_args.dataset_name:
@@ -142,6 +137,7 @@ def main(script_args, training_args, model_args, dataset_args):
         args=training_args,
         train_dataset=dataset[script_args.dataset_train_split],
         eval_dataset=dataset[script_args.dataset_test_split] if training_args.eval_strategy != "no" else None,
+        quantization_config=get_quantization_config(model_args),
         peft_config=get_peft_config(model_args),
     )
 

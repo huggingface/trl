@@ -79,6 +79,14 @@ class GOLDConfig(SFTConfig):
             across student and teacher tokenizations. When `True`, the trainer will compute token mappings and merge
             probabilities for split tokens; when `False`, ULD will use simple positional truncation like in the
             original ULD paper.
+        uld_token_merge_strategy (`str`, *optional*, defaults to `"observed"`):
+            Strategy used to align answer logits and merge token probabilities in the ULD loss. With `"observed"`, the
+            answer logits are sliced at the answer positions and split tokens (when `use_extended_uld=True`) are merged
+            by multiplying the marginal distribution at the first position by the scalar conditional probabilities of
+            the actual later tokens. With `"bayesian"`, the answer-logit slice is shifted one position earlier so that
+            `probs[k]` predicts `token_ids[k]` (chain rule), and split tokens are merged using the last position's full
+            distribution, conditioned on the actual prefix tokens, multiplied by the scalar probabilities of the
+            earlier tokens. The logit-alignment shift applies whether or not `use_extended_uld` is enabled.
         uld_use_hybrid_loss (`bool`, *optional*, defaults to `False`):
             Whether to use a hybrid loss that combines ULD loss and JSD loss. When `True`, the final loss is a
             combination of JSD for known token mappings and ULD for unknown token mappings.
@@ -152,22 +160,10 @@ class GOLDConfig(SFTConfig):
             `True`.
         num_completions_to_print (`int` or `None`, *optional*):
             Number of completions to print with `rich`. If `None`, all completions are logged.
-        wandb_entity (`str` or `None`, *optional*):
-            The entity to store runs under.
-        wandb_project (`str` or `None`, *optional*):
-            The project to store runs under.
-        wandb_run_group (`str` or `None`, *optional*):
-            The group to store runs under.
         wandb_log_unique_prompts (`bool`, *optional*, defaults to `True`):
             Whether to log the unique prompts to wandb. This will create a new run for each unique prompt.
         callbacks (`list[str]`, *optional*, defaults to `[]`):
             The callbacks to run during training.
-        hub_model_revision (`str` or `None`, *optional*, defaults to `"main"`):
-            The Hub model branch to push the model to.
-        overwrite_hub_revision (`bool`, *optional*, defaults to `False`):
-            Whether to overwrite the Hub revision.
-        push_to_hub_revision (`bool`, *optional*, defaults to `False`):
-            Whether to push to a Hub revision/branch.
 
     > [!NOTE]
     > These parameters have default values different from [`~transformers.TrainingArguments`]:
@@ -278,6 +274,21 @@ class GOLDConfig(SFTConfig):
         default=False,
         metadata={
             "help": "Whether to use Universal Logit Distillation (ULD) loss instead of Generalized Jensen-Shannon Divergence loss."
+        },
+    )
+    uld_token_merge_strategy: str = field(
+        default="observed",
+        metadata={
+            "help": (
+                'Strategy used to align answer logits and merge token probabilities in the ULD loss. With "observed", '
+                "the answer logits are sliced at the answer positions and split tokens (when use_extended_uld=True) "
+                "are merged by multiplying the marginal distribution at the first position by the scalar conditional "
+                'probabilities of the actual later tokens. With "bayesian", the answer-logit slice is shifted one '
+                "position earlier so probs[k] predicts token_ids[k] (chain rule), and split tokens are merged using "
+                "the last position's full distribution, conditioned on the actual prefix tokens, multiplied by the "
+                "scalar probabilities of the earlier tokens. The logit-alignment shift applies whether or not "
+                "use_extended_uld is enabled."
+            )
         },
     )
     use_extended_uld: bool = field(
@@ -437,18 +448,6 @@ class GOLDConfig(SFTConfig):
         default=None,
         metadata={"help": "Number of completions to print with `rich`. If `None`, all completions are logged."},
     )
-    wandb_entity: str | None = field(
-        default=None,
-        metadata={"help": ("The entity to store runs under.")},
-    )
-    wandb_project: str | None = field(
-        default=None,
-        metadata={"help": ("The project to store runs under.")},
-    )
-    wandb_run_group: str | None = field(
-        default=None,
-        metadata={"help": ("The group to store runs under.")},
-    )
     wandb_log_unique_prompts: bool = field(
         default=True,
         metadata={
@@ -459,11 +458,6 @@ class GOLDConfig(SFTConfig):
         default_factory=lambda: [],
         metadata={"help": "The callbacks to run during training."},
     )
-    hub_model_revision: str | None = field(
-        default="main", metadata={"help": "The Hub model branch to push the model to."}
-    )
-    overwrite_hub_revision: bool = field(default=False, metadata={"help": "Whether to overwrite the Hub revision."})
-    push_to_hub_revision: bool = field(default=False, metadata={"help": "Whether to push to a Hub revision/branch."})
 
     def __post_init__(self):
         super().__post_init__()
@@ -515,6 +509,11 @@ class GOLDConfig(SFTConfig):
                 raise ValueError("uld_student_temperature must be positive.")
             if self.uld_teacher_temperature <= 0.0:
                 raise ValueError("uld_teacher_temperature must be positive.")
+            if self.uld_token_merge_strategy not in ("observed", "bayesian"):
+                raise ValueError(
+                    'uld_token_merge_strategy must be either "observed" or "bayesian", got '
+                    f'"{self.uld_token_merge_strategy}".'
+                )
 
             # Validate hybrid loss weights - both must be None or both must be set
             if self.uld_use_hybrid_loss:

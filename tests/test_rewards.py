@@ -12,9 +12,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import pickle
 import threading
 
-from trl.rewards import accuracy_reward, get_soft_overlong_punishment, reasoning_accuracy_reward, think_format_reward
+import pytest
+
+from trl.rewards import (
+    accuracy_reward,
+    get_cosine_scaled_reward,
+    get_repetition_penalty_reward,
+    get_soft_overlong_punishment,
+    reasoning_accuracy_reward,
+    think_format_reward,
+)
 
 from .testing_utils import TrlTestCase, require_math_latex
 
@@ -86,6 +96,85 @@ class TestSoftOverlongPunishmentReward:
         completion_ids = [[1] * 90]  # 90 is between 80 and 100
         rewards = reward_fn(completion_ids)
         assert round(abs(rewards[0] - -0.5), 4) == 0
+
+
+class TestRepetitionPenaltyReward:
+    def test_no_repetition_yields_zero(self):
+        """A completion with only unique n-grams gets no penalty."""
+        reward_fn = get_repetition_penalty_reward(ngram_size=2, max_penalty=-1.0)
+        completion_ids = [[1, 2, 3, 4]]
+        assert reward_fn(completion_ids) == [0.0]
+
+    def test_full_repetition_approaches_max_penalty(self):
+        """A fully repetitive completion approaches max_penalty."""
+        reward_fn = get_repetition_penalty_reward(ngram_size=2, max_penalty=-1.0)
+        # [5, 5, 5, 5, 5] -> 4 bigrams, 1 unique -> scaling = 1 - 1/4 = 0.75
+        completion_ids = [[5, 5, 5, 5, 5]]
+        assert reward_fn(completion_ids) == [pytest.approx(-0.75)]
+
+    def test_partial_repetition(self):
+        reward_fn = get_repetition_penalty_reward(ngram_size=2, max_penalty=-1.0)
+        # [1, 2, 1, 2, 1, 2] -> 5 bigrams, 2 unique -> scaling = 1 - 2/5 = 0.6
+        completion_ids = [[1, 2, 1, 2, 1, 2]]
+        assert reward_fn(completion_ids) == [pytest.approx(-0.6)]
+
+    def test_completion_shorter_than_ngram_size_yields_zero(self):
+        reward_fn = get_repetition_penalty_reward(ngram_size=3, max_penalty=-1.0)
+        completion_ids = [[1, 2]]  # 2 tokens < ngram_size
+        assert reward_fn(completion_ids) == [0.0]
+
+    def test_completion_exactly_ngram_size_yields_zero(self):
+        reward_fn = get_repetition_penalty_reward(ngram_size=3, max_penalty=-1.0)
+        completion_ids = [[1, 2, 3]]  # a single, unique n-gram
+        assert reward_fn(completion_ids) == [0.0]
+
+    def test_empty_completion_yields_zero(self):
+        reward_fn = get_repetition_penalty_reward(ngram_size=3, max_penalty=-1.0)
+        completion_ids = [[]]
+        assert reward_fn(completion_ids) == [0.0]
+
+    def test_max_penalty_scales_reward(self):
+        reward_fn = get_repetition_penalty_reward(ngram_size=2, max_penalty=-0.5)
+        # scaling 0.75 * max_penalty -0.5 = -0.375
+        completion_ids = [[5, 5, 5, 5, 5]]
+        assert reward_fn(completion_ids) == [pytest.approx(-0.375)]
+
+    def test_ngram_size_changes_reward(self):
+        completion_ids = [[1, 2, 3, 1, 2, 3]]
+        # bigrams: 5 total, 3 unique -> 1 - 3/5 = 0.4
+        reward_bigram = get_repetition_penalty_reward(ngram_size=2, max_penalty=-1.0)
+        assert reward_bigram(completion_ids) == [pytest.approx(-0.4)]
+        # trigrams: 4 total, 3 unique -> 1 - 3/4 = 0.25
+        reward_trigram = get_repetition_penalty_reward(ngram_size=3, max_penalty=-1.0)
+        assert reward_trigram(completion_ids) == [pytest.approx(-0.25)]
+
+    def test_batch_of_completions(self):
+        reward_fn = get_repetition_penalty_reward(ngram_size=2, max_penalty=-1.0)
+        completion_ids = [
+            [1, 2, 3, 4],  # no repetition
+            [5, 5, 5, 5, 5],  # full repetition
+            [9],  # shorter than ngram_size
+        ]
+        assert reward_fn(completion_ids) == [pytest.approx(0.0), pytest.approx(-0.75), pytest.approx(0.0)]
+
+    def test_positive_max_penalty_raises(self):
+        with pytest.raises(ValueError):
+            get_repetition_penalty_reward(ngram_size=2, max_penalty=0.5)
+
+    def test_extra_kwargs_are_ignored(self):
+        """Trainers pass prompts/completions/etc. as kwargs; the reward must accept and ignore them."""
+        reward_fn = get_repetition_penalty_reward(ngram_size=2, max_penalty=-1.0)
+        completion_ids = [[5, 5, 5, 5, 5]]
+        rewards = reward_fn(completion_ids, prompts=["x"], completions=[[{"content": "5 5 5 5 5"}]])
+        assert rewards == [pytest.approx(-0.75)]
+
+    def test_reward_is_picklable(self):
+        """The reward must survive pickling for the async GRPO rollout worker."""
+        reward_fn = get_repetition_penalty_reward(ngram_size=2, max_penalty=-1.0)
+        unpickled = pickle.loads(pickle.dumps(reward_fn))
+        completion_ids = [[5, 5, 5, 5, 5]]
+        assert unpickled(completion_ids) == [pytest.approx(-0.75)]
+        assert unpickled.__name__ == "repetition_penalty_reward"
 
 
 class TestAccuracyReward:
@@ -213,3 +302,98 @@ class TestReasoningAccuracyReward:
         ]
         rewards = reasoning_accuracy_reward(completions, solutions)
         assert rewards[0] is None
+
+
+class TestCosineScaledReward:
+    @require_math_latex
+    def test_correct_shorter_rewarded_more(self):
+        """For correct completions, a shorter one gets a higher reward."""
+        reward_fn = get_cosine_scaled_reward(max_len=100)
+        completions = [[{"content": r"\boxed{\frac{1}{3}}"}], [{"content": r"\boxed{\frac{1}{3}}"}]]
+        solution = [r"\frac{1}{3}", r"\frac{1}{3}"]
+        completion_ids = [[1] * 25, [1] * 75]
+        rewards = reward_fn(completions, solution, completion_ids)
+        assert rewards[0] > rewards[1]
+        assert rewards == [pytest.approx(0.92678, abs=1e-4), pytest.approx(0.57322, abs=1e-4)]
+
+    @require_math_latex
+    def test_wrong_longer_penalized_less(self):
+        """For wrong completions, a longer one is penalized less (closer to zero)."""
+        reward_fn = get_cosine_scaled_reward(max_len=100)
+        completions = [[{"content": r"\boxed{\frac{1}{2}}"}], [{"content": r"\boxed{\frac{1}{2}}"}]]
+        solution = [r"\frac{1}{3}", r"\frac{1}{3}"]
+        completion_ids = [[1] * 25, [1] * 75]
+        rewards = reward_fn(completions, solution, completion_ids)
+        assert rewards[1] > rewards[0]
+        assert rewards == [pytest.approx(-0.92678, abs=1e-4), pytest.approx(-0.57322, abs=1e-4)]
+
+    @require_math_latex
+    def test_midpoint_values(self):
+        """At half of max_len (cosine = 0), correct -> 0.75 and wrong -> -0.75 with default bounds."""
+        reward_fn = get_cosine_scaled_reward(max_len=100)
+        completions = [[{"content": r"\boxed{\frac{1}{3}}"}], [{"content": r"\boxed{\frac{1}{2}}"}]]
+        solution = [r"\frac{1}{3}", r"\frac{1}{3}"]
+        completion_ids = [[1] * 50, [1] * 50]
+        rewards = reward_fn(completions, solution, completion_ids)
+        assert rewards == [pytest.approx(0.75), pytest.approx(-0.75)]
+
+    @require_math_latex
+    def test_correct_boundary_values(self):
+        """Correct: shortest -> max_value_correct (1.0), longest -> min_value_correct (0.5)."""
+        reward_fn = get_cosine_scaled_reward(max_len=100)
+        completions = [[{"content": r"\boxed{\frac{1}{3}}"}], [{"content": r"\boxed{\frac{1}{3}}"}]]
+        solution = [r"\frac{1}{3}", r"\frac{1}{3}"]
+        completion_ids = [[], [1] * 100]
+        rewards = reward_fn(completions, solution, completion_ids)
+        assert rewards == [pytest.approx(1.0), pytest.approx(0.5)]
+
+    @require_math_latex
+    def test_wrong_boundary_values(self):
+        """Wrong: shortest -> min_value_wrong (-1.0), longest -> max_value_wrong (-0.5)."""
+        reward_fn = get_cosine_scaled_reward(max_len=100)
+        completions = [[{"content": r"\boxed{\frac{1}{2}}"}], [{"content": r"\boxed{\frac{1}{2}}"}]]
+        solution = [r"\frac{1}{3}", r"\frac{1}{3}"]
+        completion_ids = [[], [1] * 100]
+        rewards = reward_fn(completions, solution, completion_ids)
+        assert rewards == [pytest.approx(-1.0), pytest.approx(-0.5)]
+
+    @require_math_latex
+    def test_length_exceeding_max_len_is_clamped(self):
+        """Completions longer than max_len stay at the long-length bound (no climb back up past max_len)."""
+        reward_fn = get_cosine_scaled_reward(max_len=100)
+        completions = [[{"content": r"\boxed{\frac{1}{3}}"}], [{"content": r"\boxed{\frac{1}{2}}"}]]
+        solution = [r"\frac{1}{3}", r"\frac{1}{3}"]
+        completion_ids = [[1] * 200, [1] * 200]  # both 2x max_len
+        rewards = reward_fn(completions, solution, completion_ids)
+        # correct -> min_value_correct (0.5), wrong -> max_value_wrong (-0.5); same as at exactly max_len
+        assert rewards == [pytest.approx(0.5), pytest.approx(-0.5)]
+
+    @require_math_latex
+    def test_unparsable_gold_yields_none(self):
+        """An unparseable gold solution is skipped, as in accuracy_reward."""
+        reward_fn = get_cosine_scaled_reward(max_len=100)
+        completions = [[{"content": r"\boxed{42}"}]]
+        solution = ["forty two"]
+        completion_ids = [[1] * 50]
+        rewards = reward_fn(completions, solution, completion_ids)
+        assert rewards == [None]
+
+    @require_math_latex
+    def test_custom_value_bounds(self):
+        reward_fn = get_cosine_scaled_reward(max_len=100, min_value_correct=0.0, max_value_correct=2.0)
+        completions = [[{"content": r"\boxed{\frac{1}{3}}"}]]
+        solution = [r"\frac{1}{3}"]
+        completion_ids = [[1] * 50]  # progress 0.5, cosine 0 -> 0.0 + 0.5 * (2.0 - 0.0) * 1 = 1.0
+        rewards = reward_fn(completions, solution, completion_ids)
+        assert rewards == [pytest.approx(1.0)]
+
+    @require_math_latex
+    def test_reward_is_picklable(self):
+        """The reward must survive pickling for the async GRPO rollout worker."""
+        reward_fn = get_cosine_scaled_reward(max_len=100)
+        unpickled = pickle.loads(pickle.dumps(reward_fn))
+        completions = [[{"content": r"\boxed{\frac{1}{3}}"}]]
+        solution = [r"\frac{1}{3}"]
+        completion_ids = [[1] * 50]
+        assert unpickled(completions, solution, completion_ids) == [pytest.approx(0.75)]
+        assert unpickled.__name__ == "cosine_scaled_reward"

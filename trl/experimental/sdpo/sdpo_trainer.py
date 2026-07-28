@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import inspect
+import math
 import re
 import textwrap
 from collections import defaultdict
@@ -23,6 +24,7 @@ from typing import Any
 
 import datasets
 import torch
+from accelerate.logging import get_logger
 from accelerate.utils import gather_object, is_peft_model
 from datasets import Dataset, IterableDataset
 from torch import nn
@@ -39,7 +41,7 @@ from transformers import (
     TrainerCallback,
 )
 from transformers.trainer_utils import seed_worker
-from transformers.utils import is_datasets_available, is_liger_kernel_available, is_peft_available, logging
+from transformers.utils import is_datasets_available, is_liger_kernel_available, is_peft_available
 
 from ...data_utils import apply_chat_template, is_conversational
 from ...models import prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
@@ -49,6 +51,7 @@ from ...trainer.utils import (
     RepeatSampler,
     create_model_from_path,
     disable_dropout_in_model,
+    get_callable_name,
     get_config_model_id,
     identity,
     pad,
@@ -69,14 +72,15 @@ from .sdpo_config import SDPOConfig
 from .teacher_sync import PEFTAdapterEMACallback, SyncTeacherModelCallback, is_pure_lora_training
 
 
-logger = logging.get_logger(__name__)
+if is_liger_kernel_available():
+    from liger_kernel.chunked_loss import LigerFusedLinearJSDLoss
 
 
 if is_peft_available():
     from peft import PeftConfig
 
-if is_liger_kernel_available():
-    from liger_kernel.chunked_loss import LigerFusedLinearJSDLoss
+
+logger = get_logger(__name__)
 
 
 TrainingBatch = dict[str, torch.Tensor | Any]
@@ -361,6 +365,7 @@ class SDPOTrainer(_BaseTrainer):
             model_init_kwargs = args.model_init_kwargs or {}
             if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 model_init_kwargs["device_map"] = None
+            model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
             model = create_model_from_path(model, **model_init_kwargs)
         elif args.model_init_kwargs is not None:
             logger.warning(
@@ -403,7 +408,10 @@ class SDPOTrainer(_BaseTrainer):
 
         if processing_class is None:
             processing_class = AutoProcessor.from_pretrained(
-                get_config_model_id(model.config), truncation_side="left", padding_side="left"
+                get_config_model_id(model.config),
+                truncation_side="left",
+                padding_side="left",
+                trust_remote_code=args.trust_remote_code,
             )
 
         if isinstance(processing_class, ProcessorMixin):
@@ -517,7 +525,7 @@ class SDPOTrainer(_BaseTrainer):
                     "The Liger fused loss reduces with a token-level mean (equivalent to `loss_type='bnpo'`); the "
                     f"configured `loss_type={args.loss_type!r}` is ignored on the Liger path."
                 )
-            self.liger_jsd_loss = LigerFusedLinearJSDLoss(
+            self.liger_loss = LigerFusedLinearJSDLoss(
                 beta=args.distillation_alpha,
                 ignore_index=-100,
                 temperature=args.temperature,
@@ -562,6 +570,7 @@ class SDPOTrainer(_BaseTrainer):
                 * args.steps_per_generation,
                 enable_sleep_mode=args.vllm_enable_sleep_mode,
                 model_impl=args.vllm_model_impl,
+                trust_remote_code=args.trust_remote_code,
                 repetition_penalty=args.repetition_penalty,
                 temperature=self.temperature,
                 top_p=args.top_p,
@@ -597,6 +606,14 @@ class SDPOTrainer(_BaseTrainer):
         self.epsilon_high = args.epsilon_high
         self.beta = args.beta
 
+        if args.importance_sampling_level == "sequence" and args.loss_type in ["bnpo", "dr_grpo", "dapo"]:
+            logger.warning(
+                f"When using `importance_sampling_level='sequence'`, the `'{args.loss_type}'` loss sums per-token "
+                "contributions, which effectively weights each sequence by its completion length instead of "
+                "optimizing the per-sequence objective. To reproduce the GSPO paper's setup, set `loss_type='grpo'` "
+                "(see https://huggingface.co/docs/trl/main/en/paper_index#group-sequence-policy-optimization)."
+            )
+
         if not isinstance(reward_funcs, list):
             reward_funcs = [reward_funcs]
         self.reward_func_names = []
@@ -605,6 +622,7 @@ class SDPOTrainer(_BaseTrainer):
                 reward_model_init_kwargs = args.model_init_kwargs or {}
                 if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                     reward_model_init_kwargs["device_map"] = None
+                reward_model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
                 reward_funcs[i] = AutoModelForSequenceClassification.from_pretrained(
                     reward_func,
                     num_labels=1,
@@ -613,7 +631,7 @@ class SDPOTrainer(_BaseTrainer):
             if isinstance(reward_funcs[i], nn.Module):
                 self.reward_func_names.append(get_config_model_id(reward_funcs[i].config).split("/")[-1])
             else:
-                self.reward_func_names.append(reward_funcs[i].__name__)
+                self.reward_func_names.append(get_callable_name(reward_funcs[i]))
         self.reward_funcs = reward_funcs
 
         if args.reward_weights is not None:
@@ -635,7 +653,9 @@ class SDPOTrainer(_BaseTrainer):
         ):
             if isinstance(reward_func, PreTrainedModel):
                 if reward_processing_class is None:
-                    reward_processing_class = AutoTokenizer.from_pretrained(get_config_model_id(reward_func.config))
+                    reward_processing_class = AutoTokenizer.from_pretrained(
+                        get_config_model_id(reward_func.config), trust_remote_code=args.trust_remote_code
+                    )
                 if reward_processing_class.pad_token_id is None:
                     reward_processing_class.pad_token = reward_processing_class.eos_token
                 reward_func.config.pad_token_id = reward_processing_class.pad_token_id
@@ -727,6 +747,7 @@ class SDPOTrainer(_BaseTrainer):
         model_init_kwargs = self.args.model_init_kwargs or {}
         if self.args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
             model_init_kwargs["device_map"] = None
+        model_init_kwargs.setdefault("trust_remote_code", self.args.trust_remote_code)
         self.teacher_model = create_model_from_path(get_config_model_id(self.model.config), **model_init_kwargs)
         self.teacher_model.requires_grad_(False)
         self.teacher_model.eval()
@@ -1079,7 +1100,7 @@ class SDPOTrainer(_BaseTrainer):
             zip(self.reward_funcs, self.reward_processing_classes, strict=True)
         ):
             if isinstance(reward_func, nn.Module):
-                if is_conversational(inputs[0]):
+                if is_conversational({"prompt": prompts[0]}):
                     messages = [{"messages": p + c} for p, c in zip(prompts, completions, strict=True)]
                     texts = [
                         apply_chat_template(x, reward_processing_class, **self.chat_template_kwargs)["text"]
@@ -1559,7 +1580,7 @@ class SDPOTrainer(_BaseTrainer):
         # Per-sequence then batch mean (grpo), matching the non-Liger path: the fused kernel reduces by total tokens
         # (bnpo), so we call it per sequence and average.
         seq_losses = [
-            self.liger_jsd_loss(
+            self.liger_loss(
                 student_input=student_hidden[i],
                 student_weight=student_head.weight,
                 teacher_input=teacher_hidden[i],
@@ -1647,10 +1668,22 @@ class SDPOTrainer(_BaseTrainer):
 
     def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
         mode = "train" if self.model.training else "eval"
-        metrics = {k: sum(v) / len(v) for k, v in self._metrics[mode].items() if v}
+        # Average the metrics
+        metrics = {}
+        for key, val in self._metrics[mode].items():
+            # Filter out NaN values before averaging. A reward function that returns None for all samples
+            # in a batch produces NaN for that batch's metric. With logging_steps > 1, a naive sum()/len()
+            # would let a single NaN contaminate valid data from other batches. Only return None when no
+            # valid values remain (e.g. JSON loggers crash on float NaN).
+            valid = [v for v in val if not math.isnan(v)]
+            metrics[key] = sum(valid) / len(valid) if valid else None
+
+        # This method can be called both in training and evaluation. When called in evaluation, the keys in `logs`
+        # start with "eval_". We need to add the prefix "eval_" to the keys in `metrics` to match the format.
         if mode == "eval":
-            metrics = {f"eval_{k}": v for k, v in metrics.items()}
-        logs = {**logs, **metrics}
+            metrics = {f"eval_{key}": val for key, val in metrics.items()}
+
+        logs.update(metrics)
         super().log(logs, start_time)
         self._metrics[mode].clear()
 

@@ -53,17 +53,17 @@ class MiniLLMTrainer(GRPOTrainer):
     Example:
 
     ```python
-    from datasets import load_dataset
-    from trl.experimental.minillm import MiniLLMTrainer
+    >>> from datasets import load_dataset
+    >>> from trl.experimental.minillm import MiniLLMTrainer
 
-    dataset = load_dataset("trl-lib/tldr", split="train")
+    >>> dataset = load_dataset("trl-lib/tldr", split="train")
 
-    trainer = MiniLLMTrainer(
-        model="Qwen/Qwen3-0.6B",
-        teacher_model="Qwen/Qwen3-1.7B",
-        train_dataset=dataset,
-    )
-    trainer.train()
+    >>> trainer = MiniLLMTrainer(
+    ...     model="Qwen/Qwen3-0.6B",
+    ...     teacher_model="Qwen/Qwen3-1.7B",
+    ...     train_dataset=dataset,
+    ... )
+    >>> trainer.train()
     ```
 
     Args:
@@ -224,6 +224,7 @@ class MiniLLMTrainer(GRPOTrainer):
             )
 
         if isinstance(teacher_model, str):
+            teacher_model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
             teacher_model = AutoModelForCausalLM.from_pretrained(teacher_model, **teacher_model_init_kwargs)
 
         # Disable dropout in the model
@@ -254,22 +255,20 @@ class MiniLLMTrainer(GRPOTrainer):
         https://huggingface.co/papers/2306.08543 for the definition.
 
         Args:
-            student_logits:
-                Tensor of shape (batch_size, sequence_length, vocab_size)
-            teacher_logits:
-                Tensor of shape (batch_size, sequence_length, vocab_size)
-            labels:
-                Tensor of shape (batch_size, sequence_length) with -100 for padding tokens to ignore when computing
-                loss
-            beta:
-                Interpolation coefficient between 0 and 1 (default: 0.5)
-            temperature:
-                Softmax temperature (default: 1.0)
+            student_log_probs:
+                Per-token log-probabilities from the student, of shape (batch_size, sequence_length)
+            teacher_log_probs:
+                Per-token log-probabilities from the teacher, of shape (batch_size, sequence_length)
+            mask:
+                Optional boolean tensor of shape (batch_size, sequence_length) selecting the tokens to include in the
+                loss (e.g. excluding padding)
             reduction:
-                Specifies the reduction to apply to the output (default: 'batchmean')
+                Specifies the reduction to apply to the output: 'batchmean' (default), 'sum' or 'mean'; any other value
+                returns the unreduced per-token loss
 
         Returns:
-            loss: Scalar tensor with the generalized JSD loss
+            loss: Scalar tensor with the single-step KL regularization loss (unreduced if `reduction` is not one of the
+            above)
         """
         reg_loss = F.kl_div(
             teacher_log_probs, student_log_probs, reduction="none", log_target=True

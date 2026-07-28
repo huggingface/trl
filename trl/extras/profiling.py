@@ -17,28 +17,33 @@ import time
 from collections.abc import Callable
 
 from transformers import Trainer
-from transformers.integrations import is_mlflow_available, is_wandb_available
+from transformers.integrations import is_mlflow_available, is_trackio_available, is_wandb_available
+
+
+if is_mlflow_available():
+    import mlflow
+
+
+if is_trackio_available():
+    import trackio
 
 
 if is_wandb_available():
     import wandb
-
-if is_mlflow_available():
-    import mlflow
 
 
 class ProfilingContext:
     """
     Context manager for profiling code blocks with configurable logging.
 
-    This class handles timing of code execution and logging metrics to various backends (Weights & Biases, MLflow)
-    without being coupled to the Trainer class.
+    This class handles timing of code execution and logging metrics to various backends (Weights & Biases, MLflow,
+    Trackio) without being coupled to the Trainer class.
 
     Args:
         name (`str`):
             Name of the profiling context. Used in the metric name.
         report_to (`list` of `str`):
-            List of integrations to report metrics to (e.g., ["wandb", "mlflow"]).
+            List of integrations to report metrics to (e.g., ["wandb", "mlflow", "trackio"]).
         is_main_process (`bool`, *optional*, defaults to `True`):
             Whether this is the main process in distributed training. Metrics are only logged from the main process.
         step (`int` or `None`, *optional*):
@@ -121,6 +126,10 @@ class ProfilingContext:
         if "mlflow" in self.report_to and is_mlflow_available() and mlflow.active_run() is not None:
             mlflow.log_metrics(metrics, step=self.step)
 
+        # Log to Trackio if configured
+        if "trackio" in self.report_to and is_trackio_available():
+            trackio.log(metrics, step=self.step)
+
 
 def profiling_context(trainer: Trainer, name: str) -> ProfilingContext:
     """
@@ -140,17 +149,17 @@ def profiling_context(trainer: Trainer, name: str) -> ProfilingContext:
 
     Example:
     ```python
-    from transformers import Trainer
-    from trl.extras.profiling import profiling_context
+    >>> from transformers import Trainer
+    >>> from trl.extras.profiling import profiling_context
 
 
-    class MyTrainer(Trainer):
-        def some_method(self):
-            A = np.random.rand(1000, 1000)
-            B = np.random.rand(1000, 1000)
-            with profiling_context(self, "matrix_multiplication"):
-                # Code to profile: simulate a computationally expensive operation
-                result = A @ B  # Matrix multiplication
+    >>> class MyTrainer(Trainer):
+    ...     def some_method(self):
+    ...         A = np.random.rand(1000, 1000)
+    ...         B = np.random.rand(1000, 1000)
+    ...         with profiling_context(self, "matrix_multiplication"):
+    ...             # Code to profile: simulate a computationally expensive operation
+    ...             result = A @ B  # Matrix multiplication
     ```
     """
     context_name = f"{trainer.__class__.__name__}.{name}"
@@ -180,17 +189,17 @@ def profiling_decorator(func: Callable) -> Callable:
 
     Example:
     ```python
-    from transformers import Trainer
-    from trl.extras.profiling import profiling_decorator
+    >>> from transformers import Trainer
+    >>> from trl.extras.profiling import profiling_decorator
 
 
-    class MyTrainer(Trainer):
-        @profiling_decorator
-        def some_method(self):
-            A = np.random.rand(1000, 1000)
-            B = np.random.rand(1000, 1000)
-            # Code to profile: simulate a computationally expensive operation
-            result = A @ B
+    >>> class MyTrainer(Trainer):
+    ...     @profiling_decorator
+    ...     def some_method(self):
+    ...         A = np.random.rand(1000, 1000)
+    ...         B = np.random.rand(1000, 1000)
+    ...         # Code to profile: simulate a computationally expensive operation
+    ...         result = A @ B
     ```
     """
 

@@ -93,10 +93,10 @@ SDFT-specific hook:
 
 ## Example script
 
-Use [`trl/experimental/sdft/sdft.py`](https://github.com/huggingface/trl/blob/main/trl/experimental/sdft/sdft.py) to launch SDFT training from the command line. The script supports any causal LM from the Hub, custom local datasets via `--dataset_path`, and PEFT/LoRA via the standard `ModelConfig` flags.
+Use [`examples/scripts/sdft.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/sdft.py) to launch SDFT training from the command line. The script supports any causal LM from the Hub, custom local datasets via `--dataset_path`, and PEFT/LoRA via the standard `ModelConfig` flags.
 
 ```bash
-python trl/experimental/sdft/sdft.py \
+python examples/scripts/sdft.py \
     --model_name_or_path Qwen/Qwen3.5-0.8B \
     --dataset_name your-org/your-dataset \
     --output_dir outputs/sdft-qwen3.5-0.8b \

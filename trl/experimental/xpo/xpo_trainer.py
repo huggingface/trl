@@ -74,6 +74,14 @@ class XPOTrainer(OnlineDPOTrainer):
             Processing class used to process the data. If provided, will be used to automatically process the inputs
             for the model, and it will be saved along the model to make it easier to rerun an interrupted training or
             reuse the fine-tuned model.
+        reward_processing_classes ([`~transformers.PreTrainedTokenizerBase`] or `list[PreTrainedTokenizerBase]`, *optional*):
+            Processing classes corresponding to the reward functions specified in `reward_funcs`. Can be either:
+
+            - A single processing class: Used when `reward_funcs` contains only one reward function.
+            - A list of processing classes: Must match the order and length of the reward functions in `reward_funcs`.
+
+            If set to `None`, the tokenizer for each model-based reward function is automatically loaded using
+            [`~transformers.AutoTokenizer.from_pretrained`].
         peft_config ([`~peft.PeftConfig`], *optional*):
             The peft config to use for training.
         compute_metrics (`Callable[[EvalPrediction], dict]`, *optional*):
