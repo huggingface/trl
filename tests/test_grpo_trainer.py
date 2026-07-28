@@ -40,6 +40,7 @@ from transformers.utils import is_peft_available
 
 from trl import GRPOConfig, GRPOTrainer
 from trl.import_utils import is_liger_kernel_available
+from trl.trainer import grpo_trainer as grpo_trainer_module
 
 from .testing_utils import (
     TrlTestCase,
@@ -246,16 +247,20 @@ class TestGRPOCompletionLogging(TrlTestCase):
         assert config.wandb_log_completions_by_step is False
 
     @pytest.mark.parametrize(
-        ("wandb_log_completions_by_step", "expected_key"),
-        [(False, "completions"), (True, "completions_step=7")],
+        ("report_to", "wandb_log_completions_by_step", "expected_wandb_key"),
+        [
+            (["wandb", "trackio"], False, "completions"),
+            (["wandb", "trackio"], True, "completions_step=7"),
+            (["trackio"], True, None),
+        ],
     )
-    def test_wandb_completion_table_key(self, wandb_log_completions_by_step, expected_key):
+    def test_completion_table_keys(self, report_to, wandb_log_completions_by_step, expected_wandb_key):
         trainer = object.__new__(GRPOTrainer)
         trainer.model = SimpleNamespace(training=True)
         trainer.accelerator = SimpleNamespace(is_main_process=True)
         trainer.args = SimpleNamespace(
             output_dir=self.tmp_dir,
-            report_to=["wandb", "trackio"],
+            report_to=report_to,
             wandb_log_completions_by_step=wandb_log_completions_by_step,
         )
         trainer.state = SimpleNamespace(global_step=7)
@@ -276,15 +281,21 @@ class TestGRPOCompletionLogging(TrlTestCase):
         wandb_mock.run = object()
         trackio_mock = MagicMock()
         with (
-            patch("trl.trainer.grpo_trainer.wandb", wandb_mock, create=True),
-            patch("trl.trainer.grpo_trainer.trackio", trackio_mock, create=True),
+            patch.dict(grpo_trainer_module.__dict__, {"trackio": trackio_mock}),
             patch("trl.trainer.grpo_trainer.is_rich_available", return_value=False),
             patch("transformers.Trainer.log"),
             patch("pandas.DataFrame.to_parquet"),
         ):
+            if expected_wandb_key is None:
+                grpo_trainer_module.__dict__.pop("wandb", None)
+            else:
+                grpo_trainer_module.wandb = wandb_mock
             trainer.log({})
 
-        assert set(wandb_mock.log.call_args.args[0]) == {expected_key}
+        if expected_wandb_key is None:
+            wandb_mock.log.assert_not_called()
+        else:
+            assert set(wandb_mock.log.call_args.args[0]) == {expected_wandb_key}
         assert set(trackio_mock.log.call_args.args[0]) == {"completions"}
 
 
