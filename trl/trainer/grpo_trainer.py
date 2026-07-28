@@ -1468,7 +1468,6 @@ class GRPOTrainer(_BaseTrainer):
             # Build model inputs
             model_inputs = {"input_ids": input_ids_batch, "attention_mask": attention_mask_batch}
             if num_images is not None:
-                # Samples can hold several images, so image-indexed tensors are sliced with image boundaries.
                 cum_imgs = torch.tensor([0] + num_images).cumsum(0)
                 img_start, img_end = cum_imgs[start], cum_imgs[start + batch_size]
             if image_grid_thw is not None and pixel_values is not None:
