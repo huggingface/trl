@@ -270,8 +270,8 @@ def _patch_chunked_ce_lm_head(
             Set to `True` for VLMs. Only used to read `logit_scale` / `final_logit_softcapping` /
             `output_router_logits` from `model.config.text_config` instead of the top-level config.
         compute_token_metrics (`bool`):
-            Whether to compute `num_correct_tokens` / `entropy_sum` on the patched output. When `False`, both are
-            `0` and the extra `argmax` / entropy computation over each chunk's logits is skipped.
+            Whether to compute `num_correct_tokens` / `entropy_sum` on the patched output. When `False`, both are `0`
+            and the extra `argmax` / entropy computation over each chunk's logits is skipped.
     """
     # VLM scaling configs (`logit_scale`, `final_logit_softcapping`, MoE `output_router_logits`) live on `text_config`;
     # text-only models keep them on the top-level config.
