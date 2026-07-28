@@ -914,6 +914,10 @@ class RLOOTrainer(_BaseTrainer):
 
             # Build model inputs
             model_inputs = {"input_ids": input_ids_batch, "attention_mask": attention_mask_batch}
+            if num_images is not None:
+                # Samples can hold several images, so image-indexed tensors are sliced with image boundaries.
+                cum_imgs = torch.tensor([0] + num_images).cumsum(0)
+                img_start, img_end = cum_imgs[start], cum_imgs[start + batch_size]
             if image_grid_thw is not None and pixel_values is not None:
                 rows_per_image = image_grid_thw.prod(dim=-1)
                 rows_per_sample = torch.split(rows_per_image, num_images)
@@ -921,12 +925,8 @@ class RLOOTrainer(_BaseTrainer):
                 cum_rows = torch.cat([torch.tensor([0], device=rows_per_sample.device), rows_per_sample.cumsum(0)])
                 row_start, row_end = cum_rows[start].item(), cum_rows[start + batch_size].item()
                 model_inputs["pixel_values"] = pixel_values[row_start:row_end]
-                cum_imgs = torch.tensor([0] + num_images).cumsum(0)
-                img_start, img_end = cum_imgs[start], cum_imgs[start + batch_size]
                 model_inputs["image_grid_thw"] = image_grid_thw[img_start:img_end]
             elif image_position_ids is not None and pixel_values is not None:
-                cum_imgs = torch.tensor([0] + num_images).cumsum(0)
-                img_start, img_end = cum_imgs[start], cum_imgs[start + batch_size]
                 model_inputs["pixel_values"] = pixel_values[img_start:img_end]
                 model_inputs["image_position_ids"] = image_position_ids[img_start:img_end]
             elif spatial_shapes is not None and pixel_values is not None:
@@ -937,11 +937,12 @@ class RLOOTrainer(_BaseTrainer):
                 model_inputs["pixel_attention_mask"] = pixel_attention_mask[tile_start:tile_end]
                 model_inputs["spatial_shapes"] = spatial_shapes[tile_start:tile_end]
             elif pixel_values is not None:
-                model_inputs["pixel_values"] = pixel_values[start : start + batch_size]
+                # Models without grid metadata (e.g. LLaVA): pixel_values is indexed by image.
+                model_inputs["pixel_values"] = pixel_values[img_start:img_end]
             if pixel_attention_mask is not None and spatial_shapes is None:
                 model_inputs["pixel_attention_mask"] = pixel_attention_mask[start : start + batch_size]
             if image_sizes is not None:
-                model_inputs["image_sizes"] = image_sizes[start : start + batch_size]
+                model_inputs["image_sizes"] = image_sizes[img_start:img_end]
             if token_type_ids is not None:
                 model_inputs["token_type_ids"] = token_type_ids[start : start + batch_size]
             if mm_token_type_ids is not None:

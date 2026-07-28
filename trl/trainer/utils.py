@@ -999,6 +999,7 @@ def split_pixel_values_by_grid(batch: dict[str, torch.Tensor]) -> dict[str, torc
     For models with `image_grid_thw` (e.g. Qwen), the grid dimensions determine how many rows of `pixel_values` belong
     to each image. For models with `image_position_ids` instead (e.g. Gemma), `pixel_values` is indexed directly by
     image count. For models with `spatial_shapes` (e.g. LFM2-VL), tile-indexed tensors are split using `num_tiles`.
+    For models with none of these (e.g. LLaVA), `pixel_values` is indexed by image count as well.
     """
     if "pixel_values" not in batch or "num_images" not in batch:
         return batch
@@ -1040,6 +1041,10 @@ def split_pixel_values_by_grid(batch: dict[str, torch.Tensor]) -> dict[str, torc
             "spatial_shapes": split_spatial_shapes,
         }
 
+    # Models without extra metadata (e.g. LLaVA): pixel_values and image_sizes are indexed by image.
+    batch = {**batch, "pixel_values": list(torch.split(pixel_values, num_images, dim=0))}
+    if "image_sizes" in batch:
+        batch = {**batch, "image_sizes": list(torch.split(batch["image_sizes"], num_images, dim=0))}
     return batch
 
 
@@ -1072,6 +1077,11 @@ def unsplit_pixel_values_by_grid(batch: dict[str, torch.Tensor | list[torch.Tens
     if isinstance(spatial_shapes, list):
         merged = torch.cat(spatial_shapes, dim=0)
         batch = {**batch, "spatial_shapes": merged}
+
+    image_sizes = batch.get("image_sizes")
+    if isinstance(image_sizes, list):
+        merged = torch.cat(image_sizes, dim=0)
+        batch = {**batch, "image_sizes": merged}
 
     return batch
 
