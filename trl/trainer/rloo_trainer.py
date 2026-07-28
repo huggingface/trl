@@ -937,7 +937,6 @@ class RLOOTrainer(_BaseTrainer):
                 model_inputs["pixel_attention_mask"] = pixel_attention_mask[tile_start:tile_end]
                 model_inputs["spatial_shapes"] = spatial_shapes[tile_start:tile_end]
             elif pixel_values is not None:
-                # Models without grid metadata (e.g. LLaVA): pixel_values is indexed by image.
                 model_inputs["pixel_values"] = pixel_values[img_start:img_end]
             if pixel_attention_mask is not None and spatial_shapes is None:
                 model_inputs["pixel_attention_mask"] = pixel_attention_mask[start : start + batch_size]
