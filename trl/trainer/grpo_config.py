@@ -67,7 +67,7 @@ class GRPOConfig(_BaseConfig):
         num_generations_eval (`int` or `None`, *optional*):
             Number of generations to sample during evaluation. This allows using fewer generations during evaluation to
             save computation. If `None`, uses the value of `num_generations`.
-        max_completion_length (`int` or `None`, *optional*, defaults to `256`):
+        max_completion_length (`int` or `None`, *optional*, defaults to `512`):
             Maximum length of the generated completion.
         ds3_gather_for_generation (`bool`, *optional*, defaults to `True`):
             This setting applies to DeepSpeed ZeRO-3. If enabled, the policy model weights are gathered for generation,
@@ -486,7 +486,7 @@ class GRPOConfig(_BaseConfig):
         },
     )
     max_completion_length: int | None = field(
-        default=256,
+        default=512,
         metadata={"help": "Maximum length of the generated completion."},
     )
     ds3_gather_for_generation: bool = field(
@@ -791,8 +791,8 @@ class GRPOConfig(_BaseConfig):
     loss_type: str = field(
         default="dapo",
         metadata={
-            "help": "Specifies the loss formulation to use. Supported values are 'grpo', 'dapo', 'bnpo', and "
-            "'dr_grpo'. "
+            "help": "Specifies the loss formulation to use. Supported values are 'grpo', 'dr_grpo', 'dapo', "
+            "'bnpo', 'cispo', 'sapo', 'luspo', and 'vespo'. "
             "'grpo': Aggregates token-level losses by normalizing over sequence length. Not recommended due to length "
             "bias—this approach tends to prefer shorter completions with positive advantages and longer ones with "
             "negative advantages. "
@@ -804,7 +804,7 @@ class GRPOConfig(_BaseConfig):
             "'bnpo': Aggregates token-level losses by normalizing with the number of active token in the local batch. "
             "Note that normalization is performed over the local batch only, so results may slightly vary depending "
             "on the local batch size, despite a constant effective batch size. When using "
-            "`per_device_train_batch_size==1`, the loss is equivalent to the GRPO loss."
+            "`per_device_train_batch_size==1`, the loss is equivalent to the GRPO loss. "
             "'cispo': Clips the importance sampling weights instead of the advantage scaled importance weights. "
             "The clipped weights are then multiplied with the advantages and policy model's log probs. "
             "Individual token losses are aggregated by normalizing with the number of active tokens in "
@@ -813,11 +813,11 @@ class GRPOConfig(_BaseConfig):
             "'sapo': Soft Adaptive Policy Optimization loss, as introduced in the "
             "[Soft Adaptive Policy Optimization paper](https://huggingface.co/papers/2511.20347). "
             "Replaces hard clipping with a smooth, temperature-controlled gate that adaptively attenuates "
-            "off-policy updates while preserving useful learning signals."
+            "off-policy updates while preserving useful learning signals. "
             "'luspo': Length-Unbiased Sequence Policy Optimization loss. A sequence-level loss that scales each "
             "sequence's loss by its length. This is a modification of GSPO and requires "
             "`importance_sampling_level='sequence'`. Introduced in the [LUSPO "
-            "paper](https://huggingface.co/papers/2602.05261)."
+            "paper](https://huggingface.co/papers/2602.05261). "
             "'vespo': Variational Sequence-Level Soft Policy Optimization. Replaces hard clipping with a smooth, "
             "asymmetric Gamma weighting function applied directly to sequence-level importance weights. Introduced in "
             "the [VESPO paper](https://huggingface.co/papers/2602.10693)."
@@ -1060,6 +1060,16 @@ class GRPOConfig(_BaseConfig):
             raise ValueError(
                 "log_completions_hub_repo is set, but log_completions is False. Enable log_completions to upload "
                 "completions to the Hub, or unset log_completions_hub_repo."
+            )
+
+        # `auto_find_batch_size` halves the train batch size on OOM, and the generation batch is derived from it. The
+        # reduced batch is no longer guaranteed to hold full prompt groups, which breaks grouping the rewards by
+        # prompt. There's no way to preserve the invariant while shrinking the batch, so reject it up front.
+        if self.auto_find_batch_size:
+            raise ValueError(
+                "auto_find_batch_size is not supported by GRPO, because the generation batch must contain full "
+                "prompt groups of num_generations completions, and reducing the batch size on out-of-memory breaks "
+                "this invariant. Set auto_find_batch_size=False and lower per_device_train_batch_size instead."
             )
 
         num_processes = self.world_size

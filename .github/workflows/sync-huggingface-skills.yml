@@ -14,7 +14,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout trl repo
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Set up Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
@@ -40,14 +40,14 @@ jobs:
           repositories: huggingface/skills
 
       - name: Checkout huggingface/skills repo
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           repository: huggingface/skills
           token: ${{ steps.app_token.outputs.token }}
           path: skills-repo
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # v8.2.0
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990  # v8.3.2
 
       - name: Copy generated files
         run: cp trl/skills/trl-training/SKILL.md skills-repo/skills/trl-training/
