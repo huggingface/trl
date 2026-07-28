@@ -162,6 +162,6 @@ git push origin v{major}.{minor}.{patch}
 
 1. Go to the repo’s [releases section](https://github.com/huggingface/trl/releases) on GitHub.
 2. Click **Draft a new release**.
-3. Select the `v{major}.{minor}.{patch}` tag you just created in step 7.
+3. Select the `v{major}.{minor}.{patch}` tag you just created in step 6.
 4. Add a title (`v{major}.{minor}.{patch}`) and a short description of what’s new.
 5. Click **Publish Release**.
