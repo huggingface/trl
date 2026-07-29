@@ -31,7 +31,6 @@ from datasets import Dataset, IterableDataset
 from packaging.version import Version
 from torch.utils.data import DataLoader, Sampler
 from transformers import AutoTokenizer, TrainerCallback, is_trackio_available, is_wandb_available
-from transformers.data.data_collator import DataCollator
 from transformers.feature_extraction_utils import FeatureExtractionMixin
 from transformers.generation.configuration_utils import GenerationConfig
 from transformers.image_processing_utils import BaseImageProcessor
@@ -367,7 +366,6 @@ class DistillationTrainer(_BaseTrainer):
         model: PreTrainedModel | nn.Module | str | None = None,
         teacher_model: PreTrainedModel | nn.Module | str = None,
         args: DistillationConfig | None = None,
-        data_collator: DataCollator | None = None,  # type: ignore
         train_dataset: Dataset | None = None,
         eval_dataset: Dataset | dict[str, Dataset] | None = None,
         processing_class: PreTrainedTokenizerBase
