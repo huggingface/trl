@@ -1072,13 +1072,17 @@ class TestParseResponse:
         if "ForCausalLM" in model_name:
             self.is_vlm = False
             processing_class = AutoTokenizer.from_pretrained(model_name)
-            response_schema = getattr(processing_class, "response_schema", None)
+            tokenizer = processing_class
         elif "ForConditionalGeneration" in model_name:
             self.is_vlm = True
             processing_class = AutoProcessor.from_pretrained(model_name)
-            response_schema = getattr(processing_class.tokenizer, "response_schema", None)
+            tokenizer = processing_class.tokenizer
 
-        if response_schema is None:
+        # Nothing to add for models that already ship a new-style `response_template` or a legacy
+        # `response_schema`; `add_response_schema` only knows a fixed set of chat templates and raises otherwise.
+        has_template = getattr(tokenizer, "response_template", None) is not None
+        has_schema = getattr(tokenizer, "response_schema", None) is not None
+        if not has_template and not has_schema:
             processing_class = add_response_schema(processing_class)
 
         return processing_class
