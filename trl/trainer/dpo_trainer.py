@@ -809,6 +809,12 @@ class DPOTrainer(_BaseTrainer):
                     "Multiple loss types are not yet supported when using Liger kernel. If you need this feature, "
                     "please open a feature request at https://github.com/huggingface/trl/issues."
                 )
+            if self.f_divergence_type != "reverse_kl":
+                raise ValueError(
+                    "`use_liger_kernel=True` is incompatible with a non-default `f_divergence_type`. The Liger fused "
+                    "DPO loss always uses the standard reverse-KL parameterization, so the requested divergence would "
+                    "be silently ignored. Either set `f_divergence_type='reverse_kl'`, or set `use_liger_kernel=False`."
+                )
             if compute_metrics is not None:
                 raise ValueError(
                     "compute_metrics is not supported with the Liger kernel. compute_metrics requires to be able to "
