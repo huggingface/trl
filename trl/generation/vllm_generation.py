@@ -28,6 +28,7 @@ from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.distributed.tensor import DTensor
 from transformers import PreTrainedModel, PreTrainedTokenizerBase, ProcessorMixin, is_bitsandbytes_available
 from transformers.utils import (
+    is_peft_available,
     is_torch_mlu_available,
     is_torch_mps_available,
     is_torch_npu_available,
@@ -45,6 +46,9 @@ if is_vllm_available():
     from vllm import LLM, RequestOutput, SamplingParams
     from vllm.lora.request import LoRARequest
     from vllm.sampling_params import StructuredOutputsParams
+
+if is_peft_available():
+    from peft import LoraConfig
 
 
 logger = logging.getLogger(__name__)
@@ -349,20 +353,21 @@ class VLLMGeneration:
             obj_list = [lora_sync, server_max_lora_rank]
             broadcast_object_list(obj_list, from_process=0)
             self.lora_sync, server_max_lora_rank = obj_list
-            # Fail fast with a clear message if the adapter rank exceeds the server's `--max-lora-rank` (only knowable
-            # when the server reported it), instead of hitting the server's opaque load-time error. `rank_pattern` may
-            # raise individual modules above the base `r`.
-            if self.lora_sync and server_max_lora_rank is not None:
-                active_peft_config = model.peft_config[model.active_adapters[0]]
-                adapter_rank = max([active_peft_config.r, *active_peft_config.rank_pattern.values()])
-                if adapter_rank > server_max_lora_rank:
-                    # Suggest a rank vLLM actually accepts, so the fix doesn't trade this error for a pydantic one.
-                    suggested_rank = next(rank for rank in VLLM_LORA_RANKS if rank >= adapter_rank)
-                    raise ValueError(
-                        f"The LoRA adapter rank ({adapter_rank}) exceeds the vLLM server's `--max-lora-rank` "
-                        f"({server_max_lora_rank}). Relaunch the server with `trl vllm-serve ... --max-lora-rank "
-                        f"{suggested_rank}` (or higher)."
-                    )
+            if self.lora_sync:
+                active_peft_config = self._active_lora_config()
+                # Fail fast with a clear message if the adapter rank exceeds the server's `--max-lora-rank` (only
+                # knowable when the server reported it), instead of hitting the server's opaque load-time error.
+                # `rank_pattern` may raise individual modules above the base `r`.
+                if server_max_lora_rank is not None:
+                    adapter_rank = max([active_peft_config.r, *active_peft_config.rank_pattern.values()])
+                    if adapter_rank > server_max_lora_rank:
+                        # Suggest a rank vLLM accepts, so the fix doesn't trade this error for a pydantic one.
+                        suggested_rank = next(rank for rank in VLLM_LORA_RANKS if rank >= adapter_rank)
+                        raise ValueError(
+                            f"The LoRA adapter rank ({adapter_rank}) exceeds the vLLM server's `--max-lora-rank` "
+                            f"({server_max_lora_rank}). Relaunch the server with `trl vllm-serve ... --max-lora-rank "
+                            f"{suggested_rank}` (or higher)."
+                        )
             if accelerator.is_main_process and not self.lora_sync:
                 self.vllm_client.init_communicator(device=accelerator.device)
 
@@ -409,7 +414,7 @@ class VLLMGeneration:
             if self.lora_sync:
                 if not is_vllm_available(min_version="0.15.0"):
                     raise ImportError("Adapter-only LoRA sync in colocate mode requires vLLM >= 0.15.0.")
-                active_peft_config = model.peft_config[model.active_adapters[0]]
+                active_peft_config = self._active_lora_config()
                 # `rank_pattern` may raise individual modules above the base `r`; vLLM needs the max.
                 adapter_rank = max([active_peft_config.r, *active_peft_config.rank_pattern.values()])
                 # Round up to a rank vLLM accepts; a plain `r=4` adapter would otherwise crash the engine.
@@ -513,6 +518,22 @@ class VLLMGeneration:
         elif self._dist.fsdp_version == 2:
             self._sync_fsdp2_params_to_vllm(model)
 
+    def _active_lora_config(self) -> "LoraConfig":
+        """Return the active adapter's config, checking it can be synced as a plain LoRA adapter."""
+        model = self.model
+        if len(model.active_adapters) != 1:
+            raise ValueError("Adapter-only LoRA sync currently supports exactly one active adapter.")
+        active_peft_config = model.peft_config[model.active_adapters[0]]
+        if not isinstance(active_peft_config, LoraConfig):
+            raise ValueError("Adapter-only LoRA sync currently supports only PEFT LoRA adapters.")
+        if active_peft_config.modules_to_save:
+            raise ValueError("Adapter-only LoRA sync does not support LoRA configs with `modules_to_save`.")
+        if active_peft_config.use_dora:
+            raise ValueError("Adapter-only LoRA sync does not support DoRA adapters.")
+        if active_peft_config.bias != "none":
+            raise ValueError("Adapter-only LoRA sync does not support LoRA adapters with bias.")
+        return active_peft_config
+
     def _save_lora_adapter(self) -> str:
         """Save the active PEFT adapter to a versioned directory and return its path."""
         model = self.model
@@ -525,6 +546,10 @@ class VLLMGeneration:
         # half-flushed adapter dir. `os.rename` is atomic within the same filesystem, and tmp_dir/adapter_dir share
         # root_dir.
         tmp_dir = f"{adapter_dir}.tmp"
+        # In colocate mode every rank loads the adapter from this path, so one writer per node keeps multi-node runs
+        # working without shared storage. In server mode only rank 0's copy is read — by the server, which is why that
+        # path must be visible to it.
+        writes_adapter = accelerator.is_local_main_process if self.mode == "colocate" else accelerator.is_main_process
 
         with self._dist.gather_params([p for p in model.parameters() if p.requires_grad]):
             with self._dist.summon_full_params(model, recurse=True, writeback=False):
@@ -538,7 +563,7 @@ class VLLMGeneration:
                     name: param.full_tensor().detach().cpu() if isinstance(param, DTensor) else param.detach().cpu()
                     for name, param in state_dict.items()
                 }
-                if accelerator.is_main_process:
+                if writes_adapter:
                     shutil.rmtree(tmp_dir, ignore_errors=True)  # clear any leftover from a crashed prior run
                     os.makedirs(tmp_dir, exist_ok=True)
                     model.save_pretrained(
@@ -553,7 +578,7 @@ class VLLMGeneration:
                     os.rename(tmp_dir, adapter_dir)
 
         accelerator.wait_for_everyone()
-        if accelerator.is_main_process and self._lora_sync_version > 2:
+        if writes_adapter and self._lora_sync_version > 2:
             old_dir = os.path.join(root_dir, f"sync_{self._lora_sync_version - 2}")
             shutil.rmtree(old_dir, ignore_errors=True)
         accelerator.wait_for_everyone()

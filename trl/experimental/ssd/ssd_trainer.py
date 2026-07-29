@@ -65,7 +65,7 @@ from .ssd_config import SSDConfig
 
 
 if is_peft_available():
-    from peft import LoraConfig, PeftConfig
+    from peft import PeftConfig
 
 
 logger = get_logger(__name__)
@@ -261,21 +261,6 @@ class SSDTrainer(_BaseTrainer):
                 lora_sync_output_dir=args.output_dir,
             )
             self._last_loaded_step = -1
-
-            # Adapter-only LoRA sync is auto-detected in the generation backend (LoRA model + server launched with
-            # `--enable-lora`). When it's active, the active adapter must be syncable as a plain LoRA adapter.
-            if self.vllm_generation.lora_sync:
-                if len(self.model.active_adapters) != 1:
-                    raise ValueError("Adapter-only LoRA sync currently supports exactly one active adapter.")
-                active_peft_config = self.model.peft_config[self.model.active_adapters[0]]
-                if not isinstance(active_peft_config, LoraConfig):
-                    raise ValueError("Adapter-only LoRA sync currently supports only PEFT LoRA adapters.")
-                if active_peft_config.modules_to_save:
-                    raise ValueError("Adapter-only LoRA sync does not support LoRA configs with `modules_to_save`.")
-                if active_peft_config.use_dora:
-                    raise ValueError("Adapter-only LoRA sync does not support DoRA adapters.")
-                if active_peft_config.bias != "none":
-                    raise ValueError("Adapter-only LoRA sync does not support LoRA adapters with bias.")
 
     def _set_signature_columns_if_needed(self):
         if self._signature_columns is None:

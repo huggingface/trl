@@ -56,7 +56,7 @@ if is_liger_kernel_available():
 
 if is_peft_available():
     import peft
-    from peft import LoraConfig, PeftConfig, get_peft_model
+    from peft import PeftConfig, get_peft_model
 
 
 if is_rich_available():
@@ -685,21 +685,6 @@ class IWOPDTrainer(_BaseTrainer):
             )
             self.vllm_sync_frequency = args.vllm_sync_frequency
             self._last_vllm_sync_step = -1
-
-            # Adapter-only LoRA sync is auto-detected in the generation backend (LoRA model + server launched with
-            # `--enable-lora`). When it's active, the active adapter must be syncable as a plain LoRA adapter.
-            if self.vllm_generation.lora_sync:
-                if len(self.model.active_adapters) != 1:
-                    raise ValueError("Adapter-only LoRA sync currently supports exactly one active adapter.")
-                active_peft_config = self.model.peft_config[self.model.active_adapters[0]]
-                if not isinstance(active_peft_config, LoraConfig):
-                    raise ValueError("Adapter-only LoRA sync currently supports only PEFT LoRA adapters.")
-                if active_peft_config.modules_to_save:
-                    raise ValueError("Adapter-only LoRA sync does not support LoRA configs with `modules_to_save`.")
-                if active_peft_config.use_dora:
-                    raise ValueError("Adapter-only LoRA sync does not support DoRA adapters.")
-                if active_peft_config.bias != "none":
-                    raise ValueError("Adapter-only LoRA sync does not support LoRA adapters with bias.")
 
     @staticmethod
     def _local_teacher_tokenizers_match(

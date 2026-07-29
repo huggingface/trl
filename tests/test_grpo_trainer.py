@@ -168,6 +168,7 @@ class TestGRPORolloutDispatch:
         trainer.accelerator = SimpleNamespace(
             device=torch.device("cpu"),
             is_main_process=True,
+            is_local_main_process=True,
             gather=lambda t: t,
         )
         trainer.args = SimpleNamespace(report_to=[])
@@ -322,19 +323,16 @@ class TestGRPOTrainer(TrlTestCase):
         ],
     )
     def test_vllm_lora_sync_rejects_unsupported_lora_configs(self, peft_config_kwargs, error_message):
-        # When the generation backend auto-detects adapter-only sync (`lora_sync=True`), the trainer validates that the
-        # active adapter is syncable as a plain LoRA adapter.
-        training_args = self.get_vllm_args()
-        with patch("trl.trainer.grpo_trainer.VLLMGeneration") as mock_vllm_generation:
-            mock_vllm_generation.return_value.lora_sync = True
-            with pytest.raises(ValueError, match=error_message):
-                GRPOTrainer(
-                    model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-                    reward_funcs=self.reward_func,
-                    args=training_args,
-                    train_dataset=self.get_prompt_dataset(),
-                    peft_config=LoraConfig(**peft_config_kwargs),
-                )
+        # Adapter-only sync requires a plain LoRA adapter. The generation backend owns this check, next to the other
+        # vLLM capability checks, so it fires before any LoRA-only config field is read.
+        model = MagicMock()
+        model.active_adapters = ["default"]
+        model.peft_config = {"default": LoraConfig(**peft_config_kwargs)}
+        vllm_generation = object.__new__(VLLMGeneration)
+        vllm_generation.model = model
+
+        with pytest.raises(ValueError, match=error_message):
+            vllm_generation._active_lora_config()
 
     def test_vllm_lora_sync_path_loads_adapter_without_merging(self):
         vllm_generation = object.__new__(VLLMGeneration)
@@ -396,7 +394,11 @@ class TestGRPOTrainer(TrlTestCase):
         vllm_generation.server_base_url = "http://localhost:8000"
         vllm_generation.group_port = 51216
         vllm_generation.server_timeout = 0
-        vllm_generation.model = model if model is not None else MagicMock()
+        if model is None:
+            model = MagicMock()
+            model.active_adapters = ["default"]
+            model.peft_config = {"default": LoraConfig()}
+        vllm_generation.model = model
         vllm_generation.accelerator = SimpleNamespace(
             is_main_process=True, wait_for_everyone=MagicMock(), device=torch.device("cpu")
         )
@@ -439,7 +441,7 @@ class TestGRPOTrainer(TrlTestCase):
         # The adapter rank must fit the server's `--max-lora-rank`; otherwise fail fast with a clear message.
         model = MagicMock()
         model.active_adapters = ["default"]
-        model.peft_config = {"default": SimpleNamespace(r=16, rank_pattern={})}
+        model.peft_config = {"default": LoraConfig(r=16)}
         with pytest.raises(ValueError, match=r"adapter rank \(16\) exceeds the vLLM server's `--max-lora-rank` \(8\)"):
             self._run_server_autodetect(
                 is_lora_model=True, server_enable_lora=True, server_max_lora_rank=8, model=model
@@ -449,7 +451,7 @@ class TestGRPOTrainer(TrlTestCase):
         # rank_pattern can raise individual modules above the base `r`; the max must still fit.
         model = MagicMock()
         model.active_adapters = ["default"]
-        model.peft_config = {"default": SimpleNamespace(r=8, rank_pattern={"q_proj": 16})}
+        model.peft_config = {"default": LoraConfig(r=8, rank_pattern={"q_proj": 16})}
         vllm_generation, _ = self._run_server_autodetect(
             is_lora_model=True, server_enable_lora=True, server_max_lora_rank=16, model=model
         )
@@ -461,7 +463,7 @@ class TestGRPOTrainer(TrlTestCase):
         # one that fits. Passing an adapter's raw `r` (e.g. 4) would crash the engine with a pydantic literal error.
         model = MagicMock()
         model.active_adapters = ["default"]
-        model.peft_config = {"default": SimpleNamespace(r=adapter_rank, rank_pattern={})}
+        model.peft_config = {"default": LoraConfig(r=adapter_rank)}
         model.named_modules = MagicMock(return_value=[])
 
         vllm_generation = object.__new__(VLLMGeneration)
@@ -477,6 +479,7 @@ class TestGRPOTrainer(TrlTestCase):
         vllm_generation.trust_remote_code = False
         vllm_generation.accelerator = SimpleNamespace(
             is_main_process=True,
+            is_local_main_process=True,
             wait_for_everyone=MagicMock(),
             num_processes=1,
             process_index=0,
@@ -503,9 +506,11 @@ class TestGRPOTrainer(TrlTestCase):
         model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="float32")
         model = get_peft_model(model, LoraConfig(task_type="CAUSAL_LM", target_modules=["q_proj", "v_proj"]))
         vllm_generation = object.__new__(VLLMGeneration)
+        vllm_generation.mode = "server"
         vllm_generation.model = model
         vllm_generation.accelerator = SimpleNamespace(
             is_main_process=True,
+            is_local_main_process=True,
             wait_for_everyone=lambda: None,
             state=SimpleNamespace(deepspeed_plugin=None),
         )
@@ -4340,9 +4345,11 @@ class TestGRPOTrainerSlow(TrlTestCase):
         )
         model = get_peft_model(model, LoraConfig(task_type="CAUSAL_LM", target_modules=["q_proj", "v_proj"]))
         vllm_generation = object.__new__(VLLMGeneration)
+        vllm_generation.mode = "server"
         vllm_generation.model = model
         vllm_generation.accelerator = SimpleNamespace(
             is_main_process=True,
+            is_local_main_process=True,
             wait_for_everyone=lambda: None,
             state=SimpleNamespace(deepspeed_plugin=None),
         )
