@@ -39,7 +39,7 @@ from transformers.testing_utils import backend_empty_cache, torch_device
 from transformers.utils import is_peft_available
 
 from trl import GRPOConfig, GRPOTrainer
-from trl.generation.vllm_generation import VLLMGeneration
+from trl.generation.vllm_generation import VLLMGeneration, round_lora_rank
 from trl.import_utils import is_liger_kernel_available
 
 from .testing_utils import (
@@ -498,6 +498,20 @@ class TestGRPOTrainer(TrlTestCase):
 
         assert mock_llm.call_args.kwargs["enable_lora"] is True
         assert mock_llm.call_args.kwargs["max_lora_rank"] == expected_max_lora_rank
+
+    def test_vllm_lora_sync_rejects_adapter_rank_above_vllm_max(self):
+        # vLLM cannot serve a rank above the largest value it accepts; fail with a clear message rather than the bare
+        # `StopIteration` that rounding would otherwise raise.
+        with pytest.raises(ValueError, match=r"exceeds the largest rank vLLM can serve \(512\)"):
+            round_lora_rank(1024)
+
+    @pytest.mark.parametrize(("lora_sync", "expected_level"), [(True, 1), (False, 2)])
+    def test_sleep_level_depends_on_lora_sync(self, lora_sync, expected_level):
+        # Sleep level 2 discards the weights, which merged sync re-pushes every step. Adapter-only sync never pushes
+        # the frozen base model, so it must use level 1, which offloads to CPU and restores on wake.
+        vllm_generation = object.__new__(VLLMGeneration)
+        vllm_generation.lora_sync = lora_sync
+        assert vllm_generation._sleep_level == expected_level
 
     @require_peft
     def test_save_lora_adapter_writes_non_empty_adapter(self):

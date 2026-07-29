@@ -58,6 +58,16 @@ logger = logging.getLogger(__name__)
 VLLM_LORA_RANKS = (1, 8, 16, 32, 64, 128, 256, 320, 512)
 
 
+def round_lora_rank(adapter_rank: int) -> int:
+    """Round a LoRA rank up to the smallest `max_lora_rank` vLLM accepts."""
+    if adapter_rank > VLLM_LORA_RANKS[-1]:
+        raise ValueError(
+            f"The LoRA adapter rank ({adapter_rank}) exceeds the largest rank vLLM can serve "
+            f"({VLLM_LORA_RANKS[-1]}). Train with a smaller `r`, or sync full merged weights instead."
+        )
+    return next(rank for rank in VLLM_LORA_RANKS if rank >= adapter_rank)
+
+
 def empty_cache() -> None:
     """Empties the cache of the available torch device.
 
@@ -362,7 +372,7 @@ class VLLMGeneration:
                     adapter_rank = max([active_peft_config.r, *active_peft_config.rank_pattern.values()])
                     if adapter_rank > server_max_lora_rank:
                         # Suggest a rank vLLM accepts, so the fix doesn't trade this error for a pydantic one.
-                        suggested_rank = next(rank for rank in VLLM_LORA_RANKS if rank >= adapter_rank)
+                        suggested_rank = round_lora_rank(adapter_rank)
                         raise ValueError(
                             f"The LoRA adapter rank ({adapter_rank}) exceeds the vLLM server's `--max-lora-rank` "
                             f"({server_max_lora_rank}). Relaunch the server with `trl vllm-serve ... --max-lora-rank "
@@ -418,7 +428,7 @@ class VLLMGeneration:
                 # `rank_pattern` may raise individual modules above the base `r`; vLLM needs the max.
                 adapter_rank = max([active_peft_config.r, *active_peft_config.rank_pattern.values()])
                 # Round up to a rank vLLM accepts; a plain `r=4` adapter would otherwise crash the engine.
-                max_lora_rank = next(rank for rank in VLLM_LORA_RANKS if rank >= adapter_rank)
+                max_lora_rank = round_lora_rank(adapter_rank)
                 lora_kwargs = {"enable_lora": True, "max_lora_rank": max_lora_rank}
 
             # Build LLM initialization kwargs
@@ -442,9 +452,10 @@ class VLLMGeneration:
                 **lora_kwargs,
             )
             if self.enable_sleep_mode:
-                self.llm.sleep(level=2)
-            # Sleep level 2 discards the weights; track it so that generate() knows it must re-push them
-            self._llm_weights_sleeping = self.enable_sleep_mode
+                self.llm.sleep(level=self._sleep_level)
+            # Sleep level 2 discards the weights; track it so that generate() knows it must re-push them. Level 1
+            # offloads them to CPU instead and `wake_up` restores them, so there is nothing to re-push.
+            self._llm_weights_sleeping = self.enable_sleep_mode and self._sleep_level == 2
         else:
             raise ValueError(f"vllm_mode must be either 'server' or 'colocate', got '{self.mode}'.")
 
@@ -517,6 +528,16 @@ class VLLMGeneration:
             self._sync_fsdp1_params_to_vllm(model)
         elif self._dist.fsdp_version == 2:
             self._sync_fsdp2_params_to_vllm(model)
+
+    @property
+    def _sleep_level(self) -> int:
+        """vLLM sleep level to use in colocate mode.
+
+        Level 2 discards the weights, which is free for merged sync because it re-pushes every parameter each step.
+        Adapter-only sync leaves the base model frozen and never pushes it, and `wake_up` leaves discarded memory
+        uninitialized, so it uses level 1 — weights are offloaded to CPU and restored on wake.
+        """
+        return 1 if self.lora_sync else 2
 
     def _active_lora_config(self) -> "LoraConfig":
         """Return the active adapter's config, checking it can be synced as a plain LoRA adapter."""
@@ -862,7 +883,7 @@ class VLLMGeneration:
                 logprob_token_ids = all_logprob_token_ids
 
             if self.enable_sleep_mode:
-                self.llm.sleep(level=2)
-                self._llm_weights_sleeping = True
+                self.llm.sleep(level=self._sleep_level)
+                self._llm_weights_sleeping = self._sleep_level == 2
 
         return prompt_ids, completion_ids, logprobs, logprob_token_ids
