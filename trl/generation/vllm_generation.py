@@ -25,6 +25,7 @@ import torch
 from accelerate.utils import broadcast_object_list, gather_object, is_peft_model
 from torch import nn
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+from torch.distributed.tensor import DTensor
 from transformers import PreTrainedModel, PreTrainedTokenizerBase, ProcessorMixin, is_bitsandbytes_available
 from transformers.utils import (
     is_torch_mlu_available,
@@ -533,7 +534,8 @@ class VLLMGeneration:
                     if "lora_" in name and f".{adapter_name}." in name
                 }
                 state_dict = {
-                    name: param.full_tensor().detach().cpu() if hasattr(param, "full_tensor") else param.detach().cpu()
+                    # FSDP2 shards parameters as DTensor; `full_tensor()` all-gathers just this one.
+                    name: param.full_tensor().detach().cpu() if isinstance(param, DTensor) else param.detach().cpu()
                     for name, param in state_dict.items()
                 }
                 if accelerator.is_main_process:
@@ -545,6 +547,9 @@ class VLLMGeneration:
                         state_dict=state_dict,
                         safe_serialization=True,
                     )
+                    # The version counter restarts at 1 in every process, so a prior run sharing this `output_dir` may
+                    # have left this version behind, and `os.rename` onto a non-empty directory fails.
+                    shutil.rmtree(adapter_dir, ignore_errors=True)
                     os.rename(tmp_dir, adapter_dir)
 
         accelerator.wait_for_everyone()

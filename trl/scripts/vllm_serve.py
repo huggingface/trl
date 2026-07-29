@@ -465,6 +465,12 @@ def main(script_args: ScriptArguments):
     elif not is_vllm_available():
         raise ImportError("vLLM is required to run the vLLM serve script. Please install it using `pip install vllm`.")
 
+    if script_args.enable_lora and script_args.max_lora_rank is None:
+        raise ValueError(
+            "`--enable-lora` requires `--max-lora-rank`. Pass one of 1, 8, 16, 32, 64, 128, 256, 320 or 512, at least "
+            "as large as the adapter's `r`."
+        )
+
     import uvicorn
     from fastapi import FastAPI
     from pydantic import BaseModel
