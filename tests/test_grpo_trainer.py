@@ -509,6 +509,47 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @pytest.mark.parametrize("train_dataset_type", ["dataset", "iterable_dataset", "none", "unsupported_dataset_dict"])
+    def test_init_with_train_dataset(self, train_dataset_type):
+        streaming = "iterable" in train_dataset_type
+        if train_dataset_type == "none":
+            train_dataset = None
+        else:
+            train_dataset = load_dataset(
+                "trl-internal-testing/zen", "standard_prompt_only", split="train", streaming=streaming
+            )
+            if train_dataset_type == "unsupported_dataset_dict":
+                # `DatasetDict` is representative of any unsupported type here; not exhaustive
+                train_dataset = DatasetDict({"train": train_dataset})
+
+        # Iterable (streaming) datasets have no length, so `max_steps` is required.
+        training_args = GRPOConfig(output_dir=self.tmp_dir, max_steps=4 if streaming else -1, report_to="none")
+
+        if train_dataset_type == "none":
+            with pytest.raises(ValueError, match="`train_dataset` is required"):
+                GRPOTrainer(
+                    model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                    reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                    args=training_args,
+                    train_dataset=train_dataset,
+                )
+        elif train_dataset_type == "unsupported_dataset_dict":
+            with pytest.raises(TypeError, match="`train_dataset` must be a `Dataset` or `IterableDataset`"):
+                GRPOTrainer(
+                    model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                    reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                    args=training_args,
+                    train_dataset=train_dataset,
+                )
+        else:
+            trainer = GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=train_dataset,
+            )
+            assert trainer.train_dataset is train_dataset
+
     @pytest.mark.parametrize(
         "eval_dataset_type",
         [
@@ -1662,6 +1703,30 @@ class TestGRPOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    def test_reward_func_wrong_number_of_rewards(self):
+        # A reward function that returns the wrong number of rewards should raise a clear error instead of silently
+        # broadcasting (when it returns a single value) or failing later with an opaque shape error.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        def wrong_length_reward(completions, **kwargs):
+            return [1.0]  # too few: one reward is expected per completion
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs=wrong_length_reward,
+            args=training_args,
+            train_dataset=dataset,
+        )
+        with pytest.raises(ValueError, match="returned 1 rewards"):
+            trainer.train()
 
     @pytest.mark.parametrize(
         "model_name",
