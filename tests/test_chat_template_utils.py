@@ -1046,6 +1046,16 @@ class TestGetTrainingChatTemplate:
         ),
         pytest.param("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", id="qwen2.5"),
         pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM", id="qwen3"),
+        pytest.param(
+            # Same model as `qwen3`, but shipping the response template itself instead of relying on
+            # `add_response_schema` to supply it — so `_load` must leave it alone.
+            "trl-internal-testing/tiny-Qwen3MoeForCausalLM-ResponseTemplate",
+            id="qwen3-response-template",
+            marks=pytest.mark.skipif(
+                not _SUPPORTS_RESPONSE_TEMPLATE,
+                reason="Fixture ships a new-style response template, which requires transformers>=5.13",
+            ),
+        ),
         pytest.param("trl-internal-testing/tiny-Qwen3ForCausalLM-Instruct-2507", id="qwen3_instruct_2507"),
         pytest.param("trl-internal-testing/tiny-Qwen3VLForConditionalGeneration", id="qwen3_vl"),
         pytest.param("trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink", id="qwen35-nothink"),
@@ -1072,13 +1082,17 @@ class TestParseResponse:
         if "ForCausalLM" in model_name:
             self.is_vlm = False
             processing_class = AutoTokenizer.from_pretrained(model_name)
-            response_schema = getattr(processing_class, "response_schema", None)
+            tokenizer = processing_class
         elif "ForConditionalGeneration" in model_name:
             self.is_vlm = True
             processing_class = AutoProcessor.from_pretrained(model_name)
-            response_schema = getattr(processing_class.tokenizer, "response_schema", None)
+            tokenizer = processing_class.tokenizer
 
-        if response_schema is None:
+        # Nothing to add for models that already ship a new-style `response_template` or a legacy
+        # `response_schema`; `add_response_schema` only knows a fixed set of chat templates and raises otherwise.
+        has_template = getattr(tokenizer, "response_template", None) is not None
+        has_schema = getattr(tokenizer, "response_schema", None) is not None
+        if not has_template and not has_schema:
             processing_class = add_response_schema(processing_class)
 
         return processing_class
