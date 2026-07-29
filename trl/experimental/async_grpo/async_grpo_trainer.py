@@ -180,6 +180,8 @@ class _SaveRolloutStateCallback(TrainerCallback):
             checkpoint_dir = os.path.join(args.output_dir, f"checkpoint-{state.global_step}")
             with open(os.path.join(checkpoint_dir, "rollout_state.json"), "w") as f:
                 json.dump({"prompt_index": self._trainer.rollout_worker.prompt_index}, f)
+
+
 class _EpochStopCallback(TrainerCallback):
     """Stop after `num_train_epochs` full passes over the prompt dataset.
 
