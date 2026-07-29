@@ -774,8 +774,10 @@ def test_non_vllm_on_policy_does_not_trim_padded_width_when_real_prompt_fits(mon
 def test_gold_trainer_init_defaults_vllm_max_model_length_to_max_length(monkeypatch):
     captured = {}
 
-    class DummyStudentModel:
+    # A real `nn.Module`: the trainer calls `is_peft_model` on it, which unwraps via `extract_model_from_parallel`.
+    class DummyStudentModel(torch.nn.Module):
         def __init__(self):
+            super().__init__()
             config = SimpleNamespace(_name_or_path="student", vocab_size=17)
             config.get_text_config = lambda: config
             self.config = config
@@ -827,6 +829,9 @@ def test_gold_trainer_init_defaults_vllm_max_model_length_to_max_length(monkeypa
         self.is_fsdp_enabled = False
 
     class CapturingVLLMGeneration:
+        # Adapter-only LoRA sync is off, so the trainer skips its LoRA-adapter validation.
+        lora_sync = False
+
         def __init__(self, **kwargs):
             captured.update(kwargs)
 
@@ -859,6 +864,7 @@ def test_gold_trainer_init_defaults_vllm_max_model_length_to_max_length(monkeypa
         per_device_train_batch_size=1,
         gradient_accumulation_steps=1,
         use_vllm=True,
+        output_dir="gold-adapter-sync",
         vllm_mode="colocate",
         vllm_structured_outputs_regex=None,
         vllm_server_base_url=None,
@@ -2361,8 +2367,10 @@ def test_gold_trainer_vlm_vllm_init_uses_identity_collator(monkeypatch):
     """
     captured = {}
 
-    class DummyStudentModel:
+    # A real `nn.Module`: the trainer calls `is_peft_model` on it, which unwraps via `extract_model_from_parallel`.
+    class DummyStudentModel(torch.nn.Module):
         def __init__(self):
+            super().__init__()
             self.config = SimpleNamespace(
                 _name_or_path="student",
                 vocab_size=17,
@@ -2410,6 +2418,9 @@ def test_gold_trainer_vlm_vllm_init_uses_identity_collator(monkeypatch):
         self.is_fsdp_enabled = False
 
     class CapturingVLLMGeneration:
+        # Adapter-only LoRA sync is off, so the trainer skips its LoRA-adapter validation.
+        lora_sync = False
+
         def __init__(self, **kwargs):
             captured.update(kwargs)
 
@@ -2449,6 +2460,7 @@ def test_gold_trainer_vlm_vllm_init_uses_identity_collator(monkeypatch):
         per_device_train_batch_size=1,
         gradient_accumulation_steps=1,
         use_vllm=True,
+        output_dir="gold-adapter-sync",
         vllm_mode="colocate",
         vllm_structured_outputs_regex=None,
         vllm_server_base_url=None,
@@ -2486,8 +2498,10 @@ def test_gold_trainer_vlm_vllm_init_uses_identity_collator(monkeypatch):
 def _make_dummy_vlm_models(student_model_type, teacher_model_type):
     """Helper to create dummy student/teacher VLM models with specified model_type."""
 
-    class DummyStudentModel:
+    # A real `nn.Module`: the trainer calls `is_peft_model` on it, which unwraps via `extract_model_from_parallel`.
+    class DummyStudentModel(torch.nn.Module):
         def __init__(self):
+            super().__init__()
             self.config = SimpleNamespace(
                 _name_or_path="student",
                 vocab_size=17,
