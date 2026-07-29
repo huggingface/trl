@@ -299,10 +299,7 @@ class TestGRPOTrainer(TrlTestCase):
         # Adapter-only LoRA sync is auto-detected, so the trainer just reports whether the model is a PEFT model and
         # lets the generation backend decide based on the server's reported `enable_lora`.
         training_args = self.get_vllm_args()
-        with (
-            patch("trl.trainer.grpo_trainer.is_vllm_available", return_value=True),
-            patch("trl.trainer.grpo_trainer.VLLMGeneration") as mock_vllm_generation,
-        ):
+        with patch("trl.trainer.grpo_trainer.VLLMGeneration") as mock_vllm_generation:
             mock_vllm_generation.return_value.lora_sync = False
             GRPOTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
@@ -328,10 +325,7 @@ class TestGRPOTrainer(TrlTestCase):
         # When the generation backend auto-detects adapter-only sync (`lora_sync=True`), the trainer validates that the
         # active adapter is syncable as a plain LoRA adapter.
         training_args = self.get_vllm_args()
-        with (
-            patch("trl.trainer.grpo_trainer.is_vllm_available", return_value=True),
-            patch("trl.trainer.grpo_trainer.VLLMGeneration") as mock_vllm_generation,
-        ):
+        with patch("trl.trainer.grpo_trainer.VLLMGeneration") as mock_vllm_generation:
             mock_vllm_generation.return_value.lora_sync = True
             with pytest.raises(ValueError, match=error_message):
                 GRPOTrainer(
@@ -403,7 +397,9 @@ class TestGRPOTrainer(TrlTestCase):
         vllm_generation.group_port = 51216
         vllm_generation.server_timeout = 0
         vllm_generation.model = model if model is not None else MagicMock()
-        vllm_generation.accelerator = SimpleNamespace(is_main_process=True, wait_for_everyone=MagicMock())
+        vllm_generation.accelerator = SimpleNamespace(
+            is_main_process=True, wait_for_everyone=MagicMock(), device=torch.device("cpu")
+        )
         fake_client = SimpleNamespace(
             server_enable_lora=server_enable_lora,
             server_max_lora_rank=server_max_lora_rank,
@@ -413,7 +409,6 @@ class TestGRPOTrainer(TrlTestCase):
             patch("trl.generation.vllm_generation.is_vllm_available", return_value=True),
             patch("trl.generation.vllm_generation.VLLMClient", return_value=fake_client),
             patch("trl.generation.vllm_generation.broadcast_object_list"),  # single process: leave obj_list unchanged
-            patch("torch.cuda.current_device", return_value=0),
         ):
             vllm_generation._init_vllm()
         return vllm_generation, fake_client
@@ -4301,7 +4296,6 @@ class TestGRPOTrainerSlow(TrlTestCase):
         model = AutoModelForCausalLM.from_pretrained(
             "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             quantization_config=quantization_config,
-            device_map=get_kbit_device_map(),
         )
         model = get_peft_model(model, LoraConfig(task_type="CAUSAL_LM", target_modules=["q_proj", "v_proj"]))
         vllm_generation = object.__new__(VLLMGeneration)

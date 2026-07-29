@@ -1110,9 +1110,7 @@ class TestVLLMClientServerLoRAInplaceSwap(TrlTestCase):
         cls.adapter_a = os.path.join(cls.tmp_adapters, "adapter_a")
         cls.adapter_b = os.path.join(cls.tmp_adapters, "adapter_b")
         model = AutoModelForCausalLM.from_pretrained(cls.model_id)
-        peft_model = get_peft_model(
-            model, LoraConfig(task_type="CAUSAL_LM", target_modules=["q_proj", "v_proj"], r=8)
-        )
+        peft_model = get_peft_model(model, LoraConfig(task_type="CAUSAL_LM", target_modules=["q_proj", "v_proj"], r=8))
         peft_model.save_pretrained(cls.adapter_a)
         torch.manual_seed(0)
         with torch.no_grad():

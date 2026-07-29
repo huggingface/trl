@@ -613,6 +613,7 @@ class GRPOConfig(_BaseConfig):
         default=None,
         metadata={"help": "Regex for vLLM structured outputs. If `None` (default), structured outputs is disabled."},
     )
+
     # Parameters that control the vLLM server (only used when `vllm_mode` is `"server"`)
     vllm_server_base_url: str | None = field(
         default=None,

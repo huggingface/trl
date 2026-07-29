@@ -69,7 +69,7 @@ from ..data_utils import apply_chat_template, is_conversational, prepare_multimo
 from ..distributed import DistributedBackend
 from ..extras.profiling import profiling_context, profiling_decorator
 from ..generation.vllm_generation import VLLMGeneration
-from ..import_utils import is_jmespath_available, is_liger_kernel_available, is_vllm_available
+from ..import_utils import is_jmespath_available, is_liger_kernel_available
 from ..models import prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
 from ..models.utils import _ForwardRedirection, disable_gradient_checkpointing
 from .base_trainer import _BaseTrainer
