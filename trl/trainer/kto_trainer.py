@@ -1215,7 +1215,14 @@ class KTOTrainer(_BaseTrainer):
             model = self._precompute_engine
         elif self.ref_model is None and self.is_fsdp_enabled:
             if self._precompute_engine is None:
-                self._precompute_engine = prepare_fsdp(self.model, self.accelerator)
+                if self.accelerator.state.fsdp_plugin.fsdp_version == 2:
+                    # FSDP2 must prepare the model and optimizer together so optimizer parameters map to DTensors.
+                    self.create_optimizer()
+                    self.model, self.optimizer = self.accelerator.prepare(self.model, self.optimizer)
+                    self.model_wrapped = self.model
+                    self._precompute_engine = self.model.eval()
+                else:
+                    self._precompute_engine = prepare_fsdp(self.model, self.accelerator)
             model = self._precompute_engine
         else:
             model = self.ref_model or self.model
