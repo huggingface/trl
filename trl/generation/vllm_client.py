@@ -727,6 +727,14 @@ class VLLMClient:
     def load_lora_adapter(self, lora_name: str, lora_path: str, load_inplace: bool = True):
         """
         Loads a LoRA adapter into the vLLM server.
+
+        Args:
+            lora_name (`str`):
+                Name the adapter is served under. Reusing the same name replaces the previously loaded adapter.
+            lora_path (`str`):
+                Path to the PEFT adapter directory, which must be readable by the server.
+            load_inplace (`bool`, *optional*, defaults to `True`):
+                Whether to swap the weights of the already-loaded adapter instead of registering a new one.
         """
         url = f"{self.base_url}/v1/load_lora_adapter"
         response = self.session.post(
