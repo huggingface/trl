@@ -294,6 +294,14 @@ class TestSFTTrainer(TrlTestCase):
                     reason="Olmo 3 requires transformers>=4.57.0",
                 ),
             ),
+            "trl-internal-testing/tiny-Lfm2ForCausalLM",
+            pytest.param(
+                "trl-internal-testing/tiny-Lfm2ForCausalLM-2.5",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.0.0"),
+                    reason="LFM2.5 tokenizer requires transformers>=5.0.0",
+                ),
+            ),
         ],
     )
     def test_train(self, model_id):
@@ -1644,10 +1652,41 @@ class TestSFTTrainer(TrlTestCase):
         assert trainer.state.log_history[-3]["eval_data1_loss"] is not None
         assert trainer.state.log_history[-2]["eval_data2_loss"] is not None
 
-    def test_train_dataset_required(self):
-        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
-        with pytest.raises(ValueError, match="`train_dataset` is required"):
-            SFTTrainer(model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args)
+    @pytest.mark.parametrize("train_dataset_type", ["dataset", "iterable_dataset", "none", "unsupported_dataset_dict"])
+    def test_init_with_train_dataset(self, train_dataset_type):
+        streaming = "iterable" in train_dataset_type
+        if train_dataset_type == "none":
+            train_dataset = None
+        else:
+            train_dataset = load_dataset(
+                "trl-internal-testing/zen", "standard_language_modeling", split="train", streaming=streaming
+            )
+            if train_dataset_type == "unsupported_dataset_dict":
+                # `DatasetDict` is representative of any unsupported type here; not exhaustive
+                train_dataset = DatasetDict({"train": train_dataset})
+
+        # Iterable (streaming) datasets have no length, so `max_steps` is required.
+        training_args = SFTConfig(output_dir=self.tmp_dir, max_steps=3 if streaming else -1, report_to="none")
+
+        if train_dataset_type == "none":
+            with pytest.raises(ValueError, match="`train_dataset` is required"):
+                SFTTrainer(
+                    model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                    args=training_args,
+                    train_dataset=train_dataset,
+                )
+        elif train_dataset_type == "unsupported_dataset_dict":
+            with pytest.raises(TypeError, match="`train_dataset` must be a `Dataset` or `IterableDataset`"):
+                SFTTrainer(
+                    model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                    args=training_args,
+                    train_dataset=train_dataset,
+                )
+        else:
+            trainer = SFTTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=train_dataset
+            )
+            assert "input_ids" in next(iter(trainer.train_dataset))
 
     @pytest.mark.parametrize(
         "eval_dataset_type",
@@ -2023,6 +2062,39 @@ class TestSFTTrainer(TrlTestCase):
             else:
                 assert not torch.equal(param, new_param), f"Param {n} is not updated"
 
+    @ignore_warnings(message="You are using packing, but the attention implementation is not.*", category=UserWarning)
+    @require_vision
+    def test_train_vlm_text_only_data_packing(self):
+        # Packing is incompatible with on-the-fly image processing, not with VLMs. A text-only dataset goes through
+        # the regular text pipeline, so packing must be available on a VLM checkpoint too. Regression test for #6545.
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
+
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            packing=True,
+            report_to="none",
+        )
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            if n.startswith("model.visual"):
+                torch.testing.assert_close(param, new_param, rtol=1e-12, atol=1e-12, msg=f"Param {n} is updated")
+            else:
+                assert not torch.equal(param, new_param), f"Param {n} is not updated"
+
     @require_vision
     def test_vision_dataset_with_text_model_raises(self):
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_language_modeling", split="train")
@@ -2094,22 +2166,33 @@ class TestSFTTrainer(TrlTestCase):
         assert trainer.state.log_history[-1]["train_loss"] is not None
         assert trainer.state.log_history[-1]["mean_token_accuracy"] is not None
 
+        # In bitsandbytes, a Linear4bit's bias is cast in-place to the input dtype during the forward pass if its
+        # dtype doesn't match, which changes these specific bias parameters unexpectedly during the first forward
+        # pass of training. Before bitsandbytes 0.50.0, this only affected the biases below; from 0.50.0 on
+        # (https://github.com/bitsandbytes-foundation/bitsandbytes/pull/1904), the cast happens after the input is
+        # cast to the compute dtype, so it now affects every layer's biases instead of only some.
+        import bitsandbytes as bnb
+
+        bnb_bias_params_that_change = [
+            "base_model.model.model.layers.1.self_attn.k_proj.bias",
+            "base_model.model.model.layers.1.self_attn.q_proj.base_layer.bias",
+            "base_model.model.model.layers.1.self_attn.v_proj.base_layer.bias",
+        ]
+        if Version(bnb.__version__) >= Version("0.50.0"):
+            bnb_bias_params_that_change += [
+                "base_model.model.model.layers.0.self_attn.k_proj.bias",
+                "base_model.model.model.layers.0.self_attn.q_proj.base_layer.bias",
+                "base_model.model.model.layers.0.self_attn.v_proj.base_layer.bias",
+            ]
+
         # Check that the peft params have changed and the base model params have not changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            # In bitsandbytes, bias parameters are automatically cast to the input dtype during the forward pass if
-            # their dtype doesn’t match. This causes the module to change unexpectedly during the first forward pass of
-            # the training. To handle this, we cast these specific bias parameters to float32 before comparison.
-            # https://github.com/bitsandbytes-foundation/bitsandbytes/blob/45553f7392e524eacf400b132cfe01261f6477be/bitsandbytes/nn/modules.py#L518
-            # We still need to investigate why the compute dtype ends up being different than for these parameters.
-            if n in [
-                "base_model.model.model.layers.1.self_attn.k_proj.bias",
-                "base_model.model.model.layers.1.self_attn.q_proj.base_layer.bias",
-                "base_model.model.model.layers.1.self_attn.v_proj.base_layer.bias",
-            ]:
+            if n in bnb_bias_params_that_change:
                 param = param.float()
+                new_param = new_param.float()
 
-            if "lora" not in n:  # We expect the base model params to be the same
+            if "lora" not in n:  # We expect the base model params to be the same (up to the bnb bias dtype cast above)
                 torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed.")
             elif "lora" in n:  # We expect the peft params to be different
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
@@ -2462,6 +2545,14 @@ _CHUNKED_CE_MODEL_IDS = [
     "trl-internal-testing/tiny-GemmaForCausalLM",
     "trl-internal-testing/tiny-Glm4MoeForCausalLM",
     "trl-internal-testing/tiny-GptOssForCausalLM",
+    "trl-internal-testing/tiny-Lfm2ForCausalLM",
+    pytest.param(
+        "trl-internal-testing/tiny-Lfm2ForCausalLM-2.5",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("5.0.0"),
+            reason="LFM2.5 tokenizer requires transformers>=5.0.0",
+        ),
+    ),
     "trl-internal-testing/tiny-LlamaForCausalLM-3.1",
     "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
     "trl-internal-testing/tiny-LlamaForCausalLM-3",

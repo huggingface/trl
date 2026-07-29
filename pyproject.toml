@@ -57,7 +57,7 @@ kernels = [  # transformers renamed the "hub-kernels" extra to "kernels" in 5.1.
     "transformers[hub-kernels]",  # transformers < 5.1.0
 ]
 liger = [
-    "liger-kernel>=0.8.0"
+    "liger-kernel>=0.8.0,!=0.8.1"  # upstream PR https://github.com/linkedin/Liger-Kernel/pull/1316
 ]
 peft = [
     "peft>=0.8.0"
@@ -111,7 +111,7 @@ dev = [
     "transformers[kernels]",  # transformers >= 5.1.0
     "transformers[hub-kernels]",  # transformers < 5.1.0
     # liger
-    "liger-kernel>=0.8.0",
+    "liger-kernel>=0.8.0,!=0.8.1",  # upstream PR https://github.com/linkedin/Liger-Kernel/pull/1316
     # openreward (requires Python 3.11+)
     "openreward>=0.1.109; python_version >= '3.11'",
     # peft
@@ -223,4 +223,10 @@ filterwarnings = [
     # Tracking issue: https://github.com/huggingface/trl/issues/6466
     # Upstream issue: https://github.com/triton-lang/triton/issues/10981
     "ignore:AnnAssign.__init__ missing 1 required positional argument:DeprecationWarning",
+
+    # kernels-community/mamba-ssm (a Hub-hosted build of state-spaces/mamba) calls the deprecated
+    # torch.get_autocast_gpu_dtype() in its Triton ssd_combined.py kernel (upstream, not actionable in TRL)
+    # Triggered by the NemotronH (Nemotron 3) Mamba2 mixer fast path during training under CUDA autocast
+    # Tracking issue: https://github.com/huggingface/trl/issues/6555
+    "ignore:torch.get_autocast_gpu_dtype\\(\\) is deprecated:DeprecationWarning",
 ]
