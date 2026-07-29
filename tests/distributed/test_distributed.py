@@ -168,6 +168,44 @@ class TestDistributed(TrlTestCase):
         )
         # fmt: on
 
+    def test_gold_fsdp(self, get_config_path):
+        # fmt: off
+        run_command(
+            [
+                "accelerate", "launch", "--config_file", get_config_path("fsdp2"), "examples/scripts/gold.py",
+                "--output_dir", self.tmp_dir,
+                "--model_name_or_path", "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                "--teacher_model_name_or_path", "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                "--dataset_name", "trl-internal-testing/zen",
+                "--dataset_config", "conversational_language_modeling",
+                "--max_steps", "1",
+                "--per_device_train_batch_size", "1",
+                "--max_completion_length", "8",
+                "--report_to", "none",
+            ],
+            os.environ.copy(),
+        )
+        # fmt: on
+
+    def test_distillation_fsdp(self, get_config_path):
+        # fmt: off
+        run_command(
+            [
+                "accelerate", "launch", "--config_file", get_config_path("fsdp2"), "examples/scripts/distillation.py",
+                "--output_dir", self.tmp_dir,
+                "--model_name_or_path", "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                "--teacher_model_name_or_path", "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                "--dataset_name", "trl-internal-testing/zen",
+                "--dataset_config", "conversational_prompt_only",
+                "--max_steps", "1",
+                "--per_device_train_batch_size", "1",
+                "--max_completion_length", "8",
+                "--report_to", "none",
+            ],
+            os.environ.copy(),
+        )
+        # fmt: on
+
     @pytest.mark.parametrize(
         "config",
         [
