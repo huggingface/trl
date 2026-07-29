@@ -274,17 +274,17 @@ training_args = RewardConfig(..., pad_to_multiple_of=2048)
 
 PyTorch's caching allocator can fragment over long training runs — separate caches for forward activations, optimizer states, KL reference logits, and FlashAttention workspace each grow and shrink at different rates, leaving holes that cannot satisfy a new large allocation even though aggregate free memory is high. This is especially common in online RL methods (GRPO, RLOO, Online DPO) where the rollout, log-prob, and update steps allocate at different sizes within each iteration.
 
-Setting `expandable_segments:True` lets the allocator grow existing segments instead of fragmenting into fresh fixed blocks, typically reclaiming 2–5 GB per GPU on long-context training with no measurable throughput cost.
+Setting `expandable_segments:True` lets the allocator grow existing segments instead of fragmenting into fresh fixed blocks, which can substantially reduce the gap between allocated and reserved memory on long-context training.
 
 ```bash
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-export PYTORCH_ALLOC_CONF=expandable_segments:True   # canonical name in PyTorch >= 2.11
+export PYTORCH_ALLOC_CONF=expandable_segments:True   # canonical name in PyTorch >= 2.10
 ```
 
-Set both names: `PYTORCH_ALLOC_CONF` is the canonical knob in PyTorch ≥ 2.11; older versions only read the legacy `PYTORCH_CUDA_ALLOC_CONF` alias.
+Set both names: `PYTORCH_ALLOC_CONF` is the canonical knob since PyTorch 2.10 (`PYTORCH_CUDA_ALLOC_CONF` is kept as a backward-compatibility alias); PyTorch 2.9 and older only read `PYTORCH_CUDA_ALLOC_CONF`. Note that vLLM (and possibly other libraries) inspect only `PYTORCH_CUDA_ALLOC_CONF`, so setting only the new name can silently bypass their allocator-config handling.
 
 > [!WARNING]
-> `expandable_segments:True` is **incompatible with vLLM's `CuMemAllocator`**. If you use vLLM as the generation backend (e.g. `use_vllm=True` in [`GRPOConfig`]), clear the variable in the worker environment before vLLM initializes, or vLLM will assert on startup.
+> `expandable_segments:True` conflicts with the `CuMemAllocator` that vLLM uses for [vLLM sleep mode](#vllm-sleep-mode). This only applies when sleep mode is enabled (`vllm_enable_sleep_mode=True`); plain `use_vllm=True` is unaffected. vLLM detects the setting and temporarily disables expandable segments while its memory pool is active, but it reads only `PYTORCH_CUDA_ALLOC_CONF` — if you enable expandable segments only via `PYTORCH_ALLOC_CONF`, that detection is bypassed. With sleep mode enabled, prefer setting the legacy name (or both).
 
 For runs where fragmentation persists despite this knob (typically chunked-LM-head and other custom kernels that allocate transient ~GB tensors), append `garbage_collection_threshold:0.85` to trigger the allocator's defragmentation pass earlier:
 
