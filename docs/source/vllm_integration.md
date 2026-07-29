@@ -436,7 +436,7 @@ When you train a [PEFT](peft_integration) LoRA model, TRL syncs only the small L
 <hfoptions id="lora sync modes">
 <hfoption id="Server mode">
 
-Launch the server with LoRA enabled, passing `--max-lora-rank` (it must be at least the adapter's `r`):
+Launch the server with LoRA enabled, passing `--max-lora-rank`. It must be at least the adapter's `r`, and vLLM only accepts one of `1`, `8`, `16`, `32`, `64`, `128`, `256`, `320`, `512` — so for an `r=4` adapter, pass `8`:
 
 ```bash
 trl vllm-serve --model <model_name> --enable-lora --max-lora-rank 32

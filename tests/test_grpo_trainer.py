@@ -455,6 +455,47 @@ class TestGRPOTrainer(TrlTestCase):
         )
         assert vllm_generation.lora_sync is True
 
+    @pytest.mark.parametrize(("adapter_rank", "expected_max_lora_rank"), [(4, 8), (8, 8), (12, 16), (200, 256)])
+    def test_vllm_lora_sync_colocate_rounds_max_lora_rank(self, adapter_rank, expected_max_lora_rank):
+        # vLLM only accepts a fixed set of `max_lora_rank` values, so the inferred rank is rounded up to the smallest
+        # one that fits. Passing an adapter's raw `r` (e.g. 4) would crash the engine with a pydantic literal error.
+        model = MagicMock()
+        model.active_adapters = ["default"]
+        model.peft_config = {"default": SimpleNamespace(r=adapter_rank, rank_pattern={})}
+        model.named_modules = MagicMock(return_value=[])
+
+        vllm_generation = object.__new__(VLLMGeneration)
+        vllm_generation.mode = "colocate"
+        vllm_generation.is_lora_model = True
+        vllm_generation.model = model
+        vllm_generation.tensor_parallel_size = 1
+        vllm_generation.gpu_memory_utilization = 0.1
+        vllm_generation.max_model_length = None
+        vllm_generation.max_num_seqs = None
+        vllm_generation.enable_sleep_mode = False
+        vllm_generation.model_impl = "auto"
+        vllm_generation.trust_remote_code = False
+        vllm_generation.accelerator = SimpleNamespace(
+            is_main_process=True,
+            wait_for_everyone=MagicMock(),
+            num_processes=1,
+            process_index=0,
+            local_process_index=0,
+        )
+        with (
+            patch("trl.generation.vllm_generation.is_vllm_available", return_value=True),
+            patch("trl.generation.vllm_generation.is_bitsandbytes_available", return_value=False),
+            patch("trl.generation.vllm_generation.ensure_master_addr_port"),
+            patch("trl.generation.vllm_generation.LLM") as mock_llm,
+            # `_init_vllm` sets RANK/LOCAL_RANK/WORLD_SIZE for vLLM; restore the environment afterwards so later tests
+            # don't see a half-configured distributed setup (MASTER_ADDR is never set, since the helper is patched).
+            patch.dict(os.environ),
+        ):
+            vllm_generation._init_vllm()
+
+        assert mock_llm.call_args.kwargs["enable_lora"] is True
+        assert mock_llm.call_args.kwargs["max_lora_rank"] == expected_max_lora_rank
+
     @require_peft
     def test_save_lora_adapter_writes_non_empty_adapter(self):
         from safetensors.torch import load_file

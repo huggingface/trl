@@ -48,6 +48,10 @@ if is_vllm_available():
 
 logger = logging.getLogger(__name__)
 
+# The only values vLLM accepts for `max_lora_rank`. It is a capacity bound, not the served rank, so an adapter of any
+# rank is served correctly under the smallest of these that fits it.
+VLLM_LORA_RANKS = (1, 8, 16, 32, 64, 128, 256, 320, 512)
+
 
 def empty_cache() -> None:
     """Empties the cache of the available torch device.
@@ -351,10 +355,12 @@ class VLLMGeneration:
                 active_peft_config = model.peft_config[model.active_adapters[0]]
                 adapter_rank = max([active_peft_config.r, *active_peft_config.rank_pattern.values()])
                 if adapter_rank > server_max_lora_rank:
+                    # Suggest a rank vLLM actually accepts, so the fix doesn't trade this error for a pydantic one.
+                    suggested_rank = next(rank for rank in VLLM_LORA_RANKS if rank >= adapter_rank)
                     raise ValueError(
                         f"The LoRA adapter rank ({adapter_rank}) exceeds the vLLM server's `--max-lora-rank` "
                         f"({server_max_lora_rank}). Relaunch the server with `trl vllm-serve ... --max-lora-rank "
-                        f"{adapter_rank}` (or higher)."
+                        f"{suggested_rank}` (or higher)."
                     )
             if accelerator.is_main_process and not self.lora_sync:
                 self.vllm_client.init_communicator(device=accelerator.device)
@@ -404,7 +410,9 @@ class VLLMGeneration:
                     raise ImportError("Adapter-only LoRA sync in colocate mode requires vLLM >= 0.15.0.")
                 active_peft_config = model.peft_config[model.active_adapters[0]]
                 # `rank_pattern` may raise individual modules above the base `r`; vLLM needs the max.
-                max_lora_rank = max([active_peft_config.r, *active_peft_config.rank_pattern.values()])
+                adapter_rank = max([active_peft_config.r, *active_peft_config.rank_pattern.values()])
+                # Round up to a rank vLLM accepts; a plain `r=4` adapter would otherwise crash the engine.
+                max_lora_rank = next(rank for rank in VLLM_LORA_RANKS if rank >= adapter_rank)
                 lora_kwargs = {"enable_lora": True, "max_lora_rank": max_lora_rank}
 
             # Build LLM initialization kwargs
