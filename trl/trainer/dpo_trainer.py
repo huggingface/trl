@@ -14,6 +14,7 @@
 
 import contextlib
 import json
+import math
 import os
 import textwrap
 from collections import defaultdict
@@ -1418,13 +1419,13 @@ class DPOTrainer(_BaseTrainer):
             chosen_scores = chosen_logratios
             rejected_scores = rejected_logratios
         elif self.f_divergence_type == "forward_kl":
-            # f'(t) = 1 - 1/t  -> drop constant -> -exp(-logratio)
-            chosen_scores = -torch.exp(-chosen_logratios)
-            rejected_scores = -torch.exp(-rejected_logratios)
+            # f'(t) = 1 - 1/t
+            chosen_scores = 1 - torch.exp(-chosen_logratios)
+            rejected_scores = 1 - torch.exp(-rejected_logratios)
         elif self.f_divergence_type == "js_divergence":
-            # f'(t) = log(2t/(t+1)) -> drop log 2
-            chosen_scores = F.logsigmoid(chosen_logratios)
-            rejected_scores = F.logsigmoid(rejected_logratios)
+            # f'(t) = log(2t/(t+1)) = log 2 + logsigmoid(log t)
+            chosen_scores = math.log(2) + F.logsigmoid(chosen_logratios)
+            rejected_scores = math.log(2) + F.logsigmoid(rejected_logratios)
         elif self.f_divergence_type == "alpha_divergence":
             # alpha-divergence: f'(t) = (t^(α-1) - 1)/(α-1)
             if abs(self.f_alpha_divergence_coef - 1.0) < 1e-6:  # limit case f'(t) -> log(t), fall back to reverse_kl
@@ -1439,8 +1440,8 @@ class DPOTrainer(_BaseTrainer):
                 clamp_max = {torch.float16: 11.0, torch.bfloat16: 80.0, torch.float32: 80.0}[dtype]
                 t_chosen_float = torch.clamp(t_chosen.float(), max=clamp_max)
                 t_rejected_float = torch.clamp(t_rejected.float(), max=clamp_max)
-                chosen_scores = torch.exp(t_chosen_float).to(dtype) * coef
-                rejected_scores = torch.exp(t_rejected_float).to(dtype) * coef
+                chosen_scores = (torch.exp(t_chosen_float) - 1.0).to(dtype) * coef
+                rejected_scores = (torch.exp(t_rejected_float) - 1.0).to(dtype) * coef
         else:
             raise ValueError(f"Unknown f_divergence_type: {self.f_divergence_type}")
 
