@@ -1080,7 +1080,7 @@ class TestParseResponse:
 
         # Nothing to add for models that already ship a new-style `response_template` or a legacy
         # `response_schema`; `add_response_schema` only knows a fixed set of chat templates and raises otherwise.
-        has_template = getattr(tokenizer, "response_template", None) is not None
+        has_template = _SUPPORTS_RESPONSE_TEMPLATE and tokenizer.response_template is not None
         has_schema = getattr(tokenizer, "response_schema", None) is not None
         if not has_template and not has_schema:
             processing_class = add_response_schema(processing_class)
