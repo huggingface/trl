@@ -1046,6 +1046,16 @@ class TestGetTrainingChatTemplate:
         ),
         pytest.param("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", id="qwen2.5"),
         pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM", id="qwen3"),
+        pytest.param(
+            # Same model as `qwen3`, but shipping the response template itself instead of relying on
+            # `add_response_schema` to supply it — so `_load` must leave it alone.
+            "trl-internal-testing/tiny-Qwen3MoeForCausalLM-ResponseTemplate",
+            id="qwen3-response-template",
+            marks=pytest.mark.skipif(
+                not _SUPPORTS_RESPONSE_TEMPLATE,
+                reason="Fixture ships a new-style response template, which requires transformers>=5.13",
+            ),
+        ),
         pytest.param("trl-internal-testing/tiny-Qwen3ForCausalLM-Instruct-2507", id="qwen3_instruct_2507"),
         pytest.param("trl-internal-testing/tiny-Qwen3VLForConditionalGeneration", id="qwen3_vl"),
         pytest.param("trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink", id="qwen35-nothink"),
