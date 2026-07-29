@@ -493,7 +493,8 @@ class TestIWOPDTrainer(TrlTestCase):
         )
 
     def _make_batch(self, trainer):
-        return [trainer.train_dataset[i] for i in range(2)]
+        examples = [trainer.train_dataset[i] for i in range(2)]
+        return trainer.data_collator(examples)
 
     @staticmethod
     def _move_batch_to_device(batch, device):
