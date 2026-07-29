@@ -1088,10 +1088,10 @@ class TestVLLMClientServerVLM(TrlTestCase):
 class TestVLLMClientServerLoRAInplaceSwap(TrlTestCase):
     """
     Regression guard for the in-place adapter swap (vLLM #42125): reloading a new adapter under the same name/int_id
-    with `load_inplace=True` (then resetting the prefix cache, exactly as `sync_weights` does) must actually change
-    the served output. If `load_inplace` were ignored or the prefix cache not reset, the server would keep serving the
-    previous adapter's weights/KV blocks and the swap would be silently lost — the failure mode this whole feature
-    must avoid.
+    with `load_inplace=True` (then resetting the prefix cache, exactly as `sync_weights` does) must actually change the
+    served output. If `load_inplace` were ignored or the prefix cache not reset, the server would keep serving the
+    previous adapter's weights/KV blocks and the swap would be silently lost — the failure mode this whole feature must
+    avoid.
     """
 
     model_id = "Qwen/Qwen2.5-1.5B"
