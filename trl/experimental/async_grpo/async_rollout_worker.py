@@ -317,10 +317,11 @@ class _AsyncRolloutLoop:
     ):
         self.model_name = model_name
         self.dataset = dataset
-        self._dataset_iter = iter(dataset)
         if dataset_start_index > 0:
-            for _ in range(dataset_start_index % len(dataset)):
-                next(self._dataset_iter)
+            start = dataset_start_index % len(dataset)
+            self._dataset_iter = iter(dataset.select(range(start, len(dataset))))
+        else:
+            self._dataset_iter = iter(dataset)
         self._prompt_index_value = prompt_index_value
         if prompt_index_value is not None:
             prompt_index_value.value = dataset_start_index

@@ -13,8 +13,8 @@
 # limitations under the License.
 
 
-import json
 import contextvars
+import json
 import math
 import os
 import queue
@@ -1185,6 +1185,10 @@ class AsyncGRPOTrainer(_BaseTrainer):
             elif not os.path.isfile(rollout_state_file):
                 logger.warning(
                     "rollout_state.json not found in the checkpoint; the rollout worker will restart from prompt 0."
+                )
+            elif not isinstance(self.train_dataset, Dataset):
+                logger.warning(
+                    "Resuming with an IterableDataset; the rollout worker will restart from prompt 0."
                 )
         try:
             return super()._inner_training_loop(*args, **kwargs)

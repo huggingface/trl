@@ -38,8 +38,8 @@ from trl.experimental.async_grpo.async_grpo_trainer import (
     _balance_by_squared_length,
     _SaveRolloutStateCallback,
 )
-from trl.experimental.async_grpo.async_rollout_worker import AsyncRolloutWorker, RolloutSample, _AsyncRolloutLoop
 from trl.experimental.async_grpo.async_rollout_worker import (
+    AsyncRolloutWorker,
     DriftKind,
     RolloutGroup,
     RolloutSample,
@@ -194,9 +194,9 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_resume_from_checkpoint(self):
-        # ignore_data_skip must always be True for AsyncGRPO, this is because the base Trainer's skip-and-replay
-        # loop doesn't apply to a live rollout queue and would trigger unnecessary vLLM inference.
-        # This test also verifies that training resumes from a checkpoint without errors.
+        # Checks that ignore_data_skip is True and that resume doesn't crash. The stub worker is not an
+        # AsyncRolloutWorker, so the checkpoint-write and resume-read paths stay inert here — those are
+        # covered by TestRolloutStateCheckpoint.
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
         tokenizer = AutoTokenizer.from_pretrained(model_id)
@@ -208,6 +208,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             max_steps=2,
             save_steps=1,
             max_completion_length=8,
+            token_budget=256,
             vllm_server_timeout=5.0,
             report_to="none",
         )
@@ -219,6 +220,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             args=training_args,
             train_dataset=dataset,
             rollout_worker=_StubRolloutWorker(tokenizer, dataset, num_generations=3),
+            weight_transfer=_StubWeightTransfer(),
         )
         assert trainer.args.ignore_data_skip is True
         trainer.train()
@@ -233,6 +235,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             num_generations=3,
             max_steps=3,
             max_completion_length=8,
+            token_budget=256,
             vllm_server_timeout=5.0,
             report_to="none",
         )
@@ -242,6 +245,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             args=training_args2,
             train_dataset=dataset,
             rollout_worker=_StubRolloutWorker(tokenizer, dataset, num_generations=3),
+            weight_transfer=_StubWeightTransfer(),
         )
         assert trainer2.args.ignore_data_skip is True
         trainer2.train(resume_from_checkpoint=checkpoint_dir)
@@ -315,21 +319,13 @@ class TestRolloutStateCheckpoint(TrlTestCase):
             return _AsyncRolloutLoop(**kwargs)
 
     def test_save_rollout_state_callback_writes_json(self):
-        class _MockWorker(AsyncRolloutWorker):
-            # isinstance check requires AsyncRolloutWorker. skip __init__ (needs vLLM)
-            def __init__(self, index):
-                self._index = index
-
-            @property
-            def prompt_index(self):
-                return self._index
-
         checkpoint_dir = os.path.join(self.tmp_dir, "checkpoint-5")
         os.makedirs(checkpoint_dir)
 
         trainer = MagicMock()
         trainer.accelerator.is_main_process = True
-        trainer.rollout_worker = _MockWorker(42)
+        trainer.rollout_worker = MagicMock(spec=AsyncRolloutWorker)
+        trainer.rollout_worker.prompt_index = 42
 
         args = MagicMock()
         args.output_dir = self.tmp_dir
@@ -377,11 +373,6 @@ class TestRolloutStateCheckpoint(TrlTestCase):
         assert prompt_index_value.value == 2
 
     def test_inner_training_loop_sets_dataset_start_index_from_file(self):
-        class _MockWorker(AsyncRolloutWorker):
-            # isinstance check requires AsyncRolloutWorker. skip __init__ (needs vLLM)
-            def __init__(self):
-                self._loop_kwargs = {}
-
         checkpoint_dir = os.path.join(self.tmp_dir, "checkpoint-10")
         os.makedirs(checkpoint_dir)
         with open(os.path.join(checkpoint_dir, "rollout_state.json"), "w") as f:
@@ -389,7 +380,8 @@ class TestRolloutStateCheckpoint(TrlTestCase):
 
         # __new__ skips __init__ (requires GPU + model)
         trainer = AsyncGRPOTrainer.__new__(AsyncGRPOTrainer)
-        trainer.rollout_worker = _MockWorker()
+        trainer.rollout_worker = MagicMock(spec=AsyncRolloutWorker)
+        trainer.rollout_worker._loop_kwargs = {}
         trainer.train_dataset = Dataset.from_dict({"prompt": list(range(100))})
         trainer.accelerator = MagicMock()
         trainer.accelerator.is_main_process = False  # skip finally-block teardown
