@@ -522,15 +522,20 @@ class TestSDPOTrainer(TrlTestCase):
             report_to="none",
         )
 
-        # Return None for the first completion (unscorable) and valid negative rewards for the others.
+        # Return None for the first completion (unscorable), a positive reward
+        # for the second (so SDPO sees non-flat rewards and proceeds), and a
+        # negative reward for the third.
         call_count = [0]
 
         def partially_none_reward(**kwargs):
             n = len(kwargs["prompts"])
             rewards = []
             for _ in range(n):
-                if call_count[0] % 3 == 0:
+                idx = call_count[0] % 3
+                if idx == 0:
                     rewards.append(None)  # unscorable
+                elif idx == 1:
+                    rewards.append(1.0)  # valid positive reward
                 else:
                     rewards.append(-1.0)  # valid negative reward
                 call_count[0] += 1
@@ -565,10 +570,10 @@ class TestSDPOTrainer(TrlTestCase):
         assert not torch.isnan(advantages).any(), "NaN found in advantages — unscorable defense failed"
 
         # The unscorable advantage should be exactly 0, not a spurious positive value.
-        # With 3 generations: one None (unscorable → 0), two -1.0. Before the fix, the unscorable
-        # row would get reward 0 via nansum, producing a positive advantage over its -1.0 siblings.
-        # After the fix, it gets advantage 0.
-        zero_advantages = (advantages.abs() < 1e-6)
+        # With 3 generations: one None (unscorable → 0), one +1.0, one -1.0.
+        # Before the fix, the unscorable row would get reward 0 via nansum, producing a
+        # positive advantage over its -1.0 sibling. After the fix, it gets advantage 0.
+        zero_advantages = advantages.abs() < 1e-6
         assert zero_advantages.any(), f"Expected at least one zeroed (unscorable) advantage, got: {advantages}"
 
         # Verify the warning was emitted
