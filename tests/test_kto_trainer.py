@@ -1321,22 +1321,33 @@ class TestKTOTrainer(TrlTestCase):
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
+        # In bitsandbytes, a Linear4bit's bias is cast in-place to the input dtype during the forward pass if its
+        # dtype doesn't match, which changes these specific bias parameters unexpectedly during the first forward
+        # pass of training. Before bitsandbytes 0.50.0, this only affected the biases below; from 0.50.0 on
+        # (https://github.com/bitsandbytes-foundation/bitsandbytes/pull/1904), the cast happens after the input is
+        # cast to the compute dtype, so it now affects every layer's biases instead of only some.
+        import bitsandbytes as bnb
+
+        bnb_bias_params_that_change = [
+            "base_model.model.model.layers.1.self_attn.k_proj.bias",
+            "base_model.model.model.layers.1.self_attn.q_proj.base_layer.bias",
+            "base_model.model.model.layers.1.self_attn.v_proj.base_layer.bias",
+        ]
+        if Version(bnb.__version__) >= Version("0.50.0"):
+            bnb_bias_params_that_change += [
+                "base_model.model.model.layers.0.self_attn.k_proj.bias",
+                "base_model.model.model.layers.0.self_attn.q_proj.base_layer.bias",
+                "base_model.model.model.layers.0.self_attn.v_proj.base_layer.bias",
+            ]
+
         # Check that the peft params have changed and the base model params have not changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            # In bitsandbytes, bias parameters are automatically cast to the input dtype during the forward pass if
-            # their dtype doesn’t match. This causes the module to change unexpectedly during the first forward pass of
-            # the training. To handle this, we cast these specific bias parameters to float32 before comparison.
-            # https://github.com/bitsandbytes-foundation/bitsandbytes/blob/45553f7392e524eacf400b132cfe01261f6477be/bitsandbytes/nn/modules.py#L518
-            # We still need to investigate why the compute dtype ends up being different than for these parameters.
-            if n in [
-                "base_model.model.model.layers.1.self_attn.k_proj.bias",
-                "base_model.model.model.layers.1.self_attn.q_proj.base_layer.bias",
-                "base_model.model.model.layers.1.self_attn.v_proj.base_layer.bias",
-            ]:
+            if n in bnb_bias_params_that_change:
                 param = param.float()
+                new_param = new_param.float()
 
-            if "lora" not in n:  # We expect the base model params to be the same
+            if "lora" not in n:  # We expect the base model params to be the same (up to the bnb bias dtype cast above)
                 torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed.")
             elif "lora" in n:  # We expect the peft params to be different
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
