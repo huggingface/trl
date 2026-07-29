@@ -2037,7 +2037,11 @@ class GOLDTrainer(SFTTrainer):
                 "prompt/completion example."
             )
 
-        if not is_processed or (self.use_uld_loss and self.teacher_tokenizer is not None) or self.use_privileged_context:
+        if (
+            not is_processed
+            or (self.use_uld_loss and self.teacher_tokenizer is not None)
+            or self.use_privileged_context
+        ):
             return self._prepare_dataset_with_original_text(
                 dataset, processing_class, args, packing, formatting_func, dataset_name
             )
@@ -2062,9 +2066,7 @@ class GOLDTrainer(SFTTrainer):
     ) -> str:
         """Build the teacher prompt by enriching the final user turn with privileged context."""
         if privileged_context is None:
-            raise ValueError(
-                f"`{privileged_context_column}` must not be None when `use_privileged_context=True`."
-            )
+            raise ValueError(f"`{privileged_context_column}` must not be None when `use_privileged_context=True`.")
 
         privileged_context = str(privileged_context)
         if isinstance(prompt, list):

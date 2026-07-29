@@ -741,6 +741,9 @@ def test_gold_trainer_init_defaults_vllm_max_model_length_to_max_length(monkeypa
         model_init_kwargs=None,
         max_length=128,
         use_liger_kernel=False,
+        use_privileged_context=False,
+        teacher_prompt_template=None,
+        privileged_context_column="privileged_context",
         trust_remote_code=False,
         teacher_model_init_kwargs=None,
         use_uld_loss=False,
@@ -869,6 +872,9 @@ def test_prepared_tokenized_rows_keep_completion_after_truncation(llama_tokenize
         use_liger_kernel=False,
     )
     trainer = GOLDTrainer.__new__(GOLDTrainer)
+    trainer.use_privileged_context = False
+    trainer.teacher_prompt_template = "{prompt}\n\n{privileged_context}"
+    trainer.privileged_context_column = "privileged_context"
     prepared = trainer._prepare_dataset_with_original_text(
         dataset,
         llama_tokenizer,
@@ -923,6 +929,9 @@ def test_prepared_tokenized_rows_rebase_byte_offsets_when_truncation_eats_into_c
         use_liger_kernel=False,
     )
     trainer = GOLDTrainer.__new__(GOLDTrainer)
+    trainer.use_privileged_context = False
+    trainer.teacher_prompt_template = "{prompt}\n\n{privileged_context}"
+    trainer.privileged_context_column = "privileged_context"
     prepared = trainer._prepare_dataset_with_original_text(
         dataset,
         llama_tokenizer,
@@ -958,6 +967,9 @@ def test_prepare_dataset_messages_uses_last_assistant_turn(qwen_tokenizer):
         use_liger_kernel=False,
     )
     trainer = GOLDTrainer.__new__(GOLDTrainer)
+    trainer.use_privileged_context = False
+    trainer.teacher_prompt_template = "{prompt}\n\n{privileged_context}"
+    trainer.privileged_context_column = "privileged_context"
 
     prepared = trainer._prepare_dataset_with_original_text(
         dataset,
@@ -1148,7 +1160,7 @@ def test_privileged_context_default_behavior_unchanged(llama_tokenizer):
         formatting_func=None,
         dataset_name="train",
     )
-    
+
     assert "teacher_prompt_text" not in prepared.column_names
 
 
@@ -1917,6 +1929,9 @@ def test_gold_trainer_init_rejects_llm_with_vision_dataset(monkeypatch):
         model_init_kwargs=None,
         max_length=128,
         use_liger_kernel=False,
+        use_privileged_context=False,
+        teacher_prompt_template=None,
+        privileged_context_column="privileged_context",
         trust_remote_code=False,
         teacher_model_init_kwargs=None,
         use_uld_loss=False,
@@ -2248,6 +2263,9 @@ def test_gold_trainer_init_rejects_non_vlm_teacher(monkeypatch):
         max_length=128,
         truncation_mode="keep_start",
         use_liger_kernel=False,
+        use_privileged_context=False,
+        teacher_prompt_template=None,
+        privileged_context_column="privileged_context",
         trust_remote_code=False,
         teacher_model_init_kwargs=None,
         use_uld_loss=False,
@@ -2339,6 +2357,9 @@ def test_gold_trainer_init_rejects_keep_end_truncation_for_vlm(monkeypatch):
         max_length=128,
         truncation_mode="keep_end",
         use_liger_kernel=False,
+        use_privileged_context=False,
+        teacher_prompt_template=None,
+        privileged_context_column="privileged_context",
         teacher_model_init_kwargs=None,
         use_uld_loss=False,
         teacher_tokenizer_name_or_path=None,
@@ -2444,6 +2465,9 @@ def test_gold_trainer_vlm_vllm_init_uses_identity_collator(monkeypatch):
         max_length=128,
         truncation_mode="keep_start",
         use_liger_kernel=False,
+        use_privileged_context=False,
+        teacher_prompt_template=None,
+        privileged_context_column="privileged_context",
         trust_remote_code=False,
         teacher_model_init_kwargs=None,
         use_uld_loss=False,
@@ -2536,6 +2560,9 @@ def _make_vlm_trainer_args(use_vllm=False):
         max_length=128,
         truncation_mode="keep_start",
         use_liger_kernel=False,
+        use_privileged_context=False,
+        teacher_prompt_template=None,
+        privileged_context_column="privileged_context",
         trust_remote_code=False,
         teacher_model_init_kwargs=None,
         use_uld_loss=False,
