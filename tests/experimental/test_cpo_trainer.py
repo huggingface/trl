@@ -14,7 +14,7 @@
 
 import pytest
 import torch
-from datasets import load_dataset
+from datasets import DatasetDict, load_dataset
 from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokenizer
 
 from trl.experimental.cpo import CPOConfig, CPOTrainer
@@ -110,6 +110,47 @@ class TestCPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             if param.sum() != 0:  # ignore 0 biases
                 assert not torch.equal(param, new_param)
+
+    @pytest.mark.parametrize(
+        "eval_dataset_type",
+        [
+            "dataset",
+            "dataset_dict",
+            "none",
+        ],
+    )
+    def test_init_with_eval_dataset(self, eval_dataset_type):
+        # CPO tokenizes the eval dataset at init by calling `.map()` directly on it, so streaming (iterable) and
+        # plain dict-of-datasets eval datasets are not yet supported; only `Dataset` and `DatasetDict` are tested.
+        train_dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+
+        if eval_dataset_type == "none":
+            eval_dataset = None
+        else:
+            eval_split = load_dataset("trl-internal-testing/zen", "standard_preference", split="test")
+            if eval_dataset_type == "dataset":
+                eval_dataset = eval_split
+            else:  # "dataset_dict"
+                eval_dataset = DatasetDict({"data1": eval_split, "data2": eval_split})
+
+        training_args = CPOConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = CPOTrainer(
+            model=self.model,
+            args=training_args,
+            processing_class=self.tokenizer,
+            train_dataset=train_dataset,
+            eval_dataset=eval_dataset,
+        )
+
+        if eval_dataset_type == "none":
+            assert trainer.eval_dataset is None
+        elif isinstance(trainer.eval_dataset, dict):
+            assert set(trainer.eval_dataset.keys()) == {"data1", "data2"}
+            # Each split was tokenized independently.
+            assert "chosen_input_ids" in next(iter(trainer.eval_dataset["data1"]))
+            assert "chosen_input_ids" in next(iter(trainer.eval_dataset["data2"]))
+        else:
+            assert "chosen_input_ids" in next(iter(trainer.eval_dataset))
 
     def test_cpo_trainer_processing_class_autoloaded(self):
         # processing_class is documented as optional: when omitted it should be

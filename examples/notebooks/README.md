@@ -17,10 +17,9 @@ This directory contains a collection of Jupyter notebooks that demonstrate how t
 
 ## OpenEnv Notebooks
 
-These notebooks demonstrate GRPO training with [OpenEnv](https://github.com/huggingface/OpenEnv) environments using `environment_factory`. The BrowserGym notebook uses the lower-level `rollout_func` API instead.
+These notebooks demonstrate GRPO training with [OpenEnv](https://github.com/huggingface/OpenEnv) environments using `environment_factory`.
 
 | Notebook | Description | Open in Colab |
 | --- | --- | --- |
 | [`openenv_wordle_grpo.ipynb`](https://github.com/huggingface/trl/tree/main/examples/notebooks/openenv_wordle_grpo.ipynb) | GRPO to play Wordle on an OpenEnv environment | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/huggingface/trl/blob/main/examples/notebooks/openenv_wordle_grpo.ipynb) |
 | [`openenv_sudoku_grpo.ipynb`](https://github.com/huggingface/trl/tree/main/examples/notebooks/openenv_sudoku_grpo.ipynb) | GRPO to play Sudoku on an OpenEnv environment | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/huggingface/trl/blob/main/examples/notebooks/openenv_sudoku_grpo.ipynb) |
-| [`grpo_functiongemma_browsergym_openenv.ipynb`](https://github.com/huggingface/trl/tree/main/examples/notebooks/grpo_functiongemma_browsergym_openenv.ipynb) | GRPO on FunctionGemma in the BrowserGym environment | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/huggingface/trl/blob/main/examples/notebooks/grpo_functiongemma_browsergym_openenv.ipynb) |

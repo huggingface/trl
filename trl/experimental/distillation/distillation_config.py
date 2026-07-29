@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import warnings
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -42,31 +41,18 @@ class DistillationConfig(_BaseConfig):
             Whether to allow loading models and tokenizers that ship custom Python code from the Hub. Forwarded to
             [`~transformers.AutoModelForCausalLM.from_pretrained`] and
             [`~transformers.AutoTokenizer.from_pretrained`], for both the student and teacher.
-        max_length (`int` or `None`, *optional*, defaults to `1024`):
-            Maximum total sequence length (prompt + completion) for tokenization and truncation.
 
         > Parameters that control the distillation
 
         temperature (`float`, *optional*, defaults to `1.0`):
             Temperature for sampling during generation and for computing the distillation loss. Higher values produce
             softer probability distributions.
-        lmbda (`float`, *optional*, defaults to `1.0`):
-            Probability of using on-policy (student-generated) data for each gradient accumulation slice. A value of
-            `0.0` means fully off-policy (dataset completions only), `1.0` means fully on-policy.
         beta (`float`, *optional*, defaults to `1.0`):
             Interpolation coefficient for the Generalized Jensen-Shannon Divergence loss. When `0.0`, the loss is the
             forward KL divergence. When `1.0`, the loss is the reverse KL divergence. When `0.5`, it is the standard
             JSD.
-        reverse_kl_top_1_mode (`str`, *optional*, defaults to `"sampled"`):
-            Selection rule for the reverse-KL top-1 token when `beta > 0` and `loss_top_k == 1`. `"sampled"` uses the
-            actual completion token in the batch. `"argmax"` uses the student's highest-probability token. This
-            setting does not affect the forward-KL support, which always uses the teacher's top-1 token. Ignored when
-            `beta == 0` or `loss_top_k != 1`.
         max_completion_length (`int`, *optional*, defaults to `512`):
             Maximum number of tokens to generate per completion during on-policy generation.
-        max_prompt_length (`int` or `None`, *optional*):
-            Maximum number of tokens for the prompt. If `None`, auto-computed as `max_length - max_completion_length`.
-            Prompts are truncated according to the tokenizer's `truncation_side` setting.
         disable_dropout (`bool`, *optional*, defaults to `True`):
             Whether to disable dropout in the student model during training.
 
@@ -79,24 +65,6 @@ class DistillationConfig(_BaseConfig):
         teacher_model_init_kwargs (`dict[str, Any]` or `None`, *optional*):
             Keyword arguments passed to `AutoModelForCausalLM.from_pretrained` when instantiating the teacher model
             from a string.
-        use_teacher_server (`bool`, *optional*, defaults to `False`):
-            Whether to use an external vLLM teacher server instead of a local teacher model.
-        teacher_model_server_url (`str` or `None`, *optional*):
-            Base URL of a vLLM server hosting the teacher model (e.g., `"http://localhost:8000"`). When set, teacher
-            logprobs are fetched from the server instead of running a local forward pass when `use_teacher_server=True`.
-        loss_top_k (`int`, *optional*, defaults to `1`):
-            Number of top tokens to use when computing the JSD/KL loss. Both student and teacher distributions are
-            restricted to these K tokens and re-normalized before computing divergence. If 0, the full vocabulary
-            is used. For local teachers, the general support rule is teacher top-k for forward KL, student top-k for
-            reverse KL, and the union for mixed JSD. When `beta > 0` and `loss_top_k == 1`, the forward support still
-            uses the teacher's top-1 token, while the reverse top-1 token is controlled by `reverse_kl_top_1_mode`.
-            When `use_teacher_server=True`, the pure forward path (`beta=0`) requires this to be positive and uses the
-            teacher's top-k logprobs for the forward term. When `beta > 0`, server-backed distillation requires
-            `loss_top_k == 1` and only supports `"sampled"` reverse top-1 tokens.
-        loss_add_tail (`bool`, *optional*, defaults to `True`):
-            Whether to append a tail bucket that represents the remaining probability mass outside the selected top-k
-            support when computing the loss.
-
         > Parameters that control on-policy generation
 
         num_generations (`int`, *optional*, defaults to `1`):
@@ -104,10 +72,35 @@ class DistillationConfig(_BaseConfig):
         generation_batch_size (`int` or `None`, *optional*):
             Number of unique prompts per worker per optimizer step. If `None`, computed from
             `(per_device_train_batch_size * gradient_accumulation_steps) // num_generations`.
-        top_p (`float`, *optional*, defaults to `0.95`):
+        top_p (`float`, *optional*, defaults to `1.0`):
             Top-p (nucleus) sampling parameter for on-policy generation.
         top_k (`int`, *optional*, defaults to `0`):
             Top-k sampling parameter for on-policy generation. `0` disables top-k filtering.
+        min_p (`float`, *optional*):
+            Minimum token probability, which will be scaled by the probability of the most likely token. It must be a
+            value between `0.0` and `1.0`. Typical values are in the `0.01-0.2` range.
+        generation_kwargs (`dict[str, Any]`, *optional*):
+            Additional keyword arguments to pass to [`~transformers.GenerationConfig`] (if using transformers) or
+            `SamplingParams` (if using vLLM) when sampling completions. This can be used to further customize the
+            generation behavior, such as setting `suppress_tokens`, `num_beams`, etc. If it contains keys that conflict
+            with the other generation parameters (like `min_p`, `top_p`, etc.), they will override them.
+        chat_template_kwargs (`dict[str, Any]`, *optional*):
+            Additional keyword arguments to pass to the `apply_chat_template` function when generating completions.
+        repetition_penalty (`float`, *optional*, defaults to `1.0`):
+            Float that penalizes new tokens based on whether they appear in the prompt and the generated text so far.
+            Values > `1.0` encourage the model to use new tokens, while values < `1.0` encourage the model to repeat
+            tokens.
+        cache_implementation (`str`, *optional*):
+            Implementation of the cache method for faster generation when `use_vllm` is set to `False`.
+        pad_to_multiple_of (`int`, *optional*):
+            If set, the prompts ids and completions ids will be padded to a multiple of this value.
+        shuffle_dataset (`bool`, *optional*, defaults to `True`):
+            Whether to shuffle the training dataset.
+        ds3_gather_for_generation (`bool`, *optional*, defaults to `True`):
+            This setting applies to DeepSpeed ZeRO-3. If enabled, the policy model weights are gathered for generation,
+            improving generation speed. However, disabling this option allows training models that exceed the VRAM
+            capacity of a single GPU, albeit at the cost of slower generation. Disabling this option is not compatible
+            with vLLM generation.
 
         > Parameters that control vLLM for student generation
 
@@ -119,7 +112,7 @@ class DistillationConfig(_BaseConfig):
             Base URL for the student vLLM server. If provided, `vllm_server_host` and `vllm_server_port` are ignored.
         vllm_server_host (`str`, *optional*, defaults to `"0.0.0.0"`):
             Host of the student vLLM server.
-        vllm_server_port (`int`, *optional*, defaults to `8001`):
+        vllm_server_port (`int`, *optional*, defaults to `8000`):
             Port of the student vLLM server.
         vllm_server_timeout (`float`, *optional*, defaults to `240.0`):
             Timeout for connecting to the student vLLM server.
@@ -170,11 +163,6 @@ class DistillationConfig(_BaseConfig):
             "student and teacher."
         },
     )
-    max_length: int | None = field(
-        default=1024,
-        metadata={"help": "Maximum total sequence length (prompt + completion) for tokenization and truncation."},
-    )
-
     # Overridden defaults
     learning_rate: float = field(
         default=1e-6,
@@ -188,13 +176,6 @@ class DistillationConfig(_BaseConfig):
             "help": "Temperature for sampling and loss computation. Higher values produce softer distributions."
         },
     )
-    lmbda: float = field(
-        default=1.0,
-        metadata={
-            "help": "Probability of using on-policy (student-generated) data per gradient accumulation slice. "
-            "0.0 = fully off-policy, 1.0 = fully on-policy."
-        },
-    )
     beta: float = field(
         default=1.0,
         metadata={
@@ -202,25 +183,9 @@ class DistillationConfig(_BaseConfig):
             "0.0 = forward KL, 0.5 = JSD, 1.0 = reverse KL."
         },
     )
-    reverse_kl_top_1_mode: str = field(
-        default="sampled",
-        metadata={
-            "help": "Reverse-KL top-1 token selection when beta > 0 and loss_top_k == 1. "
-            "Use 'sampled' for the actual completion token or 'argmax' for the student's top-1 token. "
-            "The forward-KL support always uses the teacher's top-1 token. Ignored when beta == 0 or loss_top_k != 1."
-        },
-    )
     max_completion_length: int = field(
         default=512,
         metadata={"help": "Maximum number of tokens to generate per completion."},
-    )
-    max_prompt_length: int | None = field(
-        default=None,
-        metadata={
-            "help": "Maximum number of tokens for the prompt. If None, auto-computed as "
-            "max_length - max_completion_length. Prompts are truncated according to the "
-            "tokenizer's truncation_side setting."
-        },
     )
     disable_dropout: bool = field(
         default=True,
@@ -243,40 +208,6 @@ class DistillationConfig(_BaseConfig):
         },
     )
 
-    # Teacher model (external vLLM server)
-    use_teacher_server: bool = field(
-        default=False,
-        metadata={"help": "Whether to use an external vLLM teacher server instead of a local teacher model."},
-    )
-    teacher_model_server_url: str | None = field(
-        default=None,
-        metadata={
-            "help": 'Base URL of a vLLM server hosting the teacher model (e.g., "http://localhost:8000"). '
-            "Required when use_teacher_server=True."
-        },
-    )
-    loss_top_k: int = field(
-        default=1,
-        metadata={
-            "help": "Number of top tokens to use when computing the JSD/KL loss. "
-            "Both student and teacher distributions are restricted to these K tokens "
-            "(selected based on beta: teacher's top-k for forward KL, student's top-k for reverse KL, "
-            "union of both for JSD) and re-normalized before computing divergence. "
-            "If 0, the full vocabulary is used (slower but exact). "
-            "When beta > 0 and loss_top_k == 1, the forward support still uses the teacher's top-1 token, "
-            "while the reverse top-1 token is controlled by reverse_kl_top_1_mode. "
-            "When use_teacher_server=True, beta=0 requires loss_top_k > 0 and uses the teacher's top-k "
-            "logprobs for the forward term. When beta > 0, server-backed distillation requires loss_top_k == 1 "
-            "and only supports 'sampled' reverse top-1 tokens."
-        },
-    )
-    loss_add_tail: bool = field(
-        default=True,
-        metadata={
-            "help": "Whether to append a tail bucket representing the remaining probability mass outside the selected top-k support."
-        },
-    )
-
     # On-policy generation
     num_generations: int = field(
         default=1,
@@ -290,12 +221,64 @@ class DistillationConfig(_BaseConfig):
         },
     )
     top_p: float = field(
-        default=0.95,
+        default=1.0,
         metadata={"help": "Top-p (nucleus) sampling parameter for on-policy generation."},
     )
     top_k: int = field(
         default=0,
         metadata={"help": "Top-k sampling parameter for on-policy generation. 0 disables top-k filtering."},
+    )
+    min_p: float | None = field(
+        default=None,
+        metadata={
+            "help": "Minimum token probability, which will be scaled by the probability of the most likely token. It "
+            "must be a value between 0.0 and 1.0. Typical values are in the 0.01-0.2 range."
+        },
+    )
+    generation_kwargs: dict | None = field(
+        default=None,
+        metadata={
+            "help": "Additional keyword arguments to pass to `GenerationConfig` (if using transformers) or "
+            "`SamplingParams` (if using vLLM) when sampling completions. This can be used to further customize the "
+            "generation behavior, such as setting `suppress_tokens`, `num_beams`, etc. If it contains keys that "
+            "conflict with the other generation parameters (like `min_p`, `top_p`, etc.), they will override them."
+        },
+    )
+    chat_template_kwargs: dict | None = field(
+        default=None,
+        metadata={
+            "help": "Additional keyword arguments to pass to the `apply_chat_template` function when generating "
+            "completions."
+        },
+    )
+    repetition_penalty: float = field(
+        default=1.0,
+        metadata={
+            "help": "Float that penalizes new tokens based on whether they appear in the prompt and the generated "
+            "text so far. Values > 1.0 encourage the model to use new tokens, while values < 1.0 encourage the model "
+            "to repeat tokens."
+        },
+    )
+    cache_implementation: str | None = field(
+        default=None,
+        metadata={"help": "Implementation of the cache method for faster generation when use_vllm is set to False."},
+    )
+    pad_to_multiple_of: int | None = field(
+        default=None,
+        metadata={"help": "If set, the prompts ids and completions ids will be padded to a multiple of this value."},
+    )
+    shuffle_dataset: bool | None = field(
+        default=True,
+        metadata={"help": "Whether to shuffle the training dataset."},
+    )
+    ds3_gather_for_generation: bool = field(
+        default=True,
+        metadata={
+            "help": "This setting applies to DeepSpeed ZeRO-3. If enabled, the policy model weights are gathered for "
+            "generation, improving generation speed. However, disabling this option allows training models that "
+            "exceed the VRAM capacity of a single GPU, albeit at the cost of slower generation. Disabling this option "
+            "is not compatible with vLLM generation."
+        },
     )
 
     # vLLM for student generation
@@ -316,7 +299,7 @@ class DistillationConfig(_BaseConfig):
         metadata={"help": "Host of the student vLLM server."},
     )
     vllm_server_port: int = field(
-        default=8001,
+        default=8000,
         metadata={"help": "Port of the student vLLM server."},
     )
     vllm_server_timeout: float = field(
@@ -379,21 +362,8 @@ class DistillationConfig(_BaseConfig):
     def __post_init__(self):
         super().__post_init__()
 
-        if self.lmbda < 0.0 or self.lmbda > 1.0:
-            raise ValueError(f"lmbda must be in [0.0, 1.0], got {self.lmbda}.")
         if self.beta < 0.0 or self.beta > 1.0:
             raise ValueError(f"beta must be in [0.0, 1.0], got {self.beta}.")
-        if self.reverse_kl_top_1_mode not in {"sampled", "argmax"}:
-            raise ValueError("reverse_kl_top_1_mode must be one of: 'sampled', 'argmax'")
-
-        if self.max_length is not None and self.max_completion_length >= self.max_length:
-            raise ValueError(
-                f"max_completion_length ({self.max_completion_length}) must be smaller than "
-                f"max_length ({self.max_length}) to leave room for the prompt."
-            )
-
-        if self.max_prompt_length is None and self.max_length is not None:
-            self.max_prompt_length = self.max_length - self.max_completion_length
 
         if self.num_generations < 1:
             raise ValueError(f"num_generations must be at least 1, got {self.num_generations}.")
@@ -408,47 +378,4 @@ class DistillationConfig(_BaseConfig):
                 "generation_batch_size * num_generations must equal per_device_train_batch_size * "
                 f"gradient_accumulation_steps. Got {self.generation_batch_size} * {self.num_generations} != "
                 f"{self.per_device_train_batch_size} * {self.gradient_accumulation_steps}."
-            )
-
-        if self.use_teacher_server and self.use_liger_kernel:
-            raise ValueError(
-                "use_liger_kernel=True is not supported with use_teacher_server=True because the Liger loss path "
-                "requires a local teacher model."
-            )
-        if self.use_teacher_server and (
-            self.teacher_model_server_url is None or not self.teacher_model_server_url.strip()
-        ):
-            raise ValueError("teacher_model_server_url must be set when use_teacher_server=True.")
-
-        if self.use_teacher_server and self.beta == 0 and self.loss_top_k < 1:
-            raise ValueError(
-                f"loss_top_k must be positive when using use_teacher_server=True with beta=0 "
-                f"(got loss_top_k={self.loss_top_k}). The pure forward server path only has access to the "
-                f"teacher's top-k logprobs, so it cannot compute the exact full-vocabulary loss when loss_top_k=0."
-            )
-        if self.use_teacher_server and self.reverse_kl_top_1_mode == "argmax":
-            raise ValueError(
-                "reverse_kl_top_1_mode='argmax' is not supported with use_teacher_server=True because the server "
-                "cannot provide teacher logprobs for arbitrary student-selected tokens."
-            )
-        if self.use_teacher_server and self.beta > 0 and self.loss_top_k != 1:
-            raise ValueError(
-                f"loss_top_k must be 1 when using use_teacher_server=True with beta>0 "
-                f"(got loss_top_k={self.loss_top_k}). Mixed forward/reverse distillation with an external teacher "
-                "is only implemented for top-1 support."
-            )
-        if self.reverse_kl_top_1_mode != "sampled" and (self.beta == 0 or self.loss_top_k != 1):
-            warnings.warn(
-                f"reverse_kl_top_1_mode='{self.reverse_kl_top_1_mode}' has no effect when beta={self.beta} "
-                f"and loss_top_k={self.loss_top_k}. It only applies when beta > 0 and loss_top_k == 1.",
-                UserWarning,
-                stacklevel=2,
-            )
-
-        if self.num_generations > 1 and self.lmbda < 1.0:
-            warnings.warn(
-                f"num_generations={self.num_generations} with lmbda={self.lmbda} means off-policy batches include "
-                f"{self.num_generations} copies of each sample. Consider lmbda=1.0 when num_generations > 1.",
-                UserWarning,
-                stacklevel=2,
             )
