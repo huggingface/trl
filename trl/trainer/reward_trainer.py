@@ -31,7 +31,7 @@ import transformers
 from accelerate import PartialState
 from accelerate.logging import get_logger
 from accelerate.utils import is_peft_model
-from datasets import Dataset, IterableDataset
+from datasets import Dataset, DatasetDict, IterableDataset, IterableDatasetDict
 from packaging.version import Version
 from transformers import (
     AutoModelForSequenceClassification,
@@ -273,7 +273,11 @@ class RewardTrainer(_BaseTrainer):
 
             The trainer also supports processed datasets (tokenized) as long as they contain `chosen_ids` and
             `rejected_ids` fields.
-        eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`] or `dict[str, Dataset | IterableDataset]`):
+
+            When `train_dataset` is an [`~datasets.IterableDataset`] (e.g. a streaming dataset), `max_steps` must be
+            set in the training arguments, since its length cannot be inferred and the total number of training steps
+            is required to bound the training loop and configure the learning rate scheduler.
+        eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`], [`~datasets.DatasetDict`], [`~datasets.IterableDatasetDict`] or `dict[str, Dataset | IterableDataset]`):
             Dataset to use for evaluation. It must meet the same requirements as `train_dataset`.
         processing_class ([`~transformers.PreTrainedTokenizerBase`], *optional*):
             Tokenizer used to process the data. If `None`, the tokenizer is loaded from the model's name with
@@ -328,7 +332,12 @@ class RewardTrainer(_BaseTrainer):
         args: RewardConfig | None = None,
         data_collator: DataCollator | None = None,
         train_dataset: Dataset | IterableDataset | None = None,
-        eval_dataset: Dataset | IterableDataset | dict[str, Dataset | IterableDataset] | None = None,
+        eval_dataset: Dataset
+        | IterableDataset
+        | DatasetDict
+        | IterableDatasetDict
+        | dict[str, Dataset | IterableDataset]
+        | None = None,
         processing_class: PreTrainedTokenizerBase | None = None,
         compute_metrics: Callable[[EvalPrediction], dict] | None = None,
         callbacks: list[TrainerCallback] | None = None,
@@ -356,6 +365,10 @@ class RewardTrainer(_BaseTrainer):
                     "`dispatch_batches` in `RewardConfig` or set it to `False`."
                 )
             args.accelerator_config.dispatch_batches = False
+        elif not isinstance(train_dataset, Dataset):
+            raise TypeError(
+                f"`train_dataset` must be a `Dataset` or `IterableDataset`, got `{type(train_dataset).__name__}`."
+            )
 
         # Model
         # As AutoModelForSequenceClassification.from_pretrained() will add a random head for the model, set_seed must
@@ -486,6 +499,25 @@ class RewardTrainer(_BaseTrainer):
             ):
                 get_peft_model_kwargs["autocast_adapter_dtype"] = False
             model = get_peft_model(model, peft_config, **get_peft_model_kwargs)
+
+        # PEFT + DeepSpeed ZeRO-3 requires reentrant checkpointing. For more details, see
+        # https://github.com/huggingface/trl/issues/2514#issuecomment-2692152703.
+        # Can be removed once https://github.com/deepspeedai/DeepSpeed/pull/8130 is merged and released.
+        if (
+            is_peft_model(model)
+            and args.deepspeed_plugin is not None
+            and args.deepspeed_plugin.zero_stage == 3
+            and args.gradient_checkpointing
+        ):
+            args.gradient_checkpointing_kwargs = args.gradient_checkpointing_kwargs or {}
+            use_reentrant = args.gradient_checkpointing_kwargs.get("use_reentrant")
+            if use_reentrant is False:
+                logger.warning(
+                    "You are using PEFT with DeepSpeed ZeRO-3 and gradient checkpointing with `use_reentrant=False`. "
+                    "`use_reentrant` is forced to `True` in this configuration to ensure correct training. To remove "
+                    "this warning, unset `use_reentrant` in `gradient_checkpointing_kwargs` or set it to `True`."
+                )
+            args.gradient_checkpointing_kwargs["use_reentrant"] = True
 
         # When using gradient checkpointing with PEFT, we need to enable input gradients. transformers.Trainer normally
         # handles this, but a bug currently prevents it; see https://github.com/huggingface/transformers/issues/42489
@@ -683,7 +715,12 @@ class RewardTrainer(_BaseTrainer):
 
     def evaluate(
         self,
-        eval_dataset: Dataset | dict[str, Dataset] | None = None,
+        eval_dataset: Dataset
+        | IterableDataset
+        | DatasetDict
+        | IterableDatasetDict
+        | dict[str, Dataset | IterableDataset]
+        | None = None,
         ignore_keys: list[str] | None = None,
         metric_key_prefix: str = "eval",
     ) -> dict[str, float]:
