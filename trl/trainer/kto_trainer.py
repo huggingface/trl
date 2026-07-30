@@ -1280,7 +1280,7 @@ class KTOTrainer(_BaseTrainer):
 
         model = self.accelerator.prepare_model(self._precompute_engine)
         if self.optimizer is None:
-            self.create_optimizer(model)
+            self.create_optimizer()
         self.optimizer = self.accelerator.prepare_optimizer(self.optimizer)
         self.create_scheduler(num_training_steps=max_steps)
 

@@ -92,8 +92,7 @@ def test_precomputed_fsdp_model_is_reused_for_training(trainer_cls, optimizer_pr
     trainer.model_wrapped = model
     trainer.callback_handler = types.SimpleNamespace()
 
-    def create_optimizer(prepared_model):
-        assert prepared_model is model
+    def create_optimizer():
         trainer.optimizer = optimizer
 
     trainer.create_optimizer = Mock(side_effect=create_optimizer)
@@ -112,7 +111,7 @@ def test_precomputed_fsdp_model_is_reused_for_training(trainer_cls, optimizer_pr
     if optimizer_prepared_during_precompute:
         trainer.create_optimizer.assert_not_called()
     else:
-        trainer.create_optimizer.assert_called_once_with(model)
+        trainer.create_optimizer.assert_called_once_with()
     trainer.create_scheduler.assert_called_once_with(num_training_steps=4)
     assert prepared_model is trainer.model is trainer.model_wrapped is trainer._precompute_engine
     assert prepared_dataloader is trainer.callback_handler.train_dataloader is train_dataloader
