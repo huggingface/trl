@@ -1528,7 +1528,7 @@ class DPOTrainer(_BaseTrainer):
                 # Use this loss when you believe the chosen outputs are worse than your model's default output.
                 # Decrease chosen likelihood and decrease rejected likelihood more
                 losses_chosen = torch.sigmoid(self.beta * chosen_logratios)
-                losses_rejected = 1 - torch.sigmoid(self.beta * delta_score)
+                losses_rejected = 1 - torch.sigmoid(self.beta * rejected_logratios)
                 per_sequence_loss = losses_chosen + losses_rejected
 
             elif loss_type == "discopop":
