@@ -22,10 +22,8 @@ import pytest
 import torch
 
 from trl.experimental.sdft.loss_utils import (
-    compute_divergence,
     compute_dopd_routed_loss,
     compute_full_logit_self_distillation_loss,
-    compute_sampled_token_self_distillation_loss,
     compute_topk_self_distillation_loss,
 )
 
@@ -98,17 +96,21 @@ class TestDOPDRouting:
             teacher_logits,
             distillation_alpha=0.5,
         )
-        expected_regime4 = STUDENT_CONSISTENCY_WEIGHT * compute_sampled_token_self_distillation_loss(
+        expected_regime4 = STUDENT_CONSISTENCY_WEIGHT * compute_topk_self_distillation_loss(
             student_logits,
-            teacher_logits,
-            completion_ids,
+            student_logits.detach(),
+            distillation_topk=LIGHT_TOPK,
             distillation_alpha=1.0,
+            distillation_add_tail=True,
+            topk_support="student",
         )
-        student_log_probs_full = torch.log_softmax(student_logits, dim=-1)
-        expected_regime2 = SELF_REG_WEIGHT * compute_divergence(
-            student_log_probs_full,
-            student_log_probs_full.detach(),
-            alpha=1.0,
+        expected_regime2 = SELF_REG_WEIGHT * compute_topk_self_distillation_loss(
+            student_logits,
+            student_logits.detach(),
+            distillation_topk=LIGHT_TOPK,
+            distillation_alpha=1.0,
+            distillation_add_tail=True,
+            topk_support="student",
         )
 
         torch.testing.assert_close(routed[0], expected_regime1[0])
