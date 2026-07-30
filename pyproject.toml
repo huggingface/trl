@@ -229,4 +229,12 @@ filterwarnings = [
     # Triggered by the NemotronH (Nemotron 3) Mamba2 mixer fast path during training under CUDA autocast
     # Tracking issue: https://github.com/huggingface/trl/issues/6555
     "ignore:torch.get_autocast_gpu_dtype\\(\\) is deprecated:DeprecationWarning",
+
+    # bitsandbytes warns, on every forward of a 4-bit layer whose inner dimension is not a multiple of the quantization
+    # blocksize, that it falls back to the slower dequantize + linear path (upstream, not actionable in TRL)
+    # Triggered by the tiny models in the PEFT + quantization tests: their hidden_size (8) and intermediate_size (32)
+    # are not multiples of the 64 blocksize, and transformers exposes no option to change it
+    # Tracking issue: https://github.com/huggingface/trl/issues/6580
+    # Upstream issue: https://github.com/bitsandbytes-foundation/bitsandbytes/issues/2027
+    "ignore:inner dimension \\(\\d+\\) is not aligned for fast kernel:UserWarning",
 ]
