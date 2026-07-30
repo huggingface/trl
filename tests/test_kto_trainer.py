@@ -16,7 +16,7 @@ import multiprocess
 import pytest
 import torch
 import transformers
-from datasets import DatasetDict, IterableDatasetDict, load_dataset
+from datasets import Dataset, DatasetDict, IterableDatasetDict, load_dataset
 from packaging.version import Version
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 from transformers.utils import is_peft_available
@@ -28,6 +28,7 @@ from .testing_utils import TrlTestCase, require_bitsandbytes, require_liger_kern
 
 
 if is_peft_available():
+    import peft
     from peft import LoraConfig, PromptTuningConfig, get_peft_model
     from peft.utils import TaskType
 
@@ -332,43 +333,129 @@ class TestKTOTrainer(TrlTestCase):
             if param.sum() != 0:  # ignore 0 biases
                 assert not torch.equal(param, new_param)
 
+    def test_fully_truncated_completion_examples_dropped(self):
+        """The collator truncates with `keep_start`, so an example whose prompt alone fills `max_length` loses every
+        completion token; it's dropped during dataset preparation."""
+        dataset = Dataset.from_dict(
+            {
+                "prompt": ["Hi", "This is a very long prompt that fills up the whole max_length budget on its own"],
+                "completion": [" there", " yes"],
+                "label": [True, False],
+            }
+        )
+
+        training_args = KTOConfig(output_dir=self.tmp_dir, max_length=6, report_to="none")
+        trainer = KTOTrainer(model=self.model_id, args=training_args, train_dataset=dataset)
+
+        # Only the short-prompt example survives.
+        assert len(trainer.train_dataset) == 1
+        assert trainer.train_dataset[0]["prompt_ids"] == trainer.processing_class("Hi")["input_ids"]
+
     @pytest.mark.parametrize("precompute_ref_log_probs", [False, True])
-    def test_evaluate_with_raw_dataset(self, precompute_ref_log_probs):
-        # `evaluate` should accept the same (unprocessed) dataset types as the trainer, e.g. a held-out test set
-        # passed directly to `evaluate`. With `precompute_ref_log_probs=True`, the reference log-probs must also be
-        # precomputed for the freshly-passed dataset. See https://github.com/huggingface/trl/issues/6115.
-        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
-
-        training_args = KTOConfig(
-            output_dir=self.tmp_dir, precompute_ref_log_probs=precompute_ref_log_probs, report_to="none"
-        )
-        trainer = KTOTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
-        )
-
-        metrics = trainer.evaluate(eval_dataset=dataset)
-        assert metrics["eval_loss"] is not None
-
-    @pytest.mark.parametrize("streaming", [False, True])
-    def test_evaluate_with_eval_dataset_dict(self, streaming):
-        # `evaluate` should accept a `DatasetDict` (map-style) or `IterableDatasetDict` (streaming) passed directly —
-        # e.g. the raw output of `load_dataset` without a `split` — not only a plain `dict`. Each split is prepared
-        # independently. `apo_zero_unpaired` avoids KTO's KL term, which is incompatible with streaming datasets.
+    @pytest.mark.parametrize(
+        "eval_dataset_type",
+        [
+            "dataset",
+            "iterable_dataset",
+            "dataset_dict",
+            "iterable_dataset_dict",
+            "dict_of_dataset",
+            "dict_of_iterable_dataset",
+        ],
+    )
+    def test_evaluate_with_eval_dataset(self, eval_dataset_type, precompute_ref_log_probs):
+        # `evaluate` accepts a raw (unprepared) dataset passed directly, not only a preprocessed `eval_dataset` set
+        # at init. See https://github.com/huggingface/trl/issues/6115. Also a regression test: Accelerate's dispatch
+        # for `IterableDataset` requires every batch field to be a tensor, which previously broke streaming
+        # evaluation. `apo_zero_unpaired` avoids KTO's KL term, which is incompatible with streaming datasets.
         train_dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
+        streaming = "iterable" in eval_dataset_type
         eval_split = load_dataset(
             "trl-internal-testing/zen", "standard_unpaired_preference", split="test", streaming=streaming
         )
-        dataset_dict_cls = IterableDatasetDict if streaming else DatasetDict
-        eval_dataset = dataset_dict_cls({"data1": eval_split, "data2": eval_split})
+        if eval_dataset_type in ("dataset", "iterable_dataset"):
+            eval_dataset = eval_split
+        elif eval_dataset_type in ("dataset_dict", "iterable_dataset_dict"):
+            dataset_dict_cls = IterableDatasetDict if streaming else DatasetDict
+            eval_dataset = dataset_dict_cls({"data1": eval_split, "data2": eval_split})
+        else:  # "dict_of_dataset" or "dict_of_iterable_dataset"
+            eval_dataset = {"data1": eval_split, "data2": eval_split}
 
-        training_args = KTOConfig(output_dir=self.tmp_dir, loss_type="apo_zero_unpaired", report_to="none")
+        training_args = KTOConfig(
+            output_dir=self.tmp_dir,
+            loss_type="apo_zero_unpaired",
+            precompute_ref_log_probs=precompute_ref_log_probs,
+            report_to="none",
+        )
         trainer = KTOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=train_dataset
         )
 
+        if streaming and precompute_ref_log_probs:
+            with pytest.raises(ValueError, match="precompute_ref_log_probs.*not supported with IterableDataset"):
+                trainer.evaluate(eval_dataset=eval_dataset)
+            return
+
         metrics = trainer.evaluate(eval_dataset=eval_dataset)
-        assert metrics["eval_data1_loss"] is not None
-        assert metrics["eval_data2_loss"] is not None
+        if eval_dataset_type in ("dataset", "iterable_dataset"):
+            assert metrics["eval_loss"] is not None
+        else:
+            assert metrics["eval_data1_loss"] is not None
+            assert metrics["eval_data2_loss"] is not None
+
+    def test_evaluate_precompute_ref_log_probs_after_training_raises(self):
+        # Full fine-tuning with `precompute_ref_log_probs=True` and no `ref_model` uses `self.model` as the reference.
+        # That's valid only before training; a dataset passed to `evaluate()` afterwards can't get a correct reference.
+        train_dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
+        eval_dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="test")
+        training_args = KTOConfig(
+            output_dir=self.tmp_dir,
+            max_steps=1,
+            precompute_ref_log_probs=True,
+            report_to="none",
+        )
+        trainer = KTOTrainer(model=self.model_id, args=training_args, train_dataset=train_dataset)
+
+        # Before training the reference is available, so evaluating a new dataset works.
+        assert trainer.evaluate(eval_dataset=eval_dataset)["eval_loss"] is not None
+
+        trainer.train()
+
+        with pytest.raises(ValueError, match="Cannot compute reference log-probs for a dataset passed to"):
+            trainer.evaluate(eval_dataset=eval_dataset)
+
+    @pytest.mark.parametrize("eval_dataset_type", ["dataset", "dataset_dict", "dict_of_dataset"])
+    def test_evaluate_precompute_ref_log_probs_at_init_after_training(self, eval_dataset_type):
+        # Regression for the guard above: an `eval_dataset` set at init has its reference log-probs precomputed once
+        # (against the untrained reference) and stored, so no-arg `evaluate()` reuses those stored values and must not
+        # raise after training, even with full fine-tuning and `precompute_ref_log_probs=True`.
+        train_dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
+        eval_split = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="test")
+        if eval_dataset_type == "dataset":
+            eval_dataset = eval_split
+        elif eval_dataset_type == "dataset_dict":
+            eval_dataset = DatasetDict({"data1": eval_split, "data2": eval_split})
+        else:  # "dict_of_dataset"
+            eval_dataset = {"data1": eval_split, "data2": eval_split}
+
+        training_args = KTOConfig(
+            output_dir=self.tmp_dir,
+            max_steps=1,
+            precompute_ref_log_probs=True,
+            report_to="none",
+        )
+        trainer = KTOTrainer(
+            model=self.model_id, args=training_args, train_dataset=train_dataset, eval_dataset=eval_dataset
+        )
+
+        trainer.train()
+
+        metrics = trainer.evaluate()
+        if eval_dataset_type == "dataset":
+            assert metrics["eval_loss"] is not None
+        else:
+            assert metrics["eval_data1_loss"] is not None
+            assert metrics["eval_data2_loss"] is not None
 
     def test_trust_remote_code(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
@@ -725,6 +812,43 @@ class TestKTOTrainer(TrlTestCase):
             elif "base_layer" not in n and "ref" not in n:  # and the peft params to be different (except base and ref)
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @require_peft
+    def test_train_moe_peft_model(self):
+        # Regression test for https://github.com/huggingface/trl/issues/5222. PEFT only supports one adapter per model
+        # when the LoRA config uses `target_parameters` (see peft#3340), so no "ref" adapter can be created and the
+        # reference log probs are computed with adapters disabled instead.
+        model_id = "trl-internal-testing/tiny-GptOssForCausalLM"
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
+        base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
+
+        lora_config = LoraConfig(target_parameters=["mlp.experts.down_proj", "mlp.experts.gate_up_proj"])
+        model = get_peft_model(model, lora_config)
+
+        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
+
+        training_args = KTOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=1.0,  # use higher lr because gradients are tiny and default lr can stall updates
+            report_to="none",
+        )
+        trainer = KTOTrainer(model=model, args=training_args, train_dataset=dataset)
+
+        assert "ref" not in trainer.model.peft_config
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the peft params have changed and the base model params have not changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            if n in base_param_names:  # We expect the base model params to be the same
+                torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed.")
+            elif "base_layer" not in n:  # We expect the peft params to be different (except for the base layer)
+                assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
     # In practice, this test is the same as `test_kto_trainer_without_providing_ref_model_with_lora`, since gradient
     # checkpointing is enabled by default in `KTOTrainer`. We keep it as a regression guard: if the default ever
     # changes, we still explicitly test PEFT + gradient checkpointing, which has caused issues in the past.
@@ -827,12 +951,21 @@ class TestKTOTrainer(TrlTestCase):
         # ignored and never trained. The trainer must fail fast instead of training a silently-frozen head.
         dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
         training_args = KTOConfig(output_dir=self.tmp_dir, use_liger_kernel=True, report_to="none")
+        # `ensure_weight_tying=True` silences PEFT's weight-tying warning fired when lm_head is in the adapter on a
+        # model with untied embeddings; once tying respects `tie_word_embeddings`, the flag itself warns that no tied
+        # modules were found, so it must only be set on the affected range.
+        # - Introduced in PEFT 0.19.0 (peft#2879); fixed on main, unreleased as of 0.19.2.dev0 (peft#3171)
+        needs_ensure_weight_tying = Version("0.19.0") <= Version(peft.__version__) < Version("0.19.2.dev0")
+        lora_config = LoraConfig(
+            target_modules=["q_proj", "v_proj", "lm_head"],
+            **({"ensure_weight_tying": True} if needs_ensure_weight_tying else {}),
+        )
         with pytest.raises(ValueError, match="lm_head"):
             KTOTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
                 args=training_args,
                 train_dataset=dataset,
-                peft_config=LoraConfig(target_modules=["q_proj", "v_proj", "lm_head"]),
+                peft_config=lora_config,
             )
 
     @require_liger_kernel
@@ -906,9 +1039,9 @@ class TestKTOTrainer(TrlTestCase):
         elif iterable_as == "eval_iterable_dataset_dict":
             eval_dataset = IterableDatasetDict({"eval": iterable_dataset})
 
-        # `apo_zero_unpaired` avoids KTO's KL term, which (like precompute) is incompatible with streaming datasets,
-        # so the precompute error is what surfaces. `max_steps` lets the iterable-train case reach the precompute
-        # check instead of failing earlier on the missing dataset length required by the learning-rate scheduler.
+        # `apo_zero_unpaired` keeps the trainer setup minimal (no KL-term constraints), so the precompute error is what
+        # surfaces. `max_steps` lets the iterable-train case reach the precompute check instead of failing earlier on
+        # the missing dataset length required by the learning-rate scheduler.
         training_args = KTOConfig(
             output_dir=self.tmp_dir,
             loss_type="apo_zero_unpaired",
@@ -924,9 +1057,11 @@ class TestKTOTrainer(TrlTestCase):
                 eval_dataset=eval_dataset,
             )
 
-    def test_train_with_iterable_dataset(self):
-        # KTO's default `kto` loss estimates the KL term from neighboring examples in a fixed-order batch, which is not
-        # possible with a streaming dataset; use `apo_zero_unpaired` which does not require the KL term.
+    @pytest.mark.parametrize("loss_type", ["kto", "apo_zero_unpaired"])
+    def test_train_with_iterable_dataset(self, loss_type):
+        # Streaming `IterableDataset` is supported for all loss types. Loss types that estimate the KL term (all except
+        # `apo_zero_unpaired`) build the mismatched KL pairs from neighboring examples within each fixed-order batch,
+        # which streaming preserves because it is consumed sequentially.
         dataset = load_dataset(
             "trl-internal-testing/zen", "standard_unpaired_preference", split="train", streaming=True
         )
@@ -934,7 +1069,8 @@ class TestKTOTrainer(TrlTestCase):
         training_args = KTOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
-            loss_type="apo_zero_unpaired",
+            loss_type=loss_type,
+            per_device_train_batch_size=2,  # KL-term loss types require a per-device train batch size greater than 1
             max_steps=3,
             report_to="none",
         )
@@ -952,24 +1088,6 @@ class TestKTOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
-
-    def test_evaluate_with_iterable_dataset(self):
-        # Regression test: Accelerate's dispatch for `IterableDataset` requires every batch field to be a tensor, so
-        # the collator must not leave `"label"` as a plain list of booleans, which broke streaming evaluation with
-        # `TypeError: Can only concatenate tensors but got <class 'bool'>`.
-        train_dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
-        eval_dataset = load_dataset(
-            "trl-internal-testing/zen", "standard_unpaired_preference", split="test", streaming=True
-        )
-
-        # `apo_zero_unpaired` avoids KTO's KL term, which is not possible with a streaming dataset.
-        training_args = KTOConfig(output_dir=self.tmp_dir, loss_type="apo_zero_unpaired", report_to="none")
-        trainer = KTOTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=train_dataset
-        )
-
-        metrics = trainer.evaluate(eval_dataset=eval_dataset)
-        assert metrics["eval_loss"] is not None
 
     def test_train_with_chat_template_kwargs(self):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
@@ -1075,17 +1193,72 @@ class TestKTOTrainer(TrlTestCase):
         assert trainer.state.log_history[-3]["eval_data1_loss"] is not None
         assert trainer.state.log_history[-2]["eval_data2_loss"] is not None
 
-    @pytest.mark.parametrize("streaming", [False, True])
-    def test_init_with_eval_dataset_dict(self, streaming):
-        # `eval_dataset` may be a `DatasetDict` (map-style) or `IterableDatasetDict` (streaming) — e.g. the raw output
-        # of `load_dataset` without a `split` — not only a plain `dict`. Each split is prepared independently at init.
+    @pytest.mark.parametrize("train_dataset_type", ["dataset", "iterable_dataset", "none", "unsupported_dataset_dict"])
+    def test_init_with_train_dataset(self, train_dataset_type):
+        streaming = "iterable" in train_dataset_type
+        if train_dataset_type == "none":
+            train_dataset = None
+        else:
+            train_dataset = load_dataset(
+                "trl-internal-testing/zen", "standard_unpaired_preference", split="train", streaming=streaming
+            )
+            if train_dataset_type == "unsupported_dataset_dict":
+                # `DatasetDict` is representative of any unsupported type here; not exhaustive
+                train_dataset = DatasetDict({"train": train_dataset})
+
+        # Iterable (streaming) datasets have no length, so `max_steps` is required.
+        training_args = KTOConfig(output_dir=self.tmp_dir, max_steps=3 if streaming else -1, report_to="none")
+
+        if train_dataset_type == "none":
+            with pytest.raises(ValueError, match="`train_dataset` is required"):
+                KTOTrainer(
+                    model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                    args=training_args,
+                    train_dataset=train_dataset,
+                )
+        elif train_dataset_type == "unsupported_dataset_dict":
+            with pytest.raises(TypeError, match="`train_dataset` must be a `Dataset` or `IterableDataset`"):
+                KTOTrainer(
+                    model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                    args=training_args,
+                    train_dataset=train_dataset,
+                )
+        else:
+            trainer = KTOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=train_dataset
+            )
+            assert "prompt_ids" in next(iter(trainer.train_dataset))
+
+    @pytest.mark.parametrize(
+        "eval_dataset_type",
+        [
+            "dataset",
+            "iterable_dataset",
+            "dataset_dict",
+            "iterable_dataset_dict",
+            "dict_of_dataset",
+            "dict_of_iterable_dataset",
+            "none",
+        ],
+    )
+    def test_init_with_eval_dataset(self, eval_dataset_type):
         # `apo_zero_unpaired` avoids KTO's KL term, which is incompatible with streaming datasets.
         train_dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
-        eval_split = load_dataset(
-            "trl-internal-testing/zen", "standard_unpaired_preference", split="test", streaming=streaming
-        )
-        dataset_dict_cls = IterableDatasetDict if streaming else DatasetDict
-        eval_dataset = dataset_dict_cls({"data1": eval_split, "data2": eval_split})
+
+        if eval_dataset_type == "none":
+            eval_dataset = None
+        else:
+            streaming = "iterable" in eval_dataset_type
+            eval_split = load_dataset(
+                "trl-internal-testing/zen", "standard_unpaired_preference", split="test", streaming=streaming
+            )
+            if eval_dataset_type in ("dataset", "iterable_dataset"):
+                eval_dataset = eval_split
+            elif eval_dataset_type in ("dataset_dict", "iterable_dataset_dict"):
+                dataset_dict_cls = IterableDatasetDict if streaming else DatasetDict
+                eval_dataset = dataset_dict_cls({"data1": eval_split, "data2": eval_split})
+            else:  # "dict_of_dataset" or "dict_of_iterable_dataset"
+                eval_dataset = {"data1": eval_split, "data2": eval_split}
 
         training_args = KTOConfig(output_dir=self.tmp_dir, loss_type="apo_zero_unpaired", report_to="none")
         trainer = KTOTrainer(
@@ -1095,10 +1268,15 @@ class TestKTOTrainer(TrlTestCase):
             eval_dataset=eval_dataset,
         )
 
-        assert set(trainer.eval_dataset.keys()) == {"data1", "data2"}
-        # Each split was tokenized independently.
-        assert "prompt_ids" in next(iter(trainer.eval_dataset["data1"]))
-        assert "prompt_ids" in next(iter(trainer.eval_dataset["data2"]))
+        if eval_dataset_type == "none":
+            assert trainer.eval_dataset is None
+        elif isinstance(trainer.eval_dataset, dict):
+            assert set(trainer.eval_dataset.keys()) == {"data1", "data2"}
+            # Each split was tokenized independently.
+            assert "prompt_ids" in next(iter(trainer.eval_dataset["data1"]))
+            assert "prompt_ids" in next(iter(trainer.eval_dataset["data2"]))
+        else:
+            assert "prompt_ids" in next(iter(trainer.eval_dataset))
 
     # In practice, this test is the same as `test_kto_trainer`, since gradient checkpointing is enabled by default in
     # `KTOTrainer`. We keep it as a regression guard: if the default ever changes, we still explicitly test gradient
@@ -1180,22 +1358,33 @@ class TestKTOTrainer(TrlTestCase):
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
+        # In bitsandbytes, a Linear4bit's bias is cast in-place to the input dtype during the forward pass if its
+        # dtype doesn't match, which changes these specific bias parameters unexpectedly during the first forward
+        # pass of training. Before bitsandbytes 0.50.0, this only affected the biases below; from 0.50.0 on
+        # (https://github.com/bitsandbytes-foundation/bitsandbytes/pull/1904), the cast happens after the input is
+        # cast to the compute dtype, so it now affects every layer's biases instead of only some.
+        import bitsandbytes as bnb
+
+        bnb_bias_params_that_change = [
+            "base_model.model.model.layers.1.self_attn.k_proj.bias",
+            "base_model.model.model.layers.1.self_attn.q_proj.base_layer.bias",
+            "base_model.model.model.layers.1.self_attn.v_proj.base_layer.bias",
+        ]
+        if Version(bnb.__version__) >= Version("0.50.0"):
+            bnb_bias_params_that_change += [
+                "base_model.model.model.layers.0.self_attn.k_proj.bias",
+                "base_model.model.model.layers.0.self_attn.q_proj.base_layer.bias",
+                "base_model.model.model.layers.0.self_attn.v_proj.base_layer.bias",
+            ]
+
         # Check that the peft params have changed and the base model params have not changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            # In bitsandbytes, bias parameters are automatically cast to the input dtype during the forward pass if
-            # their dtype doesn’t match. This causes the module to change unexpectedly during the first forward pass of
-            # the training. To handle this, we cast these specific bias parameters to float32 before comparison.
-            # https://github.com/bitsandbytes-foundation/bitsandbytes/blob/45553f7392e524eacf400b132cfe01261f6477be/bitsandbytes/nn/modules.py#L518
-            # We still need to investigate why the compute dtype ends up being different than for these parameters.
-            if n in [
-                "base_model.model.model.layers.1.self_attn.k_proj.bias",
-                "base_model.model.model.layers.1.self_attn.q_proj.base_layer.bias",
-                "base_model.model.model.layers.1.self_attn.v_proj.base_layer.bias",
-            ]:
+            if n in bnb_bias_params_that_change:
                 param = param.float()
+                new_param = new_param.float()
 
-            if "lora" not in n:  # We expect the base model params to be the same
+            if "lora" not in n:  # We expect the base model params to be the same (up to the bnb bias dtype cast above)
                 torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed.")
             elif "lora" in n:  # We expect the peft params to be different
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."

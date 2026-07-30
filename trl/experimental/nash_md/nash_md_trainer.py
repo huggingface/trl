@@ -102,6 +102,12 @@ class GeometricMixtureWrapper(GenerationMixin):
     def _validate_model_kwargs(self, model_kwargs):
         return self.model._validate_model_kwargs(model_kwargs)
 
+    def get_experts_implementation(self):
+        return self.model.get_experts_implementation()
+
+    def set_experts_implementation(self, experts_implementation):
+        self.model.set_experts_implementation(experts_implementation)
+
 
 class NashMDTrainer(OnlineDPOTrainer):
     """
