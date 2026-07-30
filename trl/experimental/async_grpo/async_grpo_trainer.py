@@ -1207,9 +1207,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
                     "rollout_state.json not found in the checkpoint; the rollout worker will restart from prompt 0."
                 )
             elif not isinstance(self.train_dataset, Dataset):
-                logger.warning(
-                    "Resuming with an IterableDataset; the rollout worker will restart from prompt 0."
-                )
+                logger.warning("Resuming with an IterableDataset; the rollout worker will restart from prompt 0.")
         try:
             return super()._inner_training_loop(*args, **kwargs)
         finally:
