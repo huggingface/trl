@@ -537,13 +537,19 @@ class ORPOTrainer(_BaseTrainer):
                 self.processing_class.eos_token_id, chosen_tokens, rejected_tokens
             )
 
-            longer_response_length = max(len(chosen_tokens["input_ids"]), len(rejected_tokens["input_ids"]))
-
             # if combined sequence is too long, truncate the response
             for answer_tokens in [chosen_tokens, rejected_tokens]:
-                if len(answer_tokens["prompt_input_ids"]) + longer_response_length > self.max_length:
+                if len(answer_tokens["prompt_input_ids"]) + len(answer_tokens["input_ids"]) > self.max_length:
                     for k in ["input_ids", "attention_mask"]:
-                        answer_tokens[k] = answer_tokens[k][: self.max_length - longer_response_length]
+                        answer_tokens[k] = answer_tokens[k][
+                            : max(0, self.max_length - len(answer_tokens["prompt_input_ids"]))
+                        ]
+                if len(answer_tokens["input_ids"]) == 0:
+                    logger.warning(
+                        "Truncation resulted in an empty completion. "
+                        "This example will contribute no learning signal. "
+                        "Consider increasing `max_length` or filtering long prompts."
+                    )
 
             # Create labels
             chosen_sequence_tokens = {
