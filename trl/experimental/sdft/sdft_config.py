@@ -42,8 +42,8 @@ class SDFTConfig(_BaseConfig):
             used when `distillation_mode="topk_logits"`; the `"dopd"` mode's internal top-k regimes always use
             `"teacher"` support per that method's own convention, regardless of this setting.
         distillation_kl_clip (`float`, *optional*):
-            Pointwise per-vocabulary-entry clip applied to the divergence before it is summed over the vocabulary.
-            Prevents high-divergence style tokens from dominating the training signal. `None` (the default) disables
+            Per-token upper bound on the summed vocabulary divergence, applied before averaging across the batch.
+            Prevents high-divergence outlier tokens from dominating the training signal. `None` (the default) disables
             clipping. Only supported for the `full_logits` and `topk_logits` modes, and incompatible with
             `use_liger_kernel` (the fused kernel does not expose per-vocabulary-entry divergences to clip).
         distillation_is_clip (`float`, *optional*, defaults to `2.0`):
