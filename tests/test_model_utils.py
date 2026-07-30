@@ -13,14 +13,16 @@
 # limitations under the License.
 
 import types
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import accelerate
 import pytest
+import torch
 from packaging.version import Version
 from torch import nn
 from transformers import AutoModelForCausalLM
 
+from trl import DPOTrainer, KTOTrainer
 from trl.import_utils import is_deepspeed_available
 from trl.models.utils import disable_gradient_checkpointing, prepare_deepspeed, prepare_fsdp
 
@@ -72,6 +74,49 @@ def test_prepare_fsdp2_uses_accelerate_auto_wrap():
     prepare_model.assert_called_once_with(accelerator, model)
     assert result is model
     assert result.training is False
+
+
+@pytest.mark.parametrize("trainer_cls", [DPOTrainer, KTOTrainer])
+@pytest.mark.parametrize("optimizer_prepared_during_precompute", [False, True])
+def test_precomputed_fsdp_model_is_reused_for_training(trainer_cls, optimizer_prepared_during_precompute):
+    trainer = object.__new__(trainer_cls)
+    model = nn.Linear(2, 2)
+    model.eval()
+    optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
+    trainer._precompute_engine = model
+    trainer.is_fsdp_enabled = True
+    trainer._created_lr_scheduler = False
+    trainer.lr_scheduler = None
+    trainer.optimizer = optimizer if optimizer_prepared_during_precompute else None
+    trainer.model = model
+    trainer.model_wrapped = model
+    trainer.callback_handler = types.SimpleNamespace()
+
+    def create_optimizer(prepared_model):
+        assert prepared_model is model
+        trainer.optimizer = optimizer
+
+    trainer.create_optimizer = Mock(side_effect=create_optimizer)
+    trainer.create_scheduler = Mock()
+    trainer.accelerator = types.SimpleNamespace(
+        prepare_model=Mock(return_value=model),
+        prepare_optimizer=Mock(return_value=optimizer),
+        parallelism_config=None,
+    )
+    train_dataloader = object()
+
+    prepared_model, prepared_dataloader = trainer._prepare_for_training(4, train_dataloader, None)
+
+    trainer.accelerator.prepare_model.assert_called_once_with(model)
+    trainer.accelerator.prepare_optimizer.assert_called_once_with(optimizer)
+    if optimizer_prepared_during_precompute:
+        trainer.create_optimizer.assert_not_called()
+    else:
+        trainer.create_optimizer.assert_called_once_with(model)
+    trainer.create_scheduler.assert_called_once_with(num_training_steps=4)
+    assert prepared_model is trainer.model is trainer.model_wrapped is trainer._precompute_engine
+    assert prepared_dataloader is trainer.callback_handler.train_dataloader is train_dataloader
+    assert prepared_model.training is True
 
 
 class TestDisableGradientCheckpointing:

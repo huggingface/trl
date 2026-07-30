@@ -1219,10 +1219,10 @@ class KTOTrainer(_BaseTrainer):
                     # FSDP2 must prepare the model and optimizer together so optimizer parameters map to DTensors.
                     self.create_optimizer()
                     self.model, self.optimizer = self.accelerator.prepare(self.model, self.optimizer)
-                    self.model_wrapped = self.model
-                    self._precompute_engine = self.model.eval()
                 else:
-                    self._precompute_engine = prepare_fsdp(self.model, self.accelerator)
+                    self.model = self.accelerator.prepare(self.model)
+                self.model_wrapped = self.model
+                self._precompute_engine = self.model.eval()
             model = self._precompute_engine
         else:
             model = self.ref_model or self.model
@@ -1266,6 +1266,45 @@ class KTOTrainer(_BaseTrainer):
         self.accelerator.wait_for_everyone()
 
         return concatenate_datasets([dataset, Dataset.from_file(cache_file)], axis=1)
+
+    def _prepare_for_training(self, max_steps, train_dataloader, resume_from_checkpoint):
+        if self._precompute_engine is None or not self.is_fsdp_enabled:
+            return super()._prepare_for_training(max_steps, train_dataloader, resume_from_checkpoint)
+
+        # FSDP precompute prepares the policy before `train()`. Re-register those objects after Trainer's
+        # `accelerator.free_memory()` instead of preparing and sharding the same model a second time.
+        if self._created_lr_scheduler:
+            self.lr_scheduler = None
+            self._created_lr_scheduler = False
+
+        model = self.accelerator.prepare_model(self._precompute_engine)
+        if self.optimizer is None:
+            self.create_optimizer(model)
+        self.optimizer = self.accelerator.prepare_optimizer(self.optimizer)
+        self.create_scheduler(num_training_steps=max_steps)
+
+        self.model = self.model_wrapped = self._precompute_engine = model
+        if hasattr(model, "generate"):
+            torch.distributed.fsdp.register_fsdp_forward_method(model, "generate")
+
+        parallelism_config = getattr(self.accelerator, "parallelism_config", None)
+        if (
+            parallelism_config is not None
+            and parallelism_config.sp_backend == "deepspeed"
+            and parallelism_config.sp_enabled
+        ):
+            train_dataloader = self.accelerator.deepspeed_ulysses_dl_adapter(train_dataloader, model)
+
+        if resume_from_checkpoint is not None:
+            self._load_from_checkpoint(resume_from_checkpoint, self.model_wrapped)
+            self._load_optimizer_and_scheduler(resume_from_checkpoint)
+            self._load_scaler(resume_from_checkpoint)
+
+        for attr in ("model", "optimizer", "lr_scheduler"):
+            setattr(self.callback_handler, attr, getattr(self, attr))
+        self.callback_handler.train_dataloader = train_dataloader
+        model.train()
+        return model, train_dataloader
 
     def compute_ref_log_probs(self, model, inputs):
         """Computes reference log probabilities for a single padded batch."""
