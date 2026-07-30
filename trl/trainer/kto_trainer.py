@@ -1285,9 +1285,6 @@ class KTOTrainer(_BaseTrainer):
         self.create_scheduler(num_training_steps=max_steps)
 
         self.model = self.model_wrapped = self._precompute_engine = model
-        if hasattr(model, "generate"):
-            torch.distributed.fsdp.register_fsdp_forward_method(model, "generate")
-
         if Version(accelerate.__version__) >= Version("1.10.0"):
             parallelism_config = self.accelerator.parallelism_config
             if (
