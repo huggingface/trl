@@ -14,17 +14,20 @@
 
 import os
 import subprocess
-from types import SimpleNamespace
+import sys
+from types import ModuleType, SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 import pytest
 from packaging.version import Version
 from transformers import AutoModelForCausalLM, AutoProcessor, AutoTokenizer
 from transformers.testing_utils import torch_device
 
+from trl.generation import vllm_client as vllm_client_module
 from trl.generation.vllm_client import VLLMClient
 from trl.generation.vllm_generation import extract_logprobs
 from trl.import_utils import is_vllm_available
-from trl.scripts.vllm_serve import chunk_list
+from trl.scripts.vllm_serve import WeightSyncWorkerExtension, chunk_list
 
 from .testing_utils import (
     TrlTestCase,
@@ -122,6 +125,79 @@ class TestExtractLogprobs(TrlTestCase):
 
         assert all_logprobs is None
         assert all_token_ids is None
+
+
+class TestVLLMClientCommunicator(TrlTestCase):
+    @pytest.mark.parametrize(
+        ("host", "expected_communicator_host"),
+        [("[2001:db8::1]", "2001:db8::1"), ("127.0.0.1", "127.0.0.1")],
+    )
+    def test_init_communicator_host(self, host, expected_communicator_host):
+        client = object.__new__(VLLMClient)
+        client.host = host
+        client.base_url = f"http://{host}:8000"
+        client.group_port = 51216
+        client.session = MagicMock()
+        client.session.post.return_value.status_code = 200
+
+        get_response = MagicMock(status_code=200)
+        get_response.json.return_value = {"world_size": 1}
+        stateless_process_group = MagicMock()
+
+        with (
+            patch.object(vllm_client_module, "is_torch_xpu_available", return_value=False),
+            patch.object(
+                vllm_client_module.torch.cuda, "get_device_properties", return_value=SimpleNamespace(uuid="uuid")
+            ),
+            patch.object(vllm_client_module.requests, "get", return_value=get_response),
+            patch.object(vllm_client_module, "StatelessProcessGroup", stateless_process_group, create=True),
+            patch.object(vllm_client_module, "PyNcclCommunicator", create=True),
+            patch.object(vllm_client_module.time, "sleep"),
+            patch.object(vllm_client_module.atexit, "register"),
+        ):
+            client.init_communicator()
+
+        stateless_process_group.create.assert_called_once_with(
+            host=expected_communicator_host, port=51216, rank=1, world_size=2
+        )
+        assert client.host == host
+        assert client.base_url == f"http://{host}:8000"
+
+    @pytest.mark.parametrize(
+        ("host", "expected_communicator_host"),
+        [("[2001:db8::1]", "2001:db8::1"), ("127.0.0.1", "127.0.0.1")],
+    )
+    def test_server_init_communicator_host(self, host, expected_communicator_host):
+        worker = WeightSyncWorkerExtension()
+        worker.device = 0
+        worker.communicator = None
+
+        stateless_process_group = MagicMock()
+        pynccl_communicator = MagicMock()
+        pynccl_module = ModuleType("vllm.distributed.device_communicators.pynccl")
+        pynccl_module.PyNcclCommunicator = pynccl_communicator
+        parallel_state_module = ModuleType("vllm.distributed.parallel_state")
+        parallel_state_module.get_world_group = MagicMock(return_value=SimpleNamespace(rank=0))
+        utils_module = ModuleType("vllm.distributed.utils")
+        utils_module.StatelessProcessGroup = stateless_process_group
+
+        with (
+            patch.dict(
+                sys.modules,
+                {
+                    "vllm.distributed.device_communicators.pynccl": pynccl_module,
+                    "vllm.distributed.parallel_state": parallel_state_module,
+                    "vllm.distributed.utils": utils_module,
+                },
+            ),
+            patch("torch.cuda.is_available", return_value=False),
+            patch("transformers.is_torch_xpu_available", return_value=False),
+        ):
+            worker.init_communicator(host, port=51216, world_size=2, client_device_uuid="client-uuid")
+
+        stateless_process_group.create.assert_called_once_with(
+            host=expected_communicator_host, port=51216, rank=0, world_size=2
+        )
 
 
 @pytest.mark.slow

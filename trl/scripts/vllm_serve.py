@@ -94,8 +94,11 @@ class WeightSyncWorkerExtension:
         # Get the rank of the current worker in the global world group.
         rank = get_world_group().rank
 
+        communicator_host = host.strip("[]")
         if is_torch_xpu_available():
-            store = torch.distributed.TCPStore(host_name=host, port=port, world_size=world_size, is_master=(rank == 0))
+            store = torch.distributed.TCPStore(
+                host_name=communicator_host, port=port, world_size=world_size, is_master=(rank == 0)
+            )
             prefixed_store = c10d.PrefixStore("client2server", store)
             xccl_options = c10d.ProcessGroupXCCL.Options()
             pg = c10d.ProcessGroupXCCL(
@@ -108,7 +111,7 @@ class WeightSyncWorkerExtension:
         else:
             # Create a stateless process group to manage communication between training processes and vLLM workers.
             # Initialize the NCCL-based communicator for weight synchronization.
-            pg = StatelessProcessGroup.create(host=host, port=port, rank=rank, world_size=world_size)
+            pg = StatelessProcessGroup.create(host=communicator_host, port=port, rank=rank, world_size=world_size)
             self.communicator = PyNcclCommunicator(pg, device=self.device)
 
         # The client process that sends updated weights has the highest rank (world_size - 1).
