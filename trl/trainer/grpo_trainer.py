@@ -3087,9 +3087,15 @@ class GRPOTrainer(_BaseTrainer):
             per_token_kl = (
                 torch.exp(ref_per_token_logps - per_token_logps) - (ref_per_token_logps - per_token_logps) - 1
             )
-            # Importance sampling correction for the KL divergence
+            # Importance sampling correction for the KL divergence.
+            # Always use the per-token IS ratio (exp(log_ratio), shape (B, T)), regardless of
+            # `importance_sampling_level`. When level="sequence", `coef_1` is exp(mean(log_ratio))
+            # of shape (B, 1), which broadcasts a sequence-mean weight onto per-token KL and
+            # introduces a spurious term `(Σ_t k3_t)·∇(mean_t log π_t)` in the gradient —
+            # neither the paper's per-token correction nor the unbiased reverse-KL gradient.
+            # Per-token correction here matches the DeepSeek-V3.2 paper exactly (see #6586).
             if self.args.use_bias_correction_kl:
-                per_token_kl = per_token_kl * coef_1
+                per_token_kl = per_token_kl * torch.exp(log_ratio)
 
         # From here, log_importance_weights (and all subsequent tensors, coef_1, coef_2, etc.) shape depends on
         # importance_sampling_level: "token" level: (B, T); "sequence" level: (B, 1)
