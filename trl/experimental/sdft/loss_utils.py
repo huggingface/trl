@@ -214,15 +214,16 @@ def compute_dopd_routed_loss(
         topk_support="teacher",
     )
 
-    # Entropy-style self-anchor: forward value is ~0 (same distribution on both sides of the KL), but the
-    # detached side breaks symmetry so autograd still produces a small regularizing gradient through the live
-    # student logits. This is the "stop-gradient" self-regularization the paper uses for low-confidence tokens
-    # with no reliable external signal.
-    student_log_probs_full = torch.log_softmax(student_logits, dim=-1)
-    loss2 = self_reg_weight * compute_divergence(
-        student_log_probs_full,
-        student_log_probs_full.detach(),
-        alpha=1.0,
+    # Weak self-regularization: top-k reverse KL of student against a detached student anchor (paper's LL
+    # regime, weight beta_w). Forward value is ~0; the detached side breaks symmetry so autograd still
+    # produces a small regularizing gradient through the live student logits.
+    loss2 = self_reg_weight * compute_topk_self_distillation_loss(
+        student_logits,
+        student_logits.detach(),
+        distillation_topk=light_topk,
+        distillation_alpha=1.0,
+        distillation_add_tail=True,
+        topk_support="student",
     )
 
     loss3 = compute_full_logit_self_distillation_loss(
@@ -231,14 +232,16 @@ def compute_dopd_routed_loss(
         distillation_alpha=0.5,
     )
 
-    # Light, stop-gradient student-consistency nudge: reuses the REINFORCE-style surrogate from
-    # `compute_sampled_token_self_distillation_loss` (a detached log-ratio weighting a live student log-prob),
-    # scaled down since this regime should not commit as hard as regime 3's full JSD.
-    loss4 = student_consistency_weight * compute_sampled_token_self_distillation_loss(
+    # Light privileged-student distillation (paper's HS regime, weight beta_l): top-k reverse KL against a
+    # detached student anchor. Preserves confident student exploration without pulling toward the unsure
+    # teacher on high-gap tokens.
+    loss4 = student_consistency_weight * compute_topk_self_distillation_loss(
         student_logits,
-        teacher_logits,
-        completion_ids,
+        student_logits.detach(),
+        distillation_topk=light_topk,
         distillation_alpha=1.0,
+        distillation_add_tail=True,
+        topk_support="student",
     )
 
     per_token_loss = torch.where(regime1, loss1, torch.zeros_like(loss1))
