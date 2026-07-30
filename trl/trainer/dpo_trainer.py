@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import accelerate
 import torch
 import torch.nn.functional as F
 import transformers
@@ -1220,13 +1221,14 @@ class DPOTrainer(_BaseTrainer):
         if hasattr(model, "generate"):
             torch.distributed.fsdp.register_fsdp_forward_method(model, "generate")
 
-        parallelism_config = getattr(self.accelerator, "parallelism_config", None)
-        if (
-            parallelism_config is not None
-            and parallelism_config.sp_backend == "deepspeed"
-            and parallelism_config.sp_enabled
-        ):
-            train_dataloader = self.accelerator.deepspeed_ulysses_dl_adapter(train_dataloader, model)
+        if Version(accelerate.__version__) >= Version("1.10.0"):
+            parallelism_config = self.accelerator.parallelism_config
+            if (
+                parallelism_config is not None
+                and parallelism_config.sp_backend == "deepspeed"
+                and parallelism_config.sp_enabled
+            ):
+                train_dataloader = self.accelerator.deepspeed_ulysses_dl_adapter(train_dataloader, model)
 
         if resume_from_checkpoint is not None:
             self._load_from_checkpoint(resume_from_checkpoint, self.model_wrapped)
