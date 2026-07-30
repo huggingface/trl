@@ -515,8 +515,8 @@ class XPOTrainer(OnlineDPOTrainer):
         """Not implemented for XPOTrainer.
 
         ``XPOTrainer`` uses a different training-step logic (XPO loss with reference-model completions) that is not
-        compatible with the base :meth:`OnlineDPOTrainer.prediction_step`. This override prevents silent inheritance
-        of the wrong eval logic.
+        compatible with the base :meth:`OnlineDPOTrainer.prediction_step`. This override prevents silent inheritance of
+        the wrong eval logic.
 
         Raises:
             NotImplementedError: Always. Evaluation is not yet supported for ``XPOTrainer``.

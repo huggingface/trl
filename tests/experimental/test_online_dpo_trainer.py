@@ -445,9 +445,8 @@ class TestOnlineDPOTrainer(TrlTestCase):
 
         eval_strategy="steps" used to crash with
           TypeError: forward() got an unexpected keyword argument 'prompt'
-        because the default Trainer.prediction_step passed raw dataset columns
-        directly to model(**inputs). OnlineDPOTrainer.prediction_step now
-        intercepts eval and reuses _compute_online_dpo_loss instead.
+        because the default Trainer.prediction_step passed raw dataset columns directly to model(**inputs).
+        OnlineDPOTrainer.prediction_step now intercepts eval and reuses _compute_online_dpo_loss instead.
         """
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         training_args = OnlineDPOConfig(
@@ -478,9 +477,8 @@ class TestOnlineDPOTrainer(TrlTestCase):
     def test_eval_stats_not_polluted_during_eval(self):
         """Eval batches must not corrupt self.stats used for training metrics.
 
-        _compute_online_dpo_loss appends to self.stats. prediction_step must
-        save and restore stats so that training log metrics (computed as
-        mean over the training accumulation window) are not diluted by eval steps.
+        _compute_online_dpo_loss appends to self.stats. prediction_step must save and restore stats so that training
+        log metrics (computed as mean over the training accumulation window) are not diluted by eval steps.
         """
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         training_args = OnlineDPOConfig(

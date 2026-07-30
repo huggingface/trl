@@ -524,8 +524,8 @@ class NashMDTrainer(OnlineDPOTrainer):
         """Not implemented for NashMDTrainer.
 
         ``NashMDTrainer`` uses a different training-step logic (mixture sampling + per-trainer loss) that is not
-        compatible with the base :meth:`OnlineDPOTrainer.prediction_step`. This override prevents silent inheritance
-        of the wrong eval logic.
+        compatible with the base :meth:`OnlineDPOTrainer.prediction_step`. This override prevents silent inheritance of
+        the wrong eval logic.
 
         Raises:
             NotImplementedError: Always. Evaluation is not yet supported for ``NashMDTrainer``.
