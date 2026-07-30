@@ -299,7 +299,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
 class TestRolloutStateCheckpoint(TrlTestCase):
     """Prompt-index checkpoint/resume logic — no GPU or vLLM required."""
 
-    def _make_rollout_loop(self, dataset, dataset_start_index=0, num_generations=2, prompt_index_value=None):
+    def _make_rollout_loop(self, dataset, dataset_start_index=0, num_generations=2):
         ctx = mp.get_context("spawn")
         kwargs = dict(
             model_name="test",
@@ -313,7 +313,6 @@ class TestRolloutStateCheckpoint(TrlTestCase):
             exception_info_queue=ctx.Queue(),
             num_generations=num_generations,
             dataset_start_index=dataset_start_index,
-            prompt_index_value=prompt_index_value,
         )
         with patch("trl.experimental.async_grpo.async_rollout_worker.add_response_schema", side_effect=lambda x: x):
             return _AsyncRolloutLoop(**kwargs)
@@ -325,7 +324,8 @@ class TestRolloutStateCheckpoint(TrlTestCase):
         trainer = MagicMock()
         trainer.accelerator.is_main_process = True
         trainer.rollout_worker = MagicMock(spec=AsyncRolloutWorker)
-        trainer.rollout_worker.prompt_index = 42
+        trainer.rollout_worker._loop_kwargs = {"dataset_start_index": 10}
+        trainer._trained_groups = {0, 1, 2, 3, 4}
 
         args = MagicMock()
         args.output_dir = self.tmp_dir
@@ -336,41 +336,14 @@ class TestRolloutStateCheckpoint(TrlTestCase):
 
         with open(os.path.join(checkpoint_dir, "rollout_state.json")) as f:
             data = json.load(f)
-        assert data["prompt_index"] == 42
+        assert data["prompt_index"] == 15  # dataset_start_index(10) + first_untrained(5)
 
     def test_rollout_loop_skips_to_start_index(self):
         dataset = Dataset.from_dict({"prompt": [f"row_{i}" for i in range(10)]})
-        ctx = mp.get_context("spawn")
-        prompt_index_value = ctx.Value("i", 0)
-
-        loop = self._make_rollout_loop(dataset, dataset_start_index=3, prompt_index_value=prompt_index_value)
-
-        assert prompt_index_value.value == 3
-
+        loop = self._make_rollout_loop(dataset, dataset_start_index=3)
         it = loop._repeat_iterator()
         _group_id, row = next(it)
         assert row["prompt"] == "row_3"
-
-    def test_rollout_loop_tracks_prompt_index_value(self):
-        dataset = Dataset.from_dict({"prompt": [f"row_{i}" for i in range(10)]})
-        ctx = mp.get_context("spawn")
-        prompt_index_value = ctx.Value("i", 0)
-
-        loop = self._make_rollout_loop(
-            dataset, dataset_start_index=0, num_generations=2, prompt_index_value=prompt_index_value
-        )
-
-        it = loop._repeat_iterator()
-
-        # row_0 is yielded twice (num_generations=2) but the counter only ticks once per row
-        next(it)
-        assert prompt_index_value.value == 1
-        next(it)
-        assert prompt_index_value.value == 1
-
-        # row_1 is now pulled
-        next(it)
-        assert prompt_index_value.value == 2
 
     def test_inner_training_loop_sets_dataset_start_index_from_file(self):
         checkpoint_dir = os.path.join(self.tmp_dir, "checkpoint-10")

@@ -40,6 +40,8 @@ Because generation and training run concurrently, the training samples may have 
 
 The number of concurrent requests sent to the vLLM server is controlled by `max_inflight_tasks`. By default it is set automatically to `max_staleness × per_device_train_batch_size × gradient_accumulation_steps × num_processes` — the maximum number of samples the trainer can consume before they become stale. Generating more than this is wasteful since the excess samples will be discarded.
 
+**Checkpoint and resume**: `ignore_data_skip` defaults to `True`; the base Trainer's skip-and-replay loop does not apply to a live rollout queue. Instead, the rollout worker's dataset position is saved to `rollout_state.json` alongside each checkpoint and restored on resume, so the worker fast-forwards to the correct prompt without replaying samples. Streaming datasets (`IterableDataset`) cannot be repositioned; their worker restarts from prompt 0 on resume.
+
 ## Quick start
 
 ```python

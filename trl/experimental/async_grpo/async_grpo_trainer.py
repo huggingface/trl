@@ -14,6 +14,7 @@
 
 
 import contextvars
+import itertools
 import json
 import math
 import os
@@ -178,8 +179,11 @@ class _SaveRolloutStateCallback(TrainerCallback):
     def on_save(self, args, state, _control, **_kwargs):
         if self._trainer.accelerator.is_main_process and isinstance(self._trainer.rollout_worker, AsyncRolloutWorker):
             checkpoint_dir = os.path.join(args.output_dir, f"checkpoint-{state.global_step}")
+            trained = self._trainer._trained_groups
+            first_untrained = next(g for g in itertools.count() if g not in trained)
+            prompt_index = self._trainer.rollout_worker._loop_kwargs["dataset_start_index"] + first_untrained
             with open(os.path.join(checkpoint_dir, "rollout_state.json"), "w") as f:
-                json.dump({"prompt_index": self._trainer.rollout_worker.prompt_index}, f)
+                json.dump({"prompt_index": prompt_index}, f)
 
 
 class _EpochStopCallback(TrainerCallback):
@@ -1194,20 +1198,21 @@ class AsyncGRPOTrainer(_BaseTrainer):
         # Always reset first so a stale value from a prior train() call is never carried over.
         if isinstance(self.rollout_worker, AsyncRolloutWorker):
             self.rollout_worker._loop_kwargs["dataset_start_index"] = 0
-        resume_from_checkpoint = kwargs.get("resume_from_checkpoint")
-        if resume_from_checkpoint is not None and isinstance(self.rollout_worker, AsyncRolloutWorker):
-            rollout_state_file = os.path.join(resume_from_checkpoint, "rollout_state.json")
-            # IterableDataset is skipped deliberately: streaming datasets have no len() and can't be repositioned.
-            if os.path.isfile(rollout_state_file) and isinstance(self.train_dataset, Dataset):
-                with open(rollout_state_file) as f:
-                    prompt_index = json.load(f)["prompt_index"]
-                self.rollout_worker._loop_kwargs["dataset_start_index"] = prompt_index
-            elif not os.path.isfile(rollout_state_file):
-                logger.warning(
-                    "rollout_state.json not found in the checkpoint; the rollout worker will restart from prompt 0."
-                )
-            elif not isinstance(self.train_dataset, Dataset):
-                logger.warning("Resuming with an IterableDataset; the rollout worker will restart from prompt 0.")
+            resume_from_checkpoint = kwargs.get("resume_from_checkpoint")
+            if resume_from_checkpoint is not None:
+                rollout_state_file = os.path.join(resume_from_checkpoint, "rollout_state.json")
+                # IterableDataset is skipped deliberately: streaming datasets have no len() and can't be repositioned.
+                if not os.path.isfile(rollout_state_file):
+                    logger.warning(
+                        "rollout_state.json not found in the checkpoint; "
+                        "the rollout worker will restart from prompt 0."
+                    )
+                elif not isinstance(self.train_dataset, Dataset):
+                    logger.warning("Resuming with an IterableDataset; the rollout worker will restart from prompt 0.")
+                else:
+                    with open(rollout_state_file) as f:
+                        prompt_index = json.load(f)["prompt_index"]
+                    self.rollout_worker._loop_kwargs["dataset_start_index"] = prompt_index
         try:
             return super()._inner_training_loop(*args, **kwargs)
         finally:
