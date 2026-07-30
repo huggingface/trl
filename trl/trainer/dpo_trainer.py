@@ -551,6 +551,10 @@ class DPOTrainer(_BaseTrainer):
                     "`dispatch_batches` in `DPOConfig` or set it to `False`."
                 )
             args.accelerator_config.dispatch_batches = False
+        elif not isinstance(train_dataset, Dataset):
+            raise TypeError(
+                f"`train_dataset` must be a `Dataset` or `IterableDataset`, got `{type(train_dataset).__name__}`."
+            )
 
         # Model
         if isinstance(model, str):
@@ -1143,7 +1147,11 @@ class DPOTrainer(_BaseTrainer):
 
         ref_chosen_logps = []
         ref_rejected_logps = []
-        for padded_batch in tqdm(iterable=data_loader, desc=f"Computing reference log probs for {name} dataset"):
+        for padded_batch in tqdm(
+            iterable=data_loader,
+            desc=f"Computing reference log probs for {name} dataset",
+            disable=bool(os.environ.get("TQDM_DISABLE", "")),
+        ):
             ref_chosen_logp, ref_rejected_logp = self.compute_ref_log_probs(model, padded_batch)
             ref_chosen_logp, ref_rejected_logp = self.accelerator.gather_for_metrics(
                 (ref_chosen_logp, ref_rejected_logp)

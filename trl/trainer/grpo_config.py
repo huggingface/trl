@@ -356,10 +356,13 @@ class GRPOConfig(_BaseConfig):
             sequences with negative advantages and high KL divergence are masked out to stabilize training. This
             parameter corresponds to the `delta` threshold in Equation 9 of the [DeepSeek-V3.2
             paper](https://huggingface.co/papers/2512.02556). It expects a positive value (e.g., 0.5).
-        use_bias_correction_kl (`bool`, *optional*, defaults to `False`):
-            Whether to use the unbiased KL divergence estimator with importance sampling correction. This corrects the
-            KL divergence estimate by multiplying it with the importance sampling ratio. This is described in the
-            [DeepSeek-V3.2 paper](https://huggingface.co/papers/2512.02556).
+        use_bias_correction_kl (`bool`, *optional*, defaults to `True`):
+            Whether to multiply the KL term by the importance sampling ratio, so that the KL gradient becomes the
+            unbiased reverse-KL gradient, as described in the
+            [DeepSeek-V3.2 paper](https://huggingface.co/papers/2512.02556). This changes the KL gradient whenever
+            `beta != 0`, including on-policy: the ratio is differentiable, so it affects the gradient even where its
+            value is exactly 1. The unbiased reverse-KL property holds for `importance_sampling_level="token"`; with
+            `"sequence"` a sequence-level weight is broadcast onto the per-token KL.
 
         > Parameters that control the logging
 
@@ -960,11 +963,14 @@ class GRPOConfig(_BaseConfig):
         },
     )
     use_bias_correction_kl: bool = field(
-        default=False,
+        default=True,
         metadata={
-            "help": "Whether to use the unbiased KL divergence estimator with importance sampling correction. This "
-            "corrects the KL divergence estimate by multiplying it with the importance sampling ratio. "
-            "This is described in the [DeepSeek-V3.2 paper](https://huggingface.co/papers/2512.02556)."
+            "help": "Whether to multiply the KL term by the importance sampling ratio, so that the KL gradient "
+            "becomes the unbiased reverse-KL gradient, as described in the [DeepSeek-V3.2 "
+            "paper](https://huggingface.co/papers/2512.02556). This changes the KL gradient whenever `beta != 0`, "
+            "including on-policy: the ratio is differentiable, so it affects the gradient even where its value is "
+            "exactly 1. The unbiased reverse-KL property holds for `importance_sampling_level='token'`; with "
+            "'sequence' a sequence-level weight is broadcast onto the per-token KL."
         },
     )
 
