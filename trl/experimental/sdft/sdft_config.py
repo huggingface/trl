@@ -38,7 +38,7 @@ class SDFTConfig(_BaseConfig):
             Number of top tokens used by the default SDFT top-k logit objective.
         distillation_topk_support (`Literal["student", "teacher"]`, *optional*, defaults to `"student"`):
             Which side's logits define the top-k token support for `distillation_mode="topk_logits"`. SDFT's
-            convention is `"student"`; some methods built on this trainer (e.g. OPSD) use `"teacher"` instead. Only
+            convention is `"student"`; pass `"teacher"` to project onto the teacher's top-k instead. Only
             used when `distillation_mode="topk_logits"`; the `"dopd"` mode's internal top-k regimes always use
             `"teacher"` support per that method's own convention, regardless of this setting.
         distillation_kl_clip (`float`, *optional*):

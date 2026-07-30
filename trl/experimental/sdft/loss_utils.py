@@ -41,7 +41,9 @@ def compute_divergence(
         kl = torch.lerp(kl_student, kl_teacher, alpha)
     if kl_clip is not None:
         # Pointwise per-vocabulary-entry clip: caps high-divergence style tokens before the vocabulary sum.
-        kl = kl.clamp(max=kl_clip)
+        # Clamp to [0, kl_clip]: `F.kl_div(..., reduction="none")` can emit negative per-entry contributions,
+        # and clipping only the positive tail would let unclipped negatives flip the summed divergence negative.
+        kl = kl.clamp(min=0.0, max=kl_clip)
     return kl.sum(-1)
 
 
@@ -81,8 +83,8 @@ def compute_topk_self_distillation_loss(
 ) -> torch.Tensor:
     """Compute distillation loss on a top-k token support.
 
-    `topk_support` selects which side's top-k logits define the support: SDFT's convention is `"student"`; some
-    methods built on this trainer (e.g. OPSD) use `"teacher"` instead. The other side's distribution is projected
+    `topk_support` selects which side's top-k logits define the support: SDFT's convention is `"student"`;
+    passing `"teacher"` uses the teacher's top-k instead. The other side's distribution is projected
     onto the same token indices. The selected support is then either renormalized or augmented with a tail bucket
     before the divergence is computed.
     """
