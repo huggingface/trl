@@ -10,6 +10,7 @@ A single ping is sent each time a trainer is instantiated. The payload contains:
 - Trainer class name, reported only if it is a TRL-defined trainer (e.g. `SFTTrainer`, `GRPOTrainer`). Custom user subclasses are reported as `other`.
 - Model architecture, reported only if it is a model type known to [`transformers`](https://github.com/huggingface/transformers) (e.g. `llama`, `qwen3`). Custom or private architectures are reported as `other`.
 - Whether [PEFT](https://github.com/huggingface/peft) is in use
+- How the training dataset was loaded: `hub` (downloaded from the Hub), `files` (read through a file-based builder such as `json` or `csv` — this also covers Hub repos containing raw json/csv files), `memory` (built in-process, e.g. `Dataset.from_dict`), or `other`. The dataset name and path are never collected.
 - Distributed backend (`deepspeed`, `fsdp`, `ddp`, or `none`)
 - World size, bucketed (`1`, `2-8`, `9-64`, `65+`)
 - Accelerator type (`cuda`, `xpu`, `npu`, `mlu`, `mps`, `cpu`)
