@@ -179,7 +179,10 @@ def _chunk(h_s, w_s, b_s, s_scale, s_softcap, h_t, w_t, b_t, t_scale, t_softcap,
         student_logits = student_logits * s_scale
     if s_softcap is not None:
         student_logits = s_softcap * torch.tanh(student_logits / s_softcap)
-    with maybe_gather_lm_head_ctx(w_t, b_t):
+    # The teacher is a fixed target: compute its logits under `no_grad` so the projection builds no autograd graph
+    # and the teacher accumulates no gradients (the teacher params are not frozen by `prepare_model`). Everything
+    # downstream inherits this since `teacher_logits` is already detached.
+    with maybe_gather_lm_head_ctx(w_t, b_t), torch.no_grad():
         teacher_logits = h_t.float() @ w_t.float().t()
         if b_t is not None:
             teacher_logits = teacher_logits + b_t.float()
