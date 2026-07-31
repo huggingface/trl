@@ -144,13 +144,14 @@ class DistillationConfig(_BaseConfig):
         > Parameters that control the logging
 
         log_completions (`bool`, *optional*, defaults to `False`):
-            Whether to log a sample of (prompt, completion) pairs every `log_completions_steps` steps. If `rich` is
+            Whether to log a sample of (prompt, completion) pairs every `logging_steps` steps. If `rich` is
             installed, it prints the sample. If `wandb` and/or `trackio` logging is enabled, it logs it to `wandb`
             and/or `trackio`.
-        log_completions_steps (`int`, *optional*, defaults to `100`):
-            Number of steps between logging completions. Only used if `log_completions` is `True`.
-        num_completions_to_print (`int` or `None`, *optional*):
-            Number of completions to print. If `None`, all completions are logged.
+        num_completions_to_print (`int`, *optional*):
+            Number of completions to print with `rich`. If `None`, all completions are logged.
+        log_unique_prompts (`bool`, *optional*, defaults to `False`):
+            Whether to log unique prompts. If `True`, only unique prompts are logged. If `False`, all prompts are
+            logged.
     """
 
     _VALID_DICT_FIELDS = _BaseConfig._VALID_DICT_FIELDS + ["model_init_kwargs", "teacher_model_init_kwargs"]
@@ -351,18 +352,21 @@ class DistillationConfig(_BaseConfig):
     log_completions: bool = field(
         default=False,
         metadata={
-            "help": "Whether to log a sample of (prompt, completion) pairs every `log_completions_steps` steps. If `rich` is "
+            "help": "Whether to log a sample of (prompt, completion) pairs every `logging_steps` steps. If `rich` is "
             "installed, it prints the sample. If `wandb` and/or `trackio` logging is enabled, it logs it to `wandb` "
             "and/or `trackio`."
         },
     )
-    log_completions_steps: int = field(
-        default=100,
-        metadata={"help": "Number of steps between logging completions."},
-    )
     num_completions_to_print: int | None = field(
         default=None,
-        metadata={"help": "Number of completions to print. If None, all completions are logged."},
+        metadata={"help": "Number of completions to print with `rich`. If `None`, all completions are logged."},
+    )
+    log_unique_prompts: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to log unique prompts. If `True`, only unique prompts are logged. If `False`, all "
+            "prompts are logged."
+        },
     )
 
     def __post_init__(self):
