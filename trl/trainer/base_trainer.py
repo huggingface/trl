@@ -117,9 +117,7 @@ class _BaseTrainer(Trainer):
             dataset_source = "other"  # IterableDataset, torch Dataset, or no training dataset
         elif not self.train_dataset.cache_files:
             dataset_source = "memory"  # e.g. `Dataset.from_dict`
-        elif self.train_dataset.info.builder_name == "parquet" or any(
-            "___" in part for part in Path(self.train_dataset.cache_files[0]["filename"]).parts
-        ):
+        elif any("___" in part for part in Path(self.train_dataset.cache_files[0]["filename"]).parts):
             dataset_source = "hub"
         else:
             dataset_source = "files"
