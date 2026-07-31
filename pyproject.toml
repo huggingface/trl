@@ -246,13 +246,4 @@ filterwarnings = [
     # Upstream issue: https://github.com/bitsandbytes-foundation/bitsandbytes/issues/2027
     # Remove once: no supported bitsandbytes version emits it
     "ignore:inner dimension \\(\\d+\\) is not aligned for fast kernel:UserWarning",
-
-    # transformers' rotary modules unconditionally forward the freshly-deprecated `device` kwarg into their own
-    # `compute_default_rope_parameters` staticmethod, so transformers warns about its own internal call (upstream,
-    # not actionable in TRL); it fires at init for nearly every architecture in the test suite
-    # Introduced by https://github.com/huggingface/transformers/pull/47598
-    # Tracking issue: https://github.com/huggingface/trl/issues/6584
-    # Upstream issue: https://github.com/huggingface/transformers/issues/47641
-    # Remove once: no supported transformers version emits it
-    "ignore:`device` is deprecated and will be removed in version 5.18 for `compute_default_rope_parameters`:FutureWarning",
 ]
