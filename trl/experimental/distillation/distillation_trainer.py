@@ -17,7 +17,9 @@ import inspect
 import math
 import os
 import textwrap
+import time
 from collections import defaultdict, deque
+from pathlib import Path
 from typing import Any, Optional
 
 import numpy as np
@@ -605,6 +607,7 @@ class DistillationTrainer(_BaseTrainer):
         # ── Metrics & Logging ──
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
         self._total_train_tokens = 0
+        self._current_train_step_time = 0.0
         self.log_completions = args.log_completions
         self.log_unique_prompts = args.log_unique_prompts
         self.num_completions_to_print = args.num_completions_to_print
@@ -1173,12 +1176,15 @@ class DistillationTrainer(_BaseTrainer):
     #  Training step & Logging
     # ──────────────────────────────────────────────────────────────────────
 
-    @profiling_decorator
-    def training_step(
-        self, model: nn.Module, inputs: dict[str, torch.Tensor | Any], num_items_in_batch: int | None = None
-    ) -> torch.Tensor:
+    def training_step(self, model, inputs, num_items_in_batch):
+        time_before = time.perf_counter()
         output = super().training_step(model, inputs, num_items_in_batch)
         self._step += 1
+        time_after = time.perf_counter()
+        self._current_train_step_time += time_after - time_before
+        if self._step % self.current_gradient_accumulation_steps == 0:
+            self._metrics["train"]["step_time"].append(self._current_train_step_time)
+            self._current_train_step_time = 0.0
         return output
 
     # During eval, Trainer calls prediction_step. If no labels are present in the inputs, it only runs forward and
@@ -1249,3 +1255,12 @@ class DistillationTrainer(_BaseTrainer):
                 if self.log_unique_prompts:
                     df = df.drop_duplicates(subset=["prompt"])
                 logging_backend.log({"completions": logging_backend.Table(dataframe=df)})
+
+    # Ensure the model card is saved along with the checkpoint
+    def _save_checkpoint(self, model, trial):
+        if self.args.hub_model_id is None:
+            model_name = Path(self.args.output_dir).name
+        else:
+            model_name = self.args.hub_model_id.split("/")[-1]
+        self.create_model_card(model_name=model_name)
+        super()._save_checkpoint(model, trial)
