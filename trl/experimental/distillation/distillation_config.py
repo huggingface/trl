@@ -24,8 +24,8 @@ class DistillationConfig(_BaseConfig):
     r"""
     Configuration class for the [`DistillationTrainer`].
 
-    Extends [`~transformers.TrainingArguments`] with parameters specific to knowledge distillation. This config is
-    independent of [`SFTConfig`] — all necessary fields are declared here.
+    Extends [`~transformers.TrainingArguments`] with parameters specific to knowledge distillation. All necessary
+    fields are declared here.
 
     Using [`~transformers.HfArgumentParser`] we can turn this class into
     [argparse](https://docs.python.org/3/library/argparse#module-argparse) arguments that can be specified on the
@@ -34,7 +34,7 @@ class DistillationConfig(_BaseConfig):
     Parameters:
         > Parameters that control the model
 
-        model_init_kwargs (`dict[str, Any]`, *optional*):
+        model_init_kwargs (`str` or `dict[str, Any]`, *optional*):
             Keyword arguments for `AutoModelForCausalLM.from_pretrained`, used when the `model` argument of the
             trainer is provided as a string.
         trust_remote_code (`bool`, *optional*, defaults to `False`):
@@ -50,21 +50,23 @@ class DistillationConfig(_BaseConfig):
         beta (`float`, *optional*, defaults to `1.0`):
             Interpolation coefficient for the Generalized Jensen-Shannon Divergence loss. When `0.0`, the loss is the
             forward KL divergence. When `1.0`, the loss is the reverse KL divergence. When `0.5`, it is the standard
-            JSD.
-        max_completion_length (`int`, *optional*, defaults to `512`):
+            JSD. Unlike GRPO's `beta` (a KL-penalty coefficient against a reference model), here it selects the
+            divergence itself; there is no reference-model KL penalty.
+        max_completion_length (`int` or `None`, *optional*, defaults to `512`):
             Maximum number of tokens to generate per completion during on-policy generation.
         disable_dropout (`bool`, *optional*, defaults to `False`):
             Whether to disable dropout in the student model during training.
 
         > Parameters that control the teacher model
 
-        teacher_model_name_or_path (`str` or `None`, *optional*):
+        teacher_model_name_or_path (`str`, *optional*):
             Model name or path for the teacher model. Used when the teacher is loaded locally.
-        teacher_model_revision (`str` or `None`, *optional*):
+        teacher_model_revision (`str`, *optional*):
             Model revision of the teacher model (e.g., branch name, tag, or commit hash).
-        teacher_model_init_kwargs (`dict[str, Any]` or `None`, *optional*):
+        teacher_model_init_kwargs (`str` or `dict[str, Any]`, *optional*):
             Keyword arguments passed to `AutoModelForCausalLM.from_pretrained` when instantiating the teacher model
             from a string.
+
         > Parameters that control on-policy generation
 
         top_p (`float`, *optional*, defaults to `1.0`):
@@ -161,6 +163,13 @@ class DistillationConfig(_BaseConfig):
         default=1e-6,
         metadata={"help": "The initial learning rate for AdamW."},
     )
+    remove_unused_columns: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to only keep the columns used by the model's forward pass. Forced to `False` here: the "
+            "trainer consumes the raw prompt column and generates completions on-policy, so no columns are dropped."
+        },
+    )
 
     # Distillation core
     temperature: float = field(
@@ -172,11 +181,12 @@ class DistillationConfig(_BaseConfig):
     beta: float = field(
         default=1.0,
         metadata={
-            "help": "Interpolation coefficient for the Generalized JSD loss. "
-            "0.0 = forward KL, 0.5 = JSD, 1.0 = reverse KL."
+            "help": "Interpolation coefficient for the Generalized JSD loss. 0.0 = forward KL, 0.5 = JSD, 1.0 = reverse "
+            "KL. Unlike GRPO's `beta` (a KL-penalty coefficient against a reference model), here it selects the "
+            "divergence itself; there is no reference-model KL penalty."
         },
     )
-    max_completion_length: int = field(
+    max_completion_length: int | None = field(
         default=512,
         metadata={"help": "Maximum number of tokens to generate per completion."},
     )
@@ -316,8 +326,6 @@ class DistillationConfig(_BaseConfig):
         default=False,
         metadata={"help": "Enable vLLM sleep mode to offload student weights during the optimizer step."},
     )
-
-    # W&B
 
     # Logging
     log_completions: bool = field(
