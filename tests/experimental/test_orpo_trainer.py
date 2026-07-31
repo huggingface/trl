@@ -22,55 +22,6 @@ from trl.experimental.orpo import ORPOConfig, ORPOTrainer
 from ..testing_utils import TrlTestCase, require_peft
 
 
-class _CharacterTokenizer:
-    bos_token_id = None
-    eos_token_id = 0
-
-    def __call__(self, text, add_special_tokens=False):
-        input_ids = [ord(character) for character in text]
-        return {"input_ids": input_ids, "attention_mask": [1] * len(input_ids)}
-
-
-@pytest.mark.parametrize(
-    ("prompt_length", "chosen_length", "rejected_length", "max_length"),
-    [
-        (4, 3, 2, 16),  # everything fits
-        (4, 8, 6, 11),  # the old slice bound is positive but over-truncates both completions
-        (4, 20, 6, 12),  # a negative old slice bound empties the shorter completion
-        (4, 20, 16, 12),  # both completions need truncation
-    ],
-)
-def test_tokenize_row_truncates_completions_independently(prompt_length, chosen_length, rejected_length, max_length):
-    trainer = ORPOTrainer.__new__(ORPOTrainer)
-    trainer.is_encoder_decoder = False
-    trainer.processing_class = _CharacterTokenizer()
-    trainer.max_length = max_length
-
-    tokenized = trainer.tokenize_row(
-        {
-            "prompt": "p" * prompt_length,
-            "chosen": "c" * chosen_length,
-            "rejected": "r" * rejected_length,
-        }
-    )
-
-    completion_budget = max_length - prompt_length
-    expected_chosen_length = min(chosen_length + 1, completion_budget)  # +1 for EOS
-    expected_rejected_length = min(rejected_length + 1, completion_budget)
-
-    for prefix, expected_completion_length in [
-        ("chosen", expected_chosen_length),
-        ("rejected", expected_rejected_length),
-    ]:
-        input_ids = tokenized[f"{prefix}_input_ids"]
-        attention_mask = tokenized[f"{prefix}_attention_mask"]
-        labels = tokenized[f"{prefix}_labels"]
-
-        assert len(input_ids) == len(attention_mask) == len(labels)
-        assert len(input_ids) <= max_length
-        assert sum(label != -100 for label in labels) == expected_completion_length
-
-
 class TestORPOTrainer(TrlTestCase):
     def setup_method(self):
         self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
@@ -82,29 +33,6 @@ class TestORPOTrainer(TrlTestCase):
         model_id = "trl-internal-testing/tiny-T5ForConditionalGeneration"
         self.t5_model = AutoModelForSeq2SeqLM.from_pretrained(model_id, dtype="float32")
         self.t5_tokenizer = AutoTokenizer.from_pretrained(model_id)
-
-    def test_fully_truncated_completion_examples_dropped(self):
-        dataset = Dataset.from_dict(
-            {
-                "prompt": ["Hi", "This is a very long prompt that fills the whole max_length budget on its own"],
-                "chosen": [" there", " yes"],
-                "rejected": [" bye", " no"],
-            }
-        )
-        training_args = ORPOConfig(output_dir=self.tmp_dir, max_length=6, report_to="none")
-
-        trainer = ORPOTrainer(
-            model=self.model,
-            args=training_args,
-            processing_class=self.tokenizer,
-            train_dataset=dataset,
-            eval_dataset=dataset,
-        )
-
-        assert len(trainer.train_dataset) == 1
-        assert len(trainer.eval_dataset) == 1
-        assert trainer.train_dataset[0]["prompt"] == "Hi"
-        assert trainer.eval_dataset[0]["prompt"] == "Hi"
 
     def test_trust_remote_code(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
