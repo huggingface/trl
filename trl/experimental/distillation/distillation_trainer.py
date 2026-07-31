@@ -17,7 +17,6 @@ import inspect
 import random
 import textwrap
 from collections import defaultdict
-from collections.abc import Callable
 from typing import Any, Optional
 
 import numpy as np
@@ -36,7 +35,6 @@ from transformers.image_processing_utils import BaseImageProcessor
 from transformers.modeling_utils import PreTrainedModel
 from transformers.processing_utils import ProcessorMixin
 from transformers.tokenization_utils_base import PreTrainedTokenizerBase
-from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_liger_kernel_available, is_peft_available, is_rich_available
 
 from ...data_utils import is_conversational
@@ -330,7 +328,7 @@ class DistillationTrainer(_BaseTrainer):
 
     def __init__(
         self,
-        model: PreTrainedModel | nn.Module | str | None = None,
+        model: PreTrainedModel | nn.Module | str,
         teacher_model: PreTrainedModel | nn.Module | str = None,
         args: DistillationConfig | None = None,
         train_dataset: Dataset | None = None,
@@ -340,10 +338,8 @@ class DistillationTrainer(_BaseTrainer):
         | FeatureExtractionMixin
         | ProcessorMixin
         | None = None,
-        compute_metrics: Callable[[EvalPrediction], dict] | None = None,
         callbacks: list[TrainerCallback] | None = None,
         optimizers: tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
-        preprocess_logits_for_metrics: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] | None = None,
         peft_config: Optional["PeftConfig"] = None,
     ):
         if args is None:
@@ -362,7 +358,7 @@ class DistillationTrainer(_BaseTrainer):
                 model_init_kwargs["device_map"] = None
             model = create_model_from_path(model, **model_init_kwargs)
         else:
-            model_name_or_path = model.config._name_or_path if model is not None else None
+            model_name_or_path = model.config._name_or_path
 
         # Some models (SmolVLM/Idefics3) don't support `logits_to_keep` argument and error out if we pass it
         # Inspect the forward method before we wrap the model with PEFT
@@ -498,10 +494,8 @@ class DistillationTrainer(_BaseTrainer):
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
             processing_class=processing_class,
-            compute_metrics=compute_metrics,
             callbacks=callbacks,
             optimizers=optimizers,
-            preprocess_logits_for_metrics=preprocess_logits_for_metrics,
             # In Trainer, `training_step` scales the loss by `gradient_accumulation_steps` only if `compute_loss_func`
             # is None. Here, loss scaling instead depends on the total number of completion tokens across the global
             # accumulated batch. To control scaling ourselves, we must disable Trainer's built-in scaling. The simplest
