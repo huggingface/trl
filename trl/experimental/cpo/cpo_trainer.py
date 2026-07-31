@@ -576,7 +576,7 @@ class CPOTrainer(_BaseTrainer):
                             : max(0, self.max_length - len(answer_tokens["prompt_input_ids"]))
                         ]
                 if len(answer_tokens["input_ids"]) == 0:
-                    logger.warning(
+                    logger.warning_once(
                         "Truncation resulted in an empty completion. "
                         "This example will contribute no learning signal. "
                         "Consider increasing `max_length` or filtering long prompts."
