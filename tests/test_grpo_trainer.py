@@ -44,10 +44,10 @@ from .testing_utils import (
     TrlTestCase,
     is_ampere_or_newer,
     require_bitsandbytes,
-    require_jmespath,
     require_kernels,
     require_liger_kernel,
     require_peft,
+    require_response_parsing,
     require_torch_accelerator,
     require_vision,
     require_vllm,
@@ -2721,7 +2721,7 @@ class TestGRPOTrainer(TrlTestCase):
         reason="Tool parsing is not supported in transformers versions below 5.0.0",
         strict=True,
     )
-    @require_jmespath
+    @require_response_parsing
     @pytest.mark.parametrize("tools", [[multiply_tool], [async_multiply_tool]])
     def test_train_with_tools(self, tools: list[Callable]):
         # In this test, we define a simple tool that multiplies two integers. Regardless of the input prompt,
@@ -2830,7 +2830,7 @@ class TestGRPOTrainer(TrlTestCase):
         reason="Environment factory support is not available in transformers versions below 5.2.0",
         strict=True,
     )
-    @require_jmespath
+    @require_response_parsing
     @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
     def test_train_with_multiple_environments(self):
         # When `environment_factory` is a dict, each rollout selects its environment via its `environment` field, and
@@ -2961,7 +2961,7 @@ class TestGRPOTrainer(TrlTestCase):
         reason="Environment factory support is not available in transformers versions below 5.2.0",
         strict=True,
     )
-    @require_jmespath
+    @require_response_parsing
     @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
     def test_train_with_unknown_environment_raises(self):
         # With a dict `environment_factory`, an example whose `environment` field doesn't match any configured
@@ -3007,7 +3007,7 @@ class TestGRPOTrainer(TrlTestCase):
         reason="Environment factory support is not available in transformers versions below 5.2.0",
         strict=True,
     )
-    @require_jmespath
+    @require_response_parsing
     @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
     def test_train_with_environment_factory(self):
         # In this test, we define a simple tool that increments an internal counter. Regardless of the input prompt,
@@ -3100,7 +3100,7 @@ class TestGRPOTrainer(TrlTestCase):
         reason="Environment factory support is not available in transformers versions below 5.2.0",
         strict=True,
     )
-    @require_jmespath
+    @require_response_parsing
     @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
     def test_train_with_environment_owned_reward(self):
         # Same setup as `test_train_with_environment_factory`, but the environment owns the reward via a `get_reward`
@@ -3199,7 +3199,7 @@ class TestGRPOTrainer(TrlTestCase):
         reason="Environment factory support is not available in transformers versions below 5.2.0",
         strict=True,
     )
-    @require_jmespath
+    @require_response_parsing
     @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
     def test_environment_owned_reward_coexists_with_reward_funcs(self):
         # When both `reward_funcs` and an environment-owned `get_reward` are present, `get_reward` is appended as an
@@ -3256,7 +3256,7 @@ class TestGRPOTrainer(TrlTestCase):
         reason="Environment factory support is not available in transformers versions below 5.2.0",
         strict=True,
     )
-    @require_jmespath
+    @require_response_parsing
     @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
     def test_environment_owned_reward_mixed_environments(self):
         # With a dict `environment_factory`, only some environments may own their reward via `get_reward`. Each such
@@ -3357,7 +3357,7 @@ class TestGRPOTrainer(TrlTestCase):
         reason="Environment factory support is not available in transformers versions below 5.2.0",
         strict=True,
     )
-    @require_jmespath
+    @require_response_parsing
     @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
     def test_environment_owned_data_requires_max_steps(self):
         # When the environment owns the data and no external `train_dataset` is provided, `max_steps` must set the
@@ -3380,7 +3380,7 @@ class TestGRPOTrainer(TrlTestCase):
         reason="Environment factory support is not available in transformers versions below 5.2.0",
         strict=True,
     )
-    @require_jmespath
+    @require_response_parsing
     @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
     def test_multiple_environments_without_dataset_raises(self):
         # Multiple environments (a `dict` factory) need a `train_dataset` with an `environment` column to route each
@@ -3405,7 +3405,7 @@ class TestGRPOTrainer(TrlTestCase):
         reason="Environment factory support is not available in transformers versions below 5.2.0",
         strict=True,
     )
-    @require_jmespath
+    @require_response_parsing
     @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
     def test_train_with_environment_owned_data(self):
         # The environment owns the data — no external `train_dataset` is needed. `reset()` returns the prompt, and
@@ -3461,7 +3461,7 @@ class TestGRPOTrainer(TrlTestCase):
         reason="Tool parsing is not supported in transformers versions below 5.0.0",
         strict=True,
     )
-    @require_jmespath
+    @require_response_parsing
     def test_train_with_malformed_tool_calls(self):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
 
@@ -4005,7 +4005,7 @@ class TestGRPOTrainerVLM(TrlTestCase):
         reason="Qwen3.5 models were introduced in transformers-5.2.0",
         strict=True,
     )
-    @require_jmespath
+    @require_response_parsing
     def test_train_with_tools_multimodal_response(self):
         # Test that tools returning images (multimodal responses) work correctly with a VLM.
         # The tool returns a list of content blocks including an image.

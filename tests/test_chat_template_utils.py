@@ -32,7 +32,7 @@ from trl.chat_template_utils import (
 )
 from trl.data_utils import prepare_multimodal_messages
 
-from .testing_utils import TrlTestCase, require_jmespath, require_vision
+from .testing_utils import TrlTestCase, require_response_parsing, require_vision
 
 
 class TestCloneChatTemplate(TrlTestCase):
@@ -120,7 +120,7 @@ class TestCloneChatTemplate(TrlTestCase):
     reason="Response parsing is not supported in transformers versions below 5.0.0",
     strict=True,
 )
-@require_jmespath
+@require_response_parsing
 class TestAddResponseSchema:
     @pytest.mark.parametrize(
         "tokenizer_name",
@@ -1076,7 +1076,7 @@ class TestGetTrainingChatTemplate:
     reason="Response parsing is not supported in transformers versions below 5.0.0",
     strict=True,
 )
-@require_jmespath
+@require_response_parsing
 class TestParseResponse:
     def _load(self, model_name):
         if "ForCausalLM" in model_name:
