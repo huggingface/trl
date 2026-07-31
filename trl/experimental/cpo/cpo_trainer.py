@@ -389,8 +389,25 @@ class CPOTrainer(_BaseTrainer):
 
             # tokenize the dataset
             train_dataset = train_dataset.map(self.tokenize_row, num_proc=args.dataset_num_proc)
+            # Drop examples where truncation removes every completion token from either response
+            if not self.is_encoder_decoder:
+                train_dataset = train_dataset.filter(
+                    lambda example: (
+                        any(label != -100 for label in example["chosen_labels"])
+                        and any(label != -100 for label in example["rejected_labels"])
+                    ),
+                    num_proc=args.dataset_num_proc,
+                )
             if eval_dataset is not None:
                 eval_dataset = eval_dataset.map(self.tokenize_row, num_proc=args.dataset_num_proc)
+                if not self.is_encoder_decoder:
+                    eval_dataset = eval_dataset.filter(
+                        lambda example: (
+                            any(label != -100 for label in example["chosen_labels"])
+                            and any(label != -100 for label in example["rejected_labels"])
+                        ),
+                        num_proc=args.dataset_num_proc,
+                    )
 
         # Transformers explicitly set use_reentrant=True in the past to silence a PyTorch warning, but the default was
         # never updated once PyTorch switched to recommending use_reentrant=False. Until that change lands upstream

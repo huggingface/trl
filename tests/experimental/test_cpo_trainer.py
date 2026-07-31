@@ -12,14 +12,65 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import math
+
 import pytest
 import torch
-from datasets import DatasetDict, load_dataset
+from datasets import Dataset, DatasetDict, load_dataset
 from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokenizer
 
 from trl.experimental.cpo import CPOConfig, CPOTrainer
 
 from ..testing_utils import TrlTestCase, require_peft
+
+
+class _CharacterTokenizer:
+    bos_token_id = None
+    eos_token_id = 0
+
+    def __call__(self, text, add_special_tokens=False):
+        input_ids = [ord(character) for character in text]
+        return {"input_ids": input_ids, "attention_mask": [1] * len(input_ids)}
+
+
+@pytest.mark.parametrize(
+    ("prompt_length", "chosen_length", "rejected_length", "max_length"),
+    [
+        (4, 3, 2, 16),  # everything fits
+        (4, 8, 6, 11),  # the old slice bound is positive but over-truncates both completions
+        (4, 20, 6, 12),  # a negative old slice bound empties the shorter completion
+        (4, 20, 16, 12),  # both completions need truncation
+    ],
+)
+def test_tokenize_row_truncates_completions_independently(prompt_length, chosen_length, rejected_length, max_length):
+    trainer = CPOTrainer.__new__(CPOTrainer)
+    trainer.is_encoder_decoder = False
+    trainer.processing_class = _CharacterTokenizer()
+    trainer.max_length = max_length
+
+    tokenized = trainer.tokenize_row(
+        {
+            "prompt": "p" * prompt_length,
+            "chosen": "c" * chosen_length,
+            "rejected": "r" * rejected_length,
+        }
+    )
+
+    completion_budget = max_length - prompt_length
+    expected_chosen_length = min(chosen_length + 1, completion_budget)  # +1 for EOS
+    expected_rejected_length = min(rejected_length + 1, completion_budget)
+
+    for prefix, expected_completion_length in [
+        ("chosen", expected_chosen_length),
+        ("rejected", expected_rejected_length),
+    ]:
+        input_ids = tokenized[f"{prefix}_input_ids"]
+        attention_mask = tokenized[f"{prefix}_attention_mask"]
+        labels = tokenized[f"{prefix}_labels"]
+
+        assert len(input_ids) == len(attention_mask) == len(labels)
+        assert len(input_ids) <= max_length
+        assert sum(label != -100 for label in labels) == expected_completion_length
 
 
 class TestCPOTrainer(TrlTestCase):
@@ -33,6 +84,61 @@ class TestCPOTrainer(TrlTestCase):
         model_id = "trl-internal-testing/tiny-T5ForConditionalGeneration"
         self.t5_model = AutoModelForSeq2SeqLM.from_pretrained(model_id, dtype="float32")
         self.t5_tokenizer = AutoTokenizer.from_pretrained(model_id)
+
+    def test_fully_truncated_completion_examples_dropped(self):
+        dataset = Dataset.from_dict(
+            {
+                "prompt": ["Hi", "This is a very long prompt that fills the whole max_length budget on its own"],
+                "chosen": [" there", " yes"],
+                "rejected": [" bye", " no"],
+            }
+        )
+        training_args = CPOConfig(output_dir=self.tmp_dir, max_length=6, report_to="none")
+
+        trainer = CPOTrainer(
+            model=self.model,
+            args=training_args,
+            processing_class=self.tokenizer,
+            train_dataset=dataset,
+            eval_dataset=dataset,
+        )
+
+        assert len(trainer.train_dataset) == 1
+        assert len(trainer.eval_dataset) == 1
+        assert trainer.train_dataset[0]["prompt"] == "Hi"
+        assert trainer.eval_dataset[0]["prompt"] == "Hi"
+
+    def test_simpo_loss_is_finite_with_truncated_completion(self):
+        dataset = Dataset.from_dict(
+            {
+                "prompt": ["Question: what is 2+2?\nAnswer:"],
+                "chosen": [" step" * 64],
+                "rejected": [" The answer is 4."],
+            }
+        )
+        training_args = CPOConfig(
+            output_dir=self.tmp_dir,
+            loss_type="simpo",
+            cpo_alpha=0.0,
+            max_length=32,
+            max_steps=1,
+            logging_steps=1,
+            per_device_train_batch_size=1,
+            report_to="none",
+        )
+        trainer = CPOTrainer(
+            model=self.model,
+            args=training_args,
+            processing_class=self.tokenizer,
+            train_dataset=dataset,
+        )
+
+        trainer.train()
+
+        step_metrics = next(metrics for metrics in trainer.state.log_history if "grad_norm" in metrics)
+        assert math.isfinite(step_metrics["loss"])
+        assert math.isfinite(step_metrics["grad_norm"])
+        assert all(torch.isfinite(parameter).all() for parameter in trainer.model.parameters())
 
     def test_trust_remote_code(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
