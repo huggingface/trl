@@ -2805,6 +2805,26 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @pytest.mark.skipif(
+        Version(transformers.__version__) < Version("5.13.0.dev0"),
+        reason="Tool parsing relies on the legacy jmespath-based `response_schema` parser below transformers 5.13.0",
+    )
+    def test_tools_without_jmespath(self):
+        # jmespath is only used by the legacy `response_schema` parser (transformers < 5.13); the new-style
+        # `response_template` parser doesn't need it. The guard must therefore not fire on newer transformers, where
+        # jmespath is never imported. Guards against an over-broad regression: none of the openenv examples install
+        # jmespath, so a spurious guard breaks them before training starts.
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        training_args = GRPOConfig(output_dir=self.tmp_dir, report_to="none")
+        with patch("trl.trainer.grpo_trainer.is_jmespath_available", return_value=False):
+            GRPOTrainer(  # must construct without raising
+                model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
+                tools=[multiply_tool],
+            )
+
     @pytest.mark.xfail(
         condition=Version(transformers.__version__) < Version("5.2.0"),
         reason="Environment factory support is not available in transformers versions below 5.2.0",
