@@ -31,8 +31,12 @@ class DistillationConfig(_BaseConfig):
     [argparse](https://docs.python.org/3/library/argparse#module-argparse) arguments that can be specified on the
     command line.
 
+    > [!NOTE]
+    > Some [`~transformers.TrainingArguments`] defaults are overridden: `learning_rate` defaults to `1e-6` (instead of
+    > `5e-5`) and `remove_unused_columns` defaults to `False` (instead of `True`).
+
     Parameters:
-        > Parameters that control the model
+        > Parameters that control the model and the teacher model
 
         model_init_kwargs (`str` or `dict[str, Any]`, *optional*):
             Keyword arguments for `AutoModelForCausalLM.from_pretrained`, used when the `model` argument of the
@@ -41,24 +45,6 @@ class DistillationConfig(_BaseConfig):
             Whether to allow loading models and tokenizers that ship custom Python code from the Hub. Forwarded to
             [`~transformers.AutoModelForCausalLM.from_pretrained`] and
             [`~transformers.AutoTokenizer.from_pretrained`], for both the student and teacher.
-
-        > Parameters that control the distillation
-
-        temperature (`float`, *optional*, defaults to `1.0`):
-            Temperature for sampling during generation and for computing the distillation loss. Higher values produce
-            softer probability distributions.
-        beta (`float`, *optional*, defaults to `1.0`):
-            Interpolation coefficient for the Generalized Jensen-Shannon Divergence loss. When `0.0`, the loss is the
-            forward KL divergence. When `1.0`, the loss is the reverse KL divergence. When `0.5`, it is the standard
-            JSD. Unlike GRPO's `beta` (a KL-penalty coefficient against a reference model), here it selects the
-            divergence itself; there is no reference-model KL penalty.
-        max_completion_length (`int` or `None`, *optional*, defaults to `512`):
-            Maximum number of tokens to generate per completion during on-policy generation.
-        disable_dropout (`bool`, *optional*, defaults to `False`):
-            Whether to disable dropout in the student model during training.
-
-        > Parameters that control the teacher model
-
         teacher_model_name_or_path (`str`, *optional*):
             Model name or path for the teacher model. Used when the teacher is loaded locally.
         teacher_model_revision (`str`, *optional*):
@@ -66,9 +52,31 @@ class DistillationConfig(_BaseConfig):
         teacher_model_init_kwargs (`str` or `dict[str, Any]`, *optional*):
             Keyword arguments passed to `AutoModelForCausalLM.from_pretrained` when instantiating the teacher model
             from a string.
+        disable_dropout (`bool`, *optional*, defaults to `False`):
+            Whether to disable dropout in the student model during training.
 
-        > Parameters that control on-policy generation
+        > Parameters that control the data preprocessing
 
+        remove_unused_columns (`bool`, *optional*, defaults to `False`):
+            Whether to only keep the columns used by the model's forward pass. Forced to `False` here: the trainer
+            consumes the raw prompt column and generates completions on-policy, so no columns are dropped.
+        max_completion_length (`int` or `None`, *optional*, defaults to `512`):
+            Maximum number of tokens to generate per completion during on-policy generation.
+        ds3_gather_for_generation (`bool`, *optional*, defaults to `True`):
+            This setting applies to DeepSpeed ZeRO-3. If enabled, the policy model weights are gathered for generation,
+            improving generation speed. However, disabling this option allows training models that exceed the VRAM
+            capacity of a single GPU, albeit at the cost of slower generation. Disabling this option is not compatible
+            with vLLM generation.
+        shuffle_dataset (`bool`, *optional*, defaults to `True`):
+            Whether to shuffle the training dataset.
+        pad_to_multiple_of (`int`, *optional*):
+            If set, the prompts ids and completions ids will be padded to a multiple of this value.
+
+        > Parameters that control generation
+
+        temperature (`float`, *optional*, defaults to `1.0`):
+            Temperature for sampling during generation and for computing the distillation loss. Higher values produce
+            softer probability distributions.
         top_p (`float`, *optional*, defaults to `1.0`):
             Top-p (nucleus) sampling parameter for on-policy generation.
         top_k (`int`, *optional*, defaults to `0`):
@@ -89,22 +97,22 @@ class DistillationConfig(_BaseConfig):
             tokens.
         cache_implementation (`str`, *optional*):
             Implementation of the cache method for faster generation when `use_vllm` is set to `False`.
-        pad_to_multiple_of (`int`, *optional*):
-            If set, the prompts ids and completions ids will be padded to a multiple of this value.
-        shuffle_dataset (`bool`, *optional*, defaults to `True`):
-            Whether to shuffle the training dataset.
-        ds3_gather_for_generation (`bool`, *optional*, defaults to `True`):
-            This setting applies to DeepSpeed ZeRO-3. If enabled, the policy model weights are gathered for generation,
-            improving generation speed. However, disabling this option allows training models that exceed the VRAM
-            capacity of a single GPU, albeit at the cost of slower generation. Disabling this option is not compatible
-            with vLLM generation.
 
-        > Parameters that control vLLM for student generation
+        > Parameters that control generation acceleration powered by vLLM
 
         use_vllm (`bool`, *optional*, defaults to `False`):
             Whether to use vLLM for generating on-policy completions from the student model.
         vllm_mode (`str`, *optional*, defaults to `"colocate"`):
             Mode for student vLLM integration. Either `"server"` or `"colocate"`.
+        vllm_model_impl (`str`, *optional*, defaults to `"vllm"`):
+            Model implementation backend for vLLM. Use `"vllm"` or `"transformers"`.
+        vllm_enable_sleep_mode (`bool`, *optional*, defaults to `False`):
+            Enable vLLM sleep mode to offload student weights during the optimizer step.
+        vllm_structured_outputs_regex (`str` or `None`, *optional*):
+            Regex pattern for vLLM structured outputs.
+
+        > Parameters that control the vLLM server (only used when `vllm_mode` is `"server"`)
+
         vllm_server_base_url (`str` or `None`, *optional*):
             Base URL for the student vLLM server. If provided, `vllm_server_host` and `vllm_server_port` are ignored.
         vllm_server_host (`str`, *optional*, defaults to `"0.0.0.0"`):
@@ -115,20 +123,25 @@ class DistillationConfig(_BaseConfig):
             Timeout for connecting to the student vLLM server.
         vllm_group_port (`int`, *optional*, defaults to `51216`):
             Port for the vLLM weight-update group (NCCL communicator).
+
+        > Parameters that control colocated vLLM execution (only used when `vllm_mode` is `"colocate"`)
+
         vllm_gpu_memory_utilization (`float`, *optional*, defaults to `0.3`):
             GPU memory utilization for the colocated student vLLM engine.
-        vllm_tensor_parallel_size (`int`, *optional*, defaults to `1`):
-            Tensor parallel size for the colocated student vLLM engine.
         vllm_max_model_length (`int` or `None`, *optional*):
             Maximum model sequence length for the colocated vLLM engine.
-        vllm_model_impl (`str`, *optional*, defaults to `"vllm"`):
-            Model implementation backend for vLLM. Use `"vllm"` or `"transformers"`.
-        vllm_structured_outputs_regex (`str` or `None`, *optional*):
-            Regex pattern for vLLM structured outputs.
-        vllm_enable_sleep_mode (`bool`, *optional*, defaults to `False`):
-            Enable vLLM sleep mode to offload student weights during the optimizer step.
+        vllm_tensor_parallel_size (`int`, *optional*, defaults to `1`):
+            Tensor parallel size for the colocated student vLLM engine.
 
-        > Parameters that control logging
+        > Parameters that control the training
+
+        beta (`float`, *optional*, defaults to `1.0`):
+            Interpolation coefficient for the Generalized Jensen-Shannon Divergence loss. When `0.0`, the loss is the
+            forward KL divergence. When `1.0`, the loss is the reverse KL divergence. When `0.5`, it is the standard
+            JSD. Unlike GRPO's `beta` (a KL-penalty coefficient against a reference model), here it selects the
+            divergence itself; there is no reference-model KL penalty.
+
+        > Parameters that control the logging
 
         log_completions (`bool`, *optional*, defaults to `False`):
             Whether to log a sample of (prompt, completion) pairs every `log_completions_steps` steps. If `rich` is
@@ -142,7 +155,13 @@ class DistillationConfig(_BaseConfig):
 
     _VALID_DICT_FIELDS = _BaseConfig._VALID_DICT_FIELDS + ["model_init_kwargs", "teacher_model_init_kwargs"]
 
-    # Model
+    # Parameters whose default values are overridden from TrainingArguments
+    learning_rate: float = field(
+        default=1e-6,
+        metadata={"help": "The initial learning rate for AdamW."},
+    )
+
+    # Parameters that control the model and the teacher model
     model_init_kwargs: dict[str, Any] | str | None = field(
         default=None,
         metadata={
@@ -158,44 +177,6 @@ class DistillationConfig(_BaseConfig):
             "student and teacher."
         },
     )
-    # Overridden defaults
-    learning_rate: float = field(
-        default=1e-6,
-        metadata={"help": "The initial learning rate for AdamW."},
-    )
-    remove_unused_columns: bool = field(
-        default=False,
-        metadata={
-            "help": "Whether to only keep the columns used by the model's forward pass. Forced to `False` here: the "
-            "trainer consumes the raw prompt column and generates completions on-policy, so no columns are dropped."
-        },
-    )
-
-    # Distillation core
-    temperature: float = field(
-        default=1.0,
-        metadata={
-            "help": "Temperature for sampling and loss computation. Higher values produce softer distributions."
-        },
-    )
-    beta: float = field(
-        default=1.0,
-        metadata={
-            "help": "Interpolation coefficient for the Generalized JSD loss. 0.0 = forward KL, 0.5 = JSD, 1.0 = reverse "
-            "KL. Unlike GRPO's `beta` (a KL-penalty coefficient against a reference model), here it selects the "
-            "divergence itself; there is no reference-model KL penalty."
-        },
-    )
-    max_completion_length: int | None = field(
-        default=512,
-        metadata={"help": "Maximum number of tokens to generate per completion."},
-    )
-    disable_dropout: bool = field(
-        default=False,
-        metadata={"help": "Whether to disable dropout in the student model during training."},
-    )
-
-    # Teacher model (local)
     teacher_model_name_or_path: str | None = field(
         default=None,
         metadata={"help": "Model name or path for the teacher model."},
@@ -210,8 +191,50 @@ class DistillationConfig(_BaseConfig):
             "help": "Keyword arguments for `AutoModelForCausalLM.from_pretrained` when instantiating the teacher."
         },
     )
+    disable_dropout: bool = field(
+        default=False,
+        metadata={"help": "Whether to disable dropout in the student model during training."},
+    )
 
-    # On-policy generation
+    # Parameters that control the data preprocessing
+    # The default `remove_unused_columns` is overwritten from the parent class: distillation trains on the raw
+    # `prompt` column and generates completions on-policy, so no columns are dropped.
+    remove_unused_columns: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to only keep the columns used by the model's forward pass. Forced to `False` here: the "
+            "trainer consumes the raw prompt column and generates completions on-policy, so no columns are dropped."
+        },
+    )
+    max_completion_length: int | None = field(
+        default=512,
+        metadata={"help": "Maximum number of tokens to generate per completion."},
+    )
+    ds3_gather_for_generation: bool = field(
+        default=True,
+        metadata={
+            "help": "This setting applies to DeepSpeed ZeRO-3. If enabled, the policy model weights are gathered for "
+            "generation, improving generation speed. However, disabling this option allows training models that "
+            "exceed the VRAM capacity of a single GPU, albeit at the cost of slower generation. Disabling this option "
+            "is not compatible with vLLM generation."
+        },
+    )
+    shuffle_dataset: bool | None = field(
+        default=True,
+        metadata={"help": "Whether to shuffle the training dataset."},
+    )
+    pad_to_multiple_of: int | None = field(
+        default=None,
+        metadata={"help": "If set, the prompts ids and completions ids will be padded to a multiple of this value."},
+    )
+
+    # Parameters that control generation
+    temperature: float = field(
+        default=1.0,
+        metadata={
+            "help": "Temperature for sampling and loss computation. Higher values produce softer distributions."
+        },
+    )
     top_p: float = field(
         default=1.0,
         metadata={"help": "Top-p (nucleus) sampling parameter for on-policy generation."},
@@ -255,25 +278,8 @@ class DistillationConfig(_BaseConfig):
         default=None,
         metadata={"help": "Implementation of the cache method for faster generation when use_vllm is set to False."},
     )
-    pad_to_multiple_of: int | None = field(
-        default=None,
-        metadata={"help": "If set, the prompts ids and completions ids will be padded to a multiple of this value."},
-    )
-    shuffle_dataset: bool | None = field(
-        default=True,
-        metadata={"help": "Whether to shuffle the training dataset."},
-    )
-    ds3_gather_for_generation: bool = field(
-        default=True,
-        metadata={
-            "help": "This setting applies to DeepSpeed ZeRO-3. If enabled, the policy model weights are gathered for "
-            "generation, improving generation speed. However, disabling this option allows training models that "
-            "exceed the VRAM capacity of a single GPU, albeit at the cost of slower generation. Disabling this option "
-            "is not compatible with vLLM generation."
-        },
-    )
 
-    # vLLM for student generation
+    # Parameters that control generation acceleration powered by vLLM
     use_vllm: bool = field(
         default=False,
         metadata={"help": "Whether to use vLLM for generating on-policy completions from the student model."},
@@ -282,6 +288,20 @@ class DistillationConfig(_BaseConfig):
         default="colocate",
         metadata={"help": 'Mode for student vLLM integration. Either "server" or "colocate".'},
     )
+    vllm_model_impl: str = field(
+        default="vllm",
+        metadata={"help": 'Model implementation backend for vLLM. Use "vllm" or "transformers".'},
+    )
+    vllm_enable_sleep_mode: bool = field(
+        default=False,
+        metadata={"help": "Enable vLLM sleep mode to offload student weights during the optimizer step."},
+    )
+    vllm_structured_outputs_regex: str | None = field(
+        default=None,
+        metadata={"help": "Regex pattern for vLLM structured outputs."},
+    )
+
+    # Parameters that control the vLLM server (only used when `vllm_mode` is `"server"`)
     vllm_server_base_url: str | None = field(
         default=None,
         metadata={"help": "Base URL for the student vLLM server."},
@@ -302,32 +322,32 @@ class DistillationConfig(_BaseConfig):
         default=51216,
         metadata={"help": "Port for the vLLM weight-update group (NCCL communicator)."},
     )
+
+    # Parameters that control colocated vLLM execution (only used when `vllm_mode` is `"colocate"`)
     vllm_gpu_memory_utilization: float = field(
         default=0.3,
         metadata={"help": "GPU memory utilization for the colocated student vLLM engine."},
-    )
-    vllm_tensor_parallel_size: int = field(
-        default=1,
-        metadata={"help": "Tensor parallel size for the colocated student vLLM engine."},
     )
     vllm_max_model_length: int | None = field(
         default=None,
         metadata={"help": "Maximum model sequence length for the colocated vLLM engine."},
     )
-    vllm_model_impl: str = field(
-        default="vllm",
-        metadata={"help": 'Model implementation backend for vLLM. Use "vllm" or "transformers".'},
-    )
-    vllm_structured_outputs_regex: str | None = field(
-        default=None,
-        metadata={"help": "Regex pattern for vLLM structured outputs."},
-    )
-    vllm_enable_sleep_mode: bool = field(
-        default=False,
-        metadata={"help": "Enable vLLM sleep mode to offload student weights during the optimizer step."},
+    vllm_tensor_parallel_size: int = field(
+        default=1,
+        metadata={"help": "Tensor parallel size for the colocated student vLLM engine."},
     )
 
-    # Logging
+    # Parameters that control the training
+    beta: float = field(
+        default=1.0,
+        metadata={
+            "help": "Interpolation coefficient for the Generalized JSD loss. 0.0 = forward KL, 0.5 = JSD, 1.0 = reverse "
+            "KL. Unlike GRPO's `beta` (a KL-penalty coefficient against a reference model), here it selects the "
+            "divergence itself; there is no reference-model KL penalty."
+        },
+    )
+
+    # Parameters that control the logging
     log_completions: bool = field(
         default=False,
         metadata={
