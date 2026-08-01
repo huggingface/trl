@@ -24,7 +24,7 @@ from trl.experimental.distillation import DistillationConfig, DistillationTraine
 from trl.experimental.distillation.distillation_trainer import _chunked_divergence_loss
 from trl.experimental.gkd.gkd_trainer import GKDTrainer
 
-from ..testing_utils import TrlTestCase, require_liger_kernel, require_torch_accelerator
+from ..testing_utils import TrlTestCase, require_liger_kernel, require_peft, require_torch_accelerator
 
 
 def _reference_chunked_divergence(
@@ -539,4 +539,36 @@ class TestDistillationTrainer(TrlTestCase):
                 args=self._make_args(),
                 train_dataset=dataset,
                 processing_class=self.tokenizer,
+            )
+
+    @require_peft
+    def test_peft_lm_head_adapter_raises(self):
+        # Both loss paths read `lm_head.weight` directly, so a PEFT adapter on the head is silently ignored. Reject it.
+        from peft import LoraConfig
+
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        with pytest.raises(ValueError, match="lm_head"):
+            DistillationTrainer(
+                model=self.model_id,
+                teacher_model=self.model_id,
+                args=self._make_args(),
+                train_dataset=dataset,
+                processing_class=self.tokenizer,
+                peft_config=LoraConfig(target_modules=["q_proj", "lm_head"]),
+            )
+
+    @require_peft
+    def test_peft_prompt_learning_raises(self):
+        # Prompt-learning injects virtual tokens via `PeftModel.forward()`, which the backbone-direct loss bypasses.
+        from peft import PrefixTuningConfig
+
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        with pytest.raises(ValueError, match="Prompt-learning"):
+            DistillationTrainer(
+                model=self.model_id,
+                teacher_model=self.model_id,
+                args=self._make_args(),
+                train_dataset=dataset,
+                processing_class=self.tokenizer,
+                peft_config=PrefixTuningConfig(num_virtual_tokens=4, task_type="CAUSAL_LM"),
             )
