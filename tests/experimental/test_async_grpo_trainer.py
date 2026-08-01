@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import asyncio
+import inspect
 import itertools
 import math
 import multiprocessing as mp
@@ -21,8 +22,10 @@ import queue
 import numpy as np
 import pytest
 import torch
+import transformers
 from accelerate import PartialState
 from datasets import load_dataset
+from packaging.version import Version
 from transformers import AutoTokenizer
 from transformers.testing_utils import torch_device
 
@@ -43,10 +46,11 @@ from trl.experimental.async_grpo.async_rollout_worker import (
     _AsyncRolloutLoop,
     _chain_to_sequences,
     _common_prefix_len,
+    _environment_exposes_tools,
     _SampleBuilder,
 )
 
-from ..testing_utils import TrlTestCase, is_ampere_or_newer
+from ..testing_utils import TrlTestCase, is_ampere_or_newer, require_vision
 
 
 def dummy_reward_func(completions, **kwargs):
@@ -232,6 +236,112 @@ class TestAsyncGRPOTrainer(TrlTestCase):
                 args=args,
                 environment_factory={"a": EnvA, "b": EnvB},
             )
+
+
+@require_vision
+@pytest.mark.skipif(
+    not is_ampere_or_newer() and torch_device != "xpu",
+    reason="Flash Attention 2 requires Ampere or newer GPU, or XPU",
+)
+class TestAsyncGRPOTrainerVLM(TrlTestCase):
+    """VLM policy loading, across real tiny checkpoints. No vLLM server needed: everything asserted here is
+    observable on the loaded model and the trainer's resolved multimodal metadata."""
+
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
+            pytest.param(
+                "trl-internal-testing/tiny-Gemma4ForConditionalGeneration",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.5.0"),
+                    reason="Gemma4 models were introduced in transformers-5.5.0",
+                ),
+            ),
+            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.2.0"),
+                    reason="Qwen3.5 models were introduced in transformers-5.2.0",
+                ),
+            ),
+        ],
+    )
+    def test_vlm_policy_loads_with_multimodal_metadata(self, model_id):
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
+        trainer = AsyncGRPOTrainer(
+            model=model_id,
+            reward_funcs=dummy_reward_func,
+            args=AsyncGRPOConfig(output_dir=self.tmp_dir, report_to="none"),
+            train_dataset=dataset,
+            rollout_worker=_StubRolloutWorker(AutoTokenizer.from_pretrained(model_id), dataset, num_generations=2),
+            weight_transfer=_StubWeightTransfer(),
+        )
+
+        # Loaded as a VLM, not a bare causal LM: this is what makes `named_parameters()` match the vLLM server for
+        # weight sync (#6028) and gives the training forward a vision tower.
+        assert trainer._is_vlm
+        names = [n for n, _ in trainer.model.named_parameters()]
+        assert any("vision" in n or "visual" in n for n in names)
+
+        # Metadata `compute_loss` needs to rebuild the per-token image mask over its packed row.
+        assert trainer._image_token_id is not None
+        forward_params = inspect.signature(type(trainer.model).forward).parameters
+        assert trainer._mm_token_type_key in forward_params
+        # Most-specific name wins, so a model taking both does not get the legacy one.
+        if "mm_token_type_ids" in forward_params:
+            assert trainer._mm_token_type_key == "mm_token_type_ids"
+
+    def test_text_model_has_no_multimodal_metadata(self):
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
+        trainer = AsyncGRPOTrainer(
+            model=model_id,
+            reward_funcs=dummy_reward_func,
+            args=AsyncGRPOConfig(output_dir=self.tmp_dir, report_to="none"),
+            train_dataset=dataset,
+            rollout_worker=_StubRolloutWorker(AutoTokenizer.from_pretrained(model_id), dataset, num_generations=2),
+            weight_transfer=_StubWeightTransfer(),
+        )
+
+        assert not trainer._is_vlm
+        assert trainer._image_token_id is None
+        assert trainer._mm_token_type_key is None
+        assert any(n.startswith("model.") for n, _ in trainer.model.named_parameters())
+
+
+class TestEnvironmentExposesTools(TrlTestCase):
+    """`add_response_schema` is only required when something will actually parse tool calls."""
+
+    def test_environment_without_public_methods_needs_no_response_schema(self):
+        # An env that only serves observations gives the model nothing to call, so an unrecognized chat template
+        # (several VLMs, e.g. GLM-OCR) must not be a hard error just because an environment_factory was passed.
+        class ObservationOnlyEnv:
+            def reset(self, **kwargs):
+                return "obs"
+
+            def get_reward(self) -> float:
+                return 1.0
+
+            def _helper(self):
+                pass
+
+        assert not _environment_exposes_tools(ObservationOnlyEnv)
+
+    def test_environment_with_a_public_method_exposes_tools(self):
+        class ToolEnv:
+            def reset(self, **kwargs):
+                return "obs"
+
+            def guess(self, word: str) -> str:
+                return "nope"
+
+        assert _environment_exposes_tools(ToolEnv)
+        assert _environment_exposes_tools({"a": ToolEnv})
+
+    def test_no_environment_exposes_no_tools(self):
+        assert not _environment_exposes_tools(None)
 
 
 class TestAsyncRolloutWorkerEnvironments(TrlTestCase):
@@ -459,36 +569,47 @@ class TestPackingAwareBatching(TrlTestCase):
         assert batch["metrics"]["reward"].tolist() == [[0.5, 0.25], [0.75, 0.5]]  # one row per rank, per sample
 
     def test_collator_merges_vlm_multimodal_fields(self):
-        # Per-image fields concatenate over samples; the per-token image mask is rebuilt over the packed row.
-        # Carrying the rollout's prompt-shaped mask instead would misalign, since a row packs several
-        # prompt+completion sequences. IMAGE_TOKEN_ID is the placeholder the processor expanded images into.
-        image_token_id = 99
-        collator = DataCollatorForRollout(pad_token_id=0, num_processes=1, is_vlm=True, image_token_id=image_token_id)
-        a = _rollout_sample(3, advantage=1.0)
-        b = _rollout_sample(2, advantage=2.0)
-        a["input_ids"] = [image_token_id, 5, 6]  # placeholder, then two generated tokens
-        b["input_ids"] = [7, image_token_id]
-        # What the rollout worker carries: a prompt-shaped per-token mask plus per-image tensors.
-        a["multimodal_inputs"] = {
-            "pixel_values": torch.ones(1, 4),
-            "mm_token_type_ids": torch.tensor([[1, 0]]),  # shorter than the packed row on purpose
-        }
+        # Per-image fields concatenate over a row's samples, in the order their placeholders appear in the packed
+        # ids. The per-token mask the rollout carried is dropped: `compute_loss` rebuilds it (it describes one
+        # prompt, but a row packs several prompt+completion sequences).
+        collator = DataCollatorForRollout(pad_token_id=0, num_processes=1, is_vlm=True)
+        a, b = _rollout_sample(3, advantage=1.0), _rollout_sample(2, advantage=2.0)
+        a["multimodal_inputs"] = {"pixel_values": torch.ones(1, 4), "mm_token_type_ids": torch.tensor([[1, 0]])}
         b["multimodal_inputs"] = {"pixel_values": torch.full((1, 4), 2.0), "mm_token_type_ids": torch.tensor([[0, 1]])}
 
-        collator([[[a, b]]])
-        (row,) = collator.multimodal_queue.popleft()
+        batch = collator([[[a, b]]])
 
-        assert row["pixel_values"].shape == (2, 4)  # one entry per image, in sample order
-        assert row["pixel_values"][0].tolist() == [1.0] * 4
-        # Rebuilt over the packed row [99, 5, 6, 7, 99] -> marks exactly the placeholder positions.
-        assert row["mm_token_type_ids"].tolist() == [[1, 0, 0, 0, 1]]
+        assert batch["multimodal_inputs"]["pixel_values"].shape == (1, 2, 4)  # (num_processes, images, dim)
+        assert batch["multimodal_inputs"]["pixel_values"][0].tolist() == [[1.0] * 4, [2.0] * 4]
+        assert batch["multimodal_counts"]["pixel_values"].tolist() == [2]
+        assert "mm_token_type_ids" not in batch["multimodal_inputs"]
 
-    def test_collator_skips_multimodal_for_rows_without_images(self):
-        collator = DataCollatorForRollout(pad_token_id=0, num_processes=1, is_vlm=True, image_token_id=99)
+    def test_collator_pads_multimodal_rows_to_num_processes(self):
+        # The P1 case: with dispatch_batches=True only rank 0 collates, so multimodal data must travel IN the batch
+        # for the dispatcher to scatter it. Dim 0 must therefore be num_processes, exactly like input_ids, with
+        # per-key counts so each rank can strip the padding rows added to make the stack rectangular.
+        collator = DataCollatorForRollout(pad_token_id=0, num_processes=3, is_vlm=True)
+        two_images = _rollout_sample(3)
+        two_images["multimodal_inputs"] = {"pixel_values": torch.ones(2, 4)}
+        one_image = _rollout_sample(3)
+        one_image["multimodal_inputs"] = {"pixel_values": torch.full((1, 4), 2.0)}
+        no_image = _rollout_sample(3)  # a rank whose row drew no images at all
 
-        collator([[[_rollout_sample(3)]]])
+        batch = collator([[[two_images], [one_image], [no_image]]])
 
-        assert collator.multimodal_queue.popleft() == [None]
+        pixel_values = batch["multimodal_inputs"]["pixel_values"]
+        assert pixel_values.shape == (3, 2, 4)  # dim 0 == num_processes -> dispatcher slices row i -> rank i
+        assert batch["multimodal_counts"]["pixel_values"].tolist() == [2, 1, 0]
+        assert pixel_values[1, 0].tolist() == [2.0] * 4  # rank 1's real image
+        assert pixel_values[1, 1].tolist() == [0.0] * 4  # ...followed by padding it will strip
+        assert pixel_values[2].eq(0).all()  # rank 2 is all padding, count 0 -> forwards text-only
+
+    def test_collator_omits_multimodal_when_no_row_has_images(self):
+        collator = DataCollatorForRollout(pad_token_id=0, num_processes=1, is_vlm=True)
+
+        batch = collator([[[_rollout_sample(3)]]])
+
+        assert "multimodal_inputs" not in batch
 
 
 def _finalize(turns, rollout_id="r0", fork_threshold=1024):
@@ -598,7 +719,7 @@ def _run(monkeypatch, *, prompt_ids, turns, assistants, fork_threshold=1024, max
     loop._is_vlm = False
     loop._can_parse_response = True
 
-    async def _generate_one_turn(prompt_ids, messages=None, images=None):
+    async def _generate_one_turn(prompt_ids, messages=None, images=None, tools=None):
         return tq.pop(0)
 
     loop._generate_one_turn = _generate_one_turn
