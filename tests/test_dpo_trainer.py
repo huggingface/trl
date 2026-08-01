@@ -1601,6 +1601,17 @@ class TestDPOTrainerVLM(TrlTestCase):
             train_dataset=dataset,
         )
 
+        vision_parameters = [
+            parameter for name, parameter in trainer.model.named_parameters() if name.startswith("model.visual")
+        ]
+        assert vision_parameters
+        assert not any(parameter.requires_grad for parameter in vision_parameters)
+        assert any(
+            parameter.requires_grad
+            for name, parameter in trainer.model.named_parameters()
+            if name.startswith("model.language_model")
+        )
+
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
         trainer.train()

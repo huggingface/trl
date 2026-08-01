@@ -71,7 +71,7 @@ from ..extras.profiling import profiling_context, profiling_decorator
 from ..generation.vllm_generation import VLLMGeneration
 from ..import_utils import is_jmespath_available, is_liger_kernel_available
 from ..models import prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
-from ..models.utils import _ForwardRedirection, disable_gradient_checkpointing
+from ..models.utils import _ForwardRedirection, disable_gradient_checkpointing, freeze_non_language_model_parameters
 from .base_trainer import _BaseTrainer
 from .callbacks import SyncRefModelCallback
 from .grpo_config import GRPOConfig
@@ -942,6 +942,11 @@ class GRPOTrainer(_BaseTrainer):
         if args.gradient_checkpointing and Version(transformers.__version__) < Version("5.0.0"):
             args.gradient_checkpointing_kwargs = args.gradient_checkpointing_kwargs or {}
             args.gradient_checkpointing_kwargs.setdefault("use_reentrant", False)
+
+        dataset_columns = train_dataset.column_names
+        has_vision_data = dataset_columns is None or not {"image", "images"}.isdisjoint(dataset_columns)
+        if self._is_vlm and not has_vision_data and not self.tools:
+            freeze_non_language_model_parameters(model)
 
         super().__init__(
             model=model,

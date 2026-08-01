@@ -399,6 +399,41 @@ def disable_gradient_checkpointing(model: PreTrainedModel, gradient_checkpointin
             model.gradient_checkpointing_enable(gradient_checkpointing_kwargs)
 
 
+def freeze_non_language_model_parameters(model: nn.Module) -> None:
+    """Freeze a multimodal model outside its language model and output embeddings.
+
+    Existing trainability is preserved within the language path, so this also works after PEFT adapters have been
+    injected.
+
+    Args:
+        model (`nn.Module`):
+            Multimodal model whose non-language parameters should be frozen.
+    """
+    base_model = model.get_base_model() if hasattr(model, "get_base_model") else model
+    text_config = base_model.config.get_text_config()
+    text_model = next(
+        (
+            module
+            for module in base_model.modules()
+            if isinstance(module, PreTrainedModel) and module is not base_model and module.config is text_config
+        ),
+        None,
+    )
+    if text_model is None:
+        return
+
+    trainable_parameters = {id(parameter) for parameter in model.parameters() if parameter.requires_grad}
+    model.requires_grad_(False)
+
+    language_modules = [text_model]
+    if (output_embeddings := base_model.get_output_embeddings()) is not None:
+        language_modules.append(output_embeddings)
+    for module in language_modules:
+        for parameter in module.parameters():
+            if id(parameter) in trainable_parameters:
+                parameter.requires_grad_(True)
+
+
 def create_reference_model(
     model: nn.Module, num_shared_layers: int | None = None, pattern: str | None = None
 ) -> nn.Module:

@@ -1802,6 +1802,37 @@ class TestRLOOTrainer(TrlTestCase):
 
 @require_vision
 class TestRLOOTrainerVLM(TrlTestCase):
+    def test_text_only_dataset_freezes_non_language_parameters(self):
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+
+        def reward_func(completions, **kwargs):
+            return [float(len(completion[0]["content"])) for completion in completions]
+
+        training_args = RLOOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            num_generations=2,
+            max_completion_length=8,
+            report_to="none",
+        )
+        trainer = RLOOTrainer(
+            model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            reward_funcs=reward_func,
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        vision_parameters = [
+            parameter for name, parameter in trainer.model.named_parameters() if name.startswith("model.visual")
+        ]
+        assert vision_parameters
+        assert not any(parameter.requires_grad for parameter in vision_parameters)
+        assert any(
+            parameter.requires_grad
+            for name, parameter in trainer.model.named_parameters()
+            if name.startswith("model.language_model")
+        )
+
     @pytest.mark.parametrize(
         "model_id",
         [
@@ -1855,6 +1886,12 @@ class TestRLOOTrainerVLM(TrlTestCase):
             args=training_args,
             train_dataset=dataset,
         )
+
+        vision_parameters = [
+            parameter for name, parameter in trainer.model.named_parameters() if "visual" in name or "vision" in name
+        ]
+        assert vision_parameters
+        assert any(parameter.requires_grad for parameter in vision_parameters)
 
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 

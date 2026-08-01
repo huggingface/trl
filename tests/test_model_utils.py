@@ -16,10 +16,55 @@ import types
 from unittest.mock import patch
 
 import pytest
-from transformers import AutoModelForCausalLM
+import torch.nn as nn
+from transformers import AutoModelForCausalLM, PretrainedConfig, PreTrainedModel
 
 from trl.import_utils import is_deepspeed_available
-from trl.models.utils import disable_gradient_checkpointing, prepare_deepspeed
+from trl.models.utils import disable_gradient_checkpointing, freeze_non_language_model_parameters, prepare_deepspeed
+
+
+class _TextModel(PreTrainedModel):
+    config_class = PretrainedConfig
+
+    def __init__(self, config):
+        super().__init__(config)
+        self.proj = nn.Linear(4, 4)
+
+
+class _MultimodalConfig(PretrainedConfig):
+    def __init__(self):
+        self.text_config = PretrainedConfig()
+        super().__init__()
+
+    def get_text_config(self, decoder=False):
+        return self.text_config
+
+
+class _MultimodalModel(PreTrainedModel):
+    config_class = _MultimodalConfig
+
+    def __init__(self, config):
+        super().__init__(config)
+        self.vision_tower = nn.Linear(4, 4)
+        self.multi_modal_projector = nn.Linear(4, 4)
+        self.language_model = _TextModel(config.text_config)
+        self.lm_head = nn.Linear(4, 4)
+
+    def get_output_embeddings(self):
+        return self.lm_head
+
+
+def test_freeze_non_language_model_parameters_preserves_language_trainability():
+    model = _MultimodalModel(_MultimodalConfig())
+    model.language_model.proj.bias.requires_grad_(False)
+
+    freeze_non_language_model_parameters(model)
+
+    assert not any(parameter.requires_grad for parameter in model.vision_tower.parameters())
+    assert not any(parameter.requires_grad for parameter in model.multi_modal_projector.parameters())
+    assert model.language_model.proj.weight.requires_grad
+    assert not model.language_model.proj.bias.requires_grad
+    assert all(parameter.requires_grad for parameter in model.lm_head.parameters())
 
 
 @pytest.mark.skipif(not is_deepspeed_available(), reason="deepspeed is not installed")

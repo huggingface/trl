@@ -65,6 +65,7 @@ from ..data_utils import (
     prepare_multimodal_messages,
 )
 from ..models import get_act_offloading_ctx_manager
+from ..models.utils import freeze_non_language_model_parameters
 from .base_trainer import _BaseTrainer
 from .sft_config import SFTConfig
 from .utils import (
@@ -1336,6 +1337,9 @@ class SFTTrainer(_BaseTrainer):
         if args.gradient_checkpointing and Version(transformers.__version__) < Version("5.0.0"):
             args.gradient_checkpointing_kwargs = args.gradient_checkpointing_kwargs or {}
             args.gradient_checkpointing_kwargs.setdefault("use_reentrant", False)
+
+        if self._is_vlm and not self._is_vision_dataset:
+            freeze_non_language_model_parameters(model)
 
         super().__init__(
             model=model,
