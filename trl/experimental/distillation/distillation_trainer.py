@@ -203,6 +203,19 @@ def _chunked_divergence_loss(
         number of valid completion positions — all over the local batch. Raw sums are returned so callers can reduce
         correctly across ranks.
     """
+    # Under FSDP2, lm_head.weight is a DTensor (Shard(0) or Replicate). Passing it directly into the
+    # gradient-checkpointed chunk loop causes FSDP2 to re-gather it once per chunk during backward recomputation.
+    # full_tensor() converts it to a plain tensor once; all chunks reference that tensor, so only one all-gather occurs
+    # (in full_tensor()'s backward). Done per model since the student and teacher have their own heads.
+    if isinstance(student_lm_head_weight, torch.distributed.tensor.DTensor):
+        student_lm_head_weight = student_lm_head_weight.full_tensor()
+        if student_lm_head_bias is not None:
+            student_lm_head_bias = student_lm_head_bias.full_tensor()
+    if isinstance(teacher_lm_head_weight, torch.distributed.tensor.DTensor):
+        teacher_lm_head_weight = teacher_lm_head_weight.full_tensor()
+        if teacher_lm_head_bias is not None:
+            teacher_lm_head_bias = teacher_lm_head_bias.full_tensor()
+
     # Each model flattens with its own hidden width: the teacher may be wider/narrower than the student (only the
     # vocabulary must match), and each projects through its own `lm_head`.
     h_s = student_hidden_states.reshape(-1, student_hidden_states.size(-1))
@@ -1146,18 +1159,30 @@ class DistillationTrainer(_BaseTrainer):
             true_labels = torch.where(
                 completion_mask.bool(), inputs["completion_ids"], torch.full_like(inputs["completion_ids"], -100)
             ).reshape(-1)
+            # Under FSDP2 the heads are DTensors; materialize them once with full_tensor() for the fused kernel, as the
+            # chunked path does. No-op off FSDP2; the ZeRO-3 (non-DTensor) case is handled by maybe_gather_lm_head_ctx.
+            student_weight, student_bias = student_lm_head.weight, student_lm_head.bias
+            teacher_weight, teacher_bias = teacher_lm_head.weight, teacher_lm_head.bias
+            if isinstance(student_weight, torch.distributed.tensor.DTensor):
+                student_weight = student_weight.full_tensor()
+                if student_bias is not None:
+                    student_bias = student_bias.full_tensor()
+            if isinstance(teacher_weight, torch.distributed.tensor.DTensor):
+                teacher_weight = teacher_weight.full_tensor()
+                if teacher_bias is not None:
+                    teacher_bias = teacher_bias.full_tensor()
             # ZeRO-3 shards the heads and the fused kernel reads them directly, so gather them for the call.
             with maybe_gather_lm_head_ctx(
                 student_lm_head.weight, student_lm_head.bias, teacher_lm_head.weight, teacher_lm_head.bias
             ):
                 loss = self.liger_loss(
                     student_input=student_hidden_states.reshape(-1, student_hidden_states.size(-1)),
-                    student_weight=student_lm_head.weight,
+                    student_weight=student_weight,
                     teacher_input=teacher_hidden_states.reshape(-1, teacher_hidden_states.size(-1)),
-                    teacher_weight=teacher_lm_head.weight,
+                    teacher_weight=teacher_weight,
                     true_labels=true_labels,
-                    student_bias=student_lm_head.bias,
-                    teacher_bias=teacher_lm_head.bias,
+                    student_bias=student_bias,
+                    teacher_bias=teacher_bias,
                 )
             # Liger normalizes by the local valid-token count; rescale to the global count for grad-accum correctness.
             if num_items_in_batch is not None:
