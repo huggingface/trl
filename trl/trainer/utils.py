@@ -584,8 +584,8 @@ def print_prompt_completions_sample(
         rewards (`dict[str, list[float]]`):
             Dictionary where keys are reward names and values are lists of rewards.
         advantages (`list[float]` or `None`):
-            List of advantages corresponding to the prompts and completions. If `None`, the advantage column is
-            omitted (e.g. for distillation, which has no advantages).
+            List of advantages corresponding to the prompts and completions. If `None`, the advantage column is omitted
+            (e.g. for distillation, which has no advantages).
         step (`int`):
             Current training step number, used in the output title.
         num_samples (`int`, *optional*):
