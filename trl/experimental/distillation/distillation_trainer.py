@@ -277,6 +277,19 @@ def _chunked_divergence_loss(
         number of valid completion positions — all over the local batch. Raw sums are returned so callers can reduce
         correctly across ranks.
     """
+    # Under FSDP2, lm_head.weight is a DTensor (Shard(0) or Replicate). Passing it directly into the
+    # gradient-checkpointed chunk loop causes FSDP2 to re-gather it once per chunk during backward recomputation.
+    # full_tensor() converts it to a plain tensor once; all chunks reference that tensor, so only one all-gather occurs
+    # (in full_tensor()'s backward). Done per model since the student and teacher have their own heads.
+    if isinstance(student_lm_head_weight, torch.distributed.tensor.DTensor):
+        student_lm_head_weight = student_lm_head_weight.full_tensor()
+        if student_lm_head_bias is not None:
+            student_lm_head_bias = student_lm_head_bias.full_tensor()
+    if isinstance(teacher_lm_head_weight, torch.distributed.tensor.DTensor):
+        teacher_lm_head_weight = teacher_lm_head_weight.full_tensor()
+        if teacher_lm_head_bias is not None:
+            teacher_lm_head_bias = teacher_lm_head_bias.full_tensor()
+
     # Each model flattens with its own hidden width: the teacher may be wider/narrower than the student (only the
     # vocabulary must match), and each projects through its own `lm_head`.
     h_s = student_hidden_states.reshape(-1, student_hidden_states.size(-1))
