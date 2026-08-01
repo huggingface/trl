@@ -14,12 +14,13 @@
 
 
 import contextvars
+import inspect
 import math
 import queue
 import textwrap
 import threading
 import time
-from collections import defaultdict, deque
+from collections import defaultdict
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from multiprocessing.queues import Queue as MPQueue
@@ -423,9 +424,10 @@ class _EmptyIterableDataset(torch.utils.data.IterableDataset):
 
 
 # Multimodal fields that are per-TOKEN rather than per-image: the mask marking which positions hold image
-# placeholders. Models spell it differently (Gemma 3 `token_type_ids`, Gemma 4 / Qwen `mm_token_type_ids`), so the
-# rollout carries whichever its processor emits and the collator recomputes the value over its packed row.
-_PER_TOKEN_MM_KEYS = ("token_type_ids", "mm_token_type_ids")
+# placeholders. Models spell it differently, so the collator drops whichever the processor emitted and
+# `compute_loss` rebuilds it under the name this model's `forward` accepts. Listed most-specific first, since a
+# model accepting `mm_token_type_ids` (Gemma 4, Qwen) may also accept the older `token_type_ids` (Gemma 3).
+_PER_TOKEN_MM_KEYS = ("mm_token_type_ids", "token_type_ids")
 
 
 @dataclass
@@ -452,16 +454,8 @@ class DataCollatorForRollout(DataCollatorMixin):
     num_processes: int = 1
     return_tensors: str = "pt"
     is_vlm: bool = False
-    # VLM only: id of the image placeholder token, used to rebuild the per-token image mask over a packed row.
-    image_token_id: int | None = None
     # Distinct prompt-group ids, it counts exactly the prompt-groups that get trained
     groups_trained: set[int] = field(default_factory=set)
-    # VLM only: a FIFO of each micro-batch's per-row pixel tensors, kept OUT of the returned batch because
-    # accelerate's DataLoaderDispatcher slices every batch tensor along dim 0 to the row count, corrupting ragged
-    # `pixel_values`. A queue (not a single slot) because the dispatcher prefetches one batch ahead, so a single
-    # slot would be overwritten by batch N+1 before `compute_loss` consumes batch N. `torch_call` appends;
-    # `compute_loss` pops in order (collate and loss are 1:1 and ordered on the main process).
-    multimodal_queue: deque = field(default_factory=deque)
 
     def torch_call(self, examples: list[Any]) -> dict[str, Any]:
         # The dataloader uses batch_size=1 over a planner that pre-partitions each micro-batch into `num_processes`
@@ -532,32 +526,38 @@ class DataCollatorForRollout(DataCollatorMixin):
             "metrics": metrics,
         }
 
-        # VLM: per row (one per DP rank), concatenate its samples' pixel tensors in sample order — matching the
-        # order their image-placeholder tokens appear in that row's packed `input_ids`. Stashed on the collator
-        # (row i -> rank i) rather than returned in `batch`, so `DataLoaderDispatcher` doesn't slice the ragged
-        # `pixel_values`; `compute_loss` reads `self.multimodal_rows[rank]`. Rows with no images contribute `None`.
+        # VLM: per row (one per DP rank), concatenate its samples' image tensors in sample order — matching the
+        # order their placeholder tokens appear in that row's packed `input_ids`. These ride in `batch` like every
+        # other field: rows are padded on dim 0 to the longest row and stacked, so dim 0 is `num_processes` and
+        # `DataLoaderDispatcher` scatters row `i` -> rank `i` exactly as it does `input_ids`. `multimodal_counts`
+        # carries each row's true length so `compute_loss` strips that padding.
+        #
+        # Counts are per KEY, not per row: a key's dim 0 is not always the image count (Qwen's `pixel_values` is
+        # (Σ patches, dim) while its `image_grid_thw` is (n images, 3)).
+        #
+        # `_PER_TOKEN_MM_KEYS` are deliberately dropped here — see `compute_loss`, which rebuilds them.
         if self.is_vlm:
-            multimodal_rows = []
-            for group, row_ids in zip(groups, input_ids, strict=True):
-                row_mm = [ex["multimodal_inputs"] for ex in group if ex.get("multimodal_inputs")]
-                if not row_mm:
-                    multimodal_rows.append(None)
-                    continue
-                row = {}
-                for key in row_mm[0]:
-                    if key in _PER_TOKEN_MM_KEYS:
-                        # Per-token image mask (Gemma's `token_type_ids`, Gemma 4 / Qwen's `mm_token_type_ids`).
-                        # The rollout's copy covers one PROMPT, but this row packs several re-tokenized
-                        # prompt+completion sequences, so concatenating it would misalign. Rebuild it from the
-                        # packed ids instead — the placeholders are already in there, which is what the mask marks.
-                        # Mirrors `GRPOTrainer`'s tool-image branch.
-                        row[key] = (row_ids == self.image_token_id).long().unsqueeze(0)
-                    else:
-                        # Per-image / per-patch field (`pixel_values`, `image_position_ids`, `image_grid_thw`, ...):
-                        # concatenate in sample order, matching the order their placeholders appear in `row_ids`.
-                        row[key] = torch.cat([m[key] for m in row_mm], dim=0)
-                multimodal_rows.append(row)
-            self.multimodal_queue.append(multimodal_rows)
+            rows_by_key = {}
+            for row_index, group in enumerate(groups):
+                for example in group:
+                    for key, value in (example.get("multimodal_inputs") or {}).items():
+                        if key not in _PER_TOKEN_MM_KEYS:
+                            rows_by_key.setdefault(key, {}).setdefault(row_index, []).append(value)
+            if rows_by_key:
+                multimodal_inputs, multimodal_counts = {}, {}
+                for key, per_row in rows_by_key.items():
+                    rows = [torch.cat(per_row[i], dim=0) if i in per_row else None for i in range(len(groups))]
+                    template = next(row for row in rows if row is not None)
+                    counts = [0 if row is None else row.shape[0] for row in rows]
+                    longest = max(counts)
+                    padded = template.new_zeros((len(rows), longest, *template.shape[1:]))
+                    for i, row in enumerate(rows):
+                        if row is not None:
+                            padded[i, : row.shape[0]] = row
+                    multimodal_inputs[key] = padded
+                    multimodal_counts[key] = torch.tensor(counts, dtype=torch.long)
+                batch["multimodal_inputs"] = multimodal_inputs
+                batch["multimodal_counts"] = multimodal_counts
 
         return batch
 
@@ -759,13 +759,20 @@ class AsyncGRPOTrainer(_BaseTrainer):
         if isinstance(processing_class, ProcessorMixin):
             self._tokenizer = processing_class.tokenizer
             self._is_vlm = True
-            # Placeholder token the processor expands images into. The collator marks these positions to rebuild
-            # the per-token image mask over a packed row (see `DataCollatorForRollout`).
+            # Placeholder token the processor expands images into. `compute_loss` marks these positions to rebuild
+            # the per-token image mask over its packed row.
             self._image_token_id = processing_class.image_token_id
+            # Which name this architecture gives that mask. Read off the forward signature rather than off the
+            # processor output, because the mask is rebuilt (not forwarded) and the model is what has to accept it:
+            # Gemma 3 takes `token_type_ids`, Gemma 4 and Qwen take `mm_token_type_ids`. Read it from the CLASS:
+            # `patch_chunked_lm_head` above rebound `model.forward` on the instance to its own signature.
+            forward_params = inspect.signature(type(model).forward).parameters
+            self._mm_token_type_key = next((k for k in _PER_TOKEN_MM_KEYS if k in forward_params), None)
         elif isinstance(processing_class, PreTrainedTokenizerBase):
             self._tokenizer = processing_class
             self._is_vlm = False
             self._image_token_id = None
+            self._mm_token_type_key = None
         else:
             raise TypeError("The `processing_class` must be either a `PreTrainedTokenizerBase` or a `ProcessorMixin`")
         if self._tokenizer.pad_token is None:
@@ -952,13 +959,11 @@ class AsyncGRPOTrainer(_BaseTrainer):
         # Each planner item is one complete micro-batch (`num_processes` pre-packed rows), so the dataloader pulls them
         # one at a time (batch_size=1) and the collator tensorizes each into a rectangular `(num_processes, T_max)`
         # batch that DataLoaderDispatcher scatters row `i` -> rank `i`.
-        # Keep a handle on the collator so `compute_loss` can read the current batch's stashed VLM pixel tensors
-        # (they can't ride in the dispatched batch dict — see `DataCollatorForRollout.multimodal_rows`).
+        # Keep a handle on the collator so the trainer can read the prompt-groups it has trained on.
         self._rollout_collator = DataCollatorForRollout(
             self._tokenizer.pad_token_id,
             num_processes,
             is_vlm=self._is_vlm,
-            image_token_id=self._image_token_id,
             groups_trained=self._trained_groups,
         )
         return self.accelerator.prepare(
@@ -989,7 +994,99 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 "global_n_tokens",
                 "metrics",
                 "multimodal_inputs",
+                "multimodal_counts",
             ]
+
+    def _packed_vlm_forward_inputs(self, model, input_ids, position_ids, forward_kwargs):
+        """Rebuild the packed VLM forward so Qwen M-RoPE matches vLLM generation (PR #6515, issue #3).
+
+        Padding-free training concatenates several prompt+completion sequences into one row and passes explicit 1D
+        `position_ids`. Qwen VLMs only compute their 3D M-RoPE (temporal/height/width) when `position_ids is None`, so
+        those 1D positions silently disable M-RoPE: the training positions diverge from the 3D positions vLLM used to
+        generate, the log-prob ratio drifts, and correctness suffers. We fix it exactly as veRL / prime-rl (#2819) do:
+        embed the text and scatter the image features here (so the vision tower never sees the text `cu_seq_lens` and the
+        kwarg collision it causes), compute 3D M-RoPE per packed sub-sequence with `get_rope_index` (each sequence reset
+        to position 0, matching generation), and hand FlashAttention explicit `cu_seq_lens` for block-diagonal attention.
+
+        Args:
+            model (`nn.Module`):
+                The (possibly wrapped) policy model; unwrapped here to reach the Qwen vision/language submodules.
+            input_ids (`torch.LongTensor` of shape `(1, sum_seq_len)`):
+                This rank's packed real tokens.
+            position_ids (`torch.LongTensor` of shape `(1, sum_seq_len)`):
+                The 1D packed positions the collator built (resetting to 0 at each sub-sequence start).
+            forward_kwargs (`dict`):
+                Multimodal fields for this row (`pixel_values`, `image_grid_thw`, the per-token mask).
+
+        Returns:
+            `tuple`:
+                - `inputs_embeds` (`torch.FloatTensor` of shape `(1, sum_seq_len, hidden)`): text embeddings with image
+                  features scattered into the placeholder positions.
+                - `position_ids_3d` (`torch.LongTensor` of shape `(3, 1, sum_seq_len)`): per-sequence 3D M-RoPE.
+                - `fa_kwargs` (`dict`): explicit FlashAttention `cu_seq_lens_q`/`cu_seq_lens_k`/`max_length_q`/`max_length_k`.
+        """
+        vlm = self.accelerator.unwrap_model(model).model  # Qwen3_5Model: visual + language_model + get_rope_index
+
+        # cu_seq_lens straight from the packed 1D positions (they reset to 0 at each sub-sequence start), mirroring
+        # transformers' `prepare_fa_kwargs_from_position_ids`. Passing all four kwargs makes FlashAttention take the
+        # explicit varlen path instead of re-deriving cu_seqlens from `position_ids` (which is 2D-only and breaks on 3D).
+        pos_1d = position_ids[0]
+        seq_len = pos_1d.shape[0]
+        starts = (pos_1d == 0).nonzero().flatten()
+        cu_seq_lens = torch.cat([starts, torch.tensor([seq_len], device=pos_1d.device)]).to(torch.int32)
+        seg_lengths = cu_seq_lens.diff()
+        max_length = int(seg_lengths.max())
+        # `seq_idx` labels every token with its sub-sequence index. Qwen3.5 is a hybrid model: its full-attention
+        # layers segment via `cu_seq_lens`, but its linear-attention (gated-delta) layers segment the causal conv via
+        # `seq_idx` (see `Qwen3_5GatedDeltaNet.forward`). Both must be passed or the recurrent/conv state leaks across
+        # packed sequence boundaries — and both the conv and the delta-rule need their fast kernels (`causal_conv1d`,
+        # `flash-linear-attention`) installed, since the pure-torch fallbacks ignore this segmentation entirely.
+        seq_idx = torch.repeat_interleave(
+            torch.arange(len(seg_lengths), device=pos_1d.device, dtype=torch.int32), seg_lengths
+        ).unsqueeze(0)
+        fa_kwargs = {
+            "cu_seq_lens_q": cu_seq_lens,
+            "cu_seq_lens_k": cu_seq_lens,
+            "max_length_q": max_length,
+            "max_length_k": max_length,
+            "seq_idx": seq_idx,
+        }
+
+        # Text embeddings, then scatter this row's image features into the placeholder positions (mirrors the block in
+        # `Qwen3_5Model.forward`, but run here so the vision tower is invoked without the text `cu_seq_lens` kwargs).
+        # `autocast` is required: accelerate wraps the *model's* `forward` in mixed-precision autocast, but this helper
+        # calls the submodules on the *unwrapped* model, so without it the fp32 master weights drive the vision tower in
+        # fp32 and its FlashAttention rejects the fp32 q/k/v.
+        image_grid_thw = forward_kwargs["image_grid_thw"]
+        with self.accelerator.autocast():
+            inputs_embeds = vlm.language_model.embed_tokens(input_ids)
+            image_embeds = vlm.get_image_features(forward_kwargs["pixel_values"], image_grid_thw, return_dict=True).pooler_output
+            image_embeds = torch.cat(image_embeds, dim=0).to(inputs_embeds.device, inputs_embeds.dtype)
+            image_mask, _ = vlm.get_placeholder_mask(input_ids, inputs_embeds=inputs_embeds, image_features=image_embeds)
+            inputs_embeds = inputs_embeds.masked_scatter(image_mask, image_embeds)
+
+        # 3D M-RoPE per packed sub-sequence: run `get_rope_index` on each slice (it starts every sequence at position 0),
+        # then concatenate. Images are consumed in order, matched to each slice by placeholder-token count.
+        mm_token_type_ids = forward_kwargs[self._mm_token_type_key]
+        tokens_per_image = (image_grid_thw.prod(-1) // vlm.visual.spatial_merge_size**2).tolist()
+        bounds = cu_seq_lens.tolist()
+        position_ids_3d, img_ptr = [], 0
+        for start, end in zip(bounds[:-1], bounds[1:]):
+            seg_ids = input_ids[:, start:end]
+            n_image_tokens = int((seg_ids[0] == self._image_token_id).sum())
+            seg_grids, acc = [], 0
+            while acc < n_image_tokens:
+                seg_grids.append(image_grid_thw[img_ptr])
+                acc += tokens_per_image[img_ptr]
+                img_ptr += 1
+            seg_grid_thw = torch.stack(seg_grids) if seg_grids else None
+            seg_pos, _ = vlm.get_rope_index(
+                seg_ids, mm_token_type_ids=mm_token_type_ids[:, start:end], image_grid_thw=seg_grid_thw
+            )
+            position_ids_3d.append(seg_pos)
+        position_ids_3d = torch.cat(position_ids_3d, dim=2)
+
+        return inputs_embeds, position_ids_3d, fa_kwargs
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         # Padding-free: the collator already packed this rank's samples into a single row (real tokens concatenated,
@@ -1003,18 +1100,39 @@ class AsyncGRPOTrainer(_BaseTrainer):
         position_ids = inputs["position_ids"][mask_bool].unsqueeze(0)
         advantages = inputs["advantages"][mask_bool].unsqueeze(0)
 
-        # VLM: add this rank's pixel tensors to the forward. `multimodal_inputs` is a per-rank list from the collator
-        # (row i -> rank i); its placeholder tokens are already in `input_ids`, so the model binds pixels to them.
+        # VLM: add this rank's image tensors to the forward. They arrived in `inputs` like every other field, so the
+        # dispatcher already scattered this rank's row; strip the dim-0 padding the collator added to make rows
+        # rectangular. The placeholder tokens are already in `input_ids`, so the model binds the images to them.
         forward_kwargs = {}
-        if self._is_vlm:
-            mm_rows = self._rollout_collator.multimodal_queue.popleft()
-            mm = mm_rows[self.accelerator.process_index]
-            if mm is not None:
-                forward_kwargs = {k: v.to(input_ids.device) for k, v in mm.items()}
+        if self._is_vlm and "multimodal_inputs" in inputs:
+            for key, value in inputs["multimodal_inputs"].items():
+                count = int(inputs["multimodal_counts"][key].item())
+                if count:  # a rank whose row happened to draw no images forwards text-only
+                    forward_kwargs[key] = value[0, :count]
+            # Per-token image mask, rebuilt rather than carried: the rollout's copy describes one prompt, while this
+            # row packs several re-tokenized prompt+completion sequences. Deriving it from the placeholder positions
+            # in the packed ids is exact and immune to that repacking. Mirrors `GRPOTrainer`'s tool-image branch.
+            if forward_kwargs and self._mm_token_type_key is not None:
+                forward_kwargs[self._mm_token_type_key] = (input_ids == self._image_token_id).long()
+
+        # VLM M-RoPE correctness (PR #6515, issue #3): when this row actually carries images, the 1D `position_ids`
+        # above would disable Qwen's 3D M-RoPE. Rebuild the forward with `inputs_embeds` (image features scattered),
+        # 3D positions reset per packed sub-sequence, and explicit FlashAttention `cu_seq_lens`; text-only rows (and
+        # non-VLM training) keep the unchanged `input_ids` + 1D-position path.
+        model_input_ids = input_ids
+        if self._is_vlm and "pixel_values" in forward_kwargs:
+            inputs_embeds, position_ids, fa_kwargs = self._packed_vlm_forward_inputs(
+                model, input_ids, position_ids, forward_kwargs
+            )
+            for consumed in ("pixel_values", "image_grid_thw", "pixel_values_videos", "video_grid_thw", self._mm_token_type_key):
+                forward_kwargs.pop(consumed, None)
+            forward_kwargs["inputs_embeds"] = inputs_embeds
+            forward_kwargs.update(fa_kwargs)
+            model_input_ids = None
 
         forward_start = time.time()
         outputs = model(
-            input_ids=input_ids,
+            input_ids=model_input_ids,
             position_ids=position_ids,
             labels=input_ids,
             completion_mask=completion_mask,
