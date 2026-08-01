@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 import torch
@@ -102,6 +102,35 @@ class TestRLOOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    def test_train_with_activation_offloading(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        offload_context = MagicMock()
+
+        with patch(
+            "trl.trainer.rloo_trainer.get_act_offloading_ctx_manager", return_value=offload_context
+        ) as mock_get_context:
+            training_args = RLOOConfig(
+                output_dir=self.tmp_dir,
+                learning_rate=0.1,
+                per_device_train_batch_size=3,
+                num_generations=3,
+                max_completion_length=8,
+                max_steps=2,
+                activation_offloading=True,
+                report_to="none",
+            )
+            trainer = RLOOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
+            )
+            trainer.train()
+
+        mock_get_context.assert_called_once_with(model=trainer.model)
+        assert offload_context.__enter__.call_count == offload_context.__exit__.call_count == 2
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
     def test_reward_func_wrong_number_of_rewards(self):
         # A reward function that returns the wrong number of rewards should raise a clear error instead of silently

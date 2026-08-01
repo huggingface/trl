@@ -207,6 +207,9 @@ class RLOOConfig(_BaseConfig):
             frequently the current policy is synchronized with the reference policy. To use this parameter, you must
             set `sync_ref_model=True`.
 
+        activation_offloading (`bool`, *optional*, defaults to `False`):
+            Whether to offload the activations to the CPU.
+
         > Parameters that control the logging
 
         log_completions (`bool`, *optional*, defaults to `False`):
@@ -560,6 +563,11 @@ class RLOOConfig(_BaseConfig):
             "help": "τ parameter from the TR-DPO paper, which determines how frequently the current policy is "
             "synchronized with the reference policy. To use this parameter, you must set `sync_ref_model=True`."
         },
+    )
+
+    activation_offloading: bool = field(
+        default=False,
+        metadata={"help": "Whether to offload the activations to the CPU."},
     )
 
     # Parameters that control the logging

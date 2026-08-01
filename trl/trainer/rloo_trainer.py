@@ -14,6 +14,7 @@
 
 import asyncio
 import atexit
+import contextlib
 import copy
 import inspect
 import math
@@ -54,7 +55,7 @@ from ..data_utils import apply_chat_template, is_conversational, prepare_multimo
 from ..distributed import DistributedBackend
 from ..extras.profiling import profiling_context, profiling_decorator
 from ..generation.vllm_generation import VLLMGeneration
-from ..models import prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
+from ..models import get_act_offloading_ctx_manager, prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
 from ..models.utils import disable_gradient_checkpointing
 from .base_trainer import _BaseTrainer
 from .callbacks import SyncRefModelCallback
@@ -624,6 +625,12 @@ class RLOOTrainer(_BaseTrainer):
             if self.ref_model is not None:
                 disable_dropout_in_model(self.ref_model)
 
+        # Initialize activation offloading context
+        if self.args.activation_offloading:
+            self.maybe_activation_offload_context = get_act_offloading_ctx_manager(model=self.model)
+        else:
+            self.maybe_activation_offload_context = contextlib.nullcontext()
+
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
         self._total_train_tokens = 0
@@ -993,7 +1000,8 @@ class RLOOTrainer(_BaseTrainer):
 
     def training_step(self, model, inputs, num_items_in_batch):
         time_before = time.perf_counter()
-        output = super().training_step(model, inputs, num_items_in_batch)
+        with self.maybe_activation_offload_context:
+            output = super().training_step(model, inputs, num_items_in_batch)
         self._step += 1
         time_after = time.perf_counter()
         self._current_train_step_time += time_after - time_before

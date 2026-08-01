@@ -230,12 +230,14 @@ training_args = SFTConfig(..., padding_free=True, model_init_kwargs={"attn_imple
 
 Activation offloading is a memory efficiency technique that reduces GPU VRAM usage by temporarily moving activation tensors to CPU RAM during the forward pass and bringing them back only when needed for the backward pass. This significantly reduces peak memory usage at the cost of slightly increased training time.
 
-To enable activation offloading in your SFT training configuration:
+Activation offloading is available in [`SFTConfig`], [`RewardConfig`], [`DPOConfig`], [`KTOConfig`], [`GRPOConfig`],
+and [`RLOOConfig`]. To enable it, set `activation_offloading=True` in the training configuration. For example, with
+GRPO:
 
 ```python
-from trl import SFTConfig
+from trl import GRPOConfig
 
-training_args = SFTConfig(..., activation_offloading=True)
+training_args = GRPOConfig(..., activation_offloading=True)
 ```
 
 Under the hood, activation offloading implements PyTorch's [`saved_tensors_hooks`](https://pytorch.org/tutorials/intermediate/autograd_saved_tensors_hooks_tutorial.html#hooks-for-autograd-saved-tensors) to intercept activations during the forward pass. It intelligently manages which tensors to offload based on size and context, avoiding offloading output tensors that would be inefficient. For performance optimization, it can, via a flag (which is true by default), use CUDA streams to overlap computation with CPU-GPU transfers.

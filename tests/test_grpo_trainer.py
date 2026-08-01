@@ -340,6 +340,35 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    def test_train_with_activation_offloading(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        offload_context = MagicMock()
+
+        with patch(
+            "trl.trainer.grpo_trainer.get_act_offloading_ctx_manager", return_value=offload_context
+        ) as mock_get_context:
+            training_args = GRPOConfig(
+                output_dir=self.tmp_dir,
+                learning_rate=0.1,
+                per_device_train_batch_size=3,
+                num_generations=3,
+                max_completion_length=8,
+                max_steps=2,
+                activation_offloading=True,
+                report_to="none",
+            )
+            trainer = GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
+            )
+            trainer.train()
+
+        mock_get_context.assert_called_once_with(model=trainer.model)
+        assert offload_context.__enter__.call_count == offload_context.__exit__.call_count == 2
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
     @pytest.mark.parametrize("config_name", ["standard_prompt_only", "conversational_prompt_only"])
     def test_train_dataset_format(self, config_name):
         dataset = load_dataset("trl-internal-testing/zen", config_name, split="train")
