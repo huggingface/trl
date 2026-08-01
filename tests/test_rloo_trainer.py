@@ -1802,8 +1802,11 @@ class TestRLOOTrainer(TrlTestCase):
 
 @require_vision
 class TestRLOOTrainerVLM(TrlTestCase):
-    def test_text_only_dataset_freezes_non_language_parameters(self):
+    @pytest.mark.parametrize("streaming", [False, True])
+    def test_text_only_dataset_freezes_non_language_parameters(self, streaming):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        if streaming:
+            dataset = dataset.to_iterable_dataset()
 
         def reward_func(completions, **kwargs):
             return [float(len(completion[0]["content"])) for completion in completions]
@@ -1813,6 +1816,7 @@ class TestRLOOTrainerVLM(TrlTestCase):
             per_device_train_batch_size=2,
             num_generations=2,
             max_completion_length=8,
+            max_steps=1,
             report_to="none",
         )
         trainer = RLOOTrainer(

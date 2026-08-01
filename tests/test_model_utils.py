@@ -54,6 +54,17 @@ class _MultimodalModel(PreTrainedModel):
         return self.lm_head
 
 
+class _PromptLearningModel(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.base_model = _MultimodalModel(_MultimodalConfig())
+        self.prompt_encoder = nn.ModuleDict({"default": nn.Linear(4, 4)})
+        self.peft_config = {"default": types.SimpleNamespace(is_prompt_learning=True)}
+
+    def get_base_model(self):
+        return self.base_model
+
+
 def test_freeze_non_language_model_parameters_preserves_language_trainability():
     model = _MultimodalModel(_MultimodalConfig())
     model.language_model.proj.bias.requires_grad_(False)
@@ -65,6 +76,16 @@ def test_freeze_non_language_model_parameters_preserves_language_trainability():
     assert model.language_model.proj.weight.requires_grad
     assert not model.language_model.proj.bias.requires_grad
     assert all(parameter.requires_grad for parameter in model.lm_head.parameters())
+
+
+def test_freeze_non_language_model_parameters_preserves_prompt_encoder():
+    model = _PromptLearningModel()
+
+    with patch("trl.models.utils.is_peft_model", return_value=True):
+        freeze_non_language_model_parameters(model)
+
+    assert all(parameter.requires_grad for parameter in model.prompt_encoder.parameters())
+    assert not any(parameter.requires_grad for parameter in model.base_model.vision_tower.parameters())
 
 
 @pytest.mark.skipif(not is_deepspeed_available(), reason="deepspeed is not installed")

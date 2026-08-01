@@ -23,6 +23,7 @@ import accelerate
 import torch.nn as nn
 import transformers
 from accelerate import Accelerator
+from accelerate.utils import is_peft_model
 from packaging.version import Version
 from torch.distributed.fsdp import FSDPModule
 from torch.distributed.fsdp.fully_sharded_data_parallel import FullyShardedDataParallel as FSDP
@@ -409,7 +410,8 @@ def freeze_non_language_model_parameters(model: nn.Module) -> None:
         model (`nn.Module`):
             Multimodal model whose non-language parameters should be frozen.
     """
-    base_model = model.get_base_model() if hasattr(model, "get_base_model") else model
+    is_peft = is_peft_model(model)
+    base_model = model.get_base_model() if is_peft else model
     text_config = base_model.config.get_text_config()
     text_model = next(
         (
@@ -428,6 +430,8 @@ def freeze_non_language_model_parameters(model: nn.Module) -> None:
     language_modules = [text_model]
     if (output_embeddings := base_model.get_output_embeddings()) is not None:
         language_modules.append(output_embeddings)
+    if is_peft and any(config.is_prompt_learning for config in model.peft_config.values()):
+        language_modules.append(model.prompt_encoder)
     for module in language_modules:
         for parameter in module.parameters():
             if id(parameter) in trainable_parameters:

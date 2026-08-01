@@ -65,7 +65,7 @@ from ..chat_template_utils import (
     parse_response,
     supports_tool_calling,
 )
-from ..data_utils import apply_chat_template, is_conversational, prepare_multimodal_messages
+from ..data_utils import apply_chat_template, get_dataset_column_names, is_conversational, prepare_multimodal_messages
 from ..distributed import DistributedBackend
 from ..extras.profiling import profiling_context, profiling_decorator
 from ..generation.vllm_generation import VLLMGeneration
@@ -943,8 +943,8 @@ class GRPOTrainer(_BaseTrainer):
             args.gradient_checkpointing_kwargs = args.gradient_checkpointing_kwargs or {}
             args.gradient_checkpointing_kwargs.setdefault("use_reentrant", False)
 
-        dataset_columns = train_dataset.column_names
-        has_vision_data = dataset_columns is None or not {"image", "images"}.isdisjoint(dataset_columns)
+        dataset_columns = get_dataset_column_names(train_dataset)
+        has_vision_data = not {"image", "images"}.isdisjoint(dataset_columns)
         if self._is_vlm and not has_vision_data and not self.tools:
             freeze_non_language_model_parameters(model)
 
