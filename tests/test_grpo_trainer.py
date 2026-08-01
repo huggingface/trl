@@ -513,6 +513,61 @@ class TestGRPOTrainer(TrlTestCase):
         vllm_generation.lora_sync = lora_sync
         assert vllm_generation._sleep_level == expected_level
 
+    @require_vllm
+    @require_peft
+    def test_vllm_lora_sync_restores_weights_for_second_generate_in_one_step(self):
+        # Adapter-only sync sleeps at level 1, which offloads the weights to CPU rather than discarding them. The
+        # trainer only calls `sync_weights()` when the training step advanced, so a second `generate()` within the
+        # same step (an eval loop with more than one batch, say) has to bring them back itself. Without that, the
+        # forward pass runs against unmapped weight memory and hangs.
+        #
+        # This uses a real 0.5B model rather than a tiny test one: with a tiny model vLLM falls back to the
+        # flex-attention backend, whose inverse block table is sized by KV block count, and the resulting block
+        # count is large enough that cudagraph capture tries to allocate tens of GiB.
+        from accelerate import Accelerator
+
+        model_id = "Qwen/Qwen2.5-0.5B-Instruct"
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype=torch.bfloat16)
+        model = get_peft_model(model, LoraConfig(task_type="CAUSAL_LM", target_modules=["q_proj", "v_proj"], r=8))
+
+        accelerator = Accelerator()
+        model = model.to(accelerator.device)
+
+        vllm_generation = VLLMGeneration(
+            model=model,
+            accelerator=accelerator,
+            processing_class=tokenizer,
+            mode="colocate",
+            gpu_memory_utilization=0.15,
+            enable_sleep_mode=True,
+            is_lora_model=True,
+            max_model_length=512,
+            max_completion_length=8,
+            temperature=0.0,  # greedy, so the two runs are directly comparable
+            lora_sync_output_dir=self.tmp_dir,
+        )
+        assert vllm_generation.lora_sync, "adapter-only sync did not activate; this would not cover the bug"
+        assert vllm_generation._sleep_level == 1
+
+        prompts = [tokenizer("The capital of France is")["input_ids"]] * 2
+
+        # Step boundary: the trainer syncs once per step, which wakes the weights and pushes the adapter.
+        vllm_generation.sync_weights()
+        _, first_completions, _, _ = vllm_generation.generate(prompts, images=None, num_generations=1)
+
+        # Asserted before the second `generate()` on purpose. On the buggy path this is False, so the failure
+        # surfaces here rather than as a hang in the forward pass below.
+        assert vllm_generation._llm_weights_sleeping is True
+
+        # Second batch of the same step -- deliberately no `sync_weights()` in between.
+        _, second_completions, _, _ = vllm_generation.generate(prompts, images=None, num_generations=1)
+        assert second_completions == first_completions
+
+        # `generate()` leaves the engine asleep. Tearing the allocator down while its allocations are
+        # still unmapped makes its destructor fail with "CUDA Error: invalid argument", so wake it first.
+        vllm_generation.llm.wake_up()
+
     @require_peft
     def test_save_lora_adapter_writes_non_empty_adapter(self):
         from safetensors.torch import load_file

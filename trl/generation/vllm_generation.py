@@ -453,9 +453,10 @@ class VLLMGeneration:
             )
             if self.enable_sleep_mode:
                 self.llm.sleep(level=self._sleep_level)
-            # Sleep level 2 discards the weights; track it so that generate() knows it must re-push them. Level 1
-            # offloads them to CPU instead and `wake_up` restores them, so there is nothing to re-push.
-            self._llm_weights_sleeping = self.enable_sleep_mode and self._sleep_level == 2
+            # Tracks whether the weights are off the GPU, which is true at either sleep level. What differs is
+            # how they come back: level 2 discards them so they must be re-pushed from the training model, while
+            # level 1 offloads them to CPU and `wake_up` restores them in place.
+            self._llm_weights_sleeping = self.enable_sleep_mode
         else:
             raise ValueError(f"vllm_mode must be either 'server' or 'colocate', got '{self.mode}'.")
 
@@ -720,11 +721,24 @@ class VLLMGeneration:
         repetition_penalty = self.repetition_penalty
         max_completion_length = self.max_completion_length
 
-        # Sleep level 2 discards the weights, so waking up isn't enough: they must be re-pushed from the training
-        # model. vLLM's `reload_weights` can't be used here, as it reloads the initial checkpoint from disk rather
-        # than the current training weights. See https://github.com/vllm-project/vllm/issues/29341
+        # Bring the weights back if a previous `generate()` put them to sleep. `sync_weights()` does this too,
+        # but the trainer only calls it when the training step advanced, so a second `generate()` within one step
+        # (an eval loop with more than one batch, say) has to restore them here or it runs on offloaded weights.
         if self.mode == "colocate" and self.enable_sleep_mode and self._llm_weights_sleeping:
-            self.sync_weights()
+            if self._sleep_level == 2:
+                # Level 2 discards the weights, so waking up isn't enough: they must be re-pushed from the
+                # training model. vLLM's `reload_weights` can't be used here, as it reloads the initial
+                # checkpoint from disk rather than the current training weights.
+                # See https://github.com/vllm-project/vllm/issues/29341
+                self.sync_weights()
+            else:
+                # Level 1 only offloaded them to CPU. The base model is frozen and vLLM already holds the
+                # adapter this step generated with, so restoring in place is enough -- nothing to re-push.
+                # This is gated on `_llm_weights_sleeping` rather than done unconditionally below because
+                # `CuMemAllocator.wake_up` re-maps every matching allocation without checking whether it is
+                # already mapped, so waking "weights" twice between two sleeps would double-map.
+                self.llm.wake_up(tags=["weights"])
+                self._llm_weights_sleeping = False
 
         # Generate completions using vLLM: gather all prompts and use them in a single call in the main process
         if self.mode == "server":
@@ -884,6 +898,6 @@ class VLLMGeneration:
 
             if self.enable_sleep_mode:
                 self.llm.sleep(level=self._sleep_level)
-                self._llm_weights_sleeping = self._sleep_level == 2
+                self._llm_weights_sleeping = True
 
         return prompt_ids, completion_ids, logprobs, logprob_token_ids

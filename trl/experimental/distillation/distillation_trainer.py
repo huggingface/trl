@@ -505,7 +505,6 @@ class DistillationTrainer(_BaseTrainer):
             )
             self._last_loaded_step = -1  # tag to avoid useless loading during grad accumulation
 
-
     # ──────────────────────────────────────────────────────────────────────
     #  Dataset / Dataloader
     # ──────────────────────────────────────────────────────────────────────
