@@ -389,7 +389,8 @@ class TestDistillationTrainer(TrlTestCase):
     def test_compute_loss_matches_full_logit_reference(self):
         # The chunked JSD path must produce the same loss as the full-logit JSD it replaced (the handover). This also
         # checks the wiring: the student stays the student, the teacher the teacher, and only completion positions score.
-        trainer = self._make_local_trainer(beta=0.5)
+        # A non-symmetric `beta` (0.25, not 0.5) is used deliberately so a student/teacher swap would change the loss.
+        trainer = self._make_local_trainer(beta=0.25)
         torch.manual_seed(0)
         with torch.no_grad():
             for p in trainer.teacher_model.parameters():
@@ -419,9 +420,9 @@ class TestDistillationTrainer(TrlTestCase):
             t = trainer.teacher_model(input_ids=input_ids, attention_mask=attention_mask).logits[:, keep, :]
             slp = torch.log_softmax(s.float(), dim=-1)
             tlp = torch.log_softmax(t.float(), dim=-1)
-            beta_t = torch.tensor(0.5)
+            beta_t = torch.tensor(0.25)
             mixture = torch.logsumexp(torch.stack([slp + torch.log1p(-beta_t), tlp + torch.log(beta_t)]), dim=0)
-            jsd = 0.5 * F.kl_div(mixture, tlp, reduction="none", log_target=True) + 0.5 * F.kl_div(
+            jsd = 0.25 * F.kl_div(mixture, tlp, reduction="none", log_target=True) + 0.75 * F.kl_div(
                 mixture, slp, reduction="none", log_target=True
             )
             reference = jsd.sum() / num_valid
