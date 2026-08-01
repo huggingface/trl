@@ -31,13 +31,17 @@ from accelerate.utils import gather_object, is_peft_model, set_seed
 from datasets import Dataset, IterableDataset
 from packaging.version import Version
 from torch.utils.data import DataLoader, Sampler
-from transformers import AutoTokenizer, BitsAndBytesConfig, TrainerCallback, is_trackio_available, is_wandb_available
-from transformers.feature_extraction_utils import FeatureExtractionMixin
-from transformers.generation.configuration_utils import GenerationConfig
-from transformers.image_processing_utils import BaseImageProcessor
-from transformers.modeling_utils import PreTrainedModel
-from transformers.processing_utils import ProcessorMixin
-from transformers.tokenization_utils_base import PreTrainedTokenizerBase
+from transformers import (
+    AutoTokenizer,
+    BitsAndBytesConfig,
+    GenerationConfig,
+    PreTrainedModel,
+    PreTrainedTokenizerBase,
+    ProcessorMixin,
+    TrainerCallback,
+    is_trackio_available,
+    is_wandb_available,
+)
 from transformers.utils import is_liger_kernel_available, is_peft_available, is_rich_available
 
 from ...data_utils import is_conversational
@@ -281,14 +285,79 @@ def _chunked_divergence_loss(
 
 class DistillationTrainer(_BaseTrainer):
     """
-    Trainer for knowledge distillation from a teacher model to a student model.
+    Trainer for knowledge distillation. The student is trained on-policy — it generates the completions itself — to
+    match the teacher's next-token distribution under a generalized Jensen-Shannon divergence (interpolating forward
+    KL, reverse KL, and JSD via `beta`), as introduced in [On-Policy Distillation of Language
+    Models](https://huggingface.co/papers/2306.13649).
 
-    Supports:
-    - Generalized JSD loss (forward KL, reverse KL, or interpolated JSD via `beta`)
-    - On-policy distillation: the student generates completions, the teacher scores them
-    - Local teacher model
-    - Student on-policy generation via vLLM or model.generate()
-    - Liger kernel for memory-efficient fused JSD loss
+    Example:
+
+    ```python
+    >>> from trl.experimental.distillation import DistillationTrainer
+    >>> from datasets import load_dataset
+
+    >>> dataset = load_dataset("trl-lib/tldr", split="train")
+
+    >>> trainer = DistillationTrainer(
+    ...     model="Qwen/Qwen2.5-0.5B-Instruct",
+    ...     teacher_model="Qwen/Qwen2.5-1.5B-Instruct",
+    ...     train_dataset=dataset,
+    ... )
+    >>> trainer.train()
+    ```
+
+    Args:
+        model (`str` or [`~transformers.PreTrainedModel`] or [`~peft.PeftModel`]):
+            Model to be trained. Can be either:
+
+            - A string, being the *model id* of a pretrained model hosted inside a model repo on huggingface.co, or a
+              path to a *directory* containing model weights saved using
+              [`~transformers.PreTrainedModel.save_pretrained`], e.g., `'./my_model_directory/'`. The model is loaded
+              using `<ModelArchitecture>.from_pretrained` (where `<ModelArchitecture>` is derived from the model
+              config) with the keyword arguments in `args.model_init_kwargs`. If `dtype` is not specified in
+              `args.model_init_kwargs`, it defaults to `float32`. This differs from
+              [`~transformers.PreTrainedModel.from_pretrained`], where (since Transformers v5) the dtype is inferred
+              from the model config.
+            - A [`~transformers.PreTrainedModel`] object. Only causal language models are supported.
+            - A [`~peft.PeftModel`] object. Only causal language models are supported.
+        teacher_model (`str` or [`~transformers.PreTrainedModel`], *optional*):
+            Teacher model whose next-token distribution the student is trained to match. Can be a *model id* / path
+            (loaded like `model`, using `args.teacher_model_init_kwargs`) or an instantiated
+            [`~transformers.PreTrainedModel`]. It must share the student's vocabulary. May be omitted by subclasses that
+            supply the teacher another way (e.g. a remote server).
+        args ([`DistillationConfig`], *optional*):
+            Configuration for this trainer. If `None`, a default configuration is used.
+        train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`], *optional*):
+            Dataset to use for training. It must include a column `"prompt"`. Any additional columns in the dataset is
+            ignored. The format of the samples can be either:
+
+            - [Standard](dataset_formats#standard): Each sample contains plain text.
+            - [Conversational](dataset_formats#conversational): Each sample contains structured messages (e.g., role
+              and content).
+
+            When `train_dataset` is an [`~datasets.IterableDataset`] (e.g. a streaming dataset), `max_steps` must be set
+            in the training arguments, since its length cannot be inferred and the total number of training steps is
+            required to bound the training loop and configure the learning rate scheduler.
+        eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`], [`~datasets.DatasetDict`], [`~datasets.IterableDatasetDict`] or `dict[str, Dataset | IterableDataset]`):
+            Dataset to use for evaluation. It must meet the same requirements as `train_dataset`.
+        processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.ProcessorMixin`], *optional*):
+            Processing class used to process the data. If `None`, it is loaded from the model's name with
+            [`~transformers.AutoTokenizer.from_pretrained`]. A padding token, `tokenizer.pad_token`, must be set; if the
+            processing class has not set one, `tokenizer.eos_token` is used as the default.
+        callbacks (list of [`~transformers.TrainerCallback`], *optional*):
+            List of callbacks to customize the training loop. Will add those to the list of default callbacks detailed
+            in [here](https://huggingface.co/docs/transformers/main_classes/callback).
+
+            If you want to remove one of the default callbacks used, use the [`~transformers.Trainer.remove_callback`]
+            method.
+        optimizers (`tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None]`, *optional*, defaults to `(None, None)`):
+            A tuple containing the optimizer and the scheduler to use. Will default to an instance of `AdamW` on your
+            model and a scheduler given by [`~transformers.get_linear_schedule_with_warmup`] controlled by `args`.
+        quantization_config ([`~transformers.BitsAndBytesConfig`], *optional*):
+            Quantization configuration used when loading the model from a model identifier. Combine with `peft_config`
+            for QLoRA training. Ignored if the model is already instantiated.
+        peft_config ([`~peft.PeftConfig`], *optional*):
+            PEFT configuration used to wrap the model. If `None`, the model is not wrapped.
     """
 
     _tag_names = ["trl", "distillation"]
@@ -315,11 +384,7 @@ class DistillationTrainer(_BaseTrainer):
         args: DistillationConfig | None = None,
         train_dataset: Dataset | None = None,
         eval_dataset: Dataset | dict[str, Dataset] | None = None,
-        processing_class: PreTrainedTokenizerBase
-        | BaseImageProcessor
-        | FeatureExtractionMixin
-        | ProcessorMixin
-        | None = None,
+        processing_class: PreTrainedTokenizerBase | ProcessorMixin | None = None,
         callbacks: list[TrainerCallback] | None = None,
         optimizers: tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
         quantization_config: "BitsAndBytesConfig | None" = None,
@@ -328,7 +393,7 @@ class DistillationTrainer(_BaseTrainer):
         if args is None:
             args = DistillationConfig(output_dir="tmp_distillation")
 
-        # ── Student model loading ──
+        # Student model loading
         # `_VALID_DICT_FIELDS` already parses any JSON-string form of these in `DistillationConfig.__post_init__`, so
         # they are dicts (or None) here; copy so the setdefaults below don't mutate the config.
         model_init_kwargs = dict(args.model_init_kwargs or {})
@@ -370,7 +435,7 @@ class DistillationTrainer(_BaseTrainer):
             else inspect.signature(model.get_base_model().forward).parameters.keys()
         )
 
-        # ── Processing class (tokenizer) ──
+        # Processing class (tokenizer)
         if processing_class is None and model_name_or_path is not None:
             processing_class = AutoTokenizer.from_pretrained(
                 model_name_or_path, trust_remote_code=args.trust_remote_code
@@ -382,7 +447,7 @@ class DistillationTrainer(_BaseTrainer):
             processing_class.tokenizer if isinstance(processing_class, ProcessorMixin) else processing_class
         )
 
-        # ── PEFT ──
+        # PEFT
         if peft_config is not None:
             if not is_peft_available():
                 raise ImportError(
@@ -484,7 +549,7 @@ class DistillationTrainer(_BaseTrainer):
         # wrapper's forward; route them through `_forward_redirection` so `prepare_for_backward()` still fires.
         self._forward_redirection = _ForwardRedirection()
 
-        # ── Liger fused JSD loss ──
+        # Liger fused JSD loss
         self.use_liger_loss = False
         if args.use_liger_kernel:
             if not is_liger_kernel_available():
@@ -502,7 +567,7 @@ class DistillationTrainer(_BaseTrainer):
             )
             self.use_liger_loss = True
 
-        # ── Teacher model setup ──
+        # Teacher model setup
         # `teacher_model` may be None: subclasses (e.g. ServerDistillationTrainer) supply the teacher another way.
         if teacher_model is not None:
             if isinstance(teacher_model, str):
@@ -578,7 +643,7 @@ class DistillationTrainer(_BaseTrainer):
         # Add tags to the model
         self.model.add_model_tags(self._tag_names)
 
-        # ── Prepare teacher model (after super().__init__ so accelerator is ready) ──
+        # Prepare teacher model (after super().__init__ so accelerator is ready)
         if teacher_model is not None:
             # The divergence compares the full next-token distribution of the student against the teacher's, so both
             # must be defined over the same vocabulary.
@@ -617,7 +682,7 @@ class DistillationTrainer(_BaseTrainer):
         if args.disable_dropout:
             disable_dropout_in_model(self.model)
 
-        # ── Store config values ──
+        # Store config values
         self.beta = args.beta
         self.temperature = args.temperature
         self.top_p = args.top_p
@@ -639,7 +704,7 @@ class DistillationTrainer(_BaseTrainer):
         # generating with transformers. We could skip it if we use vLLM, but it's safer to set it in all cases.
         set_seed(args.seed, device_specific=True)
 
-        # ── Generation config ──
+        # Generation config
         generation_kwargs = {
             "max_new_tokens": self.max_completion_length,
             "do_sample": True,
@@ -659,7 +724,7 @@ class DistillationTrainer(_BaseTrainer):
         # Keep training-specific generation kwargs to overwrite model's original generation config
         self.generation_kwargs = generation_kwargs
 
-        # ── Metrics & Logging ──
+        # Metrics & Logging
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
         self._total_train_tokens = 0
         self._current_train_step_time = 0.0
@@ -678,7 +743,7 @@ class DistillationTrainer(_BaseTrainer):
         if self.accelerator.is_main_process and self.log_completions:
             os.makedirs(os.path.join(self.args.output_dir, "completions"), exist_ok=True)
 
-        # ── vLLM for student generation ──
+        # vLLM for student generation
         self.use_vllm = args.use_vllm
         if self.use_vllm:
             if not is_vllm_available():
@@ -720,10 +785,6 @@ class DistillationTrainer(_BaseTrainer):
                 generation_kwargs=args.generation_kwargs,
             )
             self._last_loaded_step = -1  # tag to avoid useless loading during grad accumulation
-
-    # ──────────────────────────────────────────────────────────────────────
-    #  Dataset / Dataloader
-    # ──────────────────────────────────────────────────────────────────────
 
     def _set_signature_columns_if_needed(self):
         # If `self.args.remove_unused_columns` is True, non-signature columns are removed.
@@ -858,8 +919,7 @@ class DistillationTrainer(_BaseTrainer):
 
         Conversational prompts (a list of chat messages) are rendered with the chat template and a trailing generation
         prompt; standard prompts (plain strings) are tokenized directly. The per-example tools/environments path and
-        the image extraction are added with VLM support later (issue #6449). Unwired until the GRPO generation stack
-        lands.
+        the image extraction are added with VLM support later (issue #6449).
         """
         if is_conversational({"prompt": prompts[0]}):
             tokenized = self.processing_class.apply_chat_template(
@@ -1092,10 +1152,6 @@ class DistillationTrainer(_BaseTrainer):
         }
         return output
 
-    # ──────────────────────────────────────────────────────────────────────
-    #  Buffering across gradient accumulation steps
-    # ──────────────────────────────────────────────────────────────────────
-
     @profiling_decorator
     def _prepare_inputs(self, generation_batch: dict[str, torch.Tensor | Any]) -> dict[str, torch.Tensor | Any]:
         # Prepares inputs for model training/evaluation by managing completion generation and batch handling.
@@ -1127,21 +1183,18 @@ class DistillationTrainer(_BaseTrainer):
             inputs = self._generate_and_score_completions(generation_batch)
         return inputs
 
-    # ──────────────────────────────────────────────────────────────────────
-    #  Loss computation
-    # ──────────────────────────────────────────────────────────────────────
-
+    @profiling_decorator
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         # transformers computes `num_items_in_batch` from the raw dataloader labels, before on-policy generation
         # replaces the completions; use the count over the generated completions instead (computed in
         # `_generate_and_score_completions`). Divide by the process count so the per-process loss compensates for DDP
-        # gradient averaging (as GRPO does).
+        # gradient averaging.
         if self.model.training and inputs.get("num_items_in_batch") is not None:
             num_items_in_batch = inputs["num_items_in_batch"].clamp(min=1.0) / self.accelerator.num_processes
 
         # Route the whole loss (backbone + `lm_head` projection + JSD) through the DDP/FSDP wrapper via
         # `_forward_redirection`, so DDP.forward() fires `prepare_for_backward()` and FSDP/DeepSpeed keep the student's
-        # sharded parameters (including the `lm_head`) materialized for the projection. Mirrors GRPO's `compute_liger_loss`.
+        # sharded parameters (including the `lm_head`) materialized for the projection.
         unwrapped_student = self.accelerator.unwrap_model(model)
         loss = self._forward_redirection(
             model, unwrapped_student, self._compute_loss, unwrapped_student, inputs, num_items_in_batch
@@ -1238,10 +1291,6 @@ class DistillationTrainer(_BaseTrainer):
             temperature=self.temperature,
         )
         return loss
-
-    # ──────────────────────────────────────────────────────────────────────
-    #  Training step & Logging
-    # ──────────────────────────────────────────────────────────────────────
 
     def training_step(self, model, inputs, num_items_in_batch):
         time_before = time.perf_counter()
