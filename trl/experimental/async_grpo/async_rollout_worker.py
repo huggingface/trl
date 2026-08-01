@@ -62,12 +62,12 @@ def _pil_to_base64(image) -> str:
 def _messages_to_openai_mm(messages: "Messages") -> list[dict[str, Any]]:
     """Convert internal messages to OpenAI chat format with `image_url` data-URIs.
 
-    Filled image parts (`{"type": "image", "image": <PIL>}`) become OpenAI `image_url` parts so the vLLM chat
-    endpoint can consume the images; text parts and plain-string content pass through unchanged. Only needed for
-    the VLM generation path (stock vLLM `/v1/completions` cannot carry images).
+    Filled image parts (`{"type": "image", "image": <PIL>}`) become OpenAI `image_url` parts so the vLLM chat endpoint
+    can consume the images; text parts and plain-string content pass through unchanged. Only needed for the VLM
+    generation path (stock vLLM `/v1/completions` cannot carry images).
 
-    `tool_calls` and a tool message's `name` are carried over as-is: the server re-renders the whole conversation,
-    so dropping them would make it render a different history than the `prompt_ids` the loss is computed against.
+    `tool_calls` and a tool message's `name` are carried over as-is: the server re-renders the whole conversation, so
+    dropping them would make it render a different history than the `prompt_ids` the loss is computed against.
     """
     out = []
     for message in messages:
@@ -99,10 +99,10 @@ def _messages_to_openai_mm(messages: "Messages") -> list[dict[str, Any]]:
 def _environment_exposes_tools(environment_factory) -> bool:
     """Whether any environment would give the model tools to call.
 
-    An environment's tools are its public methods other than the reserved `reset` / `get_reward` (see
-    `_run_loops`), so an environment that only serves observations exposes none. Checked on the class, without
-    instantiating: building one can open sockets or spawn processes. A factory that isn't a class (e.g. a lambda)
-    is treated as tool-less, matching the lenient default.
+    An environment's tools are its public methods other than the reserved `reset` / `get_reward` (see `_run_loops`), so
+    an environment that only serves observations exposes none. Checked on the class, without instantiating: building
+    one can open sockets or spawn processes. A factory that isn't a class (e.g. a lambda) is treated as tool-less,
+    matching the lenient default.
     """
     if environment_factory is None:
         return False

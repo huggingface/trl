@@ -314,10 +314,10 @@ def _decode_tool_call_arguments(messages: list[Message]) -> list[Message]:
     """Return `messages` with every tool call's `arguments` decoded from its JSON string into a mapping.
 
     The trace records what went over the wire, and the OpenAI format sends `arguments` as a JSON *string*. Chat
-    templates disagree on what they expect: Hermes-style ones interpolate the string directly, while Qwen3.5 and
-    other XML-style templates iterate it (`{%- for k, v in tool_call.arguments|items %}`), which raises
-    `TypeError: Can only get item pairs from a mapping` on a string. Decoding first satisfies both, and matches
-    what `_msg_to_llm_response` already does on the white-box path.
+    templates disagree on what they expect: Hermes-style ones interpolate the string directly, while Qwen3.5 and other
+    XML-style templates iterate it (`{%- for k, v in tool_call.arguments|items %}`), which raises `TypeError: Can only
+    get item pairs from a mapping` on a string. Decoding first satisfies both, and matches what `_msg_to_llm_response`
+    already does on the white-box path.
 
     Copies the messages it rewrites: the same trace entries are read again by `_messages_from_trace` and
     `_tool_call_counts_by_name`, which expect the wire format.

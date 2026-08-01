@@ -1012,9 +1012,10 @@ class AsyncGRPOTrainer(_BaseTrainer):
         `position_ids`. Qwen VLMs only compute their 3D M-RoPE (temporal/height/width) when `position_ids is None`, so
         those 1D positions silently disable M-RoPE: the training positions diverge from the 3D positions vLLM used to
         generate, the log-prob ratio drifts, and correctness suffers. We fix it exactly as veRL / prime-rl (#2819) do:
-        embed the text and scatter the image features here (so the vision tower never sees the text `cu_seq_lens` and the
-        kwarg collision it causes), compute 3D M-RoPE per packed sub-sequence with `get_rope_index` (each sequence reset
-        to position 0, matching generation), and hand FlashAttention explicit `cu_seq_lens` for block-diagonal attention.
+        embed the text and scatter the image features here (so the vision tower never sees the text `cu_seq_lens` and
+        the kwarg collision it causes), compute 3D M-RoPE per packed sub-sequence with `get_rope_index` (each sequence
+        reset to position 0, matching generation), and hand FlashAttention explicit `cu_seq_lens` for block-diagonal
+        attention.
 
         Args:
             model (`nn.Module`):
@@ -1031,7 +1032,8 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 - `inputs_embeds` (`torch.FloatTensor` of shape `(1, sum_seq_len, hidden)`): text embeddings with image
                   features scattered into the placeholder positions.
                 - `position_ids_3d` (`torch.LongTensor` of shape `(3, 1, sum_seq_len)`): per-sequence 3D M-RoPE.
-                - `fa_kwargs` (`dict`): explicit FlashAttention `cu_seq_lens_q`/`cu_seq_lens_k`/`max_length_q`/`max_length_k`.
+                - `fa_kwargs` (`dict`): explicit FlashAttention
+                  `cu_seq_lens_q`/`cu_seq_lens_k`/`max_length_q`/`max_length_k`.
         """
         vlm = self.accelerator.unwrap_model(model).model  # Qwen3_5Model: visual + language_model + get_rope_index
 
@@ -1068,9 +1070,13 @@ class AsyncGRPOTrainer(_BaseTrainer):
         image_grid_thw = forward_kwargs["image_grid_thw"]
         with self.accelerator.autocast():
             inputs_embeds = vlm.language_model.embed_tokens(input_ids)
-            image_embeds = vlm.get_image_features(forward_kwargs["pixel_values"], image_grid_thw, return_dict=True).pooler_output
+            image_embeds = vlm.get_image_features(
+                forward_kwargs["pixel_values"], image_grid_thw, return_dict=True
+            ).pooler_output
             image_embeds = torch.cat(image_embeds, dim=0).to(inputs_embeds.device, inputs_embeds.dtype)
-            image_mask, _ = vlm.get_placeholder_mask(input_ids, inputs_embeds=inputs_embeds, image_features=image_embeds)
+            image_mask, _ = vlm.get_placeholder_mask(
+                input_ids, inputs_embeds=inputs_embeds, image_features=image_embeds
+            )
             inputs_embeds = inputs_embeds.masked_scatter(image_mask, image_embeds)
 
         # 3D M-RoPE per packed sub-sequence: run `get_rope_index` on each slice (it starts every sequence at position 0),
@@ -1079,7 +1085,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
         tokens_per_image = (image_grid_thw.prod(-1) // vlm.visual.spatial_merge_size**2).tolist()
         bounds = cu_seq_lens.tolist()
         position_ids_3d, img_ptr = [], 0
-        for start, end in zip(bounds[:-1], bounds[1:]):
+        for start, end in zip(bounds[:-1], bounds[1:], strict=True):
             seg_ids = input_ids[:, start:end]
             n_image_tokens = int((seg_ids[0] == self._image_token_id).sum())
             seg_grids, acc = [], 0
@@ -1132,7 +1138,13 @@ class AsyncGRPOTrainer(_BaseTrainer):
             inputs_embeds, position_ids, fa_kwargs = self._packed_vlm_forward_inputs(
                 model, input_ids, position_ids, forward_kwargs
             )
-            for consumed in ("pixel_values", "image_grid_thw", "pixel_values_videos", "video_grid_thw", self._mm_token_type_key):
+            for consumed in (
+                "pixel_values",
+                "image_grid_thw",
+                "pixel_values_videos",
+                "video_grid_thw",
+                self._mm_token_type_key,
+            ):
                 forward_kwargs.pop(consumed, None)
             forward_kwargs["inputs_embeds"] = inputs_embeds
             forward_kwargs.update(fa_kwargs)
