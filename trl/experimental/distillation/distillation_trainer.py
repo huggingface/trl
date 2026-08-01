@@ -69,7 +69,8 @@ if is_liger_kernel_available():
 
 if is_peft_available():
     import peft
-    from peft import PeftConfig, get_peft_model
+    from peft import PeftConfig, PromptLearningConfig, get_peft_model
+    from peft.tuners.tuners_utils import BaseTunerLayer
 
 
 if is_trackio_available():
@@ -440,6 +441,31 @@ class DistillationTrainer(_BaseTrainer):
             for param in model.parameters():
                 if param.requires_grad:
                     param.data = param.data.to(torch.bfloat16)
+
+        # Both loss paths (chunked and Liger) read `lm_head.weight` directly and run the backbone via
+        # `_get_last_hidden_state`, bypassing `PeftModel.forward()` — so PEFT setups that live outside the backbone
+        # weights are silently ignored. Fail loudly rather than train on a silently-wrong objective.
+        if is_peft_model(model):
+            # When the LM head is targeted by a PEFT adapter (`"lm_head"` in `target_modules`), `lm_head.weight` is the
+            # frozen base weight and the trainable adapter lives in separate submodules the loss never sees, so the head
+            # adapter would receive no gradient.
+            output_embeddings = model.get_output_embeddings()
+            if isinstance(output_embeddings, BaseTunerLayer):
+                raise ValueError(
+                    "Applying a PEFT adapter to `lm_head` is not supported. The distillation loss reads "
+                    "`lm_head.weight` directly, so the adapter on the head is ignored and never trained. Remove "
+                    "`'lm_head'` from your `target_modules`."
+                )
+            # Prompt-learning methods (PromptTuning, PrefixTuning, P-Tuning) inject virtual tokens via
+            # `PeftModel.forward()`, which the loss bypasses by calling the backbone directly, so virtual tokens are
+            # never prepended and the loss is computed on the wrong sequence.
+            if any(isinstance(cfg, PromptLearningConfig) for cfg in model.peft_config.values()):
+                raise ValueError(
+                    "Prompt-learning PEFT methods (PromptTuning, PrefixTuning, P-Tuning) are not supported. The "
+                    "distillation loss bypasses `PeftModel.forward()` by calling the backbone directly, so virtual "
+                    "tokens are never prepended and the loss is computed on the wrong sequence. Use a weight-based "
+                    "adapter such as LoRA instead."
+                )
 
         # The chunked JSD loss (and the Liger path) call the student backbone directly, bypassing the DDP/FSDP
         # wrapper's forward; route them through `_forward_redirection` so `prepare_for_backward()` still fires.
