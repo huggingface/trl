@@ -38,6 +38,7 @@ import numpy as np
 from accelerate.logging import get_logger
 from datasets import Dataset
 from transformers import PreTrainedTokenizerBase, ProcessorMixin
+from transformers.utils import get_json_schema
 
 from ...chat_template_utils import (
     _SUPPORTS_RESPONSE_TEMPLATE,
@@ -58,18 +59,26 @@ def _pil_to_base64(image) -> str:
     return base64.b64encode(buffer.getvalue()).decode("utf-8")
 
 
-def _messages_to_openai_mm(messages: "Messages") -> list[dict]:
+def _messages_to_openai_mm(messages: "Messages") -> list[dict[str, Any]]:
     """Convert internal messages to OpenAI chat format with `image_url` data-URIs.
 
     Filled image parts (`{"type": "image", "image": <PIL>}`) become OpenAI `image_url` parts so the vLLM chat
     endpoint can consume the images; text parts and plain-string content pass through unchanged. Only needed for
     the VLM generation path (stock vLLM `/v1/completions` cannot carry images).
+
+    `tool_calls` and a tool message's `name` are carried over as-is: the server re-renders the whole conversation,
+    so dropping them would make it render a different history than the `prompt_ids` the loss is computed against.
     """
     out = []
     for message in messages:
+        converted = {"role": message["role"]}
+        for key in ("tool_calls", "name", "tool_call_id"):
+            if key in message:
+                converted[key] = message[key]
         content = message["content"]
         if not isinstance(content, list):
-            out.append({"role": message["role"], "content": content})
+            converted["content"] = content
+            out.append(converted)
             continue
         parts = []
         for part in content:
@@ -82,13 +91,35 @@ def _messages_to_openai_mm(messages: "Messages") -> list[dict]:
                 )
             elif isinstance(part, dict) and part.get("type") == "text":
                 parts.append({"type": "text", "text": part["text"]})
-        out.append({"role": message["role"], "content": parts})
+        converted["content"] = parts
+        out.append(converted)
     return out
+
+
+def _environment_exposes_tools(environment_factory) -> bool:
+    """Whether any environment would give the model tools to call.
+
+    An environment's tools are its public methods other than the reserved `reset` / `get_reward` (see
+    `_run_loops`), so an environment that only serves observations exposes none. Checked on the class, without
+    instantiating: building one can open sockets or spawn processes. A factory that isn't a class (e.g. a lambda)
+    is treated as tool-less, matching the lenient default.
+    """
+    if environment_factory is None:
+        return False
+    factories = environment_factory.values() if isinstance(environment_factory, dict) else [environment_factory]
+    return any(
+        name not in ("reset", "get_reward") and not name.startswith("_")
+        for factory in factories
+        if inspect.isclass(factory)
+        for name, _ in inspect.getmembers(factory, predicate=inspect.isfunction)
+    )
 
 
 logger = get_logger(__name__)
 
-Messages: TypeAlias = list[dict[str, str]]
+# A message's `content` is a plain string for text rollouts, or a list of typed parts
+# (`{"type": "text", ...}` / `{"type": "image", "image": <PIL>}`) once images are in play.
+Messages: TypeAlias = list[dict[str, Any]]
 RolloutId: TypeAlias = str
 
 _RETRYABLE_HTTP_ERRORS = (aiohttp.ClientError, asyncio.TimeoutError, TimeoutError, ConnectionResetError)
@@ -370,14 +401,14 @@ class _AsyncRolloutLoop:
         # templates, so tool calls can be parsed. Skip if one is already set; warn if it's a migratable legacy schema.
         has_template = getattr(tok, "response_template", None) is not None
         has_schema = getattr(tok, "response_schema", None) is not None
-        uses_tools = bool(tools) or environment_factory is not None
+        uses_tools = bool(tools) or _environment_exposes_tools(environment_factory)
         if not has_template and not has_schema:
             try:
                 tok = add_response_schema(tok)
             except ValueError:
                 # Response parsing only matters for extracting tool calls. Some chat templates (notably several
-                # VLMs) aren't recognized by `add_response_schema`; a plain reward-function run never parses tool
-                # calls, so skip it there and re-raise only when tools/environments are actually in play.
+                # VLMs) aren't recognized by `add_response_schema`; a run that never parses tool calls doesn't need
+                # one, so skip it there and re-raise only when tools are actually in play.
                 if uses_tools:
                     raise
         elif has_schema and not has_template and _SUPPORTS_RESPONSE_TEMPLATE:
@@ -855,7 +886,9 @@ class _AsyncRolloutLoop:
                     chat_template=self.chat_template,
                     **self.chat_template_kwargs,
                 )
-            turn_ids, turn_logprobs = await self._generate_one_turn(prompt_ids, messages=messages, images=images)
+            turn_ids, turn_logprobs = await self._generate_one_turn(
+                prompt_ids, messages=messages, images=images, tools=tools
+            )
             if self._can_parse_response:
                 assistant_message = parse_response(self.tokenizer, turn_ids, prefix=prompt_ids)
             else:
@@ -900,7 +933,12 @@ class _AsyncRolloutLoop:
         return tool_messages, n_calls, n_failures
 
     async def _generate_one_turn(
-        self, prompt_ids: list[int], *, messages: "Messages | None" = None, images: list | None = None
+        self,
+        prompt_ids: list[int],
+        *,
+        messages: "Messages | None" = None,
+        images: list | None = None,
+        tools: list[Callable] | None = None,
     ) -> tuple[list[int], list[float]]:
         # VLM branch: stock vLLM `/v1/completions` cannot carry images, so images go through the chat endpoint as
         # OpenAI `image_url` parts. `return_token_ids` returns the completion token ids and `logprobs` the per-token
@@ -916,6 +954,11 @@ class _AsyncRolloutLoop:
                 "logprobs": True,
                 "chat_template_kwargs": self.chat_template_kwargs,
             }
+            # The server re-renders the prompt from `messages`, so it needs the same tools the processor rendered
+            # `prompt_ids` with. Without them the model would generate under a prompt that lacks the tool
+            # boilerplate the loss is computed against.
+            if tools:
+                payload["tools"] = [get_json_schema(tool) for tool in tools]
             output = await _retry_on_http_error(
                 lambda: self._post("/v1/chat/completions", payload, self.request_timeout),
                 max_attempts=30,
