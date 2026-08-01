@@ -937,7 +937,11 @@ class BCOTrainer(_BaseTrainer):
 
         with torch.no_grad():
             all_embeddings = torch.empty(0)
-            for padded_batch in tqdm(iterable=data_loader, desc="Building sample prompt embeddings"):
+            for padded_batch in tqdm(
+                iterable=data_loader,
+                desc="Building sample prompt embeddings",
+                disable=bool(os.environ.get("TQDM_DISABLE", "")),
+            ):
                 embeddings = self._vectorize_prompt(
                     input_ids=padded_batch["embedding_input_ids"],
                     attention_mask=padded_batch["embedding_attention_mask"],
@@ -1009,7 +1013,11 @@ class BCOTrainer(_BaseTrainer):
             data_loader = self.accelerator.prepare(DataLoader(self.train_dataset, **dataloader_params))
             reference_completion_logps = []
 
-            for padded_batch in tqdm(iterable=data_loader, desc="Train dataset reference log probs"):
+            for padded_batch in tqdm(
+                iterable=data_loader,
+                desc="Train dataset reference log probs",
+                disable=bool(os.environ.get("TQDM_DISABLE", "")),
+            ):
                 reference_completion_logp = self.compute_reference_log_probs(padded_batch)
 
                 reference_completion_logp = self.accelerator.gather_for_metrics(reference_completion_logp)
@@ -1052,7 +1060,11 @@ class BCOTrainer(_BaseTrainer):
 
             reference_completion_logps = []
 
-            for padded_batch in tqdm(iterable=data_loader, desc="Eval dataset reference log probs"):
+            for padded_batch in tqdm(
+                iterable=data_loader,
+                desc="Eval dataset reference log probs",
+                disable=bool(os.environ.get("TQDM_DISABLE", "")),
+            ):
                 reference_completion_logp = self.compute_reference_log_probs(padded_batch)
 
                 reference_completion_logp = self.accelerator.gather_for_metrics(reference_completion_logp)

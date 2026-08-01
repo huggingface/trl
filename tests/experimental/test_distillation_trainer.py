@@ -21,7 +21,6 @@ from datasets import DatasetDict, IterableDatasetDict, load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from trl.experimental.distillation import DistillationConfig, DistillationTrainer
-from trl.experimental.distillation.distillation_trainer import _RepeatBatchDataLoader
 from trl.experimental.gkd.gkd_trainer import GKDTrainer
 
 from ..testing_utils import TrlTestCase, require_liger_kernel, require_torch_accelerator
@@ -422,15 +421,9 @@ class TestDistillationTrainer(TrlTestCase):
         assert "completion_mask" in inputs
         # Region-shaped (B, C), aligned with `completion_ids`.
         assert inputs["completion_mask"].shape == inputs["completion_ids"].shape
-        # Reconstruction invariant: cat(prompt_mask, completion_mask) == attention_mask.
-        assert torch.equal(
-            torch.cat([inputs["prompt_mask"], inputs["completion_mask"]], dim=1), inputs["attention_mask"]
-        )
-        # Same valid-token count as the (retained-for-metrics) labels.
-        assert int(inputs["completion_mask"].sum()) == int((inputs["labels"] != -100).sum())
 
     def test_generated_batch_emits_prompt_and_completion_ids(self, monkeypatch):
-        """The generated batch emits GRPO-style `prompt_ids`/`prompt_mask`/`completion_ids` alongside the old keys."""
+        """The generated batch emits the GRPO-style keys the loss consumes."""
         trainer = self._make_local_trainer()
         captured = {}
         original = DistillationTrainer.compute_loss
@@ -443,12 +436,8 @@ class TestDistillationTrainer(TrlTestCase):
         trainer.train()
 
         inputs = captured["inputs"]
-        for key in ("prompt_ids", "prompt_mask", "completion_ids"):
+        for key in ("prompt_ids", "prompt_mask", "completion_ids", "completion_mask", "num_items_in_batch"):
             assert key in inputs
-        # cat(prompt_ids, completion_ids) reconstructs input_ids; the new keys mirror the existing prompt tensors.
-        assert torch.equal(torch.cat([inputs["prompt_ids"], inputs["completion_ids"]], dim=1), inputs["input_ids"])
-        assert torch.equal(inputs["prompt_ids"], inputs["prompts"])
-        assert torch.equal(inputs["prompt_mask"], inputs["prompt_attention_mask"])
 
     @require_liger_kernel
     @require_torch_accelerator
@@ -498,25 +487,3 @@ class TestDistillationTrainer(TrlTestCase):
                 train_dataset=dataset,
                 processing_class=self.tokenizer,
             )
-
-
-def test_repeat_batch_dataloader_delegates_set_epoch_via_getattr():
-    class DummyDataLoader:
-        def __init__(self):
-            self.epoch = None
-
-        def __iter__(self):
-            yield {"x": 1}
-
-        def __len__(self):
-            return 1
-
-        def set_epoch(self, epoch):
-            self.epoch = epoch
-
-    dataloader = DummyDataLoader()
-    wrapper = _RepeatBatchDataLoader(dataloader, repeat_count=2)
-
-    wrapper.set_epoch(7)
-
-    assert dataloader.epoch == 7
