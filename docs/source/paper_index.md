@@ -256,6 +256,26 @@ trainer = GRPOTrainer(
 )
 ```
 
+### On-Policy RL with Optimal Reward Baseline
+
+**📄 Paper**: https://huggingface.co/papers/2505.23585
+
+OPO uses exact on-policy training and replaces the arithmetic mean reward baseline with the
+completion-length-weighted mean reward of each group. It does not use reward standard deviation normalization, KL
+regularization, or entropy regularization. To reproduce the OPO algorithm with [`GRPOTrainer`], use this configuration:
+
+```python
+from trl import GRPOConfig
+
+training_args = GRPOConfig(
+    reward_baseline="length_weighted",
+    scale_rewards="none",
+    beta=0.0,
+    num_iterations=1,
+    entropy_coef=0.0,
+)
+```
+
 ### Beyond the 80/20 Rule: High-Entropy Minority Tokens Drive Effective Reinforcement Learning for LLM Reasoning
 
 **📜 Paper**: https://huggingface.co/papers/2506.01939

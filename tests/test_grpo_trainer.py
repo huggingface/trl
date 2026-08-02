@@ -2247,6 +2247,80 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    def test_reward_baseline_config(self):
+        training_args = GRPOConfig(output_dir=self.tmp_dir, report_to="none")
+        assert training_args.reward_baseline == "mean"
+
+        with pytest.raises(ValueError, match="Invalid value for reward_baseline"):
+            GRPOConfig(output_dir=self.tmp_dir, reward_baseline="invalid", report_to="none")
+
+        with pytest.raises(ValueError, match="only supported with"):
+            GRPOConfig(
+                output_dir=self.tmp_dir,
+                reward_baseline="length_weighted",
+                multi_objective_aggregation="normalize_then_sum",
+                report_to="none",
+            )
+
+    def test_train_length_weighted_reward_baseline(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        def reward_func(completions, **kwargs):
+            assert len(completions) == 12
+            return [1.0, 2.0, 4.0, 1.0, 2.0, 4.0, 1.0, None, 4.0, None, None, None]
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=12,
+            num_generations=3,
+            max_completion_length=4,
+            max_steps=1,
+            reward_baseline="length_weighted",
+            scale_rewards="none",
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs=reward_func,
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        def fake_generate(input_ids, **kwargs):
+            # pad_token_id = 151643; eos_token_id = 151645
+            rows = [
+                [1, 151645, 151643, 151643],
+                [1, 2, 151645, 151643],
+                [1, 2, 3, 151645],
+                [1, 151645, 151643, 151643],
+                [2, 151645, 151643, 151643],
+                [3, 151645, 151643, 151643],
+                [1, 151645, 151643, 151643],
+                [1, 2, 151645, 151643],
+                [1, 2, 3, 151645],
+                [1, 151645, 151643, 151643],
+                [1, 2, 151645, 151643],
+                [1, 2, 3, 151645],
+            ]
+            completion_ids = torch.tensor(rows, device=input_ids.device)
+            return torch.cat([input_ids, completion_ids], dim=1)
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+        with patch.object(trainer.model, "generate", side_effect=fake_generate):
+            trainer.train()
+
+        # Group 1 uses lengths [2, 3, 4], group 2 has equal lengths, group 3 excludes the unscorable middle
+        # completion from the weighted baseline, and group 4 is entirely unscorable.
+        expected_advantages = torch.tensor(
+            [-5 / 3, -2 / 3, 4 / 3, -4 / 3, -1 / 3, 5 / 3, -2.0, 0.0, 1.0, 0.0, 0.0, 0.0]
+        )
+        torch.testing.assert_close(torch.tensor(trainer._logs["advantages"]), expected_advantages)
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
     @patch("transformers.generation.utils.GenerationMixin.generate")
     def test_train_with_mask_truncated_completions(self, mock_generate):
         """Test that training works with mask_truncated_completions=True parameter."""

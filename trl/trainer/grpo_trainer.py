@@ -782,6 +782,7 @@ class GRPOTrainer(_BaseTrainer):
         self.use_liger_kernel = args.use_liger_kernel
         self.loss_type = args.loss_type
         self.multi_objective_aggregation = args.multi_objective_aggregation
+        self.reward_baseline = args.reward_baseline
 
         # MoE load-balancing auxiliary loss, applied to Mixture-of-Experts models (no effect otherwise)
         text_config = model.config.get_text_config()
@@ -2707,8 +2708,20 @@ class GRPOTrainer(_BaseTrainer):
             # Apply weights to each reward function's output and sum
             rewards = (rewards_per_func * self.reward_weights.to(device).unsqueeze(0)).nansum(dim=1)
             rewards[unscorable_mask] = torch.nan
-            mean_grouped_rewards = torch.nanmean(rewards.view(-1, num_generations), dim=1)
-            mean_grouped_rewards = mean_grouped_rewards.repeat_interleave(num_generations, dim=0)
+            grouped_rewards = rewards.view(-1, num_generations)
+            if self.reward_baseline == "mean":
+                grouped_reward_baseline = torch.nanmean(grouped_rewards, dim=1)
+            else:
+                if tool_mask_list is not None:
+                    completion_lengths = torch.tensor([sum(mask) for mask in tool_mask_list], device=device)
+                else:
+                    completion_lengths = torch.tensor([len(ids) for ids in completion_ids_list], device=device)
+                agg_completion_lengths = self.accelerator.gather(completion_lengths)
+                grouped_completion_lengths = agg_completion_lengths.view(-1, num_generations)
+                valid_grouped_lengths = grouped_completion_lengths.masked_fill(torch.isnan(grouped_rewards), 0)
+                grouped_reward_baseline = torch.nansum(grouped_rewards * grouped_completion_lengths, dim=1)
+                grouped_reward_baseline /= valid_grouped_lengths.sum(dim=1)
+            grouped_reward_baseline = grouped_reward_baseline.repeat_interleave(num_generations, dim=0)
             if self.scale_rewards in ["group", "none"]:
                 # If self.scale_rewards = "none", we'll only use std_rewards to check for zero std for logging
                 if num_generations > 1:
@@ -2727,7 +2740,7 @@ class GRPOTrainer(_BaseTrainer):
                     f"Invalid value for scale_rewards: {self.scale_rewards}. Must be one of 'batch', 'group', or 'none'."
                 )
 
-            advantages = rewards - mean_grouped_rewards
+            advantages = rewards - grouped_reward_baseline
             if self.scale_rewards != "none":
                 advantages = advantages / (std_rewards + 1e-4)
             is_std_zero = torch.isclose(std_rewards, torch.zeros_like(std_rewards))  # for logging

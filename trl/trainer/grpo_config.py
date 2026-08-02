@@ -231,6 +231,13 @@ class GRPOConfig(_BaseConfig):
               normalized at the batch level when forming advantages. This is the suggested approach from the paper
               [GDPO: Group reward-Decoupled Normalization Policy Optimization for Multi-reward RL
               Optimization](https://huggingface.co/papers/2601.05242).
+        reward_baseline (`str`, *optional*, defaults to `"mean"`):
+            Specifies the baseline used to compute advantages. Supported values are:
+
+            - `"mean"` (default): uses the arithmetic mean reward of each group.
+            - `"length_weighted"`: uses the completion-length-weighted mean reward of each group, as proposed in the
+              [OPO paper](https://huggingface.co/papers/2505.23585). This option is only supported with
+              `multi_objective_aggregation="sum_then_normalize"`.
         scale_rewards (`str` or `bool`, *optional*, defaults to `"group"`):
             Specifies the scaling strategy for rewards. Supported values are:
 
@@ -779,6 +786,15 @@ class GRPOConfig(_BaseConfig):
             "GDPO: Group reward-Decoupled Normalization Policy Optimization for Multi-reward RL Optimization."
         },
     )
+    reward_baseline: str = field(
+        default="mean",
+        metadata={
+            "help": "Specifies the baseline used to compute advantages. Supported values are: "
+            "`'mean'` (default): uses the arithmetic mean reward of each group. "
+            "`'length_weighted'`: uses the completion-length-weighted mean reward of each group, as proposed in the "
+            "OPO paper. This option is only supported with `multi_objective_aggregation='sum_then_normalize'`."
+        },
+    )
     scale_rewards: str = field(
         default="group",
         metadata={
@@ -1061,6 +1077,17 @@ class GRPOConfig(_BaseConfig):
             )
 
         self.scale_rewards = {True: "group", False: "none"}.get(self.scale_rewards, self.scale_rewards)
+
+        if self.reward_baseline not in ["mean", "length_weighted"]:
+            raise ValueError(
+                f"Invalid value for reward_baseline: {self.reward_baseline}. Must be one of 'mean' or "
+                "'length_weighted'."
+            )
+        if self.reward_baseline == "length_weighted" and self.multi_objective_aggregation != "sum_then_normalize":
+            raise ValueError(
+                "reward_baseline='length_weighted' is only supported with "
+                "multi_objective_aggregation='sum_then_normalize'."
+            )
 
         if self.log_completions_hub_repo is not None and not self.log_completions:
             raise ValueError(
