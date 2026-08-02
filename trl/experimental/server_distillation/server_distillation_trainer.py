@@ -17,6 +17,7 @@ from typing import Any
 import torch
 import torch.nn.functional as F
 
+from ...extras.profiling import profiling_decorator
 from ..distillation.distillation_trainer import DistillationTrainer
 from .server_distillation_config import ServerDistillationConfig
 
@@ -279,6 +280,7 @@ class ServerDistillationTrainer(DistillationTrainer):
         else:
             return jsd
 
+    @profiling_decorator
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         # Reconstruct the old `input_ids` / `attention_mask` / `labels` layout this server path is built on from GRPO's
         # keys, so it rides on the base's (evolving) generation. The teacher-server loss is migrated onto the stable
