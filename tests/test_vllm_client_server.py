@@ -14,6 +14,7 @@
 
 import os
 import subprocess
+from multiprocessing import Pipe, Process
 from types import SimpleNamespace
 
 import pytest
@@ -24,7 +25,7 @@ from transformers.testing_utils import torch_device
 from trl.generation.vllm_client import VLLMClient
 from trl.generation.vllm_generation import extract_logprobs
 from trl.import_utils import is_vllm_available
-from trl.scripts.vllm_serve import chunk_list
+from trl.scripts.vllm_serve import _recv_worker_result, _run_llm_worker, chunk_list
 
 from .testing_utils import (
     TrlTestCase,
@@ -43,6 +44,38 @@ if is_vllm_available():
     _is_vllm_ge_014 = Version(vllm.__version__) >= Version("0.14.0")
 else:
     _is_vllm_ge_014 = False
+
+
+class _FailingLLM:
+    def generate(self):
+        raise ValueError("prompt is too long")
+
+
+class TestLLMWorker(TrlTestCase):
+    def test_call_error_is_returned_to_parent(self):
+        parent_connection, child_connection = Pipe()
+        process = Process(target=_run_llm_worker, args=(_FailingLLM(), child_connection))
+        process.start()
+        child_connection.close()
+
+        try:
+            assert parent_connection.poll(5)
+            assert parent_connection.recv() == {"status": "ready"}
+
+            parent_connection.send({"type": "call", "method": "generate"})
+            assert parent_connection.poll(5)
+            with pytest.raises(RuntimeError, match="vLLM worker failed with ValueError: prompt is too long"):
+                _recv_worker_result(parent_connection)
+
+            parent_connection.send({"type": "shutdown"})
+            process.join(timeout=5)
+            assert not process.is_alive()
+            assert process.exitcode == 0
+        finally:
+            if process.is_alive():
+                process.terminate()
+                process.join()
+            parent_connection.close()
 
 
 class TestChunkList(TrlTestCase):

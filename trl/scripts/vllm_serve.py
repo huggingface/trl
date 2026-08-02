@@ -329,6 +329,44 @@ class ScriptArguments:
     )
 
 
+def _run_llm_worker(llm, connection: Connection) -> None:
+    # Send ready signal to parent process
+    connection.send({"status": "ready"})
+
+    while True:
+        # Wait for commands from the parent process
+        try:
+            command = connection.recv()
+        except KeyboardInterrupt:
+            llm.collective_rpc(method="close_communicator")
+            break
+
+        # Handle commands
+        if command["type"] in ["call", "fire_and_forget"]:
+            method_name = command["method"]
+            args, kwargs = command.get("args", ()), command.get("kwargs", {})
+            method = getattr(llm, method_name)
+            try:
+                result = method(*args, **kwargs)
+            except Exception as error:
+                if command["type"] == "call":
+                    connection.send({"error": {"type": type(error).__name__, "message": str(error)}})
+                    continue
+                raise
+            if command["type"] == "call":
+                connection.send({"result": result})
+        elif command["type"] == "shutdown":
+            break
+
+
+def _recv_worker_result(connection: Connection):
+    response = connection.recv()
+    if "error" in response:
+        error = response["error"]
+        raise RuntimeError(f"vLLM worker failed with {error['type']}: {error['message']}")
+    return response["result"]
+
+
 def llm_worker(
     script_args: ScriptArguments, data_parallel_rank: int, master_port: int, connection: Connection
 ) -> None:
@@ -362,27 +400,7 @@ def llm_worker(
         speculative_config=json.loads(script_args.speculative_config) if script_args.speculative_config else None,
     )
 
-    # Send ready signal to parent process
-    connection.send({"status": "ready"})
-
-    while True:
-        # Wait for commands from the parent process
-        try:
-            command = connection.recv()
-        except KeyboardInterrupt:
-            llm.collective_rpc(method="close_communicator")
-            break
-
-        # Handle commands
-        if command["type"] in ["call", "fire_and_forget"]:
-            method_name = command["method"]
-            args, kwargs = command.get("args", ()), command.get("kwargs", {})
-            method = getattr(llm, method_name)
-            result = method(*args, **kwargs)
-            if command["type"] == "call":
-                connection.send(result)
-        elif command["type"] == "shutdown":
-            break
+    _run_llm_worker(llm, connection)
 
 
 def chunk_list(lst: list, n: int) -> list[list]:
@@ -456,6 +474,7 @@ def main(script_args: ScriptArguments):
         parent_connection, child_connection = Pipe()
         process = Process(target=llm_worker, args=(script_args, data_parallel_rank, master_port, child_connection))
         process.start()
+        child_connection.close()
         connections.append(parent_connection)
         processes.append(process)
 
@@ -641,7 +660,7 @@ def main(script_args: ScriptArguments):
             connection.send({"type": "call", "method": "generate", "kwargs": kwargs})
 
         # Receive results
-        all_outputs = [connection.recv() for connection in connections]
+        all_outputs = [_recv_worker_result(connection) for connection in connections]
 
         # Handle empty prompts (see above)
         all_outputs = [output for output, prompts in zip(all_outputs, chunked_prompts, strict=True) if prompts]
@@ -685,7 +704,7 @@ def main(script_args: ScriptArguments):
                 chunk = [{"prompt_token_ids": [0]}]
             kwargs = {"prompts": chunk, "sampling_params": sampling_params}
             connection.send({"type": "call", "method": "generate", "kwargs": kwargs})
-        all_outputs = [connection.recv() for connection in connections]
+        all_outputs = [_recv_worker_result(connection) for connection in connections]
         all_outputs = [output for output, chunk in zip(all_outputs, chunked_prompts, strict=True) if chunk]
         return list(chain.from_iterable(all_outputs))
 
@@ -1097,7 +1116,7 @@ def main(script_args: ScriptArguments):
             connection.send({"type": "call", "method": "chat", "kwargs": kwargs})
 
         # Receive results
-        all_outputs = [connection.recv() for connection in connections]
+        all_outputs = [_recv_worker_result(connection) for connection in connections]
 
         # Handle empty prompts (see above)
         all_outputs = [output for output, prompts in zip(all_outputs, chunked_messages, strict=True) if prompts]
@@ -1184,7 +1203,7 @@ def main(script_args: ScriptArguments):
         for connection in connections:
             connection.send({"type": "call", "method": "reset_prefix_cache"})
         # Wait for and collect all results
-        all_outputs = [connection.recv() for connection in connections]
+        all_outputs = [_recv_worker_result(connection) for connection in connections]
         success = all(output for output in all_outputs)
         return {"message": "Request received, resetting prefix cache status: " + str(success)}
 
