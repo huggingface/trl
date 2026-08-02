@@ -7,7 +7,7 @@ on:
 
 jobs:
   smoke-test:
-    runs-on: hf-jobs-cpu-basic
+    runs-on: hf-jobs-cpu
     steps:
       - uses: actions/checkout@v4
       - run: echo "Hello from HF Jobs"
