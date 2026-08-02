@@ -338,10 +338,10 @@ class DistillationTrainer(_BaseTrainer):
                         "Please set it in only one place, preferably as a trainer argument."
                     )
                 model_init_kwargs["quantization_config"] = quantization_config
-            model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
             # Distributed training requires device_map=None ("auto" fails)
             if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 model_init_kwargs["device_map"] = None
+            model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
             model = create_model_from_path(model, **model_init_kwargs)
         else:
             model_name_or_path = model.config._name_or_path
@@ -502,7 +502,6 @@ class DistillationTrainer(_BaseTrainer):
         # `teacher_model` may be None: subclasses (e.g. ServerDistillationTrainer) supply the teacher another way.
         if teacher_model is not None:
             if isinstance(teacher_model, str):
-                teacher_model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
                 dtype = teacher_model_init_kwargs.get("dtype")
                 teacher_model_init_kwargs["dtype"] = dtype if dtype in ["auto", None] else getattr(torch, dtype)
                 if args.teacher_model_revision is not None:
@@ -510,6 +509,7 @@ class DistillationTrainer(_BaseTrainer):
                 # Distributed training requires device_map=None ("auto" fails)
                 if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                     teacher_model_init_kwargs["device_map"] = None
+                teacher_model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
                 teacher_model = create_model_from_path(teacher_model, **teacher_model_init_kwargs)
             elif args.teacher_model_init_kwargs is not None:
                 raise ValueError(
