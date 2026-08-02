@@ -361,8 +361,11 @@ class GRPOConfig(_BaseConfig):
             KL divergence estimate by multiplying it with the importance sampling ratio. This is described in the
             [DeepSeek-V3.2 paper](https://huggingface.co/papers/2512.02556).
 
+        > Parameters that control memory optimization
+
         activation_offloading (`bool`, *optional*, defaults to `False`):
-            Whether to offload the activations to the CPU.
+            Whether to offload activations to the CPU during the forward pass to reduce peak GPU memory usage. This
+            trades memory for compute: activations are moved to CPU and fetched back during the backward pass.
 
         > Parameters that control the logging
 
