@@ -1,0 +1,13 @@
+name: HF Jobs smoke test
+
+on:
+  workflow_dispatch:
+  # TODO: temporary, remove before merging — lets the smoke test run on the PR itself
+  pull_request:
+
+jobs:
+  smoke-test:
+    runs-on: hf-jobs-cpu-basic
+    steps:
+      - uses: actions/checkout@v4
+      - run: echo "Hello from HF Jobs"
