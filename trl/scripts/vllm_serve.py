@@ -359,12 +359,13 @@ def _run_llm_worker(llm, connection: Connection) -> None:
             break
 
 
-def _recv_worker_result(connection: Connection):
-    response = connection.recv()
-    if "error" in response:
-        error = response["error"]
-        raise RuntimeError(f"vLLM worker failed with {error['type']}: {error['message']}")
-    return response["result"]
+def _recv_worker_results(connections: list[Connection]):
+    responses = [connection.recv() for connection in connections]
+    for response in responses:
+        if "error" in response:
+            error = response["error"]
+            raise RuntimeError(f"vLLM worker failed with {error['type']}: {error['message']}")
+    return [response["result"] for response in responses]
 
 
 def llm_worker(
@@ -660,7 +661,7 @@ def main(script_args: ScriptArguments):
             connection.send({"type": "call", "method": "generate", "kwargs": kwargs})
 
         # Receive results
-        all_outputs = [_recv_worker_result(connection) for connection in connections]
+        all_outputs = _recv_worker_results(connections)
 
         # Handle empty prompts (see above)
         all_outputs = [output for output, prompts in zip(all_outputs, chunked_prompts, strict=True) if prompts]
@@ -704,7 +705,7 @@ def main(script_args: ScriptArguments):
                 chunk = [{"prompt_token_ids": [0]}]
             kwargs = {"prompts": chunk, "sampling_params": sampling_params}
             connection.send({"type": "call", "method": "generate", "kwargs": kwargs})
-        all_outputs = [_recv_worker_result(connection) for connection in connections]
+        all_outputs = _recv_worker_results(connections)
         all_outputs = [output for output, chunk in zip(all_outputs, chunked_prompts, strict=True) if chunk]
         return list(chain.from_iterable(all_outputs))
 
@@ -1116,7 +1117,7 @@ def main(script_args: ScriptArguments):
             connection.send({"type": "call", "method": "chat", "kwargs": kwargs})
 
         # Receive results
-        all_outputs = [_recv_worker_result(connection) for connection in connections]
+        all_outputs = _recv_worker_results(connections)
 
         # Handle empty prompts (see above)
         all_outputs = [output for output, prompts in zip(all_outputs, chunked_messages, strict=True) if prompts]
@@ -1203,7 +1204,7 @@ def main(script_args: ScriptArguments):
         for connection in connections:
             connection.send({"type": "call", "method": "reset_prefix_cache"})
         # Wait for and collect all results
-        all_outputs = [_recv_worker_result(connection) for connection in connections]
+        all_outputs = _recv_worker_results(connections)
         success = all(output for output in all_outputs)
         return {"message": "Request received, resetting prefix cache status: " + str(success)}
 

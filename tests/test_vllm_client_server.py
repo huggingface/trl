@@ -25,7 +25,7 @@ from transformers.testing_utils import torch_device
 from trl.generation.vllm_client import VLLMClient
 from trl.generation.vllm_generation import extract_logprobs
 from trl.import_utils import is_vllm_available
-from trl.scripts.vllm_serve import _recv_worker_result, _run_llm_worker, chunk_list
+from trl.scripts.vllm_serve import _recv_worker_results, _run_llm_worker, chunk_list
 
 from .testing_utils import (
     TrlTestCase,
@@ -46,26 +46,21 @@ else:
     _is_vllm_ge_014 = False
 
 
-class _FailingLLM:
-    def generate(self):
-        raise ValueError("prompt is too long")
-
-
 class TestLLMWorker(TrlTestCase):
     def test_call_error_is_returned_to_parent(self):
         parent_connection, child_connection = Pipe()
-        process = Process(target=_run_llm_worker, args=(_FailingLLM(), child_connection))
+        process = Process(target=_run_llm_worker, args=({}, child_connection))
         process.start()
         child_connection.close()
 
         try:
-            assert parent_connection.poll(5)
+            assert parent_connection.poll(10)
             assert parent_connection.recv() == {"status": "ready"}
 
-            parent_connection.send({"type": "call", "method": "generate"})
+            parent_connection.send({"type": "call", "method": "__getitem__", "args": ("missing",)})
             assert parent_connection.poll(5)
-            with pytest.raises(RuntimeError, match="vLLM worker failed with ValueError: prompt is too long"):
-                _recv_worker_result(parent_connection)
+            with pytest.raises(RuntimeError, match="vLLM worker failed with KeyError: 'missing'"):
+                _recv_worker_results([parent_connection])
 
             parent_connection.send({"type": "shutdown"})
             process.join(timeout=5)
@@ -76,6 +71,24 @@ class TestLLMWorker(TrlTestCase):
                 process.terminate()
                 process.join()
             parent_connection.close()
+
+    def test_call_error_drains_other_worker_results(self):
+        pipe_pairs = [Pipe(), Pipe()]
+        parent_connections = [parent_connection for parent_connection, _ in pipe_pairs]
+        child_connections = [child_connection for _, child_connection in pipe_pairs]
+
+        try:
+            child_connections[0].send({"error": {"type": "ValueError", "message": "prompt is too long"}})
+            child_connections[1].send({"result": 1})
+            with pytest.raises(RuntimeError, match="vLLM worker failed with ValueError: prompt is too long"):
+                _recv_worker_results(parent_connections)
+
+            for child_connection in child_connections:
+                child_connection.send({"result": 2})
+            assert _recv_worker_results(parent_connections) == [2, 2]
+        finally:
+            for connection in parent_connections + child_connections:
+                connection.close()
 
 
 class TestChunkList(TrlTestCase):
