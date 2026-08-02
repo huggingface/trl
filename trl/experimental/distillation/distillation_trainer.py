@@ -324,8 +324,8 @@ class DistillationTrainer(_BaseTrainer):
         teacher_model (`str` or [`~transformers.PreTrainedModel`], *optional*):
             Teacher model whose next-token distribution the student is trained to match. Can be a *model id* / path
             (loaded like `model`, using `args.teacher_model_init_kwargs`) or an instantiated
-            [`~transformers.PreTrainedModel`]. It must share the student's vocabulary. May be omitted by subclasses that
-            supply the teacher another way (e.g. a remote server).
+            [`~transformers.PreTrainedModel`]. It must share the student's vocabulary. May be omitted by subclasses
+            that supply the teacher another way (e.g. a remote server).
         args ([`DistillationConfig`], *optional*):
             Configuration for this trainer. If `None`, a default configuration is used.
         train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`], *optional*):
@@ -336,15 +336,15 @@ class DistillationTrainer(_BaseTrainer):
             - [Conversational](dataset_formats#conversational): Each sample contains structured messages (e.g., role
               and content).
 
-            When `train_dataset` is an [`~datasets.IterableDataset`] (e.g. a streaming dataset), `max_steps` must be set
-            in the training arguments, since its length cannot be inferred and the total number of training steps is
-            required to bound the training loop and configure the learning rate scheduler.
+            When `train_dataset` is an [`~datasets.IterableDataset`] (e.g. a streaming dataset), `max_steps` must be
+            set in the training arguments, since its length cannot be inferred and the total number of training steps
+            is required to bound the training loop and configure the learning rate scheduler.
         eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`], [`~datasets.DatasetDict`], [`~datasets.IterableDatasetDict`] or `dict[str, Dataset | IterableDataset]`):
             Dataset to use for evaluation. It must meet the same requirements as `train_dataset`.
         processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.ProcessorMixin`], *optional*):
             Processing class used to process the data. If `None`, it is loaded from the model's name with
-            [`~transformers.AutoTokenizer.from_pretrained`]. A padding token, `tokenizer.pad_token`, must be set; if the
-            processing class has not set one, `tokenizer.eos_token` is used as the default.
+            [`~transformers.AutoTokenizer.from_pretrained`]. A padding token, `tokenizer.pad_token`, must be set; if
+            the processing class has not set one, `tokenizer.eos_token` is used as the default.
         callbacks (list of [`~transformers.TrainerCallback`], *optional*):
             List of callbacks to customize the training loop. Will add those to the list of default callbacks detailed
             in [here](https://huggingface.co/docs/transformers/main_classes/callback).
