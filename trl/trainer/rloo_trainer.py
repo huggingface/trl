@@ -1448,11 +1448,10 @@ class RLOOTrainer(_BaseTrainer):
             if self.processing_class.image_processor.use_thumbnail:
                 tiles_per_image = tiles_per_image + (tiles_per_image > 1).to(tiles_per_image.dtype)
             num_tiles = [group.sum().item() for group in torch.split(tiles_per_image, num_images)]
-        # Same for InternVL, which crops images into a variable number of tiles and returns no grid metadata.
+        # Same for InternVL, whose pixel_values is tile-indexed ([total_tiles, channels, height, width]).
         elif (
             images is not None
-            and "image_grid_thw" not in forward_kwargs
-            and "image_position_ids" not in forward_kwargs
+            and forward_kwargs["pixel_values"].ndim == 4
             and forward_kwargs["pixel_values"].size(0) != sum(num_images)
         ):
             num_patches = self.processing_class.image_processor(
