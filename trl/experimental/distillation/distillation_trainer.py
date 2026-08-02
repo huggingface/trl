@@ -505,9 +505,6 @@ class DistillationTrainer(_BaseTrainer):
             )
             args.dataloader_num_workers = 0
 
-        # Trainer does not need to remove unused columns — the collator handles raw data
-        args.remove_unused_columns = False
-
         super().__init__(
             model=model,
             args=args,
