@@ -528,6 +528,23 @@ class TestDistillationTrainer(TrlTestCase):
                 processing_class=self.tokenizer,
             )
 
+    @require_liger_kernel
+    def test_liger_incompatible_with_logit_softcapping_raises(self):
+        # The Liger fused JSD kernel can't apply Cohere `logit_scale` / Gemma `final_logit_softcapping`, so unlike the
+        # chunked path it would optimize a different objective than the model's real forward. Reject rather than train
+        # silently wrong.
+        student = AutoModelForCausalLM.from_pretrained(self.model_id)
+        student.config.final_logit_softcapping = 30.0
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        with pytest.raises(ValueError, match="final_logit_softcapping"):
+            DistillationTrainer(
+                model=student,
+                teacher_model=self.model_id,
+                args=self._make_args(use_liger_kernel=True),
+                train_dataset=dataset,
+                processing_class=self.tokenizer,
+            )
+
     def test_teacher_model_init_kwargs_with_instantiated_teacher_raises(self):
         # `teacher_model_init_kwargs` only applies when the teacher is a model id; passing it alongside an already
         # instantiated teacher is a mistake worth surfacing.
