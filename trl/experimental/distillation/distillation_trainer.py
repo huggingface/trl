@@ -553,7 +553,7 @@ class DistillationTrainer(_BaseTrainer):
         self._forward_redirection = _ForwardRedirection()
 
         # Liger fused JSD loss
-        self.use_liger_loss = False
+        self.use_liger_kernel = False
         if args.use_liger_kernel:
             if not is_liger_kernel_available():
                 raise ImportError(
@@ -568,7 +568,7 @@ class DistillationTrainer(_BaseTrainer):
                 weight_hard_loss=0.0,
                 weight_soft_loss=1.0,
             )
-            self.use_liger_loss = True
+            self.use_liger_kernel = True
 
         # Teacher model setup
         # `teacher_model` may be None: subclasses (e.g. ServerDistillationTrainer) supply the teacher another way.
@@ -663,7 +663,7 @@ class DistillationTrainer(_BaseTrainer):
             # `final_logit_softcapping` parameters, so (unlike the chunked path) it cannot reproduce Cohere
             # `logit_scale` or Gemma `final_logit_softcapping`. Refuse rather than silently optimize a different
             # objective than the model's real forward.
-            if self.use_liger_loss:
+            if self.use_liger_kernel:
                 for name, config in [("student", self.model.config), ("teacher", teacher_model.config)]:
                     scaled = getattr(config, "logit_scale", 1.0) not in (None, 1.0)
                     softcapped = getattr(config, "final_logit_softcapping", None) is not None
@@ -1235,7 +1235,7 @@ class DistillationTrainer(_BaseTrainer):
         student_lm_head = unwrapped_student.get_output_embeddings()
         teacher_lm_head = unwrapped_teacher.get_output_embeddings()
 
-        if self.use_liger_loss:
+        if self.use_liger_kernel:
             # Fused JSD over the same hidden states as the chunked path. `true_labels` only masks positions (the
             # hard-loss weight is 0), so any non-ignore id marks a valid completion token; `_get_last_hidden_state`
             # already returns the completion-aligned positions, so no shift is needed.
