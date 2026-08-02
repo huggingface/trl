@@ -14,7 +14,6 @@
 
 import copy
 import inspect
-import random
 import textwrap
 from collections import defaultdict
 from typing import Any, Optional
@@ -52,6 +51,7 @@ from ...trainer.utils import (
     identity,
     maybe_gather_lm_head_ctx,
     pad,
+    print_prompt_completions_sample,
     repeat_iterable_dataset,
     shuffle_sequence_dict,
     split_tensor_dict,
@@ -69,13 +69,6 @@ if is_peft_available():
     from peft.tuners.tuners_utils import BaseTunerLayer
 
 
-if is_rich_available():
-    from rich.console import Console
-    from rich.panel import Panel
-    from rich.table import Table
-    from rich.text import Text
-
-
 if is_trackio_available():
     import trackio
 
@@ -85,35 +78,6 @@ if is_wandb_available():
 
 
 logger = get_logger(__name__)
-
-
-def _print_completions_sample(prompts: list[str], completions: list[str], step: int, num_samples: int = None) -> None:
-    """Print a sample of prompt-completion pairs using rich."""
-    if not is_rich_available():
-        return
-
-    console = Console()
-    table = Table(show_header=True, header_style="bold white", expand=True)
-    table.add_column("Prompt", style="bright_yellow")
-    table.add_column("Completion", style="bright_green")
-
-    if num_samples is not None:
-        if num_samples >= len(prompts):
-            num_samples = None
-        elif num_samples <= 0:
-            return
-
-    if num_samples is not None:
-        indices = random.sample(range(len(prompts)), num_samples)
-        prompts = [prompts[i] for i in indices]
-        completions = [completions[i] for i in indices]
-
-    for prompt, completion in zip(prompts, completions, strict=True):
-        table.add_row(Text(prompt), Text(completion))
-        table.add_section()
-
-    panel = Panel(table, expand=False, title=f"Step {step}", border_style="bold white")
-    console.print(panel)
 
 
 # Number of valid completion positions projected through the `lm_head` per chunk in the memory-efficient JSD loss
@@ -1293,7 +1257,15 @@ class DistillationTrainer(_BaseTrainer):
             completions = list(self._textual_logs["completion"])
 
             if prompts:
-                _print_completions_sample(prompts, completions, self.state.global_step, self.num_completions_to_print)
+                if is_rich_available():
+                    print_prompt_completions_sample(
+                        prompts,
+                        completions,
+                        {},
+                        None,
+                        self.state.global_step,
+                        self.num_completions_to_print,
+                    )
 
                 logging_backends = []
                 if self.args.report_to and "wandb" in self.args.report_to and wandb.run is not None:
