@@ -14,8 +14,10 @@
 
 import copy
 import inspect
+import math
+import os
 import textwrap
-from collections import defaultdict
+from collections import defaultdict, deque
 from typing import Any, Optional
 
 import numpy as np
@@ -643,13 +645,19 @@ class DistillationTrainer(_BaseTrainer):
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
         self._total_train_tokens = 0
         self.log_completions = args.log_completions
-        self.log_completions_steps = args.log_completions_steps
+        self.log_unique_prompts = args.log_unique_prompts
         self.num_completions_to_print = args.num_completions_to_print
-
-        self._textual_logs = {
-            "prompt": [],
-            "completion": [],
+        # Keep logs sized to the generation batch to record only outputs from the latest model update.
+        generation_batch_size = (
+            args.per_device_train_batch_size * self.accelerator.num_processes * args.gradient_accumulation_steps
+        )
+        self._logs = {
+            "prompt": deque(maxlen=generation_batch_size),
+            "completion": deque(maxlen=generation_batch_size),
         }
+
+        if self.accelerator.is_main_process and self.log_completions:
+            os.makedirs(os.path.join(self.args.output_dir, "completions"), exist_ok=True)
 
         # ── vLLM for student generation ──
         self.use_vllm = args.use_vllm
@@ -1053,8 +1061,8 @@ class DistillationTrainer(_BaseTrainer):
         if self.log_completions:
             prompts_text = self.processing_class.batch_decode(prompt_ids, skip_special_tokens=True)
             completions_text = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
-            self._textual_logs["prompt"].extend(gather_object(prompts_text))
-            self._textual_logs["completion"].extend(gather_object(completions_text))
+            self._logs["prompt"].extend(gather_object(prompts_text))
+            self._logs["completion"].extend(gather_object(completions_text))
 
         output = {
             "prompt_ids": prompt_ids,
@@ -1236,8 +1244,17 @@ class DistillationTrainer(_BaseTrainer):
 
     def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
         mode = "train" if self.model.training else "eval"
-        metrics = {key: sum(val) / len(val) for key, val in self._metrics[mode].items()}
+        # Average the metrics
+        metrics = {}
+        for key, val in self._metrics[mode].items():
+            # Filter out NaN values before averaging. With logging_steps > 1, a naive sum()/len() would let a single
+            # NaN contaminate valid data from other batches. Only return None when no valid values remain (e.g. JSON
+            # loggers crash on float NaN).
+            valid = [v for v in val if not math.isnan(v)]
+            metrics[key] = sum(valid) / len(valid) if valid else None
 
+        # This method can be called both in training and evaluation. When called in evaluation, the keys in `logs`
+        # start with "eval_". We need to add the prefix "eval_" to the keys in `metrics` to match the format.
         if mode == "eval":
             metrics = {f"eval_{key}": val for key, val in metrics.items()}
 
@@ -1245,50 +1262,41 @@ class DistillationTrainer(_BaseTrainer):
         super().log(logs, start_time)
         self._metrics[mode].clear()
 
-        # Log completions to console, wandb, and trackio
-        should_log_completions = (
-            self.log_completions
-            and self.state.global_step > 0
-            and self.state.global_step % self.log_completions_steps == 0
-        )
+        if self.accelerator.is_main_process and self.log_completions:
+            if is_rich_available():
+                print_prompt_completions_sample(
+                    self._logs["prompt"],
+                    self._logs["completion"],
+                    {},
+                    None,
+                    self.state.global_step,
+                    self.num_completions_to_print,
+                )
 
-        if should_log_completions and self.accelerator.is_main_process:
-            prompts = list(self._textual_logs["prompt"])
-            completions = list(self._textual_logs["completion"])
+            logging_backends = []
+            if self.args.report_to and "wandb" in self.args.report_to and wandb.run is not None:
+                logging_backends.append(wandb)
+            if self.args.report_to and "trackio" in self.args.report_to:
+                logging_backends.append(trackio)
 
-            if prompts:
-                if is_rich_available():
-                    print_prompt_completions_sample(
-                        prompts,
-                        completions,
-                        {},
-                        None,
-                        self.state.global_step,
-                        self.num_completions_to_print,
-                    )
+            import pandas as pd
 
-                logging_backends = []
-                if self.args.report_to and "wandb" in self.args.report_to and wandb.run is not None:
-                    logging_backends.append(wandb)
-                if self.args.report_to and "trackio" in self.args.report_to:
-                    logging_backends.append(trackio)
+            table = {
+                "step": [self.state.global_step] * len(self._logs["prompt"]),
+                "prompt": self._logs["prompt"],
+                "completion": self._logs["completion"],
+            }
+            df_base = pd.DataFrame(table)
+            df_base.to_parquet(
+                os.path.join(
+                    self.args.output_dir,
+                    "completions",
+                    f"completions_{self.state.global_step:05d}.parquet",
+                )
+            )
 
-                if logging_backends:
-                    import pandas as pd
-
-                    table_data = {
-                        "step": [str(self.state.global_step)] * len(prompts),
-                        "prompt": prompts,
-                        "completion": completions,
-                    }
-                    df = pd.DataFrame(table_data)
-                    if self.num_completions_to_print and len(df) > self.num_completions_to_print:
-                        df = df.sample(n=self.num_completions_to_print, random_state=42)
-
-                    for logging_backend in logging_backends:
-                        logging_backend.log({"completions": logging_backend.Table(dataframe=df)})
-
-        # Clear text logs on all processes after the logging interval
-        if should_log_completions:
-            self._textual_logs["prompt"].clear()
-            self._textual_logs["completion"].clear()
+            for logging_backend in logging_backends:
+                df = df_base
+                if self.log_unique_prompts:
+                    df = df.drop_duplicates(subset=["prompt"])
+                logging_backend.log({"completions": logging_backend.Table(dataframe=df)})
