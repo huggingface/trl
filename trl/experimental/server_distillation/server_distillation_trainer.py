@@ -141,7 +141,7 @@ class ServerDistillationTrainer(DistillationTrainer):
 
     def __init__(
         self,
-        model=None,
+        model,
         args: ServerDistillationConfig | None = None,
         train_dataset=None,
         eval_dataset=None,
