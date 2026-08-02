@@ -363,16 +363,10 @@ class DistillationTrainer(_BaseTrainer):
             args = DistillationConfig(output_dir="tmp_distillation")
 
         # ── Student model loading ──
-        model_init_kwargs = args.model_init_kwargs or {}
-        if isinstance(model_init_kwargs, str):
-            import json
-
-            model_init_kwargs = json.loads(model_init_kwargs)
-        teacher_model_init_kwargs = args.teacher_model_init_kwargs or {}
-        if isinstance(teacher_model_init_kwargs, str):
-            import json
-
-            teacher_model_init_kwargs = json.loads(teacher_model_init_kwargs)
+        # `_VALID_DICT_FIELDS` already parses any JSON-string form of these in `DistillationConfig.__post_init__`, so
+        # they are dicts (or None) here; copy so the setdefaults below don't mutate the config.
+        model_init_kwargs = dict(args.model_init_kwargs or {})
+        teacher_model_init_kwargs = dict(args.teacher_model_init_kwargs or {})
         if isinstance(model, str):
             model_name_or_path = model
             model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
@@ -397,7 +391,7 @@ class DistillationTrainer(_BaseTrainer):
                 model_name_or_path, trust_remote_code=args.trust_remote_code
             )
         if processing_class is not None:
-            if getattr(processing_class, "pad_token", None) is None:
+            if processing_class.pad_token is None:
                 processing_class.pad_token = processing_class.eos_token
         self._tokenizer = (
             processing_class.tokenizer if isinstance(processing_class, ProcessorMixin) else processing_class
@@ -446,6 +440,11 @@ class DistillationTrainer(_BaseTrainer):
         # ── Liger fused JSD loss ──
         self.use_liger_loss = False
         if args.use_liger_kernel:
+            if not is_liger_kernel_available():
+                raise ImportError(
+                    "Liger is required to use `use_liger_kernel` as the distillation loss. Run "
+                    "`pip install liger-kernel`."
+                )
             self.liger_loss = LigerFusedLinearJSDLoss(
                 beta=args.beta,
                 ignore_index=-100,
