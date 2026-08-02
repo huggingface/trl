@@ -53,7 +53,7 @@ class DistillationConfig(_BaseConfig):
             JSD.
         max_completion_length (`int`, *optional*, defaults to `512`):
             Maximum number of tokens to generate per completion during on-policy generation.
-        disable_dropout (`bool`, *optional*, defaults to `True`):
+        disable_dropout (`bool`, *optional*, defaults to `False`):
             Whether to disable dropout in the student model during training.
 
         > Parameters that control the teacher model
@@ -181,7 +181,7 @@ class DistillationConfig(_BaseConfig):
         metadata={"help": "Maximum number of tokens to generate per completion."},
     )
     disable_dropout: bool = field(
-        default=True,
+        default=False,
         metadata={"help": "Whether to disable dropout in the student model during training."},
     )
 
