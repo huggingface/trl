@@ -27,6 +27,7 @@ import torch.utils.data
 import transformers
 from accelerate.logging import get_logger
 from accelerate.utils import broadcast_object_list, gather_object, is_peft_model
+from accelerate.utils.versions import is_torch_version
 from datasets import Dataset
 from packaging.version import Version
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
@@ -88,6 +89,12 @@ else:
 if is_vllm_available():
     from vllm import LLM, SamplingParams
     from vllm.sampling_params import StructuredOutputsParams
+
+# DTensor lives under `torch.distributed._tensor` before torch 2.5.0
+if is_torch_version(">=", "2.5.0"):
+    from torch.distributed.tensor import DTensor
+else:
+    from torch.distributed._tensor import DTensor
 
 
 logger = get_logger(__name__)
@@ -763,7 +770,9 @@ class OnlineDPOTrainer(_BaseTrainer):
 
             if param.is_cpu:
                 param = param.to(self.accelerator.device)
-            param = param.full_tensor()
+            # Ignored params stay plain tensors under FSDP2, so only DTensors need `full_tensor()`
+            if isinstance(param, DTensor):
+                param = param.full_tensor()
 
             if self.vllm_mode == "server" and self.accelerator.is_main_process:
                 self.vllm_client.update_named_param(name, param)
