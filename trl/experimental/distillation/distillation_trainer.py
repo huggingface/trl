@@ -597,7 +597,7 @@ class DistillationTrainer(_BaseTrainer):
             # objective than the model's real forward.
             if self.use_liger_loss:
                 for name, config in [("student", self.model.config), ("teacher", teacher_model.config)]:
-                    scaled = getattr(config, "logit_scale", 1.0) != 1.0
+                    scaled = getattr(config, "logit_scale", 1.0) not in (None, 1.0)
                     softcapped = getattr(config, "final_logit_softcapping", None) is not None
                     if scaled or softcapped:
                         raise ValueError(
@@ -1231,8 +1231,8 @@ class DistillationTrainer(_BaseTrainer):
             num_items_in_batch=num_items_in_batch,
             student_lm_head_bias=student_lm_head.bias,
             teacher_lm_head_bias=teacher_lm_head.bias,
-            student_logit_scale=getattr(student_config, "logit_scale", 1.0),
-            teacher_logit_scale=getattr(teacher_config, "logit_scale", 1.0),
+            student_logit_scale=getattr(student_config, "logit_scale", 1.0) or 1.0,
+            teacher_logit_scale=getattr(teacher_config, "logit_scale", 1.0) or 1.0,
             student_final_logit_softcapping=getattr(student_config, "final_logit_softcapping", None),
             teacher_final_logit_softcapping=getattr(teacher_config, "final_logit_softcapping", None),
             temperature=self.temperature,

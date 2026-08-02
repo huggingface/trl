@@ -545,6 +545,20 @@ class TestDistillationTrainer(TrlTestCase):
                 processing_class=self.tokenizer,
             )
 
+    @require_liger_kernel
+    def test_liger_allows_none_logit_scale(self):
+        # `logit_scale = None` (e.g. MPT) means unscaled, like `1.0`; the Liger guard must not reject it.
+        student = AutoModelForCausalLM.from_pretrained(self.model_id)
+        student.config.logit_scale = None
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        DistillationTrainer(  # must not raise
+            model=student,
+            teacher_model=self.model_id,
+            args=self._make_args(use_liger_kernel=True),
+            train_dataset=dataset,
+            processing_class=self.tokenizer,
+        )
+
     def test_teacher_model_init_kwargs_with_instantiated_teacher_raises(self):
         # `teacher_model_init_kwargs` only applies when the teacher is a model id; passing it alongside an already
         # instantiated teacher is a mistake worth surfacing.
