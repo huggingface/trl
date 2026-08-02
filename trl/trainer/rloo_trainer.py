@@ -942,6 +942,11 @@ class RLOOTrainer(_BaseTrainer):
                 model_inputs["pixel_values"] = pixel_values[tile_start:tile_end]
                 model_inputs["pixel_attention_mask"] = pixel_attention_mask[tile_start:tile_end]
                 model_inputs["spatial_shapes"] = spatial_shapes[tile_start:tile_end]
+            elif num_tiles is not None and pixel_values is not None:
+                # InternVL tensors are tile-indexed.
+                cum_tiles = torch.tensor([0] + num_tiles).cumsum(0)
+                tile_start, tile_end = cum_tiles[start], cum_tiles[start + batch_size]
+                model_inputs["pixel_values"] = pixel_values[tile_start:tile_end]
             elif pixel_values is not None:
                 model_inputs["pixel_values"] = pixel_values[start : start + batch_size]
             if pixel_attention_mask is not None and spatial_shapes is None:
@@ -1443,6 +1448,17 @@ class RLOOTrainer(_BaseTrainer):
             if self.processing_class.image_processor.use_thumbnail:
                 tiles_per_image = tiles_per_image + (tiles_per_image > 1).to(tiles_per_image.dtype)
             num_tiles = [group.sum().item() for group in torch.split(tiles_per_image, num_images)]
+        # Same for InternVL, which crops images into a variable number of tiles and returns no grid metadata.
+        elif (
+            images is not None
+            and "image_grid_thw" not in forward_kwargs
+            and "image_position_ids" not in forward_kwargs
+            and forward_kwargs["pixel_values"].size(0) != sum(num_images)
+        ):
+            num_patches = self.processing_class.image_processor(
+                images=images, crop_to_patches=True, return_tensors="pt"
+            )["num_patches"]
+            num_tiles = [group.sum().item() for group in torch.split(num_patches, num_images)]
 
         # If token_type_ids are used, extend them with zeros for the completion part
         if "token_type_ids" in forward_kwargs:
