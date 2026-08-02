@@ -169,6 +169,12 @@ class RLOOConfig(_BaseConfig):
         transformers_continuous_batching_config (`dict`, *optional*):
             Keyword arguments for [`~transformers.generation.ContinuousBatchingConfig`].
 
+        > Parameters that control memory optimization
+
+        activation_offloading (`bool`, *optional*, defaults to `False`):
+            Whether to offload activations to the CPU during the forward pass to reduce peak GPU memory usage. This
+            trades memory for compute: activations are moved to CPU and fetched back during the backward pass.
+
         > Parameters that control the training
 
         beta (`float`, *optional*, defaults to `0.05`):
@@ -600,6 +606,12 @@ class RLOOConfig(_BaseConfig):
     transformers_continuous_batching_config: dict | None = field(
         default=None,
         metadata={"help": "Keyword arguments for `transformers.generation.ContinuousBatchingConfig`."},
+    )
+
+    # Parameters that control memory optimization
+    activation_offloading: bool = field(
+        default=False,
+        metadata={"help": "Whether to offload the activations to the CPU."},
     )
 
     # Deprecated parameters
