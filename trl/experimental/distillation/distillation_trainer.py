@@ -56,6 +56,7 @@ from ...trainer.utils import (
     RepeatSampler,
     create_model_from_path,
     disable_dropout_in_model,
+    get_config_model_id,
     identity,
     maybe_gather_lm_head_ctx,
     pad,
@@ -391,7 +392,9 @@ class DistillationTrainer(_BaseTrainer):
         peft_config: Optional["PeftConfig"] = None,
     ):
         if args is None:
-            args = DistillationConfig(output_dir="tmp_distillation")
+            model_name = model if isinstance(model, str) else get_config_model_id(model.config)
+            model_name = model_name.split("/")[-1]
+            args = DistillationConfig(f"{model_name}-Distillation")
 
         # Student model loading
         # `_VALID_DICT_FIELDS` already parses any JSON-string form of these in `DistillationConfig.__post_init__`, so
@@ -413,7 +416,7 @@ class DistillationTrainer(_BaseTrainer):
             model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
             model = create_model_from_path(model, **model_init_kwargs)
         else:
-            model_name_or_path = model.config._name_or_path
+            model_name_or_path = get_config_model_id(model.config)
             if args.model_init_kwargs is not None:
                 logger.warning(
                     "You passed `model_init_kwargs` to the `DistillationConfig`, but your model is already "
