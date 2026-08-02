@@ -753,7 +753,7 @@ class OnlineDPOTrainer(_BaseTrainer):
             name = self._fix_param_name_to_vllm(name, extra_prefixes=["modules_to_save.default."])
 
             if param.is_cpu:
-                param = param.to(torch.device("cuda"))
+                param = param.to(self.accelerator.device)
             param = param.full_tensor()
 
             if self.vllm_mode == "server" and self.accelerator.is_main_process:
