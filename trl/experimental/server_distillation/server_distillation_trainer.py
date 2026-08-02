@@ -148,6 +148,7 @@ class ServerDistillationTrainer(DistillationTrainer):
         processing_class=None,
         callbacks=None,
         optimizers=(None, None),
+        quantization_config=None,
         peft_config=None,
     ):
         if args is None:
@@ -163,6 +164,7 @@ class ServerDistillationTrainer(DistillationTrainer):
             processing_class=processing_class,
             callbacks=callbacks,
             optimizers=optimizers,
+            quantization_config=quantization_config,
             peft_config=peft_config,
         )
 
