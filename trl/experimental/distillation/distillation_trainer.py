@@ -18,7 +18,6 @@ import random
 import textwrap
 from collections import defaultdict
 from collections.abc import Callable
-from contextlib import nullcontext
 from typing import Any, Optional
 
 import numpy as np
@@ -1076,11 +1075,7 @@ class DistillationTrainer(_BaseTrainer):
         if self.model.training and inputs.get("num_items_in_batch") is not None:
             num_items_in_batch = inputs["num_items_in_batch"].clamp(min=1.0) / self.accelerator.num_processes
 
-        if self.use_liger_loss:
-            loss = self._compute_liger_loss(model, inputs, num_items_in_batch=num_items_in_batch)
-            return (loss, None) if return_outputs else loss
-
-        # Route the whole chunked loss (backbone + `lm_head` projection + JSD) through the DDP/FSDP wrapper via
+        # Route the whole loss (backbone + `lm_head` projection + JSD) through the DDP/FSDP wrapper via
         # `_forward_redirection`, so DDP.forward() fires `prepare_for_backward()` and FSDP/DeepSpeed keep the student's
         # sharded parameters (including the `lm_head`) materialized for the projection. Mirrors GRPO's `compute_liger_loss`.
         unwrapped_student = self.accelerator.unwrap_model(model)
@@ -1119,8 +1114,48 @@ class DistillationTrainer(_BaseTrainer):
 
         student_lm_head = unwrapped_student.get_output_embeddings()
         teacher_lm_head = unwrapped_teacher.get_output_embeddings()
-        student_config, teacher_config = unwrapped_student.config, unwrapped_teacher.config
 
+        if self.use_liger_loss:
+            # Fused JSD over the same hidden states as the chunked path. `true_labels` only masks positions (the
+            # hard-loss weight is 0), so any non-ignore id marks a valid completion token; `_get_last_hidden_state`
+            # already returns the completion-aligned positions, so no shift is needed.
+            true_labels = torch.where(
+                completion_mask.bool(), inputs["completion_ids"], torch.full_like(inputs["completion_ids"], -100)
+            ).reshape(-1)
+            # Under FSDP2 the heads are DTensors; materialize them once with full_tensor() for the fused kernel, as the
+            # chunked path does. No-op off FSDP2; the ZeRO-3 (non-DTensor) case is handled by maybe_gather_lm_head_ctx.
+            student_weight, student_bias = student_lm_head.weight, student_lm_head.bias
+            teacher_weight, teacher_bias = teacher_lm_head.weight, teacher_lm_head.bias
+            if isinstance(student_weight, torch.distributed.tensor.DTensor):
+                student_weight = student_weight.full_tensor()
+                if student_bias is not None:
+                    student_bias = student_bias.full_tensor()
+            if isinstance(teacher_weight, torch.distributed.tensor.DTensor):
+                teacher_weight = teacher_weight.full_tensor()
+                if teacher_bias is not None:
+                    teacher_bias = teacher_bias.full_tensor()
+            # ZeRO-3 shards the heads and the fused kernel reads them directly, so gather them for the call.
+            with maybe_gather_lm_head_ctx(
+                student_lm_head.weight, student_lm_head.bias, teacher_lm_head.weight, teacher_lm_head.bias
+            ):
+                loss = self.liger_loss(
+                    student_input=student_hidden_states.reshape(-1, student_hidden_states.size(-1)),
+                    student_weight=student_weight,
+                    teacher_input=teacher_hidden_states.reshape(-1, teacher_hidden_states.size(-1)),
+                    teacher_weight=teacher_weight,
+                    true_labels=true_labels,
+                    student_bias=student_bias,
+                    teacher_bias=teacher_bias,
+                )
+            # Liger normalizes by the local valid-token count; rescale to the global count for grad-accum correctness.
+            if num_items_in_batch is not None:
+                num_valid_local = (true_labels != -100).sum().clamp_min(1)
+                if isinstance(num_items_in_batch, torch.Tensor):
+                    num_items_in_batch = num_items_in_batch.to(loss.device)
+                loss = loss * num_valid_local / num_items_in_batch
+            return loss
+
+        student_config, teacher_config = unwrapped_student.config, unwrapped_teacher.config
         loss, _, _ = _chunked_divergence_loss(
             student_hidden_states,
             teacher_hidden_states,
@@ -1140,99 +1175,6 @@ class DistillationTrainer(_BaseTrainer):
         )
         return loss
 
-    def _liger_student_forward(self, student, inputs):
-        """Decoder-only forward used by the Liger JSD path (skips lm_head to save memory)."""
-        if hasattr(student, "get_decoder") and student.get_decoder() is not None:
-            decoder = student.get_decoder()
-        else:
-            decoder = getattr(student, getattr(student, "base_model_prefix", "model"), student)
-        input_ids = torch.cat([inputs["prompt_ids"], inputs["completion_ids"]], dim=1)
-        attention_mask = torch.cat([inputs["prompt_mask"], inputs["completion_mask"]], dim=1)
-        return decoder(input_ids=input_ids, attention_mask=attention_mask, use_cache=False)
-
-    def _compute_liger_loss(self, model, inputs, num_items_in_batch=None):
-        """Memory-efficient JSD using Liger kernel (operates on hidden states, not full logits)."""
-        # Route through the DDP/FSDP wrapper via _forward_redirection so that
-        # DDP.forward() is called and prepare_for_backward() fires correctly.
-        unwrapped_student = self.accelerator.unwrap_model(model)
-        student_outputs = self._forward_redirection(
-            model, unwrapped_student, self._liger_student_forward, unwrapped_student, inputs
-        )
-
-        self.teacher_model.eval()
-        unwrapped_teacher = self.accelerator.unwrap_model(self.teacher_model)
-        if hasattr(unwrapped_teacher, "get_decoder") and unwrapped_teacher.get_decoder() is not None:
-            base_teacher = unwrapped_teacher.get_decoder()
-        else:
-            base_teacher = getattr(
-                unwrapped_teacher, getattr(unwrapped_teacher, "base_model_prefix", "model"), unwrapped_teacher
-            )
-        input_ids = torch.cat([inputs["prompt_ids"], inputs["completion_ids"]], dim=1)
-        attention_mask = torch.cat([inputs["prompt_mask"], inputs["completion_mask"]], dim=1)
-        with torch.no_grad():
-            teacher_outputs = base_teacher(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                use_cache=False,
-            )
-
-        student_hidden = student_outputs.last_hidden_state[:, :-1]
-        teacher_hidden = teacher_outputs.last_hidden_state[:, :-1]
-        del student_outputs, teacher_outputs
-
-        student_hidden = student_hidden.reshape(-1, student_hidden.shape[-1])
-        teacher_hidden = teacher_hidden.reshape(-1, teacher_hidden.shape[-1])
-
-        completion_mask = torch.cat([torch.zeros_like(inputs["prompt_mask"]), inputs["completion_mask"]], dim=1).bool()
-        masked_input_ids = torch.where(completion_mask, input_ids, torch.full_like(input_ids, -100))
-        true_labels = masked_input_ids[:, 1:].reshape(-1)
-
-        student_head = unwrapped_student.get_output_embeddings()
-        teacher_head = unwrapped_teacher.get_output_embeddings()
-
-        loss = self.liger_loss(
-            student_input=student_hidden,
-            student_weight=student_head.weight,
-            teacher_input=teacher_hidden,
-            teacher_weight=teacher_head.weight,
-            true_labels=true_labels,
-            student_bias=getattr(student_head, "bias", None),
-            teacher_bias=getattr(teacher_head, "bias", None),
-        )
-
-        # The Liger JSD loss normalizes by the local number of valid tokens. Under gradient accumulation we want
-        # the global normalization, so rescale by `num_valid_local / num_items_in_batch`.
-        if num_items_in_batch is not None:
-            num_valid_local = (true_labels != -100).sum().clamp_min(1)
-            if isinstance(num_items_in_batch, torch.Tensor):
-                num_items_in_batch = num_items_in_batch.to(loss.device)
-            loss = loss * num_valid_local / num_items_in_batch
-
-        del student_hidden, teacher_hidden, true_labels
-        return loss
-
-    def _get_liger_zero3_lm_head_gather_ctx(self, model: nn.Module):
-        """Context manager for gathering lm_head parameters under Liger + ZeRO-3."""
-        if not self.use_liger_loss:
-            return nullcontext()
-
-        deepspeed_plugin = self.accelerator.state.deepspeed_plugin
-        if deepspeed_plugin is None or deepspeed_plugin.zero_stage != 3:
-            return nullcontext()
-
-        import deepspeed
-
-        unwrapped_student = self.accelerator.unwrap_model(model)
-        unwrapped_teacher = self.accelerator.unwrap_model(self.teacher_model)
-        student_head = unwrapped_student.get_output_embeddings()
-        teacher_head = unwrapped_teacher.get_output_embeddings()
-        params = [student_head.weight, teacher_head.weight]
-        if student_head.bias is not None:
-            params.append(student_head.bias)
-        if teacher_head.bias is not None:
-            params.append(teacher_head.bias)
-        return deepspeed.zero.GatheredParameters(params, modifier_rank=None)
-
     # ──────────────────────────────────────────────────────────────────────
     #  Training step & Logging
     # ──────────────────────────────────────────────────────────────────────
@@ -1241,8 +1183,7 @@ class DistillationTrainer(_BaseTrainer):
     def training_step(
         self, model: nn.Module, inputs: dict[str, torch.Tensor | Any], num_items_in_batch: int | None = None
     ) -> torch.Tensor:
-        with self._get_liger_zero3_lm_head_gather_ctx(model):
-            output = super().training_step(model, inputs, num_items_in_batch)
+        output = super().training_step(model, inputs, num_items_in_batch)
         self._step += 1
         return output
 
@@ -1252,10 +1193,7 @@ class DistillationTrainer(_BaseTrainer):
         inputs = self._prepare_inputs(inputs)
         with torch.no_grad():
             with self.compute_loss_context_manager():
-                # Gather the ZeRO-3-partitioned lm_head for the Liger loss path, matching training_step (removed with
-                # the Liger path).
-                with self._get_liger_zero3_lm_head_gather_ctx(model):
-                    loss = self.compute_loss(model, inputs)
+                loss = self.compute_loss(model, inputs)
             loss = loss.mean().detach()
         return loss, None, None
 
