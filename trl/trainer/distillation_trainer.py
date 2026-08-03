@@ -16,9 +16,12 @@ import copy
 import inspect
 import math
 import os
+import sys
 import textwrap
 import time
+import warnings
 from collections import defaultdict, deque
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Optional
 
@@ -44,11 +47,18 @@ from transformers import (
 )
 from transformers.utils import is_liger_kernel_available, is_peft_available, is_rich_available
 
+from ..chat_template_utils import (
+    _SUPPORTS_RESPONSE_TEMPLATE,
+    add_response_schema,
+    get_training_chat_template,
+    is_chat_template_prefix_preserving,
+    supports_tool_calling,
+)
 from ..data_utils import apply_chat_template, is_conversational, prepare_multimodal_messages
 from ..distributed import DistributedBackend
 from ..extras.profiling import profiling_context, profiling_decorator
 from ..generation.vllm_generation import VLLMGeneration
-from ..import_utils import is_vllm_available
+from ..import_utils import is_jmespath_available, is_vllm_available
 from ..models import prepare_deepspeed
 from ..models.utils import _ForwardRedirection, unwrap_model_for_generation
 from .base_trainer import _BaseTrainer
@@ -362,6 +372,13 @@ class DistillationTrainer(_BaseTrainer):
             for QLoRA training. Ignored if the model is already instantiated.
         peft_config ([`~peft.PeftConfig`], *optional*):
             PEFT configuration used to wrap the model. If `None`, the model is not wrapped.
+        tools (list of `Callable`, *optional*):
+            A list of callable tool functions that the model can invoke during generation. Each tool should be a
+            standard Python function with properly type-hinted arguments and return values, and a Google-style
+            docstring describing its purpose, arguments, and return value. For more details, see:
+            https://huggingface.co/docs/transformers/en/chat_extras#passing-tools. The model uses the function's name,
+            type hints, and docstring to determine how to call it. Ensure that the model's chat template supports tool
+            use and that it has been fine-tuned for tool calling.
     """
 
     _tag_names = ["trl", "distillation"]
@@ -393,6 +410,7 @@ class DistillationTrainer(_BaseTrainer):
         optimizers: tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
         quantization_config: "BitsAndBytesConfig | None" = None,
         peft_config: Optional["PeftConfig"] = None,
+        tools: list[Callable] | None = None,
     ):
         if args is None:
             model_name = model if isinstance(model, str) else get_config_model_id(model.config)
@@ -462,6 +480,55 @@ class DistillationTrainer(_BaseTrainer):
 
         if self._tokenizer.pad_token is None:
             self._tokenizer.pad_token = self._tokenizer.eos_token
+
+        # Tools
+        if tools:
+            if not Version(transformers.__version__) >= Version("5.0.0"):
+                raise ImportError(
+                    "Using tools with DistillationTrainer requires transformers version 5.0.0 or higher. Please "
+                    "upgrade transformers with `pip install --upgrade transformers` to use this feature."
+                )
+            # jmespath is only needed by the legacy `response_schema` parser, which is all transformers < 5.13 ships.
+            # The new-style `response_template` parser doesn't use it, so don't require it on newer versions.
+            if not _SUPPORTS_RESPONSE_TEMPLATE and not is_jmespath_available():
+                raise ImportError(
+                    "Using tools with DistillationTrainer on transformers below 5.13.0 requires the jmespath library "
+                    "for response parsing. Please install it with `pip install jmespath`, or upgrade transformers to "
+                    "5.13.0 or higher, which doesn't need it."
+                )
+            if not supports_tool_calling(processing_class):
+                raise ValueError(
+                    "The provided chat template does not support tool calling. The template must be able to render a "
+                    "full tool-calling conversation (user -> assistant with tool_calls -> tool)."
+                )
+            # Async tools are deferred to a future PR; reject them now rather than fail cryptically in the tool loop.
+            if any(inspect.iscoroutinefunction(tool) for tool in tools):
+                raise ValueError("Async tools are not yet supported by `DistillationTrainer`. Pass synchronous tools.")
+        self.tools = tools or []
+        # Per-rollout tool dict. Without environments the tools are constant across examples, so build it once here
+        # rather than per-batch as GRPO does.
+        self._tool_dict = {tool.__name__: tool for tool in self.tools}
+
+        # `add_response_schema` sets the response template (transformers >= 5.13) or legacy schema for known chat
+        # templates, so tool calls can be parsed. Skip if one is already set; warn if it's a migratable legacy schema.
+        if self.tools:
+            has_template = getattr(self._tokenizer, "response_template", None) is not None
+            has_schema = getattr(self._tokenizer, "response_schema", None) is not None
+            if not has_template and not has_schema:
+                processing_class = add_response_schema(processing_class)
+            elif has_schema and not has_template and _SUPPORTS_RESPONSE_TEMPLATE:
+                warnings.warn(
+                    "The tokenizer has a legacy `response_schema` set but no `response_template`. The installed "
+                    "transformers supports the new-style `response_template`; consider migrating, as `response_schema` "
+                    "support will eventually be removed. See the Transformers response-parsing docs.",
+                    FutureWarning,
+                )
+        # In multi-turn training, the chat template *must* be prefix-preserving. If the tokenizer's original template
+        # isn't, we replace it at initialization with a training-safe, prefix-preserving template.
+        if self.tools and not is_chat_template_prefix_preserving(processing_class):
+            self.chat_template = get_training_chat_template(processing_class)
+        else:
+            self.chat_template = None
 
         # PEFT
         if peft_config is not None:
@@ -706,6 +773,9 @@ class DistillationTrainer(_BaseTrainer):
         self.min_p = args.min_p
         self.repetition_penalty = args.repetition_penalty
         self.max_completion_length = args.max_completion_length
+        self.max_tool_calling_iterations = (
+            args.max_tool_calling_iterations if args.max_tool_calling_iterations is not None else sys.maxsize
+        )
         self.chat_template_kwargs = args.chat_template_kwargs or {}
         self.pad_to_multiple_of = args.pad_to_multiple_of
         self.shuffle_dataset = args.shuffle_dataset
