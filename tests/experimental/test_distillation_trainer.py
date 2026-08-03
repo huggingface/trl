@@ -249,8 +249,8 @@ class TestDistillationTrainer(TrlTestCase):
         # Instantiate with only model, teacher_model and train_dataset.
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         DistillationTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            teacher_model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            model="trl-internal-testing/tiny-Qwen3ForCausalLM",
+            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
             train_dataset=dataset,
         )
 
@@ -265,18 +265,11 @@ class TestDistillationTrainer(TrlTestCase):
             report_to="none",
         )
         trainer = DistillationTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            teacher_model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            model="trl-internal-testing/tiny-Qwen3ForCausalLM",
+            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
             args=training_args,
             train_dataset=dataset,
         )
-
-        # Self-distillation (teacher == student) gives ~zero divergence and thus ~zero gradient, which would make the
-        # params-changed check below vacuous. Diverge the teacher so the loss — and the update — clears fp noise.
-        torch.manual_seed(0)
-        with torch.no_grad():
-            for p in trainer.teacher_model.parameters():
-                p.add_(0.5 * torch.randn_like(p))
 
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
@@ -305,17 +298,16 @@ class TestDistillationTrainer(TrlTestCase):
             report_to="none",
         )
         trainer = DistillationTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            teacher_model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            model="trl-internal-testing/tiny-Qwen3ForCausalLM",
+            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
             args=training_args,
             train_dataset=dataset,
         )
 
         trainer.train()
 
-        # A full step ran and every parameter stayed finite. Self-distillation makes the gradient ~zero, so the
-        # "params changed" check used elsewhere would be vacuous here; the point of this test is only that the format
-        # is accepted and trains. See `test_train` for the params-changed assertion (with a diverged teacher).
+        # The point of this test is only that both prompt-only formats are accepted and train end to end: a full step
+        # ran and every parameter stayed finite. See `test_train` for the params-changed assertion.
         assert trainer.state.log_history[-1]["train_loss"] is not None
         assert all(torch.isfinite(param).all() for param in trainer.model.parameters())
 
@@ -352,8 +344,8 @@ class TestDistillationTrainer(TrlTestCase):
             report_to="none",
         )
         trainer = DistillationTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            teacher_model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            model="trl-internal-testing/tiny-Qwen3ForCausalLM",
+            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
             args=training_args,
             train_dataset=dataset["train"],
             eval_dataset=dataset["test"],
@@ -363,9 +355,6 @@ class TestDistillationTrainer(TrlTestCase):
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
         assert trainer.state.log_history[0]["eval_loss"] is not None
-        # Self-distillation (teacher == student): the divergence is ~0. Allow tiny floating-point noise below zero
-        # while still catching a genuinely negative loss (a sign error in the JSD).
-        assert trainer.state.log_history[-1]["train_loss"] >= -1e-4
 
     def test_train_with_iterable_dataset(self):
         # Iterable (streaming) datasets have no length, so `max_steps` is required.
@@ -379,8 +368,8 @@ class TestDistillationTrainer(TrlTestCase):
             report_to="none",
         )
         trainer = DistillationTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            teacher_model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            model="trl-internal-testing/tiny-Qwen3ForCausalLM",
+            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
             args=training_args,
             train_dataset=dataset,
         )
@@ -401,8 +390,8 @@ class TestDistillationTrainer(TrlTestCase):
         )
         with pytest.raises(ValueError, match="Iterable datasets require `dispatch_batches=False`"):
             DistillationTrainer(
-                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-                teacher_model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                model="trl-internal-testing/tiny-Qwen3ForCausalLM",
+                teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
                 args=training_args,
                 train_dataset=dataset,
             )
@@ -416,8 +405,8 @@ class TestDistillationTrainer(TrlTestCase):
             output_dir=self.tmp_dir, dataloader_num_workers=4, max_steps=1, report_to="none"
         )
         trainer = DistillationTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            teacher_model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            model="trl-internal-testing/tiny-Qwen3ForCausalLM",
+            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
             args=training_args,
             train_dataset=dataset,
         )
@@ -438,8 +427,8 @@ class TestDistillationTrainer(TrlTestCase):
             report_to="none",
         )
         trainer = DistillationTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            teacher_model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            model="trl-internal-testing/tiny-Qwen3ForCausalLM",
+            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
             args=training_args,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
@@ -461,8 +450,8 @@ class TestDistillationTrainer(TrlTestCase):
         training_args = DistillationConfig(output_dir=self.tmp_dir, max_steps=4 if streaming else -1, report_to="none")
 
         trainer = DistillationTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            teacher_model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            model="trl-internal-testing/tiny-Qwen3ForCausalLM",
+            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
             args=training_args,
             train_dataset=train_dataset,
         )
@@ -500,8 +489,8 @@ class TestDistillationTrainer(TrlTestCase):
 
         training_args = DistillationConfig(output_dir=self.tmp_dir, report_to="none")
         trainer = DistillationTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            teacher_model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            model="trl-internal-testing/tiny-Qwen3ForCausalLM",
+            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
             args=training_args,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
@@ -550,8 +539,8 @@ class TestDistillationTrainer(TrlTestCase):
             report_to="none",
         )
         trainer = DistillationTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            teacher_model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            model="trl-internal-testing/tiny-Qwen3ForCausalLM",
+            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
             args=training_args,
             train_dataset=train_dataset,
         )
@@ -577,8 +566,8 @@ class TestDistillationTrainer(TrlTestCase):
             report_to="none",
         )
         trainer = DistillationTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            teacher_model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            model="trl-internal-testing/tiny-Qwen3ForCausalLM",
+            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
             args=training_args,
             train_dataset=dataset["train"],
             eval_dataset=dataset["test"],
@@ -597,8 +586,8 @@ class TestDistillationTrainer(TrlTestCase):
             report_to="none",
         )
         trainer = DistillationTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            teacher_model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            model="trl-internal-testing/tiny-Qwen3ForCausalLM",
+            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
             args=training_args,
             train_dataset=dataset,
         )
@@ -618,8 +607,8 @@ class TestDistillationTrainer(TrlTestCase):
             report_to="none",
         )
         trainer = DistillationTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            teacher_model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            model="trl-internal-testing/tiny-Qwen3ForCausalLM",
+            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
             args=training_args,
             train_dataset=dataset,
         )
@@ -644,8 +633,8 @@ class TestDistillationTrainer(TrlTestCase):
         )
 
         trainer = DistillationTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            teacher_model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            model="trl-internal-testing/tiny-Qwen3ForCausalLM",
+            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
             args=training_args,
             train_dataset=dataset,
         )
@@ -666,8 +655,8 @@ class TestDistillationTrainer(TrlTestCase):
             report_to="none",
         )
         trainer = DistillationTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            teacher_model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            model="trl-internal-testing/tiny-Qwen3ForCausalLM",
+            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
             args=training_args,
             train_dataset=dataset,
         )
@@ -688,7 +677,7 @@ class TestDistillationTrainer(TrlTestCase):
         )
         trainer = DistillationTrainer(
             model="trl-internal-testing/tiny-Qwen3ForCausalLM",
-            teacher_model="trl-internal-testing/tiny-Qwen3ForCausalLM",
+            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
             args=training_args,
             train_dataset=dataset,
         )
@@ -719,8 +708,8 @@ class TestDistillationTrainer(TrlTestCase):
             report_to="none",
         )
         trainer = DistillationTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            teacher_model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            model="trl-internal-testing/tiny-Qwen3ForCausalLM",
+            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
             args=training_args,
             train_dataset=dataset,
         )
@@ -744,18 +733,11 @@ class TestDistillationTrainer(TrlTestCase):
             report_to="none",
         )
         trainer = DistillationTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            teacher_model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            model="trl-internal-testing/tiny-Qwen3ForCausalLM",
+            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
             args=training_args,
             train_dataset=dataset,
         )
-
-        # Self-distillation (teacher == student) gives ~zero divergence and thus ~zero gradient, which would make the
-        # params-changed check below vacuous. Diverge the teacher so the loss — and the update — clears fp noise.
-        torch.manual_seed(0)
-        with torch.no_grad():
-            for p in trainer.teacher_model.parameters():
-                p.add_(0.5 * torch.randn_like(p))
 
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
@@ -786,8 +768,8 @@ class TestDistillationTrainer(TrlTestCase):
 
         try:
             trainer = DistillationTrainer(
-                model="Qwen/Qwen2.5-0.5B-Instruct",  # tiny models are too small for vLLM
-                teacher_model="Qwen/Qwen2.5-0.5B-Instruct",
+                model="Qwen/Qwen3-0.6B",  # tiny models are too small for vLLM
+                teacher_model="Qwen/Qwen3-0.6B",
                 args=training_args,
                 train_dataset=dataset,
             )
@@ -837,7 +819,7 @@ class TestDistillationTrainer(TrlTestCase):
 
     @require_peft
     def test_train_peft_config(self):
-        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="float32")
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM", dtype="float32")
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
@@ -850,18 +832,11 @@ class TestDistillationTrainer(TrlTestCase):
         )
         trainer = DistillationTrainer(
             model=model,
-            teacher_model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
             args=training_args,
             train_dataset=dataset,
             peft_config=LoraConfig(),
         )
-
-        # Self-distillation (teacher == student) gives ~zero divergence and thus ~zero gradient, which would make the
-        # params-changed check below vacuous. Diverge the teacher so the loss — and the update — clears fp noise.
-        torch.manual_seed(0)
-        with torch.no_grad():
-            for p in trainer.teacher_model.parameters():
-                p.add_(0.5 * torch.randn_like(p))
 
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
@@ -879,7 +854,7 @@ class TestDistillationTrainer(TrlTestCase):
 
     @require_peft
     def test_train_peft_model(self):
-        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="float32")
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM", dtype="float32")
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
         model = get_peft_model(model, LoraConfig())
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
@@ -893,17 +868,10 @@ class TestDistillationTrainer(TrlTestCase):
         )
         trainer = DistillationTrainer(
             model=model,
-            teacher_model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
             args=training_args,
             train_dataset=dataset,
         )
-
-        # Self-distillation (teacher == student) gives ~zero divergence and thus ~zero gradient, which would make the
-        # params-changed check below vacuous. Diverge the teacher so the loss — and the update — clears fp noise.
-        torch.manual_seed(0)
-        with torch.no_grad():
-            for p in trainer.teacher_model.parameters():
-                p.add_(0.5 * torch.randn_like(p))
 
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
@@ -924,7 +892,7 @@ class TestDistillationTrainer(TrlTestCase):
     # explicitly test PEFT + gradient checkpointing, which has caused issues in the past.
     @require_peft
     def test_train_peft_with_gradient_checkpointing(self):
-        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="float32")
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM", dtype="float32")
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
@@ -938,18 +906,11 @@ class TestDistillationTrainer(TrlTestCase):
         )
         trainer = DistillationTrainer(
             model=model,
-            teacher_model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
             args=training_args,
             train_dataset=dataset,
             peft_config=LoraConfig(),
         )
-
-        # Self-distillation (teacher == student) gives ~zero divergence and thus ~zero gradient, which would make the
-        # params-changed check below vacuous. Diverge the teacher so the loss — and the update — clears fp noise.
-        torch.manual_seed(0)
-        with torch.no_grad():
-            for p in trainer.teacher_model.parameters():
-                p.add_(0.5 * torch.randn_like(p))
 
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
@@ -970,11 +931,11 @@ class TestDistillationTrainer(TrlTestCase):
         # The lm_head guard must only fire when the adapter actually wraps lm_head. An adapter targeting other modules
         # (here q_proj/v_proj) leaves lm_head as a plain Linear, so the loss reads the real (frozen) head weight and
         # there is nothing to silently drop. Guards against an over-broad regression of the guard.
-        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="float32")
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM", dtype="float32")
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         DistillationTrainer(  # must construct without raising
             model=model,
-            teacher_model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
             args=DistillationConfig(output_dir=self.tmp_dir, report_to="none"),
             train_dataset=dataset,
             peft_config=LoraConfig(target_modules=["q_proj", "v_proj"]),
@@ -985,11 +946,11 @@ class TestDistillationTrainer(TrlTestCase):
         # `modules_to_save=["lm_head"]` makes the head a fully trained copy (a ModulesToSaveWrapper, not a tuner layer),
         # so `get_output_embeddings().weight` resolves to the trained weight and the loss trains it correctly. The guard
         # keys on the head being a tuner layer, so this must stay unblocked.
-        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="float32")
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM", dtype="float32")
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         DistillationTrainer(  # must construct without raising
             model=model,
-            teacher_model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
             args=DistillationConfig(output_dir=self.tmp_dir, report_to="none"),
             train_dataset=dataset,
             peft_config=LoraConfig(target_modules=["q_proj", "v_proj"], modules_to_save=["lm_head"]),
@@ -1001,8 +962,8 @@ class TestDistillationTrainer(TrlTestCase):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         with pytest.raises(ValueError, match="lm_head"):
             DistillationTrainer(
-                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-                teacher_model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                model="trl-internal-testing/tiny-Qwen3ForCausalLM",
+                teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
                 args=DistillationConfig(output_dir=self.tmp_dir, report_to="none"),
                 train_dataset=dataset,
                 peft_config=LoraConfig(target_modules=["q_proj", "lm_head"]),
@@ -1014,8 +975,8 @@ class TestDistillationTrainer(TrlTestCase):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         with pytest.raises(ValueError, match="Prompt-learning"):
             DistillationTrainer(
-                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-                teacher_model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                model="trl-internal-testing/tiny-Qwen3ForCausalLM",
+                teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
                 args=DistillationConfig(output_dir=self.tmp_dir, report_to="none"),
                 train_dataset=dataset,
                 peft_config=PrefixTuningConfig(num_virtual_tokens=4, task_type="CAUSAL_LM"),
@@ -1027,7 +988,7 @@ class TestDistillationTrainer(TrlTestCase):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         with pytest.raises(ValueError, match="vocab_size"):
             DistillationTrainer(
-                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                model="trl-internal-testing/tiny-Qwen3ForCausalLM",
                 teacher_model="trl-internal-testing/tiny-LlamaForCausalLM-3.2",
                 args=DistillationConfig(output_dir=self.tmp_dir, report_to="none"),
                 train_dataset=dataset,
@@ -1039,8 +1000,8 @@ class TestDistillationTrainer(TrlTestCase):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         with pytest.raises(ValueError, match="teacher_model_init_kwargs"):
             DistillationTrainer(
-                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-                teacher_model=AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"),
+                model="trl-internal-testing/tiny-Qwen3ForCausalLM",
+                teacher_model=AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM"),
                 args=DistillationConfig(
                     output_dir=self.tmp_dir, report_to="none", teacher_model_init_kwargs={"dtype": "float32"}
                 ),
@@ -1053,17 +1014,11 @@ class TestDistillationTrainer(TrlTestCase):
         # must honor `num_items_in_batch`.
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         trainer = DistillationTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            teacher_model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            model="trl-internal-testing/tiny-Qwen3ForCausalLM",
+            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
             args=DistillationConfig(output_dir=self.tmp_dir, beta=0.5, report_to="none"),
             train_dataset=dataset,
         )
-
-        # Diverge the teacher from the student so the divergence is well above fp noise (else the loss is ~0).
-        torch.manual_seed(0)
-        with torch.no_grad():
-            for p in trainer.teacher_model.parameters():
-                p.add_(0.5 * torch.randn_like(p))
 
         device = trainer.accelerator.device
         prompt_length, completion_length = 4, 3
@@ -1096,15 +1051,11 @@ class TestDistillationTrainer(TrlTestCase):
         # A non-symmetric `beta` (0.25, not 0.5) is used deliberately so a student/teacher swap would change the loss.
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         trainer = DistillationTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            teacher_model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            model="trl-internal-testing/tiny-Qwen3ForCausalLM",
+            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
             args=DistillationConfig(output_dir=self.tmp_dir, beta=0.25, report_to="none"),
             train_dataset=dataset,
         )
-        torch.manual_seed(0)
-        with torch.no_grad():
-            for p in trainer.teacher_model.parameters():
-                p.add_(0.5 * torch.randn_like(p))  # diverge the teacher so the JSD is well above fp noise
 
         device = trainer.accelerator.device
         vocab_size = trainer.model.config.vocab_size
@@ -1149,17 +1100,11 @@ class TestDistillationTrainer(TrlTestCase):
 
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         trainer = DistillationTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            teacher_model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            model="trl-internal-testing/tiny-Qwen3ForCausalLM",
+            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
             args=DistillationConfig(output_dir=self.tmp_dir, beta=0.5, report_to="none"),
             train_dataset=dataset,
         )
-
-        # Diverge the teacher so the JSD is well above fp noise.
-        torch.manual_seed(0)
-        with torch.no_grad():
-            for p in trainer.teacher_model.parameters():
-                p.add_(0.5 * torch.randn_like(p))
 
         device = trainer.accelerator.device
         vocab_size = trainer.model.config.vocab_size
@@ -1194,13 +1139,13 @@ class TestDistillationTrainer(TrlTestCase):
         # The Liger fused JSD kernel can't apply Cohere `logit_scale` / Gemma `final_logit_softcapping`, so unlike the
         # chunked path it would optimize a different objective than the model's real forward. Reject rather than train
         # silently wrong.
-        student = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
+        student = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM")
         student.config.final_logit_softcapping = 30.0
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         with pytest.raises(ValueError, match="final_logit_softcapping"):
             DistillationTrainer(
                 model=student,
-                teacher_model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
                 args=DistillationConfig(output_dir=self.tmp_dir, use_liger_kernel=True, report_to="none"),
                 train_dataset=dataset,
             )
@@ -1208,12 +1153,12 @@ class TestDistillationTrainer(TrlTestCase):
     @require_liger_kernel
     def test_liger_allows_none_logit_scale(self):
         # `logit_scale = None` (e.g. MPT) means unscaled, like `1.0`; the Liger guard must not reject it.
-        student = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
+        student = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM")
         student.config.logit_scale = None
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         DistillationTrainer(  # must not raise
             model=student,
-            teacher_model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
             args=DistillationConfig(output_dir=self.tmp_dir, use_liger_kernel=True, report_to="none"),
             train_dataset=dataset,
         )
