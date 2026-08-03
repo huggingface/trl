@@ -15,8 +15,10 @@
 import pytest
 import torch
 import torch.nn.functional as F
+import transformers
 from accelerate.utils.memory import release_memory
 from datasets import DatasetDict, IterableDatasetDict, load_dataset
+from packaging.version import Version
 from transformers import AutoModelForCausalLM
 from transformers.utils import is_peft_available
 
@@ -24,7 +26,14 @@ from trl import DistillationConfig, DistillationTrainer
 from trl.experimental.gkd.gkd_trainer import GKDTrainer
 from trl.trainer.distillation_trainer import _chunked_divergence_loss
 
-from .testing_utils import TrlTestCase, require_liger_kernel, require_peft, require_torch_accelerator, require_vllm
+from .testing_utils import (
+    TrlTestCase,
+    require_liger_kernel,
+    require_peft,
+    require_torch_accelerator,
+    require_vision,
+    require_vllm,
+)
 
 
 if is_peft_available():
@@ -1170,3 +1179,61 @@ class TestDistillationTrainer(TrlTestCase):
             args=DistillationConfig(output_dir=self.tmp_dir, use_liger_kernel=True, report_to="none"),
             train_dataset=dataset,
         )
+
+
+@require_vision
+class TestDistillationTrainerVLM(TrlTestCase):
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
+            pytest.param(
+                "trl-internal-testing/tiny-Gemma4ForConditionalGeneration",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.5.0"),
+                    reason="Gemma4 models were introduced in transformers-5.5.0",
+                ),
+            ),
+            "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
+            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.2.0"),
+                    reason="Qwen3.5 models were introduced in transformers-5.2.0",
+                ),
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.2.0"),
+                    reason="Qwen3.5 models were introduced in transformers-5.2.0",
+                ),
+            ),
+            # "trl-internal-testing/tiny-SmolVLMForConditionalGeneration", seems not to support bf16 properly
+        ],
+    )
+    def test_train_vlm(self, model_id):
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
+
+        training_args = DistillationConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,  # VLM training is memory intensive, reduce batch size to avoid OOM
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            report_to="none",
+        )
+        trainer = DistillationTrainer(
+            model=model_id,
+            teacher_model=model_id,  # self-distillation: no tiny+small VLM fixture pair exists
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        trainer.train()
+
+        # Self-distillation gives a near-zero teacher signal, so we assert the multimodal path ran end to end and the
+        # loss stayed finite, rather than params-changed (see `test_train_dataset_format`).
+        train_loss = trainer.state.log_history[-1]["train_loss"]
+        assert train_loss is not None
+        assert torch.isfinite(torch.tensor(train_loss))
