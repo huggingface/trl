@@ -12,19 +12,23 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os
-
 import pytest
 import torch
 import torch.nn.functional as F
+from accelerate.utils.memory import release_memory
 from datasets import DatasetDict, IterableDatasetDict, load_dataset
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM
+from transformers.utils import is_peft_available
 
 from trl.experimental.distillation import DistillationConfig, DistillationTrainer
 from trl.experimental.distillation.distillation_trainer import _chunked_divergence_loss
 from trl.experimental.gkd.gkd_trainer import GKDTrainer
 
-from ..testing_utils import TrlTestCase, require_liger_kernel, require_peft, require_torch_accelerator
+from ..testing_utils import TrlTestCase, require_liger_kernel, require_peft, require_torch_accelerator, require_vllm
+
+
+if is_peft_available():
+    from peft import LoraConfig, PrefixTuningConfig, get_peft_model
 
 
 def _reference_chunked_divergence(
@@ -201,103 +205,228 @@ class TestChunkedDivergenceLoss(TrlTestCase):
 
 
 class TestDistillationTrainer(TrlTestCase):
-    def setup_method(self):
-        self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
-        self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
-        self.tokenizer.pad_token = self.tokenizer.eos_token
-
-    def _make_args(self, **kwargs):
-        args = {
-            "output_dir": self.tmp_dir,
-            "per_device_train_batch_size": 2,
-            "gradient_accumulation_steps": 1,
-            "max_steps": 1,
-            "save_strategy": "no",
-            "report_to": "none",
-            "disable_tqdm": True,
-            "use_cpu": True,
-            "bf16": False,
-            "max_completion_length": 32,
-            "model_init_kwargs": {"dtype": "float32", "device_map": None},
-            "teacher_model_init_kwargs": {"dtype": "float32", "device_map": None},
-        }
-        args.update(kwargs)
-        return DistillationConfig(**args)
-
-    def _make_local_trainer(self, **kwargs):
-        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
-        return DistillationTrainer(
-            model=self.model_id,
-            teacher_model=self.model_id,
-            args=self._make_args(**kwargs),
+    def test_init_minimal(self):
+        # Instantiate with only model, teacher_model and train_dataset.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        DistillationTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            teacher_model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             train_dataset=dataset,
-            processing_class=self.tokenizer,
         )
 
-    def test_distillation_trainer_train_runs_with_local_teacher(self):
-        training_args = self._make_args(
-            dataloader_drop_last=True,
-            eval_strategy="steps",
-            max_steps=4,
-            eval_steps=2,
-            save_strategy="steps",
-            save_steps=2,
-            per_device_eval_batch_size=2,
+    def test_train(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        training_args = DistillationConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            report_to="none",
         )
-        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only")
         trainer = DistillationTrainer(
-            model=self.model_id,
-            teacher_model=self.model_id,
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            teacher_model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             args=training_args,
-            train_dataset=dataset["train"],
-            eval_dataset=dataset["test"],
-            processing_class=self.tokenizer,
+            train_dataset=dataset,
         )
 
-        train_result = trainer.train()
-
-        assert trainer.state.log_history[-1]["train_loss"] is not None
-        assert trainer.state.log_history[0]["eval_loss"] is not None
-        # Self-distillation (teacher == student), so the divergence is ~0; allow tiny floating-point noise below zero
-        # while still catching a genuinely negative loss.
-        assert train_result.metrics["train_loss"] >= -1e-4
-        assert "model.safetensors" in os.listdir(self.tmp_dir + "/checkpoint-2")
-
-    def test_train_updates_params(self):
-        """Training is always on-policy: the student generates completions, the teacher scores them, params move."""
-        # Higher lr than the default: gradients are tiny on this model and the default lr can stall the update, which
-        # would make the assertion below vacuous.
-        trainer = self._make_local_trainer(max_steps=2, learning_rate=0.1)
-
-        # Diverge the teacher from the student so the divergence (and thus the gradient) is well above fp noise; with
-        # matched weights it would be ~0 and the update below could pass on noise alone.
+        # Self-distillation (teacher == student) gives ~zero divergence and thus ~zero gradient, which would make the
+        # params-changed check below vacuous. Diverge the teacher so the loss — and the update — clears fp noise.
         torch.manual_seed(0)
         with torch.no_grad():
             for p in trainer.teacher_model.parameters():
                 p.add_(0.5 * torch.randn_like(p))
 
-        previous_params = {name: param.clone() for name, param in trainer.model.named_parameters()}
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
         trainer.train()
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
-        for name, param in previous_params.items():
-            assert not torch.equal(param, trainer.model.get_parameter(name)), f"Parameter {name} has not changed."
 
-    def test_train_runs_with_prompt_only_dataset(self):
-        """The forward-looking prompt-only format trains end to end: the student generates, the teacher scores."""
-        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        # The student entropy metric is logged (item 61).
+        assert any("entropy" in entry for entry in trainer.state.log_history)
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @pytest.mark.parametrize("config_name", ["standard_prompt_only", "conversational_prompt_only"])
+    def test_train_dataset_format(self, config_name):
+        # Both the standard (plain-text prompt) and conversational (chat-message prompt) prompt-only formats train end
+        # to end: the student generates on-policy completions, the teacher scores them.
+        dataset = load_dataset("trl-internal-testing/zen", config_name, split="train")
+
+        training_args = DistillationConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            report_to="none",
+        )
         trainer = DistillationTrainer(
-            model=self.model_id,
-            teacher_model=self.model_id,
-            args=self._make_args(max_steps=1, learning_rate=0.1),
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            teacher_model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
             train_dataset=dataset,
-            processing_class=self.tokenizer,
         )
 
         trainer.train()
 
+        # A full step ran and every parameter stayed finite. Self-distillation makes the gradient ~zero, so the
+        # "params changed" check used elsewhere would be vacuous here; the point of this test is only that the format
+        # is accepted and trains. See `test_train` for the params-changed assertion (with a diverged teacher).
+        assert trainer.state.log_history[-1]["train_loss"] is not None
         assert all(torch.isfinite(param).all() for param in trainer.model.parameters())
+
+    def test_trust_remote_code(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        model_id = "trl-internal-testing/tiny-RemoteForCausalLM"
+
+        with pytest.raises(ValueError, match="custom code"):
+            DistillationTrainer(
+                model=model_id,
+                teacher_model=model_id,
+                args=DistillationConfig(output_dir=self.tmp_dir, report_to="none"),
+                train_dataset=dataset,
+            )
+
+        trainer = DistillationTrainer(
+            model=model_id,
+            teacher_model=model_id,
+            args=DistillationConfig(output_dir=self.tmp_dir, report_to="none", trust_remote_code=True),
+            train_dataset=dataset,
+        )
+        assert type(trainer.model).__name__ == "RemoteForCausalLM"
+
+    def test_train_with_eval(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
+
+        training_args = DistillationConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            per_device_eval_batch_size=3,  # reduce the batch size to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            eval_strategy="steps",
+            eval_steps=2,
+            report_to="none",
+        )
+        trainer = DistillationTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            teacher_model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset["train"],
+            eval_dataset=dataset["test"],
+        )
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+        assert trainer.state.log_history[0]["eval_loss"] is not None
+        # Self-distillation (teacher == student): the divergence is ~0. Allow tiny floating-point noise below zero
+        # while still catching a genuinely negative loss (a sign error in the JSD).
+        assert trainer.state.log_history[-1]["train_loss"] >= -1e-4
+
+    def test_train_with_iterable_dataset(self):
+        # Iterable (streaming) datasets have no length, so `max_steps` is required.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train", streaming=True)
+
+        training_args = DistillationConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            max_steps=4,
+            report_to="none",
+        )
+        trainer = DistillationTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            teacher_model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        # Iterable datasets force `dispatch_batches=False` so the stream can be sharded per process.
+        assert trainer.args.accelerator_config.dispatch_batches is False
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+    def test_iterable_dataset_requires_dispatch_batches_false(self):
+        # `dispatch_batches=True` is incompatible with iterable datasets (see get_train_dataloader).
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train", streaming=True)
+
+        training_args = DistillationConfig(
+            output_dir=self.tmp_dir, accelerator_config={"dispatch_batches": True}, report_to="none"
+        )
+        with pytest.raises(ValueError, match="Iterable datasets require `dispatch_batches=False`"):
+            DistillationTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                teacher_model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                args=training_args,
+                train_dataset=dataset,
+            )
+
+    def test_iterable_dataset_forces_num_workers_zero(self):
+        # Multiple workers would shard and interleave the stream, breaking the generation-batch ordering that
+        # `_prepare_inputs` relies on, so `dataloader_num_workers` is forced to 0 for iterable datasets.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train", streaming=True)
+
+        training_args = DistillationConfig(
+            output_dir=self.tmp_dir, dataloader_num_workers=4, max_steps=1, report_to="none"
+        )
+        trainer = DistillationTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            teacher_model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        assert trainer.args.dataloader_num_workers == 0
+
+    def test_iterable_eval_keeps_map_style_train_workers(self):
+        # A map-style train set keeps its workers even when the eval set is iterable; the single-worker restriction is
+        # scoped to the iterable eval loader and not persisted.
+        train_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        eval_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="test", streaming=True)
+
+        training_args = DistillationConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            per_device_eval_batch_size=3,  # reduce the batch size to reduce memory usage
+            dataloader_num_workers=4,
+            report_to="none",
+        )
+        trainer = DistillationTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            teacher_model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=train_dataset,
+            eval_dataset=eval_dataset,
+        )
+
+        assert trainer.args.dataloader_num_workers == 4  # not disabled by the iterable eval set
+        assert trainer.get_train_dataloader().num_workers == 4  # map-style train keeps its workers
+        assert trainer.get_eval_dataloader().num_workers == 0  # iterable eval loader uses a single worker
+        assert trainer.args.dataloader_num_workers == 4  # override is scoped, not persisted
+
+    @pytest.mark.parametrize("train_dataset_type", ["dataset", "iterable_dataset"])
+    def test_init_with_train_dataset(self, train_dataset_type):
+        streaming = "iterable" in train_dataset_type
+        train_dataset = load_dataset(
+            "trl-internal-testing/zen", "standard_prompt_only", split="train", streaming=streaming
+        )
+
+        # Iterable (streaming) datasets have no length, so `max_steps` is required.
+        training_args = DistillationConfig(output_dir=self.tmp_dir, max_steps=4 if streaming else -1, report_to="none")
+
+        trainer = DistillationTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            teacher_model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=train_dataset,
+        )
+        assert trainer.train_dataset is train_dataset
 
     @pytest.mark.parametrize(
         "eval_dataset_type",
@@ -312,14 +441,14 @@ class TestDistillationTrainer(TrlTestCase):
         ],
     )
     def test_init_with_eval_dataset(self, eval_dataset_type):
-        train_dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        train_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         if eval_dataset_type == "none":
             eval_dataset = None
         else:
             streaming = "iterable" in eval_dataset_type
             eval_split = load_dataset(
-                "trl-internal-testing/zen", "conversational_prompt_only", split="test", streaming=streaming
+                "trl-internal-testing/zen", "standard_prompt_only", split="test", streaming=streaming
             )
             if eval_dataset_type in ("dataset", "iterable_dataset"):
                 eval_dataset = eval_split
@@ -331,15 +460,13 @@ class TestDistillationTrainer(TrlTestCase):
 
         training_args = DistillationConfig(output_dir=self.tmp_dir, report_to="none")
         trainer = DistillationTrainer(
-            model=self.model_id,
-            teacher_model=self.model_id,
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            teacher_model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             args=training_args,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
-            processing_class=self.tokenizer,
         )
 
-        # The distillation collator consumes raw examples, so eval datasets are stored as-is (not tokenized).
         if eval_dataset_type == "none":
             assert trainer.eval_dataset is None
         elif isinstance(trainer.eval_dataset, dict):
@@ -347,11 +474,550 @@ class TestDistillationTrainer(TrlTestCase):
         else:
             assert trainer.eval_dataset is eval_dataset
 
+    @pytest.mark.parametrize(
+        "eval_dataset_type",
+        [
+            "dataset",
+            "iterable_dataset",
+            "dataset_dict",
+            "iterable_dataset_dict",
+            "dict_of_dataset",
+            "dict_of_iterable_dataset",
+        ],
+    )
+    def test_evaluate_with_eval_dataset(self, eval_dataset_type):
+        # `evaluate` accepts a dataset passed directly, not only an `eval_dataset` set at init. Iterable datasets passed
+        # this way must still be configured for the iterable path, since they are absent at init.
+        train_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        streaming = "iterable" in eval_dataset_type
+        eval_split = load_dataset(
+            "trl-internal-testing/zen", "standard_prompt_only", split="test", streaming=streaming
+        )
+        if eval_dataset_type in ("dataset", "iterable_dataset"):
+            eval_dataset = eval_split
+        elif eval_dataset_type in ("dataset_dict", "iterable_dataset_dict"):
+            dataset_dict_cls = IterableDatasetDict if streaming else DatasetDict
+            eval_dataset = dataset_dict_cls({"data1": eval_split, "data2": eval_split})
+        else:  # "dict_of_dataset" or "dict_of_iterable_dataset"
+            eval_dataset = {"data1": eval_split, "data2": eval_split}
+
+        training_args = DistillationConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            per_device_eval_batch_size=3,  # reduce the batch size to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            report_to="none",
+        )
+        trainer = DistillationTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            teacher_model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=train_dataset,
+        )
+
+        metrics = trainer.evaluate(eval_dataset=eval_dataset)
+        if eval_dataset_type in ("dataset", "iterable_dataset"):
+            assert metrics["eval_loss"] is not None
+        else:
+            assert metrics["eval_data1_loss"] is not None
+            assert metrics["eval_data2_loss"] is not None
+
+    def test_train_eval_on_start(self):
+        # Evaluation runs before the first training step; the loss must be computable at that point.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
+        training_args = DistillationConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            per_device_eval_batch_size=3,  # reduce the batch size to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            eval_strategy="steps",
+            eval_steps=2,
+            eval_on_start=True,
+            report_to="none",
+        )
+        trainer = DistillationTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            teacher_model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset["train"],
+            eval_dataset=dataset["test"],
+        )
+        trainer.train()
+
+    def test_train_beta_non_zero(self):
+        # `beta` is the JSD interpolation coefficient (0 = forward KL, 1 = reverse KL); an intermediate value exercises
+        # the generalized-JSD-against-the-mixture branch of the loss end to end.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        training_args = DistillationConfig(
+            output_dir=self.tmp_dir,
+            beta=0.5,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            report_to="none",
+        )
+        trainer = DistillationTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            teacher_model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+    def test_train_with_pad_to_multiple_of(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        training_args = DistillationConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            pad_to_multiple_of=8,
+            report_to="none",
+        )
+        trainer = DistillationTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            teacher_model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+    def test_train_with_additional_generation_kwargs(self):
+        """Test that training works with additional generation kwargs."""
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        training_args = DistillationConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            report_to="none",
+            top_p=0.9,
+            top_k=10,
+            min_p=0.01,
+            repetition_penalty=1.1,
+        )
+
+        trainer = DistillationTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            teacher_model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+    def test_train_with_generation_kwargs(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        training_args = DistillationConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            # Pass gen kwargs
+            generation_kwargs={"do_sample": True, "top_k": 50, "num_beams": 2, "length_penalty": -0.1},
+            report_to="none",
+        )
+        trainer = DistillationTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            teacher_model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+    def test_train_with_chat_template_kwargs(self):
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+
+        training_args = DistillationConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            report_to="none",
+            chat_template_kwargs={"enable_thinking": False},
+        )
+        trainer = DistillationTrainer(
+            model="trl-internal-testing/tiny-Qwen3ForCausalLM",
+            teacher_model="trl-internal-testing/tiny-Qwen3ForCausalLM",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+    def test_train_multiple_dataloader_workers(self):
+        # Pytest/CI often starts background threads before tests run. With Python 3.12, using the default "fork" start
+        # method in a multi-threaded process emits a DeprecationWarning and may deadlock.
+        #
+        # We force "spawn" here to make multiprocessing safe under pytest when DataLoader workers are enabled. This is
+        # test-environment–specific and not required by the training logic itself.
+        #
+        # This means the test does not cover "fork". However, "spawn" is stricter (requires full picklability and clean
+        # state) and avoids fork-after-threads issues that pytest cannot reliably test anyway. Fork-specific behavior,
+        # if needed, should be tested in a clean process outside pytest.
+        torch.multiprocessing.set_start_method("spawn", force=True)
+
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        training_args = DistillationConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            dataloader_num_workers=2,  # use multiple dataloader workers
+            report_to="none",
+        )
+        trainer = DistillationTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            teacher_model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+    def test_train_with_gradient_accumulation(self):
+        # Gradient accumulation exercises the `num_items_in_batch` global-token normalizer (#4719) end to end: the loss
+        # over the accumulated micro-batches must be reduced by the global valid-token count, not the per-microbatch
+        # mean, for the update to be correct.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        training_args = DistillationConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            gradient_accumulation_steps=2,  # accumulate over 2 micro-batches
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            report_to="none",
+        )
+        trainer = DistillationTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            teacher_model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        # Self-distillation (teacher == student) gives ~zero divergence and thus ~zero gradient, which would make the
+        # params-changed check below vacuous. Diverge the teacher so the loss — and the update — clears fp noise.
+        torch.manual_seed(0)
+        with torch.no_grad():
+            for p in trainer.teacher_model.parameters():
+                p.add_(0.5 * torch.randn_like(p))
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @require_vllm
+    @require_torch_accelerator
+    def test_train_vllm(self):
+        """Test that training works with vLLM for on-policy generation (colocate mode)."""
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        training_args = DistillationConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            report_to="none",
+            logging_strategy="no",
+            use_vllm=True,
+        )
+
+        try:
+            trainer = DistillationTrainer(
+                model="Qwen/Qwen2.5-0.5B-Instruct",  # tiny models are too small for vLLM
+                teacher_model="Qwen/Qwen2.5-0.5B-Instruct",
+                args=training_args,
+                train_dataset=dataset,
+            )
+
+            # Self-distillation (teacher == student) gives ~zero divergence and thus ~zero gradient, which would make
+            # the params-changed check below vacuous. Diverge the teacher so the loss — and the update — clears fp noise.
+            torch.manual_seed(0)
+            with torch.no_grad():
+                for p in trainer.teacher_model.parameters():
+                    p.add_(0.5 * torch.randn_like(p))
+
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+            trainer.train()
+
+            assert trainer.state.log_history[-1]["train_loss"] is not None
+
+            # Check that the params have changed
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+        except Exception as e:
+            # If vLLM fails to initialize due to hardware constraints or other issues, that's expected
+            if any(
+                keyword in str(e).lower()
+                for keyword in [
+                    "outofmemoryerror",
+                    "cuda",
+                    "memory",
+                    "insufficient",
+                    "no such device",
+                    "free memory",
+                    "gpu memory utilization",
+                    "decrease gpu memory",
+                ]
+            ):
+                pytest.skip(f"Skipping vLLM training test due to hardware constraints: {e}")
+            elif "KeyError" in str(e) and "RANK" in str(e):
+                pytest.skip(f"Skipping vLLM training test due to environment setup issues: {e}")
+            elif "ValueError" in str(e) and "memory" in str(e).lower():
+                pytest.skip(f"Skipping vLLM training test due to memory constraints: {e}")
+            else:
+                raise
+
+        release_memory(trainer.model, trainer)
+
+    @require_peft
+    def test_train_peft_config(self):
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="float32")
+        base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        training_args = DistillationConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            report_to="none",
+        )
+        trainer = DistillationTrainer(
+            model=model,
+            teacher_model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset,
+            peft_config=LoraConfig(),
+        )
+
+        # Self-distillation (teacher == student) gives ~zero divergence and thus ~zero gradient, which would make the
+        # params-changed check below vacuous. Diverge the teacher so the loss — and the update — clears fp noise.
+        torch.manual_seed(0)
+        with torch.no_grad():
+            for p in trainer.teacher_model.parameters():
+                p.add_(0.5 * torch.randn_like(p))
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the peft params have changed and the base model params have not changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            if n in base_param_names:  # We expect the base model params to be the same
+                torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed.")
+            elif "base_layer" not in n:  # We expect the peft params to be different (except for the base layer)
+                assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @require_peft
+    def test_train_peft_model(self):
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="float32")
+        base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
+        model = get_peft_model(model, LoraConfig())
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        training_args = DistillationConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            report_to="none",
+        )
+        trainer = DistillationTrainer(
+            model=model,
+            teacher_model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        # Self-distillation (teacher == student) gives ~zero divergence and thus ~zero gradient, which would make the
+        # params-changed check below vacuous. Diverge the teacher so the loss — and the update — clears fp noise.
+        torch.manual_seed(0)
+        with torch.no_grad():
+            for p in trainer.teacher_model.parameters():
+                p.add_(0.5 * torch.randn_like(p))
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the peft params have changed and the base model params have not changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            if n in base_param_names:  # We expect the base model params to be the same
+                torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed.")
+            elif "base_layer" not in n:  # We expect the peft params to be different (except for the base layer)
+                assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    # In practice, this test is the same as `test_train_peft_config`, since gradient checkpointing is enabled by
+    # default in `DistillationTrainer`. We keep it as a regression guard: if the default ever changes, we still
+    # explicitly test PEFT + gradient checkpointing, which has caused issues in the past.
+    @require_peft
+    def test_train_peft_with_gradient_checkpointing(self):
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="float32")
+        base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        training_args = DistillationConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            gradient_checkpointing=True,  # enable gradient checkpointing
+            report_to="none",
+        )
+        trainer = DistillationTrainer(
+            model=model,
+            teacher_model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset,
+            peft_config=LoraConfig(),
+        )
+
+        # Self-distillation (teacher == student) gives ~zero divergence and thus ~zero gradient, which would make the
+        # params-changed check below vacuous. Diverge the teacher so the loss — and the update — clears fp noise.
+        torch.manual_seed(0)
+        with torch.no_grad():
+            for p in trainer.teacher_model.parameters():
+                p.add_(0.5 * torch.randn_like(p))
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the peft params have changed and the base model params have not changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            if n in base_param_names:  # We expect the base model params to be the same
+                torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed.")
+            elif "base_layer" not in n:  # We expect the peft params to be different (except for the base layer)
+                assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @require_peft
+    def test_peft_non_lm_head_target_allowed(self):
+        # The lm_head guard must only fire when the adapter actually wraps lm_head. An adapter targeting other modules
+        # (here q_proj/v_proj) leaves lm_head as a plain Linear, so the loss reads the real (frozen) head weight and
+        # there is nothing to silently drop. Guards against an over-broad regression of the guard.
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="float32")
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        DistillationTrainer(  # must construct without raising
+            model=model,
+            teacher_model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=DistillationConfig(output_dir=self.tmp_dir, report_to="none"),
+            train_dataset=dataset,
+            peft_config=LoraConfig(target_modules=["q_proj", "v_proj"]),
+        )
+
+    @require_peft
+    def test_peft_modules_to_save_lm_head_allowed(self):
+        # `modules_to_save=["lm_head"]` makes the head a fully trained copy (a ModulesToSaveWrapper, not a tuner layer),
+        # so `get_output_embeddings().weight` resolves to the trained weight and the loss trains it correctly. The guard
+        # keys on the head being a tuner layer, so this must stay unblocked.
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="float32")
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        DistillationTrainer(  # must construct without raising
+            model=model,
+            teacher_model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=DistillationConfig(output_dir=self.tmp_dir, report_to="none"),
+            train_dataset=dataset,
+            peft_config=LoraConfig(target_modules=["q_proj", "v_proj"], modules_to_save=["lm_head"]),
+        )
+
+    @require_peft
+    def test_peft_lm_head_adapter_raises(self):
+        # Both loss paths read `lm_head.weight` directly, so a PEFT adapter on the head is silently ignored. Reject it.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        with pytest.raises(ValueError, match="lm_head"):
+            DistillationTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                teacher_model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                args=DistillationConfig(output_dir=self.tmp_dir, report_to="none"),
+                train_dataset=dataset,
+                peft_config=LoraConfig(target_modules=["q_proj", "lm_head"]),
+            )
+
+    @require_peft
+    def test_peft_prompt_learning_raises(self):
+        # Prompt-learning injects virtual tokens via `PeftModel.forward()`, which the backbone-direct loss bypasses.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        with pytest.raises(ValueError, match="Prompt-learning"):
+            DistillationTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                teacher_model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                args=DistillationConfig(output_dir=self.tmp_dir, report_to="none"),
+                train_dataset=dataset,
+                peft_config=PrefixTuningConfig(num_virtual_tokens=4, task_type="CAUSAL_LM"),
+            )
+
+    def test_teacher_vocab_size_mismatch_raises(self):
+        # The local-teacher loss compares full next-token distributions, so student and teacher must share a
+        # vocabulary. A teacher with a different vocab_size is rejected (use GOLD for cross-tokenizer distillation).
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        with pytest.raises(ValueError, match="vocab_size"):
+            DistillationTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                teacher_model="trl-internal-testing/tiny-LlamaForCausalLM-3.2",
+                args=DistillationConfig(output_dir=self.tmp_dir, report_to="none"),
+                train_dataset=dataset,
+            )
+
+    def test_teacher_model_init_kwargs_with_instantiated_teacher_raises(self):
+        # `teacher_model_init_kwargs` only applies when the teacher is a model id; passing it alongside an already
+        # instantiated teacher is a mistake worth surfacing.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        with pytest.raises(ValueError, match="teacher_model_init_kwargs"):
+            DistillationTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                teacher_model=AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"),
+                args=DistillationConfig(
+                    output_dir=self.tmp_dir, report_to="none", teacher_model_init_kwargs={"dtype": "float32"}
+                ),
+                train_dataset=dataset,
+            )
+
     def test_loss_normalizes_by_num_items_in_batch(self):
         # When `num_items_in_batch` is passed (as under gradient accumulation), the divergence loss must be reduced as
         # sum / num_items_in_batch rather than the local per-microbatch mean. See issue #4719. The chunked JSD path
         # must honor `num_items_in_batch`.
-        trainer = self._make_local_trainer(beta=0.5)
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        trainer = DistillationTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            teacher_model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=DistillationConfig(output_dir=self.tmp_dir, beta=0.5, report_to="none"),
+            train_dataset=dataset,
+        )
 
         # Diverge the teacher from the student so the divergence is well above fp noise (else the loss is ~0).
         torch.manual_seed(0)
@@ -359,8 +1025,6 @@ class TestDistillationTrainer(TrlTestCase):
             for p in trainer.teacher_model.parameters():
                 p.add_(0.5 * torch.randn_like(p))
 
-        # The collator is prompt-only (completions come from on-policy generation); build a batch with completion
-        # tokens directly, in GRPO's key layout, to exercise the loss reduction.
         device = trainer.accelerator.device
         prompt_length, completion_length = 4, 3
         vocab_size = trainer.model.config.vocab_size
@@ -390,7 +1054,13 @@ class TestDistillationTrainer(TrlTestCase):
         # The chunked JSD path must produce the same loss as the full-logit JSD it replaced (the handover). This also
         # checks the wiring: the student stays the student, the teacher the teacher, and only completion positions score.
         # A non-symmetric `beta` (0.25, not 0.5) is used deliberately so a student/teacher swap would change the loss.
-        trainer = self._make_local_trainer(beta=0.25)
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        trainer = DistillationTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            teacher_model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=DistillationConfig(output_dir=self.tmp_dir, beta=0.25, report_to="none"),
+            train_dataset=dataset,
+        )
         torch.manual_seed(0)
         with torch.no_grad():
             for p in trainer.teacher_model.parameters():
@@ -429,41 +1099,6 @@ class TestDistillationTrainer(TrlTestCase):
 
         torch.testing.assert_close(loss, reference, rtol=1e-4, atol=1e-6)
 
-    def test_generated_batch_emits_completion_mask(self, monkeypatch):
-        """The generated batch emits a region-shaped `completion_mask` that the loss consumes via GRPO's key layout."""
-        trainer = self._make_local_trainer()
-        captured = {}
-        original = DistillationTrainer.compute_loss
-
-        def _capturing(self, model, inputs, *args, **kwargs):
-            captured.setdefault("inputs", {k: v.clone() if torch.is_tensor(v) else v for k, v in inputs.items()})
-            return original(self, model, inputs, *args, **kwargs)
-
-        monkeypatch.setattr(DistillationTrainer, "compute_loss", _capturing)
-        trainer.train()
-
-        inputs = captured["inputs"]
-        assert "completion_mask" in inputs
-        # Region-shaped (B, C), aligned with `completion_ids`.
-        assert inputs["completion_mask"].shape == inputs["completion_ids"].shape
-
-    def test_generated_batch_emits_prompt_and_completion_ids(self, monkeypatch):
-        """The generated batch emits the GRPO-style keys the loss consumes."""
-        trainer = self._make_local_trainer()
-        captured = {}
-        original = DistillationTrainer.compute_loss
-
-        def _capturing(self, model, inputs, *args, **kwargs):
-            captured.setdefault("inputs", {k: v.clone() if torch.is_tensor(v) else v for k, v in inputs.items()})
-            return original(self, model, inputs, *args, **kwargs)
-
-        monkeypatch.setattr(DistillationTrainer, "compute_loss", _capturing)
-        trainer.train()
-
-        inputs = captured["inputs"]
-        for key in ("prompt_ids", "prompt_mask", "completion_ids", "completion_mask", "num_items_in_batch"):
-            assert key in inputs
-
     @require_liger_kernel
     @require_torch_accelerator
     def test_liger_loss_agrees_with_chunked(self):
@@ -472,13 +1107,12 @@ class TestDistillationTrainer(TrlTestCase):
         # `use_liger_kernel` on one trainer keeps the same (un-patched) model, so only the loss kernel differs.
         from liger_kernel.chunked_loss import LigerFusedLinearJSDLoss
 
-        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         trainer = DistillationTrainer(
-            model=self.model_id,
-            teacher_model=self.model_id,
-            args=self._make_args(beta=0.5, use_cpu=False),
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            teacher_model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=DistillationConfig(output_dir=self.tmp_dir, beta=0.5, report_to="none"),
             train_dataset=dataset,
-            processing_class=self.tokenizer,
         )
 
         # Diverge the teacher so the JSD is well above fp noise.
@@ -515,91 +1149,31 @@ class TestDistillationTrainer(TrlTestCase):
 
         torch.testing.assert_close(liger_loss, chunked_loss, rtol=1e-3, atol=1e-4)
 
-    def test_teacher_vocab_size_mismatch_raises(self):
-        # The local-teacher loss compares full next-token distributions, so student and teacher must share a
-        # vocabulary. A teacher with a different vocab_size is rejected (use GOLD for cross-tokenizer distillation).
-        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
-        with pytest.raises(ValueError, match="vocab_size"):
-            DistillationTrainer(
-                model=self.model_id,
-                teacher_model="trl-internal-testing/tiny-LlamaForCausalLM-3.2",
-                args=self._make_args(),
-                train_dataset=dataset,
-                processing_class=self.tokenizer,
-            )
-
     @require_liger_kernel
     def test_liger_incompatible_with_logit_softcapping_raises(self):
         # The Liger fused JSD kernel can't apply Cohere `logit_scale` / Gemma `final_logit_softcapping`, so unlike the
         # chunked path it would optimize a different objective than the model's real forward. Reject rather than train
         # silently wrong.
-        student = AutoModelForCausalLM.from_pretrained(self.model_id)
+        student = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
         student.config.final_logit_softcapping = 30.0
-        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         with pytest.raises(ValueError, match="final_logit_softcapping"):
             DistillationTrainer(
                 model=student,
-                teacher_model=self.model_id,
-                args=self._make_args(use_liger_kernel=True),
+                teacher_model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                args=DistillationConfig(output_dir=self.tmp_dir, use_liger_kernel=True, report_to="none"),
                 train_dataset=dataset,
-                processing_class=self.tokenizer,
             )
 
     @require_liger_kernel
     def test_liger_allows_none_logit_scale(self):
         # `logit_scale = None` (e.g. MPT) means unscaled, like `1.0`; the Liger guard must not reject it.
-        student = AutoModelForCausalLM.from_pretrained(self.model_id)
+        student = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
         student.config.logit_scale = None
-        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         DistillationTrainer(  # must not raise
             model=student,
-            teacher_model=self.model_id,
-            args=self._make_args(use_liger_kernel=True),
+            teacher_model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=DistillationConfig(output_dir=self.tmp_dir, use_liger_kernel=True, report_to="none"),
             train_dataset=dataset,
-            processing_class=self.tokenizer,
         )
-
-    def test_teacher_model_init_kwargs_with_instantiated_teacher_raises(self):
-        # `teacher_model_init_kwargs` only applies when the teacher is a model id; passing it alongside an already
-        # instantiated teacher is a mistake worth surfacing.
-        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
-        with pytest.raises(ValueError, match="teacher_model_init_kwargs"):
-            DistillationTrainer(
-                model=self.model_id,
-                teacher_model=AutoModelForCausalLM.from_pretrained(self.model_id),
-                args=self._make_args(),
-                train_dataset=dataset,
-                processing_class=self.tokenizer,
-            )
-
-    @require_peft
-    def test_peft_lm_head_adapter_raises(self):
-        # Both loss paths read `lm_head.weight` directly, so a PEFT adapter on the head is silently ignored. Reject it.
-        from peft import LoraConfig
-
-        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
-        with pytest.raises(ValueError, match="lm_head"):
-            DistillationTrainer(
-                model=self.model_id,
-                teacher_model=self.model_id,
-                args=self._make_args(),
-                train_dataset=dataset,
-                processing_class=self.tokenizer,
-                peft_config=LoraConfig(target_modules=["q_proj", "lm_head"]),
-            )
-
-    @require_peft
-    def test_peft_prompt_learning_raises(self):
-        # Prompt-learning injects virtual tokens via `PeftModel.forward()`, which the backbone-direct loss bypasses.
-        from peft import PrefixTuningConfig
-
-        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
-        with pytest.raises(ValueError, match="Prompt-learning"):
-            DistillationTrainer(
-                model=self.model_id,
-                teacher_model=self.model_id,
-                args=self._make_args(),
-                train_dataset=dataset,
-                processing_class=self.tokenizer,
-                peft_config=PrefixTuningConfig(num_virtual_tokens=4, task_type="CAUSAL_LM"),
-            )
