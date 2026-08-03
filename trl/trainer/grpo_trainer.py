@@ -1030,6 +1030,13 @@ class GRPOTrainer(_BaseTrainer):
                 raise ImportError(
                     "Liger is required to use `use_liger_kernel` as the GRPO loss. Run `pip install liger-kernel`."
                 )
+            if self.beta != 0.0 and args.kl_log_ratio_clip is not None:
+                raise NotImplementedError(
+                    "`kl_log_ratio_clip` is not supported with `use_liger_kernel=True`: the Liger fused GRPO loss "
+                    "computes the KL penalty internally and does not apply the clip, so the guard against `inf` "
+                    "overflow (issue #3015) would not take effect. Set `use_liger_kernel=False` to use "
+                    "`kl_log_ratio_clip`."
+                )
             # Redirect the model.module forward to the model forward to ensure pre-forward hooks are called, so that
             # under ZeRO-3 the parameter coordinator gathers/reduces `lm_head.weight` around the fused loss.
             self._forward_redirection = _ForwardRedirection()

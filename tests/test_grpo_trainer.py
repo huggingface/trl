@@ -917,6 +917,28 @@ class TestGRPOTrainer(TrlTestCase):
                 peft_config=PromptTuningConfig(task_type=TaskType.CAUSAL_LM, num_virtual_tokens=8),
             )
 
+    @require_liger_kernel
+    def test_liger_kernel_with_kl_log_ratio_clip_raises(self):
+        # `kl_log_ratio_clip` is applied only in the manual `_compute_loss` path; the Liger fused loss computes the KL
+        # internally and can't receive the clip, so the trainer must fail fast rather than silently ignore the guard
+        # against `inf` overflow (issue #3015).
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="float32")
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            use_liger_kernel=True,
+            beta=0.1,  # non-zero so the KL term (and thus the clip) is active
+            kl_log_ratio_clip=20.0,
+            report_to="none",
+        )
+        with pytest.raises(NotImplementedError, match="kl_log_ratio_clip"):
+            GRPOTrainer(
+                model=model,
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
+            )
+
     @require_peft
     def test_train_peft_model(self):
         model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="float32")
