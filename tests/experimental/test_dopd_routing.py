@@ -291,6 +291,18 @@ class TestDOPDConfigValidation:
         SDFTConfig(output_dir="unused", distillation_mode="dopd", teacher_model_kind="base")
         SDFTConfig(output_dir="unused", distillation_mode="dopd", teacher_model_kind="ema")
 
+    def test_teacher_server_aligns_topk_support(self):
+        """The server only returns the teacher's top-k, so `distillation_topk_support` is force-aligned to
+        `"teacher"` at construction instead of rejecting previously-working default configs.
+        """
+        config = SDFTConfig(
+            output_dir="unused",
+            use_teacher_server=True,
+            distillation_mode="topk_logits",
+            distillation_topk_support="student",  # the default — must not raise
+        )
+        assert config.distillation_topk_support == "teacher"
+
 
 class TestTopkSupportParameter:
     """`compute_topk_self_distillation_loss`'s `topk_support` controls whose top-k defines the token support.
