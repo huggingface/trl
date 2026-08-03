@@ -17,6 +17,8 @@
     title: Paper Index
   title: Conceptual Guides
 - sections: # Sorted alphabetically
+  - local: distillation_trainer
+    title: Distillation
   - local: dpo_trainer
     title: DPO
   - local: grpo_trainer
@@ -105,8 +107,6 @@
     title: BCO
   - local: cpo_trainer
     title: CPO
-  - local: distillation_trainer
-    title: Distillation
   - local: gkd_trainer
     title: GKD
   - local: gmpo
