@@ -45,7 +45,7 @@ from transformers import (
 )
 from transformers.utils import is_liger_kernel_available, is_peft_available, is_rich_available
 
-from ..data_utils import is_conversational, prepare_multimodal_messages
+from ..data_utils import apply_chat_template, is_conversational, prepare_multimodal_messages
 from ..distributed import DistributedBackend
 from ..extras.profiling import profiling_context, profiling_decorator
 from ..generation.vllm_generation import VLLMGeneration
@@ -1086,7 +1086,7 @@ class DistillationTrainer(_BaseTrainer):
         self._metrics[mode]["completions/min_terminated_length"].append(term_completion_lengths.float().min().item())
         self._metrics[mode]["completions/max_terminated_length"].append(term_completion_lengths.float().max().item())
 
-        return prompt_ids, completion_ids, multimodal_fields
+        return prompt_ids, completion_ids
 
     @profiling_decorator
     def _get_last_hidden_state(
@@ -1100,6 +1100,8 @@ class DistillationTrainer(_BaseTrainer):
         pixel_attention_mask=None,
         spatial_shapes=None,
         image_sizes=None,
+        token_type_ids=None,
+        mm_token_type_ids=None,
         image_position_ids=None,
     ):
         if is_peft_model(unwrapped_model):
@@ -1123,6 +1125,10 @@ class DistillationTrainer(_BaseTrainer):
         # For LLaVa-Next
         if image_sizes is not None:
             model_inputs["image_sizes"] = image_sizes
+        if token_type_ids is not None:
+            model_inputs["token_type_ids"] = token_type_ids
+        if mm_token_type_ids is not None:
+            model_inputs["mm_token_type_ids"] = mm_token_type_ids
         if image_position_ids is not None:
             model_inputs["image_position_ids"] = image_position_ids
 
@@ -1136,7 +1142,12 @@ class DistillationTrainer(_BaseTrainer):
         # `base_model` gives the backbone model (skipping `lm_head`) — text decoder for LMs, multimodal wrapper for
         # VLMs (so vision-token injection runs before the text decoder). `get_decoder()` won't do: on VLMs it
         # returns just the text stack and feeds image-placeholder IDs through it.
-        backbone = unwrapped_model.base_model
+        # Pre-5.0 transformers VLMs set `base_model_prefix = ""` so `base_model is self` (re-runs `lm_head`).
+        # Fall back to `.model` there.
+        if self._is_vlm and Version(transformers.__version__) < Version("5.0.0"):
+            backbone = unwrapped_model.model
+        else:
+            backbone = unwrapped_model.base_model
         last_hidden_state = backbone(**model_inputs).last_hidden_state
         # Exclude the last value: it corresponds to the next token pred
         last_hidden_state = last_hidden_state[:, :-1, :]  # (B, L-1, H)
@@ -1150,7 +1161,33 @@ class DistillationTrainer(_BaseTrainer):
 
         prompts = [x["prompt"] for x in inputs]
 
-        prompt_ids_list, completion_ids_list, multimodal_fields = self._generate(prompts)
+        if "images" in inputs[0]:
+            images = [example.get("images") for example in inputs]
+        elif "image" in inputs[0]:
+            images = [[example.get("image")] if example.get("image") is not None else None for example in inputs]
+        else:
+            images = None
+        # Transformers requires at least one image in the batch, otherwise it throws an error
+        if images is not None and all(img_list == [] for img_list in images):
+            images = None
+
+        # If the prompts are conversational and the inputs contain images, we need to convert the prompts from
+        # [{"role": "user", "content": "What color is the sky?"}] to
+        # [{"role": "user", "content": [{"type": "image", "image": <Image>}, {"type": "text", "text": "What color is the sky?"}]}]
+        if images is not None:
+            if not is_conversational(inputs[0]):
+                raise ValueError(
+                    "Multimodal training requires conversational prompts. It looks like the dataset contains "
+                    "non-conversational inputs, likely because a chat template was applied before passing the dataset "
+                    "to the trainer. Please provide the raw conversational prompts and let the trainer apply the chat "
+                    "template internally."
+                )
+            prompts = [
+                prepare_multimodal_messages(prompt, images=image_list)
+                for prompt, image_list in zip(prompts, images, strict=True)
+            ]
+
+        prompt_ids_list, completion_ids_list = self._generate(prompts)
 
         # Convert lists of token IDs to padded tensors
         prompt_ids = [torch.tensor(ids) for ids in prompt_ids_list]
@@ -1178,6 +1215,59 @@ class DistillationTrainer(_BaseTrainer):
 
         num_items_in_batch = self.accelerator.gather(completion_mask.sum()).sum()
 
+        num_images = [len(img_list) if img_list else 0 for img_list in images] if images is not None else None
+
+        # Get forward_kwargs for models with multimodal inputs.
+        if images is not None:
+            prompts_text = [
+                apply_chat_template({"prompt": prompt}, self.processing_class, **self.chat_template_kwargs)["prompt"]
+                for prompt in prompts
+            ]
+            prompt_inputs = self.processing_class(images=images, text=prompts_text, padding=True, return_tensors="pt")
+            prompt_inputs = super()._prepare_inputs(prompt_inputs)
+            forward_kwargs = {k: v for k, v in prompt_inputs.items() if k not in ["input_ids", "attention_mask"]}
+        else:
+            forward_kwargs = {}
+
+        # Recover LFM2-VL tile counts; the full processor drops row/column metadata.
+        num_tiles = None
+        if images is not None and "spatial_shapes" in forward_kwargs:
+            image_info = self.processing_class.image_processor(
+                images=images, return_tensors="pt", return_row_col_info=True
+            )
+            tiles_per_image = image_info["image_rows"] * image_info["image_cols"]
+            if self.processing_class.image_processor.use_thumbnail:
+                tiles_per_image = tiles_per_image + (tiles_per_image > 1).to(tiles_per_image.dtype)
+            num_tiles = [group.sum().item() for group in torch.split(tiles_per_image, num_images)]
+
+        # If token_type_ids are used, extend them with zeros for the completion part
+        if "token_type_ids" in forward_kwargs:
+            token_type_ids = forward_kwargs["token_type_ids"]
+            if self.pad_to_multiple_of is not None:
+                # Needed only with pad_to_multiple_of: otherwise prompt_ids and token_type_ids must have equal len
+                padding_size = prompt_ids.size(1) - token_type_ids.size(1)
+                if padding_size > 0:
+                    token_type_ids = torch.cat(
+                        [token_type_ids.new_zeros((token_type_ids.size(0), padding_size)), token_type_ids], dim=1
+                    )
+            forward_kwargs["token_type_ids"] = torch.cat(
+                [token_type_ids, token_type_ids.new_zeros(completion_ids.shape)], dim=1
+            )
+        # If mm_token_type_ids are used, extend them with zeros for the completion part
+        if "mm_token_type_ids" in forward_kwargs:
+            mm_token_type_ids = forward_kwargs["mm_token_type_ids"]
+            if self.pad_to_multiple_of is not None:
+                # Needed only with pad_to_multiple_of: otherwise prompt_ids and mm_token_type_ids must have equal len
+                padding_size = prompt_ids.size(1) - mm_token_type_ids.size(1)
+                if padding_size > 0:
+                    mm_token_type_ids = torch.cat(
+                        [mm_token_type_ids.new_zeros((mm_token_type_ids.size(0), padding_size)), mm_token_type_ids],
+                        dim=1,
+                    )
+            forward_kwargs["mm_token_type_ids"] = torch.cat(
+                [mm_token_type_ids, mm_token_type_ids.new_zeros(completion_ids.shape)], dim=1
+            )
+
         # Log the prompt and completion texts
         if self.log_completions:
             prompts_text = self.processing_class.batch_decode(prompt_ids, skip_special_tokens=True)
@@ -1192,22 +1282,26 @@ class DistillationTrainer(_BaseTrainer):
             "completion_mask": completion_mask,
             "num_items_in_batch": num_items_in_batch,
         }
-        if "pixel_values" in multimodal_fields:
-            output["pixel_values"] = multimodal_fields["pixel_values"]
-        if "image_grid_thw" in multimodal_fields:
-            output["image_grid_thw"] = multimodal_fields["image_grid_thw"]
-        if "pixel_attention_mask" in multimodal_fields:
-            output["pixel_attention_mask"] = multimodal_fields["pixel_attention_mask"]
-        if "spatial_shapes" in multimodal_fields:
-            output["spatial_shapes"] = multimodal_fields["spatial_shapes"]
-        if "image_sizes" in multimodal_fields:
-            output["image_sizes"] = multimodal_fields["image_sizes"]
-        if "token_type_ids" in multimodal_fields:
-            output["token_type_ids"] = multimodal_fields["token_type_ids"]
-        if "mm_token_type_ids" in multimodal_fields:
-            output["mm_token_type_ids"] = multimodal_fields["mm_token_type_ids"]
-        if "image_position_ids" in multimodal_fields:
-            output["image_position_ids"] = multimodal_fields["image_position_ids"]
+        if "pixel_values" in forward_kwargs:
+            output["pixel_values"] = forward_kwargs["pixel_values"]
+        if "image_grid_thw" in forward_kwargs:
+            output["image_grid_thw"] = forward_kwargs["image_grid_thw"]
+        if "pixel_attention_mask" in forward_kwargs:
+            output["pixel_attention_mask"] = forward_kwargs["pixel_attention_mask"]
+        if "spatial_shapes" in forward_kwargs:
+            output["spatial_shapes"] = forward_kwargs["spatial_shapes"]
+        if "image_sizes" in forward_kwargs:
+            output["image_sizes"] = forward_kwargs["image_sizes"]
+        if "token_type_ids" in forward_kwargs:
+            output["token_type_ids"] = forward_kwargs["token_type_ids"]
+        if "mm_token_type_ids" in forward_kwargs:
+            output["mm_token_type_ids"] = forward_kwargs["mm_token_type_ids"]
+        if "image_position_ids" in forward_kwargs:
+            output["image_position_ids"] = forward_kwargs["image_position_ids"]
+        if images is not None:
+            output["num_images"] = num_images
+            if num_tiles is not None:
+                output["num_tiles"] = num_tiles
         return output
 
     @profiling_decorator
@@ -1287,6 +1381,8 @@ class DistillationTrainer(_BaseTrainer):
             "pixel_attention_mask",
             "spatial_shapes",
             "image_sizes",
+            "token_type_ids",
+            "mm_token_type_ids",
             "image_position_ids",
         )
         multimodal_inputs = {k: inputs[k] for k in multimodal_keys if k in inputs}

@@ -1241,6 +1241,38 @@ class TestDistillationTrainerVLM(TrlTestCase):
     @pytest.mark.parametrize(
         "model_id",
         [
+            "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",  # image_grid_thw path
+            "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",  # image_position_ids path
+        ],
+    )
+    def test_train_vlm_gradient_accumulation(self, model_id):
+        # With gradient accumulation the packed `pixel_values` are split across micro-batches via `num_images`; train a
+        # couple of steps to exercise that path (a missing `num_images` would misalign images and text).
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
+
+        training_args = DistillationConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,  # VLM training is memory intensive, reduce batch size to avoid OOM
+            gradient_accumulation_steps=2,  # split the packed pixel_values across micro-batches
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            report_to="none",
+        )
+        trainer = DistillationTrainer(
+            model=model_id,
+            teacher_model=model_id,  # self-distillation: no tiny+small VLM fixture pair exists
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        trainer.train()
+
+        train_loss = trainer.state.log_history[-1]["train_loss"]
+        assert train_loss is not None
+        assert torch.isfinite(torch.tensor(train_loss))
+
+    @pytest.mark.parametrize(
+        "model_id",
+        [
             "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
             "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
             pytest.param(
