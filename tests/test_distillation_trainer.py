@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from unittest.mock import patch
+
 import pytest
 import torch
 import torch.nn.functional as F
@@ -30,10 +32,25 @@ from .testing_utils import (
     TrlTestCase,
     require_liger_kernel,
     require_peft,
+    require_response_parsing,
     require_torch_accelerator,
     require_vision,
     require_vllm,
 )
+
+
+def multiply_tool(a: int, b: int) -> int:
+    """
+    Multiplies two integers.
+
+    Args:
+        a: The first integer.
+        b: The second integer.
+
+    Returns:
+        The product of the two integers.
+    """
+    return a * b
 
 
 if is_peft_available():
@@ -319,6 +336,72 @@ class TestDistillationTrainer(TrlTestCase):
         # ran and every parameter stayed finite. See `test_train` for the params-changed assertion.
         assert trainer.state.log_history[-1]["train_loss"] is not None
         assert all(torch.isfinite(param).all() for param in trainer.model.parameters())
+
+    @pytest.mark.xfail(
+        condition=Version(transformers.__version__) < Version("5.0.0"),
+        reason="Tool parsing is not supported in transformers versions below 5.0.0",
+        strict=True,
+    )
+    @require_response_parsing
+    def test_train_with_tools(self):
+        # A `multiply_tool` is exposed and generation is mocked to deterministically emit, for the batch of 3 prompts,
+        # one valid tool call, one invalid tool call (wrong argument name), and one non-tool completion. This exercises
+        # the tool-calling loop (execution + `tool_mask`) without relying on the tiny model to emit valid calls.
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+
+        training_args = DistillationConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            max_completion_length=128,
+            report_to="none",
+        )
+        trainer = DistillationTrainer(
+            model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            teacher_model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            args=training_args,
+            train_dataset=dataset,
+            tools=[multiply_tool],
+        )
+
+        def fake_generate(input_ids, **kwargs):
+            if input_ids.shape[0] == 3:  # first call
+                # fmt: off
+                completion_ids = torch.tensor(
+                    [
+                        # '<tool_call>\n{"name": "multiply_tool", "arguments": {"a": 3, "b": 4}}\n</tool_call><|im_end|>'
+                        [151657, 198, 4913, 606, 788, 330, 64648, 22785, 497, 330, 16370, 788, 5212, 64, 788, 220, 18, 11, 330, 65, 788, 220, 19, 11248, 151658, 151645],
+                        # an invalid tool call with wrong argument name
+                        # '<tool_call>\n{"name": "multiply_tool", "arguments": {"a": 3, "c": 4}}\n</tool_call><|im_end|>'
+                        [151657, 198, 4913, 606, 788, 330, 64648, 22785, 497, 330, 16370, 788, 5212, 64, 788, 220, 18, 11, 330, 66, 788, 220, 19, 11248, 151658, 151645],
+                        # "I don't know any tool<|im_end|>"
+                        [40, 1513, 944, 1414, 894, 5392, 151645, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643],
+                    ],
+                    device=input_ids.device,
+                )
+                # fmt: on
+            else:  # second call will only have two inputs in the batch, because two examples have a tool call.
+                completion_ids = torch.tensor(
+                    [
+                        # 'Done!<|im_end|>'
+                        [17453, 0, 151645],
+                        # 'Done!<|im_end|>'
+                        [17453, 0, 151645],
+                    ],
+                    device=input_ids.device,
+                )
+            return torch.cat([input_ids, completion_ids], dim=-1)
+
+        with patch.object(trainer.model, "generate", side_effect=fake_generate):
+            trainer.train()
+
+        # Self-distillation gives a near-zero teacher signal, so we assert the tool-calling loop ran end to end and the
+        # loss stayed finite rather than params-changed (see `test_train_dataset_format`). The tool metrics confirm the
+        # loop executed: 2 of 3 completions were tool calls, and 1 of those 2 failed (wrong argument name).
+        train_loss = trainer.state.log_history[-1]["train_loss"]
+        assert train_loss is not None
+        assert torch.isfinite(torch.tensor(train_loss))
+        assert trainer.state.log_history[-1]["tools/call_frequency"] == pytest.approx(2 / 3)
+        assert trainer.state.log_history[-1]["tools/failure_frequency"] == pytest.approx(1 / 2)
 
     def test_trust_remote_code(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
