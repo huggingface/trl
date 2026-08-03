@@ -72,7 +72,7 @@ class SDFTConfig(_BaseConfig):
 
         teacher_model_kind (`str`, *optional*, defaults to `"base"`):
             Semantic teacher choice for SDFT. `base` uses the initial student, `live` uses the current student, and
-            `ema` uses an exponentially averaged teacher.
+            `ema` uses an exponentially averaged teacher. `live` is not supported with `distillation_mode="dopd"`.
         teacher_update_rate (`float`, *optional*, defaults to `0.05`):
             EMA update rate used when `teacher_model_kind="ema"`. A value of `1.0` reduces the update to a hard
             overwrite, periodically resyncing the teacher to the current student weights.
@@ -520,6 +520,13 @@ class SDFTConfig(_BaseConfig):
             raise ValueError(
                 "`distillation_mode='sampled_token'` only supports reverse KL, so it requires "
                 f"`distillation_alpha=1.0`, got {self.distillation_alpha}."
+            )
+        if self.distillation_mode == "dopd" and self.teacher_model_kind == "live":
+            raise ValueError(
+                "`distillation_mode='dopd'` is not supported with `teacher_model_kind='live'`, because the "
+                "privileged teacher and privileged-student forwards would use the same weights on the same "
+                "privileged input, collapsing the advantage gap to ~0 and leaving the high-gap routing regimes "
+                "unreachable. Use `teacher_model_kind` in {'base', 'ema'}."
             )
         if self.distillation_kl_clip is not None and self.distillation_mode not in ("full_logits", "topk_logits"):
             raise ValueError(

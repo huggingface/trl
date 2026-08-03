@@ -21,6 +21,7 @@ GPU is involved, matching the coverage style of `test_self_distillation_trainer_
 import pytest
 import torch
 
+from trl.experimental.sdft import SDFTConfig
 from trl.experimental.sdft.loss_utils import (
     compute_dopd_routed_loss,
     compute_full_logit_self_distillation_loss,
@@ -272,6 +273,23 @@ class TestDOPDRouting:
         assert not torch.allclose(routed, expected_regime1, atol=1e-6), (
             "routing used the bare student's gap instead of the privileged student's gap"
         )
+
+
+class TestDOPDConfigValidation:
+    def test_dopd_rejects_live_teacher(self):
+        """`teacher_model_kind='live'` makes the privileged teacher and privileged-student forwards identical,
+        collapsing the advantage gap to ~0, so the high-gap routing regimes are unreachable and config must reject it.
+        """
+        with pytest.raises(ValueError, match="teacher_model_kind='live'"):
+            SDFTConfig(
+                output_dir="unused",
+                distillation_mode="dopd",
+                teacher_model_kind="live",
+            )
+
+    def test_dopd_allows_base_and_ema_teacher(self):
+        SDFTConfig(output_dir="unused", distillation_mode="dopd", teacher_model_kind="base")
+        SDFTConfig(output_dir="unused", distillation_mode="dopd", teacher_model_kind="ema")
 
 
 class TestTopkSupportParameter:
