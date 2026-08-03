@@ -294,7 +294,7 @@ class DistillationTrainer(_BaseTrainer):
     Example:
 
     ```python
-    >>> from trl.experimental.distillation import DistillationTrainer
+    >>> from trl import DistillationTrainer
     >>> from datasets import load_dataset
 
     >>> dataset = load_dataset("trl-lib/tldr", split="train")
