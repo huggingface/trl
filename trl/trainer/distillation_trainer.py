@@ -44,15 +44,16 @@ from transformers import (
 )
 from transformers.utils import is_liger_kernel_available, is_peft_available, is_rich_available
 
-from ...data_utils import is_conversational
-from ...distributed import DistributedBackend
-from ...extras.profiling import profiling_context, profiling_decorator
-from ...generation.vllm_generation import VLLMGeneration
-from ...import_utils import is_vllm_available
-from ...models import prepare_deepspeed
-from ...models.utils import _ForwardRedirection, unwrap_model_for_generation
-from ...trainer.base_trainer import _BaseTrainer
-from ...trainer.utils import (
+from ..data_utils import is_conversational
+from ..distributed import DistributedBackend
+from ..extras.profiling import profiling_context, profiling_decorator
+from ..generation.vllm_generation import VLLMGeneration
+from ..import_utils import is_vllm_available
+from ..models import prepare_deepspeed
+from ..models.utils import _ForwardRedirection, unwrap_model_for_generation
+from .base_trainer import _BaseTrainer
+from .distillation_config import DistillationConfig
+from .utils import (
     RepeatSampler,
     create_model_from_path,
     disable_dropout_in_model,
@@ -65,7 +66,6 @@ from ...trainer.utils import (
     shuffle_sequence_dict,
     split_tensor_dict,
 )
-from .distillation_config import DistillationConfig
 
 
 if is_liger_kernel_available():

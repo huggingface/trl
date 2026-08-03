@@ -14,7 +14,7 @@
 
 from dataclasses import dataclass, field
 
-from ..distillation.distillation_config import DistillationConfig
+from ...trainer.distillation_config import DistillationConfig
 
 
 @dataclass

@@ -15,7 +15,7 @@
 from dataclasses import dataclass, field
 from typing import Any
 
-from ...trainer.base_config import _BaseConfig
+from .base_config import _BaseConfig
 
 
 @dataclass
