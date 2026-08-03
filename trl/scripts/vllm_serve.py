@@ -32,6 +32,8 @@ from multiprocessing.connection import Connection
 # the 'spawn' start method
 os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
 
+logger = logging.getLogger(__name__)
+
 
 class WeightSyncWorkerExtension:
     """
@@ -78,7 +80,14 @@ class WeightSyncWorkerExtension:
             from vllm_ascend.distributed.device_communicators.pyhccl import PyHcclCommunicator as PyNcclCommunicator
 
         if self.communicator is not None:
-            raise RuntimeError("Weight update group already initialized. Call close_communicator first.")
+            # A previous client left a stale weight update group, e.g. it crashed (OOM) before its atexit
+            # `close_communicator` could run, so the group was never torn down. Close it here so a relaunched
+            # client can re-initialize instead of hard-failing. See https://github.com/huggingface/trl/issues/3408.
+            logger.warning(
+                "A weight update group is already initialized, likely left by a client that exited without closing "
+                "it. Closing the stale group before re-initializing."
+            )
+            self.close_communicator()
 
         # TODO: will remove after torch xpu 2.9 support uuid in get_device_properties
         if torch.cuda.is_available() or (

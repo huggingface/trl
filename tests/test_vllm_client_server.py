@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import atexit
 import os
 import subprocess
 from types import SimpleNamespace
@@ -1030,6 +1031,52 @@ class TestVLLMClientServerVLM(TrlTestCase):
         assert all(isinstance(tok, int) for tok in prompt_ids[1])
         assert all(isinstance(tok, int) for tok in completion_ids[0])
         assert all(isinstance(tok, int) for tok in completion_ids[1])
+
+    @classmethod
+    def teardown_class(cls):
+        kill_process(cls.server_process)
+
+
+@pytest.mark.slow
+@require_torch_multi_accelerator
+@require_vllm
+class TestVLLMClientServerReinit(TrlTestCase):
+    """Regression test for #3408.
+
+    A relaunched client must be able to re-initialize the weight update group when a previous client left it
+    initialized (e.g. a training run crashed before its atexit `close_communicator` ran). The server should
+    close the stale group and re-initialize rather than hard-failing with "already initialized".
+    """
+
+    model_id = "Qwen/Qwen2.5-1.5B"
+
+    @classmethod
+    def setup_class(cls):
+        env = os.environ.copy()
+        VISIBLE_DEVICES = "ZE_AFFINITY_MASK" if torch_device == "xpu" else "CUDA_VISIBLE_DEVICES"
+        env[VISIBLE_DEVICES] = "1"  # Restrict the server to accelerator 1
+        cls.server_process = subprocess.Popen(
+            ["trl", "vllm-serve", "--model", cls.model_id], stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env
+        )
+
+    def test_reinit_after_stale_group(self):
+        # A first client initializes the weight update group, then goes away WITHOUT closing it, leaving the
+        # server's group stale (what happens when a training run crashes before its atexit close runs).
+        first_client = VLLMClient(connection_timeout=240, host="localhost")
+        first_client.init_communicator()
+        atexit.unregister(first_client.close_communicator)  # simulate a crash: no cleanup
+        del first_client
+
+        # A relaunched client must be able to re-initialize against the stale group: the server closes the
+        # stale group and re-initializes instead of raising "already initialized".
+        second_client = VLLMClient(connection_timeout=240, host="localhost")
+        second_client.init_communicator()
+        try:
+            # The re-initialized group is functional end to end.
+            model = AutoModelForCausalLM.from_pretrained(self.model_id, device_map=torch_device)
+            second_client.update_model_params(model)
+        finally:
+            second_client.close_communicator()
 
     @classmethod
     def teardown_class(cls):
