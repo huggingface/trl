@@ -658,6 +658,36 @@ class TestPrintPromptCompletionsSample(TrlTestCase):
         assert output == expected_output
 
     @patch("sys.stdout", new_callable=StringIO)
+    def test_no_advantages(self, mock_stdout):
+        # When `advantages` is None, the Advantage column is omitted (e.g. distillation, which has no advantages).
+        prompts = ["The sky is", "The sun is"]
+        completions = [" blue.", " in the sky."]
+        rewards = {"Correctness": [0.123, 0.456]}
+        step = 42
+
+        print_prompt_completions_sample(prompts, completions, rewards, None, step)
+
+        output = mock_stdout.getvalue()
+        assert "Prompt" in output
+        assert "Completion" in output
+        assert "Correctness" in output
+        assert "Advantage" not in output
+
+    @patch("sys.stdout", new_callable=StringIO)
+    def test_no_rewards_no_advantages(self, mock_stdout):
+        # Prompt/completion-only table: empty rewards and `advantages=None` (the distillation case).
+        prompts = ["The sky is", "The sun is"]
+        completions = [" blue.", " in the sky."]
+        step = 42
+
+        print_prompt_completions_sample(prompts, completions, {}, None, step)
+
+        output = mock_stdout.getvalue()
+        assert "Prompt" in output
+        assert "Completion" in output
+        assert "Advantage" not in output
+
+    @patch("sys.stdout", new_callable=StringIO)
     def test_extra_columns(self, mock_stdout):
         prompts = ["The sky is", "The sun is"]
         completions = [" blue.", " in the sky."]
