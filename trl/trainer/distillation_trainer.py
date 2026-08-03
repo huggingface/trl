@@ -26,6 +26,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import transformers
 from accelerate.logging import get_logger
 from accelerate.utils import gather_object, is_peft_model, set_seed
 from datasets import Dataset, IterableDataset
@@ -44,7 +45,7 @@ from transformers import (
 )
 from transformers.utils import is_liger_kernel_available, is_peft_available, is_rich_available
 
-from ..data_utils import is_conversational
+from ..data_utils import is_conversational, prepare_multimodal_messages
 from ..distributed import DistributedBackend
 from ..extras.profiling import profiling_context, profiling_decorator
 from ..generation.vllm_generation import VLLMGeneration
@@ -446,9 +447,14 @@ class DistillationTrainer(_BaseTrainer):
         if processing_class is not None:
             if processing_class.pad_token is None:
                 processing_class.pad_token = processing_class.eos_token
-        self._tokenizer = (
-            processing_class.tokenizer if isinstance(processing_class, ProcessorMixin) else processing_class
-        )
+        if isinstance(processing_class, ProcessorMixin):
+            self._tokenizer = processing_class.tokenizer
+            self._is_vlm = True
+        elif isinstance(processing_class, PreTrainedTokenizerBase):
+            self._tokenizer = processing_class
+            self._is_vlm = False
+        else:
+            raise TypeError("The `processing_class` must be either a `PreTrainedTokenizerBase` or a `ProcessorMixin`")
 
         # PEFT
         if peft_config is not None:
@@ -918,27 +924,52 @@ class DistillationTrainer(_BaseTrainer):
                 self.args.dataloader_num_workers = num_workers
 
     def _tokenize_prompts(self, prompts: list):
-        """Tokenize prompts and extract multimodal fields for generation.
-
-        Conversational prompts (a list of chat messages) are rendered with the chat template and a trailing generation
-        prompt; standard prompts (plain strings) are tokenized directly. The per-example tools/environments path and
-        the image extraction are added with VLM support later (issue #6449).
-        """
+        """Tokenize prompts and extract images/multimodal fields for generation."""
         if is_conversational({"prompt": prompts[0]}):
+            # Normalize string content to content blocks for VLM processors that don't handle plain strings.
+            if self._is_vlm:
+                prompts = [prepare_multimodal_messages(prompt) for prompt in prompts]
+
+            # Extract images from messages for VLM support
+            images = []
+            has_images = False
+            for prompt in prompts:
+                prompt_images = []
+                for message in prompt:
+                    if isinstance(message["content"], list):
+                        for part in message["content"]:
+                            if part["type"] == "image":
+                                prompt_images.append(part["image"])
+                                has_images = True
+                images.append(prompt_images if prompt_images else None)
+            images = images if has_images else None
+
+            # Workaround for a bug in transformers 5.3.0 where some processors (e.g. Qwen2.5-VL) crash on
+            # batched unpadded input (transformers#44514).
+            # Fixed in transformers 5.4.0 (transformers#44563).
+            needs_padding_workaround = Version("5.3.0") <= Version(transformers.__version__) < Version("5.4.0")
             tokenized = self.processing_class.apply_chat_template(
                 conversation=prompts,
                 add_generation_prompt=True,
                 tokenize=True,
                 return_dict=True,
+                **({"padding": True} if needs_padding_workaround else {}),
                 **self.chat_template_kwargs,
             )
-            prompt_ids = tokenized["input_ids"]
+            if needs_padding_workaround:
+                # Unpad input_ids: remove padding tokens using attention_mask to get per-sequence lists
+                prompt_ids = [
+                    [tok for tok, m in zip(ids, mask, strict=True) if m]
+                    for ids, mask in zip(tokenized["input_ids"], tokenized["attention_mask"], strict=True)
+                ]
+            else:
+                prompt_ids = tokenized["input_ids"]
             # For VLMs, the processor returns extra multimodal fields (pixel_values, image_grid_thw, etc.)
             multimodal_fields = {k: v for k, v in tokenized.items() if k not in ("input_ids", "attention_mask")}
         else:
             prompt_ids = self.processing_class(text=prompts)["input_ids"]
+            images = None
             multimodal_fields = {}
-        images = None  # extracted from the messages once VLM support lands
         return prompt_ids, images, multimodal_fields
 
     def _generate_single_turn(self, prompt_ids, images, multimodal_fields):
