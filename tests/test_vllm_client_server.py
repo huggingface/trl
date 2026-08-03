@@ -1044,8 +1044,8 @@ class TestVLLMClientServerReinit(TrlTestCase):
     """Regression test for #3408.
 
     A relaunched client must be able to re-initialize the weight update group when a previous client left it
-    initialized (e.g. a training run crashed before its atexit `close_communicator` ran). The server should
-    close the stale group and re-initialize rather than hard-failing with "already initialized".
+    initialized (e.g. a training run crashed before its atexit `close_communicator` ran). The server should close the
+    stale group and re-initialize rather than hard-failing with "already initialized".
     """
 
     model_id = "Qwen/Qwen2.5-1.5B"
