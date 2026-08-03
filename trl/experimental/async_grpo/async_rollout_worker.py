@@ -959,11 +959,20 @@ class _AsyncRolloutLoop:
                 "messages": _messages_to_openai_mm(messages),
                 "max_tokens": self.max_tokens,
                 "temperature": self.temperature,
+                # Sampling params must match the text path (and the `AsyncGRPOConfig` values from #6608). Stock vLLM
+                # defaults `top_p` to 0.95, so omitting these makes VLM rollouts sample from a truncated distribution
+                # the trainer never sees — a systematic train-vs-generation mismatch that biases the importance ratio
+                # and collapses training. Send them explicitly so image rollouts decode like text rollouts.
+                "top_p": self.top_p,
+                "top_k": self.top_k,
+                "repetition_penalty": self.repetition_penalty,
                 "n": 1,
                 "return_token_ids": True,
                 "logprobs": True,
                 "chat_template_kwargs": self.chat_template_kwargs,
             }
+            if self.min_p is not None:
+                payload["min_p"] = self.min_p
             # The server re-renders the prompt from `messages`, so it needs the same tools the processor rendered
             # `prompt_ids` with. Without them the model would generate under a prompt that lacks the tool
             # boilerplate the loss is computed against.
