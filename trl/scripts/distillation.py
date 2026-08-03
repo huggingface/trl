@@ -59,13 +59,20 @@ def main(script_args, training_args, model_args, dataset_args):
 
     logger = get_logger(__name__)
 
+    if training_args.teacher_model_name_or_path is None:
+        raise ValueError(
+            "A teacher model is required for distillation training. Set it with `--teacher_model_name_or_path`."
+        )
+
     quantization_config = get_quantization_config(model_args)
+    # The student's quantization is passed via the trainer's `quantization_config` argument (below), so it must NOT
+    # also be set in `model_init_kwargs` — the trainer rejects that combination. Only the teacher, which has no
+    # dedicated trainer argument, carries it in `teacher_model_init_kwargs`.
     training_args.model_init_kwargs = dict(
         revision=model_args.model_revision,
         trust_remote_code=training_args.trust_remote_code,
         attn_implementation=model_args.attn_implementation,
         dtype=model_args.dtype,
-        quantization_config=quantization_config,
     )
 
     teacher_model_init_kwargs = dict(
