@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import types
+
 import pytest
 import torch
 from datasets import DatasetDict, load_dataset
@@ -80,3 +82,38 @@ class TestMiniLLMTrainer(TrlTestCase):
             assert set(trainer.eval_dataset.keys()) == {"data1", "data2"}
         else:
             assert trainer.eval_dataset is eval_dataset
+
+
+class TestMiniLLMComputeAdvantage(TrlTestCase):
+    """Unit tests for the discounted advantage (issue #6626). `_compute_advantage` only reads `self.gamma` and
+    `self.length_normalization`, so it is exercised with a stub `self` and no model."""
+
+    def test_discount_is_relative_not_absolute(self):
+        # advantages_t must be sum_{i>=t} gamma^(i-t) R_i, not gamma^t times that. With a constant reward of
+        # 1.0 (teacher=1, student=0) and no length normalization, the closed form is
+        # A_t = (1 - gamma^(T-t)) / (1 - gamma). The absolute-index gamma^i weighting scaled every position
+        # by an extra gamma^t, suppressing later tokens toward zero.
+        gamma, seq_len = 0.9, 64
+        student = torch.zeros(1, seq_len)
+        teacher = torch.ones(1, seq_len)
+        stub = types.SimpleNamespace(gamma=gamma, length_normalization=False)
+
+        advantages = MiniLLMTrainer._compute_advantage(stub, student, teacher)[0]
+
+        t = torch.arange(seq_len)
+        expected = (1 - gamma ** (seq_len - t)) / (1 - gamma)
+        torch.testing.assert_close(advantages, expected.float())
+
+    def test_length_normalized_is_finite_on_long_sequences(self):
+        # With length normalization the gamma^t factor cancels, so a constant reward gives advantage 1.0 at
+        # every position. The absolute-index gamma^i weighting underflowed to 0.0 in float32 on long
+        # completions, turning the ratio into 0/0 = nan.
+        gamma, seq_len = 0.5, 512
+        student = torch.zeros(1, seq_len)
+        teacher = torch.ones(1, seq_len)
+        stub = types.SimpleNamespace(gamma=gamma, length_normalization=True)
+
+        advantages = MiniLLMTrainer._compute_advantage(stub, student, teacher)[0]
+
+        assert torch.isfinite(advantages).all(), "length-normalized advantages contain non-finite values"
+        torch.testing.assert_close(advantages, torch.ones(seq_len))

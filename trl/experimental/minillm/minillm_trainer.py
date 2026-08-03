@@ -330,15 +330,24 @@ class MiniLLMTrainer(GRPOTrainer):
         rewards = teacher_log_probs_on_labels - student_log_probs_on_labels  # (batch_size, sequence_length)
 
         if self.gamma > 0.0:
-            gamma_pow = torch.pow(self.gamma, torch.arange(response_length, device=rewards.device))
-
-            advantages = rewards * gamma_pow
-            advantages = advantages.flip(1).cumsum(dim=1).flip(1)
+            # advantages_t = sum_{i>=t} gamma^(i-t) R_i, computed by the reverse recurrence
+            # a_t = R_t + gamma * a_{t+1} (a_T = 0). The previous implementation weighted by gamma^i (the
+            # absolute index), which scaled every advantage by an extra gamma^t and underflowed to 0.0 in
+            # float32 on long completions, giving 0/0 = nan under length normalization. The recurrence never
+            # materializes gamma^i, so it is exact and stable at any length. See issue #6626.
+            advantages = torch.zeros_like(rewards)
+            running_advantage = torch.zeros_like(rewards[:, 0])
+            for t in range(response_length - 1, -1, -1):
+                running_advantage = rewards[:, t] + self.gamma * running_advantage
+                advantages[:, t] = running_advantage
 
             if self.length_normalization:
                 mask = torch.where(mask < 0.5, 1e-4, mask)
-                lengths = mask * gamma_pow
-                lengths = lengths.flip(1).cumsum(dim=1).flip(1)
+                lengths = torch.zeros_like(mask)
+                running_length = torch.zeros_like(mask[:, 0])
+                for t in range(response_length - 1, -1, -1):
+                    running_length = mask[:, t] + self.gamma * running_length
+                    lengths[:, t] = running_length
                 advantages = advantages / lengths
         else:
             advantages = rewards
