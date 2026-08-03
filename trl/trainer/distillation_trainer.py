@@ -52,6 +52,7 @@ from ..chat_template_utils import (
     add_response_schema,
     get_training_chat_template,
     is_chat_template_prefix_preserving,
+    parse_response,
     supports_tool_calling,
 )
 from ..data_utils import apply_chat_template, is_conversational, prepare_multimodal_messages
@@ -1027,6 +1028,8 @@ class DistillationTrainer(_BaseTrainer):
             needs_padding_workaround = Version("5.3.0") <= Version(transformers.__version__) < Version("5.4.0")
             tokenized = self.processing_class.apply_chat_template(
                 conversation=prompts,
+                tools=self.tools or None,  # `or None`: Llama bug: it renders tool boilerplate for tools=[]
+                chat_template=self.chat_template,
                 add_generation_prompt=True,
                 tokenize=True,
                 return_dict=True,
@@ -1116,6 +1119,239 @@ class DistillationTrainer(_BaseTrainer):
 
         return completion_ids
 
+    def _get_tool_suffix_ids(self, tool_messages):
+        """Get token IDs for tool result formatting by using a minimal dummy conversation."""
+        # Use the real tool name instead of a dummy: some templates (e.g. GPT-OSS) derive the tool response
+        # header from the assistant's tool call name.
+        dummy_tool_calls = [{"type": "function", "function": {"name": tool_messages[0]["name"], "arguments": {}}}]
+        dummy_messages = [
+            {"role": "user", "content": "dummy"},
+            {
+                "role": "assistant",
+                # "content" is required here because VLM processors crash on tokenize=True without it
+                # (KeyError in processing_utils.py). See huggingface/transformers#45290.
+                "content": "",
+                "tool_calls": dummy_tool_calls,
+            },
+        ]
+        if self._is_vlm:
+            dummy_messages = prepare_multimodal_messages(dummy_messages)
+            tool_messages = prepare_multimodal_messages(tool_messages)
+
+        prefix_ids = self.processing_class.apply_chat_template(
+            dummy_messages,
+            add_generation_prompt=False,
+            tokenize=True,
+            chat_template=self.chat_template,
+            return_dict=False,
+            **self.chat_template_kwargs,
+        )
+        full_ids = self.processing_class.apply_chat_template(
+            dummy_messages + tool_messages,
+            add_generation_prompt=True,
+            tokenize=True,
+            chat_template=self.chat_template,
+            return_dict=False,
+            **self.chat_template_kwargs,
+        )
+        # VLM processors return batched output (list of lists), unbatch for single conversation
+        if self._is_vlm:
+            prefix_ids = prefix_ids[0]
+            full_ids = full_ids[0]
+
+        # Some chat templates (notably Qwen3/Qwen3.5) render "...<|im_end|>\n" after an assistant/tool block.
+        # When we compute `suffix_ids` by slicing `full_ids`, we must align the slicing boundary to
+        # EOS (not EOS + newline). Templates that don't use EOS as end-of-turn (e.g. Gemma uses
+        # <turn|>) skip this trimming.
+        eos_positions = [i for i, tok_id in enumerate(prefix_ids) if tok_id == self._tokenizer.eos_token_id]
+        if eos_positions:
+            prefix_ids = prefix_ids[: eos_positions[-1] + 1]
+
+        if full_ids[: len(prefix_ids)] != prefix_ids:
+            raise ValueError("Unexpected tokenization: the EOS-trimmed prefix IDs are not a prefix of the full IDs.")
+        return full_ids[len(prefix_ids) :]
+
+    def _tool_call_loop(self, prompts, prompt_ids, completion_ids, completions, images, multimodal_fields):
+        # Tool execution loop: execute tools, then regenerate completions with tool results appended to the prompt
+        tool_calls = [completion[0].get("tool_calls") for completion in completions]
+        idxs_with_tool = [idx for idx, tool_call in enumerate(tool_calls) if tool_call]
+        tool_calls = [tool_calls[idx] for idx in idxs_with_tool]
+        tool_mask = [[1] * len(ids) for ids in completion_ids]  # 0 for tool result tokens, 1 elsewhere
+        # Collect images from multimodal tool responses for the forward pass
+        tool_images = [[] for _ in completion_ids]
+        tool_call_count = 0
+        tool_failure_count = 0
+        iteration_num = 0
+
+        while idxs_with_tool and iteration_num < self.max_tool_calling_iterations:
+            prompt_completion_tools = [prompts[i] for i in idxs_with_tool]  # select only prompts that need tool calls
+            # Snapshot state so we can rollback tool results that would exceed max_completion_length
+            completions_len_before = [len(completions[i]) for i in idxs_with_tool]
+            tool_images_len_before = [len(tool_images[i]) for i in idxs_with_tool]
+            prompts_len_before = [len(prompts[i]) for i in idxs_with_tool]
+
+            # Call the tools, and build the new prompt for generation
+            for idx in range(len(idxs_with_tool)):
+                idx_with_tool = idxs_with_tool[idx]
+                tool_call_list = tool_calls[idx]
+                prompt_completion_tool = prompt_completion_tools[idx]
+                # Append the last assistant message (which triggered tool_calls) to the prompt
+                prompt_completion_tool.append(completions[idx_with_tool][-1])
+                tool_call_results = []
+                for tool_call in tool_call_list:
+                    tool_call_count += 1
+                    if tool_call["type"] == "function":
+                        function = tool_call["function"]
+                        name = function["name"]
+                        try:
+                            if name in self._tool_dict:
+                                tool_call_results.append((name, self._tool_dict[name](**function["arguments"])))
+                            else:
+                                raise ValueError(f"Tool {name} not found.")
+                        except Exception as e:
+                            tool_failure_count += 1
+                            result = {"error": str(e)}
+                            tool_call_results.append((name, result))
+                    else:
+                        tool_failure_count += 1
+                        name = tool_call.get("name", "unknown")
+                        tool_call_results.append((name, {"error": f"Unsupported tool call type: {tool_call['type']}"}))
+
+                for name, result in tool_call_results:
+                    # Support multimodal tool responses: if the tool returns a list of content blocks
+                    # (e.g., [{"type": "image", "image": ...}, {"type": "text", "text": "..."}]),
+                    # pass them through directly so _tokenize_prompts can extract images for VLMs.
+                    content = result if isinstance(result, list) else str(result)
+                    tool_message = {"role": "tool", "name": name, "content": content}
+                    # Collect images from multimodal tool responses
+                    if isinstance(content, list):
+                        for part in content:
+                            if isinstance(part, dict) and part.get("type") == "image":
+                                tool_images[idx_with_tool].append(part["image"])
+                    prompt_completion_tool.append(tool_message)
+                    completions[idx_with_tool].append(tool_message)
+
+            # Build token IDs by concatenation: prompt + completion + tool_suffix.
+            prompt_completion_tool_ids = []
+            for idx in range(len(idxs_with_tool)):
+                idx_with_tool = idxs_with_tool[idx]
+                # Extract trailing tool messages from completions
+                tool_messages = []
+                for message in reversed(completions[idx_with_tool]):
+                    if message["role"] == "tool":
+                        tool_messages.insert(0, message)
+                    else:
+                        break
+                suffix_ids = self._get_tool_suffix_ids(tool_messages)
+                prompt_completion_tool_ids.append(
+                    prompt_ids[idx_with_tool] + completion_ids[idx_with_tool] + suffix_ids
+                )
+
+            # Drop tool results whose addition would push the sequence past max_completion_length (the completion
+            # budget) or past the backend context ceiling (vLLM and transformers will error out on inputs longer than
+            # the model's max length). The sample exits the loop with its completion as-is, and the tool
+            # messages/images appended this iteration are rolled back so completions and tool_images stay consistent
+            # with completion_ids.
+            if self.use_vllm and self.vllm_mode == "colocate":
+                max_model_len = self.vllm_generation.llm.llm_engine.model_config.max_model_len
+            else:
+                config = self.model.config.text_config if self._is_vlm else self.model.config
+                max_model_len = config.max_position_embeddings
+            overlong = [
+                len(pct) - len(prompt_ids[i]) > self.max_completion_length or len(pct) >= max_model_len
+                for i, pct in zip(idxs_with_tool, prompt_completion_tool_ids, strict=True)
+            ]
+            for idx in range(len(idxs_with_tool)):
+                if overlong[idx]:
+                    idx_with_tool = idxs_with_tool[idx]
+                    del completions[idx_with_tool][completions_len_before[idx] :]
+                    del tool_images[idx_with_tool][tool_images_len_before[idx] :]
+                    del prompts[idx_with_tool][prompts_len_before[idx] :]
+            # Keep only non-overlong items for further processing
+            idxs_with_tool = [idx for idx, o in zip(idxs_with_tool, overlong, strict=True) if not o]
+            prompt_completion_tool_ids = [
+                pct for pct, o in zip(prompt_completion_tool_ids, overlong, strict=True) if not o
+            ]
+            if not idxs_with_tool:
+                break  # all overlong, exit tool loop
+
+            # Filter images and multimodal fields to match the current subset (index into full batch).
+            # Merge tool response images so the model can see visual feedback during generation.
+            merged_images = images
+            if any(imgs for imgs in tool_images):
+                if merged_images is None:
+                    merged_images = [imgs if imgs else None for imgs in tool_images]
+                else:
+                    merged_images = [
+                        (existing or []) + new for existing, new in zip(merged_images, tool_images, strict=True)
+                    ]
+            loop_images = [merged_images[i] for i in idxs_with_tool] if merged_images else None
+            if multimodal_fields:
+                loop_multimodal_fields = {}
+                for k, v in multimodal_fields.items():
+                    selected = [v[i] for i in idxs_with_tool]
+                    # Per-token fields (e.g. token_type_ids) need zero-padding to match extended prompt length
+                    if isinstance(selected[0], list):
+                        selected = [
+                            s + [0] * (len(pct) - len(s))
+                            for s, pct in zip(selected, prompt_completion_tool_ids, strict=True)
+                        ]
+                    loop_multimodal_fields[k] = selected
+            else:
+                loop_multimodal_fields = {}
+
+            # Generate new completions after tool execution (using concatenated IDs, no re-tokenization)
+            post_tool_ids = self._generate_single_turn(prompt_completion_tool_ids, loop_images, loop_multimodal_fields)
+
+            # Truncate so that pct[len(prompt_ids[idx]) :] + post_tool does not exceed max_completion_length.
+            # The pre-regen check guarantees len(completion_tool_ids) <= max_completion_length, so any
+            # excess can only come from post_tool_ids. post_tool_ids is model-generated text and never
+            # contains image tokens, so a plain slice is safe.
+            for idx in range(len(idxs_with_tool)):
+                idx_with_tool = idxs_with_tool[idx]
+                completion_tool_length = len(prompt_completion_tool_ids[idx]) - len(prompt_ids[idx_with_tool])
+                excess_length = completion_tool_length + len(post_tool_ids[idx]) - self.max_completion_length
+                if excess_length > 0:
+                    new_len = len(post_tool_ids[idx]) - excess_length
+                    post_tool_ids[idx] = post_tool_ids[idx][:new_len]
+
+            # Update tool_mask: the tool result should be 0 and the post-tool 1
+            for idx in range(len(idxs_with_tool)):
+                idx_with_tool = idxs_with_tool[idx]
+                prompt_completion_tool_length = len(prompt_completion_tool_ids[idx])
+                prompt_length = len(prompt_ids[idx_with_tool])
+                completion_length = len(completion_ids[idx_with_tool])
+                post_tool_length = len(post_tool_ids[idx])
+                tool_length = prompt_completion_tool_length - prompt_length - completion_length
+                tool_mask[idx_with_tool] += [0] * tool_length + [1] * post_tool_length
+
+            # Update completion_ids with the new completions (after tool execution)
+            for idx in range(len(idxs_with_tool)):
+                idx_with_tool = idxs_with_tool[idx]
+                prompt_length = len(prompt_ids[idx_with_tool])
+                pct = prompt_completion_tool_ids[idx]  # = prompt-completion-tool
+                completion_ids[idx_with_tool] = pct[prompt_length:] + post_tool_ids[idx]
+
+            # Decode post-tool completions
+            post_tool_completions = [
+                parse_response(self._tokenizer, ids, prefix=prompt_completion_tool_ids[idx]) if ids else {}
+                for idx, ids in enumerate(post_tool_ids)
+            ]
+
+            # Add post-tool completions to the existing completions
+            for idx in range(len(idxs_with_tool)):
+                idx_with_tool = idxs_with_tool[idx]
+                if post_tool_completions[idx]:  # {} if post-tool completions completely truncated
+                    completions[idx_with_tool].append(post_tool_completions[idx])
+
+            # Check for further tool calls
+            tool_calls = [completion.get("tool_calls") for completion in post_tool_completions]
+            idxs_with_tool = [idx for idx, tool_call in zip(idxs_with_tool, tool_calls, strict=True) if tool_call]
+            tool_calls = [tool_call for tool_call in tool_calls if tool_call]
+            iteration_num += 1
+
+        return tool_mask, completions, completion_ids, tool_call_count, tool_failure_count, tool_images
+
     def _generate(self, prompts: list):
         device = self.accelerator.device
         mode = "train" if self.model.training else "eval"
@@ -1126,9 +1362,48 @@ class DistillationTrainer(_BaseTrainer):
         prompt_ids, images, multimodal_fields = self._tokenize_prompts(prompts)
         completion_ids = self._generate_single_turn(prompt_ids, images, multimodal_fields)
 
+        # Decode completions. It's important to use `parse_response` when possible, because it handles tool calls.
+        if is_conversational({"prompt": prompts[0]}):
+            if Version(transformers.__version__) >= Version("5.0.0") and (  # parse_response added in v5
+                getattr(self._tokenizer, "response_template", None) is not None  # new-style
+                or getattr(self._tokenizer, "response_schema", None) is not None  # old-style
+            ):
+                completions = [
+                    [parse_response(self._tokenizer, ids, prefix=prompt_ids[i])]
+                    for i, ids in enumerate(completion_ids)
+                ]
+            else:
+                contents = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
+                completions = [[{"role": "assistant", "content": content}] for content in contents]
+        else:
+            completions = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
+
+        # Extract tool calls from the completions and (possibly) execute them
+        tool_images = []
+        if self.tools:
+            (
+                tool_mask,
+                completions,
+                completion_ids,
+                tool_call_count,
+                tool_failure_count,
+                tool_images,
+            ) = self._tool_call_loop(prompts, prompt_ids, completion_ids, completions, images, multimodal_fields)
+            # Merge tool response images into the images list for the forward pass
+            if any(imgs for imgs in tool_images):
+                if images is None:
+                    images = [imgs if imgs else None for imgs in tool_images]
+                else:
+                    images = [(existing or []) + new for existing, new in zip(images, tool_images, strict=True)]
+        else:
+            tool_mask = None
+
         # Get completion length per sequence, used for logging
         prompt_lengths = torch.tensor([len(ids) for ids in prompt_ids], device=device)
-        completion_lengths = torch.tensor([len(ids) for ids in completion_ids], device=device)
+        if tool_mask is not None:  # count only model-generated tokens (tool_mask=1)
+            completion_lengths = torch.tensor([sum(mask) for mask in tool_mask], device=device)
+        else:
+            completion_lengths = torch.tensor([len(ids) for ids in completion_ids], device=device)
         agg_prompt_lengths = self.accelerator.gather(prompt_lengths)
         agg_completion_lengths = self.accelerator.gather(completion_lengths)
         total_prompt_tokens = agg_prompt_lengths.sum()
@@ -1155,7 +1430,17 @@ class DistillationTrainer(_BaseTrainer):
         self._metrics[mode]["completions/min_terminated_length"].append(term_completion_lengths.float().min().item())
         self._metrics[mode]["completions/max_terminated_length"].append(term_completion_lengths.float().max().item())
 
-        return prompt_ids, completion_ids
+        if self.tools:
+            agg_tool_call_count = self.accelerator.gather(torch.tensor(tool_call_count, device=device)).sum()
+            tool_call_frequency = (agg_tool_call_count / len(agg_prompt_lengths)).item()
+            self._metrics[mode]["tools/call_frequency"].append(tool_call_frequency)
+            agg_tool_failure_count = self.accelerator.gather(torch.tensor(tool_failure_count, device=device)).sum()
+            failure_frequency = (
+                (agg_tool_failure_count / agg_tool_call_count).item() if agg_tool_call_count > 0 else 0.0
+            )
+            self._metrics[mode]["tools/failure_frequency"].append(failure_frequency)
+
+        return prompt_ids, completion_ids, tool_mask, images
 
     @profiling_decorator
     def _get_last_hidden_state(
@@ -1256,7 +1541,7 @@ class DistillationTrainer(_BaseTrainer):
                 for prompt, image_list in zip(prompts, images, strict=True)
             ]
 
-        prompt_ids_list, completion_ids_list = self._generate(prompts)
+        prompt_ids_list, completion_ids_list, tool_mask_list, images = self._generate(prompts)
 
         # Convert lists of token IDs to padded tensors
         prompt_ids = [torch.tensor(ids) for ids in prompt_ids_list]
@@ -1281,8 +1566,16 @@ class DistillationTrainer(_BaseTrainer):
         completion_mask = pad(
             completion_mask, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
         ).to(device=device)
+        if tool_mask_list is not None:
+            tool_mask = [torch.tensor(mask) for mask in tool_mask_list]
+            tool_mask = pad(
+                tool_mask, padding_value=1, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
+            ).to(device=device)
+        else:
+            tool_mask = None
 
-        num_items_in_batch = self.accelerator.gather(completion_mask.sum()).sum()
+        loss_mask = completion_mask if tool_mask is None else completion_mask * tool_mask
+        num_items_in_batch = self.accelerator.gather(loss_mask.sum()).sum()
 
         num_images = [len(img_list) if img_list else 0 for img_list in images] if images is not None else None
 
@@ -1371,6 +1664,8 @@ class DistillationTrainer(_BaseTrainer):
             output["num_images"] = num_images
             if num_tiles is not None:
                 output["num_tiles"] = num_tiles
+        if tool_mask is not None:
+            output["tool_mask"] = tool_mask
         return output
 
     @profiling_decorator
@@ -1441,6 +1736,8 @@ class DistillationTrainer(_BaseTrainer):
         input_ids = torch.cat([inputs["prompt_ids"], inputs["completion_ids"]], dim=1)
         attention_mask = torch.cat([inputs["prompt_mask"], inputs["completion_mask"]], dim=1)
         completion_mask = inputs["completion_mask"]
+        # Apply tool_mask for loss computation in multi-turn training scenarios
+        loss_mask = completion_mask if "tool_mask" not in inputs else completion_mask * inputs["tool_mask"]
         logits_to_keep = inputs["completion_ids"].size(1)  # only the completion tokens are trained on
 
         # Multimodal (VLM) fields, extracted during generation and split to this micro-batch by `_prepare_inputs`.
@@ -1484,7 +1781,7 @@ class DistillationTrainer(_BaseTrainer):
             # hard-loss weight is 0), so any non-ignore id marks a valid completion token; `_get_last_hidden_state`
             # already returns the completion-aligned positions, so no shift is needed.
             true_labels = torch.where(
-                completion_mask.bool(), inputs["completion_ids"], torch.full_like(inputs["completion_ids"], -100)
+                loss_mask.bool(), inputs["completion_ids"], torch.full_like(inputs["completion_ids"], -100)
             ).reshape(-1)
             # Under FSDP2 the heads are DTensors; materialize them once with full_tensor() for the fused kernel, as the
             # chunked path does. No-op off FSDP2; the ZeRO-3 (non-DTensor) case is handled by maybe_gather_lm_head_ctx.
@@ -1532,7 +1829,7 @@ class DistillationTrainer(_BaseTrainer):
             teacher_hidden_states,
             student_lm_head.weight,
             teacher_lm_head.weight,
-            completion_mask,
+            loss_mask,
             self.beta,
             _CHUNKED_LM_HEAD_CHUNK_SIZE,
             num_items_in_batch=num_items_in_batch,
