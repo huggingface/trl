@@ -3184,8 +3184,8 @@ class GRPOTrainer(_BaseTrainer):
             # Entropy bonus = mean per-token entropy H (the documented objective L = L_policy - coef * H), so
             # H does not depend on how each loss type normalizes its policy term. The bonus is a mean over the
             # tokens it acts on (effective_mask), scaled only for gradient accumulation, never by a loss-type-
-            # specific policy normalizer, so this accumulates to H over the optimizer step for every loss type
-            # and matches world_entropy below.
+            # specific policy normalizer. (The adaptive controller below tracks a window-global token-weighted mean,
+            # which can differ from this per-micro-batch mean when token counts vary across micro-batches.)
             accumulation_factor = self.current_gradient_accumulation_steps if mode == "train" else 1.0
             entropy_loss = (
                 (entropies * effective_mask).sum() / effective_mask.sum().clamp(min=1.0) / accumulation_factor
