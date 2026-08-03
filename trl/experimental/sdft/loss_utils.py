@@ -161,6 +161,7 @@ def compute_sampled_token_self_distillation_loss(
 def compute_dopd_routed_loss(
     student_logits: torch.Tensor,
     teacher_logits: torch.Tensor,
+    privileged_student_logits: torch.Tensor,
     completion_ids: torch.Tensor,
     *,
     gap_threshold: float,
@@ -172,8 +173,12 @@ def compute_dopd_routed_loss(
     """DOPD-style (https://huggingface.co/papers/2606.30626) advantage-gap routing between four token-level regimes.
 
     The "advantage gap" is the absolute log-probability difference on the realized token between the privileged
-    teacher (``teacher_logits``, e.g. scored with the ground-truth solution in context) and the privileged student
-    (``student_logits``, sampled on-policy from the bare problem). Each token is routed into exactly one of:
+    teacher (``teacher_logits``, scored with the ground-truth solution in context) and the privileged student
+    (``privileged_student_logits``, the student's own no-grad forward on the same privileged context). Routing on
+    this pair isolates the transferable capability gap from the information-asymmetry gap (the paper's "privilege
+    illusion"): the bare-prompt student would conflate the two and invert regime selection. ``student_logits``
+    (sampled on-policy from the bare problem) is what the loss terms train; ``privileged_student_logits`` is
+    detached and used only for routing. Each token is routed into exactly one of:
 
         1. low gap, either side confident   -> light top-k reverse-KL toward the teacher.
         2. low gap, both sides unsure       -> weak self-regularization, stop-gradient anchor.
@@ -184,11 +189,11 @@ def compute_dopd_routed_loss(
     weak self-regularization of regime 2, matching the paper's intent that ambiguous tokens get the smallest,
     least committal update.
     """
-    student_logp_tok = selective_log_softmax(student_logits, completion_ids)
     teacher_logp_tok = selective_log_softmax(teacher_logits, completion_ids)
-    gap = (teacher_logp_tok - student_logp_tok).detach().abs()
+    privileged_student_logp_tok = selective_log_softmax(privileged_student_logits, completion_ids)
+    gap = (teacher_logp_tok - privileged_student_logp_tok).detach().abs()
 
-    student_confidence = student_logits.softmax(dim=-1).amax(dim=-1).detach()
+    student_confidence = privileged_student_logits.softmax(dim=-1).amax(dim=-1).detach()
     teacher_confidence = teacher_logits.softmax(dim=-1).amax(dim=-1).detach()
     teacher_confident = teacher_confidence >= confidence_threshold
     student_confident = student_confidence >= confidence_threshold

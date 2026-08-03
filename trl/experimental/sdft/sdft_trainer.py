@@ -940,9 +940,21 @@ class SDFTTrainer(_BaseTrainer):
                 distillation_alpha=self.args.distillation_alpha,
             )
         elif self.args.distillation_mode == "dopd":
+            # DOPD routes on the advantage gap between both policies under the same privileged context (the paper's
+            # "privilege illusion" fix): the bare-prompt student forward would conflate the transferable capability
+            # gap with the information-asymmetry gap. Forward the student on the teacher's privileged input under
+            # `no_grad` purely for routing; the loss terms still train the live bare-student logits.
+            with torch.no_grad():
+                privileged_student_logits = self._forward_logits(
+                    model=model,
+                    input_ids=inputs["teacher_input_ids"],
+                    attention_mask=inputs["teacher_attention_mask"],
+                    logits_to_keep=distillation_logits.completion_ids.size(1),
+                )
             per_token_loss = compute_dopd_routed_loss(
                 distillation_logits.student_logits,
                 distillation_logits.teacher_logits,
+                privileged_student_logits,
                 distillation_logits.completion_ids,
                 gap_threshold=self.args.distillation_dopd_gap_threshold,
                 confidence_threshold=self.args.distillation_dopd_confidence_threshold,

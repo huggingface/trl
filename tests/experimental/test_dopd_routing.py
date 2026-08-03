@@ -74,6 +74,7 @@ class TestDOPDRouting:
         routed = compute_dopd_routed_loss(
             student_logits,
             teacher_logits,
+            student_logits,  # privileged student == bare student here, so routing behavior is unchanged
             completion_ids,
             gap_threshold=GAP_THRESHOLD,
             confidence_threshold=CONFIDENCE_THRESHOLD,
@@ -156,6 +157,7 @@ class TestDOPDRouting:
         routed = compute_dopd_routed_loss(
             student_logits,
             teacher_logits,
+            student_logits,  # privileged student == bare student here, so routing behavior is unchanged
             completion_ids,
             gap_threshold=GAP_THRESHOLD,
             confidence_threshold=CONFIDENCE_THRESHOLD,
@@ -181,6 +183,7 @@ class TestDOPDRouting:
         routed = compute_dopd_routed_loss(
             student_logits,
             teacher_logits,
+            student_logits,  # privileged student == bare student here, so routing behavior is unchanged
             completion_ids,
             gap_threshold=GAP_THRESHOLD,
             confidence_threshold=CONFIDENCE_THRESHOLD,
@@ -205,6 +208,7 @@ class TestDOPDRouting:
         routed_permissive = compute_dopd_routed_loss(
             student_logits,
             teacher_logits,
+            student_logits,  # privileged student == bare student here, so routing behavior is unchanged
             completion_ids,
             gap_threshold=100.0,
             confidence_threshold=CONFIDENCE_THRESHOLD,
@@ -223,6 +227,51 @@ class TestDOPDRouting:
         # Rows 1 and 2 (previously high-gap regimes 3/4) must now fall under regime 1 since every row is "low gap".
         torch.testing.assert_close(routed_permissive[1], expected_regime1[1])
         torch.testing.assert_close(routed_permissive[2], expected_regime1[2])
+
+    def test_routing_uses_privileged_student_not_bare_student(self):
+        """The advantage gap is measured between teacher and *privileged* student, not the bare student.
+
+        A token where the bare student agrees with the teacher (low bare gap) but the privileged student is unsure
+        and far from the teacher (high privileged gap) must route to regime 3, not regime 1. Routing on the bare
+        student would conflate the information-asymmetry gap with the capability gap (the paper's "privilege
+        illusion").
+        """
+        # Bare student: close to the teacher on the realized token -> low bare gap.
+        student_logits = _row([0.85, 0.05, 0.05, 0.05]).unsqueeze(1)
+        # Privileged student: uniform -> low confidence and a large log-prob gap vs the teacher.
+        privileged_student_logits = _row([0.25, 0.25, 0.25, 0.25]).unsqueeze(1)
+        teacher_logits = _row([0.90, 0.05, 0.03, 0.02]).unsqueeze(1)
+        completion_ids = torch.zeros((1, 1), dtype=torch.long)
+
+        routed = compute_dopd_routed_loss(
+            student_logits,
+            teacher_logits,
+            privileged_student_logits,
+            completion_ids,
+            gap_threshold=GAP_THRESHOLD,
+            confidence_threshold=CONFIDENCE_THRESHOLD,
+            light_topk=LIGHT_TOPK,
+            self_reg_weight=SELF_REG_WEIGHT,
+            student_consistency_weight=STUDENT_CONSISTENCY_WEIGHT,
+        )
+
+        # High privileged gap + teacher confident -> regime 3 (full-vocab JSD), NOT regime 1.
+        expected_regime3 = compute_full_logit_self_distillation_loss(
+            student_logits, teacher_logits, distillation_alpha=0.5
+        )
+        torch.testing.assert_close(routed, expected_regime3)
+        # Regime 1's light top-k loss on this pair is nonzero and different from the regime-3 value.
+        expected_regime1 = compute_topk_self_distillation_loss(
+            student_logits,
+            teacher_logits,
+            distillation_topk=LIGHT_TOPK,
+            distillation_alpha=1.0,
+            distillation_add_tail=True,
+            topk_support="teacher",
+        )
+        assert not torch.allclose(routed, expected_regime1, atol=1e-6), (
+            "routing used the bare student's gap instead of the privileged student's gap"
+        )
 
 
 class TestTopkSupportParameter:
