@@ -18,7 +18,7 @@ import torch
 import torch.nn.functional as F
 
 from ...extras.profiling import profiling_decorator
-from ..distillation.distillation_trainer import DistillationTrainer
+from ...trainer.distillation_trainer import DistillationTrainer
 from .server_distillation_config import ServerDistillationConfig
 
 
