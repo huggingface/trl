@@ -1237,3 +1237,45 @@ class TestDistillationTrainerVLM(TrlTestCase):
         train_loss = trainer.state.log_history[-1]["train_loss"]
         assert train_loss is not None
         assert torch.isfinite(torch.tensor(train_loss))
+
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
+            pytest.param(
+                "trl-internal-testing/tiny-Gemma4ForConditionalGeneration",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.5.0"),
+                    reason="Gemma4 models were introduced in transformers-5.5.0",
+                ),
+            ),
+        ],
+    )
+    @require_vllm
+    @pytest.mark.skip(reason="We should add a mock for the vLLM server.")
+    def test_train_vlm_and_vllm(self, model_id) -> None:
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
+
+        training_args = DistillationConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,  # VLM training is memory intensive, reduce batch size to avoid OOM
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            report_to="none",
+            use_vllm=True,
+            vllm_mode="server",
+        )
+        trainer = DistillationTrainer(
+            model=model_id,
+            teacher_model=model_id,  # self-distillation: no tiny+small VLM fixture pair exists
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        trainer.train()
+
+        # Self-distillation gives a near-zero teacher signal, so we assert the multimodal path ran end to end and the
+        # loss stayed finite, rather than params-changed (see `test_train_dataset_format`).
+        train_loss = trainer.state.log_history[-1]["train_loss"]
+        assert train_loss is not None
+        assert torch.isfinite(torch.tensor(train_loss))
