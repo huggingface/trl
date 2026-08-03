@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import tempfile
 
 from datasets import load_dataset
@@ -94,22 +95,40 @@ class _MeasuringSFTTrainer(SFTTrainer):
         return loss
 
 
-# The chunked-CE loop chunks over *valid tokens*, not vocab: `for start in range(0, n_valid, chunk_size)`
-# in `_chunked_cross_entropy_loss`. So a per-chunk `lm_head.weight` re-gather regression scales with
-# ceil(n_valid / chunk_size) — the TOKEN-chunk count — and is only observable when more than one chunk
-# runs (n_valid > chunk_size). The zen test data is tiny (~120 valid tokens total), so with the default
-# chunk size of 256 only a single chunk would run and a regression would be invisible. We therefore shrink
-# the chunk size for this test so the tiny batch genuinely exercises many token-chunks.
+# Config for the measured step. Promoted to module constants so the baseline chunk size can be derived from
+# them (see `_BASELINE_CHUNK_SIZE`) rather than hardcoded.
+_PER_DEVICE_TRAIN_BATCH_SIZE = 8
+_MAX_LENGTH = 64
+
+# Probe run. The chunked-CE loop chunks over *valid tokens*, not vocab: `for start in range(0, n_valid,
+# chunk_size)` in `_chunked_cross_entropy_loss`. So a per-chunk `lm_head.weight` re-gather regression scales
+# with ceil(n_valid / chunk_size) — the TOKEN-chunk count — and is only observable when more than one chunk
+# runs (n_valid > chunk_size). The zen test data is tiny (~120 valid tokens total), so with the default chunk
+# size of 256 only a single chunk would run and a regression would be invisible. We therefore shrink the chunk
+# size for this run so the tiny batch genuinely exercises many token-chunks.
 _TEST_CHUNK_SIZE = 4
+
+# Baseline run. A chunk size at least as large as the valid-token count forces exactly ONE token chunk, so the
+# per-chunk regather signal is zero by construction and the measured all-gather count is the pure FSDP2
+# parameter-unshard baseline B (one unshard per sharded param per fwd/bwd, independent of the chunk count).
+# `per_device_train_batch_size * max_length` is the hard upper bound on valid tokens, so it guarantees a single
+# chunk without over-allocating logits. Derived from the config above — never a magic collective count.
+_BASELINE_CHUNK_SIZE = _PER_DEVICE_TRAIN_BATCH_SIZE * _MAX_LENGTH
 
 
 def main() -> None:
     import trl.trainer.sft_trainer as sft
 
-    # Shrink the chunk size BEFORE the trainer patches the lm_head (it reads this module constant at
-    # construction). With ~120 valid tokens this yields ~30 token-chunks, so a per-chunk re-gather
-    # regression would do ~30 lm_head all-gathers vs O(1) for the fixed path — a wide, detectable margin.
-    sft._CHUNKED_LM_HEAD_CHUNK_SIZE = _TEST_CHUNK_SIZE
+    # Two modes, selected by the launcher via CHUNKED_NLL_MODE:
+    #   "probe"    (default): shrink the chunk size so many token chunks run; a per-chunk re-gather regression
+    #              then does ~ceil(n_valid / chunk_size) lm_head all-gathers vs O(1) for the fixed path.
+    #   "baseline": use a chunk size >= the valid-token count so exactly one token chunk runs, giving the
+    #              regression-free FSDP2 unshard baseline B that the probe count is compared against.
+    # The chunk size must be set BEFORE the trainer patches the lm_head (it reads this module constant at
+    # construction).
+    mode = os.environ.get("CHUNKED_NLL_MODE", "probe")
+    chunk_size = _BASELINE_CHUNK_SIZE if mode == "baseline" else _TEST_CHUNK_SIZE
+    sft._CHUNKED_LM_HEAD_CHUNK_SIZE = chunk_size
 
     # Capture the real valid-token count from inside the chunked-CE path, so the regression threshold is
     # derived from the exact n_valid the loop iterates over (never guessed from token lengths).
@@ -134,8 +153,8 @@ def main() -> None:
         loss_type="chunked_nll",
         # Pack as many of the tiny examples into the single measured step as possible, so n_valid is well
         # above the (shrunk) chunk size and the token-chunk count is large.
-        per_device_train_batch_size=8,
-        max_length=64,
+        per_device_train_batch_size=_PER_DEVICE_TRAIN_BATCH_SIZE,
+        max_length=_MAX_LENGTH,
         max_steps=1,
         report_to="none",
         bf16=True,
@@ -160,6 +179,7 @@ def main() -> None:
     train_loss = last.get("train_loss")
 
     result = {
+        "mode": mode,
         "vocab_size": int(vocab_size),
         "n_valid": int(n_valid),
         "chunk_size": int(chunk_size),
