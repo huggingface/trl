@@ -1199,9 +1199,20 @@ class DistillationTrainer(_BaseTrainer):
         # `_forward_redirection`, so DDP.forward() fires `prepare_for_backward()` and FSDP/DeepSpeed keep the student's
         # sharded parameters (including the `lm_head`) materialized for the projection.
         unwrapped_student = self.accelerator.unwrap_model(model)
-        loss = self._forward_redirection(
+        loss, entropy_sum, num_valid_tokens = self._forward_redirection(
             model, unwrapped_student, self._compute_loss, unwrapped_student, inputs, num_items_in_batch
         )
+
+        # Log the mean per-token student entropy (in nats). The reduction runs here, after `_forward_redirection`
+        # returns, so the `gather_for_metrics` collective does not run inside the DDP/FSDP-wrapped forward (a hang/
+        # ordering risk). The Liger path produces no entropy, so it logs none. Mirrors `SFTTrainer.compute_loss`.
+        if entropy_sum is not None:
+            mode = "train" if self.model.training else "eval"
+            num_valid_tokens = self.accelerator.gather_for_metrics(num_valid_tokens).sum()
+            entropy_sum = self.accelerator.gather_for_metrics(entropy_sum).sum()
+            entropy = (entropy_sum / num_valid_tokens).item() if num_valid_tokens > 0 else 0.0
+            self._metrics[mode]["entropy"].append(entropy)
+
         return (loss, None) if return_outputs else loss
 
     def _compute_loss(self, unwrapped_student, inputs, num_items_in_batch):
@@ -1273,7 +1284,8 @@ class DistillationTrainer(_BaseTrainer):
                 if isinstance(num_items_in_batch, torch.Tensor):
                     num_items_in_batch = num_items_in_batch.to(loss.device)
                 loss = loss * num_valid_local / num_items_in_batch
-            return loss
+            # The fused kernel produces no entropy; `compute_loss` logs none for the Liger path.
+            return loss, None, None
 
         student_config, teacher_config = unwrapped_student.config, unwrapped_teacher.config
         loss, entropy_sum, n_valid = _chunked_divergence_loss(
@@ -1293,13 +1305,9 @@ class DistillationTrainer(_BaseTrainer):
             teacher_final_logit_softcapping=getattr(teacher_config, "final_logit_softcapping", None),
             temperature=self.temperature,
         )
-        # Log the mean per-token student entropy (in nats) over the global batch. `_chunked_divergence_loss` returns
-        # raw sums, so gather across ranks and divide to get a valid-token-weighted mean (gradient-free).
-        mode = "train" if self.model.training else "eval"
-        total_entropy = self.accelerator.gather(entropy_sum.detach().reshape(1)).sum()
-        total_valid = self.accelerator.gather(n_valid.reshape(1)).sum().clamp_min(1)
-        self._metrics[mode]["entropy"].append((total_entropy / total_valid).item())
-        return loss
+        # Return the raw entropy sum and valid-token count for `compute_loss` to aggregate and log after the forward
+        # returns (see there). Detached: the metric is gradient-free.
+        return loss, entropy_sum.detach(), n_valid
 
     def training_step(self, model, inputs, num_items_in_batch):
         time_before = time.perf_counter()
