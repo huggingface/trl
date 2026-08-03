@@ -1873,6 +1873,52 @@ class TestGRPOTrainer(TrlTestCase):
         # Every loss type regularizes the mean per-token entropy, so contrib == entropy_coef * entropy.
         assert ratio == pytest.approx(entropy_coef, rel=0.3)
 
+    def test_luspo_loss_ignores_padding(self):
+        # Regression test: the luspo branch assumes per_token_loss is (B, 1) and uses `mask` only as a per-sequence
+        # length, not as an elementwise mask. That assumption breaks once beta != 0, since the KL term broadcasts
+        # per_token_loss to (B, T), letting padded positions leak into the loss. The loss must not depend on padded
+        # positions.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            loss_type="luspo",
+            beta=0.1,
+            importance_sampling_level="sequence",
+            report_to="none",
+            use_cpu=True,
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+        trainer.model.train()
+        trainer.current_gradient_accumulation_steps = 1
+
+        batch_size, prompt_len, completion_len = 2, 3, 6
+        inputs = {
+            "prompt_ids": torch.randint(1, 1000, (batch_size, prompt_len)),
+            "prompt_mask": torch.ones(batch_size, prompt_len, dtype=torch.long),
+            "completion_ids": torch.randint(1, 1000, (batch_size, completion_len)),
+            # trailing positions are padding for every sequence
+            "completion_mask": torch.tensor([[1, 1, 1, 1, 0, 0], [1, 1, 1, 0, 0, 0]]),
+            "advantages": torch.tensor([1.0, -1.0]),
+            "ref_per_token_logps": torch.randn(batch_size, completion_len),
+        }
+
+        loss_before = trainer._compute_loss(trainer.model, inputs)
+
+        # Perturb ref_per_token_logps only at padded positions; the loss must be unaffected.
+        perturbed_inputs = dict(inputs)
+        perturbed_ref = inputs["ref_per_token_logps"].clone()
+        perturbed_ref[inputs["completion_mask"] == 0] += 1.0
+        perturbed_inputs["ref_per_token_logps"] = perturbed_ref
+
+        loss_after = trainer._compute_loss(trainer.model, perturbed_inputs)
+
+        torch.testing.assert_close(loss_before, loss_after)
+
     def test_train_with_adaptive_entropy_gradient_accumulation(self):
         # Adaptive entropy must behave correctly under gradient accumulation: the coefficient and gating are
         # frozen across an accumulation window and the controller updates once per optimizer step (not once
