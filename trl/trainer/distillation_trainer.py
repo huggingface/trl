@@ -33,7 +33,7 @@ from datasets import Dataset, IterableDataset
 from packaging.version import Version
 from torch.utils.data import DataLoader, Sampler
 from transformers import (
-    AutoTokenizer,
+    AutoProcessor,
     BitsAndBytesConfig,
     GenerationConfig,
     PreTrainedModel,
@@ -345,9 +345,10 @@ class DistillationTrainer(_BaseTrainer):
         eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`], [`~datasets.DatasetDict`], [`~datasets.IterableDatasetDict`] or `dict[str, Dataset | IterableDataset]`):
             Dataset to use for evaluation. It must meet the same requirements as `train_dataset`.
         processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.ProcessorMixin`], *optional*):
-            Processing class used to process the data. If `None`, it is loaded from the model's name with
-            [`~transformers.AutoTokenizer.from_pretrained`]. A padding token, `tokenizer.pad_token`, must be set; if
-            the processing class has not set one, `tokenizer.eos_token` is used as the default.
+            Processing class used to process the data. The padding side must be set to "left". If `None`, the
+            processing class is loaded from the model's name with [`~transformers.AutoProcessor.from_pretrained`]. A
+            padding token, `tokenizer.pad_token`, must be set. If the processing class has not set a padding token,
+            `tokenizer.eos_token` will be used as the default.
         callbacks (list of [`~transformers.TrainerCallback`], *optional*):
             List of callbacks to customize the training loop. Will add those to the list of default callbacks detailed
             in [here](https://huggingface.co/docs/transformers/main_classes/callback).
@@ -441,14 +442,16 @@ class DistillationTrainer(_BaseTrainer):
             else inspect.signature(model.get_base_model().forward).parameters.keys()
         )
 
-        # Processing class (tokenizer)
-        if processing_class is None and model_name_or_path is not None:
-            processing_class = AutoTokenizer.from_pretrained(
-                model_name_or_path, trust_remote_code=args.trust_remote_code
+        # Processing class
+        if processing_class is None:
+            processing_class = AutoProcessor.from_pretrained(
+                model_name_or_path,
+                truncation_side="left",
+                padding_side="left",
+                trust_remote_code=args.trust_remote_code,
             )
-        if processing_class is not None:
-            if processing_class.pad_token is None:
-                processing_class.pad_token = processing_class.eos_token
+
+        # Handle pad token for processors or tokenizers
         if isinstance(processing_class, ProcessorMixin):
             self._tokenizer = processing_class.tokenizer
             self._is_vlm = True
@@ -457,6 +460,9 @@ class DistillationTrainer(_BaseTrainer):
             self._is_vlm = False
         else:
             raise TypeError("The `processing_class` must be either a `PreTrainedTokenizerBase` or a `ProcessorMixin`")
+
+        if self._tokenizer.pad_token is None:
+            self._tokenizer.pad_token = self._tokenizer.eos_token
 
         # PEFT
         if peft_config is not None:
@@ -1274,8 +1280,19 @@ class DistillationTrainer(_BaseTrainer):
         completion_mask = inputs["completion_mask"]
         logits_to_keep = inputs["completion_ids"].size(1)  # only the completion tokens are trained on
 
+        # Multimodal (VLM) fields, extracted during generation and split to this micro-batch by `_prepare_inputs`.
+        multimodal_keys = (
+            "pixel_values",
+            "image_grid_thw",
+            "pixel_attention_mask",
+            "spatial_shapes",
+            "image_sizes",
+            "image_position_ids",
+        )
+        multimodal_inputs = {k: inputs[k] for k in multimodal_keys if k in inputs}
+
         student_hidden_states = self._get_last_hidden_state(
-            unwrapped_student, input_ids, attention_mask, logits_to_keep
+            unwrapped_student, input_ids, attention_mask, logits_to_keep, **multimodal_inputs
         )
 
         # Route the teacher backbone through its own wrapper via `_forward_redirection` too, so FSDP/DeepSpeed
@@ -1291,6 +1308,7 @@ class DistillationTrainer(_BaseTrainer):
                 input_ids,
                 attention_mask,
                 logits_to_keep,
+                **multimodal_inputs,
             )
 
         student_lm_head = unwrapped_student.get_output_embeddings()
