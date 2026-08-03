@@ -1078,7 +1078,7 @@ class DistillationTrainer(_BaseTrainer):
         self._metrics[mode]["completions/min_terminated_length"].append(term_completion_lengths.float().min().item())
         self._metrics[mode]["completions/max_terminated_length"].append(term_completion_lengths.float().max().item())
 
-        return prompt_ids, completion_ids
+        return prompt_ids, completion_ids, multimodal_fields
 
     @profiling_decorator
     def _get_last_hidden_state(
@@ -1142,7 +1142,7 @@ class DistillationTrainer(_BaseTrainer):
 
         prompts = [x["prompt"] for x in inputs]
 
-        prompt_ids_list, completion_ids_list = self._generate(prompts)
+        prompt_ids_list, completion_ids_list, multimodal_fields = self._generate(prompts)
 
         # Convert lists of token IDs to padded tensors
         prompt_ids = [torch.tensor(ids) for ids in prompt_ids_list]
@@ -1184,6 +1184,22 @@ class DistillationTrainer(_BaseTrainer):
             "completion_mask": completion_mask,
             "num_items_in_batch": num_items_in_batch,
         }
+        if "pixel_values" in multimodal_fields:
+            output["pixel_values"] = multimodal_fields["pixel_values"]
+        if "image_grid_thw" in multimodal_fields:
+            output["image_grid_thw"] = multimodal_fields["image_grid_thw"]
+        if "pixel_attention_mask" in multimodal_fields:
+            output["pixel_attention_mask"] = multimodal_fields["pixel_attention_mask"]
+        if "spatial_shapes" in multimodal_fields:
+            output["spatial_shapes"] = multimodal_fields["spatial_shapes"]
+        if "image_sizes" in multimodal_fields:
+            output["image_sizes"] = multimodal_fields["image_sizes"]
+        if "token_type_ids" in multimodal_fields:
+            output["token_type_ids"] = multimodal_fields["token_type_ids"]
+        if "mm_token_type_ids" in multimodal_fields:
+            output["mm_token_type_ids"] = multimodal_fields["mm_token_type_ids"]
+        if "image_position_ids" in multimodal_fields:
+            output["image_position_ids"] = multimodal_fields["image_position_ids"]
         return output
 
     @profiling_decorator
