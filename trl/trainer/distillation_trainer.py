@@ -65,7 +65,9 @@ from .utils import (
     print_prompt_completions_sample,
     repeat_iterable_dataset,
     shuffle_sequence_dict,
+    split_pixel_values_by_grid,
     split_tensor_dict,
+    unsplit_pixel_values_by_grid,
 )
 
 
@@ -1223,9 +1225,10 @@ class DistillationTrainer(_BaseTrainer):
             if self._step % generate_every == 0 or self._buffered_inputs is None:
                 # self._buffered_inputs=None can occur when resuming from a checkpoint
                 generation_batch = self._generate_and_score_completions(generation_batch)
+                generation_batch = split_pixel_values_by_grid(generation_batch)
                 generation_batch = shuffle_sequence_dict(generation_batch)
                 generation_batches = split_tensor_dict(generation_batch, self.args.gradient_accumulation_steps)
-                self._buffered_inputs = generation_batches
+                self._buffered_inputs = [unsplit_pixel_values_by_grid(batch) for batch in generation_batches]
             inputs = self._buffered_inputs[self._step % self.args.gradient_accumulation_steps]
         else:
             # In evaluation, there is neither batch grouping for generation, nor multiple iterations, hence
