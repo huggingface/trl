@@ -3182,18 +3182,14 @@ class GRPOTrainer(_BaseTrainer):
             # tokens. Use the same effective mask for the entropy bonus so it acts on the same tokens.
             effective_mask = mask if entropy_mask is None else mask * entropy_mask
             # Entropy bonus = mean per-token entropy H (the documented objective L = L_policy - coef * H), so
-            # H does not depend on how each loss type normalizes its policy term. The term is computed so that
-            # it accumulates to H over the optimizer step for every loss type and matches world_entropy below.
-            # The only wrinkle is the normalizer: most loss types divide by the gradient accumulation step
-            # count, but cispo/dapo/vespo divide by a global token count.
-            if self.loss_type in ["cispo", "dapo", "vespo"]:
-                # normalizer is a global token count, so summing the entropies (instead of averaging them
-                # again) makes the term accumulate over the optimizer step to the global mean per-token
-                # entropy, like the other loss types.
-                entropy_loss = (entropies * effective_mask).sum() / normalizer
-            else:
-                # Mean per-token entropy of active tokens, scaled for gradient accumulation.
-                entropy_loss = (entropies * effective_mask).sum() / effective_mask.sum().clamp(min=1.0) / normalizer
+            # H does not depend on how each loss type normalizes its policy term. The bonus is a mean over the
+            # tokens it acts on (effective_mask), scaled only for gradient accumulation, never by a loss-type-
+            # specific policy normalizer, so this accumulates to H over the optimizer step for every loss type
+            # and matches world_entropy below.
+            accumulation_factor = self.current_gradient_accumulation_steps if mode == "train" else 1.0
+            entropy_loss = (
+                (entropies * effective_mask).sum() / effective_mask.sum().clamp(min=1.0) / accumulation_factor
+            )
 
             # Apply the coefficient and gating from the end of the previous optimizer step, so that every
             # micro-batch in the current accumulation window applies the same entropy bonus. The adaptive

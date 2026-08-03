@@ -1832,8 +1832,9 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @pytest.mark.parametrize("top_entropy_quantile", [1.0, 0.2])
     @pytest.mark.parametrize("loss_type", ["grpo", "dr_grpo", "dapo", "luspo"])
-    def test_entropy_bonus_scale(self, loss_type):
+    def test_entropy_bonus_scale(self, loss_type, top_entropy_quantile):
         # Regression test: the entropy bonus is the mean per-token entropy H for every loss type (documented
         # objective L = L_policy - entropy_coef * H), so it must not inherit any loss-type-specific policy
         # normalization. A previous "unified" formula divided H by a global token count for the
@@ -1853,6 +1854,7 @@ class TestGRPOTrainer(TrlTestCase):
             max_completion_length=16,  # reduce the completion length to reduce memory usage
             gradient_accumulation_steps=1,  # so contrib == entropy_coef * entropy_loss holds per step
             loss_type=loss_type,
+            top_entropy_quantile=top_entropy_quantile,
             logging_steps=1,
             report_to="none",
             entropy_coef=entropy_coef,
