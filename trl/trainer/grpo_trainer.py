@@ -3090,9 +3090,12 @@ class GRPOTrainer(_BaseTrainer):
         # Compute the KL divergence between the model and the reference model
         if self.beta != 0.0:
             ref_per_token_logps = inputs["ref_per_token_logps"]
-            per_token_kl = (
-                torch.exp(ref_per_token_logps - per_token_logps) - (ref_per_token_logps - per_token_logps) - 1
-            )
+            log_ratio = ref_per_token_logps - per_token_logps
+            # Clip the log-ratio before the exponential so the K3 estimator stays finite when the policy and
+            # reference distributions drift far apart (issue #3015). No-op when kl_log_ratio_clip is None.
+            if self.args.kl_log_ratio_clip is not None:
+                log_ratio = log_ratio.clamp(-self.args.kl_log_ratio_clip, self.args.kl_log_ratio_clip)
+            per_token_kl = torch.exp(log_ratio) - log_ratio - 1
             # Importance sampling correction for the KL divergence
             if self.args.use_bias_correction_kl:
                 per_token_kl = per_token_kl * coef_1

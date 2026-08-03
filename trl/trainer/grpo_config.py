@@ -363,6 +363,11 @@ class GRPOConfig(_BaseConfig):
             `beta != 0`, including on-policy: the ratio is differentiable, so it affects the gradient even where its
             value is exactly 1. The unbiased reverse-KL property holds for `importance_sampling_level="token"`; with
             `"sequence"` a sequence-level weight is broadcast onto the per-token KL.
+        kl_log_ratio_clip (`float`, *optional*):
+            Clips the log-ratio `log(pi_ref / pi_theta)` to `[-kl_log_ratio_clip, kl_log_ratio_clip]` before the
+            exponential in the K3 KL estimator. If `None` (default), no clipping is applied and the estimator is
+            unchanged. Set to a positive value to keep the KL term finite when the policy and reference distributions
+            drift far apart during training, which otherwise overflows `torch.exp` to `inf` (see issue #3015).
 
         > Parameters that control the logging
 
@@ -971,6 +976,16 @@ class GRPOConfig(_BaseConfig):
             "including on-policy: the ratio is differentiable, so it affects the gradient even where its value is "
             "exactly 1. The unbiased reverse-KL property holds for `importance_sampling_level='token'`; with "
             "'sequence' a sequence-level weight is broadcast onto the per-token KL."
+        },
+    )
+    kl_log_ratio_clip: float | None = field(
+        default=None,
+        metadata={
+            "help": "Clips the log-ratio `log(pi_ref / pi_theta)` to `[-kl_log_ratio_clip, kl_log_ratio_clip]` before "
+            "the exponential in the K3 KL estimator. If `None` (default), no clipping is applied and the estimator is "
+            "unchanged. Set to a positive value to keep the KL term finite when the policy and reference "
+            "distributions drift far apart during training, which otherwise overflows `torch.exp` to `inf` (see "
+            "issue #3015)."
         },
     )
 

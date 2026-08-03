@@ -284,6 +284,32 @@ class TestGRPOTrainer(TrlTestCase):
             train_dataset=dataset,
         )
 
+    def test_kl_log_ratio_clip(self):
+        # Regression test for #3015: the K3 KL estimator `exp(log_ratio) - log_ratio - 1` overflows to `inf` when the
+        # policy and reference distributions drift far apart (large positive log-ratio). `kl_log_ratio_clip` clips the
+        # log-ratio before the exponential so the KL term stays finite, without changing the estimate when unset.
+        def k3(log_ratio, clip=None):
+            if clip is not None:
+                log_ratio = log_ratio.clamp(-clip, clip)
+            return torch.exp(log_ratio) - log_ratio - 1
+
+        # A large positive log-ratio overflows the unclipped estimator.
+        drifted = torch.tensor([50.0, 90.0, 100.0])
+        assert torch.isinf(k3(drifted)).any(), "expected the unclipped K3 estimator to overflow on a large log-ratio"
+
+        # Clipping keeps it finite and non-negative (K3 is a Bregman divergence, always >= 0).
+        clipped = k3(drifted, clip=10.0)
+        assert torch.isfinite(clipped).all(), "kl_log_ratio_clip did not tame the overflow"
+        assert (clipped >= 0).all(), "clipped K3 must stay non-negative"
+
+        # When unset (the default), the estimate is unchanged for normally scaled log-ratios.
+        normal = torch.tensor([-1.3, 0.0, 0.5, 2.1])
+        torch.testing.assert_close(k3(normal, clip=None), torch.exp(normal) - normal - 1)
+
+        # The config field exists, defaults to None (no clipping), and is settable.
+        assert GRPOConfig(output_dir=self.tmp_dir, use_cpu=True).kl_log_ratio_clip is None
+        assert GRPOConfig(output_dir=self.tmp_dir, use_cpu=True, kl_log_ratio_clip=10.0).kl_log_ratio_clip == 10.0
+
     @pytest.mark.parametrize(
         "model_id",
         [
