@@ -1276,7 +1276,7 @@ class DistillationTrainer(_BaseTrainer):
             return loss
 
         student_config, teacher_config = unwrapped_student.config, unwrapped_teacher.config
-        loss, _, _ = _chunked_divergence_loss(
+        loss, entropy_sum, n_valid = _chunked_divergence_loss(
             student_hidden_states,
             teacher_hidden_states,
             student_lm_head.weight,
@@ -1293,6 +1293,12 @@ class DistillationTrainer(_BaseTrainer):
             teacher_final_logit_softcapping=getattr(teacher_config, "final_logit_softcapping", None),
             temperature=self.temperature,
         )
+        # Log the mean per-token student entropy (in nats) over the global batch. `_chunked_divergence_loss` returns
+        # raw sums, so gather across ranks and divide to get a valid-token-weighted mean (gradient-free).
+        mode = "train" if self.model.training else "eval"
+        total_entropy = self.accelerator.gather(entropy_sum.detach().reshape(1)).sum()
+        total_valid = self.accelerator.gather(n_valid.reshape(1)).sum().clamp_min(1)
+        self._metrics[mode]["entropy"].append((total_entropy / total_valid).item())
         return loss
 
     def training_step(self, model, inputs, num_items_in_batch):
