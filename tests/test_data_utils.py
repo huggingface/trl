@@ -480,6 +480,7 @@ class TestIsConversational(TrlTestCase):
     # fmt: on
 
     non_conversational_examples = [
+        {"prompt": []},
         {"prompt": "The sky is", "completion": " blue."},
         {"text": "The sky is blue."},
         {"prompt": "The sky is"},
@@ -517,6 +518,10 @@ class TestIsConversationalFromValue(TrlTestCase):
 
     def test_negative_2(self):
         example = {"text": "The sky is blue."}
+        assert not is_conversational_from_value(example)
+
+    def test_empty_conversation(self):
+        example = {"conversations": []}
         assert not is_conversational_from_value(example)
 
 
