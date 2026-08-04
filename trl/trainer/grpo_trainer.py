@@ -3171,8 +3171,7 @@ class GRPOTrainer(_BaseTrainer):
         elif self.loss_type == "luspo":
             # `per_token_loss` is (B, 1) only in the recommended sequence-level setup; the KL term, token-level
             # vLLM IS ratios and the entropy mask all broadcast it to (B, T), so mask before aggregating.
-            seq_loss = (per_token_loss * mask).sum(-1) / mask.sum(-1).clamp(min=1.0)  # (B,)
-            loss = (seq_loss * mask.sum(-1)).mean()
+            loss = (per_token_loss * mask).sum(-1).mean()
             normalizer = self.current_gradient_accumulation_steps if mode == "train" else 1.0
             policy_loss = loss.detach()
             loss = loss / normalizer
