@@ -12,7 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .utils import generate_rollout_completions
+from .server_distillation_config import ServerDistillationConfig
+from .server_distillation_trainer import ServerDistillationTrainer, build_teacher_request_inputs
 
 
-__all__ = ["generate_rollout_completions"]
+__all__ = ["ServerDistillationConfig", "ServerDistillationTrainer", "build_teacher_request_inputs"]

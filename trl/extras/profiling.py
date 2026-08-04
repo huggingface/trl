@@ -20,14 +20,16 @@ from transformers import Trainer
 from transformers.integrations import is_mlflow_available, is_trackio_available, is_wandb_available
 
 
-if is_wandb_available():
-    import wandb
-
 if is_mlflow_available():
     import mlflow
 
+
 if is_trackio_available():
     import trackio
+
+
+if is_wandb_available():
+    import wandb
 
 
 class ProfilingContext:

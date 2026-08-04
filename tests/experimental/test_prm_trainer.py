@@ -269,6 +269,31 @@ class TestPRMTrainer(TrlTestCase):
             if param.sum() != 0:  # ignore 0 biases
                 assert not torch.equal(param, new_param)
 
+    @pytest.mark.parametrize("eval_dataset_type", ["dataset", "none"])
+    def test_init_with_eval_dataset(self, eval_dataset_type):
+        # PRM tokenizes the eval dataset at init by calling `.map(..., remove_columns=eval_dataset.features)` directly
+        # on it, so streaming (iterable) and dict eval datasets are not yet supported; only a plain `Dataset` is tested.
+        train_dataset = load_dataset("trl-internal-testing/zen", "standard_stepwise_supervision", split="train")
+
+        if eval_dataset_type == "none":
+            eval_dataset = None
+        else:
+            eval_dataset = load_dataset("trl-internal-testing/zen", "standard_stepwise_supervision", split="test")
+
+        training_args = PRMConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = PRMTrainer(
+            model=self.model,
+            args=training_args,
+            processing_class=self.tokenizer,
+            train_dataset=train_dataset,
+            eval_dataset=eval_dataset,
+        )
+
+        if eval_dataset_type == "none":
+            assert trainer.eval_dataset is None
+        else:
+            assert "input_ids" in next(iter(trainer.eval_dataset))
+
     def test_train_full_pretokenized(self):
         dataset = Dataset.from_dict(
             {
