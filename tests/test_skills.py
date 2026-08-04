@@ -299,6 +299,26 @@ class TestUninstallSkill:
         assert not (target_dir / "skill1").exists()
         assert (target_dir / "skill2").exists()
 
+    @pytest.mark.parametrize("broken", [False, True])
+    def test_uninstall_symlink(self, tmp_path, broken):
+        """Test that uninstall removes valid and broken symlinks without touching their targets."""
+        source_skill = tmp_path / "source" / "test-skill"
+        if not broken:
+            source_skill.mkdir(parents=True)
+            (source_skill / "SKILL.md").write_text("# Test")
+
+        target_dir = tmp_path / "target"
+        target_dir.mkdir()
+        target_skill = target_dir / "test-skill"
+        target_skill.symlink_to(source_skill, target_is_directory=True)
+
+        result = uninstall_skill("test-skill", target_dir)
+
+        assert result is True
+        assert not target_skill.is_symlink()
+        if not broken:
+            assert (source_skill / "SKILL.md").exists()
+
 
 class TestIntegration:
     """Integration tests for skills functions."""
