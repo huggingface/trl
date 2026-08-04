@@ -106,6 +106,16 @@ class TestTrlParser(TrlTestCase):
         with pytest.raises(ValueError, match="`env` field should be a dict in the YAML file."):
             parser.parse_args_and_config(args)
 
+    @pytest.mark.parametrize("config", [None, [], "value", 42])
+    @patch("builtins.open", mock_open())
+    @patch("yaml.safe_load")
+    def test_parse_args_and_config_with_non_mapping_config(self, mock_yaml_load, config):
+        mock_yaml_load.return_value = config
+        parser = TrlParser(dataclass_types=[MyDataclass])
+
+        with pytest.raises(ValueError, match="must contain a YAML mapping"):
+            parser.parse_args_and_config(["--config", "config.yaml"])
+
     def test_parse_args_and_config_without_config(self):
         """Test parse_args_and_config without the `--config` argument."""
         parser = TrlParser(dataclass_types=[MyDataclass])

@@ -325,6 +325,8 @@ class TrlParser(HfArgumentParser):
             config_path = args.pop(config_index)  # get the path to the config file
             with open(config_path) as yaml_file:
                 config = yaml.safe_load(yaml_file)
+            if not isinstance(config, dict):
+                raise ValueError(f"Config file {config_path} must contain a YAML mapping.")
 
             # Set the environment variables specified in the config file
             if "env" in config:
