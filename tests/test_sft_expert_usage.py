@@ -198,6 +198,43 @@ def test_sft_trainer_logs_bounded_expert_usage_metrics(tmp_path, loss_type):
     }
 
 
+@pytest.mark.parametrize("loss_type", ["nll", "chunked_nll"])
+def test_predict_does_not_collect_or_pollute_expert_usage(tmp_path, loss_type):
+    tokenizer, model, dataset = _make_tiny_moe_components()
+    args = SFTConfig(
+        output_dir=str(tmp_path),
+        per_device_eval_batch_size=2,
+        max_length=16,
+        loss_type=loss_type,
+        log_expert_usage=True,
+        router_aux_loss_coef=0.0,
+        gradient_checkpointing=False,
+        dataloader_pin_memory=False,
+        bf16=False,
+        report_to="none",
+    )
+    trainer = SFTTrainer(
+        model=model,
+        args=args,
+        train_dataset=dataset,
+        eval_dataset=dataset,
+        processing_class=tokenizer,
+    )
+
+    prediction = trainer.predict(dataset)
+
+    assert not {key for key in prediction.metrics if "expert_usage/" in key}
+    assert trainer._expert_usage_counts is None
+    metrics = trainer.evaluate()
+    assert {key for key in metrics if key.startswith("eval_expert_usage/")} == {
+        "eval_expert_usage/normalized_entropy_mean",
+        "eval_expert_usage/normalized_entropy_min",
+        "eval_expert_usage/max_share_mean",
+        "eval_expert_usage/max_share_max",
+        "eval_expert_usage/active_fraction_mean",
+    }
+
+
 @require_peft
 @pytest.mark.parametrize("loss_type", ["nll", "chunked_nll"])
 def test_sft_trainer_logs_expert_usage_with_prompt_tuning(tmp_path, loss_type):

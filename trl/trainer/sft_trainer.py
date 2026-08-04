@@ -1470,6 +1470,7 @@ class SFTTrainer(_BaseTrainer):
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
         self._expert_usage_counts = None
+        self._is_evaluating = False
         self._total_train_tokens = 0
 
         # Add tags to the model
@@ -1796,13 +1797,22 @@ class SFTTrainer(_BaseTrainer):
             else {}
         )
         self._reject_skip_prepare_without_labels(eval_datasets, self.data_collator)
-        return super().evaluate(
-            eval_dataset=eval_dataset, ignore_keys=ignore_keys, metric_key_prefix=metric_key_prefix
-        )
+        was_evaluating = self._is_evaluating
+        self._is_evaluating = True
+        if not was_evaluating:
+            self._expert_usage_counts = None
+        try:
+            return super().evaluate(
+                eval_dataset=eval_dataset, ignore_keys=ignore_keys, metric_key_prefix=metric_key_prefix
+            )
+        finally:
+            self._is_evaluating = was_evaluating
+            if not was_evaluating:
+                self._expert_usage_counts = None
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         mode = "train" if self.model.training else "eval"
-        collect_expert_usage = self.expert_usage_enabled and mode == "eval"
+        collect_expert_usage = self.expert_usage_enabled and self._is_evaluating and mode == "eval"
         prediction_loss_only = inputs.pop("_prediction_loss_only", None)
 
         # Set aside labels as it will be dropped by super().compute_loss() if a custom `compute_loss_func` is used.
