@@ -141,16 +141,14 @@ class ServerDistillationTrainer(DistillationTrainer):
 
     def __init__(
         self,
-        model=None,
+        model,
         args: ServerDistillationConfig | None = None,
-        data_collator=None,
         train_dataset=None,
         eval_dataset=None,
         processing_class=None,
-        compute_metrics=None,
         callbacks=None,
         optimizers=(None, None),
-        preprocess_logits_for_metrics=None,
+        quantization_config=None,
         peft_config=None,
     ):
         if args is None:
@@ -161,14 +159,12 @@ class ServerDistillationTrainer(DistillationTrainer):
             model=model,
             teacher_model=None,
             args=args,
-            data_collator=data_collator,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
             processing_class=processing_class,
-            compute_metrics=compute_metrics,
             callbacks=callbacks,
             optimizers=optimizers,
-            preprocess_logits_for_metrics=preprocess_logits_for_metrics,
+            quantization_config=quantization_config,
             peft_config=peft_config,
         )
 
