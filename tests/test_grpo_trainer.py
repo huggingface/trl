@@ -1893,7 +1893,7 @@ class TestGRPOTrainer(TrlTestCase):
             args=training_args,
             train_dataset=dataset,
         )
-        trainer.model.train()
+        trainer.model.eval()
         trainer.current_gradient_accumulation_steps = 1
 
         batch_size, prompt_len, completion_len = 2, 3, 6
