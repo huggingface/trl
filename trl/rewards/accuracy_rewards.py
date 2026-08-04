@@ -302,18 +302,17 @@ def reasoning_accuracy_reward(
 
     for content, sol in zip(contents, solution, strict=True):
         # Split final answer from reasoning content
-        is_reasoning_complete = False
-        for delim in reasoning_delimiters:
-            if delim in content:
-                content = content.split(delim)[-1]
-                is_reasoning_complete = True
-                break
-        if not is_reasoning_complete:
+        reasoning_end = max(
+            (content.rfind(delim) + len(delim) for delim in reasoning_delimiters if delim in content),
+            default=None,
+        )
+        if reasoning_end is None:
             # We assign zero reward instead of `None` to penalize incomplete reasoning
             rewards.append(0.0)
             gold_parsed_strs.append("[incomplete reasoning]")
             answer_parsed_strs.append("[incomplete reasoning]")
             continue
+        content = content[reasoning_end:]
 
         gold_parsed = parse(sol, parsing_timeout=parsing_timeout)
         if len(gold_parsed) != 0:
