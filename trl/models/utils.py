@@ -136,20 +136,24 @@ def _unwrap_model_for_generation(
         unwrapped_model.gradient_checkpointing_disable()
     from ..distributed import DistributedBackend
 
-    if DistributedBackend(accelerator).is_zero3:
-        if not gather_deepspeed3_params:
-            yield accelerator.unwrap_model(model)
-        else:
-            import deepspeed
-
-            with deepspeed.zero.GatheredParameters(model.parameters()):
-                remove_hooks(model)
+    try:
+        if DistributedBackend(accelerator).is_zero3:
+            if not gather_deepspeed3_params:
                 yield accelerator.unwrap_model(model)
-                add_hooks(model)
-    else:
-        yield unwrapped_model
-    if is_gradient_checkpointing:
-        unwrapped_model.gradient_checkpointing_enable()
+            else:
+                import deepspeed
+
+                with deepspeed.zero.GatheredParameters(model.parameters()):
+                    remove_hooks(model)
+                    try:
+                        yield accelerator.unwrap_model(model)
+                    finally:
+                        add_hooks(model)
+        else:
+            yield unwrapped_model
+    finally:
+        if is_gradient_checkpointing:
+            unwrapped_model.gradient_checkpointing_enable()
 
 
 @contextmanager
