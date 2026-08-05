@@ -3881,8 +3881,8 @@ class TestGRPOTrainerVLM(TrlTestCase):
     @require_jmespath
     def test_train_with_tools_text_response_multimodal_prompt(self):
         # Test that tools returning text (non-multimodal response) work correctly with a VLM prompt having images.
-        def text_tool() -> str:
-            """Simple text tool."""
+        def screenshot_tool() -> str:
+            """Simple text-returning tool."""
             return "The image shows a red square."
 
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
@@ -3900,7 +3900,7 @@ class TestGRPOTrainerVLM(TrlTestCase):
             reward_funcs=lambda completions, **kwargs: [1.0] * len(completions),
             args=training_args,
             train_dataset=dataset,
-            tools=[text_tool],
+            tools=[screenshot_tool],
         )
 
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}

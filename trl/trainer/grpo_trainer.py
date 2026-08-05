@@ -2080,7 +2080,7 @@ class GRPOTrainer(_BaseTrainer):
                 loop_multimodal_fields = {}
                 for k, v in split_fields.items():
                     selected = [v[i] for i in idxs_with_tool]
-                    if isinstance(selected[0], torch.Tensor) and selected[0].ndim == 1:
+                    if k in ("token_type_ids", "mm_token_type_ids") and isinstance(selected[0], torch.Tensor):
                         selected = [
                             torch.cat([s, torch.zeros(len(pct) - len(s), dtype=s.dtype, device=s.device)])
                             if len(s) < len(pct)
