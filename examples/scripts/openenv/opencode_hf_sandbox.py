@@ -286,17 +286,12 @@ def opencode_reward(outcome: HarnessRolloutOutcome) -> float | None:
     """Dense terminal verifier + degeneracy penalties. Long-horizon credit is carried by the terminal reward,
     propagated to every trained token through the group-relative advantage.
 
-      - unscorable rollout (empty trace or no verifier score) -> None (dropped from the group baseline)
+      - unscorable rollout (no verifier score) -> None (dropped from the group baseline)
       - never ran its code (no `bash`) -> -0.1 (kills blind-write / prose-dump / give-up)
       - else DENSE base: the fraction of held-out tests passed (partial credit); timed out -> 0.0
       - minus a step penalty for tool calls beyond a budget (bounds runaway edit/bash loops), capped at 0.5
     """
     step_budget, step_penalty, step_penalty_cap = 30, 0.03, 0.5
-    if not outcome.trace:
-        # 0 model calls: the sandbox/agent failed to run, not a real attempt. Drop it as unscorable
-        # (reward None -> NaN'd out of the group baseline) instead of scoring it, so a flaky sandbox
-        # never poisons the batch. The generic version of this belongs in the worker (TODO: upstream to TRL).
-        return None
     frac = outcome.env_reward
     bash = outcome.tool_calls_by_name.get("bash", 0)
     if frac is None:
