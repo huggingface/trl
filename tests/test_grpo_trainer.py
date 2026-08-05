@@ -44,10 +44,10 @@ from .testing_utils import (
     TrlTestCase,
     is_ampere_or_newer,
     require_bitsandbytes,
-    require_jmespath,
     require_kernels,
     require_liger_kernel,
     require_peft,
+    require_response_parsing,
     require_torch_accelerator,
     require_vision,
     require_vllm,
@@ -930,9 +930,9 @@ class TestGRPOTrainer(TrlTestCase):
 
     @require_peft
     def test_train_moe_peft_model(self):
-        # Regression test for https://github.com/huggingface/trl/issues/5222. PEFT only supports one adapter per model
-        # when the LoRA config uses `target_parameters` (see peft#3340), so no "ref" adapter can be created and the
-        # reference log probs are computed with adapters disabled instead.
+        # Regression test for https://github.com/huggingface/trl/issues/5222. Before PEFT 0.20.0, only one adapter per
+        # model was supported when the LoRA config uses `target_parameters` (see peft#3340, fixed in peft#3350), so no
+        # "ref" adapter could be created and the reference log probs were computed with adapters disabled instead.
         model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-GptOssForCausalLM", dtype="float32")
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
         lora_config = LoraConfig(target_parameters=["mlp.experts.down_proj", "mlp.experts.gate_up_proj"])
@@ -955,7 +955,10 @@ class TestGRPOTrainer(TrlTestCase):
             train_dataset=dataset,
         )
 
-        assert "ref" not in trainer.model.peft_config
+        if Version(peft.__version__) < Version("0.20.0"):
+            assert "ref" not in trainer.model.peft_config
+        else:
+            assert "ref" in trainer.model.peft_config
 
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
@@ -968,7 +971,7 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             if n in base_param_names:  # We expect the base model params to be the same
                 torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed.")
-            elif "base_layer" not in n:  # We expect the peft params to be different (except for the base layer)
+            elif "base_layer" not in n and "ref" not in n:  # and the peft params to be different (except base and ref)
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     # In practice, this test is the same as `test_train_peft_config`, since gradient checkpointing is enabled by
@@ -2721,7 +2724,7 @@ class TestGRPOTrainer(TrlTestCase):
         reason="Tool parsing is not supported in transformers versions below 5.0.0",
         strict=True,
     )
-    @require_jmespath
+    @require_response_parsing
     @pytest.mark.parametrize("tools", [[multiply_tool], [async_multiply_tool]])
     def test_train_with_tools(self, tools: list[Callable]):
         # In this test, we define a simple tool that multiplies two integers. Regardless of the input prompt,
@@ -2805,12 +2808,32 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @pytest.mark.skipif(
+        Version(transformers.__version__) < Version("5.13.0.dev0"),
+        reason="Tool parsing relies on the legacy jmespath-based `response_schema` parser below transformers 5.13.0",
+    )
+    def test_tools_without_jmespath(self):
+        # jmespath is only used by the legacy `response_schema` parser (transformers < 5.13); the new-style
+        # `response_template` parser doesn't need it. The guard must therefore not fire on newer transformers, where
+        # jmespath is never imported. Guards against an over-broad regression: none of the openenv examples install
+        # jmespath, so a spurious guard breaks them before training starts.
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        training_args = GRPOConfig(output_dir=self.tmp_dir, report_to="none")
+        with patch("trl.trainer.grpo_trainer.is_jmespath_available", return_value=False):
+            GRPOTrainer(  # must construct without raising
+                model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
+                tools=[multiply_tool],
+            )
+
     @pytest.mark.xfail(
         condition=Version(transformers.__version__) < Version("5.2.0"),
         reason="Environment factory support is not available in transformers versions below 5.2.0",
         strict=True,
     )
-    @require_jmespath
+    @require_response_parsing
     @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
     def test_train_with_multiple_environments(self):
         # When `environment_factory` is a dict, each rollout selects its environment via its `environment` field, and
@@ -2941,7 +2964,7 @@ class TestGRPOTrainer(TrlTestCase):
         reason="Environment factory support is not available in transformers versions below 5.2.0",
         strict=True,
     )
-    @require_jmespath
+    @require_response_parsing
     @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
     def test_train_with_unknown_environment_raises(self):
         # With a dict `environment_factory`, an example whose `environment` field doesn't match any configured
@@ -2987,7 +3010,7 @@ class TestGRPOTrainer(TrlTestCase):
         reason="Environment factory support is not available in transformers versions below 5.2.0",
         strict=True,
     )
-    @require_jmespath
+    @require_response_parsing
     @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
     def test_train_with_environment_factory(self):
         # In this test, we define a simple tool that increments an internal counter. Regardless of the input prompt,
@@ -3080,7 +3103,7 @@ class TestGRPOTrainer(TrlTestCase):
         reason="Environment factory support is not available in transformers versions below 5.2.0",
         strict=True,
     )
-    @require_jmespath
+    @require_response_parsing
     @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
     def test_train_with_environment_owned_reward(self):
         # Same setup as `test_train_with_environment_factory`, but the environment owns the reward via a `get_reward`
@@ -3179,7 +3202,7 @@ class TestGRPOTrainer(TrlTestCase):
         reason="Environment factory support is not available in transformers versions below 5.2.0",
         strict=True,
     )
-    @require_jmespath
+    @require_response_parsing
     @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
     def test_environment_owned_reward_coexists_with_reward_funcs(self):
         # When both `reward_funcs` and an environment-owned `get_reward` are present, `get_reward` is appended as an
@@ -3236,7 +3259,7 @@ class TestGRPOTrainer(TrlTestCase):
         reason="Environment factory support is not available in transformers versions below 5.2.0",
         strict=True,
     )
-    @require_jmespath
+    @require_response_parsing
     @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
     def test_environment_owned_reward_mixed_environments(self):
         # With a dict `environment_factory`, only some environments may own their reward via `get_reward`. Each such
@@ -3337,7 +3360,7 @@ class TestGRPOTrainer(TrlTestCase):
         reason="Environment factory support is not available in transformers versions below 5.2.0",
         strict=True,
     )
-    @require_jmespath
+    @require_response_parsing
     @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
     def test_environment_owned_data_requires_max_steps(self):
         # When the environment owns the data and no external `train_dataset` is provided, `max_steps` must set the
@@ -3360,7 +3383,7 @@ class TestGRPOTrainer(TrlTestCase):
         reason="Environment factory support is not available in transformers versions below 5.2.0",
         strict=True,
     )
-    @require_jmespath
+    @require_response_parsing
     @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
     def test_multiple_environments_without_dataset_raises(self):
         # Multiple environments (a `dict` factory) need a `train_dataset` with an `environment` column to route each
@@ -3385,7 +3408,7 @@ class TestGRPOTrainer(TrlTestCase):
         reason="Environment factory support is not available in transformers versions below 5.2.0",
         strict=True,
     )
-    @require_jmespath
+    @require_response_parsing
     @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
     def test_train_with_environment_owned_data(self):
         # The environment owns the data — no external `train_dataset` is needed. `reset()` returns the prompt, and
@@ -3441,7 +3464,7 @@ class TestGRPOTrainer(TrlTestCase):
         reason="Tool parsing is not supported in transformers versions below 5.0.0",
         strict=True,
     )
-    @require_jmespath
+    @require_response_parsing
     def test_train_with_malformed_tool_calls(self):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
 
@@ -3985,7 +4008,7 @@ class TestGRPOTrainerVLM(TrlTestCase):
         reason="Qwen3.5 models were introduced in transformers-5.2.0",
         strict=True,
     )
-    @require_jmespath
+    @require_response_parsing
     def test_train_with_tools_multimodal_response(self):
         # Test that tools returning images (multimodal responses) work correctly with a VLM.
         # The tool returns a list of content blocks including an image.
