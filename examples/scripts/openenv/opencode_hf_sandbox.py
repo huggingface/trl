@@ -44,7 +44,7 @@ back to cold-installing opencode + proxy deps per rollout.
 
 Task: competitive-coding problems from `agentica-org/DeepCoder-Preview-Dataset`. The agent writes `solution.py`
 (reads stdin, prints stdout); the verifier runs it against the problem's HELD-OUT tests (never shown to the agent)
-and returns a DENSE reward = fraction passed. `opencode_reward` then binarizes it and adds small degeneracy
+and returns a DENSE reward = fraction passed. `opencode_reward` keeps that dense signal and adds small degeneracy
 penalties. This whole file is self-contained and every training-facing object is module-level (picklable), so the
 rollout worker can pickle the factory + verifier into its spawned child process.
 
@@ -86,9 +86,9 @@ from typing import Any
 from datasets import Dataset, load_dataset
 from opencode_env.config import OpenCodeConfig
 from opencode_env.harness import OpenCodeSessionFactory
+from opencode_env.sandbox import HFSandboxBackend, SandboxHandle
 from opencode_env.task import OpenCodeTask
 from openenv.core.harness import ResourceSession, ResourceSessionFactory, VerifyResult
-from opencode_env.sandbox import HFSandboxBackend, SandboxHandle
 from transformers import AutoTokenizer
 
 from trl.experimental.async_grpo import AsyncGRPOConfig, AsyncGRPOTrainer
