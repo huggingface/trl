@@ -20,7 +20,13 @@ from collections.abc import Callable
 import psutil
 import pytest
 import torch
-from transformers import is_bitsandbytes_available, is_comet_available, is_sklearn_available, is_wandb_available
+from transformers import (
+    PreTrainedModel,
+    is_bitsandbytes_available,
+    is_comet_available,
+    is_sklearn_available,
+    is_wandb_available,
+)
 from transformers.testing_utils import backend_device_count, torch_device
 from transformers.utils import (
     is_kernels_available,
@@ -115,6 +121,24 @@ def is_bf16_supported() -> bool:
     capability; tests setting `use_cpu=True` should not rely on it.
     """
     return is_torch_bf16_gpu_available() or is_torch_xla_available()
+
+
+def get_vision_parameter_names(model: torch.nn.Module) -> set[str]:
+    """Names of the parameters that belong to a multimodal model's vision tower.
+
+    The tower is located through the vision config instead of through module names, which differ across architectures
+    (`visual` for Qwen-VL, `vision_tower` for LLaVA and Gemma 3, `vision_model` for SmolVLM). Returns an empty set for
+    models without a vision config.
+    """
+    vision_config = getattr(model.config, "vision_config", None)
+    if vision_config is None:
+        return set()
+    return {
+        f"{module_name}.{parameter_name}"
+        for module_name, module in model.named_modules()
+        if isinstance(module, PreTrainedModel) and getattr(module, "config", None) is vision_config
+        for parameter_name, _ in module.named_parameters()
+    }
 
 
 class TrlTestCase:

@@ -29,7 +29,7 @@ from transformers.utils import is_peft_available
 
 from trl import RLOOConfig, RLOOTrainer
 
-from .testing_utils import TrlTestCase, require_peft, require_vision, require_vllm
+from .testing_utils import TrlTestCase, get_vision_parameter_names, require_peft, require_vision, require_vllm
 
 
 if is_peft_available():
@@ -1826,16 +1826,11 @@ class TestRLOOTrainerVLM(TrlTestCase):
             train_dataset=dataset,
         )
 
-        vision_parameters = [
-            parameter for name, parameter in trainer.model.named_parameters() if name.startswith("model.visual")
-        ]
-        assert vision_parameters
-        assert not any(parameter.requires_grad for parameter in vision_parameters)
-        assert any(
-            parameter.requires_grad
-            for name, parameter in trainer.model.named_parameters()
-            if name.startswith("model.language_model")
-        )
+        vision_parameter_names = get_vision_parameter_names(trainer.model)
+        frozen_parameter_names = {n for n, param in trainer.model.named_parameters() if not param.requires_grad}
+        assert vision_parameter_names
+        assert vision_parameter_names <= frozen_parameter_names
+        assert any(parameter.requires_grad for parameter in trainer.model.parameters())
 
     @pytest.mark.parametrize(
         "model_id",
@@ -1891,11 +1886,9 @@ class TestRLOOTrainerVLM(TrlTestCase):
             train_dataset=dataset,
         )
 
-        vision_parameters = [
-            parameter for name, parameter in trainer.model.named_parameters() if "visual" in name or "vision" in name
-        ]
-        assert vision_parameters
-        assert any(parameter.requires_grad for parameter in vision_parameters)
+        vision_parameter_names = get_vision_parameter_names(trainer.model)
+        assert vision_parameter_names
+        assert all(trainer.model.get_parameter(name).requires_grad for name in vision_parameter_names)
 
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 

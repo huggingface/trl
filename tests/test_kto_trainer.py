@@ -24,7 +24,14 @@ from transformers.utils import is_peft_available
 from trl import KTOConfig, KTOTrainer
 from trl.trainer.kto_trainer import DataCollatorForUnpairedPreference, DataCollatorForVisionUnpairedPreference
 
-from .testing_utils import TrlTestCase, require_bitsandbytes, require_liger_kernel, require_peft, require_vision
+from .testing_utils import (
+    TrlTestCase,
+    get_vision_parameter_names,
+    require_bitsandbytes,
+    require_liger_kernel,
+    require_peft,
+    require_vision,
+)
 
 
 if is_peft_available():
@@ -1530,6 +1537,7 @@ class TestKTOTrainerVLM(TrlTestCase):
         "model_id",
         [
             "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            "trl-internal-testing/tiny-LlavaForConditionalGeneration",
         ],
     )
     @pytest.mark.parametrize(
@@ -1545,16 +1553,11 @@ class TestKTOTrainerVLM(TrlTestCase):
             train_dataset=dataset,
         )
 
-        vision_parameters = [
-            parameter for name, parameter in trainer.model.named_parameters() if name.startswith("model.visual")
-        ]
-        assert vision_parameters
-        assert not any(parameter.requires_grad for parameter in vision_parameters)
-        assert any(
-            parameter.requires_grad
-            for name, parameter in trainer.model.named_parameters()
-            if name.startswith("model.language_model")
-        )
+        vision_parameter_names = get_vision_parameter_names(trainer.model)
+        frozen_parameter_names = {n for n, param in trainer.model.named_parameters() if not param.requires_grad}
+        assert vision_parameter_names
+        assert vision_parameter_names <= frozen_parameter_names
+        assert any(parameter.requires_grad for parameter in trainer.model.parameters())
 
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
@@ -1565,7 +1568,7 @@ class TestKTOTrainerVLM(TrlTestCase):
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            if n.startswith("model.visual"):
+            if n in frozen_parameter_names:
                 torch.testing.assert_close(param, new_param, rtol=1e-12, atol=1e-12, msg=f"Param {n} is updated")
             else:
                 assert not torch.equal(param, new_param), f"Param {n} is not updated"
