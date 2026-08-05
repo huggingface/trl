@@ -14,31 +14,30 @@
 
 import copy
 import inspect
-import random
+import math
+import os
 import textwrap
-from collections import defaultdict
-from collections.abc import Callable
-from contextlib import nullcontext
-from functools import partial
+import time
+from collections import defaultdict, deque
+from pathlib import Path
 from typing import Any, Optional
 
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from accelerate.utils import gather_object, set_seed
-from datasets import Dataset
+from accelerate.logging import get_logger
+from accelerate.utils import gather_object, is_peft_model, set_seed
+from datasets import Dataset, IterableDataset
 from packaging.version import Version
-from torch.utils.data import DataLoader
-from transformers import AutoTokenizer, TrainerCallback, is_trackio_available, is_wandb_available
-from transformers.data.data_collator import DataCollator
+from torch.utils.data import DataLoader, Sampler
+from transformers import AutoTokenizer, BitsAndBytesConfig, TrainerCallback, is_trackio_available, is_wandb_available
 from transformers.feature_extraction_utils import FeatureExtractionMixin
 from transformers.generation.configuration_utils import GenerationConfig
 from transformers.image_processing_utils import BaseImageProcessor
 from transformers.modeling_utils import PreTrainedModel
 from transformers.processing_utils import ProcessorMixin
 from transformers.tokenization_utils_base import PreTrainedTokenizerBase
-from transformers.trainer_utils import EvalPrediction, seed_worker
 from transformers.utils import is_liger_kernel_available, is_peft_available, is_rich_available
 
 from ...data_utils import is_conversational
@@ -49,7 +48,18 @@ from ...import_utils import is_vllm_available
 from ...models import prepare_deepspeed
 from ...models.utils import _ForwardRedirection, unwrap_model_for_generation
 from ...trainer.base_trainer import _BaseTrainer
-from ...trainer.utils import RepeatSampler, create_model_from_path, disable_dropout_in_model, pad, split_tensor_dict
+from ...trainer.utils import (
+    RepeatSampler,
+    create_model_from_path,
+    disable_dropout_in_model,
+    identity,
+    maybe_gather_lm_head_ctx,
+    pad,
+    print_prompt_completions_sample,
+    repeat_iterable_dataset,
+    shuffle_sequence_dict,
+    split_tensor_dict,
+)
 from .distillation_config import DistillationConfig
 
 
@@ -59,14 +69,8 @@ if is_liger_kernel_available():
 
 if is_peft_available():
     import peft
-    from peft import PeftConfig, get_peft_model
-
-
-if is_rich_available():
-    from rich.console import Console
-    from rich.panel import Panel
-    from rich.table import Table
-    from rich.text import Text
+    from peft import PeftConfig, PromptLearningConfig, get_peft_model
+    from peft.tuners.tuners_utils import BaseTunerLayer
 
 
 if is_trackio_available():
@@ -77,180 +81,202 @@ if is_wandb_available():
     import wandb
 
 
-def _print_completions_sample(prompts: list[str], completions: list[str], step: int, num_samples: int = None) -> None:
-    """Print a sample of prompt-completion pairs using rich."""
-    if not is_rich_available():
-        return
-
-    console = Console()
-    table = Table(show_header=True, header_style="bold white", expand=True)
-    table.add_column("Prompt", style="bright_yellow")
-    table.add_column("Completion", style="bright_green")
-
-    if num_samples is not None:
-        if num_samples >= len(prompts):
-            num_samples = None
-        elif num_samples <= 0:
-            return
-
-    if num_samples is not None:
-        indices = random.sample(range(len(prompts)), num_samples)
-        prompts = [prompts[i] for i in indices]
-        completions = [completions[i] for i in indices]
-
-    for prompt, completion in zip(prompts, completions, strict=True):
-        table.add_row(Text(prompt), Text(completion))
-        table.add_section()
-
-    panel = Panel(table, expand=False, title=f"Step {step}", border_style="bold white")
-    console.print(panel)
+logger = get_logger(__name__)
 
 
-def _jsd_divergence(student_log_probs, teacher_log_probs, beta, support_mask=None):
-    """Compute JSD (or forward/reverse KL) from log-probability tensors.
+# Number of valid completion positions projected through the `lm_head` per chunk in the memory-efficient JSD loss
+# (mirrors SFT's `_CHUNKED_LM_HEAD_CHUNK_SIZE`).
+_CHUNKED_LM_HEAD_CHUNK_SIZE = 256
 
-    When *support_mask* is not None, uses manual computation with masked positions zeroed. When None, uses
-    ``F.kl_div``.
-    """
-    if support_mask is not None:
-        safe_student = torch.where(support_mask, student_log_probs, torch.zeros_like(student_log_probs))
-        safe_teacher = torch.where(support_mask, teacher_log_probs, torch.zeros_like(teacher_log_probs))
-        student_probs = torch.where(support_mask, student_log_probs.exp(), torch.zeros_like(student_log_probs))
-        teacher_probs = torch.where(support_mask, teacher_log_probs.exp(), torch.zeros_like(teacher_log_probs))
 
-        if beta == 0:
-            return torch.nan_to_num(teacher_probs * (safe_teacher - safe_student), nan=0.0)
-        elif beta == 1:
-            return torch.nan_to_num(student_probs * (safe_student - safe_teacher), nan=0.0)
-        else:
-            beta_t = torch.tensor(beta, dtype=student_log_probs.dtype, device=student_log_probs.device)
-            tiny = torch.finfo(student_probs.dtype).tiny
-            mixture_probs = (1 - beta_t) * student_probs + beta_t * teacher_probs
-            safe_mixture = torch.where(
-                support_mask,
-                torch.log(mixture_probs.clamp_min(tiny)),
-                torch.zeros_like(student_log_probs),
-            )
-            kl_teacher = torch.nan_to_num(teacher_probs * (safe_teacher - safe_mixture), nan=0.0)
-            kl_student = torch.nan_to_num(student_probs * (safe_student - safe_mixture), nan=0.0)
-            return beta_t * kl_teacher + (1 - beta_t) * kl_student
+def _chunk(h_s, w_s, b_s, s_scale, s_softcap, h_t, w_t, b_t, t_scale, t_softcap, beta, temperature, valid):
+    # Project both hidden states to vocab logits inside the checkpointed body so only `(chunk, H)` is retained across
+    # the backward, never `(chunk, V)`. ZeRO-3 shards the `lm_head`, so gather it tightly around each projection.
+    # `logit_scale` (Cohere) / `final_logit_softcapping` (Gemma) are applied per model to match its full forward.
+    with maybe_gather_lm_head_ctx(w_s, b_s):
+        student_logits = h_s.float() @ w_s.float().t()
+        if b_s is not None:
+            student_logits = student_logits + b_s.float()
+    if s_scale != 1.0:
+        student_logits = student_logits * s_scale
+    if s_softcap is not None:
+        student_logits = s_softcap * torch.tanh(student_logits / s_softcap)
+    # The teacher is a fixed target: compute its logits under `no_grad` so the projection builds no autograd graph
+    # and the teacher accumulates no gradients (the teacher params are not frozen by `prepare_model`). Everything
+    # downstream inherits this since `teacher_logits` is already detached.
+    with maybe_gather_lm_head_ctx(w_t, b_t), torch.no_grad():
+        teacher_logits = h_t.float() @ w_t.float().t()
+        if b_t is not None:
+            teacher_logits = teacher_logits + b_t.float()
+    if t_scale != 1.0:
+        teacher_logits = teacher_logits * t_scale
+    if t_softcap is not None:
+        teacher_logits = t_softcap * torch.tanh(teacher_logits / t_softcap)
+    # Distillation (softmax) temperature: soften both distributions before the divergence, applied after any
+    # per-model scaling/softcapping (matching the model's full forward, then the loss's temperature).
+    if temperature != 1.0:
+        student_logits = student_logits / temperature
+        teacher_logits = teacher_logits / temperature
+
+    student_log_probs = F.log_softmax(student_logits, dim=-1)
+    teacher_log_probs = F.log_softmax(teacher_logits, dim=-1)
+
+    # beta: 0 = forward KL, 1 = reverse KL, else generalized JSD. `F.kl_div(input, target)` computes
+    # `target * (log target - input)`, hence the swapped argument order relative to the KL written in the paper.
+    if beta == 0.0:
+        jsd = F.kl_div(student_log_probs, teacher_log_probs, reduction="none", log_target=True)
+    elif beta == 1.0:
+        jsd = F.kl_div(teacher_log_probs, student_log_probs, reduction="none", log_target=True)
     else:
-        if beta == 0:
-            return F.kl_div(student_log_probs, teacher_log_probs, reduction="none", log_target=True)
-        elif beta == 1:
-            return F.kl_div(teacher_log_probs, student_log_probs, reduction="none", log_target=True)
-        else:
-            beta_t = torch.tensor(beta, dtype=student_log_probs.dtype, device=student_log_probs.device)
-            mixture_log_probs = torch.logsumexp(
-                torch.stack([student_log_probs + torch.log1p(-beta_t), teacher_log_probs + torch.log(beta_t)]),
-                dim=0,
-            )
-            kl_teacher = F.kl_div(mixture_log_probs, teacher_log_probs, reduction="none", log_target=True)
-            kl_student = F.kl_div(mixture_log_probs, student_log_probs, reduction="none", log_target=True)
-            return beta_t * kl_teacher + (1 - beta_t) * kl_student
+        beta_t = torch.tensor(beta, dtype=student_log_probs.dtype, device=student_log_probs.device)
+        mixture_log_probs = torch.logsumexp(
+            torch.stack([student_log_probs + torch.log1p(-beta_t), teacher_log_probs + torch.log(beta_t)]), dim=0
+        )
+        kl_teacher = F.kl_div(mixture_log_probs, teacher_log_probs, reduction="none", log_target=True)
+        kl_student = F.kl_div(mixture_log_probs, student_log_probs, reduction="none", log_target=True)
+        jsd = beta_t * kl_teacher + (1 - beta_t) * kl_student
+
+    # A chunk's tail may hold positions packed out of the valid prefix; zero those rows before summing.
+    per_token_jsd = jsd.sum(dim=-1) * valid
+    per_token_entropy = -(student_log_probs.exp() * student_log_probs).sum(dim=-1) * valid
+    return per_token_jsd.sum(), per_token_entropy.sum()
 
 
-class _DistillationCollator:
-    """Data collator for the distillation trainer.
-
-    Accepts a prompt-only dataset (a ``prompt`` column, the format shared with GRPO): the student generates the
-    completion on-policy, so there is nothing to train on in the dataset.
+def _chunked_divergence_loss(
+    student_hidden_states: torch.Tensor,
+    teacher_hidden_states: torch.Tensor,
+    student_lm_head_weight: torch.Tensor,
+    teacher_lm_head_weight: torch.Tensor,
+    completion_mask: torch.Tensor,
+    beta: float,
+    chunk_size: int,
+    num_items_in_batch: torch.Tensor | int | None = None,
+    student_lm_head_bias: torch.Tensor | None = None,
+    teacher_lm_head_bias: torch.Tensor | None = None,
+    student_logit_scale: float = 1.0,
+    teacher_logit_scale: float = 1.0,
+    student_final_logit_softcapping: float | None = None,
+    teacher_final_logit_softcapping: float | None = None,
+    temperature: float = 1.0,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
+    Memory-efficient generalized JSD over student/teacher hidden states and their `lm_head` weights.
 
-    def __init__(
-        self,
-        tokenizer: "PreTrainedTokenizerBase",
-        ignore_index: int = -100,
-    ):
-        self.tokenizer = tokenizer
-        self.ignore_index = ignore_index
+    The full `lm_head` projections are never materialized. Valid (unmasked) completion positions are packed to the
+    front (via `argsort` on the completion mask, a static-shape op) and processed in chunks of `chunk_size`, rounding
+    the count up to a whole chunk so masked positions land in a skippable tail. Each chunk's `[chunk_size, vocab_size]`
+    logits (for both models) are kept alive only during its own forward/backward via gradient checkpointing, so peak
+    logits memory is `2 * chunk_size * vocab_size` instead of `2 * batch_size * seq_len * vocab_size`.
 
-        if tokenizer.pad_token_id is None:
-            raise ValueError("The tokenizer does not have a pad token. Please set `pad_token_id` in the tokenizer.")
+    Args:
+        student_hidden_states (`torch.Tensor`):
+            Student backbone output of shape `(B, K, H)`, aligned to the completion tokens (before the `lm_head`).
+        teacher_hidden_states (`torch.Tensor`):
+            Teacher backbone output of shape `(B, K, H)`, aligned to the same completion tokens.
+        student_lm_head_weight (`torch.Tensor`):
+            Student `lm_head` weight of shape `(V, H)`.
+        teacher_lm_head_weight (`torch.Tensor`):
+            Teacher `lm_head` weight of shape `(V, H)`.
+        completion_mask (`torch.Tensor`):
+            Binary mask of shape `(B, K)`; `1` marks completion positions included in the loss.
+        beta (`float`):
+            Interpolation coefficient. `0.0` = forward KL, `1.0` = reverse KL, else generalized JSD.
+        chunk_size (`int`):
+            Number of valid positions processed per chunk. Peak memory scales linearly with this.
+        num_items_in_batch (`torch.Tensor`, `int` or `None`, *optional*):
+            Total number of valid tokens across the global batch. When provided, the loss is reduced as `sum /
+            num_items_in_batch` (gradient-accumulation-correct); when `None`, reduction is `mean` over local valid
+            positions.
+        student_lm_head_bias (`torch.Tensor`, *optional*):
+            Student `lm_head` bias of shape `(V,)`, added to each chunk's logits when provided.
+        teacher_lm_head_bias (`torch.Tensor`, *optional*):
+            Teacher `lm_head` bias of shape `(V,)`, added to each chunk's logits when provided.
+        student_logit_scale (`float`, *optional*, defaults to `1.0`):
+            Multiplier applied to the student's logits before the softmax (Cohere-style `logit_scale`).
+        teacher_logit_scale (`float`, *optional*, defaults to `1.0`):
+            Multiplier applied to the teacher's logits before the softmax.
+        student_final_logit_softcapping (`float`, *optional*):
+            If set, applies `softcap * tanh(logits / softcap)` to the student's logits (Gemma-style), after the scale.
+        teacher_final_logit_softcapping (`float`, *optional*):
+            If set, applies `softcap * tanh(logits / softcap)` to the teacher's logits, after the scale.
+        temperature (`float`, *optional*, defaults to `1.0`):
+            Softmax temperature applied to both distributions before the divergence, after any scale/softcapping.
 
-    def __call__(self, examples: list[dict[str, Any]]) -> dict[str, torch.Tensor]:
-        all_input_ids: list[list[int]] = []
-        all_labels: list[list[int]] = []
-        all_prompt_ids: list[list[int]] = []
-
-        for example in examples:
-            formatted_prompt = self.tokenizer.apply_chat_template(
-                example["prompt"], tokenize=False, add_generation_prompt=True
-            )
-            prompt_ids = self.tokenizer(formatted_prompt, padding=False, add_special_tokens=False)["input_ids"]
-
-            # Prompt-only: no completion to train on (on-policy will generate one)
-            all_input_ids.append(list(prompt_ids))
-            all_labels.append([self.ignore_index] * len(prompt_ids))
-            all_prompt_ids.append(list(prompt_ids))
-
-        # Convert to tensors and left-pad
-        pad_id = self.tokenizer.pad_token_id
-        input_ids_t = pad(
-            [torch.tensor(ids, dtype=torch.long) for ids in all_input_ids],
-            padding_side="left",
-            padding_value=pad_id,
-        )
-        attention_mask_t = pad(
-            [torch.ones(len(ids), dtype=torch.long) for ids in all_input_ids],
-            padding_side="left",
-            padding_value=0,
-        )
-        labels_t = pad(
-            [torch.tensor(lab, dtype=torch.long) for lab in all_labels],
-            padding_side="left",
-            padding_value=self.ignore_index,
-        )
-        prompts_t = pad(
-            [torch.tensor(ids, dtype=torch.long) for ids in all_prompt_ids],
-            padding_side="left",
-            padding_value=pad_id,
-        )
-        prompt_mask_t = pad(
-            [torch.ones(len(ids), dtype=torch.long) for ids in all_prompt_ids],
-            padding_side="left",
-            padding_value=0,
-        )
-
-        return {
-            "input_ids": input_ids_t,
-            "attention_mask": attention_mask_t,
-            "labels": labels_t,
-            "prompts": prompts_t,
-            "prompt_attention_mask": prompt_mask_t,
-            "prompt_ids": prompts_t,
-            "prompt_mask": prompt_mask_t,
-            "completion_ids": input_ids_t[:, prompts_t.shape[1] :],
-            "completion_mask": torch.ones_like(input_ids_t[:, prompts_t.shape[1] :]),
-        }
-
-
-class _RepeatBatchDataLoader:
-    """Repeats each collated batch ``repeat_count`` times without re-collation.
-
-    ``RepeatSampler`` with ``repeat_count > 1`` causes the DataLoader to re-collate (re-tokenize) the same examples on
-    every repeat, which is wasteful. This wrapper instead keeps ``repeat_count=1`` in the sampler and repeats the
-    already-collated tensor dict, avoiding redundant tokenization.
+    Returns:
+        `tuple[torch.Tensor, torch.Tensor, torch.Tensor]`: scalar loss, sum of per-token student entropy (in nats), and
+        number of valid completion positions — all over the local batch. Raw sums are returned so callers can reduce
+        correctly across ranks.
     """
+    # Under FSDP2, lm_head.weight is a DTensor (Shard(0) or Replicate). Passing it directly into the
+    # gradient-checkpointed chunk loop causes FSDP2 to re-gather it once per chunk during backward recomputation.
+    # full_tensor() converts it to a plain tensor once; all chunks reference that tensor, so only one all-gather occurs
+    # (in full_tensor()'s backward). Done per model since the student and teacher have their own heads.
+    if isinstance(student_lm_head_weight, torch.distributed.tensor.DTensor):
+        student_lm_head_weight = student_lm_head_weight.full_tensor()
+        if student_lm_head_bias is not None:
+            student_lm_head_bias = student_lm_head_bias.full_tensor()
+    if isinstance(teacher_lm_head_weight, torch.distributed.tensor.DTensor):
+        teacher_lm_head_weight = teacher_lm_head_weight.full_tensor()
+        if teacher_lm_head_bias is not None:
+            teacher_lm_head_bias = teacher_lm_head_bias.full_tensor()
 
-    def __init__(self, dataloader, repeat_count: int):
-        self.dataloader = dataloader
-        self.repeat_count = repeat_count
+    # Each model flattens with its own hidden width: the teacher may be wider/narrower than the student (only the
+    # vocabulary must match), and each projects through its own `lm_head`.
+    h_s = student_hidden_states.reshape(-1, student_hidden_states.size(-1))
+    h_t = teacher_hidden_states.reshape(-1, teacher_hidden_states.size(-1))
+    valid = completion_mask.reshape(-1) != 0
+    n_valid_tensor = valid.sum()
 
-    def __iter__(self):
-        for batch in self.dataloader:
-            for _ in range(self.repeat_count):
-                yield batch
+    entropy_sum = h_s.new_zeros((), dtype=torch.float32)
+    if n_valid_tensor == 0:
+        # Whole micro-batch masked. Keep the loss connected to the autograd graph through every trainable parameter so
+        # `.backward()` succeeds and DDP / FSDP gradient sync doesn't hang on a missing param. Only the student carries
+        # gradients (the teacher is frozen).
+        with maybe_gather_lm_head_ctx(student_lm_head_weight, student_lm_head_bias):
+            loss = (h_s.float().sum() + student_lm_head_weight.float().sum()) * 0.0
+            if student_lm_head_bias is not None:
+                loss = loss + student_lm_head_bias.float().sum() * 0.0
+        return loss, entropy_sum, n_valid_tensor
 
-    def __len__(self):
-        return len(self.dataloader) * self.repeat_count
+    # Pack valid positions to the front so masked ones form whole trailing chunks. `argsort` on the boolean mask is a
+    # static-shape op (unlike `h_s[valid]`, whose output shape is data-dependent and poisons XLA compilation).
+    order = valid.to(torch.int8).argsort(descending=True, stable=True)
+    h_s = h_s[order]
+    h_t = h_t[order]
+    valid = valid[order]
 
-    def set_epoch(self, epoch: int):
-        if hasattr(self.dataloader, "set_epoch"):
-            self.dataloader.set_epoch(epoch)
+    # Process only the whole chunks covering the valid prefix: bounds XLA recompiles and drops fully-masked chunks on GPU.
+    n_padded = (n_valid_tensor / chunk_size).ceil().to(torch.int64) * chunk_size
 
-    def __getattr__(self, attr):
-        return getattr(self.dataloader, attr)
+    loss = h_s.new_zeros((), dtype=torch.float32)
+    for start in range(0, n_padded, chunk_size):
+        chunk_loss, chunk_entropy = torch.utils.checkpoint.checkpoint(
+            _chunk,
+            h_s[start : start + chunk_size],
+            student_lm_head_weight,
+            student_lm_head_bias,
+            student_logit_scale,
+            student_final_logit_softcapping,
+            h_t[start : start + chunk_size],
+            teacher_lm_head_weight,
+            teacher_lm_head_bias,
+            teacher_logit_scale,
+            teacher_final_logit_softcapping,
+            beta,
+            temperature,
+            valid[start : start + chunk_size].float(),
+            use_reentrant=False,
+        )
+        loss = loss + chunk_loss
+        entropy_sum = entropy_sum + chunk_entropy
+
+    if num_items_in_batch is None:
+        loss = loss / n_valid_tensor
+    else:
+        if isinstance(num_items_in_batch, torch.Tensor):
+            num_items_in_batch = num_items_in_batch.to(loss.device)
+        loss = loss / num_items_in_batch
+    return loss, entropy_sum, n_valid_tensor
 
 
 class DistillationTrainer(_BaseTrainer):
@@ -284,10 +310,9 @@ class DistillationTrainer(_BaseTrainer):
 
     def __init__(
         self,
-        model: PreTrainedModel | nn.Module | str | None = None,
+        model: PreTrainedModel | nn.Module | str,
         teacher_model: PreTrainedModel | nn.Module | str = None,
         args: DistillationConfig | None = None,
-        data_collator: DataCollator | None = None,  # type: ignore
         train_dataset: Dataset | None = None,
         eval_dataset: Dataset | dict[str, Dataset] | None = None,
         processing_class: PreTrainedTokenizerBase
@@ -295,35 +320,47 @@ class DistillationTrainer(_BaseTrainer):
         | FeatureExtractionMixin
         | ProcessorMixin
         | None = None,
-        compute_metrics: Callable[[EvalPrediction], dict] | None = None,
         callbacks: list[TrainerCallback] | None = None,
         optimizers: tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
-        preprocess_logits_for_metrics: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] | None = None,
+        quantization_config: "BitsAndBytesConfig | None" = None,
         peft_config: Optional["PeftConfig"] = None,
     ):
         if args is None:
             args = DistillationConfig(output_dir="tmp_distillation")
 
         # ── Student model loading ──
-        model_init_kwargs = args.model_init_kwargs or {}
-        if isinstance(model_init_kwargs, str):
-            import json
-
-            model_init_kwargs = json.loads(model_init_kwargs)
-        teacher_model_init_kwargs = args.teacher_model_init_kwargs or {}
-        if isinstance(teacher_model_init_kwargs, str):
-            import json
-
-            teacher_model_init_kwargs = json.loads(teacher_model_init_kwargs)
+        # `_VALID_DICT_FIELDS` already parses any JSON-string form of these in `DistillationConfig.__post_init__`, so
+        # they are dicts (or None) here; copy so the setdefaults below don't mutate the config.
+        model_init_kwargs = dict(args.model_init_kwargs or {})
+        teacher_model_init_kwargs = dict(args.teacher_model_init_kwargs or {})
         if isinstance(model, str):
             model_name_or_path = model
-            model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
+            if quantization_config is not None:
+                if "quantization_config" in model_init_kwargs:
+                    raise ValueError(
+                        "You set `quantization_config` both as a trainer argument and in `args.model_init_kwargs`. "
+                        "Please set it in only one place, preferably as a trainer argument."
+                    )
+                model_init_kwargs["quantization_config"] = quantization_config
             # Distributed training requires device_map=None ("auto" fails)
             if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 model_init_kwargs["device_map"] = None
+            model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
             model = create_model_from_path(model, **model_init_kwargs)
         else:
-            model_name_or_path = model.config._name_or_path if model is not None else None
+            model_name_or_path = model.config._name_or_path
+            if args.model_init_kwargs is not None:
+                logger.warning(
+                    "You passed `model_init_kwargs` to the `DistillationConfig`, but your model is already "
+                    "instantiated. The `model_init_kwargs` will be ignored."
+                )
+            if quantization_config is not None:
+                logger.warning(
+                    "You passed `quantization_config` to the trainer, but your model is already instantiated. The "
+                    "`quantization_config` will be ignored."
+                )
+        # Non-quantized models do not have the `is_loaded_in_{8,4}bit` attributes, whereas quantized models do
+        _is_quantized_model = getattr(model, "is_loaded_in_4bit", False) or getattr(model, "is_loaded_in_8bit", False)
 
         # Some models (SmolVLM/Idefics3) don't support `logits_to_keep` argument and error out if we pass it
         # Inspect the forward method before we wrap the model with PEFT
@@ -339,7 +376,7 @@ class DistillationTrainer(_BaseTrainer):
                 model_name_or_path, trust_remote_code=args.trust_remote_code
             )
         if processing_class is not None:
-            if getattr(processing_class, "pad_token", None) is None:
+            if processing_class.pad_token is None:
                 processing_class.pad_token = processing_class.eos_token
         self._tokenizer = (
             processing_class.tokenizer if isinstance(processing_class, ProcessorMixin) else processing_class
@@ -357,6 +394,13 @@ class DistillationTrainer(_BaseTrainer):
                     f"`peft_config` must be a `peft.PeftConfig` instance (e.g. `peft.LoraConfig`), "
                     f"got {type(peft_config).__name__}."
                 )
+            if is_peft_model(model):
+                raise ValueError(
+                    "You passed a `PeftModel` instance together with a `peft_config` to the trainer. Please first merge "
+                    "and unload the existing adapter, save the resulting base model, and then pass that base model along "
+                    "with the new `peft_config` to the trainer."
+                )
+            # Create PEFT model
             # ZeRO-3 + PEFT for non-quantized models:
             # - PEFT's default autocast_adapter_dtype=True upcasts LoRA adapter params to fp32 even when the base model is bf16.
             # - ZeRO-3's _allgather_params_coalesced allocates output buffers using the dtype of the first persistent parameter,
@@ -368,9 +412,6 @@ class DistillationTrainer(_BaseTrainer):
             #   - TRL issue: https://github.com/huggingface/trl/issues/6089
             #   - Upstream issue: https://github.com/deepspeedai/DeepSpeed/issues/8072
             # - autocast_adapter_dtype was introduced in PEFT 0.12.0; before, no upcast existed: no need to pass the kwarg
-            _is_quantized_model = getattr(model, "is_loaded_in_4bit", False) or getattr(
-                model, "is_loaded_in_8bit", False
-            )
             get_peft_model_kwargs = {}
             if (
                 args.deepspeed_plugin is not None
@@ -381,13 +422,76 @@ class DistillationTrainer(_BaseTrainer):
                 get_peft_model_kwargs["autocast_adapter_dtype"] = False
             model = get_peft_model(model, peft_config, **get_peft_model_kwargs)
 
-        # ── Data collator ──
-        if data_collator is None:
-            data_collator = _DistillationCollator(tokenizer=processing_class)
+        # PEFT + DeepSpeed ZeRO-3 requires reentrant checkpointing. For more details, see
+        # https://github.com/huggingface/trl/issues/2514#issuecomment-2692152703.
+        # Can be removed once https://github.com/deepspeedai/DeepSpeed/pull/8130 is merged and released.
+        if (
+            is_peft_model(model)
+            and args.deepspeed_plugin is not None
+            and args.deepspeed_plugin.zero_stage == 3
+            and args.gradient_checkpointing
+        ):
+            args.gradient_checkpointing_kwargs = args.gradient_checkpointing_kwargs or {}
+            use_reentrant = args.gradient_checkpointing_kwargs.get("use_reentrant")
+            if use_reentrant is False:
+                logger.warning(
+                    "You are using PEFT with DeepSpeed ZeRO-3 and gradient checkpointing with `use_reentrant=False`. "
+                    "`use_reentrant` is forced to `True` in this configuration to ensure correct training. To remove "
+                    "this warning, unset `use_reentrant` in `gradient_checkpointing_kwargs` or set it to `True`."
+                )
+            args.gradient_checkpointing_kwargs["use_reentrant"] = True
+
+        # When using gradient checkpointing with PEFT, we need to enable input gradients. transformers.Trainer normally
+        # handles this, but a bug currently prevents it; see https://github.com/huggingface/transformers/issues/42489
+        if is_peft_model(model) and args.gradient_checkpointing:
+            model.enable_input_require_grads()
+
+        # When using QLoRA, the PEFT adapter weights are converted to bf16 to follow the recommendations from the
+        # original paper (see https://huggingface.co/papers/2305.14314, paragraph 3). Normally, this can be done by
+        # passing `autocast_adapter_dtype=False` to `get_peft_model`, but this option is not yet supported for
+        # quantized models. See: https://github.com/huggingface/peft/issues/2889
+        if _is_quantized_model:
+            for param in model.parameters():
+                if param.requires_grad:
+                    param.data = param.data.to(torch.bfloat16)
+
+        # Both loss paths (chunked and Liger) read `lm_head.weight` directly and run the backbone via
+        # `_get_last_hidden_state`, bypassing `PeftModel.forward()` — so PEFT setups that live outside the backbone
+        # weights are silently ignored. Fail loudly rather than train on a silently-wrong objective.
+        if is_peft_model(model):
+            # When the LM head is targeted by a PEFT adapter (`"lm_head"` in `target_modules`), `lm_head.weight` is the
+            # frozen base weight and the trainable adapter lives in separate submodules the loss never sees, so the head
+            # adapter would receive no gradient.
+            output_embeddings = model.get_output_embeddings()
+            if isinstance(output_embeddings, BaseTunerLayer):
+                raise ValueError(
+                    "Applying a PEFT adapter to `lm_head` is not supported. The distillation loss reads "
+                    "`lm_head.weight` directly, so the adapter on the head is ignored and never trained. Remove "
+                    "`'lm_head'` from your `target_modules`."
+                )
+            # Prompt-learning methods (PromptTuning, PrefixTuning, P-Tuning) inject virtual tokens via
+            # `PeftModel.forward()`, which the loss bypasses by calling the backbone directly, so virtual tokens are
+            # never prepended and the loss is computed on the wrong sequence.
+            if any(isinstance(cfg, PromptLearningConfig) for cfg in model.peft_config.values()):
+                raise ValueError(
+                    "Prompt-learning PEFT methods (PromptTuning, PrefixTuning, P-Tuning) are not supported. The "
+                    "distillation loss bypasses `PeftModel.forward()` by calling the backbone directly, so virtual "
+                    "tokens are never prepended and the loss is computed on the wrong sequence. Use a weight-based "
+                    "adapter such as LoRA instead."
+                )
+
+        # The chunked JSD loss (and the Liger path) call the student backbone directly, bypassing the DDP/FSDP
+        # wrapper's forward; route them through `_forward_redirection` so `prepare_for_backward()` still fires.
+        self._forward_redirection = _ForwardRedirection()
 
         # ── Liger fused JSD loss ──
         self.use_liger_loss = False
         if args.use_liger_kernel:
+            if not is_liger_kernel_available():
+                raise ImportError(
+                    "Liger is required to use `use_liger_kernel` as the distillation loss. Run "
+                    "`pip install liger-kernel`."
+                )
             self.liger_loss = LigerFusedLinearJSDLoss(
                 beta=args.beta,
                 ignore_index=-100,
@@ -397,13 +501,11 @@ class DistillationTrainer(_BaseTrainer):
                 weight_soft_loss=1.0,
             )
             self.use_liger_loss = True
-            self._forward_redirection = _ForwardRedirection()
 
         # ── Teacher model setup ──
         # `teacher_model` may be None: subclasses (e.g. ServerDistillationTrainer) supply the teacher another way.
         if teacher_model is not None:
             if isinstance(teacher_model, str):
-                teacher_model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
                 dtype = teacher_model_init_kwargs.get("dtype")
                 teacher_model_init_kwargs["dtype"] = dtype if dtype in ["auto", None] else getattr(torch, dtype)
                 if args.teacher_model_revision is not None:
@@ -411,6 +513,7 @@ class DistillationTrainer(_BaseTrainer):
                 # Distributed training requires device_map=None ("auto" fails)
                 if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                     teacher_model_init_kwargs["device_map"] = None
+                teacher_model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
                 teacher_model = create_model_from_path(teacher_model, **teacher_model_init_kwargs)
             elif args.teacher_model_init_kwargs is not None:
                 raise ValueError(
@@ -418,20 +521,45 @@ class DistillationTrainer(_BaseTrainer):
                     "instantiated."
                 )
 
-        # Trainer does not need to remove unused columns — the collator handles raw data
-        args.remove_unused_columns = False
+        # Iterable datasets can't be indexed, so the RepeatSampler can't be attached to them. Instead, the sampler's
+        # ordering is reproduced by streaming (see `get_train_dataloader`/`get_eval_dataloader` and
+        # `repeat_iterable_dataset`). This requires `dispatch_batches=False`: with the default dispatch path, batches
+        # are collated on the main process and Accelerate tries to concatenate the string `prompt` column, which fails;
+        # `dispatch_batches=False` also lets each process shard the stream into contiguous slices, as the sampler does.
+        # See https://github.com/huggingface/trl/issues/3213
+        uses_iterable_dataset = (
+            isinstance(train_dataset, IterableDataset)
+            or isinstance(eval_dataset, IterableDataset)
+            or (
+                isinstance(eval_dataset, dict) and any(isinstance(ds, IterableDataset) for ds in eval_dataset.values())
+            )
+        )
+        if uses_iterable_dataset:
+            if args.accelerator_config.dispatch_batches:
+                raise ValueError(
+                    "Iterable datasets require `dispatch_batches=False`, but it is set to `True` in "
+                    "`accelerator_config`. Please set it to `False`."
+                )
+            args.accelerator_config.dispatch_batches = False
+        # An iterable train set bakes the generation-batch repeats into the stream, so it must be read by a single
+        # worker: multiple workers would shard and interleave it, breaking the generation-batch ordering that
+        # `_prepare_inputs` relies on. Map-style train keeps its workers.
+        if isinstance(train_dataset, IterableDataset) and args.dataloader_num_workers != 0:
+            logger.warning(
+                f"Iterable datasets require `dataloader_num_workers=0` to preserve prompt grouping; overriding the "
+                f"provided value ({args.dataloader_num_workers})."
+            )
+            args.dataloader_num_workers = 0
 
         super().__init__(
             model=model,
             args=args,
-            data_collator=data_collator,
+            data_collator=identity,  # No data collation is needed in distillation
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
             processing_class=processing_class,
-            compute_metrics=compute_metrics,
             callbacks=callbacks,
             optimizers=optimizers,
-            preprocess_logits_for_metrics=preprocess_logits_for_metrics,
             # In Trainer, `training_step` scales the loss by `gradient_accumulation_steps` only if `compute_loss_func`
             # is None. Here, loss scaling instead depends on the total number of completion tokens across the global
             # accumulated batch. To control scaling ourselves, we must disable Trainer's built-in scaling. The simplest
@@ -480,50 +608,59 @@ class DistillationTrainer(_BaseTrainer):
         self.top_k = args.top_k
         self.min_p = args.min_p
         self.repetition_penalty = args.repetition_penalty
+        self.max_completion_length = args.max_completion_length
         self.chat_template_kwargs = args.chat_template_kwargs or {}
         self.pad_to_multiple_of = args.pad_to_multiple_of
         self.shuffle_dataset = args.shuffle_dataset
-        self.num_generations = args.num_generations
 
-        # ── Buffer state ──
+        # Tracks the number of iterations (forward + backward passes), including those within a grad accum cycle
+        self._step = 0
+        # Buffer the batch to reuse generated outputs across multiple updates. For more details, see
+        # `_get_train_sampler` and `_prepare_inputs`.
         self._buffered_inputs = None
-        self._buffered_text_logs = None
-        self._buffered_num_items = None
-        self._buffer_step = 0
 
-        # Ensure each process receives a unique seed to prevent duplicate completions when generating with
-        # transformers if num_generations exceeds per_device_train_batch_size. We could skip it if we use vLLM, but
-        # it's safer to set it in all cases.
+        # Ensure each process receives a unique seed so different processes generate different completions when
+        # generating with transformers. We could skip it if we use vLLM, but it's safer to set it in all cases.
         set_seed(args.seed, device_specific=True)
 
         # ── Generation config ──
         generation_kwargs = {
-            "max_new_tokens": args.max_completion_length,
-            "temperature": args.temperature,
-            "top_p": args.top_p,
+            "max_new_tokens": self.max_completion_length,
             "do_sample": True,
-            "top_k": args.top_k,
-            "pad_token_id": self.processing_class.pad_token_id,
+            "pad_token_id": self._tokenizer.pad_token_id,
+            "bos_token_id": self._tokenizer.bos_token_id,
+            "eos_token_id": self._tokenizer.eos_token_id,
+            "temperature": self.temperature,
+            "top_p": self.top_p,
+            "top_k": self.top_k,
+            "min_p": self.min_p,
+            "repetition_penalty": self.repetition_penalty,
+            "cache_implementation": args.cache_implementation,
         }
-        self.generation_config = GenerationConfig(**generation_kwargs)
+        if args.generation_kwargs is not None:
+            generation_kwargs.update(args.generation_kwargs)
+        self.generation_config = GenerationConfig(**generation_kwargs, disable_compile=True)
+        # Keep training-specific generation kwargs to overwrite model's original generation config
         self.generation_kwargs = generation_kwargs
-        if (
-            hasattr(self.model.generation_config, "eos_token_id")
-            and self.model.generation_config.eos_token_id is not None
-        ):
-            self.generation_config.eos_token_id = self.model.generation_config.eos_token_id
 
         # ── Metrics & Logging ──
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
         self._total_train_tokens = 0
+        self._current_train_step_time = 0.0
         self.log_completions = args.log_completions
-        self.log_completions_steps = args.log_completions_steps
+        self.log_unique_prompts = args.log_unique_prompts
         self.num_completions_to_print = args.num_completions_to_print
-
-        self._textual_logs = {
-            "prompt": [],
-            "completion": [],
+        # Keep logs sized to the generation batch to record only outputs from the latest model update.
+        generation_batch_size = (
+            args.per_device_train_batch_size * self.accelerator.num_processes * args.gradient_accumulation_steps
+        )
+        self._logs = {
+            "prompt": deque(maxlen=generation_batch_size),
+            "completion": deque(maxlen=generation_batch_size),
         }
+
+        if self.accelerator.is_main_process and self.log_completions:
+            os.makedirs(os.path.join(self.args.output_dir, "completions"), exist_ok=True)
 
         # ── vLLM for student generation ──
         self.use_vllm = args.use_vllm
@@ -537,59 +674,36 @@ class DistillationTrainer(_BaseTrainer):
                 model=self.model,
                 accelerator=self.accelerator,
                 processing_class=self.processing_class,
+                # vLLM configuration
                 mode=args.vllm_mode,
                 structured_outputs_regex=args.vllm_structured_outputs_regex,
+                # Server mode configuration
                 server_base_url=args.vllm_server_base_url,
                 server_host=args.vllm_server_host,
                 server_port=args.vllm_server_port,
                 group_port=args.vllm_group_port,
                 server_timeout=args.vllm_server_timeout,
+                # Colocate mode configuration
                 tensor_parallel_size=args.vllm_tensor_parallel_size,
                 gpu_memory_utilization=args.vllm_gpu_memory_utilization,
                 max_model_length=args.vllm_max_model_length,
-                max_num_seqs=args.per_device_train_batch_size * args.gradient_accumulation_steps,
+                max_num_seqs=args.per_device_train_batch_size
+                * args.vllm_tensor_parallel_size
+                * args.gradient_accumulation_steps,
                 enable_sleep_mode=args.vllm_enable_sleep_mode,
                 model_impl=args.vllm_model_impl,
                 trust_remote_code=args.trust_remote_code,
-                temperature=args.temperature,
-                top_p=args.top_p,
-                top_k=args.top_k,
-                max_completion_length=args.max_completion_length,
-                logprobs=None,
+                # Generation configuration
+                repetition_penalty=self.repetition_penalty,
+                temperature=self.temperature,
+                top_p=self.top_p,
+                top_k=self.top_k,
+                min_p=self.min_p,
+                max_completion_length=self.max_completion_length,
+                logprobs=None,  # distillation trains on the teacher distribution, not sampled logprobs
+                generation_kwargs=args.generation_kwargs,
             )
-            self.vllm_sync_frequency = args.vllm_sync_frequency
-            self._last_loaded_step = -1
-
-    def _get_completion_lengths(self, generated_tokens: torch.Tensor, prompt_width: int) -> torch.Tensor:
-        """Infer per-sample completion lengths from generated tokens."""
-        completion_tokens = generated_tokens[:, prompt_width:]
-        pad_token_id = self.processing_class.pad_token_id
-        eos_token_id = self.generation_config.eos_token_id
-        if eos_token_id is None:
-            eos_token_ids = set()
-        elif isinstance(eos_token_id, int):
-            eos_token_ids = {eos_token_id}
-        else:
-            eos_token_ids = set(eos_token_id)
-        pad_equals_eos = pad_token_id is not None and pad_token_id in eos_token_ids
-
-        completion_lengths = []
-        for row in completion_tokens.tolist():
-            if pad_equals_eos and eos_token_ids:
-                completion_length = len(row)
-                for idx, token_id in enumerate(row):
-                    if token_id in eos_token_ids:
-                        completion_length = idx + 1
-                        break
-            elif pad_token_id is not None:
-                completion_length = len(row)
-                while completion_length > 0 and row[completion_length - 1] == pad_token_id:
-                    completion_length -= 1
-            else:
-                completion_length = len(row)
-            completion_lengths.append(completion_length)
-
-        return torch.tensor(completion_lengths, device=generated_tokens.device, dtype=torch.long)
+            self._last_loaded_step = -1  # tag to avoid useless loading during grad accumulation
 
     # ──────────────────────────────────────────────────────────────────────
     #  Dataset / Dataloader
@@ -603,53 +717,125 @@ class DistillationTrainer(_BaseTrainer):
         if self._signature_columns is None:
             self._signature_columns = ["prompt", "image", "images"]
 
-    def _get_train_sampler(self, dataset=None):
+    # Instead of returning a standard per-step batch (i.e., `per_device_batch_size), our dataloader loads an
+    # *generation* batch (i.e., `per_device_batch_size × gradient_accumulation_steps`). This allows us to generate
+    # completions once every gradient_accumulation_steps step—rather than once per accumulation step—which is
+    # significantly more efficient. Thus, `_prepare_inputs` is called with this *generation* batch, and it handles the
+    # splitting internally.
+    # Maintenance note: this method is a copy-paste of the original `Trainer.get_train_dataloader` with two changes: the
+    # batch size is multiplied by `gradient_accumulation_steps`, and iterable datasets are wrapped (see
+    # `repeat_iterable_dataset`).
+    def get_train_dataloader(self):
+        dataset = self.train_dataset
+        if isinstance(dataset, IterableDataset):
+            # Iterable datasets can't be indexed, so RepeatSampler can't be attached. Reproduce its ordering by
+            # transforming the stream instead (see `repeat_iterable_dataset`). The full permutation done by
+            # RepeatSampler becomes a buffered shuffle here.
+            if self.shuffle_dataset:
+                dataset = dataset.shuffle(seed=self.args.seed)
+            # Effective training batch = the generation batch (the deferred `generation_batch_size` slot-in).
+            generation_batch_size = (
+                self.args.per_device_train_batch_size
+                * self.accelerator.num_processes
+                * self.args.gradient_accumulation_steps
+            )
+            dataset = repeat_iterable_dataset(
+                dataset,
+                mini_repeat_count=1,
+                batch_size=generation_batch_size,
+                repeat_count=self.args.gradient_accumulation_steps,
+            )
+        return self._get_dataloader(
+            dataset=dataset,
+            description="Training",
+            batch_size=self._train_batch_size * self.args.gradient_accumulation_steps,  # < this is the change
+            sampler_fn=self._get_train_sampler,
+            is_training=True,
+        )
+
+    def _get_train_sampler(self, dataset: Dataset | None = None) -> Sampler:
+        # Repeat each generation batch `gradient_accumulation_steps` times so the completions generated once per
+        # generation batch (see `_prepare_inputs`) are reused across the accumulation window. Distillation is n=1,
+        # so there is no per-prompt repeat (`mini_repeat_count=1`).
         if dataset is None:
             dataset = self.train_dataset
+        # The generation batch is the full effective training batch. GRPO names it `generation_batch_size` (paired with
+        # the deferred `steps_per_generation`); both are deferred here, so derive it inline — slot-in point.
+        generation_batch_size = (
+            self.args.per_device_train_batch_size
+            * self.accelerator.num_processes
+            * self.args.gradient_accumulation_steps
+        )
         return RepeatSampler(
             data_source=dataset,
-            mini_repeat_count=self.num_generations,
-            batch_size=self.args.generation_batch_size * self.accelerator.num_processes,
-            repeat_count=1,
-            shuffle=True,
+            mini_repeat_count=1,
+            batch_size=generation_batch_size,
+            repeat_count=self.args.gradient_accumulation_steps,
+            shuffle=self.shuffle_dataset,
             seed=self.args.seed,
         )
 
-    def get_train_dataloader(self):
-        """
-        Override to load one generation batch per optimizer window.
+    def _get_eval_sampler(self, eval_dataset) -> Sampler:
+        # See _get_train_sampler for an explanation of the sampler.
+        return RepeatSampler(
+            data_source=eval_dataset,
+            mini_repeat_count=1,
+            seed=self.args.seed,
+        )
 
-        The dataloader yields batches of size `per_device_train_batch_size * gradient_accumulation_steps`.
-        RepeatSampler ensures each generation batch is repeated `gradient_accumulation_steps` times so the Trainer's
-        loop iterates the correct number of times.
-        """
-        if self.train_dataset is None:
-            raise ValueError("Trainer: training requires a train_dataset.")
+    # This method overrides `Trainer.get_eval_dataloader` to wrap iterable eval datasets, reproducing the
+    # RepeatSampler ordering that can't be attached to them (see `get_train_dataloader`). Map-style datasets keep the
+    # default path via `_get_eval_sampler`, which shuffles with `seed`, so the iterable wrap shuffles too (buffered)
+    # to walk prompts in a matching order.
+    # Maintenance note: this method is a copy-paste of the original `Trainer.get_eval_dataloader`, with the iterable
+    # wrapping as the only addition.
+    def get_eval_dataloader(self, eval_dataset: str | Dataset | IterableDataset | None = None) -> DataLoader:
+        if eval_dataset is None and self.eval_dataset is None:
+            raise ValueError("Trainer: evaluation requires an eval_dataset.")
 
-        train_dataset = self.train_dataset
-        data_collator = self.data_collator
+        # If we have persistent workers, don't do a fork bomb especially as eval datasets
+        # don't change during training
+        dataloader_key = eval_dataset if isinstance(eval_dataset, str) else "eval"
+        if (
+            hasattr(self, "_eval_dataloaders")
+            and dataloader_key in self._eval_dataloaders
+            and self.args.dataloader_persistent_workers
+        ):
+            return self._eval_dataloaders[dataloader_key]
 
-        dataloader_params = {
-            "batch_size": self._train_batch_size * self.args.gradient_accumulation_steps,
-            "collate_fn": data_collator,
-            "num_workers": self.args.dataloader_num_workers,
-            "pin_memory": self.args.dataloader_pin_memory,
-            "persistent_workers": self.args.dataloader_persistent_workers,
-        }
+        eval_dataset = (
+            self.eval_dataset[eval_dataset]
+            if isinstance(eval_dataset, str)
+            else eval_dataset
+            if eval_dataset is not None
+            else self.eval_dataset
+        )
 
-        if not isinstance(train_dataset, torch.utils.data.IterableDataset):
-            dataloader_params["sampler"] = self._get_train_sampler()
-            dataloader_params["drop_last"] = self.args.dataloader_drop_last
-            dataloader_params["worker_init_fn"] = partial(
-                seed_worker,
-                num_workers=self.args.dataloader_num_workers,
-                rank=self.args.process_index,
+        if isinstance(eval_dataset, IterableDataset):
+            # Apply the `__init__` iterable config here too
+            if self.args.accelerator_config.dispatch_batches:
+                raise ValueError(
+                    "Iterable datasets require `dispatch_batches=False`, but it is set to `True` in "
+                    "`accelerator_config`. Please set it to `False`."
+                )
+            self.accelerator.dataloader_config.dispatch_batches = False
+            eval_dataset = eval_dataset.shuffle(seed=self.args.seed)
+            eval_dataset = repeat_iterable_dataset(eval_dataset, mini_repeat_count=1)
+            # Force a single worker for this loader only, without persisting the change
+            num_workers = self.args.dataloader_num_workers
+            self.args.dataloader_num_workers = 0
+
+        try:
+            return self._get_dataloader(
+                dataset=eval_dataset,
+                description="Evaluation",
+                batch_size=self.args.eval_batch_size,
+                sampler_fn=self._get_eval_sampler,
+                dataloader_key=dataloader_key,
             )
-            if self.args.dataloader_num_workers > 0:
-                dataloader_params["prefetch_factor"] = self.args.dataloader_prefetch_factor
-
-        base_dataloader = self.accelerator.prepare(DataLoader(train_dataset, **dataloader_params))
-        return _RepeatBatchDataLoader(base_dataloader, repeat_count=self.args.gradient_accumulation_steps)
+        finally:
+            if isinstance(eval_dataset, IterableDataset):
+                self.args.dataloader_num_workers = num_workers
 
     def _tokenize_prompts(self, prompts: list):
         """Tokenize prompts and extract multimodal fields for generation.
@@ -784,6 +970,62 @@ class DistillationTrainer(_BaseTrainer):
 
         return prompt_ids, completion_ids
 
+    @profiling_decorator
+    def _get_last_hidden_state(
+        self,
+        unwrapped_model,
+        input_ids,
+        attention_mask,
+        logits_to_keep,
+        pixel_values=None,
+        image_grid_thw=None,
+        pixel_attention_mask=None,
+        spatial_shapes=None,
+        image_sizes=None,
+        image_position_ids=None,
+    ):
+        if is_peft_model(unwrapped_model):
+            unwrapped_model = unwrapped_model.base_model.model
+
+        # Build model inputs - check if the model supports logits_to_keep (some models and VLMs don't)
+        model_inputs = {"input_ids": input_ids, "attention_mask": attention_mask}
+
+        # For Qwen models:
+        if image_grid_thw is not None and pixel_values is not None:
+            model_inputs["image_grid_thw"] = image_grid_thw
+        # For Gemma, SmolVLM2, LLaVa-Next etc.:
+        if pixel_values is not None:
+            model_inputs["pixel_values"] = pixel_values
+        # For SmolVLM2
+        if pixel_attention_mask is not None:
+            model_inputs["pixel_attention_mask"] = pixel_attention_mask
+        # For LFM2-VL
+        if spatial_shapes is not None:
+            model_inputs["spatial_shapes"] = spatial_shapes
+        # For LLaVa-Next
+        if image_sizes is not None:
+            model_inputs["image_sizes"] = image_sizes
+        if image_position_ids is not None:
+            model_inputs["image_position_ids"] = image_position_ids
+
+        # Only add logits_to_keep if the model supports it
+        if "logits_to_keep" in self.model_kwarg_keys:
+            # We add 1 to `logits_to_keep` because the last logits of the sequence is later excluded
+            model_inputs["logits_to_keep"] = logits_to_keep + 1
+
+        model_inputs["use_cache"] = False  # only used in generation; set False to suppress warnings
+
+        # `base_model` gives the backbone model (skipping `lm_head`) — text decoder for LMs, multimodal wrapper for
+        # VLMs (so vision-token injection runs before the text decoder). `get_decoder()` won't do: on VLMs it
+        # returns just the text stack and feeds image-placeholder IDs through it.
+        backbone = unwrapped_model.base_model
+        last_hidden_state = backbone(**model_inputs).last_hidden_state
+        # Exclude the last value: it corresponds to the next token pred
+        last_hidden_state = last_hidden_state[:, :-1, :]  # (B, L-1, H)
+        # Only keep the last logits_to_keep. For model that support logits_to_keep, this is a no-op.
+        last_hidden_state = last_hidden_state[:, -logits_to_keep:, :]  # (B, logits_to_keep, H)
+        return last_hidden_state
+
     # Name kept aligned with GRPO/RLOO for consistency; distillation has no rewards, so nothing is actually scored.
     def _generate_and_score_completions(self, inputs: list[dict[str, torch.Tensor | Any]]) -> dict[str, Any]:
         device = self.accelerator.device
@@ -822,8 +1064,8 @@ class DistillationTrainer(_BaseTrainer):
         if self.log_completions:
             prompts_text = self.processing_class.batch_decode(prompt_ids, skip_special_tokens=True)
             completions_text = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
-            self._textual_logs["prompt"].extend(gather_object(prompts_text))
-            self._textual_logs["completion"].extend(gather_object(completions_text))
+            self._logs["prompt"].extend(gather_object(prompts_text))
+            self._logs["completion"].extend(gather_object(completions_text))
 
         output = {
             "prompt_ids": prompt_ids,
@@ -840,506 +1082,185 @@ class DistillationTrainer(_BaseTrainer):
 
     @profiling_decorator
     def _prepare_inputs(self, generation_batch: dict[str, torch.Tensor | Any]) -> dict[str, torch.Tensor | Any]:
-        if not self.model.training:
-            return generation_batch
+        # Prepares inputs for model training/evaluation by managing completion generation and batch handling.
+        # During training:
+        #   - Receives the local generation batch (Per-GPU batch size × gradient accumulation steps)
+        #     from the modified training dataloader instead of the standard local batch
+        #   - Generates completions once for the entire generation batch and splits it into batches of size
+        #     `per_device_train_batch_size`
+        #   - Buffers these completions and returns the appropriate slice for the current accumulation step
+        #   - Optimizes by regenerating completions only periodically (every gradient_accumulation_steps)
+        # During evaluation:
+        #   - The input is treated as a standard local batch (no accumulation)
+        #   - Completions are generated for each batch without buffering or reuse
+        # Returns a single local batch in both cases.
 
-        buffer_steps = self.args.gradient_accumulation_steps
-        if self._buffer_step % buffer_steps == 0 or self._buffered_inputs is None:
-            self._fill_buffer(generation_batch, buffer_steps)
-
-        slice_idx = self._buffer_step % buffer_steps
-        inputs = self._buffered_inputs[slice_idx]
-        self._buffer_step += 1
+        mode = "train" if self.model.training else "eval"
+        if mode == "train":
+            generate_every = self.args.gradient_accumulation_steps
+            if self._step % generate_every == 0 or self._buffered_inputs is None:
+                # self._buffered_inputs=None can occur when resuming from a checkpoint
+                generation_batch = self._generate_and_score_completions(generation_batch)
+                generation_batch = shuffle_sequence_dict(generation_batch)
+                generation_batches = split_tensor_dict(generation_batch, self.args.gradient_accumulation_steps)
+                self._buffered_inputs = generation_batches
+            inputs = self._buffered_inputs[self._step % self.args.gradient_accumulation_steps]
+        else:
+            # In evaluation, there is neither batch grouping for generation, nor multiple iterations, hence
+            # local generation batch == local eval batch
+            inputs = self._generate_and_score_completions(generation_batch)
         return inputs
-
-    @profiling_decorator
-    def _fill_buffer(self, generation_batch: dict[str, torch.Tensor | Any], buffer_steps: int):
-        """Split the batch into slices and generate student completions for each (always on-policy)."""
-        slices = split_tensor_dict(generation_batch, buffer_steps)
-
-        self._buffered_inputs = [None] * buffer_steps
-        self._buffered_text_logs = [None] * buffer_steps
-
-        # Generate student completions for every slice
-        self._generate_student_completions(slices, list(range(buffer_steps)))
-
-        # Loss denominator (`num_items_in_batch`): the global number of completion tokens actually trained on this
-        # optimizer step. transformers derives its own count from the *raw dataloader* labels — before generation
-        # replaces the completions — which is wrong for on-policy training and zero for prompt-only datasets (dividing
-        # the loss by zero). Recompute it here from the generated labels, gathered across processes (issue #4719).
-        local_completion_tokens = sum(int(s["completion_mask"].sum()) for s in self._buffered_inputs if s is not None)
-        self._buffered_num_items = self.accelerator.gather(
-            torch.tensor(local_completion_tokens, device=self.accelerator.device)
-        ).sum()
-
-        # Gather text logs once per optimizer step (all processes must participate)
-        if self.log_completions:
-            prompts_all = []
-            completions_all = []
-            for entry in self._buffered_text_logs:
-                if entry is not None:
-                    prompts, completions = entry
-                    prompts_all.extend(prompts)
-                    completions_all.extend(completions)
-            self._textual_logs["prompt"].extend(gather_object(prompts_all))
-            self._textual_logs["completion"].extend(gather_object(completions_all))
-
-    @profiling_decorator
-    def _generate_student_completions(self, slices: list[dict[str, torch.Tensor | Any]], on_policy_indices: list[int]):
-        """Generate completions from the student model for on-policy training."""
-        if not self.use_vllm:
-            self._generate_with_model(slices, on_policy_indices)
-            return
-
-        # Collect all prompts across on-policy slices, stripping left-padding so vLLM
-        # receives only real prompt token IDs (like GRPO trainer).
-        local_prompts = []
-        local_slice_indices = []
-        pad_token_id = self.processing_class.pad_token_id
-        for slice_idx in on_policy_indices:
-            prompt_mask = slices[slice_idx].get("prompt_attention_mask")
-            for i, prompt in enumerate(slices[slice_idx]["prompts"]):
-                if prompt_mask is not None:
-                    prompt = prompt[prompt_mask[i].bool()]
-                elif pad_token_id is not None:
-                    first_non_pad = (prompt != pad_token_id).nonzero(as_tuple=True)[0]
-                    if len(first_non_pad) > 0:
-                        prompt = prompt[first_non_pad[0] :]
-                local_prompts.append(prompt)
-                local_slice_indices.append(slice_idx)
-
-        # Sync student weights to vLLM if needed
-        if self.state.global_step != self._last_loaded_step and self.state.global_step % self.vllm_sync_frequency == 0:
-            self.vllm_generation.sync_weights()
-            self._last_loaded_step = self.state.global_step
-
-        # Generate completions — pass token IDs directly, no text decoding
-        prompt_ids_list = [p.tolist() for p in local_prompts]
-        _, completion_ids, _, _ = self.vllm_generation.generate(
-            prompts=prompt_ids_list, images=None, num_generations=self.num_generations
-        )
-
-        # Process completions into the buffer
-        self._store_completions_in_buffer(
-            slices, on_policy_indices, local_slice_indices, local_prompts, completion_ids
-        )
-
-    def _generate_with_model(self, slices: list[dict[str, torch.Tensor | Any]], on_policy_indices: list[int]):
-        """Fallback generation using model.generate() (no vLLM)."""
-        with unwrap_model_for_generation(
-            self.model, self.accelerator, generation_kwargs=self.generation_kwargs
-        ) as unwrapped_model:
-            for slice_idx in on_policy_indices:
-                slice_inputs = slices[slice_idx]
-                generated_outputs = unwrapped_model.generate(
-                    input_ids=slice_inputs["prompts"],
-                    attention_mask=slice_inputs.get("prompt_attention_mask", None),
-                    generation_config=self.generation_config,
-                    return_dict_in_generate=True,
-                )
-                generated_tokens = generated_outputs.sequences
-                batch_size = generated_tokens.size(0)
-                device = generated_tokens.device
-                pad_token_id = self.processing_class.pad_token_id
-                prompt_width = slice_inputs["prompts"].shape[1]
-                prompt_mask = slice_inputs.get("prompt_attention_mask")
-                if prompt_mask is not None:
-                    prompt_token_lengths = prompt_mask.sum(dim=1)
-                else:
-                    prompt_token_lengths = torch.full((batch_size,), prompt_width, dtype=torch.long, device=device)
-                completion_lengths = self._get_completion_lengths(generated_tokens, prompt_width)
-                new_attention_mask, new_labels, new_completion_mask = self._build_sequence_batch(
-                    generated_tokens, prompt_width, prompt_token_lengths, completion_lengths
-                )
-
-                # Decode for logging
-                prompt_texts = []
-                completion_texts = []
-                for idx in range(batch_size):
-                    prompt_tokens = slice_inputs["prompts"][idx]
-                    if prompt_mask is not None:
-                        prompt_tokens = prompt_tokens[prompt_mask[idx].bool()]
-                    elif pad_token_id is not None:
-                        prompt_tokens = prompt_tokens[prompt_tokens != pad_token_id]
-                    prompt_texts.append(
-                        self.processing_class.decode(prompt_tokens.tolist(), skip_special_tokens=False)
-                    )
-                    length = prompt_width
-                    completion_length = int(completion_lengths[idx].item())
-                    completion_texts.append(
-                        self.processing_class.decode(
-                            generated_tokens[idx, length : length + completion_length].tolist(),
-                            skip_special_tokens=False,
-                        )
-                    )
-
-                updated = dict(slice_inputs)
-                updated["input_ids"] = generated_tokens
-                updated["attention_mask"] = new_attention_mask
-                updated["labels"] = new_labels
-                updated["completion_mask"] = new_completion_mask
-                updated["prompt_ids"] = slice_inputs["prompts"]
-                updated["prompt_mask"] = prompt_mask
-                updated["completion_ids"] = generated_tokens[:, prompt_width:]
-
-                self._buffered_inputs[slice_idx] = updated
-                self._buffered_text_logs[slice_idx] = (prompt_texts, completion_texts)
-
-    def _store_completions_in_buffer(
-        self,
-        slices: list[dict[str, torch.Tensor | Any]],
-        on_policy_indices: list[int],
-        local_slice_indices: list[int],
-        local_prompts: list[torch.Tensor],
-        completion_ids: list,
-    ):
-        """Process vLLM completions and store them in the buffer.
-
-        Uses original prompt token IDs directly (no decode/re-encode roundtrip), following the same approach as
-        GRPOTrainer.
-        """
-        device = self.accelerator.device
-        pad_token_id = self.processing_class.pad_token_id if self.processing_class.pad_token_id is not None else 0
-        max_completion_length = self.generation_config.max_new_tokens
-
-        # Group completions and prompt token IDs by slice
-        slice_completions = {idx: [] for idx in on_policy_indices}
-        slice_prompt_ids = {idx: [] for idx in on_policy_indices}
-        for i, slice_idx in enumerate(local_slice_indices):
-            slice_completions[slice_idx].append(completion_ids[i])
-            slice_prompt_ids[slice_idx].append(local_prompts[i])
-
-        for slice_idx in on_policy_indices:
-            slice_inputs = slices[slice_idx]
-            prompt_id_tensors = slice_prompt_ids[slice_idx]
-            prompt_width = max(len(p) for p in prompt_id_tensors)
-            prompt_token_lengths = torch.tensor([len(p) for p in prompt_id_tensors], device=device, dtype=torch.long)
-            prompt_attention_mask = (
-                torch.arange(prompt_width, device=device).unsqueeze(0)
-                >= (prompt_width - prompt_token_lengths).unsqueeze(1)
-            ).long()
-
-            # Left-pad prompt token IDs to the longest prompt in this slice
-            prompt_ids = torch.stack(
-                [F.pad(p, (prompt_width - len(p), 0), value=pad_token_id) for p in prompt_id_tensors]
-            ).to(device)
-
-            # Pad/truncate completions (right-pad to max_completion_length)
-            completion_tensors = []
-            completion_ids_for_text = []
-            completion_lengths = []
-            for comp_ids in slice_completions[slice_idx]:
-                t = torch.tensor(comp_ids, device=device)
-                if len(t) > max_completion_length:
-                    t = t[:max_completion_length]
-                completion_ids_for_text.append(t.tolist())
-                completion_lengths.append(len(t))
-                if len(t) < max_completion_length:
-                    padding = torch.full((max_completion_length - len(t),), pad_token_id, device=device, dtype=t.dtype)
-                    t = torch.cat([t, padding])
-                completion_tensors.append(t)
-
-            completion_ids_padded = torch.stack(completion_tensors)
-            new_input_ids = torch.cat([prompt_ids, completion_ids_padded], dim=1)
-            completion_lengths = torch.tensor(completion_lengths, device=device, dtype=torch.long)
-            new_attention_mask, new_labels, new_completion_mask = self._build_sequence_batch(
-                new_input_ids, prompt_width, prompt_token_lengths, completion_lengths
-            )
-
-            # Decode for logging only
-            prompt_texts = self.processing_class.batch_decode(
-                prompt_id_tensors, skip_special_tokens=False, clean_up_tokenization_spaces=False
-            )
-            completion_texts = self.processing_class.batch_decode(
-                completion_ids_for_text, skip_special_tokens=False, clean_up_tokenization_spaces=False
-            )
-
-            updated = dict(slice_inputs)
-            updated["input_ids"] = new_input_ids
-            updated["attention_mask"] = new_attention_mask
-            updated["labels"] = new_labels
-            updated["completion_mask"] = new_completion_mask
-            updated["prompt_ids"] = prompt_ids
-            updated["prompt_mask"] = prompt_attention_mask
-            updated["completion_ids"] = completion_ids_padded
-            # Update prompts to match the new padding width so prompt_length is consistent
-            updated["prompts"] = prompt_ids
-            updated["prompt_attention_mask"] = prompt_attention_mask
-
-            self._buffered_inputs[slice_idx] = updated
-            self._buffered_text_logs[slice_idx] = (prompt_texts, completion_texts)
-
-    @staticmethod
-    def _build_sequence_batch(
-        new_input_ids: torch.Tensor,
-        prompt_width: int,
-        prompt_token_lengths: torch.Tensor,
-        completion_lengths: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Build attention mask, labels, and completion mask from prompt/completion lengths."""
-        prompt_token_lengths = prompt_token_lengths.to(device=new_input_ids.device, dtype=torch.long)
-        completion_lengths = completion_lengths.to(device=new_input_ids.device, dtype=torch.long)
-        positions = torch.arange(new_input_ids.shape[1], device=new_input_ids.device).unsqueeze(0)
-        prompt_mask = (positions < prompt_width) & (positions >= (prompt_width - prompt_token_lengths).unsqueeze(1))
-        completion_mask = (positions >= prompt_width) & (positions < (prompt_width + completion_lengths).unsqueeze(1))
-        new_attention_mask = (prompt_mask | completion_mask).long()
-
-        new_labels = torch.full_like(new_input_ids, -100)
-        new_labels[completion_mask] = new_input_ids[completion_mask]
-
-        # Region-shaped completion mask (B, completion_width), aligned with `completion_ids`, as GRPO emits it.
-        return new_attention_mask, new_labels, completion_mask[:, prompt_width:].long()
 
     # ──────────────────────────────────────────────────────────────────────
     #  Loss computation
     # ──────────────────────────────────────────────────────────────────────
 
-    @staticmethod
-    def _reduce_divergence_loss(jsd, completion_mask=None, reduction="batchmean", num_items_in_batch=None):
-        """Reduce a per-token divergence tensor over the valid completion tokens.
-
-        When `num_items_in_batch` is provided (as under gradient accumulation), the divergence is reduced as `sum /
-        num_items_in_batch`, matching the gradient-accumulation-correct behavior of HF's default cross-entropy.
-        Otherwise it falls back to the local `reduction` (default `batchmean`). See issue #4719.
-        """
-        mask = None
-        if completion_mask is not None:
-            mask = completion_mask.bool()
-            jsd = jsd[mask]
-
-        if num_items_in_batch is not None:
-            # Normalize by the global number of valid tokens for gradient-accumulation-correct loss.
-            jsd_sum = jsd.sum()
-            if isinstance(num_items_in_batch, torch.Tensor):
-                num_items_in_batch = num_items_in_batch.to(jsd_sum.device)
-            return jsd_sum / num_items_in_batch
-        if reduction == "batchmean":
-            # clamp_min(1) avoids 0/0 -> nan when a sample has no unmasked positions
-            # (e.g. completion fully truncated). jsd[mask] is empty -> jsd.sum() == 0,
-            # so 0/1 == 0 with a valid grad path.
-            denom = mask.sum().clamp_min(1) if completion_mask is not None else max(jsd.size(0), 1)
-            return jsd.sum() / denom
-        elif reduction == "sum":
-            return jsd.sum()
-        elif reduction == "mean":
-            return jsd.mean()
-        else:
-            return jsd
-
-    @staticmethod
-    def generalized_jsd_loss(
-        student_logits,
-        teacher_logits,
-        labels=None,
-        beta=0.5,
-        temperature=1.0,
-        reduction="batchmean",
-        num_items_in_batch=None,
-    ):
-        """
-        Compute the generalized Jensen-Shannon Divergence loss for knowledge distillation over the full vocabulary.
-
-        Args:
-            student_logits: Tensor of shape (batch_size, sequence_length, vocab_size).
-            teacher_logits: Tensor of shape (batch_size, sequence_length, vocab_size).
-            labels: Tensor of shape (batch_size, sequence_length) with -100 for positions to ignore.
-            beta: Interpolation coefficient. 0.0 = forward KL, 1.0 = reverse KL.
-            temperature: Softmax temperature.
-            reduction: 'batchmean', 'sum', 'mean', or 'none'.
-
-        Returns:
-            Scalar loss tensor.
-        """
-        student_logits = student_logits / temperature
-        teacher_logits = teacher_logits / temperature
-
-        student_log_probs = F.log_softmax(student_logits, dim=-1)
-        teacher_log_probs = F.log_softmax(teacher_logits, dim=-1)
-
-        jsd = _jsd_divergence(student_log_probs, teacher_log_probs, beta)
-        return DistillationTrainer._reduce_divergence_loss(
-            jsd,
-            completion_mask=(labels != -100) if labels is not None else None,
-            reduction=reduction,
-            num_items_in_batch=num_items_in_batch,
-        )
-
-    def _get_teacher_logits(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
-        """Get logits from the local teacher model."""
-        if self.teacher_model is None:
-            raise ValueError("No teacher model configured.")
-        self.teacher_model.eval()
-        with torch.no_grad():
-            return self.teacher_model(input_ids=input_ids, attention_mask=attention_mask).logits
-
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         # transformers computes `num_items_in_batch` from the raw dataloader labels, before on-policy generation
-        # replaces the completions; use the count over the generated completions instead (computed in `_fill_buffer`).
-        # Divide by the process count so the per-process loss compensates for DDP gradient averaging (as GRPO does).
-        if self.model.training and self._buffered_num_items is not None:
-            num_items_in_batch = self._buffered_num_items.clamp(min=1.0) / self.accelerator.num_processes
+        # replaces the completions; use the count over the generated completions instead (computed in
+        # `_generate_and_score_completions`). Divide by the process count so the per-process loss compensates for DDP
+        # gradient averaging (as GRPO does).
+        if self.model.training and inputs.get("num_items_in_batch") is not None:
+            num_items_in_batch = inputs["num_items_in_batch"].clamp(min=1.0) / self.accelerator.num_processes
 
-        if self.use_liger_loss:
-            loss = self._compute_liger_loss(model, inputs, num_items_in_batch=num_items_in_batch)
-            return (loss, None) if return_outputs else loss
-
-        prompt_ids, prompt_mask = inputs["prompt_ids"], inputs["prompt_mask"]
-        completion_ids, completion_mask = inputs["completion_ids"], inputs["completion_mask"]
-        input_ids = torch.cat([prompt_ids, completion_ids], dim=1)
-        attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
-        logits_to_keep = completion_ids.size(1)  # only the completion tokens are trained on
-
-        # Student forward pass
-        student_outputs = model(input_ids=input_ids, attention_mask=attention_mask)
-
-        teacher_logits = self._get_teacher_logits(input_ids, attention_mask)
-        student_logits = student_outputs.logits[:, -logits_to_keep - 1 : -1, :]
-        teacher_logits = teacher_logits[:, -logits_to_keep - 1 : -1, :]
-        jsd = self.generalized_jsd_loss(
-            student_logits=student_logits,
-            teacher_logits=teacher_logits,
-            beta=self.beta,
-            temperature=self.temperature,
-            reduction="none",
+        # Route the whole loss (backbone + `lm_head` projection + JSD) through the DDP/FSDP wrapper via
+        # `_forward_redirection`, so DDP.forward() fires `prepare_for_backward()` and FSDP/DeepSpeed keep the student's
+        # sharded parameters (including the `lm_head`) materialized for the projection. Mirrors GRPO's `compute_liger_loss`.
+        unwrapped_student = self.accelerator.unwrap_model(model)
+        loss = self._forward_redirection(
+            model, unwrapped_student, self._compute_loss, unwrapped_student, inputs, num_items_in_batch
         )
-        loss = self._reduce_divergence_loss(
-            jsd, completion_mask=completion_mask, num_items_in_batch=num_items_in_batch
-        )
+        return (loss, None) if return_outputs else loss
 
-        return (loss, student_outputs) if return_outputs else loss
-
-    def _liger_student_forward(self, student, inputs):
-        """Decoder-only forward used by the Liger JSD path (skips lm_head to save memory)."""
-        if hasattr(student, "get_decoder") and student.get_decoder() is not None:
-            decoder = student.get_decoder()
-        else:
-            decoder = getattr(student, getattr(student, "base_model_prefix", "model"), student)
+    def _compute_loss(self, unwrapped_student, inputs, num_items_in_batch):
+        # Chunked JSD path: project the teacher/student hidden states to vocab logits one chunk at a time (never
+        # materializing the full `(B, C, V)` logits), so the teacher's dense distribution can be matched without
+        # buffering it. Runs inside the student wrapper's forward (see `compute_loss`).
         input_ids = torch.cat([inputs["prompt_ids"], inputs["completion_ids"]], dim=1)
         attention_mask = torch.cat([inputs["prompt_mask"], inputs["completion_mask"]], dim=1)
-        return decoder(input_ids=input_ids, attention_mask=attention_mask, use_cache=False)
+        completion_mask = inputs["completion_mask"]
+        logits_to_keep = inputs["completion_ids"].size(1)  # only the completion tokens are trained on
 
-    def _compute_liger_loss(self, model, inputs, num_items_in_batch=None):
-        """Memory-efficient JSD using Liger kernel (operates on hidden states, not full logits)."""
-        # Route through the DDP/FSDP wrapper via _forward_redirection so that
-        # DDP.forward() is called and prepare_for_backward() fires correctly.
-        unwrapped_student = self.accelerator.unwrap_model(model)
-        student_outputs = self._forward_redirection(
-            model, unwrapped_student, self._liger_student_forward, unwrapped_student, inputs
+        student_hidden_states = self._get_last_hidden_state(
+            unwrapped_student, input_ids, attention_mask, logits_to_keep
         )
 
+        # Route the teacher backbone through its own wrapper via `_forward_redirection` too, so FSDP/DeepSpeed
+        # materialize its sharded parameters before the forward runs (the backbone call would otherwise see shards).
         self.teacher_model.eval()
         unwrapped_teacher = self.accelerator.unwrap_model(self.teacher_model)
-        if hasattr(unwrapped_teacher, "get_decoder") and unwrapped_teacher.get_decoder() is not None:
-            base_teacher = unwrapped_teacher.get_decoder()
-        else:
-            base_teacher = getattr(
-                unwrapped_teacher, getattr(unwrapped_teacher, "base_model_prefix", "model"), unwrapped_teacher
-            )
-        input_ids = torch.cat([inputs["prompt_ids"], inputs["completion_ids"]], dim=1)
-        attention_mask = torch.cat([inputs["prompt_mask"], inputs["completion_mask"]], dim=1)
         with torch.no_grad():
-            teacher_outputs = base_teacher(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                use_cache=False,
+            teacher_hidden_states = self._forward_redirection(
+                self.teacher_model,
+                unwrapped_teacher,
+                self._get_last_hidden_state,
+                unwrapped_teacher,
+                input_ids,
+                attention_mask,
+                logits_to_keep,
             )
 
-        student_hidden = student_outputs.last_hidden_state[:, :-1]
-        teacher_hidden = teacher_outputs.last_hidden_state[:, :-1]
-        del student_outputs, teacher_outputs
+        student_lm_head = unwrapped_student.get_output_embeddings()
+        teacher_lm_head = unwrapped_teacher.get_output_embeddings()
 
-        student_hidden = student_hidden.reshape(-1, student_hidden.shape[-1])
-        teacher_hidden = teacher_hidden.reshape(-1, teacher_hidden.shape[-1])
+        if self.use_liger_loss:
+            # Fused JSD over the same hidden states as the chunked path. `true_labels` only masks positions (the
+            # hard-loss weight is 0), so any non-ignore id marks a valid completion token; `_get_last_hidden_state`
+            # already returns the completion-aligned positions, so no shift is needed.
+            true_labels = torch.where(
+                completion_mask.bool(), inputs["completion_ids"], torch.full_like(inputs["completion_ids"], -100)
+            ).reshape(-1)
+            # Under FSDP2 the heads are DTensors; materialize them once with full_tensor() for the fused kernel, as the
+            # chunked path does. No-op off FSDP2; the ZeRO-3 (non-DTensor) case is handled by maybe_gather_lm_head_ctx.
+            student_weight, student_bias = student_lm_head.weight, student_lm_head.bias
+            teacher_weight, teacher_bias = teacher_lm_head.weight, teacher_lm_head.bias
+            if isinstance(student_weight, torch.distributed.tensor.DTensor):
+                student_weight = student_weight.full_tensor()
+                if student_bias is not None:
+                    student_bias = student_bias.full_tensor()
+            if isinstance(teacher_weight, torch.distributed.tensor.DTensor):
+                teacher_weight = teacher_weight.full_tensor()
+                if teacher_bias is not None:
+                    teacher_bias = teacher_bias.full_tensor()
+            # ZeRO-3 shards the heads and the fused kernel reads them directly, so gather them for the call.
+            with maybe_gather_lm_head_ctx(
+                student_lm_head.weight, student_lm_head.bias, teacher_lm_head.weight, teacher_lm_head.bias
+            ):
+                loss = self.liger_loss(
+                    student_input=student_hidden_states.reshape(-1, student_hidden_states.size(-1)),
+                    student_weight=student_weight,
+                    teacher_input=teacher_hidden_states.reshape(-1, teacher_hidden_states.size(-1)),
+                    teacher_weight=teacher_weight,
+                    true_labels=true_labels,
+                    student_bias=student_bias,
+                    teacher_bias=teacher_bias,
+                )
+            # Liger normalizes by the local valid-token count; rescale to the global count for grad-accum correctness.
+            if num_items_in_batch is not None:
+                num_valid_local = (true_labels != -100).sum().clamp_min(1)
+                if isinstance(num_items_in_batch, torch.Tensor):
+                    num_items_in_batch = num_items_in_batch.to(loss.device)
+                loss = loss * num_valid_local / num_items_in_batch
+            return loss
 
-        completion_mask = torch.cat([torch.zeros_like(inputs["prompt_mask"]), inputs["completion_mask"]], dim=1).bool()
-        masked_input_ids = torch.where(completion_mask, input_ids, torch.full_like(input_ids, -100))
-        true_labels = masked_input_ids[:, 1:].reshape(-1)
-
-        student_head = unwrapped_student.get_output_embeddings()
-        teacher_head = unwrapped_teacher.get_output_embeddings()
-
-        loss = self.liger_loss(
-            student_input=student_hidden,
-            student_weight=student_head.weight,
-            teacher_input=teacher_hidden,
-            teacher_weight=teacher_head.weight,
-            true_labels=true_labels,
-            student_bias=getattr(student_head, "bias", None),
-            teacher_bias=getattr(teacher_head, "bias", None),
+        student_config, teacher_config = unwrapped_student.config, unwrapped_teacher.config
+        loss, _, _ = _chunked_divergence_loss(
+            student_hidden_states,
+            teacher_hidden_states,
+            student_lm_head.weight,
+            teacher_lm_head.weight,
+            completion_mask,
+            self.beta,
+            _CHUNKED_LM_HEAD_CHUNK_SIZE,
+            num_items_in_batch=num_items_in_batch,
+            student_lm_head_bias=student_lm_head.bias,
+            teacher_lm_head_bias=teacher_lm_head.bias,
+            student_logit_scale=getattr(student_config, "logit_scale", 1.0),
+            teacher_logit_scale=getattr(teacher_config, "logit_scale", 1.0),
+            student_final_logit_softcapping=getattr(student_config, "final_logit_softcapping", None),
+            teacher_final_logit_softcapping=getattr(teacher_config, "final_logit_softcapping", None),
+            temperature=self.temperature,
         )
-
-        # The Liger JSD loss normalizes by the local number of valid tokens. Under gradient accumulation we want
-        # the global normalization, so rescale by `num_valid_local / num_items_in_batch`.
-        if num_items_in_batch is not None:
-            num_valid_local = (true_labels != -100).sum().clamp_min(1)
-            if isinstance(num_items_in_batch, torch.Tensor):
-                num_items_in_batch = num_items_in_batch.to(loss.device)
-            loss = loss * num_valid_local / num_items_in_batch
-
-        del student_hidden, teacher_hidden, true_labels
         return loss
-
-    def _get_liger_zero3_lm_head_gather_ctx(self, model: nn.Module):
-        """Context manager for gathering lm_head parameters under Liger + ZeRO-3."""
-        if not self.use_liger_loss:
-            return nullcontext()
-
-        deepspeed_plugin = self.accelerator.state.deepspeed_plugin
-        if deepspeed_plugin is None or deepspeed_plugin.zero_stage != 3:
-            return nullcontext()
-
-        import deepspeed
-
-        unwrapped_student = self.accelerator.unwrap_model(model)
-        unwrapped_teacher = self.accelerator.unwrap_model(self.teacher_model)
-        student_head = unwrapped_student.get_output_embeddings()
-        teacher_head = unwrapped_teacher.get_output_embeddings()
-        params = [student_head.weight, teacher_head.weight]
-        if student_head.bias is not None:
-            params.append(student_head.bias)
-        if teacher_head.bias is not None:
-            params.append(teacher_head.bias)
-        return deepspeed.zero.GatheredParameters(params, modifier_rank=None)
 
     # ──────────────────────────────────────────────────────────────────────
     #  Training step & Logging
     # ──────────────────────────────────────────────────────────────────────
 
-    @profiling_decorator
-    def training_step(
-        self, model: nn.Module, inputs: dict[str, torch.Tensor | Any], num_items_in_batch: int | None = None
-    ) -> torch.Tensor:
-        """Training step: generate on-policy, then run the parent step, tracking completion stats."""
-        buffer_steps = self.args.gradient_accumulation_steps
+    def training_step(self, model, inputs, num_items_in_batch):
+        time_before = time.perf_counter()
+        output = super().training_step(model, inputs, num_items_in_batch)
+        self._step += 1
+        time_after = time.perf_counter()
+        self._current_train_step_time += time_after - time_before
+        if self._step % self.current_gradient_accumulation_steps == 0:
+            self._metrics["train"]["step_time"].append(self._current_train_step_time)
+            self._current_train_step_time = 0.0
+        return output
 
-        with self._get_liger_zero3_lm_head_gather_ctx(model):
-            loss = super().training_step(model, inputs, num_items_in_batch)
-
-        slice_idx = (self._buffer_step - 1) % buffer_steps
-
-        # Track completion length stats — read from buffered inputs (which reflect the generated completions)
-        actual_inputs = self._buffered_inputs[slice_idx] if self._buffered_inputs is not None else inputs
-        labels = actual_inputs.get("labels")
-        if labels is not None:
-            completion_lengths = (labels != -100).sum(dim=1).float()
-            gathered_lengths = self.accelerator.gather(completion_lengths)
-            mode = "train"
-            self._metrics[mode]["completions/mean_length"].append(gathered_lengths.mean().item())
-            self._metrics[mode]["completions/max_length"].append(gathered_lengths.max().item())
-            self._metrics[mode]["completions/min_length"].append(gathered_lengths.min().item())
-
-            # Log fraction of completions that hit max_completion_length (truncated)
-            max_comp_len = getattr(self.generation_config, "max_new_tokens", None)
-            if max_comp_len is not None:
-                truncated_frac = (gathered_lengths >= max_comp_len).float().mean().item()
-                self._metrics[mode]["completions/truncated_fraction"].append(truncated_frac)
-
-        return loss
+    # During eval, Trainer calls prediction_step. If no labels are present in the inputs, it only runs forward and
+    # returns logits. We override prediction_step to force compute_loss, because this trainer doesn't involve labels.
+    def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys: list[str] | None = None):
+        inputs = self._prepare_inputs(inputs)
+        with torch.no_grad():
+            with self.compute_loss_context_manager():
+                loss = self.compute_loss(model, inputs)
+            loss = loss.mean().detach()
+        return loss, None, None
 
     def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
         mode = "train" if self.model.training else "eval"
-        metrics = {key: sum(val) / len(val) for key, val in self._metrics[mode].items()}
+        # Average the metrics
+        metrics = {}
+        for key, val in self._metrics[mode].items():
+            # Filter out NaN values before averaging. With logging_steps > 1, a naive sum()/len() would let a single
+            # NaN contaminate valid data from other batches. Only return None when no valid values remain (e.g. JSON
+            # loggers crash on float NaN).
+            valid = [v for v in val if not math.isnan(v)]
+            metrics[key] = sum(valid) / len(valid) if valid else None
 
+        # This method can be called both in training and evaluation. When called in evaluation, the keys in `logs`
+        # start with "eval_". We need to add the prefix "eval_" to the keys in `metrics` to match the format.
         if mode == "eval":
             metrics = {f"eval_{key}": val for key, val in metrics.items()}
 
@@ -1347,42 +1268,50 @@ class DistillationTrainer(_BaseTrainer):
         super().log(logs, start_time)
         self._metrics[mode].clear()
 
-        # Log completions to console, wandb, and trackio
-        should_log_completions = (
-            self.log_completions
-            and self.state.global_step > 0
-            and self.state.global_step % self.log_completions_steps == 0
-        )
+        if self.accelerator.is_main_process and self.log_completions:
+            if is_rich_available():
+                print_prompt_completions_sample(
+                    self._logs["prompt"],
+                    self._logs["completion"],
+                    {},
+                    None,
+                    self.state.global_step,
+                    self.num_completions_to_print,
+                )
 
-        if should_log_completions and self.accelerator.is_main_process:
-            prompts = list(self._textual_logs["prompt"])
-            completions = list(self._textual_logs["completion"])
+            logging_backends = []
+            if self.args.report_to and "wandb" in self.args.report_to and wandb.run is not None:
+                logging_backends.append(wandb)
+            if self.args.report_to and "trackio" in self.args.report_to:
+                logging_backends.append(trackio)
 
-            if prompts:
-                _print_completions_sample(prompts, completions, self.state.global_step, self.num_completions_to_print)
+            import pandas as pd
 
-                logging_backends = []
-                if self.args.report_to and "wandb" in self.args.report_to and wandb.run is not None:
-                    logging_backends.append(wandb)
-                if self.args.report_to and "trackio" in self.args.report_to:
-                    logging_backends.append(trackio)
+            table = {
+                "step": [self.state.global_step] * len(self._logs["prompt"]),
+                "prompt": self._logs["prompt"],
+                "completion": self._logs["completion"],
+            }
+            df_base = pd.DataFrame(table)
+            df_base.to_parquet(
+                os.path.join(
+                    self.args.output_dir,
+                    "completions",
+                    f"completions_{self.state.global_step:05d}.parquet",
+                )
+            )
 
-                if logging_backends:
-                    import pandas as pd
+            for logging_backend in logging_backends:
+                df = df_base
+                if self.log_unique_prompts:
+                    df = df.drop_duplicates(subset=["prompt"])
+                logging_backend.log({"completions": logging_backend.Table(dataframe=df)})
 
-                    table_data = {
-                        "step": [str(self.state.global_step)] * len(prompts),
-                        "prompt": prompts,
-                        "completion": completions,
-                    }
-                    df = pd.DataFrame(table_data)
-                    if self.num_completions_to_print and len(df) > self.num_completions_to_print:
-                        df = df.sample(n=self.num_completions_to_print, random_state=42)
-
-                    for logging_backend in logging_backends:
-                        logging_backend.log({"completions": logging_backend.Table(dataframe=df)})
-
-        # Clear text logs on all processes after the logging interval
-        if should_log_completions:
-            self._textual_logs["prompt"].clear()
-            self._textual_logs["completion"].clear()
+    # Ensure the model card is saved along with the checkpoint
+    def _save_checkpoint(self, model, trial):
+        if self.args.hub_model_id is None:
+            model_name = Path(self.args.output_dir).name
+        else:
+            model_name = self.args.hub_model_id.split("/")[-1]
+        self.create_model_card(model_name=model_name)
+        super()._save_checkpoint(model, trial)

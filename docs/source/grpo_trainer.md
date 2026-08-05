@@ -180,20 +180,31 @@ While training and evaluating, we record the following metrics:
 - `completions/min_terminated_length`: The minimum length of generated completions that terminate with EOS. When using tools, only non-tool tokens are counted.
 - `completions/max_terminated_length`: The maximum length of generated completions that terminate with EOS. When using tools, only non-tool tokens are counted.
 - `completions/clipped_ratio`: The ratio of truncated (clipped) completions.
+- `tools/call_frequency`: The average number of tool calls per completion in the generation batch. Logged only when `tools` are provided.
+- `tools/failure_frequency`: The fraction of tool calls that failed (the tool was not found, raised an exception, or the call type is unsupported). It is `0.0` when no tool was called. Logged only when `tools` are provided.
 - `rewards/{reward_func_name}/mean`: The average reward from a specific reward function. When an environment owns the reward via `get_reward`, `{reward_func_name}` is the environment's class name.
 - `rewards/{reward_func_name}/std`: The standard deviation of the reward from a specific reward function.
 - `reward`: The overall average reward after summing rewards across functions (weighted by `reward_weights`).
 - `reward_std`: The standard deviation of summed rewards across functions (weighted by `reward_weights`), computed over the full batch.
 - `frac_reward_zero_std`: The fraction of samples in the generation batch with a reward std of zero, implying there is little diversity for that prompt (all answers are correct or incorrect).
+- `sampling/sampling_logp_difference/mean`: The average absolute difference between the log probabilities returned by the sampler (vLLM) and the ones recomputed by the training model, over completion tokens. A growing value indicates a widening train-inference mismatch. Logged only when `use_vllm=True` and `vllm_importance_sampling_correction=True`.
+- `sampling/sampling_logp_difference/max`: The largest such absolute difference. Logged only when `use_vllm=True` and `vllm_importance_sampling_correction=True`.
+- `sampling/importance_sampling_ratio/min`: The smallest importance sampling ratio used to correct the train-inference mismatch, **after** the constraint selected by `vllm_importance_sampling_mode` has been applied (clipped to `[C_min, C_max]` for `*_truncate` modes, set to zero for `*_mask` modes). Computed over completion tokens, or over sequences for the `sequence_*` modes. Logged only when `use_vllm=True` and `vllm_importance_sampling_correction=True`.
+- `sampling/importance_sampling_ratio/mean`: The average constrained importance sampling ratio. Logged only when `use_vllm=True` and `vllm_importance_sampling_correction=True`.
+- `sampling/importance_sampling_ratio/max`: The largest constrained importance sampling ratio. Logged only when `use_vllm=True` and `vllm_importance_sampling_correction=True`.
 - `policy_loss`: The policy gradient loss value (before any entropy bonus). Logged when `entropy_coef` is nonzero or `use_adaptive_entropy=True`.
 - `entropy`: Average entropy of token predictions across generated completions. (If `mask_truncated_completions=True`, masked sequences tokens are excluded.)
 - `entropy_coef`: The current entropy regularization coefficient. Logged when `entropy_coef` is nonzero or `use_adaptive_entropy=True`. Updated once per optimizer step when `use_adaptive_entropy=True`.
+- `aux_loss`: The load-balancing auxiliary loss of a Mixture-of-Experts model, before it is scaled by `router_aux_loss_coef` and added to the loss. Logged only when the model is a MoE model and `router_aux_loss_coef` is nonzero.
 - `kl`: The average KL divergence between the model and the reference model, calculated over generated completions. Logged only if `beta` is nonzero.
 - `clip_ratio/region_mean`: The ratio of token (or sequence, if `importance_sampling_level="sequence"`) probabilities where the GRPO objective is clipped to stay within the trust region:  \\( \text{clip}\left( r_{i,t}(\theta), 1 - \epsilon_\mathrm{low}, 1 + \epsilon_\mathrm{high} \right)\,, \quad r_{i,t}(\theta) = \frac{\pi_\theta(o_{i,t} \mid q, o_{i,< t})}{\pi_{\theta_{\text{old}}}(o_{i,t} \mid q, o_{i,< t})} \\). A higher value means more tokens are clipped, which constrains how much the policy $\pi_\theta$ can change.
 - `clip_ratio/low_mean`: The average ratio of token (or sequence, if `importance_sampling_level="sequence"`) probabilities that were clipped on the lower bound of the trust region:  \\(r_{i,t}(\theta) < 1 - \epsilon_\mathrm{low}\\).
 - `clip_ratio/low_min`: The smallest per-completion fraction of tokens (or the sequence itself, if `importance_sampling_level="sequence"`) clipped on the lower bound of the trust region:  \\(r_{i,t}(\theta) < 1 - \epsilon_\mathrm{low}\\).
 - `clip_ratio/high_mean`: The average ratio of token (or sequence, if `importance_sampling_level="sequence"`) probabilities that were clipped on the upper bound of the trust region:  \\(r_{i,t}(\theta) > 1 + \epsilon_\mathrm{high}\\).
 - `clip_ratio/high_max`: The largest per-completion fraction of tokens (or the sequence itself, if `importance_sampling_level="sequence"`) clipped on the upper bound of the trust region:  \\(r_{i,t}(\theta) > 1 + \epsilon_\mathrm{high}\\).
+- `cispo_clip_ratio`: The ratio of token (or sequence, if `importance_sampling_level="sequence"`) importance sampling weights that were clipped at `epsilon_high` while having a positive advantage:  \\(r_{i,t}(\theta) > \epsilon_\mathrm{high}\\). Logged only when `loss_type="cispo"`.
+- `vespo/phi_seq_mean`: The average value of the VESPO Gamma weighting  \\(\varphi(w)\\)  applied to the sequence-level importance weights. Values below `1.0` mean sequences are being down-weighted. Logged only when `loss_type="vespo"`.
+- `clip_ratio`: The ratio of clipped tokens reported by the fused Liger GRPO loss. Logged only when `use_liger_kernel=True`, in which case it replaces the `clip_ratio/*` metrics above.
 
 ## Customization
 

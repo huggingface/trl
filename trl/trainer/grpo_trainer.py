@@ -448,18 +448,24 @@ class GRPOTrainer(_BaseTrainer):
 
         elif is_peft_model(model) and args.beta != 0.0:
             # If the model is a PEFT model with a pretrained adapter, we need to create a "ref" adapter that is a copy
-            # of the "default" adapter, so that we can use it as the reference model during GRPO training. PEFT only
-            # supports one adapter per model when the LoRA config uses `target_parameters` (see peft#3340), so in that
-            # case we skip the "ref" adapter and compute the reference log probs with adapters disabled, i.e. with the
-            # base model.
+            # of the "default" adapter, so that we can use it as the reference model during GRPO training. Before PEFT
+            # 0.20.0, only one adapter per model was supported when the LoRA config uses `target_parameters` (see
+            # peft#3340, fixed in peft#3350), so in that case we skip the "ref" adapter and compute the reference log
+            # probs with adapters disabled, i.e. with the base model. The fix only allows adapters targeting the same
+            # parameters, which holds here since the "ref" adapter reuses the "default" config.
             default_config = model.peft_config["default"]
-            if isinstance(default_config, LoraConfig) and default_config.target_parameters:
+            if (
+                isinstance(default_config, LoraConfig)
+                and default_config.target_parameters
+                and Version(peft.__version__) < Version("0.20.0")
+            ):
                 logger.warning(
-                    "PEFT can't add a frozen reference adapter alongside one that uses `target_parameters` "
+                    "PEFT<0.20.0 can't add a frozen reference adapter alongside one that uses `target_parameters` "
                     "(peft#3340), so the reference log probs are computed from the base model (adapters disabled). "
-                    "If you wrapped the model only to apply LoRA, pass a `peft_config` to the trainer instead; if you "
-                    "wrapped it deliberately (pretrained adapter or custom init), note that the base model matches "
-                    "your adapter only when it's freshly zero-initialized. If it is, this warning is safe to ignore."
+                    "Upgrade to `peft>=0.20.0` to train against a copy of your adapter instead. If you wrapped the "
+                    "model only to apply LoRA, pass a `peft_config` to the trainer instead; if you wrapped it "
+                    "deliberately (pretrained adapter or custom init), note that the base model matches your adapter "
+                    "only when it's freshly zero-initialized. If it is, this warning is safe to ignore."
                 )
             else:
                 model.add_adapter("ref", default_config)
@@ -597,10 +603,13 @@ class GRPOTrainer(_BaseTrainer):
                     "git+https://github.com/huggingface/transformers.git@main` to use this feature."
                 )
         if tools or environment_factory:
-            if not is_jmespath_available():
+            # jmespath is only needed by the legacy `response_schema` parser, which is all transformers < 5.13 ships.
+            # The new-style `response_template` parser doesn't use it, so don't require it on newer versions.
+            if not _SUPPORTS_RESPONSE_TEMPLATE and not is_jmespath_available():
                 raise ImportError(
-                    "Using tools with GRPOTrainer requires the jmespath library for response parsing. Please install "
-                    "it with `pip install jmespath` to use this feature."
+                    "Using tools with GRPOTrainer on transformers below 5.13.0 requires the jmespath library for "
+                    "response parsing. Please install it with `pip install jmespath`, or upgrade transformers to "
+                    "5.13.0 or higher, which doesn't need it."
                 )
             if not supports_tool_calling(processing_class):
                 raise ValueError(
@@ -1520,7 +1529,7 @@ class GRPOTrainer(_BaseTrainer):
             logits = logits[:, -logits_to_keep:, :]  # (B, logits_to_keep, H)
             # Divide logits by sampling temperature.
             # See https://huggingface.co/blog/the_n_implementation_details_of_rlhf_with_ppo#policy-training-implementation-details
-            logits.div_(self.temperature)
+            logits = logits / self.temperature
             completion_ids = input_ids_batch[:, -logits_to_keep:]
             logps = selective_log_softmax(logits, completion_ids)  # compute logprobs
             all_logps.append(logps)

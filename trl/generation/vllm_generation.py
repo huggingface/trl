@@ -368,6 +368,8 @@ class VLLMGeneration:
             )
             if self.enable_sleep_mode:
                 self.llm.sleep(level=2)
+            # Sleep level 2 discards the weights; track it so that generate() knows it must re-push them
+            self._llm_weights_sleeping = self.enable_sleep_mode
         else:
             raise ValueError(f"vllm_mode must be either 'server' or 'colocate', got '{self.mode}'.")
 
@@ -429,7 +431,7 @@ class VLLMGeneration:
             name = self._fix_param_name_to_vllm(name, extra_prefixes=["modules_to_save.default."])
 
             if param.is_cpu:
-                param = param.to(torch.device("cuda"))
+                param = param.to(self.accelerator.device)
             param = param.full_tensor()
 
             self._push_param_to_vllm(name, param)
@@ -452,6 +454,7 @@ class VLLMGeneration:
         if self.mode == "colocate" and self.enable_sleep_mode:
             empty_cache()  # required to avoid OOM in some cases
             self.llm.wake_up(tags=["weights"])
+            self._llm_weights_sleeping = False
 
         model = self.model
         accelerator = self.accelerator
@@ -536,16 +539,11 @@ class VLLMGeneration:
         repetition_penalty = self.repetition_penalty
         max_completion_length = self.max_completion_length
 
-        # Wake up colocated vLLM weights if needed (idempotent if already awake from sync_weights)
-        if self.mode == "colocate" and self.enable_sleep_mode:
-            empty_cache()  # required to avoid OOM in some cases
-            self.llm.wake_up(tags=["weights"])
-            # Work around for https://github.com/vllm-project/vllm/issues/29341
-            try:
-                self.llm.collective_rpc("reload_weights")
-            except NotImplementedError:
-                # Non-CUDA vLLM backends (e.g., vllm-ascend's NPUWorkerV1), don't implement reload_weights
-                pass
+        # Sleep level 2 discards the weights, so waking up isn't enough: they must be re-pushed from the training
+        # model. vLLM's `reload_weights` can't be used here, as it reloads the initial checkpoint from disk rather
+        # than the current training weights. See https://github.com/vllm-project/vllm/issues/29341
+        if self.mode == "colocate" and self.enable_sleep_mode and self._llm_weights_sleeping:
+            self.sync_weights()
 
         # Generate completions using vLLM: gather all prompts and use them in a single call in the main process
         if self.mode == "server":
@@ -700,5 +698,6 @@ class VLLMGeneration:
 
             if self.enable_sleep_mode:
                 self.llm.sleep(level=2)
+                self._llm_weights_sleeping = True
 
         return prompt_ids, completion_ids, logprobs, logprob_token_ids
