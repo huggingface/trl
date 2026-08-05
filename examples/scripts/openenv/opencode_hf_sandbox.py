@@ -61,6 +61,7 @@ CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen3-4B-Instruct-
     --enable-auto-tool-choice --tool-call-parser hermes \
     --logprobs-mode processed_logprobs \
     --return-tokens-as-token-ids \
+    --max-model-len 98304 \
     --weight-transfer-config '{"backend":"nccl"}'
 
 # Terminal 2 - expose that vLLM publicly for the remote sandboxes.
@@ -87,7 +88,7 @@ from opencode_env.config import OpenCodeConfig
 from opencode_env.harness import OpenCodeSessionFactory
 from opencode_env.task import OpenCodeTask
 from openenv.core.harness import ResourceSession, ResourceSessionFactory, VerifyResult
-from openenv.core.sandbox import HFSandboxBackend, SandboxHandle
+from opencode_env.sandbox import HFSandboxBackend, SandboxHandle
 from transformers import AutoTokenizer
 
 from trl.experimental.async_grpo import AsyncGRPOConfig, AsyncGRPOTrainer
@@ -265,6 +266,7 @@ def build_factory(
         agent_timeout_s=600.0,  # remote hop adds latency vs the local backend; give the edit/bash loop more room
         disabled_tools=["webfetch", "question", "task"],  # no web, no user, no sub-agents
         run_format="json",
+        proxy_max_tokens_cap=8192,  # keep each turn's completion + the growing multi-turn prompt under --max-model-len
     )
     inner = OpenCodeSessionFactory(
         config=config,
@@ -281,21 +283,27 @@ def build_factory(
 
 
 def opencode_reward(outcome: HarnessRolloutOutcome) -> float | None:
-    """Binary terminal verifier + degeneracy penalties. Long-horizon credit is carried by the terminal reward,
+    """Dense terminal verifier + degeneracy penalties. Long-horizon credit is carried by the terminal reward,
     propagated to every trained token through the group-relative advantage.
 
-      - unscorable rollout -> None (dropped from the group baseline)
+      - unscorable rollout (empty trace or no verifier score) -> None (dropped from the group baseline)
       - never ran its code (no `bash`) -> -0.1 (kills blind-write / prose-dump / give-up)
-      - else BINARY base: all held-out tests pass -> 1.0; timed out or failed -> 0.0
+      - else DENSE base: the fraction of held-out tests passed (partial credit); timed out -> 0.0
       - minus a step penalty for tool calls beyond a budget (bounds runaway edit/bash loops), capped at 0.5
     """
-    step_budget, step_penalty, step_penalty_cap = 20, 0.03, 0.5
+    step_budget, step_penalty, step_penalty_cap = 30, 0.03, 0.5
+    if not outcome.trace:
+        # 0 model calls: the sandbox/agent failed to run, not a real attempt. Drop it as unscorable
+        # (reward None -> NaN'd out of the group baseline) instead of scoring it, so a flaky sandbox
+        # never poisons the batch. The generic version of this belongs in the worker (TODO: upstream to TRL).
+        return None
     frac = outcome.env_reward
+    bash = outcome.tool_calls_by_name.get("bash", 0)
     if frac is None:
         return None
-    if outcome.tool_calls_by_name.get("bash", 0) == 0:
+    if bash == 0:
         return -0.1
-    base = 0.0 if outcome.timed_out else (1.0 if frac >= 1.0 - 1e-9 else 0.0)
+    base = 0.0 if outcome.timed_out else frac  # dense: fraction of held-out tests passed (partial credit)
     over = max(0, outcome.tool_call_count - step_budget)
     return base - min(step_penalty_cap, step_penalty * over)
 
@@ -356,6 +364,7 @@ def main() -> None:
     p.add_argument("--hub-model-id", default=None)
     p.add_argument("--optim", default="adamw_torch")  # e.g. paged_adamw_8bit to fit a larger policy on one GPU
     p.add_argument("--gradient-checkpointing", action="store_true")  # trade compute for memory on a larger policy
+    p.add_argument("--gradient-accumulation-steps", type=int, default=1)  # more prompts per step -> smoother reward
     args = p.parse_args()
 
     tokenizer = AutoTokenizer.from_pretrained(args.model)
@@ -366,6 +375,7 @@ def main() -> None:
         output_dir=args.output_dir,
         save_strategy="no",
         per_device_train_batch_size=4,
+        gradient_accumulation_steps=args.gradient_accumulation_steps,
         num_generations=args.num_generations,
         max_completion_length=args.max_completion_length,
         max_steps=args.max_steps,
