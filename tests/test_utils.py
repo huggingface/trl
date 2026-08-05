@@ -49,8 +49,10 @@ from trl.trainer.utils import (
     repeat_iterable_dataset,
     selective_log_softmax,
     shuffle_sequence_dict,
+    shutdown_event_loop_in_daemon,
     split_pixel_values_by_grid,
     split_tensor_dict,
+    start_event_loop_in_daemon,
     unsplit_pixel_values_by_grid,
     use_adapter,
 )
@@ -60,6 +62,16 @@ from .testing_utils import TrlTestCase, require_peft, require_rich, require_torc
 
 if is_peft_available():
     from peft import AutoPeftModelForCausalLM, LoraConfig
+
+
+def test_shutdown_event_loop_in_daemon_closes_loop():
+    thread, loop, loop_ready_event = start_event_loop_in_daemon()
+    assert loop_ready_event.wait(timeout=1)
+
+    shutdown_event_loop_in_daemon(thread, loop)
+
+    assert not thread.is_alive()
+    assert loop.is_closed()
 
 
 @require_peft

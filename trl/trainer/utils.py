@@ -1265,7 +1265,10 @@ def start_event_loop_in_daemon(
     def run_loop():
         asyncio.set_event_loop(loop)
         loop_ready_event.set()
-        loop.run_forever()
+        try:
+            loop.run_forever()
+        finally:
+            loop.close()
 
     thread = threading.Thread(target=run_loop, name=name, daemon=True)
     thread.start()
