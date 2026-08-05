@@ -2080,7 +2080,15 @@ class GRPOTrainer(_BaseTrainer):
                 loop_multimodal_fields = {}
                 for k, v in split_fields.items():
                     selected = [v[i] for i in idxs_with_tool]
-                    if isinstance(v, torch.Tensor):
+                    if isinstance(selected[0], torch.Tensor) and selected[0].ndim == 1:
+                        selected = [
+                            torch.cat([s, torch.zeros(len(pct) - len(s), dtype=s.dtype, device=s.device)])
+                            if len(s) < len(pct)
+                            else s
+                            for s, pct in zip(selected, prompt_completion_tool_ids, strict=True)
+                        ]
+                        selected = torch.stack(selected)
+                    elif isinstance(v, torch.Tensor):
                         selected = torch.stack(selected)
                     # Per-token fields (e.g. token_type_ids) need zero-padding to match extended prompt length
                     elif isinstance(selected[0], list):
@@ -2091,6 +2099,9 @@ class GRPOTrainer(_BaseTrainer):
                     loop_multimodal_fields[k] = selected
                 loop_multimodal_fields = unsplit_pixel_values_by_grid(loop_multimodal_fields)
                 loop_multimodal_fields.pop("num_images", None)
+                if "pixel_values" in loop_multimodal_fields and loop_multimodal_fields["pixel_values"].numel() == 0:
+                    for key in ["pixel_values", "image_grid_thw", "pixel_values_videos", "video_grid_thw"]:
+                        loop_multimodal_fields.pop(key, None)
             else:
                 loop_multimodal_fields = {}
 

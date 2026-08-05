@@ -3825,7 +3825,7 @@ class TestGRPOTrainerVLM(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=lambda completions, **kwargs: [1.0] * len(completions),
             args=training_args,
             train_dataset=dataset,
             tools=[screenshot_tool],
@@ -3869,6 +3869,87 @@ class TestGRPOTrainerVLM(TrlTestCase):
         assert trainer.state.log_history[-1]["tools/failure_frequency"] == pytest.approx(0.0)
 
         # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @pytest.mark.xfail(
+        condition=Version(transformers.__version__) < Version("5.2.0"),
+        reason="Qwen3.5 models were introduced in transformers-5.2.0",
+        strict=True,
+    )
+    @require_jmespath
+    def test_train_with_tools_text_response_multimodal_prompt(self):
+        # Test that tools returning text (non-multimodal response) work correctly with a VLM prompt having images.
+        def text_tool() -> str:
+            """Simple text tool."""
+            return "The image shows a red square."
+
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,
+            per_device_train_batch_size=2,
+            num_generations=2,
+            max_completion_length=512,
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
+            reward_funcs=lambda completions, **kwargs: [1.0] * len(completions),
+            args=training_args,
+            train_dataset=dataset,
+            tools=[text_tool],
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        def fake_generate(input_ids, **kwargs):
+            if input_ids.shape[0] == 2:  # first call
+                completion_ids = torch.tensor(
+                    [
+                        [248058, 198, 27, 1628, 13744, 30091, 22076, 29, 198, 510, 1628, 29, 198, 248059, 248046],
+                        [
+                            40,
+                            1459,
+                            914,
+                            1366,
+                            866,
+                            5224,
+                            248046,
+                            248044,
+                            248044,
+                            248044,
+                            248044,
+                            248044,
+                            248044,
+                            248044,
+                            248044,
+                        ],
+                    ],
+                    device=input_ids.device,
+                )
+            else:  # second call after text tool response: original image grid thw should still be present
+                assert "image_grid_thw" in kwargs, "image_grid_thw must be passed to generate"
+                assert kwargs["image_grid_thw"].shape[0] == 1, (
+                    f"Expected 1 original image, got {kwargs['image_grid_thw'].shape[0]}"
+                )
+                completion_ids = torch.tensor(
+                    [
+                        [16936, 0, 248046],
+                    ],
+                    device=input_ids.device,
+                )
+            return torch.cat([input_ids, completion_ids], dim=-1)
+
+        with patch.object(trainer.model, "generate", side_effect=fake_generate):
+            trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+        assert trainer.state.log_history[-1]["tools/call_frequency"] == pytest.approx(1 / 2)
+        assert trainer.state.log_history[-1]["tools/failure_frequency"] == pytest.approx(0.0)
+
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
