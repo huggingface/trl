@@ -603,10 +603,13 @@ class GRPOTrainer(_BaseTrainer):
                     "git+https://github.com/huggingface/transformers.git@main` to use this feature."
                 )
         if tools or environment_factory:
-            if not is_jmespath_available():
+            # jmespath is only needed by the legacy `response_schema` parser, which is all transformers < 5.13 ships.
+            # The new-style `response_template` parser doesn't use it, so don't require it on newer versions.
+            if not _SUPPORTS_RESPONSE_TEMPLATE and not is_jmespath_available():
                 raise ImportError(
-                    "Using tools with GRPOTrainer requires the jmespath library for response parsing. Please install "
-                    "it with `pip install jmespath` to use this feature."
+                    "Using tools with GRPOTrainer on transformers below 5.13.0 requires the jmespath library for "
+                    "response parsing. Please install it with `pip install jmespath`, or upgrade transformers to "
+                    "5.13.0 or higher, which doesn't need it."
                 )
             if not supports_tool_calling(processing_class):
                 raise ValueError(
