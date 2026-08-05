@@ -167,6 +167,7 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
 
             # Close concurrently: for a remote backend each close() is a network teardown, so closing them in
             # series can exceed the shutdown window and orphan the rest.
+            # TODO(@openenv): make session.close() awaitable so this cancels on the event loop, not a thread each.
             await asyncio.gather(*(asyncio.to_thread(_close, session) for session in list(self._live_sessions)))
 
         try:
