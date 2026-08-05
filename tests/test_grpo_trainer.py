@@ -1708,6 +1708,42 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    def test_kl_ignores_special_tokens(self):
+        # The per-token KL penalty drops formatting/template tokens (EOS, chat delimiters); their KL otherwise
+        # dominates the term and spikes the metric (issue #2933). Verify the ignored-id cache is built from the
+        # tokenizer's special tokens and that a KL-on run (beta != 0) trains through the masked KL path.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            beta=0.1,  # KL term on so per_token_kl and its special-token masking are exercised
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        # The ignored-id cache mirrors the tokenizer's special tokens (EOS at least), which are dropped from the KL.
+        assert trainer._tokenizer.eos_token_id in trainer._kl_ignored_token_ids.tolist()
+        assert set(trainer._kl_ignored_token_ids.tolist()) == set(trainer._tokenizer.all_special_ids)
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # The masked KL path still produces gradients: params changed.
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
     def test_reward_func_wrong_number_of_rewards(self):
         # A reward function that returns the wrong number of rewards should raise a clear error instead of silently
         # broadcasting (when it returns a single value) or failing later with an opaque shape error.

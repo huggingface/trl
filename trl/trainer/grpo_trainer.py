@@ -392,6 +392,11 @@ class GRPOTrainer(_BaseTrainer):
         if self._tokenizer.pad_token is None:
             self._tokenizer.pad_token = self._tokenizer.eos_token
 
+        # Cache the tokenizer's special-token ids (EOS, pad, chat delimiters). These formatting tokens are
+        # dropped from the per-token KL penalty in the loss (issue #2933): the policy should be free to make
+        # them deterministic, but their KL otherwise dominates the term and spikes the metric.
+        self._kl_ignored_token_ids = torch.tensor(sorted(set(self._tokenizer.all_special_ids)), dtype=torch.long)
+
         # Resolve vision placeholder token IDs once. Used by the forward pass to rebuild mm_token_type_ids
         # when tool responses inject images into the completion (see _generate forward_kwargs block).
         self._image_pad_token_id = None
@@ -3099,6 +3104,12 @@ class GRPOTrainer(_BaseTrainer):
             # Importance sampling correction for the KL divergence
             if self.args.use_bias_correction_kl:
                 per_token_kl = per_token_kl * coef_1
+            # Exclude formatting/template tokens (EOS, chat delimiters) from the KL penalty: their per-token KL
+            # dominates the term and spikes the metric (issue #2933), and we want these tokens to become
+            # deterministic. They still receive the policy-gradient update below.
+            per_token_kl = per_token_kl.masked_fill(
+                torch.isin(completion_ids, self._kl_ignored_token_ids.to(completion_ids.device)), 0.0
+            )
 
         # From here, log_importance_weights (and all subsequent tensors, coef_1, coef_2, etc.) shape depends on
         # importance_sampling_level: "token" level: (B, T); "sequence" level: (B, 1)
