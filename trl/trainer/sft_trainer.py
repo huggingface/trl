@@ -408,11 +408,13 @@ def _warn_all_labels_masked() -> None:
         "Loss is treated as 0.0 so training can continue; increase max_length or fix the "
         "dataset if this is unexpected."
     )
+    # Always emit UserWarning so tests are order-independent; also log when Accelerate is ready.
+    warnings.warn(msg, UserWarning, stacklevel=2)
     try:
         logger.warning(msg)
     except RuntimeError:
-        # Accelerate logging requires PartialState; fall back outside training loops.
-        warnings.warn(msg, UserWarning, stacklevel=2)
+        # Accelerate logging requires PartialState outside training loops.
+        pass
 
 
 def _labels_are_all_masked(labels: torch.Tensor | None) -> bool:
@@ -1810,7 +1812,7 @@ class SFTTrainer(_BaseTrainer):
         # Default HF CE on a fully ignored batch returns NaN; replace with a graph-safe 0.0 so logs are
         # not NaN and DDP still works. Chunked CE already returns 0.0 in that case (#6668).
         if all_masked and torch.isnan(loss):
-            if getattr(outputs, "logits", None) is not None:
+            if outputs.logits is not None:
                 loss = (outputs.logits * 0.0).sum()
             else:
                 loss = torch.nan_to_num(loss, nan=0.0)
