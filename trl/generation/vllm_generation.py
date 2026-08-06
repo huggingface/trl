@@ -553,6 +553,10 @@ class VLLMGeneration:
             all_images = gather_object(images if images is not None else [None] * len(prompts))
             if all(img is None for img in all_images):
                 all_images = None
+            # Ranks don't necessarily hold the same number of prompts: a multi-turn tool loop regenerates only the
+            # rollouts that called a tool, and that count is data-dependent. Gather the per-rank counts so each rank
+            # can locate its own slice of the gathered results below.
+            all_counts = gather_object([len(prompts)])
 
             if accelerator.is_main_process:
                 # Since 'prompts' contains 'num_generations' duplicates, we first take unique prompts, and
@@ -597,10 +601,8 @@ class VLLMGeneration:
             # Duplicate prompt_ids to align with per-completion entries.
             all_prompt_ids = [ids for ids in all_prompt_ids for _ in range(num_generations)]
 
-            process_slice = slice(
-                accelerator.process_index * len(prompts),
-                (accelerator.process_index + 1) * len(prompts),
-            )
+            start = sum(all_counts[: accelerator.process_index])
+            process_slice = slice(start, start + len(prompts))
             prompt_ids = all_prompt_ids[process_slice]
             completion_ids = all_completion_ids[process_slice]
             logprobs = all_logprobs[process_slice] if all_logprobs is not None else None
