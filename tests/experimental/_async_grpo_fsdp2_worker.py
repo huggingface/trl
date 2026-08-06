@@ -66,7 +66,7 @@ class _StubRolloutWorker:
         self._sample_iter = self._make_sample_iter(tokenizer, dataset, num_generations)
 
     def _make_sample_iter(self, tokenizer, dataset, num_generations):
-        for row in itertools.cycle(dataset):
+        for group_id, row in enumerate(itertools.cycle(dataset)):
             completions = [
                 [{"role": "assistant", "content": f"{row['completion'][0]['content']} {idx}"}]
                 for idx in range(num_generations)
@@ -90,6 +90,7 @@ class _StubRolloutWorker:
                     old_log_probs=[0.0] * len(prompt_ids) + [-0.5] * len(completion_ids),
                     advantage=float(advantages[idx]),
                     model_version=self._model_version,
+                    group_id=group_id,  # every completion of one prompt belongs to the same group
                     metrics={"reward": float(rewards[idx]), "reward_std": float(rewards.std())},
                 )
 
@@ -109,6 +110,27 @@ class _StubRolloutWorker:
 
     def check_health(self, stale_after_s):
         pass
+
+
+class _NoOpWeightTransfer:
+    """No-op `WeightTransferProtocol`, so the smoke exercises only the FSDP2 parameter lifecycle.
+
+    Without it `AsyncGRPOTrainer` builds the default `WeightTransferClient`, which needs a live vLLM server to stream
+    weights into over NCCL.
+    """
+
+    def init_weight_transfer(self) -> None: ...
+
+    def pause(self) -> None: ...
+
+    def send_weights(self, iterator) -> None:
+        # Drain the iterator so the trainer's weight-gathering path still runs end to end.
+        for _ in iterator:
+            pass
+
+    def resume(self) -> None: ...
+
+    def destroy(self) -> None: ...
 
 
 def main() -> None:
@@ -133,6 +155,7 @@ def main() -> None:
         args=args,
         train_dataset=dataset,
         rollout_worker=_StubRolloutWorker(tokenizer, dataset, num_generations=3),
+        weight_transfer=_NoOpWeightTransfer(),
     )
 
     # Snapshot params before training so we can confirm FSDP2 training actually updated them.
