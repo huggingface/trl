@@ -1206,9 +1206,8 @@ class RLOOTrainer(_BaseTrainer):
             multimodal_fields = {}
         return prompt_ids, images, multimodal_fields
 
-    def _generate_single_turn(self, prompt_ids, images, multimodal_fields):
+    def _generate_single_turn(self, prompt_ids, images, multimodal_fields, num_generations):
         device = self.accelerator.device
-        mode = "train" if self.model.training else "eval"
 
         # Generate completions using either vLLM or regular generation
         if self.use_vllm:
@@ -1219,7 +1218,6 @@ class RLOOTrainer(_BaseTrainer):
                 self._last_loaded_step = self.state.global_step
 
             # Generate using vLLM (note: RLOO doesn't use logprobs from generation, so we ignore them)
-            num_generations = self.num_generations if mode == "train" else self.num_generations_eval
             _, completion_ids, _, _ = self.vllm_generation.generate(
                 prompts=prompt_ids,
                 images=images,
@@ -1305,7 +1303,8 @@ class RLOOTrainer(_BaseTrainer):
         prompts = copy.deepcopy(prompts)
 
         prompt_ids, images, multimodal_fields = self._tokenize_prompts(prompts)
-        completion_ids = self._generate_single_turn(prompt_ids, images, multimodal_fields)
+        num_generations = self.num_generations if mode == "train" else self.num_generations_eval
+        completion_ids = self._generate_single_turn(prompt_ids, images, multimodal_fields, num_generations)
 
         # Decode completions. It's important to use `parse_response` when possible, because it handles tool calls.
         if is_conversational({"prompt": prompts[0]}):
