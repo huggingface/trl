@@ -27,7 +27,7 @@ import torch.nn.functional as F
 import transformers
 from accelerate import PartialState
 from accelerate.logging import get_logger
-from accelerate.utils import is_peft_model, tqdm
+from accelerate.utils import broadcast_object_list, is_peft_model, tqdm
 from datasets import Dataset, DatasetDict, IterableDataset, IterableDatasetDict, concatenate_datasets
 from datasets.fingerprint import Hasher
 from packaging.version import Version
@@ -603,6 +603,10 @@ class KTOTrainer(_BaseTrainer):
                     "`dispatch_batches` in `KTOConfig` or set it to `False`."
                 )
             args.accelerator_config.dispatch_batches = False
+        elif not isinstance(train_dataset, Dataset):
+            raise TypeError(
+                f"`train_dataset` must be a `Dataset` or `IterableDataset`, got `{type(train_dataset).__name__}`."
+            )
 
         # Model
         if isinstance(model, str):
@@ -697,18 +701,24 @@ class KTOTrainer(_BaseTrainer):
 
         elif is_peft_model(model) and ref_model is None:
             # If the model is a PEFT model with a pretrained adapter, we need to create a "ref" adapter that is a copy
-            # of the "default" adapter, so that we can use it as the reference model during KTO training. PEFT only
-            # supports one adapter per model when the LoRA config uses `target_parameters` (see peft#3340), so in that
-            # case we skip the "ref" adapter and compute the reference log probs with adapters disabled, i.e. with the
-            # base model.
+            # of the "default" adapter, so that we can use it as the reference model during KTO training. Before PEFT
+            # 0.20.0, only one adapter per model was supported when the LoRA config uses `target_parameters` (see
+            # peft#3340, fixed in peft#3350), so in that case we skip the "ref" adapter and compute the reference log
+            # probs with adapters disabled, i.e. with the base model. The fix only allows adapters targeting the same
+            # parameters, which holds here since the "ref" adapter reuses the "default" config.
             default_config = model.peft_config["default"]
-            if isinstance(default_config, LoraConfig) and default_config.target_parameters:
+            if (
+                isinstance(default_config, LoraConfig)
+                and default_config.target_parameters
+                and Version(peft.__version__) < Version("0.20.0")
+            ):
                 logger.warning(
-                    "PEFT can't add a frozen reference adapter alongside one that uses `target_parameters` "
+                    "PEFT<0.20.0 can't add a frozen reference adapter alongside one that uses `target_parameters` "
                     "(peft#3340), so the reference log probs are computed from the base model (adapters disabled). "
-                    "If you wrapped the model only to apply LoRA, pass a `peft_config` to the trainer instead; if you "
-                    "wrapped it deliberately (pretrained adapter or custom init), note that the base model matches "
-                    "your adapter only when it's freshly zero-initialized. If it is, this warning is safe to ignore."
+                    "Upgrade to `peft>=0.20.0` to train against a copy of your adapter instead. If you wrapped the "
+                    "model only to apply LoRA, pass a `peft_config` to the trainer instead; if you wrapped it "
+                    "deliberately (pretrained adapter or custom init), note that the base model matches your adapter "
+                    "only when it's freshly zero-initialized. If it is, this warning is safe to ignore."
                 )
             else:
                 model.add_adapter("ref", default_config)
@@ -980,6 +990,8 @@ class KTOTrainer(_BaseTrainer):
             # under ZeRO-3 the parameter coordinator gathers/reduces `lm_head.weight` around the fused loss.
             self._forward_redirection = _ForwardRedirection()
 
+        # Reference forwards during precompute reuse a single DeepSpeed inference engine (see `_precompute_ref_logps`).
+        self._precompute_engine = None
         if self.precompute_ref_logps:
             self.train_dataset = self._precompute_ref_logps(
                 self.train_dataset,
@@ -1177,7 +1189,11 @@ class KTOTrainer(_BaseTrainer):
                 "Dataset or set `precompute_ref_log_probs=False`."
             )
         model_hash = hash_module(self.ref_model or self.model)
-        fingerprint = Hasher.hash((dataset._fingerprint, model_hash, self.calculate_KL))
+        # Both inputs are rank-dependent under distributed training (ZeRO-3 shards the model), so broadcast rank 0's
+        # value so all ranks share one cache file.
+        fingerprint = [Hasher.hash((dataset._fingerprint, model_hash, self.calculate_KL))]
+        broadcast_object_list(fingerprint, from_process=0)
+        fingerprint = fingerprint[0]
         cache_file = dataset._get_cache_file_path(fingerprint)
         if os.path.exists(cache_file):
             return concatenate_datasets([dataset, Dataset.from_file(cache_file)], axis=1)
@@ -1191,10 +1207,25 @@ class KTOTrainer(_BaseTrainer):
             shuffle=False,
         )
         data_loader = self.accelerator.prepare(dataloader)
+
+        # This runs before the parent class prepares the model in `train`, so with DeepSpeed the parameters are still
+        # on CPU (ZeRO-1/2) and sharded (ZeRO-3). Wrap the model in an inference engine to place and gather them. Build
+        # it once and reuse it across precompute passes (train, eval, and later `evaluate` calls)
+        if self.ref_model is None and self.is_deepspeed_enabled:
+            if self._precompute_engine is None:
+                self._precompute_engine = prepare_deepspeed(self.model, self.accelerator)
+            model = self._precompute_engine
+        else:
+            model = self.ref_model or self.model
+
         ref_logps = []
         ref_KL_logps = []
-        for padded_batch in tqdm(iterable=data_loader, desc=f"Computing reference log probs for {name} dataset"):
-            ref_logp, ref_KL_logp = self.compute_ref_log_probs(padded_batch)
+        for padded_batch in tqdm(
+            iterable=data_loader,
+            desc=f"Computing reference log probs for {name} dataset",
+            disable=bool(os.environ.get("TQDM_DISABLE", "")),
+        ):
+            ref_logp, ref_KL_logp = self.compute_ref_log_probs(model, padded_batch)
             if self.calculate_KL:
                 ref_logp, ref_KL_logp = self.accelerator.gather_for_metrics((ref_logp, ref_KL_logp))
                 ref_KL_logps.append(ref_KL_logp.cpu())
@@ -1227,42 +1258,23 @@ class KTOTrainer(_BaseTrainer):
 
         return concatenate_datasets([dataset, Dataset.from_file(cache_file)], axis=1)
 
-    def compute_ref_log_probs(self, inputs):
+    def compute_ref_log_probs(self, model, inputs):
         """Computes reference log probabilities for a single padded batch."""
         with torch.no_grad(), disable_gradient_checkpointing(self.model, self.args.gradient_checkpointing_kwargs):
-            if self.ref_model is None:
-                if is_peft_model(self.model):
-                    model = self.accelerator.unwrap_model(self.model)
-                    with use_adapter(model, adapter_name="ref" if "ref" in model.peft_config else None):
-                        completion_logits = self.model(
-                            inputs["input_ids"],
-                            attention_mask=inputs["attention_mask"],
-                        ).logits
-
-                        if self.calculate_KL:
-                            KL_logits = self.model(
-                                inputs["KL_input_ids"],
-                                attention_mask=inputs["KL_attention_mask"],
-                            ).logits
-                else:
-                    completion_logits = self.model(
-                        inputs["input_ids"],
-                        attention_mask=inputs["attention_mask"],
-                    ).logits
+            if self.ref_model is None and is_peft_model(self.model):
+                unwrapped_model = self.accelerator.unwrap_model(self.model)
+                with use_adapter(
+                    unwrapped_model, adapter_name="ref" if "ref" in unwrapped_model.peft_config else None
+                ):
+                    completion_logits = model(inputs["input_ids"], attention_mask=inputs["attention_mask"]).logits
 
                     if self.calculate_KL:
-                        KL_logits = self.model(
-                            inputs["KL_input_ids"],
-                            attention_mask=inputs["KL_attention_mask"],
-                        ).logits
+                        KL_logits = model(inputs["KL_input_ids"], attention_mask=inputs["KL_attention_mask"]).logits
             else:
-                completion_logits = self.ref_model(inputs["input_ids"], attention_mask=inputs["attention_mask"]).logits
+                completion_logits = model(inputs["input_ids"], attention_mask=inputs["attention_mask"]).logits
 
                 if self.calculate_KL:
-                    KL_logits = self.ref_model(
-                        inputs["KL_input_ids"],
-                        attention_mask=inputs["KL_attention_mask"],
-                    ).logits
+                    KL_logits = model(inputs["KL_input_ids"], attention_mask=inputs["KL_attention_mask"]).logits
 
         shift_logits = completion_logits[:, :-1, :]
         per_token_logps = selective_log_softmax(shift_logits, inputs["input_ids"][:, 1:])
@@ -1680,6 +1692,23 @@ class KTOTrainer(_BaseTrainer):
         # idempotent: it skips datasets that are already tokenized. A `str` selects a dataset that was already prepared
         # at init time, so it's left untouched.
         if not self._is_vision_dataset and eval_dataset is not None and not isinstance(eval_dataset, str):
+            # Full fine-tuning with no `ref_model` uses `self.model` as the reference, which is only valid before
+            # training. After a step (`global_step > 0`) it's the trained policy, so we can't precompute a correct
+            # reference here. (PEFT is exempt: the reference is recovered by disabling the adapter.) Checked before
+            # tokenizing so we fail fast.
+            if (
+                self.precompute_ref_logps
+                and self.ref_model is None
+                and not is_peft_model(self.model)
+                and self.state.global_step > 0
+            ):
+                raise ValueError(
+                    "Cannot compute reference log-probs for a dataset passed to `evaluate()` after training has "
+                    "started, because `precompute_ref_log_probs=True` and no `ref_model` was provided (full "
+                    "fine-tuning). In this setup the reference model is not kept in memory, so it is only available "
+                    "before training. Provide this dataset as `eval_dataset` at initialization, pass an explicit "
+                    "`ref_model`, or set `precompute_ref_log_probs=False`."
+                )
             if isinstance(eval_dataset, dict):
                 eval_dataset = {
                     key: self._prepare_dataset(dataset, self.processing_class, self.args, key)

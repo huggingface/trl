@@ -33,6 +33,7 @@ from .testing_utils import TrlTestCase, require_peft, require_vision, require_vl
 
 
 if is_peft_available():
+    import peft
     from peft import LoraConfig, get_peft_model
 
 
@@ -101,6 +102,30 @@ class TestRLOOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    def test_reward_func_wrong_number_of_rewards(self):
+        # A reward function that returns the wrong number of rewards should raise a clear error instead of silently
+        # broadcasting (when it returns a single value) or failing later with an opaque shape error.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        def wrong_length_reward(completions, **kwargs):
+            return [1.0]  # too few: one reward is expected per completion
+
+        training_args = RLOOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            report_to="none",
+        )
+        trainer = RLOOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs=wrong_length_reward,
+            args=training_args,
+            train_dataset=dataset,
+        )
+        with pytest.raises(ValueError, match="returned 1 rewards"):
+            trainer.train()
 
     @pytest.mark.parametrize("config_name", ["standard_prompt_only", "conversational_prompt_only"])
     def test_train_dataset_format(self, config_name):
@@ -235,6 +260,47 @@ class TestRLOOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @pytest.mark.parametrize("train_dataset_type", ["dataset", "iterable_dataset", "none", "unsupported_dataset_dict"])
+    def test_init_with_train_dataset(self, train_dataset_type):
+        streaming = "iterable" in train_dataset_type
+        if train_dataset_type == "none":
+            train_dataset = None
+        else:
+            train_dataset = load_dataset(
+                "trl-internal-testing/zen", "standard_prompt_only", split="train", streaming=streaming
+            )
+            if train_dataset_type == "unsupported_dataset_dict":
+                # `DatasetDict` is representative of any unsupported type here; not exhaustive
+                train_dataset = DatasetDict({"train": train_dataset})
+
+        # Iterable (streaming) datasets have no length, so `max_steps` is required.
+        training_args = RLOOConfig(output_dir=self.tmp_dir, max_steps=4 if streaming else -1, report_to="none")
+
+        if train_dataset_type == "none":
+            with pytest.raises(ValueError, match="`train_dataset` is required"):
+                RLOOTrainer(
+                    model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                    reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                    args=training_args,
+                    train_dataset=train_dataset,
+                )
+        elif train_dataset_type == "unsupported_dataset_dict":
+            with pytest.raises(TypeError, match="`train_dataset` must be a `Dataset` or `IterableDataset`"):
+                RLOOTrainer(
+                    model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                    reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                    args=training_args,
+                    train_dataset=train_dataset,
+                )
+        else:
+            trainer = RLOOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=train_dataset,
+            )
+            assert trainer.train_dataset is train_dataset
 
     @pytest.mark.parametrize(
         "eval_dataset_type",
@@ -494,9 +560,9 @@ class TestRLOOTrainer(TrlTestCase):
 
     @require_peft
     def test_train_moe_peft_model(self):
-        # Regression test for https://github.com/huggingface/trl/issues/5222. PEFT only supports one adapter per model
-        # when the LoRA config uses `target_parameters` (see peft#3340), so no "ref" adapter can be created and the
-        # reference log probs are computed with adapters disabled instead.
+        # Regression test for https://github.com/huggingface/trl/issues/5222. Before PEFT 0.20.0, only one adapter per
+        # model was supported when the LoRA config uses `target_parameters` (see peft#3340, fixed in peft#3350), so no
+        # "ref" adapter could be created and the reference log probs were computed with adapters disabled instead.
         model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-GptOssForCausalLM", dtype="float32")
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
         lora_config = LoraConfig(target_parameters=["mlp.experts.down_proj", "mlp.experts.gate_up_proj"])
@@ -518,7 +584,10 @@ class TestRLOOTrainer(TrlTestCase):
             train_dataset=dataset,
         )
 
-        assert "ref" not in trainer.model.peft_config
+        if Version(peft.__version__) < Version("0.20.0"):
+            assert "ref" not in trainer.model.peft_config
+        else:
+            assert "ref" in trainer.model.peft_config
 
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
@@ -531,7 +600,7 @@ class TestRLOOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             if n in base_param_names:  # We expect the base model params to be the same
                 torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed.")
-            elif "base_layer" not in n:  # We expect the peft params to be different (except for the base layer)
+            elif "base_layer" not in n and "ref" not in n:  # and the peft params to be different (except base and ref)
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     # In practice, this test is the same as `test_train_peft_config`, since gradient checkpointing is enabled by

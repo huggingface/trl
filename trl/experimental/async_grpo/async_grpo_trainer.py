@@ -13,13 +13,16 @@
 # limitations under the License.
 
 
+import contextvars
 import math
 import queue
 import textwrap
+import threading
 import time
 from collections import defaultdict
 from collections.abc import Callable, Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from multiprocessing.queues import Queue as MPQueue
 from typing import Any, Protocol
 
 import torch
@@ -31,14 +34,17 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenize
 from transformers.data.data_collator import DataCollatorMixin
 
 from ...trainer.base_trainer import _BaseTrainer
-from ...trainer.utils import nanmax, nanmin, pad, patch_chunked_lm_head
+from ...trainer.utils import get_config_model_id, is_trackio_available, nanmax, nanmin, pad, patch_chunked_lm_head
 from .async_grpo_config import AsyncGRPOConfig
-from .async_rollout_worker import AsyncRolloutWorker
+from .async_rollout_worker import AsyncRolloutWorker, RolloutSample
 from .vllm_client import VLLMClient
 from .weight_transfer import WeightTransferClient
 
 
 logger = get_logger(__name__)
+
+if is_trackio_available():
+    import trackio
 
 # A reward function is a callable that returns a list of floats (the rewards). The callable receives prompts,
 # completions, and additional arguments from the trainer (refer to the trainer's source for details). To ensure forward
@@ -61,11 +67,14 @@ class RolloutWorkerProtocol(Protocol):
     runs reward models on their own GPUs.
 
     Attributes:
-        rollout_buffer (`queue.Queue`):
-            Queue the trainer drains; the worker pushes scored `RolloutSample`s onto it.
+        rollout_buffer (`queue.Queue` or `multiprocessing.queues.Queue`):
+            Queue the trainer drains; the worker pushes scored `RolloutSample`s onto it. The two queue types are
+            structurally identical (`get` / `put_nowait` / `qsize`) but nominally unrelated, so both are allowed: the
+            default [`AsyncRolloutWorker`] runs its loop in a spawned process and uses `multiprocessing.Queue`, while
+            an in-process worker uses `queue.Queue`.
     """
 
-    rollout_buffer: queue.Queue
+    rollout_buffer: queue.Queue | MPQueue
 
     def start(self) -> None:
         """Begin producing rollouts. Called once on train begin, after the initial weight sync."""
@@ -75,7 +84,7 @@ class RolloutWorkerProtocol(Protocol):
         """Stop the worker and release its resources. Called on train end."""
         ...
 
-    def update_model_version(self, version: int) -> None:
+    def update_model_version(self, model_version: int) -> None:
         """Tell the worker which policy version is now live, so it can tag or discard stale samples."""
         ...
 
@@ -158,6 +167,67 @@ class _StartRolloutWorkerCallback(TrainerCallback):
             self._trainer.rollout_worker.start()
 
 
+class _EpochStopCallback(TrainerCallback):
+    """Stop after `num_train_epochs` full passes over the prompt dataset.
+
+    An epoch is counted in distinct prompt-groups actually trained (accumulated in the collator, which runs on the main
+    process just before the model forward). This is fork-independent: all generations of a prompt and all forked rows
+    of a conversation share one `group_id`, so a conversation forking into many rows still counts once. Only the main
+    process collates (`dispatch_batches=True`), so the stop decision is reduced across ranks to keep data-parallel
+    workers in lockstep.
+    """
+
+    def __init__(self, trainer: "AsyncGRPOTrainer", target_groups: int):
+        self._trainer = trainer
+        self._target = target_groups
+
+    def on_step_end(self, _args, _state, control, **_kwargs):
+        acc = self._trainer.accelerator
+        reached = torch.tensor(int(len(self._trainer._trained_groups) >= self._target), device=acc.device)
+        if int(acc.reduce(reached, reduction="sum").item()) >= 1:
+            control.should_training_stop = True
+
+
+def log_rollout_traces(samples: list[RolloutSample], step: int, report_to: list[str], max_traces: int = 16) -> None:
+    """Log rollout samples to trackio as inspectable traces (prompt + completion + reward/advantage per sample).
+
+    Call from rank 0 during training, where the HF trackio callback has already initialised the run; the traces then
+    show up under the run's Traces tab so rollouts can be read directly instead of grepping logs. No-op unless trackio
+    is the active logging backend (installed and listed in `report_to`). Best-effort: a trackio hiccup must never break
+    training.
+
+    Args:
+        samples (`list[RolloutSample]`):
+            Consumed rollout samples to log; the first `max_traces` are recorded.
+        step (`int`):
+            Step value the traces are logged under (e.g. the policy version, so the UI groups by policy).
+        report_to (`list[str]`):
+            The training args' `report_to`; logging happens only when it contains `"trackio"`.
+        max_traces (`int`, *optional*, defaults to `16`):
+            Maximum number of traces to log per call.
+    """
+    if not samples or "trackio" not in report_to or not is_trackio_available():
+        return
+    try:
+        traces = [
+            trackio.Trace(
+                messages=list(sample.prompt) + list(sample.completion),
+                metadata={
+                    **sample.metrics,  # reward, reward_std, rewards/<func>, tools/call_frequency, tools/failure_frequency
+                    "advantage": float(sample.advantage),
+                    "group_id": int(sample.group_id),
+                    "model_version": int(sample.model_version),
+                    "prompt_tokens": len(sample.input_ids) - int(sum(sample.completion_mask)),
+                    "completion_tokens": int(sum(sample.completion_mask)),
+                },
+            )
+            for sample in samples[:max_traces]
+        ]
+        trackio.log({"rollouts": traces}, step=step)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"rollout trace logging skipped: {type(e).__name__}: {e}")
+
+
 class RolloutQueueDataset(torch.utils.data.IterableDataset):
     def __init__(
         self,
@@ -167,6 +237,7 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
         stale_after_s,
         max_staleness=3,
         poll_interval_s=5.0,
+        report_to=None,
     ):
         self.queue = rollout_queue
         self.model_version_fn = model_version_fn
@@ -174,18 +245,31 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
         self.stale_after_s = stale_after_s
         self.max_staleness = max_staleness
         self.poll_interval_s = poll_interval_s
+        self.report_to = report_to or []
+        self._trace_buf: list = []
+        self._trace_log_interval = 8
+        # Log traces off the training path: __iter__ enqueues, a daemon thread drains. Bounded + drop-on-full so a
+        # slow trackio backend never blocks sample delivery.
+        self._trace_queue: queue.Queue = queue.Queue(maxsize=4)
+        threading.Thread(target=self._drain_traces, name="rollout-trace-logger", daemon=True).start()
+
+    def _drain_traces(self):
+        while True:
+            samples, step, ctx = self._trace_queue.get()
+            # Replay the main-thread context captured at enqueue: trackio's run lives in a ContextVar this daemon
+            # thread wouldn't otherwise inherit, so trackio.log() would raise "call init() first".
+            ctx.run(log_rollout_traces, samples, step=step, report_to=self.report_to)
 
     def __iter__(self):
         while True:
             t0 = time.time()
-            if self.queue.qsize() == 0:
-                logger.info("queue empty, waiting for rollout samples...")
-            try:
-                sample = self.queue.get(timeout=self.poll_interval_s)
-            except queue.Empty:
-                # Returning here would broadcast None through accelerate's dispatch loop.
-                self.check_health_fn(self.stale_after_s)
-                continue
+            while True:
+                try:
+                    sample = self.queue.get(timeout=self.poll_interval_s)
+                    break
+                except queue.Empty:
+                    # Returning here would broadcast None through accelerate's dispatch loop.
+                    self.check_health_fn(self.stale_after_s)
             queue_wait_time_s = time.time() - t0
             if queue_wait_time_s > 1.0:
                 logger.info(f"waited {queue_wait_time_s:.1f}s for sample (qsize={self.queue.qsize()})")
@@ -195,11 +279,23 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
                 logger.info(f"dropping stale sample (staleness={staleness}, max={self.max_staleness})")
                 continue  # drop stale, pull next
 
+            self._trace_buf.append(sample)
+            if len(self._trace_buf) >= self._trace_log_interval:
+                try:
+                    # Capture the main-thread context (holds trackio's run) so the drain thread can replay it.
+                    self._trace_queue.put_nowait(
+                        (self._trace_buf, self.model_version_fn(), contextvars.copy_context())
+                    )
+                except queue.Full:
+                    pass
+                self._trace_buf = []
+
             yield {
                 "input_ids": sample.input_ids,
                 "completion_mask": sample.completion_mask,
                 "old_log_probs": sample.old_log_probs,
                 "advantage": sample.advantage,
+                "group_id": sample.group_id,
                 "metrics": {**sample.metrics, "queue_wait_time_s": queue_wait_time_s},
             }
 
@@ -340,6 +436,8 @@ class DataCollatorForRollout(DataCollatorMixin):
     pad_token_id: int
     num_processes: int = 1
     return_tensors: str = "pt"
+    # Distinct prompt-group ids, it counts exactly the prompt-groups that get trained
+    groups_trained: set[int] = field(default_factory=set)
 
     def torch_call(self, examples: list[Any]) -> dict[str, Any]:
         # The dataloader uses batch_size=1 over a planner that pre-partitions each micro-batch into `num_processes`
@@ -373,6 +471,7 @@ class DataCollatorForRollout(DataCollatorMixin):
         advantages = pad(advantages, padding_value=0.0)
 
         all_examples = [example for group in groups for example in group]
+        self.groups_trained.update(example["group_id"] for example in all_examples)
 
         # Total valid completion tokens across all samples in the full batch.
         # Repeated per rank so that DataLoaderDispatcher (dispatch_batches=True) slices correctly on dim=0
@@ -464,13 +563,17 @@ class AsyncGRPOTrainer(_BaseTrainer):
             trainer's GPU.
         args ([`AsyncGRPOConfig`], *optional*):
             Configuration for this trainer. If `None`, a default configuration is used.
-        train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
+        train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`], *optional*):
             Dataset to use for training. It must include a column `"prompt"`. Any additional columns in the dataset are
             ignored. The format of the samples can be either:
 
             - [Standard](dataset_formats#standard): Each sample contains plain text.
             - [Conversational](dataset_formats#conversational): Each sample contains structured messages (e.g., role
               and content).
+
+            May be omitted only when an `environment_factory` is provided and the environment owns (or procedurally
+            generates) the data, returning the prompt from its `reset()` method. In that case, `max_steps` must be set
+            to define the training length.
         processing_class ([`~transformers.PreTrainedTokenizerBase`], *optional*):
             Processing class used to process the data. The padding side must be set to "left". If `None`, the
             processing class is loaded from the model's name with [`~transformers.AutoTokenizer.from_pretrained`]. A
@@ -550,35 +653,37 @@ class AsyncGRPOTrainer(_BaseTrainer):
         rollout_worker: RolloutWorkerProtocol | None = None,
         weight_transfer: WeightTransferProtocol | None = None,
     ):
-        self.args = args or AsyncGRPOConfig()
+        # Args
+        if args is None:
+            model_name = model.split("/")[-1]
+            args = AsyncGRPOConfig(f"{model_name}-AsyncGRPO")
 
         # Training arguments
-        self.epsilon_low = self.args.epsilon
-        self.epsilon_high = self.args.epsilon_high if self.args.epsilon_high is not None else self.args.epsilon
-        self.temperature = self.args.temperature
+        self.epsilon_low = args.epsilon
+        self.epsilon_high = args.epsilon_high if args.epsilon_high is not None else args.epsilon
+        self.temperature = args.temperature
 
         # Model
-        model_name = model
-        model_init_kwargs = self.args.model_init_kwargs or {}
-        model_init_kwargs.setdefault("trust_remote_code", self.args.trust_remote_code)
+        model_init_kwargs = args.model_init_kwargs or {}
+        model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
         # FlashAttention is required: training runs in padding-free mode, where sequences are concatenated into a
         # single row and `cu_seq_lens` are derived from `position_ids` resets. SDPA/eager can't handle this.
         model = AutoModelForCausalLM.from_pretrained(
-            model_name,
+            model,
             device_map=None,
             dtype=torch.float32,
             attn_implementation="kernels-community/flash-attn3",
             **model_init_kwargs,
         )
 
-        if self.args.use_liger_kernel:
+        if args.use_liger_kernel:
             raise NotImplementedError("`use_liger_kernel` is not supported yet.")
 
         # MoE load-balancing auxiliary loss, applied to Mixture-of-Experts models (no effect otherwise)
         text_config = model.config.get_text_config()
         is_moe = getattr(text_config, "output_router_logits", None) is not None
-        self.aux_loss_enabled = is_moe and self.args.router_aux_loss_coef != 0.0
-        self.router_aux_loss_coef = self.args.router_aux_loss_coef
+        self.aux_loss_enabled = is_moe and args.router_aux_loss_coef != 0.0
+        self.router_aux_loss_coef = args.router_aux_loss_coef
 
         patch_chunked_lm_head(
             model, chunk_size=8192, temperature=self.temperature, output_router_logits=self.aux_loss_enabled
@@ -586,7 +691,9 @@ class AsyncGRPOTrainer(_BaseTrainer):
 
         # Processing class
         if processing_class is None:
-            processing_class = AutoTokenizer.from_pretrained(model_name, trust_remote_code=self.args.trust_remote_code)
+            processing_class = AutoTokenizer.from_pretrained(
+                get_config_model_id(model.config), trust_remote_code=args.trust_remote_code
+            )
         if processing_class.pad_token is None:
             processing_class.pad_token = processing_class.eos_token
 
@@ -596,10 +703,31 @@ class AsyncGRPOTrainer(_BaseTrainer):
         elif not isinstance(reward_funcs, list):
             reward_funcs = [reward_funcs]
 
+        if train_dataset is None:
+            # A dataset is optional when an environment owns the data and returns the prompt from `reset()`; then
+            # `max_steps` sets the length. Build a placeholder dataset of empty prompts to feed the rollout worker,
+            # which cycles it indefinitely (so its length only needs to be non-degenerate).
+            if environment_factory is None:
+                raise ValueError("`train_dataset` is required unless an `environment_factory` is provided.")
+            if isinstance(environment_factory, dict):
+                raise ValueError(
+                    "A `dict` `environment_factory` (multiple environments) requires a `train_dataset` with an "
+                    "`environment` column to route each example to its environment. Provide a dataset, or pass a "
+                    "single environment factory."
+                )
+            if self.args.max_steps <= 0:
+                raise ValueError(
+                    "When training without a `train_dataset` (the environment owns the data and returns the prompt "
+                    "from `reset()`), `max_steps` must be set to a positive value to define the training length. Set "
+                    "it via `AsyncGRPOConfig(max_steps=...)`."
+                )
+            num_placeholder_rows = self.args.per_device_train_batch_size * self.args.gradient_accumulation_steps
+            train_dataset = Dataset.from_dict({"prompt": [[{"role": "user", "content": ""}]] * num_placeholder_rows})
+
         # Initialize the Trainer
         super().__init__(
             model=model,
-            args=self.args,
+            args=args,
             train_dataset=train_dataset,
             processing_class=processing_class,
             callbacks=callbacks,
@@ -611,16 +739,29 @@ class AsyncGRPOTrainer(_BaseTrainer):
         # self.model_accepts_loss_kwargs to False to enable scaling.
         self.model_accepts_loss_kwargs = False
 
-        # Infer max_steps from dataset size when not explicitly set. This must happen after super().__init__()
-        # so that self.accelerator.num_processes is available for the correct calculation.
+        # Epoch handling: stop after num_train_epochs full passes over the PROMPT dataset, counted as distinct
+        # prompt-groups trained (fork-independent).
+        self._trained_groups: set[int] = set()
+        self._epoch_stop_groups: int | None = None
         samples_per_step = (
             self.args.per_device_train_batch_size
             * self.args.gradient_accumulation_steps
             * self.accelerator.num_processes
         )
         if self.args.max_steps <= 0 and train_dataset is not None and hasattr(train_dataset, "__len__"):
-            samples_per_epoch = len(train_dataset) * self.args.num_generations
-            self.args.max_steps = int(self.args.num_train_epochs * samples_per_epoch / samples_per_step)
+            # Fork-independent stop: num_train_epochs full passes over the prompts.
+            self._epoch_stop_groups = math.ceil(self.args.num_train_epochs * len(train_dataset))
+            # max_steps is a generous safety ceiling; with the default constant LR its exact value doesn't matter.
+            max_rows_per_conv = (
+                self.args.max_tool_calling_iterations + 1 if self.args.max_tool_calling_iterations is not None else 32
+            )
+            samples_per_epoch = len(train_dataset) * self.args.num_generations * max_rows_per_conv
+            self.args.max_steps = math.ceil(self.args.num_train_epochs * samples_per_epoch / samples_per_step)
+            logger.info(
+                f"Epoch-driven stop: {self._epoch_stop_groups} prompt-groups "
+                f"({self.args.num_train_epochs} epochs x {len(train_dataset)} prompts); "
+                f"max_steps={self.args.max_steps} is a safety ceiling."
+            )
 
         # Infer max_inflight_tasks when not explicitly set. Generating more samples than the trainer can consume
         # before they become stale is wasteful. The useful upper bound is max_staleness * samples_per_step.
@@ -634,12 +775,13 @@ class AsyncGRPOTrainer(_BaseTrainer):
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
         self._train_tokens_start_time = None
+        # Tracks the number of iterations (forward + backward passes), including those within a grad accum cycle
+        self._step = 0
+        self._current_train_step_time = 0.0
+        self._last_step_end_time = None
         self.model_version = 0
         # Create worker and queue on rank 0
         if self.accelerator.is_main_process:
-            if self.train_dataset is None:
-                raise ValueError("train_dataset is required for AsyncGRPOTrainer")
-
             # Weight sync and the token-budget query target the vLLM server from the config; the client is the single
             # place that talks to it, independent of how rollouts are produced.
             self.vllm_client = VLLMClient(self.args.vllm_server_base_url, self.args.vllm_server_timeout)
@@ -672,7 +814,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 self.rollout_worker = rollout_worker
             else:
                 self.rollout_worker = AsyncRolloutWorker(
-                    model_name=model_name,
+                    model_name=get_config_model_id(model.config),
                     dataset=train_dataset,
                     reward_funcs=reward_funcs,
                     processing_class=processing_class,
@@ -684,6 +826,10 @@ class AsyncGRPOTrainer(_BaseTrainer):
                     vllm_server_url=self.args.vllm_server_base_url,
                     max_tokens=self.args.max_completion_length,
                     temperature=self.args.temperature,
+                    top_p=self.args.top_p,
+                    top_k=self.args.top_k,
+                    min_p=self.args.min_p,
+                    repetition_penalty=self.args.repetition_penalty,
                     request_timeout=self.args.request_timeout,
                     chat_template_kwargs=self.args.chat_template_kwargs,
                     max_tool_calling_iterations=self.args.max_tool_calling_iterations,
@@ -703,6 +849,8 @@ class AsyncGRPOTrainer(_BaseTrainer):
         self.add_callback(_InitialWeightSyncCallback(self))
         self.add_callback(_StartRolloutWorkerCallback(self))
         self.add_callback(StepIntervalCallback(self._sync_weight, self.args.weight_sync_steps))
+        if self._epoch_stop_groups is not None:
+            self.add_callback(_EpochStopCallback(self, self._epoch_stop_groups))
 
     def get_train_dataloader(self) -> DataLoader:
         num_processes = self.accelerator.num_processes
@@ -713,6 +861,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 check_health_fn=self.rollout_worker.check_health,
                 stale_after_s=self.args.heartbeat_stale_after_s,
                 max_staleness=self.args.max_staleness,
+                report_to=self.args.report_to,
             )
             # Default the token budget to the vLLM server's max_model_len (the cap on prompt + completion), so no
             # rollout sample can exceed it. Wait for the server like weight sync does, so a still-loading vLLM doesn't
@@ -740,7 +889,9 @@ class AsyncGRPOTrainer(_BaseTrainer):
             DataLoader(
                 dataset,
                 batch_size=1,
-                collate_fn=DataCollatorForRollout(self.processing_class.pad_token_id, num_processes),
+                collate_fn=DataCollatorForRollout(
+                    self.processing_class.pad_token_id, num_processes, groups_trained=self._trained_groups
+                ),
                 num_workers=0,
                 # NOTE(@aminediro):
                 # dispatch_batches = True for DataLoader whose underlying dataset is an IterableDataset
@@ -934,6 +1085,22 @@ class AsyncGRPOTrainer(_BaseTrainer):
             # NOTE: in dynamic mbs setup, we would need to agg across DP ranks.
             self._metrics["train"]["train_seq_len"].append(float(position_ids.max() + 1))
         return loss
+
+    def training_step(self, model, inputs, num_items_in_batch):
+        time_before = time.perf_counter()
+        output = super().training_step(model, inputs, num_items_in_batch)
+        self._step += 1
+        time_after = time.perf_counter()
+        self._current_train_step_time += time_after - time_before
+        if self._step % self.current_gradient_accumulation_steps == 0:
+            self._metrics["train"]["step_time"].append(self._current_train_step_time)
+            self._current_train_step_time = 0.0
+            # Async-only end-to-end latency: unlike the fwd+bwd-only `step_time`, this also covers the optimizer
+            # step, weight sync, and rollout-queue waits.
+            if self._last_step_end_time is not None:
+                self._metrics["train"]["iteration_time_s"].append(time_after - self._last_step_end_time)
+            self._last_step_end_time = time_after
+        return output
 
     def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
         mode = "train" if self.model.training else "eval"

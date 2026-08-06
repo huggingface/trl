@@ -880,7 +880,8 @@ class PPOTrainer(_BaseTrainer):
                     empty_cache()
             with torch.no_grad():
                 mean_kl = kl.sum(1).mean()
-                mean_entropy = (-logprobs).sum(1).mean()
+                # Mask padding positions, filled with INVALID_LOGPROB, else they'd drag the entropy negative
+                mean_entropy = ((-logprobs) * (~padding_mask).float()).sum(1).mean()
                 mean_non_score_reward = non_score_reward.sum(1).mean()
                 rlhf_reward = mean_non_score_reward + scores.mean()
                 eps = int(self.state.episode / (time.time() - start_time))

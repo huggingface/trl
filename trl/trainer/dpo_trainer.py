@@ -14,6 +14,7 @@
 
 import contextlib
 import json
+import math
 import os
 import textwrap
 from collections import defaultdict
@@ -27,7 +28,7 @@ import torch.nn.functional as F
 import transformers
 from accelerate import PartialState
 from accelerate.logging import get_logger
-from accelerate.utils import is_peft_model, tqdm
+from accelerate.utils import broadcast_object_list, is_peft_model, tqdm
 from datasets import Dataset, DatasetDict, IterableDataset, IterableDatasetDict, concatenate_datasets
 from datasets.fingerprint import Hasher
 from packaging.version import Version
@@ -551,6 +552,10 @@ class DPOTrainer(_BaseTrainer):
                     "`dispatch_batches` in `DPOConfig` or set it to `False`."
                 )
             args.accelerator_config.dispatch_batches = False
+        elif not isinstance(train_dataset, Dataset):
+            raise TypeError(
+                f"`train_dataset` must be a `Dataset` or `IterableDataset`, got `{type(train_dataset).__name__}`."
+            )
 
         # Model
         if isinstance(model, str):
@@ -648,18 +653,24 @@ class DPOTrainer(_BaseTrainer):
 
         elif is_peft_model(model) and ref_model is None:
             # If the model is a PEFT model with a pretrained adapter, we need to create a "ref" adapter that is a copy
-            # of the "default" adapter, so that we can use it as the reference model during DPO training. PEFT only
-            # supports one adapter per model when the LoRA config uses `target_parameters` (see peft#3340), so in that
-            # case we skip the "ref" adapter and compute the reference log probs with adapters disabled, i.e. with the
-            # base model.
+            # of the "default" adapter, so that we can use it as the reference model during DPO training. Before PEFT
+            # 0.20.0, only one adapter per model was supported when the LoRA config uses `target_parameters` (see
+            # peft#3340, fixed in peft#3350), so in that case we skip the "ref" adapter and compute the reference log
+            # probs with adapters disabled, i.e. with the base model. The fix only allows adapters targeting the same
+            # parameters, which holds here since the "ref" adapter reuses the "default" config.
             default_config = model.peft_config["default"]
-            if isinstance(default_config, LoraConfig) and default_config.target_parameters:
+            if (
+                isinstance(default_config, LoraConfig)
+                and default_config.target_parameters
+                and Version(peft.__version__) < Version("0.20.0")
+            ):
                 logger.warning(
-                    "PEFT can't add a frozen reference adapter alongside one that uses `target_parameters` "
+                    "PEFT<0.20.0 can't add a frozen reference adapter alongside one that uses `target_parameters` "
                     "(peft#3340), so the reference log probs are computed from the base model (adapters disabled). "
-                    "If you wrapped the model only to apply LoRA, pass a `peft_config` to the trainer instead; if you "
-                    "wrapped it deliberately (pretrained adapter or custom init), note that the base model matches "
-                    "your adapter only when it's freshly zero-initialized. If it is, this warning is safe to ignore."
+                    "Upgrade to `peft>=0.20.0` to train against a copy of your adapter instead. If you wrapped the "
+                    "model only to apply LoRA, pass a `peft_config` to the trainer instead; if you wrapped it "
+                    "deliberately (pretrained adapter or custom init), note that the base model matches your adapter "
+                    "only when it's freshly zero-initialized. If it is, this warning is safe to ignore."
                 )
             else:
                 model.add_adapter("ref", default_config)
@@ -764,6 +775,15 @@ class DPOTrainer(_BaseTrainer):
         self.ld_alpha = args.ld_alpha
         self.f_divergence_type = args.f_divergence_type
         self.f_alpha_divergence_coef = args.f_alpha_divergence_coef
+        # The f-DPO reparameterization leaves a β·log Z(x) term that only cancels in the chosen-rejected reward
+        # difference, so the other losses have no valid f-divergence generalization.
+        f_divergence_loss_types = {"sigmoid", "sigmoid_norm", "hinge", "ipo", "exo_pair", "robust", "discopop", "sft"}
+        if self.f_divergence_type != "reverse_kl" and not set(self.loss_types) <= f_divergence_loss_types:
+            raise ValueError(
+                f"`f_divergence_type='{self.f_divergence_type}'` is only supported for the following loss types: "
+                f"{sorted(f_divergence_loss_types)}. You provided {self.loss_types}. Use the default "
+                "`f_divergence_type='reverse_kl'` with these losses."
+            )
         self.label_smoothing = args.label_smoothing
         self.use_weighting = args.use_weighting
         if self.use_weighting and any(loss_type in {"aot", "aot_unpaired"} for loss_type in self.loss_types):
@@ -794,6 +814,12 @@ class DPOTrainer(_BaseTrainer):
                 raise NotImplementedError(
                     "Multiple loss types are not yet supported when using Liger kernel. If you need this feature, "
                     "please open a feature request at https://github.com/huggingface/trl/issues."
+                )
+            if self.f_divergence_type != "reverse_kl":
+                raise ValueError(
+                    "`use_liger_kernel=True` is incompatible with a non-default `f_divergence_type`. The Liger fused "
+                    "DPO loss always uses the standard reverse-KL parameterization, so the requested divergence would "
+                    "be silently ignored. Either set `f_divergence_type='reverse_kl'`, or set `use_liger_kernel=False`."
                 )
             if compute_metrics is not None:
                 raise ValueError(
@@ -954,6 +980,8 @@ class DPOTrainer(_BaseTrainer):
                 )
             self.add_callback(SyncRefModelCallback(ref_model=self.ref_model, accelerator=self.accelerator))
 
+        # Reference forwards during precompute reuse a single DeepSpeed inference engine (see `_precompute_ref_logps`).
+        self._precompute_engine = None
         if args.precompute_ref_log_probs:
             self.train_dataset = self._precompute_ref_logps(
                 self.train_dataset,
@@ -1109,7 +1137,11 @@ class DPOTrainer(_BaseTrainer):
                 "Dataset or set `precompute_ref_log_probs=False`."
             )
         model_hash = hash_module(self.ref_model or self.model)
-        fingerprint = Hasher.hash((dataset._fingerprint, model_hash))
+        # Both inputs are rank-dependent under distributed training (ZeRO-3 shards the model), so broadcast rank 0's
+        # value so all ranks share one cache file.
+        fingerprint = [Hasher.hash((dataset._fingerprint, model_hash))]
+        broadcast_object_list(fingerprint, from_process=0)
+        fingerprint = fingerprint[0]
         cache_file = dataset._get_cache_file_path(fingerprint)
 
         if os.path.exists(cache_file):
@@ -1124,10 +1156,25 @@ class DPOTrainer(_BaseTrainer):
             shuffle=False,
         )
         data_loader = self.accelerator.prepare(dataloader)
+
+        # This runs before the parent class prepares the model in `train`, so with DeepSpeed the parameters are still
+        # on CPU (ZeRO-1/2) and sharded (ZeRO-3). Wrap the model in an inference engine to place and gather them. Build
+        # it once and reuse it across precompute passes (train, eval, and later `evaluate` calls)
+        if self.ref_model is None and self.is_deepspeed_enabled:
+            if self._precompute_engine is None:
+                self._precompute_engine = prepare_deepspeed(self.model, self.accelerator)
+            model = self._precompute_engine
+        else:
+            model = self.ref_model or self.model
+
         ref_chosen_logps = []
         ref_rejected_logps = []
-        for padded_batch in tqdm(iterable=data_loader, desc=f"Computing reference log probs for {name} dataset"):
-            ref_chosen_logp, ref_rejected_logp = self.compute_ref_log_probs(padded_batch)
+        for padded_batch in tqdm(
+            iterable=data_loader,
+            desc=f"Computing reference log probs for {name} dataset",
+            disable=bool(os.environ.get("TQDM_DISABLE", "")),
+        ):
+            ref_chosen_logp, ref_rejected_logp = self.compute_ref_log_probs(model, padded_batch)
             ref_chosen_logp, ref_rejected_logp = self.accelerator.gather_for_metrics(
                 (ref_chosen_logp, ref_rejected_logp)
             )
@@ -1158,7 +1205,7 @@ class DPOTrainer(_BaseTrainer):
 
         return concatenate_datasets([dataset, Dataset.from_file(cache_file)], axis=1)
 
-    def compute_ref_log_probs(self, inputs):
+    def compute_ref_log_probs(self, model, inputs):
         """Computes reference log probabilities for a single padded batch."""
         device = self.accelerator.device
 
@@ -1167,15 +1214,14 @@ class DPOTrainer(_BaseTrainer):
         model_kwargs["use_cache"] = False
 
         with torch.no_grad(), disable_gradient_checkpointing(self.model, self.args.gradient_checkpointing_kwargs):
-            if self.ref_model is None:
-                if is_peft_model(self.model):
-                    model = self.accelerator.unwrap_model(self.model)
-                    with use_adapter(model, adapter_name="ref" if "ref" in model.peft_config else None):
-                        ref_outputs = self.model(**model_kwargs)
-                else:
-                    ref_outputs = self.model(**model_kwargs)
+            if self.ref_model is None and is_peft_model(self.model):
+                unwrapped_model = self.accelerator.unwrap_model(self.model)
+                with use_adapter(
+                    unwrapped_model, adapter_name="ref" if "ref" in unwrapped_model.peft_config else None
+                ):
+                    ref_outputs = model(**model_kwargs)
             else:
-                ref_outputs = self.ref_model(**model_kwargs)
+                ref_outputs = model(**model_kwargs)
 
         input_ids = inputs["input_ids"]
         completion_mask = inputs["completion_mask"]
@@ -1385,13 +1431,13 @@ class DPOTrainer(_BaseTrainer):
             chosen_scores = chosen_logratios
             rejected_scores = rejected_logratios
         elif self.f_divergence_type == "forward_kl":
-            # f'(t) = 1 - 1/t  -> drop constant -> -exp(-logratio)
-            chosen_scores = -torch.exp(-chosen_logratios)
-            rejected_scores = -torch.exp(-rejected_logratios)
+            # f'(t) = 1 - 1/t
+            chosen_scores = 1 - torch.exp(-chosen_logratios)
+            rejected_scores = 1 - torch.exp(-rejected_logratios)
         elif self.f_divergence_type == "js_divergence":
-            # f'(t) = log(2t/(t+1)) -> drop log 2
-            chosen_scores = F.logsigmoid(chosen_logratios)
-            rejected_scores = F.logsigmoid(rejected_logratios)
+            # f'(t) = log(2t/(t+1)) = log 2 + logsigmoid(log t)
+            chosen_scores = math.log(2) + F.logsigmoid(chosen_logratios)
+            rejected_scores = math.log(2) + F.logsigmoid(rejected_logratios)
         elif self.f_divergence_type == "alpha_divergence":
             # alpha-divergence: f'(t) = (t^(α-1) - 1)/(α-1)
             if abs(self.f_alpha_divergence_coef - 1.0) < 1e-6:  # limit case f'(t) -> log(t), fall back to reverse_kl
@@ -1406,8 +1452,8 @@ class DPOTrainer(_BaseTrainer):
                 clamp_max = {torch.float16: 11.0, torch.bfloat16: 80.0, torch.float32: 80.0}[dtype]
                 t_chosen_float = torch.clamp(t_chosen.float(), max=clamp_max)
                 t_rejected_float = torch.clamp(t_rejected.float(), max=clamp_max)
-                chosen_scores = torch.exp(t_chosen_float).to(dtype) * coef
-                rejected_scores = torch.exp(t_rejected_float).to(dtype) * coef
+                chosen_scores = (torch.exp(t_chosen_float) - 1.0).to(dtype) * coef
+                rejected_scores = (torch.exp(t_rejected_float) - 1.0).to(dtype) * coef
         else:
             raise ValueError(f"Unknown f_divergence_type: {self.f_divergence_type}")
 
@@ -1448,8 +1494,8 @@ class DPOTrainer(_BaseTrainer):
                 per_sequence_loss = qw * (log_qw - log_pw) + ql * (log_ql - log_pl)
 
             elif loss_type == "nca_pair":
-                chosen_rewards = self.beta * chosen_scores
-                rejected_rewards = self.beta * rejected_scores
+                chosen_rewards = self.beta * chosen_logratios
+                rejected_rewards = self.beta * rejected_logratios
                 per_sequence_loss = (
                     -F.logsigmoid(chosen_rewards)
                     - 0.5 * F.logsigmoid(-chosen_rewards)
@@ -1462,8 +1508,8 @@ class DPOTrainer(_BaseTrainer):
                 per_sequence_loss = (clean_loss_term - flipped_loss_term) / (1 - 2 * self.label_smoothing)
 
             elif loss_type == "bco_pair":
-                chosen_rewards = self.beta * chosen_scores
-                rejected_rewards = self.beta * rejected_scores
+                chosen_rewards = self.beta * chosen_logratios
+                rejected_rewards = self.beta * rejected_logratios
                 per_sequence_loss = -F.logsigmoid(chosen_rewards) - F.logsigmoid(-rejected_rewards)
 
             elif loss_type == "sppo_hard":
@@ -1471,8 +1517,8 @@ class DPOTrainer(_BaseTrainer):
                 # estimated using the PairRM score. The probability calculation is conducted outside of the trainer
                 # class. The version described here is the hard probability version, where P in Equation (4.7) of
                 # Algorithm 1 is set to 1 for the winner and 0 for the loser.
-                winner_margin_error = (chosen_scores - 0.5 / self.beta) ** 2
-                loser_margin_error = (rejected_scores + 0.5 / self.beta) ** 2
+                winner_margin_error = (chosen_logratios - 0.5 / self.beta) ** 2
+                loser_margin_error = (rejected_logratios + 0.5 / self.beta) ** 2
                 per_sequence_loss = winner_margin_error + loser_margin_error
 
             elif loss_type == "aot":
@@ -1508,7 +1554,7 @@ class DPOTrainer(_BaseTrainer):
                 # Use this loss when you believe the chosen outputs are worse than your model's default output.
                 # Decrease chosen likelihood and decrease rejected likelihood more
                 losses_chosen = torch.sigmoid(self.beta * chosen_logratios)
-                losses_rejected = 1 - torch.sigmoid(self.beta * delta_score)
+                losses_rejected = 1 - torch.sigmoid(self.beta * (chosen_logratios - rejected_logratios))
                 per_sequence_loss = losses_chosen + losses_rejected
 
             elif loss_type == "discopop":
@@ -1654,6 +1700,23 @@ class DPOTrainer(_BaseTrainer):
         # idempotent: it skips datasets that are already tokenized. A `str` selects a dataset that was already prepared
         # at init time, so it's left untouched.
         if not self._is_vision_dataset and eval_dataset is not None and not isinstance(eval_dataset, str):
+            # Full fine-tuning with no `ref_model` uses `self.model` as the reference, which is only valid before
+            # training. After a step (`global_step > 0`) it's the trained policy, so we can't precompute a correct
+            # reference here. (PEFT is exempt: the reference is recovered by disabling the adapter.) Checked before
+            # tokenizing so we fail fast.
+            if (
+                self.precompute_ref_logps
+                and self.ref_model is None
+                and not is_peft_model(self.model)
+                and self.state.global_step > 0
+            ):
+                raise ValueError(
+                    "Cannot compute reference log-probs for a dataset passed to `evaluate()` after training has "
+                    "started, because `precompute_ref_log_probs=True` and no `ref_model` was provided (full "
+                    "fine-tuning). In this setup the reference model is not kept in memory, so it is only available "
+                    "before training. Provide this dataset as `eval_dataset` at initialization, pass an explicit "
+                    "`ref_model`, or set `precompute_ref_log_probs=False`."
+                )
             if isinstance(eval_dataset, dict):
                 eval_dataset = {
                     key: self._prepare_dataset(dataset, self.processing_class, self.args, key)
