@@ -190,7 +190,9 @@ def _chunked_cross_entropy_loss(
     if n_valid_tensor == 0:
         # Whole micro-batch masked (e.g. completion-only loss + truncation). Keep the loss connected
         # to the autograd graph through every trainable parameter so `.backward()` succeeds and DDP /
-        # FSDP gradient sync doesn't hang on a missing param.
+        # FSDP gradient sync doesn't hang on a missing param. Warn once so a reported 0.0 loss is
+        # not mistaken for a healthy run (#6668).
+        _warn_all_labels_masked()
         with maybe_gather_lm_head_ctx(lm_head_weight, lm_head_bias):
             loss = (hidden_states.float().sum() + lm_head_weight.float().sum()) * 0.0
             if lm_head_bias is not None:
@@ -379,6 +381,45 @@ def _patch_chunked_ce_lm_head(model: torch.nn.Module, chunk_size: int, is_vlm: b
 
 
 logger = get_logger(__name__)
+
+
+_ALL_LABELS_MASKED_WARNED = False
+
+
+def _warn_all_labels_masked() -> None:
+    """Warn once when a batch has no tokens contributing to the loss.
+
+    All-``-100`` labels yield NaN from standard CE (empty reduction) or an intentional
+    zero from the chunked path; either way reporting silent ``0.0`` hides misconfig
+    (e.g. ``completion_only_loss`` + ``max_length`` truncating every completion).
+    See https://github.com/huggingface/trl/issues/6668.
+
+    Uses a module-level flag rather than ``logger.warning_once`` so the warning still
+    fires in unit tests / scripts that have not initialized Accelerate's ``PartialState``.
+    """
+    global _ALL_LABELS_MASKED_WARNED
+    if _ALL_LABELS_MASKED_WARNED:
+        return
+    _ALL_LABELS_MASKED_WARNED = True
+    msg = (
+        "SFTTrainer: a batch has no unmasked labels (all labels are -100). "
+        "This often means completion tokens were fully truncated (e.g. completion_only_loss "
+        "with a too-small max_length) or the chat template never marks assistant turns. "
+        "Loss is treated as 0.0 so training can continue; increase max_length or fix the "
+        "dataset if this is unexpected."
+    )
+    try:
+        logger.warning(msg)
+    except RuntimeError:
+        # Accelerate logging requires PartialState; fall back outside training loops.
+        warnings.warn(msg, UserWarning, stacklevel=2)
+
+
+def _labels_are_all_masked(labels: torch.Tensor | None) -> bool:
+    """Return True if `labels` is non-None and every entry is ignore_index (-100)."""
+    if labels is None:
+        return False
+    return not bool((labels != -100).any().item())
 
 
 FLASH_ATTENTION_VARIANTS = {
@@ -783,6 +824,14 @@ def dft_loss(outputs, labels, num_items_in_batch=None):
     per_token_loss = -logprobs.exp().detach() * logprobs
     if num_items_in_batch is None:
         num_items_in_batch = loss_mask.sum()
+    if isinstance(num_items_in_batch, torch.Tensor):
+        empty = bool((num_items_in_batch == 0).all().item())
+    else:
+        empty = num_items_in_batch == 0
+    if empty:
+        # Avoid 0/0 → NaN; keep a graph-connected zero for backward / DDP (same idea as chunked CE).
+        _warn_all_labels_masked()
+        return (outputs.logits * 0.0).sum()
     loss = (per_token_loss * loss_mask).sum() / num_items_in_batch
     return loss
 
@@ -1709,6 +1758,11 @@ class SFTTrainer(_BaseTrainer):
         # This can be removed when this issue is fixed.
         # When using CP or SP, labels are pre-shifted, we must use shift_labels instead.
         labels = inputs["labels"] if "shift_labels" not in inputs else None
+        # Prefer shift_labels for the all-masked check under CP/SP; otherwise use labels.
+        labels_for_mask_check = inputs.get("shift_labels", inputs.get("labels"))
+        all_masked = _labels_are_all_masked(labels_for_mask_check)
+        if all_masked:
+            _warn_all_labels_masked()
 
         # If not set, defaults from model config and may warn since cache isn't compatible with gradient checkpointing
         inputs["use_cache"] = False
@@ -1752,6 +1806,14 @@ class SFTTrainer(_BaseTrainer):
                     f"Please increase `max_length` or set it to `None` to disable truncation."
                 ) from e
             raise
+
+        # Default HF CE on a fully ignored batch returns NaN; replace with a graph-safe 0.0 so logs are
+        # not NaN and DDP still works. Chunked CE already returns 0.0 in that case (#6668).
+        if all_masked and torch.isnan(loss):
+            if getattr(outputs, "logits", None) is not None:
+                loss = (outputs.logits * 0.0).sum()
+            else:
+                loss = torch.nan_to_num(loss, nan=0.0)
 
         # Compute entropy
         if self.args.loss_type == "chunked_nll":

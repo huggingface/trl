@@ -40,6 +40,7 @@ from trl import SFTConfig, SFTTrainer
 from trl.trainer.sft_trainer import (
     DataCollatorForLanguageModeling,
     _chunked_cross_entropy_loss,
+    _labels_are_all_masked,
     _patch_chunked_ce_lm_head,
     dft_loss,
 )
@@ -69,6 +70,30 @@ if is_peft_available():
         TaskType,
         get_peft_model,
     )
+
+
+class TestAllLabelsMaskedHelpers(TrlTestCase):
+    """Regression for https://github.com/huggingface/trl/issues/6668."""
+
+    def test_labels_are_all_masked(self):
+        assert _labels_are_all_masked(None) is False
+        assert _labels_are_all_masked(torch.tensor([[-100, -100], [-100, -100]])) is True
+        assert _labels_are_all_masked(torch.tensor([[-100, 1], [-100, -100]])) is False
+
+    def test_dft_loss_all_masked_returns_zero_not_nan(self):
+        import trl.trainer.sft_trainer as sft_mod
+
+        batch_size, seq_len, vocab_size = 2, 3, 5
+        logits = torch.randn(batch_size, seq_len, vocab_size, requires_grad=True)
+        labels = torch.full((batch_size, seq_len), -100)
+        outputs = type("O", (), {"logits": logits})()
+        sft_mod._ALL_LABELS_MASKED_WARNED = False
+        with pytest.warns(UserWarning, match="no unmasked labels"):
+            loss = dft_loss(outputs, labels)
+        assert loss.item() == 0.0
+        assert not torch.isnan(loss)
+        loss.backward()
+        assert logits.grad is not None
 
 
 class TestDFTLoss(TrlTestCase):
@@ -2703,13 +2728,18 @@ class TestChunkedCrossEntropyLoss:
 
         Every trainable parameter of the chunked path (hidden_states, lm_head_weight, and lm_head_bias when present)
         must receive a gradient — otherwise DDP / FSDP synchronization hangs or errors at the all-reduce step.
+        Also warns once so a silent 0.0 is not mistaken for a healthy run (#6668).
         """
         hidden, weight, labels = self._inputs(requires_grad=True)
         bias = torch.zeros(self.V, dtype=torch.float32, requires_grad=True)
         labels[:] = -100
-        loss, correct, ent_sum, n_valid = _chunked_cross_entropy_loss(
-            hidden, weight, self.CHUNK_SIZE, labels, lm_head_bias=bias
-        )
+        import trl.trainer.sft_trainer as sft_mod
+
+        sft_mod._ALL_LABELS_MASKED_WARNED = False
+        with pytest.warns(UserWarning, match="no unmasked labels"):
+            loss, correct, ent_sum, n_valid = _chunked_cross_entropy_loss(
+                hidden, weight, self.CHUNK_SIZE, labels, lm_head_bias=bias
+            )
         assert loss.item() == 0.0
         assert correct.item() == 0.0
         assert ent_sum.item() == 0.0
