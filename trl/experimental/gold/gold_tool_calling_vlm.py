@@ -139,12 +139,13 @@ class LayoutParsingEnv:
         # Built lazily on first use and kept for the life of this (pooled, reused) instance. Rebuilding it per reset
         # would reload docling's OCR models on every rollout.
         self._converter = None
+        # Per-instance scratch dir: environment instances are pooled and run concurrently, so a shared fixed path
+        # would race between rollouts saving the same image index. Created once per instance rather than per reset,
+        # since a pooled instance serves one rollout at a time and `layout_parsing` overwrites the file it reads.
+        self._tmp_dir = Path(tempfile.mkdtemp(prefix="gold_layout_"))
 
     def reset(self, **example):
         self._images = example.get("images") or []
-        # Per-instance scratch dir: environment instances are pooled and run concurrently, so a shared fixed path
-        # would race between rollouts saving the same image index.
-        self._tmp_dir = Path(tempfile.mkdtemp(prefix="gold_layout_"))
 
     def layout_parsing(self, image: str) -> str:
         """
