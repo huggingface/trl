@@ -607,7 +607,7 @@ The integrations above are **white-box**: TRL drives the multi-turn loop itself.
 
 Some agents cannot be driven this way because they own their own loop. A production coding agent harness like [`opencode`](https://opencode.ai) has its own planner, tool set, context management, and stop condition. You want to train that exact agent, not a reimplementation of it.
 
-For this, TRL provides an experimental **black box (loop-owning)** path built on [`experimental.async_grpo.AsyncGRPOTrainer`] and a `HarnessRolloutWorker` specific for OpenEnv that drives an [OpenEnv `ResourceSessionFactory`](https://huggingface.co/docs/openenv). See [`examples/scripts/openenv/opencode.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/openenv/opencode.py) for a complete, self-contained example.
+For this, TRL provides an experimental **black box (loop-owning)** path built on [`experimental.async_grpo.AsyncGRPOTrainer`] and a `HarnessRolloutWorker` specific for OpenEnv that drives an [OpenEnv `ResourceSessionFactory`](https://huggingface.co/docs/openenv). See [`examples/scripts/openenv/opencode.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/openenv/opencode.py) for a complete, self-contained example. To scale rollouts beyond a single node, [`examples/scripts/openenv/opencode_hf_sandbox.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/openenv/opencode_hf_sandbox.py) runs each rollout in its own remote Hugging Face sandbox instead of a local subprocess.
 
 ### How it works
 
