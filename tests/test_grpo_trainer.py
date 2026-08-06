@@ -1833,47 +1833,64 @@ class TestGRPOTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @pytest.mark.parametrize("top_entropy_quantile", [1.0, 0.2])
-    @pytest.mark.parametrize("loss_type", ["grpo", "dr_grpo", "dapo", "luspo"])
-    def test_entropy_bonus_scale(self, loss_type, top_entropy_quantile):
+    def test_entropy_bonus_scale(self, top_entropy_quantile):
         # Regression test: the entropy bonus is the mean per-token entropy H for every loss type (documented
         # objective L = L_policy - entropy_coef * H), so it must not inherit any loss-type-specific policy
         # normalization. A previous "unified" formula divided H by a global token count for the
         # cispo/dapo/vespo family, making the bonus ~1/sequence_length too small; conversely, scaling the
         # bonus like the dr_grpo (fixed budget) or luspo (sequence-weighted) policy term would also be wrong.
-        # With gradient_accumulation_steps=1 the per-step entropy contribution to the loss is
-        # contrib = policy_loss - loss = entropy_coef * entropy_loss, so contrib / entropy must equal
-        # entropy_coef for all loss types.
+        #
+        # With gradient_accumulation_steps=1, contrib = policy_loss - loss = entropy_coef * entropy_loss, so
+        # contrib / entropy is entropy_coef * (H_eff / H_full): H_eff is what the bonus actually uses
+        # (over effective_mask, the entropy-quantile-filtered subset), while the logged "entropy" metric is
+        # H_full (global_masked_mean over the full completion mask, see `global_masked_mean(entropies)`
+        # above). These only coincide when top_entropy_quantile == 1.0. At 0.2, comparing contrib/entropy
+        # to a fixed entropy_coef is fixture-lucky: it only holds because this tiny, ~untrained model's
+        # entropy is ~uniform across tokens (H_eff/H_full ~= 1.0), which isn't true in general. The actual
+        # invariant this PR restores is loss-type independence, so assert that directly: every loss type's
+        # ratio must agree with every other's, at the same quantile.
         entropy_coef = 0.5
-        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
-        training_args = GRPOConfig(
-            output_dir=self.tmp_dir,
-            importance_sampling_level="sequence" if loss_type == "luspo" else "token",
-            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
-            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
-            num_generations=3,  # reduce the number of generations to reduce memory usage
-            max_completion_length=16,  # reduce the completion length to reduce memory usage
-            gradient_accumulation_steps=1,  # so contrib == entropy_coef * entropy_loss holds per step
-            loss_type=loss_type,
-            top_entropy_quantile=top_entropy_quantile,
-            logging_steps=1,
-            report_to="none",
-            entropy_coef=entropy_coef,
-        )
-        trainer = GRPOTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
-            args=training_args,
-            train_dataset=dataset,
-        )
 
-        trainer.train()
+        def ratio_for(loss_type):
+            dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+            training_args = GRPOConfig(
+                output_dir=self.tmp_dir,
+                importance_sampling_level="sequence" if loss_type == "luspo" else "token",
+                learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+                per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+                num_generations=3,  # reduce the number of generations to reduce memory usage
+                max_completion_length=16,  # reduce the completion length to reduce memory usage
+                gradient_accumulation_steps=1,  # so contrib == entropy_coef * entropy_loss holds per step
+                loss_type=loss_type,
+                top_entropy_quantile=top_entropy_quantile,
+                logging_steps=1,
+                report_to="none",
+                entropy_coef=entropy_coef,
+            )
+            trainer = GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
+            )
 
-        logs = [h for h in trainer.state.log_history if "policy_loss" in h and "loss" in h and h.get("entropy")]
-        assert logs
-        ratios = sorted((h["policy_loss"] - h["loss"]) / h["entropy"] for h in logs)
-        ratio = ratios[len(ratios) // 2]  # median, robust to per-step noise
-        # Every loss type regularizes the mean per-token entropy, so contrib == entropy_coef * entropy.
-        assert ratio == pytest.approx(entropy_coef, rel=0.3)
+            trainer.train()
+
+            logs = [h for h in trainer.state.log_history if "policy_loss" in h and "loss" in h and h.get("entropy")]
+            assert logs
+            ratios = sorted((h["policy_loss"] - h["loss"]) / h["entropy"] for h in logs)
+            return ratios[len(ratios) // 2]  # median, robust to per-step noise
+
+        ratios = {loss_type: ratio_for(loss_type) for loss_type in ["grpo", "dr_grpo", "dapo", "luspo"]}
+        baseline = ratios["grpo"]
+        for loss_type, ratio in ratios.items():
+            # Every loss type regularizes the same mean per-token entropy, so their ratios must agree with
+            # each other regardless of top_entropy_quantile, even though none of them individually needs to
+            # equal entropy_coef once quantile filtering makes H_eff diverge from the logged H_full.
+            assert ratio == pytest.approx(baseline, rel=0.3), (
+                f"entropy bonus ratio for loss_type={loss_type!r} at top_entropy_quantile={top_entropy_quantile} "
+                f"diverges from the grpo baseline ({ratio} vs {baseline})"
+            )
 
     def test_train_with_adaptive_entropy_gradient_accumulation(self):
         # Adaptive entropy must behave correctly under gradient accumulation: the coefficient and gating are
