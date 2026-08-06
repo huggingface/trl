@@ -1873,17 +1873,28 @@ class TestGRPOTrainer(TrlTestCase):
         # Every loss type regularizes the mean per-token entropy, so contrib == entropy_coef * entropy.
         assert ratio == pytest.approx(entropy_coef, rel=0.3)
 
-    def test_luspo_loss_ignores_padding(self):
+    @pytest.mark.parametrize(
+        ("importance_sampling_level", "beta"),
+        [
+            ("sequence", 0.1),  # per_token_loss is (B, T) via the KL term
+            ("token", 0.0),  # per_token_loss is (B, T) via importance_sampling_level itself, the config default
+        ],
+    )
+    def test_luspo_loss_ignores_padding(self, importance_sampling_level, beta):
         # Regression test: the luspo branch assumes per_token_loss is (B, 1) and uses `mask` only as a per-sequence
-        # length, not as an elementwise mask. That assumption breaks once beta != 0, since the KL term broadcasts
-        # per_token_loss to (B, T), letting padded positions leak into the loss. The loss must not depend on padded
-        # positions.
+        # length, not as an elementwise mask. That assumption breaks once per_token_loss is actually (B, T),
+        # letting padded positions leak into the loss. The loss must not depend on padded positions.
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
             loss_type="luspo",
-            beta=0.1,
-            importance_sampling_level="sequence",
+            beta=beta,
+            importance_sampling_level=importance_sampling_level,
+            # Wide open on purpose: old_per_token_logps below is random and unrelated to per_token_logps, so the
+            # importance-sampling ratio can easily land outside the default clip range. PPO-style clipping would
+            # then saturate and mask the exact signal this test perturbs, independently of whether the padding fix
+            # under test is correct. This test isolates masking, not clipping, so clipping is disabled here.
+            epsilon=1e6,
             report_to="none",
         )
         trainer = GRPOTrainer(
@@ -1893,29 +1904,57 @@ class TestGRPOTrainer(TrlTestCase):
             train_dataset=dataset,
         )
         trainer.model.eval()
-        trainer.current_gradient_accumulation_steps = 1
 
-        # Build inputs on whatever device the model actually loaded onto, rather than forcing CPU: some CI
-        # environments bind Qwen2's RMSNorm to a Triton kernel that assumes CUDA and rejects CPU tensors outright.
+        # Trainer.__init__ moves the model to args.device, so on a GPU runner the inputs have to be built there too.
         device = next(trainer.model.parameters()).device
         batch_size, prompt_len, completion_len = 2, 3, 6
+        # This is the first test in this file to call _compute_loss with hand-built inputs; there is no other way
+        # to isolate padded positions directly, so a future refactor of _compute_loss's input contract should keep
+        # this pinned.
+        prompt_ids = torch.randint(1, 1000, (batch_size, prompt_len), device=device)
+        prompt_mask = torch.ones(batch_size, prompt_len, dtype=torch.long, device=device)
+        completion_ids = torch.randint(1, 1000, (batch_size, completion_len), device=device)
+        # trailing positions are padding for every sequence
+        completion_mask = torch.tensor([[1, 1, 1, 1, 0, 0], [1, 1, 1, 0, 0, 0]], device=device)
+
+        # old_per_token_logps/ref_per_token_logps must be close in scale to the model's actual per-token log-probs,
+        # not arbitrary noise: for this tiny, near-uniform model log-probs sit around -log(vocab_size) (~-11), so
+        # plain torch.randn() (mean 0) either makes the importance-sampling ratio astronomically small or the KL
+        # term astronomically large, and the resulting difference can fall below torch.testing.assert_close's
+        # tolerance regardless of whether the padding fix under test is correct. A small fixed offset from the
+        # model's real log-probs keeps both signals in a comparable, well-scaled range.
+        with torch.no_grad():
+            baseline_logps, _, _ = trainer._get_per_token_logps_and_entropies(
+                trainer.model,
+                torch.cat([prompt_ids, completion_ids], dim=1),
+                torch.cat([prompt_mask, completion_mask], dim=1),
+                completion_len,
+            )
         inputs = {
-            "prompt_ids": torch.randint(1, 1000, (batch_size, prompt_len), device=device),
-            "prompt_mask": torch.ones(batch_size, prompt_len, dtype=torch.long, device=device),
-            "completion_ids": torch.randint(1, 1000, (batch_size, completion_len), device=device),
-            # trailing positions are padding for every sequence
-            "completion_mask": torch.tensor([[1, 1, 1, 1, 0, 0], [1, 1, 1, 0, 0, 0]], device=device),
+            "prompt_ids": prompt_ids,
+            "prompt_mask": prompt_mask,
+            "completion_ids": completion_ids,
+            "completion_mask": completion_mask,
             "advantages": torch.tensor([1.0, -1.0], device=device),
-            "ref_per_token_logps": torch.randn(batch_size, completion_len, device=device),
+            # old_per_token_logps must be given explicitly: left unset, it falls back to per_token_logps.detach(),
+            # which makes the token-level importance-sampling ratio exactly 1 everywhere and defeats this test for
+            # importance_sampling_level="token" (per_token_loss would be (B, T) in shape but constant-valued, so
+            # masked vs. unmasked aggregation would coincidentally agree regardless of the bug).
+            "old_per_token_logps": baseline_logps + 0.05,
+            "ref_per_token_logps": baseline_logps + 0.05,
         }
 
         loss_before = trainer._compute_loss(trainer.model, inputs)
 
-        # Perturb ref_per_token_logps only at padded positions; the loss must be unaffected.
+        # Perturb both ref_per_token_logps (feeds the beta > 0 KL term) and old_per_token_logps (feeds the
+        # importance_sampling_level="token" ratio) at padded positions only. Whichever one the current
+        # parametrization doesn't route through padding is an unaffected no-op; the loss must be unaffected either
+        # way.
         perturbed_inputs = dict(inputs)
-        perturbed_ref = inputs["ref_per_token_logps"].clone()
-        perturbed_ref[inputs["completion_mask"] == 0] += 1.0
-        perturbed_inputs["ref_per_token_logps"] = perturbed_ref
+        for key in ("ref_per_token_logps", "old_per_token_logps"):
+            perturbed = inputs[key].clone()
+            perturbed[inputs["completion_mask"] == 0] += 1.0
+            perturbed_inputs[key] = perturbed
 
         loss_after = trainer._compute_loss(trainer.model, perturbed_inputs)
 
