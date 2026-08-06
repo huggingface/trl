@@ -52,6 +52,7 @@ Below is the current list of TRL trainers, organized by method type (⚡️ = vL
 ### Knowledge distillation
 
 - [`GKDTrainer`](gkd_trainer) 🧪
+- [`GOLDTrainer`](gold_trainer) 🧪 ⚡️
 - [`MiniLLMTrainer`](minillm_trainer) 🧪
 
 </div>
