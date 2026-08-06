@@ -1885,7 +1885,6 @@ class TestGRPOTrainer(TrlTestCase):
             beta=0.1,
             importance_sampling_level="sequence",
             report_to="none",
-            use_cpu=True,
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
@@ -1896,15 +1895,18 @@ class TestGRPOTrainer(TrlTestCase):
         trainer.model.eval()
         trainer.current_gradient_accumulation_steps = 1
 
+        # Build inputs on whatever device the model actually loaded onto, rather than forcing CPU: some CI
+        # environments bind Qwen2's RMSNorm to a Triton kernel that assumes CUDA and rejects CPU tensors outright.
+        device = next(trainer.model.parameters()).device
         batch_size, prompt_len, completion_len = 2, 3, 6
         inputs = {
-            "prompt_ids": torch.randint(1, 1000, (batch_size, prompt_len)),
-            "prompt_mask": torch.ones(batch_size, prompt_len, dtype=torch.long),
-            "completion_ids": torch.randint(1, 1000, (batch_size, completion_len)),
+            "prompt_ids": torch.randint(1, 1000, (batch_size, prompt_len), device=device),
+            "prompt_mask": torch.ones(batch_size, prompt_len, dtype=torch.long, device=device),
+            "completion_ids": torch.randint(1, 1000, (batch_size, completion_len), device=device),
             # trailing positions are padding for every sequence
-            "completion_mask": torch.tensor([[1, 1, 1, 1, 0, 0], [1, 1, 1, 0, 0, 0]]),
-            "advantages": torch.tensor([1.0, -1.0]),
-            "ref_per_token_logps": torch.randn(batch_size, completion_len),
+            "completion_mask": torch.tensor([[1, 1, 1, 1, 0, 0], [1, 1, 1, 0, 0, 0]], device=device),
+            "advantages": torch.tensor([1.0, -1.0], device=device),
+            "ref_per_token_logps": torch.randn(batch_size, completion_len, device=device),
         }
 
         loss_before = trainer._compute_loss(trainer.model, inputs)
