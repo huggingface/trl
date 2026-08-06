@@ -1218,6 +1218,21 @@ class TestPackDatasetWrapped(TrlTestCase):
         assert next(iter(dataset.with_format(None).batch(batch_size=num_examples))) == expected_output
         assert formatting == dataset._formatting
 
+    def test_with_multiple_map_batches(self):
+        # `map` passes each batch as a slice, so every batch but the first starts at a non-zero offset
+        examples = {
+            "input_ids": [[1, 2], [3, 4], [5, 6], [7, 8], [9, 10], [11, 12]],
+            "attention_mask": [[0, 1], [1, 0], [0, 1], [1, 0], [0, 1], [1, 0]],
+        }
+        dataset = Dataset.from_dict(examples)
+        seq_length = 4
+        expected_output = {
+            "input_ids": [[1, 2, 3, 4], [5, 6], [7, 8, 9, 10], [11, 12]],
+            "attention_mask": [[0, 1, 1, 0], [0, 1], [1, 0, 0, 1], [1, 0]],
+        }
+        dataset = pack_dataset(dataset, seq_length, strategy="wrapped", map_kwargs={"batch_size": 3})
+        assert dataset.to_dict() == expected_output
+
 
 class TestPackDatasetBfd(TrlTestCase):
     def test_with_dataset(self):
