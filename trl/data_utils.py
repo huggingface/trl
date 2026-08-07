@@ -268,8 +268,6 @@ def apply_chat_template(
             # between the prompt alone and the combined prompt+completion. To ensure consistency, we extract the
             # common prefix between the two. In most cases, this is a no-op.
             prompt = "".join(x for x, _ in takewhile(lambda x: x[0] == x[1], zip(prompt, prompt_chosen, strict=False)))
-
-            chosen = prompt_chosen[len(prompt) :]
         if "rejected" in example and "prompt" in example:  # explicit prompt
             prompt_rejected = processing_class.apply_chat_template(
                 example["prompt"] + example["rejected"],
@@ -282,7 +280,6 @@ def apply_chat_template(
             prompt = "".join(
                 x for x, _ in takewhile(lambda x: x[0] == x[1], zip(prompt, prompt_rejected, strict=False))
             )
-            rejected = prompt_rejected[len(prompt) :]
         if "completion" in example:
             prompt_completion = processing_class.apply_chat_template(
                 example["prompt"] + example["completion"],
@@ -295,6 +292,11 @@ def apply_chat_template(
             prompt = "".join(
                 x for x, _ in takewhile(lambda x: x[0] == x[1], zip(prompt, prompt_completion, strict=False))
             )
+        if "chosen" in example:
+            chosen = prompt_chosen[len(prompt) :]
+        if "rejected" in example:
+            rejected = prompt_rejected[len(prompt) :]
+        if "completion" in example:
             completion = prompt_completion[len(prompt) :]
     else:  # implicit prompt case
         if "chosen" in example:
@@ -396,6 +398,45 @@ def maybe_apply_chat_template(
         return example
 
 
+def _tokenize(
+    processing_class: PreTrainedTokenizerBase | ProcessorMixin,
+    input: str | list,
+    **apply_chat_template_kwargs,
+) -> dict[str, list]:
+    """
+    Tokenize a single example for dataset preprocessing.
+
+    Dispatches to `apply_chat_template` for conversational input (list of message dicts) and to `__call__` for
+    non-conversational input (str). For VLMs, normalizes the batch dimension that processors emit even for single
+    examples.
+
+    Args:
+        processing_class ([`~transformers.PreTrainedTokenizerBase`] or [`~transformers.ProcessorMixin`]):
+            The tokenizer or processor to use.
+        input (`str` or `list`):
+            A string for non-conversational input, or a list of message dicts for conversational input.
+        **apply_chat_template_kwargs:
+            Forwarded to `apply_chat_template` (e.g. `chat_template`, `tools`, `add_generation_prompt`,
+            `return_assistant_tokens_mask`,...).
+
+    Returns:
+        `dict` with at least an `"input_ids"` key mapping to a flat `list[int]`.
+    """
+    is_vlm = isinstance(processing_class, ProcessorMixin)
+    if isinstance(input, list):  # conversational: list of message dicts
+        if is_vlm:
+            input = prepare_multimodal_messages(input)
+        result = processing_class.apply_chat_template(
+            input, tokenize=True, return_dict=True, **apply_chat_template_kwargs
+        )
+    else:  # non-conversational: plain text string
+        result = processing_class(text=input)
+    # VLMs emit a batch dimension even for single examples; unwrap it
+    if is_vlm:
+        return {k: v[0] for k, v in result.items()}
+    return result
+
+
 def _unpair_row(batch: dict[str, list[Any]]) -> dict[str, list[Any]]:
     batch_size = len(batch["chosen"])
     new_batch = {
@@ -404,6 +445,9 @@ def _unpair_row(batch: dict[str, list[Any]]) -> dict[str, list[Any]]:
     }
     if "prompt" in batch:
         new_batch["prompt"] = batch["prompt"] + batch["prompt"]
+    for k in batch:
+        if k not in ("chosen", "rejected", "prompt"):
+            new_batch[k] = batch[k] + batch[k]
     return new_batch
 
 
@@ -414,7 +458,8 @@ def unpair_preference_dataset(
     """
     Unpair a preference dataset.
 
-    The output contains only `"prompt"`, `"completion"`, and `"label"`; all other columns are dropped.
+    The output contains `"prompt"`, `"completion"`, and `"label"` plus any extra columns, which are duplicated for
+    each chosen and rejected row.
 
     Args:
         dataset ([`~datasets.Dataset`] or [`~datasets.DatasetDict`] or [`~datasets.IterableDataset`] or [`~datasets.IterableDatasetDict`]):
@@ -975,3 +1020,7 @@ def maybe_convert_to_chatml(example: dict[str, list]) -> dict[str, list]:
         example["messages"] = example.pop("conversations")
 
     return example
+
+
+def get_dataset_column_names(dataset: Dataset | IterableDataset) -> list[str]:
+    return list(next(iter(dataset)).keys()) if dataset.column_names is None else dataset.column_names

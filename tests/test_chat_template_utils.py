@@ -22,6 +22,7 @@ from transformers import AutoModelForCausalLM, AutoModelForSequenceClassificatio
 
 from trl import clone_chat_template
 from trl.chat_template_utils import (
+    _SUPPORTS_RESPONSE_TEMPLATE,
     add_response_schema,
     get_training_chat_template,
     is_chat_template_prefix_preserving,
@@ -31,7 +32,7 @@ from trl.chat_template_utils import (
 )
 from trl.data_utils import prepare_multimodal_messages
 
-from .testing_utils import TrlTestCase, require_jmespath, require_vision
+from .testing_utils import TrlTestCase, require_response_parsing, require_vision
 
 
 class TestCloneChatTemplate(TrlTestCase):
@@ -119,7 +120,7 @@ class TestCloneChatTemplate(TrlTestCase):
     reason="Response parsing is not supported in transformers versions below 5.0.0",
     strict=True,
 )
-@require_jmespath
+@require_response_parsing
 class TestAddResponseSchema:
     @pytest.mark.parametrize(
         "tokenizer_name",
@@ -132,6 +133,14 @@ class TestAddResponseSchema:
                     Version(transformers.__version__) < Version("5.5.0"),
                     reason="Upstream bug in response parsing (see #5753; fixed in transformers#45166)",
                     strict=True,
+                ),
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Lfm2ForCausalLM-2.5",
+                id="lfm2-2.5",
+                marks=pytest.mark.skipif(
+                    not _SUPPORTS_RESPONSE_TEMPLATE,
+                    reason="LFM2.5 only ships a new-style response template, which requires transformers>=5.13",
                 ),
             ),
             pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3.1", id="llama3.1"),
@@ -180,7 +189,12 @@ class TestAddResponseSchema:
         response = text[len(prefix) :]
         # Here, we just test that the parsing doesn't raise an error.
         # The correctness of the parsing is tested in TestParseResponse
-        tokenizer.parse_response(response)
+        # The new-style `response_template` parser requires the prompt prefix; the legacy `response_schema` parser
+        # does not accept a `prefix=` argument.
+        if _SUPPORTS_RESPONSE_TEMPLATE:
+            tokenizer.parse_response(response, prefix=prefix)
+        else:
+            tokenizer.parse_response(response)
 
     @pytest.mark.parametrize(
         "processor_name",
@@ -191,12 +205,17 @@ class TestAddResponseSchema:
             pytest.param("trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6", id="qwen36"),
         ],
     )
+    @require_vision
     def test_add_response_schema_vlm(self, processor_name):
-        # For VLM processors, `add_response_schema` must set the schema on the inner tokenizer, since
-        # `parse_response` is a tokenizer method that reads `self.response_schema` from the tokenizer instance.
+        # For VLM processors, `add_response_schema` must set the template/schema on the inner tokenizer, since
+        # `parse_response` is a tokenizer method that reads `self.response_template` / `self.response_schema` from the
+        # tokenizer instance. Which attribute is set depends on the installed transformers version.
         processor = AutoProcessor.from_pretrained(processor_name)
         processor = add_response_schema(processor)
-        assert processor.tokenizer.response_schema is not None
+        if _SUPPORTS_RESPONSE_TEMPLATE:
+            assert processor.tokenizer.response_template is not None
+        else:
+            assert processor.tokenizer.response_schema is not None
         messages = [
             {"role": "user", "content": [{"type": "text", "text": "What is 3*4?"}]},
             {
@@ -212,7 +231,12 @@ class TestAddResponseSchema:
         response = text[len(prefix) :]
         # Here, we just test that the parsing doesn't raise an error.
         # The correctness of the parsing is tested in TestParseResponse
-        processor.tokenizer.parse_response(response)
+        # The new-style `response_template` parser requires the prompt prefix; the legacy `response_schema` parser
+        # does not accept a `prefix=` argument.
+        if _SUPPORTS_RESPONSE_TEMPLATE:
+            processor.tokenizer.parse_response(response, prefix=prefix)
+        else:
+            processor.tokenizer.parse_response(response)
 
 
 class TestSupportsToolCalling:
@@ -238,6 +262,14 @@ class TestSupportsToolCalling:
                 ),
             ),
             pytest.param("trl-internal-testing/tiny-GptOssForCausalLM", id="gptoss"),
+            pytest.param(
+                "trl-internal-testing/tiny-Lfm2ForCausalLM-2.5",
+                id="lfm2-2.5",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.0.0"),
+                    reason="LFM2.5 tokenizer requires transformers>=5.0.0",
+                ),
+            ),
             pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3.1", id="llama3.1"),
             pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3.2", id="llama3.2"),
             pytest.param(
@@ -346,6 +378,10 @@ class TestSupportsToolCalling:
             pytest.param("trl-internal-testing/tiny-Phi3ForCausalLM-3", id="phi3"),
             pytest.param("trl-internal-testing/tiny-Phi3ForCausalLM-3.5", id="phi3.5"),
             # Renders tool message content as plain text but drops assistant tool_calls
+            # LFM2 renders `tools` into the system prompt and wraps tool message content in
+            # <|tool_response_start|> / <|tool_response_end|>, but never reads `tool_calls`: the model is trained to
+            # emit <|tool_call_start|> / <|tool_call_end|> as plain text inside `content`.
+            pytest.param("trl-internal-testing/tiny-Lfm2ForCausalLM", id="lfm2"),
             pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3", id="llama3"),
             pytest.param("trl-internal-testing/tiny-Qwen2VLForConditionalGeneration", id="qwen2_vl"),
             pytest.param("trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration", id="qwen2.5_vl"),
@@ -567,6 +603,17 @@ class TestIsChatTemplateStopTokenTrained:
         pytest.param("trl-internal-testing/tiny-CohereForCausalLM", id="cohere"),
         pytest.param("trl-internal-testing/tiny-Cohere2ForCausalLM", id="cohere2"),
         pytest.param("trl-internal-testing/tiny-DeepseekV3ForCausalLM", id="deepseekv3"),
+        pytest.param(
+            "trl-internal-testing/tiny-DiffusionGemmaForBlockDiffusion",
+            id="diffusion_gemma",
+            marks=[
+                require_vision,
+                pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.11.0"),
+                    reason="DiffusionGemma was introduced in transformers 5.11.0",
+                ),
+            ],
+        ),
         pytest.param("trl-internal-testing/tiny-GemmaForCausalLM", id="gemma"),
         pytest.param("trl-internal-testing/tiny-Gemma2ForCausalLM", id="gemma2"),
         pytest.param("trl-internal-testing/tiny-Gemma3ForConditionalGeneration", id="gemma3", marks=require_vision),
@@ -582,6 +629,7 @@ class TestIsChatTemplateStopTokenTrained:
         pytest.param(
             "trl-internal-testing/tiny-Idefics3ForConditionalGeneration", id="idefics3", marks=require_vision
         ),
+        pytest.param("trl-internal-testing/tiny-Lfm2ForCausalLM", id="lfm2"),
         pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3", id="llama3"),
         pytest.param("trl-internal-testing/tiny-LlavaForConditionalGeneration", id="llava", marks=require_vision),
         pytest.param(
@@ -671,7 +719,7 @@ class TestGetTrainingChatTemplate:
         if "ForCausalLM" in model_name:
             self.is_vlm = False
             processing_class = AutoTokenizer.from_pretrained(model_name)
-        elif "ForConditionalGeneration" in model_name:
+        elif "ForConditionalGeneration" in model_name or "ForBlockDiffusion" in model_name:
             self.is_vlm = True
             processing_class = AutoProcessor.from_pretrained(model_name)
 
@@ -963,6 +1011,14 @@ class TestGetTrainingChatTemplate:
     [
         pytest.param("trl-internal-testing/tiny-Glm4MoeForCausalLM", id="glm4moe"),
         pytest.param("trl-internal-testing/tiny-GptOssForCausalLM", id="gptoss"),
+        pytest.param(
+            "trl-internal-testing/tiny-Lfm2ForCausalLM-2.5",
+            id="lfm2-2.5",
+            marks=pytest.mark.skipif(
+                not _SUPPORTS_RESPONSE_TEMPLATE,
+                reason="LFM2.5 only ships a new-style response template, which requires transformers>=5.13",
+            ),
+        ),
         pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3.1", id="llama3.1"),
         pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3.2", id="llama3.2"),
         pytest.param(
@@ -991,18 +1047,39 @@ class TestGetTrainingChatTemplate:
         ),
         pytest.param("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", id="qwen2.5"),
         pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM", id="qwen3"),
+        pytest.param(
+            # Same model as `qwen3`, but shipping the response template itself instead of relying on
+            # `add_response_schema` to supply it — so `_load` must leave it alone.
+            "trl-internal-testing/tiny-Qwen3MoeForCausalLM-ResponseTemplate",
+            id="qwen3-response-template",
+            marks=pytest.mark.skipif(
+                not _SUPPORTS_RESPONSE_TEMPLATE,
+                reason="Fixture ships a new-style response template, which requires transformers>=5.13",
+            ),
+        ),
         pytest.param("trl-internal-testing/tiny-Qwen3ForCausalLM-Instruct-2507", id="qwen3_instruct_2507"),
-        pytest.param("trl-internal-testing/tiny-Qwen3VLForConditionalGeneration", id="qwen3_vl"),
-        pytest.param("trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink", id="qwen35-nothink"),
-        pytest.param("trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-Think", id="qwen35-think"),
-        pytest.param("trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6", id="qwen36"),
+        pytest.param("trl-internal-testing/tiny-Qwen3VLForConditionalGeneration", id="qwen3_vl", marks=require_vision),
+        pytest.param(
+            "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
+            id="qwen35-nothink",
+            marks=require_vision,
+        ),
+        pytest.param(
+            "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-Think", id="qwen35-think", marks=require_vision
+        ),
+        pytest.param(
+            "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6", id="qwen36", marks=require_vision
+        ),
         pytest.param(
             "trl-internal-testing/tiny-Gemma4ForConditionalGeneration",
             id="gemma4",
-            marks=pytest.mark.skipif(
-                Version(transformers.__version__) < Version("5.5.0"),
-                reason="Gemma4 models were introduced in transformers-5.5.0",
-            ),
+            marks=[
+                require_vision,
+                pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.5.0"),
+                    reason="Gemma4 models were introduced in transformers-5.5.0",
+                ),
+            ],
         ),
     ],
 )
@@ -1011,19 +1088,23 @@ class TestGetTrainingChatTemplate:
     reason="Response parsing is not supported in transformers versions below 5.0.0",
     strict=True,
 )
-@require_jmespath
+@require_response_parsing
 class TestParseResponse:
     def _load(self, model_name):
         if "ForCausalLM" in model_name:
             self.is_vlm = False
             processing_class = AutoTokenizer.from_pretrained(model_name)
-            response_schema = getattr(processing_class, "response_schema", None)
+            tokenizer = processing_class
         elif "ForConditionalGeneration" in model_name:
             self.is_vlm = True
             processing_class = AutoProcessor.from_pretrained(model_name)
-            response_schema = getattr(processing_class.tokenizer, "response_schema", None)
+            tokenizer = processing_class.tokenizer
 
-        if response_schema is None:
+        # Nothing to add for models that already ship a new-style `response_template` or a legacy
+        # `response_schema`; `add_response_schema` only knows a fixed set of chat templates and raises otherwise.
+        has_template = getattr(tokenizer, "response_template", None) is not None
+        has_schema = getattr(tokenizer, "response_schema", None) is not None
+        if not has_template and not has_schema:
             processing_class = add_response_schema(processing_class)
 
         return processing_class
@@ -1049,13 +1130,12 @@ class TestParseResponse:
             text = text[0]
         response = text[len(prefix) :]
         tokenizer = processing_class.tokenizer if self.is_vlm else processing_class
-        parsed = parse_response(tokenizer, response)
+        parsed = parse_response(tokenizer, response, prefix=prefix)
         assert parsed == expected
 
     def test_parse_response_with_reasoning_content(self, model_name):
         if model_name in (
             "trl-internal-testing/tiny-Gemma4ForConditionalGeneration",
-            "trl-internal-testing/tiny-GptOssForCausalLM",
             "trl-internal-testing/tiny-LlamaForCausalLM-3.1",
             "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
             "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
@@ -1063,11 +1143,23 @@ class TestParseResponse:
             "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration",
         ):
             pytest.skip("This tokenizer doesn't support inline reasoning_content.")
+        if model_name == "trl-internal-testing/tiny-GptOssForCausalLM" and not _SUPPORTS_RESPONSE_TEMPLATE:
+            # gpt-oss surfaces the analysis channel as `thinking` (separate from `content`) only with the new-style
+            # `response_template` parser. The legacy `gptoss_schema` folds the analysis channel into `content`.
+            pytest.skip("gpt-oss thinking/content separation requires the response_template parser (>= 5.13).")
 
         processing_class = self._load(model_name)
+        # gpt-oss and LFM2.5 use the `thinking` field name (matching their own chat templates, which read it back off
+        # the message) rather than the `reasoning_content` convention used by other models.
+        reasoning_field = (
+            "thinking"
+            if model_name
+            in ("trl-internal-testing/tiny-GptOssForCausalLM", "trl-internal-testing/tiny-Lfm2ForCausalLM-2.5")
+            else "reasoning_content"
+        )
         messages = [
             {"role": "user", "content": "What is 3*4?"},
-            {"role": "assistant", "reasoning_content": "Hmmm.", "content": "12"},
+            {"role": "assistant", reasoning_field: "Hmmm.", "content": "12"},
         ]
         expected = messages[-1]
         messages = prepare_multimodal_messages(messages) if self.is_vlm else messages
@@ -1082,7 +1174,7 @@ class TestParseResponse:
             text = text[0]
         response = text[len(prefix) :]
         tokenizer = processing_class.tokenizer if self.is_vlm else processing_class
-        parsed = parse_response(tokenizer, response)
+        parsed = parse_response(tokenizer, response, prefix=prefix)
         assert parsed == expected
 
     def test_parse_response_tool_call(self, model_name):
@@ -1115,7 +1207,7 @@ class TestParseResponse:
             text = text[0]
         response = text[len(prefix) :]
         tokenizer = processing_class.tokenizer if self.is_vlm else processing_class
-        parsed = parse_response(tokenizer, response)
+        parsed = parse_response(tokenizer, response, prefix=prefix)
         assert parsed == expected
 
     def test_parse_response_tool_call_with_content(self, model_name):
@@ -1124,16 +1216,19 @@ class TestParseResponse:
             "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
         ):
             pytest.skip("Llama 3.1 / 3.2 templates only allow a single tool call per assistant turn, with no content.")
-        if model_name in ("trl-internal-testing/tiny-GptOssForCausalLM",) and Version(
-            transformers.__version__
-        ) < Version("5.5.0"):
-            pytest.skip("Upstream bug in response parsing (see #5753; fixed in transformers#45166)")
+        if model_name == "trl-internal-testing/tiny-GptOssForCausalLM" and not _SUPPORTS_RESPONSE_TEMPLATE:
+            # gpt-oss surfaces the content-before-tool-call (analysis channel) as `thinking` only with the new-style
+            # `response_template` parser. The legacy `gptoss_schema` folds the analysis channel into `content`.
+            pytest.skip("gpt-oss thinking-before-tool-call requires the response_template parser (>= 5.13).")
         processing_class = self._load(model_name)
         tool_calls = [{"type": "function", "function": {"name": "multiply", "arguments": {"a": 3, "b": 4}}}]
-        messages = [
-            {"role": "user", "content": "What is 3*4?"},
-            {"role": "assistant", "content": "Let's call the tool.", "tool_calls": tool_calls},
-        ]
+        assistant = {"role": "assistant", "tool_calls": tool_calls}
+        if model_name == "trl-internal-testing/tiny-GptOssForCausalLM":
+            assistant["thinking"] = "Let's call the tool."
+            assistant["content"] = ""
+        else:
+            assistant["content"] = "Let's call the tool."
+        messages = [{"role": "user", "content": "What is 3*4?"}, assistant]
         expected = messages[-1]
         messages = prepare_multimodal_messages(messages) if self.is_vlm else messages
         prefix = processing_class.apply_chat_template(
@@ -1145,7 +1240,7 @@ class TestParseResponse:
             text = text[0]
         response = text[len(prefix) :]
         tokenizer = processing_class.tokenizer if self.is_vlm else processing_class
-        parsed = parse_response(tokenizer, response)
+        parsed = parse_response(tokenizer, response, prefix=prefix)
         assert parsed == expected
 
     def test_parse_response_tool_call_without_arguments(self, model_name):
@@ -1176,7 +1271,7 @@ class TestParseResponse:
             text = text[0]
         response = text[len(prefix) :]
         tokenizer = processing_class.tokenizer if self.is_vlm else processing_class
-        parsed = parse_response(tokenizer, response)
+        parsed = parse_response(tokenizer, response, prefix=prefix)
         assert parsed == expected
 
     def test_parse_response_multiple_tool_calls(self, model_name):
@@ -1212,7 +1307,7 @@ class TestParseResponse:
             text = text[0]
         response = text[len(prefix) :]
         tokenizer = processing_class.tokenizer if self.is_vlm else processing_class
-        parsed = parse_response(tokenizer, response)
+        parsed = parse_response(tokenizer, response, prefix=prefix)
         assert parsed == expected
 
     def test_parse_response_malformed_tool_call(self, model_name):

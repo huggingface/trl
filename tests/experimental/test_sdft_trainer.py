@@ -12,9 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import importlib
+
 import pytest
 import torch
-from datasets import Dataset
+from datasets import Dataset, DatasetDict
 from transformers import TrainerCallback
 from transformers.utils import is_peft_available
 
@@ -61,6 +63,10 @@ class RecordingTeacherClient:
 
 
 class TestSDFTTrainer(TrlTestCase):
+    def teardown_method(self):
+        if hasattr(self, "_liger_module"):
+            importlib.reload(importlib.import_module(self._liger_module))
+
     @staticmethod
     def _trainable_param_snapshot(model):
         return {name: param.detach().clone() for name, param in model.named_parameters() if param.requires_grad}
@@ -71,6 +77,29 @@ class TestSDFTTrainer(TrlTestCase):
             not torch.allclose(previous_param, model.get_parameter(name), rtol=1e-12, atol=1e-12)
             for name, previous_param in previous_trainable_params.items()
         )
+
+    def test_trust_remote_code(self):
+        dataset = Dataset.from_dict(
+            {
+                "prompt": ["Solve 2+2.", "Name the capital of France."],
+                "privileged_context": ["Example answer: 4.", "Example answer: Paris."],
+            }
+        )
+        model_id = "trl-internal-testing/tiny-RemoteForCausalLM"
+
+        with pytest.raises(ValueError, match="custom code"):
+            SDFTTrainer(
+                model=model_id,
+                args=SDFTConfig(output_dir=self.tmp_dir, report_to="none"),
+                train_dataset=dataset,
+            )
+
+        trainer = SDFTTrainer(
+            model=model_id,
+            args=SDFTConfig(output_dir=self.tmp_dir, report_to="none", trust_remote_code=True),
+            train_dataset=dataset,
+        )
+        assert type(trainer.model).__name__ == "RemoteForCausalLM"
 
     def test_train(self):
         dataset = Dataset.from_dict(
@@ -105,6 +134,42 @@ class TestSDFTTrainer(TrlTestCase):
         assert trainer.state.log_history[-1]["train_loss"] is not None
         self._assert_any_trainable_param_changed(trainer.model, previous_trainable_params)
 
+    @pytest.mark.parametrize("eval_dataset_type", ["dataset", "dataset_dict", "dict_of_dataset", "none"])
+    def test_init_with_eval_dataset(self, eval_dataset_type):
+        # Streaming datasets are not yet supported in SDFT
+        train_dataset = Dataset.from_dict(
+            {
+                "prompt": ["Solve 2+2.", "Name the capital of France."],
+                "privileged_context": ["Example answer: 4.", "Example answer: Paris."],
+            }
+        )
+        eval_split = Dataset.from_dict({"prompt": ["Solve 3+3."], "privileged_context": ["Example answer: 6."]})
+
+        if eval_dataset_type == "none":
+            eval_dataset = None
+        elif eval_dataset_type == "dataset":
+            eval_dataset = eval_split
+        elif eval_dataset_type == "dataset_dict":
+            eval_dataset = DatasetDict({"data1": eval_split, "data2": eval_split})
+        else:  # "dict_of_dataset"
+            eval_dataset = {"data1": eval_split, "data2": eval_split}
+
+        training_args = SDFTConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = SDFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=train_dataset,
+            eval_dataset=eval_dataset,
+        )
+
+        # SDFT tokenizes prompts/completions on the fly during generation, so eval datasets are stored as-is.
+        if eval_dataset_type == "none":
+            assert trainer.eval_dataset is None
+        elif isinstance(trainer.eval_dataset, dict):
+            assert set(trainer.eval_dataset.keys()) == {"data1", "data2"}
+        else:
+            assert trainer.eval_dataset is eval_dataset
+
     @require_liger_kernel
     @require_torch_accelerator
     def test_liger_loss_matches_non_liger_loss(self):
@@ -130,6 +195,7 @@ class TestSDFTTrainer(TrlTestCase):
             args=SDFTConfig(use_liger_kernel=True, **common),
             train_dataset=dataset,
         )
+        self._liger_module = liger_trainer.model.__module__
 
         liger_trainer.model.load_state_dict(ref_trainer.model.state_dict())
         torch.manual_seed(0)

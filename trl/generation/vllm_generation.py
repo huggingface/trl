@@ -178,6 +178,8 @@ class VLLMGeneration:
             - "vllm" will use the vLLM model implementation.
             - "transformers" will use the Transformers model implementation.
             - "terratorch" will use the TerraTorch model implementation.
+        trust_remote_code (`bool`, *optional*, defaults to `False`):
+            Trust remote code (e.g., from HuggingFace) when downloading the model and tokenizer.
 
         > Parameters for generation:
 
@@ -240,6 +242,7 @@ class VLLMGeneration:
         max_num_seqs: int | None = None,
         enable_sleep_mode: bool = False,
         model_impl: str = "auto",
+        trust_remote_code: bool = False,
         # Generation configuration
         repetition_penalty: float = 1.0,
         temperature: float = 1.0,
@@ -273,6 +276,7 @@ class VLLMGeneration:
         self.max_num_seqs = max_num_seqs
         self.enable_sleep_mode = enable_sleep_mode
         self.model_impl = model_impl
+        self.trust_remote_code = trust_remote_code
 
         # Generation configuration
         self.repetition_penalty = repetition_penalty
@@ -306,7 +310,7 @@ class VLLMGeneration:
                 self.vllm_client = VLLMClient(
                     base_url=base_url, group_port=self.group_port, connection_timeout=self.server_timeout
                 )
-                self.vllm_client.init_communicator(device=torch.cuda.current_device())
+                self.vllm_client.init_communicator(device=accelerator.device)
 
         elif self.mode == "colocate":
             # Make sure tensor_parallel_size group size evenly divides the world size - each group should have
@@ -360,9 +364,12 @@ class VLLMGeneration:
                 # Important so temperature scaling/logit tweaking affects the TIS log probs
                 logprobs_mode="processed_logprobs",
                 quantization=quantization,
+                trust_remote_code=self.trust_remote_code,
             )
             if self.enable_sleep_mode:
                 self.llm.sleep(level=2)
+            # Sleep level 2 discards the weights; track it so that generate() knows it must re-push them
+            self._llm_weights_sleeping = self.enable_sleep_mode
         else:
             raise ValueError(f"vllm_mode must be either 'server' or 'colocate', got '{self.mode}'.")
 
@@ -424,7 +431,7 @@ class VLLMGeneration:
             name = self._fix_param_name_to_vllm(name, extra_prefixes=["modules_to_save.default."])
 
             if param.is_cpu:
-                param = param.to(torch.device("cuda"))
+                param = param.to(self.accelerator.device)
             param = param.full_tensor()
 
             self._push_param_to_vllm(name, param)
@@ -447,6 +454,7 @@ class VLLMGeneration:
         if self.mode == "colocate" and self.enable_sleep_mode:
             empty_cache()  # required to avoid OOM in some cases
             self.llm.wake_up(tags=["weights"])
+            self._llm_weights_sleeping = False
 
         model = self.model
         accelerator = self.accelerator
@@ -531,16 +539,11 @@ class VLLMGeneration:
         repetition_penalty = self.repetition_penalty
         max_completion_length = self.max_completion_length
 
-        # Wake up colocated vLLM weights if needed (idempotent if already awake from sync_weights)
-        if self.mode == "colocate" and self.enable_sleep_mode:
-            empty_cache()  # required to avoid OOM in some cases
-            self.llm.wake_up(tags=["weights"])
-            # Work around for https://github.com/vllm-project/vllm/issues/29341
-            try:
-                self.llm.collective_rpc("reload_weights")
-            except NotImplementedError:
-                # Non-CUDA vLLM backends (e.g., vllm-ascend's NPUWorkerV1), don't implement reload_weights
-                pass
+        # Sleep level 2 discards the weights, so waking up isn't enough: they must be re-pushed from the training
+        # model. vLLM's `reload_weights` can't be used here, as it reloads the initial checkpoint from disk rather
+        # than the current training weights. See https://github.com/vllm-project/vllm/issues/29341
+        if self.mode == "colocate" and self.enable_sleep_mode and self._llm_weights_sleeping:
+            self.sync_weights()
 
         # Generate completions using vLLM: gather all prompts and use them in a single call in the main process
         if self.mode == "server":
@@ -661,6 +664,16 @@ class VLLMGeneration:
             else:
                 vllm_prompts = [{"prompt_token_ids": ids} for ids in all_prompts]
 
+            # When PEFT is used, DDP gradient all-reduce only covers the small LoRA parameters, so
+            # NCCL operations complete very quickly. On non-NVLink hardware (e.g. A40/A100), vLLM's
+            # TP NCCL collective can race with NCCL's internal P2P/SHM channel cleanup from that
+            # all-reduce, causing llm.generate() to hang. A barrier on the default process group
+            # forces NCCL to fully drain before vLLM's TP communication starts. We pass device_ids
+            # so NCCL uses this rank's device rather than guessing, which itself risks a hang.
+            # See https://github.com/huggingface/trl/issues/3671
+            if is_peft_model(self.model) and self.tensor_parallel_size > 1:
+                torch.distributed.barrier(device_ids=[accelerator.local_process_index])
+
             with profiler:
                 all_outputs = self.llm.generate(vllm_prompts, sampling_params=sampling_params, use_tqdm=False)
 
@@ -685,5 +698,6 @@ class VLLMGeneration:
 
             if self.enable_sleep_mode:
                 self.llm.sleep(level=2)
+                self._llm_weights_sleeping = True
 
         return prompt_ids, completion_ids, logprobs, logprob_token_ids

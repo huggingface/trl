@@ -64,10 +64,10 @@ The paper identifies the following key hyperparameters:
 
 ## Example script                                                                                                            
  
-Use [`trl/experimental/ssd/ssd.py`](https://github.com/huggingface/trl/blob/main/trl/experimental/ssd/ssd.py) to launch SSD training from the command line. The script supports any causal LM from the Hub, custom local datasets via `--dataset_path`, and PEFT/LoRA via the standard `ModelConfig` flags.
+Use [`examples/scripts/ssd.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/ssd.py) to launch SSD training from the command line. The script supports any causal LM from the Hub, custom local datasets via `--dataset_path`, and PEFT/LoRA via the standard `ModelConfig` flags.
 
 ```bash
-python trl/experimental/ssd/ssd.py \
+python examples/scripts/ssd.py \
     --model_name_or_path Qwen/Qwen3-4B-Instruct-2507 \
     --dataset_name microsoft/rStar-Coder \
     --dataset_config seed_sft \
@@ -89,10 +89,10 @@ python trl/experimental/ssd/ssd.py \
 
 ## Evaluation on LiveCodeBench
 
-Use [`trl/experimental/ssd/ssd_eval.py`](https://github.com/huggingface/trl/blob/main/trl/experimental/ssd/ssd_eval.py) to evaluate a base model or an SSD-trained checkpoint on LiveCodeBench v6. The script uses vLLM for generation and LiveCodeBench's official `codegen_metrics` for sandboxed `pass@k` scoring; default decoding parameters match Table 3 of the paper.
+Use [`examples/scripts/ssd_eval.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/ssd_eval.py) to evaluate a base model or an SSD-trained checkpoint on LiveCodeBench v6. The script uses vLLM for generation and LiveCodeBench's official `codegen_metrics` for sandboxed `pass@k` scoring; default decoding parameters match Table 3 of the paper.
 
 ```bash
-python trl/experimental/ssd/ssd_eval.py \
+python examples/scripts/ssd_eval.py \
     --model_name_or_path <path-or-repo> \
     --temperature 1.1 --top_k 20 --top_p 0.8 \
     --n 1 \
