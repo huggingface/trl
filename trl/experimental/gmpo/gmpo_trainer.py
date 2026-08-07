@@ -114,9 +114,10 @@ class GMPOTrainer(GRPOTrainer):
             # Exclude formatting/template tokens (EOS, chat delimiters) from the KL penalty: their per-token KL
             # dominates the term and spikes the metric (issue #2933), and we want these tokens to become
             # deterministic. They still receive the policy-gradient update below.
-            per_token_kl = per_token_kl.masked_fill(
-                torch.isin(completion_ids, self._kl_ignored_token_ids.to(completion_ids.device)), 0.0
-            )
+            if self.exclude_special_tokens_kl:
+                per_token_kl = per_token_kl.masked_fill(
+                    torch.isin(completion_ids, self._kl_ignored_token_ids.to(completion_ids.device)), 0.0
+                )
             seq_kl = (per_token_kl * mask).sum(-1) / mask.sum(-1).clamp(min=1.0)  # (B,)
             per_sequence_loss = per_sequence_loss + self.beta * seq_kl
 
