@@ -21,9 +21,11 @@ import queue
 import numpy as np
 import pytest
 import torch
+import transformers
 from accelerate import PartialState
 from datasets import load_dataset
-from transformers import AutoTokenizer
+from packaging.version import Version
+from transformers import AutoProcessor, AutoTokenizer, ProcessorMixin
 from transformers.testing_utils import torch_device
 
 import trl.experimental.async_grpo.async_rollout_worker as worker
@@ -46,7 +48,7 @@ from trl.experimental.async_grpo.async_rollout_worker import (
     _SampleBuilder,
 )
 
-from ..testing_utils import TrlTestCase, is_ampere_or_newer
+from ..testing_utils import TrlTestCase, is_ampere_or_newer, require_vision
 
 
 def dummy_reward_func(completions, **kwargs):
@@ -57,20 +59,26 @@ class _StubRolloutWorker:
     """Minimal rollout worker stub for testing the trainer in isolation."""
 
     def __init__(
-        self, tokenizer, dataset, num_generations: int = 8, samples_per_weight_sync: int = 10, fork_k: int = 1
+        self, processing_class, dataset, num_generations: int = 8, samples_per_weight_sync: int = 10, fork_k: int = 1
     ):
         self.rollout_buffer = queue.Queue()
         self._samples_per_weight_sync = samples_per_weight_sync
         self._model_version = 0
         self._fork_k = fork_k
+        tokenizer = processing_class.tokenizer if isinstance(processing_class, ProcessorMixin) else processing_class
         self._sample_iter = self._make_sample_iter(tokenizer, dataset, num_generations)
 
     def _make_sample_iter(self, tokenizer, dataset, num_generations):
         for group_id, row in enumerate(itertools.cycle(dataset)):
-            completions = [
-                [{"role": "assistant", "content": f"{row['completion'][0]['content']} {idx}"}]
-                for idx in range(num_generations)
-            ]
+            if "completion" in row:
+                completions = [
+                    [{"role": "assistant", "content": f"{row['completion'][0]['content']} {idx}"}]
+                    for idx in range(num_generations)
+                ]
+            else:
+                completions = [
+                    [{"role": "assistant", "content": f"completion {idx}"}] for idx in range(num_generations)
+                ]
             prompt_completions = [row["prompt"] + completion for completion in completions]
             prompt_ids = tokenizer.apply_chat_template(
                 row["prompt"], tokenize=True, add_generation_prompt=True, return_dict=False
@@ -232,6 +240,59 @@ class TestAsyncGRPOTrainer(TrlTestCase):
                 args=args,
                 environment_factory={"a": EnvA, "b": EnvB},
             )
+
+    @pytest.mark.skipif(
+        Version(transformers.__version__) < Version("5.2.0"),
+        reason="Qwen3.5 models were introduced in transformers-5.2.0",
+    )
+    @require_vision
+    def test_train_vlm_text_only_data(self):
+        # A VLM trained on text-only data: the trainer must load a processor, keep it on
+        # `processing_class`, and use its tokenizer everywhere a tokenizer is required.
+        model_id = "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-Think"
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+
+        training_args = AsyncGRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            token_budget=256,  # set explicitly; the stub worker has no real vLLM server to query for max_model_len
+            vllm_server_timeout=5.0,  # short timeout so test fails fast if queue runs dry
+            report_to="none",
+        )
+        trainer = AsyncGRPOTrainer(
+            model=model_id,
+            reward_funcs=dummy_reward_func,  # unused: the stub pre-computes rewards, but the trainer requires it
+            args=training_args,
+            train_dataset=dataset,
+            rollout_worker=_StubRolloutWorker(
+                AutoProcessor.from_pretrained(model_id),
+                dataset,
+                num_generations=3,
+                # This model's samples are short (~23 tokens), so a `token_budget`-sized row needs more of
+                # them than the default buffer holds, and the trainer would block waiting for the queue.
+                samples_per_weight_sync=64,
+            ),
+            weight_transfer=_StubWeightTransfer(),
+        )
+
+        assert isinstance(trainer.processing_class, ProcessorMixin)
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            if n.startswith("model.visual"):
+                torch.testing.assert_close(param, new_param, rtol=1e-12, atol=1e-12, msg=f"Param {n} is updated")
+            else:
+                assert not torch.equal(param, new_param), f"Param {n} is not updated"
 
 
 class TestAsyncRolloutWorkerEnvironments(TrlTestCase):
