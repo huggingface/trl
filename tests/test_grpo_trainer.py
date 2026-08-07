@@ -277,6 +277,33 @@ class TestComputeStareTokenWeights(TrlTestCase):
         )
         torch.testing.assert_close(weights, torch.tensor([[1.0, 1.0, 1.5, 1.5]]))
 
+    def test_top_p_ratio_is_per_sequence_not_batch_pooled(self):
+        # Two rows, both positive-advantage. Row 0 has uniformly higher surprisal than row 1. Under a
+        # batch-global topk with top_p_ratio=0.5, k=ceil(8*0.5)=4 slots all land in row 0 and row 1
+        # gets nothing (paper Section 4.2 explicitly selects per-response). Verify each row receives
+        # its own ceil(4*0.5)=2 critical tokens.
+        logps = self._logps(
+            [
+                [-3.0, -3.1, -3.2, -3.3],  # row 0: high surprisal
+                [-0.1, -0.2, -0.3, -0.4],  # row 1: low surprisal
+            ]
+        )
+        advantages = torch.tensor([[1.0, 1.0, 1.0, 1.0], [1.0, 1.0, 1.0, 1.0]])
+        mask = torch.ones_like(advantages)
+        weights, _ = GRPOTrainer.compute_stare_token_weights(
+            per_token_logps=logps,
+            advantages=advantages,
+            entropies=self._low_entropy(logps.shape),
+            mask=mask,
+            variant="O1",
+            top_p_ratio=0.5,
+            reweight_w=1.5,
+        )
+        row0_selected = int((weights[0] > 1.0).sum().item())
+        row1_selected = int((weights[1] > 1.0).sum().item())
+        assert row0_selected == 2, f"row 0 expected 2 critical tokens, got {row0_selected}"
+        assert row1_selected == 2, f"row 1 expected 2 critical tokens, got {row1_selected} (batch-pooled regression?)"
+
     def test_rejects_invalid_variant(self):
         logps = self._logps([[-0.5]])
         advantages = torch.tensor([[1.0]])

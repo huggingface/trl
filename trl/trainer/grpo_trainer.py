@@ -3085,19 +3085,26 @@ class GRPOTrainer(_BaseTrainer):
         surprisal = -per_token_logps.detach()
 
         def top_surprisal_mask(candidate_mask: torch.Tensor) -> torch.Tensor:
-            """Select the top-``top_p_ratio`` highest-surprisal tokens within ``candidate_mask``."""
-            candidate_count = int(candidate_mask.sum().item())
+            """Select the top-``top_p_ratio`` highest-surprisal tokens *per sequence* within ``candidate_mask``.
+
+            Paper Section 4.2 selects the entropy-critical set on a per-response basis: each row gets its own
+            ``ceil(row_candidate_count * top_p_ratio)`` budget. A batch-global topk would let longer or higher-
+            surprisal rows monopolise the budget and starve shorter completions.
+            """
             selected = torch.zeros_like(candidate_mask, dtype=torch.bool)
-            if candidate_count == 0 or top_p_ratio <= 0.0:
+            if top_p_ratio <= 0.0:
                 return selected
-            # ceil(candidate_count * top_p_ratio), at least 1 token.
-            k = max(1, math.ceil(candidate_count * top_p_ratio))
-            k = min(k, candidate_count)
-            candidate_values = surprisal[candidate_mask]
-            _, topk_local_idx = torch.topk(candidate_values, k=k, largest=True)
-            flat_candidate_idx = candidate_mask.reshape(-1).nonzero(as_tuple=False).squeeze(-1)
-            flat_selected_idx = flat_candidate_idx[topk_local_idx]
-            selected.reshape(-1)[flat_selected_idx] = True
+            for b in range(candidate_mask.size(0)):
+                row_mask = candidate_mask[b]
+                candidate_count = int(row_mask.sum().item())
+                if candidate_count == 0:
+                    continue
+                k = max(1, math.ceil(candidate_count * top_p_ratio))
+                k = min(k, candidate_count)
+                row_surprisal = surprisal[b][row_mask]
+                _, topk_local_idx = torch.topk(row_surprisal, k=k, largest=True)
+                flat_candidate_idx = row_mask.nonzero(as_tuple=False).squeeze(-1)
+                selected[b][flat_candidate_idx[topk_local_idx]] = True
             return selected
 
         l_plus = top_surprisal_mask(positive_candidates)
