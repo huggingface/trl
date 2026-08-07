@@ -392,9 +392,10 @@ class GRPOTrainer(_BaseTrainer):
         if self._tokenizer.pad_token is None:
             self._tokenizer.pad_token = self._tokenizer.eos_token
 
-        # Cache the tokenizer's special-token ids (EOS, pad, chat delimiters). These formatting tokens are
-        # dropped from the per-token KL penalty in the loss (issue #2933): the policy should be free to make
-        # them deterministic, but their KL otherwise dominates the term and spikes the metric.
+        # Cache the tokenizer's special-token ids (EOS, pad, chat delimiters). When `exclude_special_tokens_kl`
+        # is set, these formatting tokens are dropped from the per-token KL penalty in the loss (issue #2933):
+        # the policy should be free to make them deterministic, but their KL otherwise dominates the term and
+        # spikes the metric.
         self._kl_ignored_token_ids = torch.tensor(sorted(set(self._tokenizer.all_special_ids)), dtype=torch.long)
 
         # Resolve vision placeholder token IDs once. Used by the forward pass to rebuild mm_token_type_ids
@@ -848,6 +849,13 @@ class GRPOTrainer(_BaseTrainer):
         self._entropy_window_stats = None
         if self.use_liger_kernel and self._entropy_bonus_enabled:
             raise NotImplementedError("Entropy bonus is not supported with Liger kernel.")
+        self.exclude_special_tokens_kl = args.exclude_special_tokens_kl
+        if self.use_liger_kernel and self.exclude_special_tokens_kl:
+            raise NotImplementedError(
+                "`exclude_special_tokens_kl=True` is not supported with `use_liger_kernel=True`: the Liger fused "
+                "GRPO loss computes the KL penalty internally from `ref_per_token_logps`, so the special-token "
+                "mask would be silently ignored. Set `use_liger_kernel=False` to use `exclude_special_tokens_kl`."
+            )
 
         # Datasets
         self.shuffle_dataset = args.shuffle_dataset
@@ -3107,9 +3115,10 @@ class GRPOTrainer(_BaseTrainer):
             # Exclude formatting/template tokens (EOS, chat delimiters) from the KL penalty: their per-token KL
             # dominates the term and spikes the metric (issue #2933), and we want these tokens to become
             # deterministic. They still receive the policy-gradient update below.
-            per_token_kl = per_token_kl.masked_fill(
-                torch.isin(completion_ids, self._kl_ignored_token_ids.to(completion_ids.device)), 0.0
-            )
+            if self.exclude_special_tokens_kl:
+                per_token_kl = per_token_kl.masked_fill(
+                    torch.isin(completion_ids, self._kl_ignored_token_ids.to(completion_ids.device)), 0.0
+                )
 
         # From here, log_importance_weights (and all subsequent tensors, coef_1, coef_2, etc.) shape depends on
         # importance_sampling_level: "token" level: (B, T); "sequence" level: (B, 1)

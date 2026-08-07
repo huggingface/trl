@@ -363,6 +363,11 @@ class GRPOConfig(_BaseConfig):
             `beta != 0`, including on-policy: the ratio is differentiable, so it affects the gradient even where its
             value is exactly 1. The unbiased reverse-KL property holds for `importance_sampling_level="token"`; with
             `"sequence"` a sequence-level weight is broadcast onto the per-token KL.
+        exclude_special_tokens_kl (`bool`, *optional*, defaults to `False`):
+            Whether to exclude the tokenizer's special tokens (EOS, pad, chat template delimiters) from the per-token
+            KL penalty. These formatting tokens are the ones the policy should be free to make deterministic, but
+            their KL otherwise dominates the term and spikes the logged `kl` metric. They still receive the policy
+            gradient update. Only has an effect when `beta != 0`, and is not supported with `use_liger_kernel=True`.
 
         > Parameters that control the logging
 
@@ -971,6 +976,16 @@ class GRPOConfig(_BaseConfig):
             "including on-policy: the ratio is differentiable, so it affects the gradient even where its value is "
             "exactly 1. The unbiased reverse-KL property holds for `importance_sampling_level='token'`; with "
             "'sequence' a sequence-level weight is broadcast onto the per-token KL."
+        },
+    )
+    exclude_special_tokens_kl: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to exclude the tokenizer's special tokens (EOS, pad, chat template delimiters) from the "
+            "per-token KL penalty. These formatting tokens are the ones the policy should be free to make "
+            "deterministic, but their KL otherwise dominates the term and spikes the logged `kl` metric. They still "
+            "receive the policy gradient update. Only has an effect when `beta != 0`, and is not supported with "
+            "`use_liger_kernel=True`."
         },
     )
 

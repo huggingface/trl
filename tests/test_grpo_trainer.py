@@ -1709,13 +1709,15 @@ class TestGRPOTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_kl_ignores_special_tokens(self):
-        # The per-token KL penalty drops formatting/template tokens (EOS, chat delimiters); their KL otherwise
-        # dominates the term and spikes the metric (issue #2933). Verify the ignored-id cache is built from the
-        # tokenizer's special tokens and that a KL-on run (beta != 0) trains through the masked KL path.
+        # With `exclude_special_tokens_kl=True` the per-token KL penalty drops formatting/template tokens (EOS,
+        # chat delimiters); their KL otherwise dominates the term and spikes the metric (issue #2933). Verify the
+        # ignored-id cache is built from the tokenizer's special tokens and that a KL-on run (beta != 0) trains
+        # through the masked KL path.
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
             beta=0.1,  # KL term on so per_token_kl and its special-token masking are exercised
+            exclude_special_tokens_kl=True,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
@@ -1743,6 +1745,29 @@ class TestGRPOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    def test_exclude_special_tokens_kl_rejects_liger(self):
+        # The Liger fused GRPO loss computes the KL penalty internally from `ref_per_token_logps`, so the
+        # special-token mask applied in `_compute_loss` would be silently skipped on that path. Guard at init
+        # rather than letting the two paths diverge.
+        assert GRPOConfig(output_dir=self.tmp_dir, use_cpu=True).exclude_special_tokens_kl is False
+        assert GRPOConfig(output_dir=self.tmp_dir, use_cpu=True, exclude_special_tokens_kl=True)
+
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            beta=0.1,  # the mask only applies when the KL term is on
+            exclude_special_tokens_kl=True,
+            use_liger_kernel=True,
+            report_to="none",
+        )
+        with pytest.raises(NotImplementedError, match="exclude_special_tokens_kl"):
+            GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
+            )
 
     def test_reward_func_wrong_number_of_rewards(self):
         # A reward function that returns the wrong number of rewards should raise a clear error instead of silently
