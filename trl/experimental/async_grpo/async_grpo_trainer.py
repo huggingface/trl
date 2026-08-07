@@ -35,6 +35,7 @@ from transformers.data.data_collator import DataCollatorMixin
 
 from ...trainer.base_trainer import _BaseTrainer
 from ...trainer.utils import get_config_model_id, is_trackio_available, nanmax, nanmin, pad, patch_chunked_lm_head
+from ..api import LocalTrainingClient, TrainingClientProtocol
 from .async_grpo_config import AsyncGRPOConfig
 from .async_rollout_worker import AsyncRolloutWorker, RolloutSample
 from .vllm_client import VLLMClient
@@ -622,6 +623,11 @@ class AsyncGRPOTrainer(_BaseTrainer):
             [`WeightTransferClient`] is created that streams the trainer's weights into the config's vLLM server over
             NCCL. This is independent of `rollout_worker`: a custom rollout worker still gets weight sync. Pass a no-op
             implementation to disable trainer-side weight sync.
+        training_client (`TrainingClientProtocol`, *optional*):
+            Custom training-compute backend implementing [`TrainingClientProtocol`]. If `None`, a default
+            [`LocalTrainingClient`] is created, which runs the model in this process. Pass a custom client to run the
+            forward and backward passes elsewhere (another process, another set of GPUs, or a remote service). The loss
+            stays here either way; only the model compute moves.
     """
 
     _tag_names = ["trl", "async-grpo"]
@@ -652,6 +658,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
         environment_factory: EnvironmentFactory | dict[str, EnvironmentFactory] | None = None,
         rollout_worker: RolloutWorkerProtocol | None = None,
         weight_transfer: WeightTransferProtocol | None = None,
+        training_client: TrainingClientProtocol | None = None,
     ):
         # Args
         if args is None:
@@ -780,6 +787,9 @@ class AsyncGRPOTrainer(_BaseTrainer):
         self._current_train_step_time = 0.0
         self._last_step_end_time = None
         self.model_version = 0
+        # Unlike the rollout and weight-sync backends, this one sits in the forward/backward path, so every rank
+        # needs it.
+        self.training_client = training_client if training_client is not None else LocalTrainingClient()
         # Create worker and queue on rank 0
         if self.accelerator.is_main_process:
             # Weight sync and the token-budget query target the vLLM server from the config; the client is the single
@@ -929,14 +939,22 @@ class AsyncGRPOTrainer(_BaseTrainer):
         advantages = inputs["advantages"][mask_bool].unsqueeze(0)
 
         forward_start = time.time()
-        outputs = model(
+        outputs = self.training_client.forward(
+            model,
             input_ids=input_ids,
             position_ids=position_ids,
-            labels=input_ids,
             completion_mask=completion_mask,
-            use_cache=False,
+            # Scaled for gradient accumulation the same way the policy loss is below, since the client applies it
+            # to its own backward pass rather than through `loss`.
+            aux_loss_coef=self.router_aux_loss_coef / self.current_gradient_accumulation_steps
+            if self.aux_loss_enabled
+            else 0.0,
         )
-        log_probs, entropy = outputs["log_probs"], outputs["entropy"]
+        log_probs, entropy = outputs.log_probs, outputs.entropy
+        # `log_probs` is a leaf, so `accelerator.backward(loss)` stops here and deposits d(loss)/d(log_probs) in its
+        # `.grad`. This hook forwards that gradient to the client, which is what actually reaches the model. The
+        # loss therefore never has to cross into the client, and the client never has to know what GRPO is.
+        log_probs.register_hook(self.training_client.backward)
         self._last_forward_time_s = time.time() - forward_start
 
         completion_mask = completion_mask[:, 1:]
@@ -961,9 +979,10 @@ class AsyncGRPOTrainer(_BaseTrainer):
         # loss = loss / max(per_token_loss.size(0), 1)
         loss = loss / self.current_gradient_accumulation_steps
 
-        # The policy loss above is scaled for gradient accumulation (HF auto-scaling is off here), so scale aux too
+        # The policy loss above is scaled for gradient accumulation (HF auto-scaling is off here), so scale aux too.
+        # `aux_loss` is detached (the client already applied its gradient), so this only affects the reported loss.
         if self.aux_loss_enabled:
-            aux_loss = outputs["aux_loss"]
+            aux_loss = outputs.aux_loss
             loss = loss + self.router_aux_loss_coef * aux_loss / self.current_gradient_accumulation_steps
 
         with torch.no_grad():
@@ -1085,6 +1104,12 @@ class AsyncGRPOTrainer(_BaseTrainer):
             # NOTE: in dynamic mbs setup, we would need to agg across DP ranks.
             self._metrics["train"]["train_seq_len"].append(float(position_ids.max() + 1))
         return loss
+
+    def _clip_grad_norm(self, model):
+        # The gradients are wherever the training client put them, so it is what can clip them. Note that the
+        # optimizer step stays with `Trainer`: a client that owns the parameters supplies its own optimizer through
+        # the `optimizers` argument.
+        return self.training_client.clip_grad_norm(model, self.accelerator, self.args.max_grad_norm)
 
     def training_step(self, model, inputs, num_items_in_batch):
         time_before = time.perf_counter()
