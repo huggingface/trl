@@ -1753,16 +1753,13 @@ class SFTTrainer(_BaseTrainer):
                 ) from e
             raise
 
-        # Compute entropy
         if self.args.loss_type == "chunked_nll":
             # Use `num_valid_tokens` from the patched forward rather than recomputing from `labels`. Prompt-learning
             # PEFT (PromptTuning, P-Tuning) prepends `-100`-padded virtual tokens before delegating into the patched
             # forward, so the valid-token count over the padded labels can differ from the un-padded `labels[..., 1:]`
             # count by up to one per sequence; using the patched output keeps numerator and denominator aligned.
-            num_valid = self.accelerator.gather_for_metrics(outputs.num_valid_tokens).sum()
-            entropy_sum = self.accelerator.gather_for_metrics(outputs.entropy_sum).sum()
-            entropy = (entropy_sum / num_valid).item() if num_valid > 0 else 0.0
-            self._metrics[mode]["entropy"].append(entropy)
+            self._metrics[mode]["_total_tokens"].append(outputs.num_valid_tokens.detach())
+            self._metrics[mode]["_entropy_sum"].append(outputs.entropy_sum.detach())
         elif not self.args.use_liger_kernel:  # liger doesn't return logits
             with torch.no_grad():
                 if "shift_labels" in inputs:
@@ -1789,38 +1786,26 @@ class SFTTrainer(_BaseTrainer):
                 correct_predictions = (predictions == shift_labels) & mask
                 correct_tokens = correct_predictions.sum()
 
-                # Gather counts across ranks and weight-average
-                entropy_sum = self.accelerator.gather_for_metrics(entropy_sum).sum()
-                total_tokens = self.accelerator.gather_for_metrics(total_tokens).sum()
-                correct_tokens = self.accelerator.gather_for_metrics(correct_tokens)
-                entropy = (entropy_sum / total_tokens).item() if total_tokens > 0 else 0.0
-
-                total_sum = total_tokens.sum()
-                accuracy = (correct_tokens.sum() / total_sum).item() if total_sum > 0 else 0.0
-            self._metrics[mode]["entropy"].append(entropy)
-            self._metrics[mode]["mean_token_accuracy"].append(accuracy)
+            self._metrics[mode]["_total_tokens"].append(total_tokens)
+            self._metrics[mode]["_entropy_sum"].append(entropy_sum)
+            self._metrics[mode]["_correct_tokens"].append(correct_tokens)
 
         if mode == "train":
             # When using padding-free, the attention_mask is not present in the inputs, instead we have cu_seq_lens_q,
             # cu_seq_lens_k, and max_length_k, max_length_q and position_ids.
             if "attention_mask" in inputs:
-                num_tokens_in_batch = self.accelerator.gather_for_metrics(inputs["attention_mask"].sum()).sum().item()
+                num_tokens_in_batch = inputs["attention_mask"].sum()
             elif "position_ids" in inputs:
-                local_num_tokens = torch.tensor(inputs["position_ids"].size(1), device=inputs["position_ids"].device)
-                num_tokens_in_batch = self.accelerator.gather_for_metrics(local_num_tokens).sum().item()
+                num_tokens_in_batch = torch.tensor(inputs["position_ids"].size(1), device=inputs["position_ids"].device)
             else:
                 raise ValueError("Expected 'attention_mask' or 'position_ids' in inputs.")
-            self._total_train_tokens += num_tokens_in_batch
-        self._metrics[mode]["num_tokens"] = [self._total_train_tokens]
+            self._metrics[mode]["_num_tokens_in_batch"].append(num_tokens_in_batch.detach())
 
         if self.args.loss_type == "chunked_nll":
-            correct = self.accelerator.gather_for_metrics(outputs.num_correct_tokens).sum()
-            accuracy = (correct / num_valid).item() if num_valid > 0 else 0.0
-            self._metrics[mode]["mean_token_accuracy"].append(accuracy)
+            self._metrics[mode]["_correct_tokens"].append(outputs.num_correct_tokens.detach())
         elif self.args.use_liger_kernel:
             if hasattr(outputs, "token_accuracy") and outputs.token_accuracy is not None:
-                token_accuracy = self.accelerator.gather_for_metrics(outputs.token_accuracy).mean().item()
-                self._metrics[mode]["mean_token_accuracy"].append(token_accuracy)
+                self._metrics[mode]["_token_accuracy_liger"].append(outputs.token_accuracy.detach())
             else:
                 warnings.warn(
                     "liger-kernel did not return token_accuracy when requested. The mean_token_accuracy metric will "
@@ -1829,9 +1814,7 @@ class SFTTrainer(_BaseTrainer):
                 )
         # Log auxiliary loss if enabled (applies to both Liger and non-Liger)
         if self.aux_loss_enabled:
-            aux_loss = outputs.aux_loss
-            aux_loss = self.accelerator.gather_for_metrics(aux_loss).mean().item()
-            self._metrics[mode]["aux_loss"].append(aux_loss)
+            self._metrics[mode]["_aux_loss"].append(outputs.aux_loss.detach())
 
         return (loss, outputs) if return_outputs else loss
 
@@ -1845,9 +1828,50 @@ class SFTTrainer(_BaseTrainer):
         with self.maybe_activation_offload_context:
             return super().training_step(*args, **kwargs)
 
+    def _gather_per_step(self, tensors: list[torch.Tensor], reduce: str) -> torch.Tensor:
+        """
+        Gather a list of per-step, per-process scalar tensors in a single collective call.
+        Returns a 1D tensor with one value per step.
+
+        We deliberately use `self.accelerator.gather` here rather than `gather_for_metrics`: the latter truncates
+        its result to the dataloader's last-batch remainder, which is meaningless for these per-step scalars and
+        would corrupt the reshape below whenever this is called on the last, uneven batch of an epoch.
+        """
+        stacked = torch.stack(tensors)
+        gathered = self.accelerator.gather(stacked).reshape(self.accelerator.num_processes, -1)
+        return gathered.sum(dim=0) if reduce == "sum" else gathered.mean(dim=0)
+
     def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
         mode = "train" if self.model.training else "eval"
-        metrics = {key: sum(val) / len(val) for key, val in self._metrics[mode].items()}  # average the metrics
+        raw_metrics = self._metrics[mode]
+
+        # Metrics are accumulated per-rank, per-step in `compute_loss` with no gather/sync. Gather and reduce them
+        # here, once per logging call, instead of once per step.
+        metrics = {}
+        if raw_metrics.get("_entropy_sum"):
+            entropy_sum = self._gather_per_step(raw_metrics["_entropy_sum"], reduce="sum")
+            total_tokens = self._gather_per_step(raw_metrics["_total_tokens"], reduce="sum")
+            has_tokens = total_tokens > 0
+            entropy = torch.where(has_tokens, entropy_sum / total_tokens.clamp(min=1), torch.zeros_like(entropy_sum))
+            metrics["entropy"] = entropy.mean().item()
+            if raw_metrics.get("_correct_tokens"):
+                correct_tokens = self._gather_per_step(raw_metrics["_correct_tokens"], reduce="sum")
+                accuracy = torch.where(
+                    has_tokens, correct_tokens / total_tokens.clamp(min=1), torch.zeros_like(entropy_sum)
+                )
+                metrics["mean_token_accuracy"] = accuracy.mean().item()
+        if raw_metrics.get("_token_accuracy_liger"):
+            metrics["mean_token_accuracy"] = (
+                self._gather_per_step(raw_metrics["_token_accuracy_liger"], reduce="mean").mean().item()
+            )
+        if raw_metrics.get("_aux_loss"):
+            metrics["aux_loss"] = self._gather_per_step(raw_metrics["_aux_loss"], reduce="mean").mean().item()
+
+        if mode == "train" and raw_metrics.get("_num_tokens_in_batch"):
+            self._total_train_tokens += (
+                self._gather_per_step(raw_metrics["_num_tokens_in_batch"], reduce="sum").sum().item()
+            )
+        metrics["num_tokens"] = self._total_train_tokens
 
         # This method can be called both in training and evaluation. When called in evaluation, the keys in `logs`
         # start with "eval_". We need to add the prefix "eval_" to the keys in `metrics` to match the format.
