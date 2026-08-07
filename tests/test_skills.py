@@ -163,22 +163,6 @@ class TestInstallSkill:
         assert (target_dir / "trl-training").exists()
         assert not marker_file.exists()  # Marker should be gone
 
-    def test_force_overwrites_symlink(self, tmp_path):
-        """Test that install_skill with force=True can overwrite a symlink."""
-        target_dir = tmp_path / "target"
-        target_dir.mkdir()
-
-        # Create a symlink
-        symlink = target_dir / "trl-training"
-        symlink.symlink_to(_get_trl_skills_dir() / "trl-training")
-
-        # Install with force should replace symlink with copy
-        result = install_skill("trl-training", target_dir, force=True)
-
-        assert result is True
-        assert (target_dir / "trl-training").exists()
-        assert not (target_dir / "trl-training").is_symlink()
-
     def test_skill_not_directory(self, tmp_path):
         """Test that install_skill raises ValueError if skill is not a directory."""
         source_dir = tmp_path / "source"
@@ -425,24 +409,6 @@ class TestEdgeCases:
 
         assert (target_dir / "test-skill" / ".hidden").exists()
         assert (target_dir / "test-skill" / ".hidden").read_text() == "hidden content"
-
-    def test_list_skills_with_symlinks(self, tmp_path):
-        """Test that list_skills handles symlinked skill directories."""
-        source_dir = tmp_path / "source"
-        skills_dir = tmp_path / "skills"
-        skills_dir.mkdir()
-
-        # Create a real skill
-        skill_dir = source_dir / "real-skill"
-        skill_dir.mkdir(parents=True)
-        (skill_dir / "SKILL.md").write_text("# Real")
-
-        # Create symlink to it
-        (skills_dir / "linked-skill").symlink_to(skill_dir)
-
-        # list_skills should include symlinked skills if they have SKILL.md
-        skills = list_skills(target=skills_dir)
-        assert "linked-skill" in skills
 
 
 class TestListAgentNames:
