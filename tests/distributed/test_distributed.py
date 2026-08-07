@@ -510,8 +510,8 @@ class TestDistributed(TrlTestCase):
         # sharded `lm_head.weight` once per token chunk under FSDP2 (correct loss, silently slow, invisible
         # to a pass/fail test). The companion worker runs one SFT `chunked_nll` step under a 2-process FSDP2
         # group (reshard_after_forward=True — the condition that triggers the bug) and counts the all-gather
-        # collectives during that step via CommDebugMode (torch's DTensor-native comm counter; required
-        # because under FSDP2 the parameter unshard is driven by autograd hooks / c10d collectives, not by
+        # collectives during that step from a counting-only `TorchDispatchMode` (required because under FSDP2
+        # the parameter unshard is driven by autograd hooks / c10d collectives, not by
         # `DTensor.full_tensor()`).
         #
         # `_chunked_cross_entropy_loss` chunks over VALID TOKENS, not vocab, so the measured count mixes two

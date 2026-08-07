@@ -26,10 +26,8 @@ derives the regression threshold from the exact ``n_valid`` captured from inside
 
 Why count real collectives and not ``DTensor.full_tensor()``: under FSDP2 the parameter unshard is driven by autograd
 pre-hooks / c10d collectives, not by explicit ``full_tensor()`` calls, so a ``full_tensor`` counter is blind to it. We
-use ``CommDebugMode`` (``torch.distributed.tensor.debug``) — torch's purpose-built, DTensor-native comm counter, which
-records ``funcol.all_gather_into_tensor`` and the ``c10d`` ``_allgather_base_`` / ``allgather_`` variants that FSDP2
-emits. (An earlier version also ran a hand-rolled ``TorchDispatchMode``, but re-dispatching sharded ops from a custom
-mode under FSDP2 mismatches the index/weight devices on the embedding lookup, so we rely on ``CommDebugMode`` alone.)
+count ``funcol.all_gather_into_tensor`` and the ``c10d`` ``_allgather_base_`` / ``allgather_`` variants that FSDP2
+emits from a ``TorchDispatchMode`` that only tallies ops and never alters dispatch (see ``_AllGatherCounter``).
 
 Prints one machine-parseable line ``CHUNKED_NLL_ALLGATHER_RESULT {json}`` that the pytest side asserts on.
 Self-contained on purpose: it imports only public TRL symbols and runs as ``__main__`` under ``accelerate launch``.
@@ -41,8 +39,12 @@ import json
 import math
 import os
 import tempfile
+from collections import Counter
 
+import torch
 from datasets import load_dataset
+from torch.distributed.tensor import DTensor
+from torch.utils._python_dispatch import TorchDispatchMode
 
 from trl import SFTConfig, SFTTrainer
 
@@ -52,13 +54,12 @@ RESULT_PREFIX = "CHUNKED_NLL_ALLGATHER_RESULT"
 
 
 def _count_all_gathers(comm_counts: dict) -> int:
-    """Sum the all-gather collectives from a ``CommDebugMode.get_comm_counts()`` dict.
+    """Sum the all-gather collectives from an ``_AllGatherCounter.comm_counts`` dict.
 
-    ``CommDebugMode`` keys the dict by the comm op (funcol / c10d). FSDP2's parameter unshard shows up as
-    ``funcol.all_gather_into_tensor`` (and the ``_allgather_base_`` / ``allgather_`` c10d variants), so we match on the
-    op's string name containing ``all_gather`` / ``allgather`` and total those. This is the DTensor-native counter — it
-    observes the autograd-hook-driven gathers that ``DTensor.full_tensor()`` is blind to, without a hand-rolled
-    ``TorchDispatchMode`` (which mis-dispatches sharded ops under FSDP2).
+    The counter keys by op name. FSDP2's parameter unshard shows up as ``funcol.all_gather_into_tensor`` (and the
+    ``_allgather_base_`` / ``allgather_`` c10d variants), so we match on the op's string name containing ``all_gather``
+    / ``allgather`` and total those. This observes the autograd-hook-driven gathers that ``DTensor.full_tensor()`` is
+    blind to.
     """
     total = 0
     for op, n in comm_counts.items():
@@ -68,6 +69,39 @@ def _count_all_gathers(comm_counts: dict) -> int:
     return total
 
 
+class _AllGatherCounter(TorchDispatchMode):
+    """Tally dispatched ops by name, leaving dispatch semantics untouched.
+
+    ``CommDebugMode`` cannot be used here. Its module tracker registers a fresh forward hook every time a module's
+    forward-pre-hook fires while keying the handles by module *name*, so a module invoked more than once inside one
+    traced forward accumulates live hooks, pops its internal parent stack more often than it pushes, and dies with
+    ``IndexError: list index out of range`` once the ``"Global"`` sentinel is gone. The chunked-CE step trips this.
+    Reproduced identically on torch 2.9, 2.11 and 2.12: one invocation is fine, two or more always raise.
+
+    This keeps only the counting contract of ``CommDebugMode.__torch_dispatch__`` and drops the tracking:
+
+    - higher-order operators carry no ``_overloadpacket`` and are never collectives, so redispatch them untouched;
+    - when any argument is a ``DTensor``, return ``NotImplemented`` so DTensor desugars into real comm ops before we
+      see them. Dispatching those ourselves is what made an earlier hand-rolled mode mismatch the index/weight devices
+      on the embedding lookup, so the collectives must be counted *after* DTensor has desugared them;
+    - otherwise run the op unchanged and tally it by overload packet.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.supports_higher_order_operators = True
+        self.comm_counts: Counter[str] = Counter()
+
+    def __torch_dispatch__(self, func, types, args=(), kwargs=None):
+        if isinstance(func, torch._ops.HigherOrderOperator):
+            return func(*args, **(kwargs or {}))
+        if any(t is DTensor for t in types):
+            return NotImplemented
+        out = func(*args, **(kwargs or {}))
+        self.comm_counts[str(func._overloadpacket)] += 1
+        return out
+
+
 class _MeasuringSFTTrainer(SFTTrainer):
     """SFTTrainer that counts all-gather collectives during its first ``training_step``.
 
@@ -75,23 +109,21 @@ class _MeasuringSFTTrainer(SFTTrainer):
     under ``fsdp_cpu_ram_efficient_loading`` the model is on CPU/meta until ``_inner_training_loop`` FSDP-wraps it and
     moves it to GPU. Calling ``training_step`` on ``trainer.model`` before ``train()`` runs the embedding lookup with a
     CPU weight against a CUDA input → device-mismatch crash. Overriding ``training_step`` lets the trainer do all
-    wrapping/placement, while we wrap the (single, since ``max_steps=1``) step in ``CommDebugMode`` to tally the FSDP2
-    unshard collectives.
+    wrapping/placement, while we wrap the (single, since ``max_steps=1``) step in ``_AllGatherCounter`` to tally the
+    FSDP2 unshard collectives.
     """
 
     comm_counts: dict | None = None
 
     def training_step(self, *args, **kwargs):
-        from torch.distributed.tensor.debug import CommDebugMode
-
         # Only measure the first step (with max_steps=1 there is exactly one); guard anyway so the counts
         # reflect a single step even if the caller raises max_steps later.
         if self.comm_counts is not None:
             return super().training_step(*args, **kwargs)
-        comm_mode = CommDebugMode()
-        with comm_mode:
+        counter = _AllGatherCounter()
+        with counter:
             loss = super().training_step(*args, **kwargs)
-        self.comm_counts = comm_mode.get_comm_counts()
+        self.comm_counts = dict(counter.comm_counts)
         return loss
 
 
@@ -164,7 +196,7 @@ def main() -> None:
     vocab_size = trainer.model.config.vocab_size
 
     # Run the real training loop: it FSDP-wraps the model and moves it to GPU, then calls training_step
-    # once (max_steps=1), which our subclass measures under CommDebugMode.
+    # once (max_steps=1), which our subclass measures under `_AllGatherCounter`.
     trainer.train()
 
     comm_counts = trainer.comm_counts or {}
@@ -185,7 +217,7 @@ def main() -> None:
         "chunk_size": int(chunk_size),
         "n_chunks_if_regressed": int(n_chunks),
         "all_gathers": int(all_gathers),
-        "commdebug_total": int(comm_total),
+        "dispatched_ops_total": int(comm_total),
         "loss_finite": train_loss is not None and math.isfinite(train_loss),
     }
     if trainer.accelerator.is_main_process:
