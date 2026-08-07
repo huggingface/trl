@@ -1890,11 +1890,6 @@ class TestGRPOTrainer(TrlTestCase):
             loss_type="luspo",
             beta=beta,
             importance_sampling_level=importance_sampling_level,
-            # Wide open on purpose: old_per_token_logps below is random and unrelated to per_token_logps, so the
-            # importance-sampling ratio can easily land outside the default clip range. PPO-style clipping would
-            # then saturate and mask the exact signal this test perturbs, independently of whether the padding fix
-            # under test is correct. This test isolates masking, not clipping, so clipping is disabled here.
-            epsilon=1e6,
             report_to="none",
         )
         trainer = GRPOTrainer(
