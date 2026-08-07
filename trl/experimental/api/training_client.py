@@ -24,13 +24,9 @@ plain tensor of the same shape.
 """
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Protocol
+from typing import Protocol
 
 import torch
-
-
-if TYPE_CHECKING:
-    from accelerate import Accelerator
 
 
 @dataclass
@@ -67,6 +63,11 @@ class TrainingClientProtocol(Protocol):
     therefore hold the autograd graph (or the remote request handle) from `forward` until `backward` consumes it.
     `backward` is not called when the trainer skips a step, so a backend must tolerate a `forward` whose gradient never
     arrives.
+
+    Gradient clipping and the optimizer step are deliberately absent. [`~transformers.Trainer`] already accepts an
+    optimizer through its `optimizers` argument, so a backend that owns the parameters supplies one whose `step`
+    reaches them and clips them on the way. That matches how existing backends are built: Tinker carries
+    `grad_clip_norm` in its optimizer params, and Arctic Platform clips inside its `step` call.
     """
 
     def forward(
@@ -107,25 +108,6 @@ class TrainingClientProtocol(Protocol):
         Args:
             grad_log_probs (`torch.Tensor`):
                 `d(loss)/d(log_probs)`, same shape as the `log_probs` returned by `forward`.
-        """
-        ...
-
-    def clip_grad_norm(self, model: torch.nn.Module, accelerator: "Accelerator", max_grad_norm: float) -> torch.Tensor:
-        """Clip the gradients accumulated by `backward` and return the global norm before clipping.
-
-        Gradients live wherever the backend put them, so the backend is what can clip them. The optimizer step itself
-        is not part of this interface: [`~transformers.Trainer`] already takes one through its `optimizers` argument,
-        so a backend supplies an optimizer whose `step` reaches its own parameters.
-
-        Args:
-            model (`torch.nn.Module`):
-                The trainer's prepared model. In-process backends clip its parameters; off-process backends clip their
-                own copy and ignore this argument.
-            accelerator (`accelerate.Accelerator`):
-                The trainer's accelerator. In-process backends clip through it, since sharded gradients need its
-                collectives. Off-process backends ignore it.
-            max_grad_norm (`float`):
-                Maximum global gradient norm.
         """
         ...
 
@@ -189,6 +171,3 @@ class LocalTrainingClient:
         surrogate.backward()
         self._log_probs = None
         self._aux_loss = None
-
-    def clip_grad_norm(self, model: torch.nn.Module, accelerator: "Accelerator", max_grad_norm: float) -> torch.Tensor:
-        return accelerator.clip_grad_norm_(model.parameters(), max_grad_norm)

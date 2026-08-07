@@ -1105,12 +1105,6 @@ class AsyncGRPOTrainer(_BaseTrainer):
             self._metrics["train"]["train_seq_len"].append(float(position_ids.max() + 1))
         return loss
 
-    def _clip_grad_norm(self, model):
-        # The gradients are wherever the training client put them, so it is what can clip them. Note that the
-        # optimizer step stays with `Trainer`: a client that owns the parameters supplies its own optimizer through
-        # the `optimizers` argument.
-        return self.training_client.clip_grad_norm(model, self.accelerator, self.args.max_grad_norm)
-
     def training_step(self, model, inputs, num_items_in_batch):
         time_before = time.perf_counter()
         output = super().training_step(model, inputs, num_items_in_batch)

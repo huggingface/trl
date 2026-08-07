@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import torch
-from accelerate import Accelerator
 from transformers import AutoModelForCausalLM
 
 from trl.experimental.api import LocalTrainingClient
@@ -120,18 +119,6 @@ class TestLocalTrainingClient(TrlTestCase):
         client = LocalTrainingClient()
         output = client.forward(self.model, self.input_ids, self.position_ids, self.completion_mask)
         torch.testing.assert_close(output.log_probs, self._model_forward().detach(), rtol=0, atol=0)
-
-    def test_clip_grad_norm_delegates_to_accelerator(self):
-        client = LocalTrainingClient()
-        output = client.forward(self.model, self.input_ids, self.position_ids, self.completion_mask)
-        self._loss(output.log_probs).backward()
-        client.backward(output.log_probs.grad)
-
-        accelerator = Accelerator()
-        expected = torch.nn.utils.get_total_norm([p.grad for p in self.model.parameters() if p.grad is not None])
-        torch.testing.assert_close(
-            client.clip_grad_norm(self.model, accelerator, 1.0).float(), expected.float(), rtol=1e-5, atol=1e-8
-        )
 
     def test_hook_wiring_matches_manual_backward(self):
         """The trainer registers `client.backward` as a hook on `log_probs` rather than calling it directly."""
