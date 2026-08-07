@@ -105,6 +105,10 @@ class TrainingClientProtocol(Protocol):
         surrogate whose gradient with respect to every parameter equals the gradient of the trainer's real loss, so the
         loss itself never has to cross the boundary.
 
+        A backend usually does not need a new loss function for this. A weighted cross-entropy, `sum(-weights *
+        log_probs)`, is already the same surrogate: pass `weights = -grad_log_probs`. That is how Tinker implements its
+        custom-loss path on top of a fixed set of server-side losses.
+
         Args:
             grad_log_probs (`torch.Tensor`):
                 `d(loss)/d(log_probs)`, same shape as the `log_probs` returned by `forward`.
