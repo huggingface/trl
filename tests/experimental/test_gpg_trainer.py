@@ -66,6 +66,8 @@ class TestGPGTrainer(TrlTestCase):
         # `_compute_loss` directly with a stubbed parent so the assertion pins the factor and nothing else.
         trainer = GPGTrainer.__new__(GPGTrainer)
         trainer.bias_correction = True
+        trainer._valid_group_fraction = {"train": 1.0, "eval": 1.0}
+        trainer.model = type("M", (), {"training": True})()
 
         base_loss = torch.tensor(2.0)
         GRPOTrainerParent = GPGTrainer.__mro__[1]
@@ -73,18 +75,47 @@ class TestGPGTrainer(TrlTestCase):
         GRPOTrainerParent._compute_loss = lambda self, model, inputs: base_loss
         try:
             for frac_zero_std, expected in [(0.0, 2.0), (0.5, 4.0), (0.75, 8.0)]:
-                trainer._valid_group_fraction = 1.0 - frac_zero_std
+                trainer._valid_group_fraction["train"] = 1.0 - frac_zero_std
                 assert trainer._compute_loss(None, {}).item() == expected
 
             # Every group degenerate: the advantages are all zero, so there is no gradient to restore and the factor
             # would divide by zero. The loss must pass through untouched.
-            trainer._valid_group_fraction = 0.0
+            trainer._valid_group_fraction["train"] = 0.0
             assert trainer._compute_loss(None, {}).item() == 2.0
 
             # Opting out recovers the uncorrected GRPO magnitude.
             trainer.bias_correction = False
-            trainer._valid_group_fraction = 0.5
+            trainer._valid_group_fraction["train"] = 0.5
             assert trainer._compute_loss(None, {}).item() == 2.0
+        finally:
+            GRPOTrainerParent._compute_loss = original_compute_loss
+
+    def test_eval_does_not_clobber_the_train_correction_factor(self):
+        # `GRPOTrainer` buffers one train generation across `steps_per_generation` optimizer steps and only
+        # regenerates every `steps_per_generation * num_iterations` steps (grpo_trainer.py:1584-1592), while eval
+        # generates per batch (:1596). An eval landing inside that window must not leave the buffered train steps
+        # rescaling with the eval fraction, so the cache is keyed by mode.
+        trainer = GPGTrainer.__new__(GPGTrainer)
+        trainer.bias_correction = True
+        trainer._valid_group_fraction = {"train": 1.0, "eval": 1.0}
+
+        base_loss = torch.tensor(1.0)
+        GRPOTrainerParent = GPGTrainer.__mro__[1]
+        original_compute_loss = GRPOTrainerParent._compute_loss
+        GRPOTrainerParent._compute_loss = lambda self, model, inputs: base_loss
+        try:
+            # Train generation scores a batch where half the groups are degenerate.
+            trainer._valid_group_fraction["train"] = 0.5
+            # An eval pass then scores a batch where none are, which used to overwrite the shared scalar.
+            trainer._valid_group_fraction["eval"] = 1.0
+
+            trainer.model = type("M", (), {"training": True})()
+            assert trainer._compute_loss(None, {}).item() == 2.0, (
+                "the buffered train step must still use the train fraction after an eval pass"
+            )
+
+            trainer.model = type("M", (), {"training": False})()
+            assert trainer._compute_loss(None, {}).item() == 1.0
         finally:
             GRPOTrainerParent._compute_loss = original_compute_loss
 
@@ -109,4 +140,4 @@ class TestGPGTrainer(TrlTestCase):
         )
         trainer.train()
 
-        assert 0.0 <= trainer._valid_group_fraction <= 1.0
+        assert 0.0 <= trainer._valid_group_fraction["train"] <= 1.0

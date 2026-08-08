@@ -54,9 +54,12 @@ class GPGTrainer(GRPOTrainer):
         super().__init__(model, reward_funcs, args=args, **kwargs)
 
         self.bias_correction = args.bias_correction
-        # Fraction of groups with a non-degenerate reward spread, refreshed once per generation batch. Starts at 1.0
-        # so the correction is a no-op if the loss is ever computed before a generation batch has been scored.
-        self._valid_group_fraction = 1.0
+        # Fraction of groups with a non-degenerate reward spread, refreshed once per generation batch. Keyed by mode
+        # like `_metrics`: the parent buffers one train generation across `steps_per_generation` optimizer steps and
+        # only regenerates periodically, while eval generates per batch, so an eval landing inside that window would
+        # otherwise leave the remaining buffered train steps rescaling with the eval fraction. Starts at 1.0 so the
+        # correction is a no-op if the loss is ever computed before a generation batch has been scored.
+        self._valid_group_fraction = {"train": 1.0, "eval": 1.0}
 
     def _generate_and_score_completions(self, inputs):
         inputs = super()._generate_and_score_completions(inputs)
@@ -65,16 +68,19 @@ class GPGTrainer(GRPOTrainer):
         # lists are cleared on every log, and a single generation batch feeds several gradient-accumulation
         # micro-batches, each of which calls `_compute_loss`.
         mode = "train" if self.model.training else "eval"
-        self._valid_group_fraction = 1.0 - self._metrics[mode]["frac_reward_zero_std"][-1]
+        self._valid_group_fraction[mode] = 1.0 - self._metrics[mode]["frac_reward_zero_std"][-1]
 
         return inputs
 
     def _compute_loss(self, model, inputs):
         loss = super()._compute_loss(model, inputs)
 
+        mode = "train" if self.model.training else "eval"
+        fraction = self._valid_group_fraction[mode]
+
         # Skip the correction when every group is degenerate: the advantages are then all zero, so the loss carries no
         # gradient and there is nothing to rescale, while the factor itself would be a division by zero.
-        if self.bias_correction and self._valid_group_fraction > 0.0:
-            loss = loss / self._valid_group_fraction
+        if self.bias_correction and fraction > 0.0:
+            loss = loss / fraction
 
         return loss
