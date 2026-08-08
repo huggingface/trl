@@ -15,6 +15,7 @@
 import os
 import subprocess
 from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 import pytest
 from packaging.version import Version
@@ -24,6 +25,7 @@ from transformers.testing_utils import torch_device
 from trl.generation.vllm_client import VLLMClient
 from trl.generation.vllm_generation import extract_logprobs
 from trl.import_utils import is_vllm_available
+from trl.scripts import vllm_serve
 from trl.scripts.vllm_serve import chunk_list
 
 from .testing_utils import (
@@ -43,6 +45,31 @@ if is_vllm_available():
     _is_vllm_ge_014 = Version(vllm.__version__) >= Version("0.14.0")
 else:
     _is_vllm_ge_014 = False
+
+
+@require_vllm
+class TestVLLMServerMultiprocessing(TrlTestCase):
+    def test_workers_use_spawn_context(self):
+        multiprocessing_context = MagicMock()
+        parent_connection, child_connection = MagicMock(), MagicMock()
+        process = MagicMock()
+        multiprocessing_context.Pipe.return_value = parent_connection, child_connection
+        multiprocessing_context.Process.return_value = process
+        script_args = vllm_serve.ScriptArguments(model="test-model")
+
+        with (
+            patch("trl.scripts.vllm_serve.get_context", return_value=multiprocessing_context) as get_context,
+            patch("vllm.utils.network_utils.get_open_port", return_value=12345),
+            patch("uvicorn.run"),
+        ):
+            vllm_serve.main(script_args)
+
+        get_context.assert_called_once_with("spawn")
+        multiprocessing_context.Pipe.assert_called_once_with()
+        multiprocessing_context.Process.assert_called_once_with(
+            target=vllm_serve.llm_worker, args=(script_args, 0, 12345, child_connection)
+        )
+        process.start.assert_called_once_with()
 
 
 class TestChunkList(TrlTestCase):
