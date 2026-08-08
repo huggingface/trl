@@ -33,6 +33,10 @@ Original Gemma chat template. Used by both Gemma (v1) and Gemma2, which ship ide
 
 Original Gemma 3 chat template (as shipped by `google/gemma-3-*` checkpoints). Unlike `gemma.jinja`, this template supports system messages and renders multimodal `content` blocks (text and image) for VLM training.
 
+### `gemma4.jinja`
+
+Original Gemma 4 chat template (as shipped by `google/gemma-4-E2B-it` and the other checkpoints in that generation). Renders reasoning (`<|channel>thought\n...<channel|>`), assistant `tool_calls` (`<|tool_call>call:<name>{...}<tool_call|>` blocks), and multimodal `content` blocks. Response parsing uses `gemma4_template`.
+
 ### `glm4moe.jinja`
 
 Original GLM-4-MoE chat template.

@@ -92,7 +92,10 @@ class DPOConfig(_BaseConfig):
             tokens beyond shared lengths.
         f_divergence_type (`str`, *optional*, defaults to `"reverse_kl"`):
             f-divergence regularizer between policy and reference (f-DPO paper). Possible values are: `reverse_kl`
-            (default), `forward_kl`, `js_divergence`, `alpha_divergence`.
+            (default), `forward_kl`, `js_divergence`, `alpha_divergence`. Only the loss types built on the
+            chosen-rejected reward difference support a non-default value: `'sigmoid'`, `'sigmoid_norm'`, `'hinge'`,
+            `'ipo'`, `'exo_pair'`, `'robust'`, `'discopop'`, `'sft'`. The other loss types have no valid f-divergence
+            generalization and are rejected with a non-default value.
         f_alpha_divergence_coef (`float`, *optional*, defaults to `0.5`):
             α coefficient for the α-divergence u^-α regularizer, used only when `f_divergence_type='alpha_divergence'`.
         label_smoothing (`float`, *optional*, defaults to `0.0`):
@@ -261,7 +264,10 @@ class DPOConfig(_BaseConfig):
         default="reverse_kl",
         metadata={
             "help": "f-divergence regularizer between policy and reference (f-DPO paper). Possible values are: "
-            "`reverse_kl` (default), `forward_kl`, `js_divergence`, `alpha_divergence`.",
+            "`reverse_kl` (default), `forward_kl`, `js_divergence`, `alpha_divergence`. Only the loss types built on "
+            "the chosen-rejected reward difference support a non-default value: `'sigmoid'`, `'sigmoid_norm'`, "
+            "`'hinge'`, `'ipo'`, `'exo_pair'`, `'robust'`, `'discopop'`, `'sft'`. The other loss types have no valid "
+            "f-divergence generalization and are rejected with a non-default value.",
         },
     )
     f_alpha_divergence_coef: float = field(

@@ -557,7 +557,7 @@ $$
 \right).
 $$
 
-To enable this feature, set the `use_bias_correction_kl` parameter to `True` in the [`GRPOConfig`], and `beta > 0`:
+This feature is enabled by default (`use_bias_correction_kl=True` in the [`GRPOConfig`]), so you only need to set `beta > 0`:
 
 ```python
 from trl import GRPOConfig
@@ -565,7 +565,6 @@ from trl import GRPOConfig
 training_args = GRPOConfig(
     ...,
     beta=0.001,  # the paper doesn't specify the value used, so we use the value from "DeepSeek-R1 incentivizes reasoning in LLMs through reinforcement learning"
-    use_bias_correction_kl=True,
 )
 ```
 
