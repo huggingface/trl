@@ -362,9 +362,12 @@ def _patch_chunked_ce_lm_head(model: torch.nn.Module, chunk_size: int, is_vlm: b
         return _ChunkedCELMHeadOutput(
             loss=loss,
             logits=None,
-            past_key_values=getattr(outputs, "past_key_values", None),
+            # The backbone above is called with `use_cache=False` and never asked for
+            # attentions, so neither is ever populated. Naming them explicitly keeps this
+            # path independent of whether the model type declares the fields at all.
+            past_key_values=None,
             hidden_states=outputs.hidden_states,
-            attentions=getattr(outputs, "attentions", None),
+            attentions=None,
             num_correct_tokens=num_correct_tokens,
             entropy_sum=entropy_sum,
             num_valid_tokens=num_valid_tokens,
