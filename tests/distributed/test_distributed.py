@@ -558,6 +558,15 @@ class TestDistributed(TrlTestCase):
             f"baseline run was expected to execute exactly one token chunk (regression signal = 0): {baseline}"
         )
         baseline_gathers = baseline["all_gathers"]
+        # Instrument-liveness guard. The bound below compares the probe against this baseline, so if the counter
+        # observed nothing — a blind probe, or a model that never actually got sharded — both runs would report 0,
+        # the excess would be 0, and the regression assertion would pass without exercising the failure mode at all.
+        # FSDP2 must unshard the parameters at least once per forward/backward, so a genuinely sharded run always
+        # records some all-gathers (10 on the 2xH100 reference run).
+        assert baseline_gathers > 0, (
+            f"no all-gather collectives observed in the baseline run, so the regression bound would be vacuous: the "
+            f"probe is not seeing FSDP2's parameter unshard (is the model actually sharded?): {baseline}"
+        )
 
         # Probe run: shrink the chunk size so many token chunks run. A per-chunk `lm_head.weight` re-gather
         # regression would then add ~n_chunks all-gathers on top of the baseline.
