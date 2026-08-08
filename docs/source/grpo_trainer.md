@@ -431,6 +431,8 @@ Reward functions can be either synchronous Python callables or asynchronous `asy
 
 2. **Return value**: The function must return a list of floats. Each float represents the reward corresponding to a single completion.
 
+3. **Batch layout**: The function is called once per batch with every completion at once, not once per completion. The completions are grouped by prompt: the first `num_generations` entries are the generations of the first prompt, the next `num_generations` entries those of the second, and so on. A reward function can therefore score a completion relative to the other generations of the same prompt. See Example 7. Note that `num_generations` is not passed as an argument, so a group-aware reward function has to capture it.
+
 #### Example 1: Reward longer completions
 
 Below is an example of a reward function for a standard format that rewards longer completions:
@@ -625,6 +627,30 @@ def reward_func(completions, ground_truth, log_extra=None, log_metric=None, **kw
 
     return rewards
 ```
+
+#### Example 7: Group-relative rewards (LLM-as-a-judge rankings)
+
+Some judges score a completion only in comparison with the other completions of the same prompt, by ranking them against each other rather than grading each one on its own. Because the reward function receives the whole batch grouped by prompt (see Batch layout above), it can split the batch into groups of `num_generations` and rank within each group. The group size is not passed to the function, so capture it:
+
+```python
+def make_ranking_reward(num_generations):
+    def ranking_reward(prompts, completions, **kwargs):
+        rewards = [0.0] * len(completions)
+        for start in range(0, len(completions), num_generations):
+            group = completions[start : start + num_generations]
+            # Ask the judge to rank the group against itself, best first. It returns positions within
+            # the group, so offset them by `start` to index back into the full batch.
+            for rank, position in enumerate(judge_ranking(prompts[start], group)):
+                rewards[start + position] = 1.0 - rank / max(num_generations - 1, 1)
+        return rewards
+
+    return ranking_reward
+
+
+trainer = GRPOTrainer(..., reward_funcs=make_ranking_reward(training_args.num_generations))
+```
+
+Ranking spreads a group's rewards apart, so the group always has a non-zero reward standard deviation and contributes to the gradient. Grading each completion on its own can instead give every completion in a group the same reward, which zeroes the advantage of the whole group and is reported as `frac_reward_zero_std`.
 
 #### Passing the reward function to the trainer
 
