@@ -151,6 +151,32 @@ training_args = GMPOConfig(
 )
 ```
 
+### GPG: A Simple and Strong Reinforcement Learning Baseline for Model Reasoning
+
+**📜 Paper**: https://huggingface.co/papers/2504.02546
+
+Group Policy Gradient (GPG) is a minimalist GRPO variant. It removes the critic and the reference model, drops the KL constraint, and optimizes the policy-gradient objective directly rather than through a surrogate. Those three simplifications are already expressible with [`GRPOConfig`] as `beta=0.0`, `scale_rewards="none"` and the default `num_iterations=1`: with a single iteration the importance ratio is exactly one at the point of evaluation and clipping around one is inert, so GRPO's surrogate is gradient-identical to the plain policy gradient GPG writes down.
+
+What GPG adds on top is a correction for the gradient bias caused by degenerate groups. A group whose completions all receive the same reward has a zero advantage and contributes nothing to the gradient, yet its tokens still count toward the loss denominator, scaling the update down by the fraction of such groups. GPG divides the loss by the fraction of non-degenerate groups:
+
+$$
+\mathcal{L}_{\text{GPG}}(\theta) = \frac{1}{\alpha} \mathcal{L}(\theta), \qquad \alpha = \frac{\left|\left\{ i : \operatorname{std}(\mathbf{r}_i) \neq 0 \right\}\right|}{G_{\text{groups}}}
+$$
+
+where  \\( \mathbf{r}_i \\) are the rewards of group  \\( i \\). TRL already logs  \\( 1 - \alpha \\) as the `frac_reward_zero_std` metric.
+
+TRL provides an experimental implementation, see [Experimental - GPG](gpg):
+
+```python
+from trl.experimental.gpg import GPGConfig, GPGTrainer
+
+training_args = GPGConfig(
+    beta=0.0,  # no KL constraint and no reference model
+    scale_rewards="none",  # mean-centered advantage, no std scaling
+    bias_correction=True,  # rescale the loss by the non-degenerate group fraction
+)
+```
+
 ### DAPO: An Open-Source LLM Reinforcement Learning System at Scale
 
 **📜 Paper**: https://huggingface.co/papers/2503.14476

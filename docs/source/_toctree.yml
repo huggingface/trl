@@ -113,6 +113,8 @@
     title: GMPO
   - local: gold_trainer
     title: GOLD
+  - local: gpg
+    title: GPG
   - local: grpo_with_replay_buffer
     title: GRPO With Replay Buffer
   - local: gspo_token
