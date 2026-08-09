@@ -25,6 +25,10 @@ Original Cohere2 chat template (as shipped by `CohereLabs/c4ai-command-r7b-12-20
 
 Original DeepSeek-V3 chat template.
 
+### `falcon3.jinja`
+
+Original Falcon3 chat template (as shipped by `tiiuae/Falcon3-*-Instruct` checkpoints). Branches on whether `tools` is set: the tools branch renders assistant `tool_calls` as a JSON block and tool responses under an `<|assistant|>` tag; the plain branch has no `tool` role clause at all, so tool calls and tool responses are both silently dropped when `tools` isn't passed.
+
 ### `gemma.jinja`
 
 Original Gemma chat template. Used by both Gemma (v1) and Gemma2, which ship identical templates.
@@ -138,6 +142,12 @@ Patched DeepSeek-V3 template. Diff vs `deepseekv3.jinja`:
 
 - Uses `| tojson` on `tool['function']['arguments']` so that `arguments` can be passed as a `dict` (the documented format per [transformers docs](https://huggingface.co/docs/transformers/en/chat_extras#tool-calling-example)). The original template uses raw string concatenation, which crashes on dict inputs.
 - Wraps assistant message output with `{% generation %}` / `{% endgeneration %}` markers for SFT assistant-only loss.
+
+### `falcon3_training.jinja`
+
+Patched Falcon3 template. Diff vs `falcon3.jinja`:
+
+Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` in both the tools and no-tools branches so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
 
 ### `gemma_training.jinja`
 

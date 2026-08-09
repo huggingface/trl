@@ -363,6 +363,10 @@ class TestSupportsToolCalling:
             pytest.param("trl-internal-testing/tiny-SmolVLMForConditionalGeneration", id="smolvlm"),
             # Silently drops both tool_calls and tool messages
             pytest.param("trl-internal-testing/tiny-Cohere2ForCausalLM", id="cohere2"),
+            # Falcon3's default (no `tools=`) branch never reads `message.tool_calls` for the assistant role and has
+            # no `elif message['role'] == 'tool'` clause at all, so both the tool call and the tool response are
+            # silently dropped when tools aren't explicitly passed.
+            pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-Falcon3", id="falcon3"),
             pytest.param("trl-internal-testing/tiny-LlavaForConditionalGeneration", id="llava"),
             # Olmo3 uses a bespoke function-calling schema (a `functions`/`function_calls` string on the
             # message plus an `environment` role) instead of the standard `tools`/`tool_calls`/`tool`
@@ -614,6 +618,7 @@ class TestIsChatTemplateStopTokenTrained:
                 ),
             ],
         ),
+        pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-Falcon3", id="falcon3"),
         pytest.param("trl-internal-testing/tiny-GemmaForCausalLM", id="gemma"),
         pytest.param("trl-internal-testing/tiny-Gemma2ForCausalLM", id="gemma2"),
         pytest.param("trl-internal-testing/tiny-Gemma3ForConditionalGeneration", id="gemma3", marks=require_vision),
