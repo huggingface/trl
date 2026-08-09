@@ -539,8 +539,9 @@ class AsyncGRPOTrainer(_BaseTrainer):
             Model to be trained. Must be a string, being the *model id* of a pretrained model hosted inside a model
             repo on huggingface.co, or a path to a *directory* containing model weights saved using
             [`~transformers.PreTrainedModel.save_pretrained`], e.g., `'./my_model_directory/'`. The model is loaded
-            using [`~transformers.AutoModelForCausalLM.from_pretrained`]. The model name is also used to identify the
-            model on the vLLM server used for generation.
+            using [`~transformers.AutoModelForCausalLM.from_pretrained`] with the keyword arguments in
+            `args.model_init_kwargs`. If `dtype` is not specified in `args.model_init_kwargs`, it defaults to
+            `float32`. The model name is also used to identify the model on the vLLM server used for generation.
         reward_funcs (`RewardFunc | list[RewardFunc]`, *optional*):
             Reward functions to be used for computing the rewards. To compute the rewards, we call all the reward
             functions with the prompts and completions and sum the rewards. May be omitted when the reward is supplied
@@ -664,14 +665,14 @@ class AsyncGRPOTrainer(_BaseTrainer):
         self.temperature = args.temperature
 
         # Model
-        model_init_kwargs = args.model_init_kwargs or {}
+        model_init_kwargs = dict(args.model_init_kwargs or {})  # copy to avoid mutating model_init_kwargs
+        model_init_kwargs.setdefault("dtype", torch.float32)
         model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
         # FlashAttention is required: training runs in padding-free mode, where sequences are concatenated into a
         # single row and `cu_seq_lens` are derived from `position_ids` resets. SDPA/eager can't handle this.
         model = AutoModelForCausalLM.from_pretrained(
             model,
             device_map=None,
-            dtype=torch.float32,
             attn_implementation="kernels-community/flash-attn3",
             **model_init_kwargs,
         )
