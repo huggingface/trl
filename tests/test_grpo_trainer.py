@@ -1587,11 +1587,20 @@ class TestGRPOTrainer(TrlTestCase):
             max_completion_length=8,
             max_steps=1,
             report_to="none",
-            use_cpu=True,
+            # Exercise the off-policy mask as well, which is the third consumer of the sampling logprobs. The
+            # threshold is large enough that every sequence is under it, so with the fix in place nothing is
+            # dropped; a NaN sequence KL would compare false and drop the negative-advantage ones instead.
+            off_policy_mask_threshold=1e9,
         )
+
+        def varied_reward(completions, **kwargs):
+            # Distinct rewards guarantee a non-degenerate group, so some advantages are negative. Without that,
+            # every sequence would be kept on `advantages >= 0` alone and the off-policy mask would prove nothing.
+            return [float(i) for i in range(len(completions))]
+
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=varied_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -1622,6 +1631,30 @@ class TestGRPOTrainer(TrlTestCase):
 
         trainer._generate = generate_with_one_unscorable_token
 
+        # Snapshot the divergence metric as soon as it is produced. Reading `_metrics` after training is useless,
+        # because the dict is cleared on every log.
+        original_score = trainer._generate_and_score_completions
+        recorded_metrics = []
+
+        def record_metrics(inputs):
+            outputs = original_score(inputs)
+            for key in ["sampling/sampling_logp_difference/mean", "sampling/sampling_logp_difference/max"]:
+                recorded_metrics.extend((key, value) for value in trainer._metrics["train"][key])
+            return outputs
+
+        trainer._generate_and_score_completions = record_metrics
+
+        # Capture the off-policy mask, the third consumer of the sampling logprobs.
+        original_off_policy_mask = trainer.get_off_policy_mask
+        off_policy_masks = []
+
+        def record_off_policy_mask(*args, **kwargs):
+            off_policy_mask = original_off_policy_mask(*args, **kwargs)
+            off_policy_masks.append(off_policy_mask)
+            return off_policy_mask
+
+        trainer.get_off_policy_mask = record_off_policy_mask
+
         # Assert on every loss the trainer actually returns. The aggregate reported in `log_history` is not a
         # reliable witness here, since it can stay finite while an individual step's loss carries NaN.
         original_compute_loss = trainer._compute_loss
@@ -1641,6 +1674,22 @@ class TestGRPOTrainer(TrlTestCase):
             assert torch.isfinite(loss).all(), (
                 f"NaN or inf reached the loss in {vllm_importance_sampling_mode} mode: an unscorable token must "
                 f"contribute a neutral importance ratio instead of poisoning the update"
+            )
+
+        # The raw sampling logprobs feed another consumer: the logged divergence. It must stay a real number
+        # rather than NaN.
+        assert recorded_metrics, "the divergence metric was never recorded, so nothing was verified"
+        for key, value in recorded_metrics:
+            assert torch.isfinite(torch.tensor(value)), f"{key} became NaN because of an unscorable token"
+
+        # And a third: the off-policy mask. The threshold above is far larger than any real sequence KL, so every
+        # sequence must be kept. A NaN sequence KL compares false against it, which would silently drop exactly the
+        # negative-advantage sequences.
+        assert off_policy_masks, "the off-policy mask was never computed, so nothing was verified"
+        for off_policy_mask in off_policy_masks:
+            assert off_policy_mask.all(), (
+                "an unscorable token caused sequences to be dropped by the off-policy mask, even though the "
+                "threshold is high enough to keep every sequence"
             )
 
     def test_train_with_off_policy_mask(self):

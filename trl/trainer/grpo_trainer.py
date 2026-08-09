@@ -2813,7 +2813,9 @@ class GRPOTrainer(_BaseTrainer):
         if self.use_vllm and self.vllm_importance_sampling_correction:
             delta = torch.abs(old_per_token_logps - sampling_per_token_logps)
             mask = completion_mask.bool() if tool_mask is None else (completion_mask * tool_mask).bool()
-            delta = delta[mask]
+            # Tokens vLLM could not score carry NaN, so exclude them rather than let them turn the reported
+            # divergence into NaN. Counting them as zero instead would understate the divergence.
+            delta = delta[mask & ~torch.isnan(delta)]
             mean_delta = torch.mean(delta) if delta.numel() > 0 else torch.tensor(0.0, device=device)
             max_delta = torch.max(delta) if delta.numel() > 0 else torch.tensor(0.0, device=device)
             self._metrics[mode]["sampling/sampling_logp_difference/mean"].append(
@@ -2964,6 +2966,10 @@ class GRPOTrainer(_BaseTrainer):
         """
         # forward KL div: log(pi_old) - log(pi_theta)
         kl_div = sampling_per_token_logps - per_token_logps.detach()
+        # Tokens vLLM could not score carry NaN and provide no KL evidence. Left in, the sequence mean is NaN,
+        # `avg_seq_kl <= off_policy_threshold` is then False, and a negative-advantage sequence would be dropped
+        # on the strength of a single unscorable token.
+        kl_div = torch.nan_to_num(kl_div, nan=0.0)
         # Sequence-level Mean KL (ignoring prompt+padding)
         seq_kl_sum = (kl_div * mask).sum(dim=1, keepdim=True)
         avg_seq_kl = seq_kl_sum / mask.sum(dim=1, keepdim=True).clamp(min=1.0)
