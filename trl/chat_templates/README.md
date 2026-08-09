@@ -81,6 +81,10 @@ Original Nemotron Super chat template (as shipped by `nvidia/NVIDIA-Nemotron-3-S
 
 Original Nemotron Ultra chat template (as shipped by `nvidia/NVIDIA-Nemotron-3-Ultra-*` checkpoints). Same as `nemotron_3_nano.jinja` except it adds a `medium_effort` flag that appends a `{reasoning effort: efficient}` hint to the last user message, and tightens the whitespace around the `<think>` block. Tool calls use the same Hermes-style format, so it also reuses `qwen3_5_schema` for response parsing.
 
+### `olmo3.jinja`
+
+Original Olmo 3 chat template (as shipped by `allenai/Olmo-3-*` checkpoints). Uses a bespoke function-calling schema (a `functions` / `function_calls` string on the message, plus an `environment` role) instead of the standard `tools` / `tool_calls` / `tool` interface, so it does not support tool calling in the sense `supports_tool_calling()` checks for.
+
 ### `phi3.jinja`
 
 Original Phi-3 chat template.
@@ -212,6 +216,12 @@ Patched Nemotron Ultra template. Diff vs `nemotron_3_ultra.jinja`:
 
 Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that
 `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+
+### `olmo3_training.jinja`
+
+Patched Olmo 3 template. Diff vs `olmo3.jinja`:
+
+Wrap assistant message output (`content`, `function_calls`, and the `<|im_end|>` / `eos_token` terminator) with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss. No prefix-preservation fix is needed: Olmo 3's bespoke function-calling schema means `supports_tool_calling()` is `False` for this template, so prefix-preservation is not required by `get_training_chat_template()`.
 
 ### `phi3_training.jinja`
 

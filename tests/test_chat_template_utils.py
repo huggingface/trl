@@ -659,6 +659,14 @@ class TestIsChatTemplateStopTokenTrained:
                 reason="Nemotron 3 tokenizer requires transformers>=5.3.0",
             ),
         ),
+        pytest.param(
+            "trl-internal-testing/tiny-Olmo3ForCausalLM",
+            id="olmo3",
+            marks=pytest.mark.skipif(
+                Version(transformers.__version__) < Version("4.57.0"),
+                reason="Olmo 3 was introduced in transformers>=4.57.0",
+            ),
+        ),
         pytest.param("trl-internal-testing/tiny-Phi3ForCausalLM-3", id="phi3"),
         pytest.param("trl-internal-testing/tiny-Phi3ForCausalLM-3.5", id="phi3.5"),
         pytest.param("trl-internal-testing/tiny-Qwen2VLForConditionalGeneration", id="qwen2_vl", marks=require_vision),
