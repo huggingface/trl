@@ -92,6 +92,7 @@ from datetime import datetime
 from pathlib import Path
 
 from datasets import Dataset
+from openenv.core.containers.runtime import LocalDockerProvider
 
 from trl import GRPOConfig, GRPOTrainer, RichProgressCallback
 
@@ -116,7 +117,7 @@ def parse_args() -> argparse.Namespace:
     # Environment
     parser.add_argument("--env-host", type=str, default="https://openenv-sudoku.hf.space")
     parser.add_argument("--env-port", type=int, default=8001)
-    parser.add_argument("--env-mode", choices=["docker-local", "docker-image", "docker-hub", "space"], default="space")
+    parser.add_argument("--env-mode", choices=["docker-local", "docker-image", "space"], default="space")
     parser.add_argument("--env-image", type=str, default="textarena-env:latest")
 
     # Prompts
@@ -378,11 +379,9 @@ def main() -> None:
     if args.env_mode == "docker-local":
         env_url = f"http://{args.env_host}:{args.env_port}"
     elif args.env_mode == "docker-image":
-        _bootstrap = TextArenaEnv.from_docker_image(args.env_image)
-        env_url = _bootstrap.base_url
-    elif args.env_mode == "docker-hub":
-        _bootstrap = TextArenaEnv.from_hub(args.env_image)
-        env_url = _bootstrap.base_url
+        provider = LocalDockerProvider()
+        env_url = provider.start_container(args.env_image)
+        provider.wait_for_ready(env_url)
     elif args.env_mode == "space":
         env_url = args.env_host
     else:

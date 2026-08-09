@@ -28,7 +28,7 @@ from trl.experimental.minillm import MiniLLMConfig
 training_args = MiniLLMConfig(
     rkl_advantage=True,
     single_step_decomposition=False,
-    gamma=False
+    gamma=0.0
 )
 ```
 

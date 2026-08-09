@@ -2,11 +2,6 @@
 
 [![All_models-KTO-blue](https://img.shields.io/badge/All_models-KTO-blue)](https://huggingface.co/models?other=kto,trl)
 
-> [!WARNING]
-> As of TRL v1.0, `KTOTrainer` and `KTOConfig` have been moved to the `trl.experimental.kto` module.  
-> KTO API is experimental and may change at any time.
-> Promoting KTO back into the stable API is a high-priority task: KTO is slated for refactoring to align with the standard core trainer architecture.
-
 ## Overview
 
 TRL supports the Kahneman-Tversky Optimization (KTO) Trainer for training language models, as described in the paper [KTO: Model Alignment as Prospect Theoretic Optimization](https://huggingface.co/papers/2402.01306) by [Kawin Ethayarajh](https://huggingface.co/kawine), [Winnie Xu](https://huggingface.co/xwinxu), [Niklas Muennighoff](https://huggingface.co/Muennighoff), Dan Jurafsky, [Douwe Kiela](https://huggingface.co/douwekiela).
@@ -35,7 +30,7 @@ Below is the script to train the model:
 ```python
 # train_kto.py
 from datasets import load_dataset
-from trl.experimental.kto import KTOConfig, KTOTrainer
+from trl import KTOConfig, KTOTrainer
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
@@ -78,7 +73,7 @@ Here are some other factors to consider when choosing a programming language for
 
 KTO requires an [unpaired preference](dataset_formats#unpaired-preference) dataset. Alternatively, you can provide a *paired* preference dataset (also known simply as a *preference dataset*). In this case, the trainer will automatically convert it to an unpaired format by separating the chosen and rejected responses, assigning `label = True` to the chosen completions and `label = False` to the rejected ones.
 
-The [`experimental.kto.KTOTrainer`] is compatible with both [standard](dataset_formats#standard) and [conversational](dataset_formats#conversational) dataset formats. When provided with a conversational dataset, the trainer will automatically apply the chat template to the dataset.
+The [`KTOTrainer`] is compatible with both [standard](dataset_formats#standard) and [conversational](dataset_formats#conversational) dataset formats. When provided with a conversational dataset, the trainer will automatically apply the chat template to the dataset.
 
 ```python
 # Standard format
@@ -101,7 +96,7 @@ This section breaks down how KTO works in practice, covering the key steps: **pr
 ### Preprocessing and tokenization
 
 During training, each example is expected to contain a prompt, a `completion`, and a boolean `label` indicating whether the completion is desirable (`True`) or undesirable (`False`). For more details on the expected formats, see [Dataset formats](dataset_formats).
-The [`experimental.kto.KTOTrainer`] tokenizes each input using the model's tokenizer.
+The [`KTOTrainer`] tokenizes each input using the model's tokenizer.
 
 ### Computing the loss
 
@@ -155,7 +150,7 @@ While training and evaluating, we record the following metrics:
 
 ### Compatibility and constraints
 
-Some argument combinations are intentionally restricted in the current [`experimental.kto.KTOTrainer`] implementation:
+Some argument combinations are intentionally restricted in the current [`KTOTrainer`] implementation:
 
 * With `use_liger_kernel=True`:
   * only `loss_type="kto"` is supported (not `"apo_zero_unpaired"`),
@@ -169,16 +164,16 @@ Some argument combinations are intentionally restricted in the current [`experim
 
 ### Model initialization
 
-You can directly pass the kwargs of the [`~transformers.AutoModelForCausalLM.from_pretrained()`] method to the [`experimental.kto.KTOConfig`]. For example, if you want to load a model in a different precision, analogous to
+You can directly pass the kwargs of the [`~transformers.AutoModelForCausalLM.from_pretrained()`] method to the [`KTOConfig`]. For example, if you want to load a model in a different precision, analogous to
 
 ```python
 model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2-0.5B-Instruct", dtype=torch.bfloat16)
 ```
 
-you can do so by passing the `model_init_kwargs={"dtype": torch.bfloat16}` argument to the [`experimental.kto.KTOConfig`].
+you can do so by passing the `model_init_kwargs={"dtype": torch.bfloat16}` argument to the [`KTOConfig`].
 
 ```python
-from trl.experimental.kto import KTOConfig
+from trl import KTOConfig
 
 training_args = KTOConfig(
     model_init_kwargs={"dtype": torch.bfloat16},
@@ -193,7 +188,7 @@ We support tight integration with 🤗 PEFT library, allowing any user to conven
 
 ```python
 from datasets import load_dataset
-from trl.experimental.kto import KTOTrainer
+from trl import KTOTrainer
 from peft import LoraConfig
 
 dataset = load_dataset("trl-lib/kto-mix-14k", split="train")
@@ -207,7 +202,7 @@ trainer = KTOTrainer(
 trainer.train()
 ```
 
-You can also continue training your [`~peft.PeftModel`]. For that, first load a `PeftModel` outside [`experimental.kto.KTOTrainer`] and pass it directly to the trainer without the `peft_config` argument being passed.
+You can also continue training your [`~peft.PeftModel`]. For that, first load a `PeftModel` outside [`KTOTrainer`] and pass it directly to the trainer without the `peft_config` argument being passed.
 
 > [!TIP]
 > When training adapters, you typically use a higher learning rate than full fine-tuning since only new parameters are being learned.
@@ -218,7 +213,7 @@ Liger Kernel is a collection of Triton kernels for LLM training that boosts mult
 
 ## Tool Calling with KTO
 
-The [`experimental.kto.KTOTrainer`] fully supports fine-tuning models with _tool calling_ capabilities. In this case, each dataset example should include:
+The [`KTOTrainer`] fully supports fine-tuning models with _tool calling_ capabilities. In this case, each dataset example should include:
 
 * The conversation messages (prompt and completion), including any tool calls (`tool_calls`) and tool responses (`tool` role messages)
 * The list of available tools in the `tools` column, typically provided as JSON schemas
@@ -227,10 +222,10 @@ For details on the expected dataset structure, see the [Dataset Format — Tool 
 
 ## Training Vision Language Models
 
-[`experimental.kto.KTOTrainer`] fully supports training Vision-Language Models (VLMs). To train a VLM, provide a dataset with either an `image` column (single image per sample) or an `images` column (list of images per sample). For more information on the expected dataset structure, see the [Dataset Format — Vision Dataset](dataset_formats#vision-dataset) section.
+[`KTOTrainer`] fully supports training Vision-Language Models (VLMs). To train a VLM, provide a dataset with either an `image` column (single image per sample) or an `images` column (list of images per sample). For more information on the expected dataset structure, see the [Dataset Format — Vision Dataset](dataset_formats#vision-dataset) section.
 
 ```python
-from trl.experimental.kto import KTOConfig, KTOTrainer
+from trl import KTOConfig, KTOTrainer
 from datasets import load_dataset
 
 trainer = KTOTrainer(
@@ -242,7 +237,7 @@ trainer.train()
 ```
 
 > [!TIP]
-> For VLMs, truncating may remove image tokens, leading to errors during training. To avoid this, set `max_length=None` in the [`experimental.kto.KTOConfig`]. This allows the model to process the full sequence length without truncating image tokens.
+> For VLMs, truncating may remove image tokens, leading to errors during training. To avoid this, set `max_length=None` in the [`KTOConfig`]. This allows the model to process the full sequence length without truncating image tokens.
 >
 > ```python
 > KTOConfig(max_length=None, ...)
@@ -284,16 +279,16 @@ Each choice of `beta` has a maximum learning rate it can tolerate before learnin
 
 ### Imbalanced data
 
-The `desirable_weight` and `undesirable_weight` of the [`experimental.kto.KTOConfig`] refer to the weights placed on the losses for desirable/positive and undesirable/negative examples.
+The `desirable_weight` and `undesirable_weight` of the [`KTOConfig`] refer to the weights placed on the losses for desirable/positive and undesirable/negative examples.
 By default, they are both 1. However, if you have more of one or the other, then you should upweight the less common type such that the ratio of (`desirable_weight`  \\(\times\\) number of positives) to (`undesirable_weight`  \\(\times\\) number of negatives) is in the range 1:1 to 4:3.
 
 ## KTOTrainer
 
-[[autodoc]] experimental.kto.KTOTrainer
+[[autodoc]] KTOTrainer
     - train
     - save_model
     - push_to_hub
 
 ## KTOConfig
 
-[[autodoc]] experimental.kto.KTOConfig
+[[autodoc]] KTOConfig

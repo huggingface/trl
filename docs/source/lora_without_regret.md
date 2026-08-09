@@ -89,7 +89,7 @@ hf jobs uv run \
 
 ```
 
-To use Hugging Face Jobs, you will need to be logged in to the Hugging Face Hub (`hf auth login`) and have a [Pro](https://hf.co/pro), [Team](https://hf.co/enterprise), or [Enterprise](https://hf.co/enterprise) plan. Check out the [Jobs documentation](https://huggingface.co/docs/huggingface_hub/en/guides/jobs) for more details.
+To use Hugging Face Jobs, log in to the Hub (`hf auth login`) and have a positive [credit balance](https://huggingface.co/settings/billing). See the [Jobs documentation](https://huggingface.co/docs/huggingface_hub/en/guides/jobs) for details.
 
 </hfoption>
 <hfoption id="local">
@@ -217,7 +217,7 @@ hf jobs uv run \
     --report_to trackio
 ```
 
-To use Hugging Face Jobs, you will need to be logged in to the Hugging Face Hub (`hf auth login`) and have a [Pro](https://hf.co/pro), [Team](https://hf.co/enterprise), or [Enterprise](https://hf.co/enterprise) plan. Check out the [Jobs documentation](https://huggingface.co/docs/huggingface_hub/en/guides/jobs) for more details.
+To use Hugging Face Jobs, log in to the Hub (`hf auth login`) and have a positive [credit balance](https://huggingface.co/settings/billing). See the [Jobs documentation](https://huggingface.co/docs/huggingface_hub/en/guides/jobs) for details.
 
 </hfoption>
 <hfoption id="local">
