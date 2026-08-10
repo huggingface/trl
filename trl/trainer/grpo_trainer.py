@@ -474,6 +474,27 @@ class GRPOTrainer(_BaseTrainer):
                         ref_name = name.replace(".default.", ".ref.")
                         ref_param = model.get_parameter(ref_name)
                         ref_param.data.copy_(param.data)
+                # The reference adapter must never be trained. `add_adapter`
+                # inherits `inference_mode` from the default adapter's config:
+                # when the model was loaded with `is_trainable=False` (the
+                # default of `PeftModel.from_pretrained`), PEFT also freezes the
+                # active "default" adapter here, so the optimizer would be
+                # created empty and GRPO would silently train nothing. Freeze
+                # the reference explicitly (defensive: PEFT 0.20.0 housekeeping
+                # already freezes it) and rely on the trainability check below
+                # to catch the empty-optimizer case.
+                if not model.peft_config["ref"].is_prompt_learning:
+                    model.set_requires_grad("ref", requires_grad=False)
+
+        if is_peft_model(model) and peft_config is None and not any(
+            p.requires_grad for p in model.parameters()
+        ):
+            raise ValueError(
+                "GRPOTrainer found no trainable parameters in the PEFT model. "
+                "If you loaded an existing adapter with `PeftModel.from_pretrained`, "
+                "pass `is_trainable=True`, or `merge_and_unload()` it and pass a "
+                "`peft_config` to the trainer instead."
+            )
 
         # PEFT + DeepSpeed ZeRO-3 requires reentrant checkpointing. For more details, see
         # https://github.com/huggingface/trl/issues/2514#issuecomment-2692152703.

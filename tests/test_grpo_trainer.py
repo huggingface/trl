@@ -3699,6 +3699,78 @@ class TestGRPOTrainer(TrlTestCase):
 
 
 @require_vision
+class TestGRPOTrainerPEFTContinuation(TrlTestCase):
+    """
+    Regression tests for the silent no-op when continuing GRPO from a PEFT
+    adapter loaded with ``PeftModel.from_pretrained`` (``is_trainable=False``).
+    """
+
+    def _make_sft_adapter(self, model_id):
+        model = AutoModelForCausalLM.from_pretrained(model_id)
+        lora = LoraConfig(
+            r=4,
+            lora_alpha=8,
+            target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
+            task_type="CAUSAL_LM",
+        )
+        sft = get_peft_model(model, lora)
+        path = os.path.join(self.tmp_dir, "sft_adapter")
+        sft.save_pretrained(path)
+        return path
+
+    @staticmethod
+    def _reward(completions, **kwargs):
+        return [1.0] * len(completions)
+
+    @require_peft
+    def test_raises_when_pretrained_adapter_is_not_trainable(self):
+        # GRPOTrainer must fail fast (instead of silently training nothing) when
+        # given a PeftModel loaded with is_trainable=False and beta != 0.
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        adapter_path = self._make_sft_adapter(model_id)
+        model = PeftModel.from_pretrained(
+            AutoModelForCausalLM.from_pretrained(model_id), adapter_path
+        )
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        args = GRPOConfig(output_dir=self.tmp_dir, beta=0.01, report_to="none")
+
+        with pytest.raises(ValueError, match="no trainable parameters"):
+            GRPOTrainer(
+                model=model,
+                processing_class=AutoTokenizer.from_pretrained(model_id),
+                reward_funcs=[self._reward],
+                args=args,
+                train_dataset=dataset,
+            )
+
+    @require_peft
+    def test_trains_when_pretrained_adapter_is_trainable(self):
+        # The same setup with is_trainable=True must keep working.
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        adapter_path = self._make_sft_adapter(model_id)
+        model = PeftModel.from_pretrained(
+            AutoModelForCausalLM.from_pretrained(model_id), adapter_path, is_trainable=True
+        )
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            beta=0.01,
+            learning_rate=0.1,
+            per_device_train_batch_size=2,
+            num_generations=2,
+            max_completion_length=8,
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model=model,
+            processing_class=AutoTokenizer.from_pretrained(model_id),
+            reward_funcs=[self._reward],
+            args=args,
+            train_dataset=dataset,
+        )
+        assert any(p.requires_grad for p in trainer.model.parameters())
+
+
 class TestGRPOTrainerVLM(TrlTestCase):
     @pytest.mark.parametrize(
         "model_id",
