@@ -47,6 +47,29 @@ class TestRLOOTrainer(TrlTestCase):
             train_dataset=dataset,
         )
 
+    @staticmethod
+    def reward_func(completions, **kwargs):
+        return [0.0] * len(completions)
+
+    @require_peft
+    def test_is_lora_model_passed_to_vllm_generation(self):
+        # Adapter-only LoRA sync is auto-detected, so the trainer just reports whether the model is a PEFT model and
+        # lets the generation backend decide based on the server's reported `enable_lora`.
+        training_args = RLOOConfig(output_dir=self.tmp_dir, report_to="none", use_vllm=True, vllm_mode="server")
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        with patch("trl.trainer.rloo_trainer.VLLMGeneration") as mock_vllm_generation:
+            mock_vllm_generation.return_value.lora_sync = False
+            RLOOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs=self.reward_func,
+                args=training_args,
+                train_dataset=dataset,
+                peft_config=LoraConfig(),
+            )
+
+        assert mock_vllm_generation.call_args.kwargs["is_lora_model"] is True
+        assert mock_vllm_generation.call_args.kwargs["lora_sync_output_dir"] == self.tmp_dir
+
     @pytest.mark.parametrize(
         "model_id",
         [

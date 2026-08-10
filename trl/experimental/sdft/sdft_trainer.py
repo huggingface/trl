@@ -447,6 +447,8 @@ class SDFTTrainer(_BaseTrainer):
                 max_completion_length=self.max_completion_length,
                 logprobs=None,
                 generation_kwargs=args.generation_kwargs,
+                is_lora_model=is_peft_model(self.model),
+                lora_sync_output_dir=args.output_dir,
             )
 
         # Per-rank read-only client to the same generation server for teacher scoring (weights are synced there by

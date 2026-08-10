@@ -16,6 +16,7 @@ import gc
 import os
 import warnings
 from collections.abc import Callable
+from contextlib import nullcontext
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -38,6 +39,7 @@ from transformers.testing_utils import backend_empty_cache, torch_device
 from transformers.utils import is_peft_available
 
 from trl import GRPOConfig, GRPOTrainer
+from trl.generation.vllm_generation import VLLMGeneration, round_lora_rank
 from trl.import_utils import is_liger_kernel_available
 
 from .testing_utils import (
@@ -166,6 +168,7 @@ class TestGRPORolloutDispatch:
         trainer.accelerator = SimpleNamespace(
             device=torch.device("cpu"),
             is_main_process=True,
+            is_local_main_process=True,
             gather=lambda t: t,
         )
         trainer.args = SimpleNamespace(report_to=[])
@@ -275,6 +278,324 @@ class TestTransformersContinuousBatchingContract:
 
 
 class TestGRPOTrainer(TrlTestCase):
+    def get_vllm_args(self, **kwargs):
+        defaults = {
+            "output_dir": self.tmp_dir,
+            "report_to": "none",
+            "use_vllm": True,
+            "vllm_mode": "server",
+        }
+        defaults.update(kwargs)
+        return GRPOConfig(**defaults)
+
+    def get_prompt_dataset(self):
+        return Dataset.from_dict({"prompt": ["hello", "hello"]})
+
+    @staticmethod
+    def reward_func(completions, **kwargs):
+        return [0.0] * len(completions)
+
+    @require_peft
+    def test_is_lora_model_passed_to_vllm_generation(self):
+        # Adapter-only LoRA sync is auto-detected, so the trainer just reports whether the model is a PEFT model and
+        # lets the generation backend decide based on the server's reported `enable_lora`.
+        training_args = self.get_vllm_args()
+        with patch("trl.trainer.grpo_trainer.VLLMGeneration") as mock_vllm_generation:
+            mock_vllm_generation.return_value.lora_sync = False
+            GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs=self.reward_func,
+                args=training_args,
+                train_dataset=self.get_prompt_dataset(),
+                peft_config=LoraConfig(),
+            )
+
+        assert mock_vllm_generation.call_args.kwargs["is_lora_model"] is True
+        assert mock_vllm_generation.call_args.kwargs["lora_sync_output_dir"] == self.tmp_dir
+
+    @require_peft
+    @pytest.mark.parametrize(
+        ("peft_config_kwargs", "error_message"),
+        [
+            ({"modules_to_save": ["lm_head"]}, "does not support LoRA configs with `modules_to_save`"),
+            ({"use_dora": True}, "does not support DoRA adapters"),
+            ({"bias": "all"}, "does not support LoRA adapters with bias"),
+        ],
+    )
+    def test_vllm_lora_sync_rejects_unsupported_lora_configs(self, peft_config_kwargs, error_message):
+        # Adapter-only sync requires a plain LoRA adapter. The generation backend owns this check, next to the other
+        # vLLM capability checks, so it fires before any LoRA-only config field is read.
+        model = MagicMock()
+        model.active_adapters = ["default"]
+        model.peft_config = {"default": LoraConfig(**peft_config_kwargs)}
+        vllm_generation = object.__new__(VLLMGeneration)
+        vllm_generation.model = model
+
+        with pytest.raises(ValueError, match=error_message):
+            vllm_generation._active_lora_config()
+
+    def test_vllm_lora_sync_path_loads_adapter_without_merging(self):
+        vllm_generation = object.__new__(VLLMGeneration)
+        vllm_generation.mode = "server"
+        vllm_generation.enable_sleep_mode = False
+        vllm_generation.lora_sync = True
+        vllm_generation.lora_name = "trl_lora_adapter"
+        vllm_generation.accelerator = SimpleNamespace(is_main_process=True, wait_for_everyone=MagicMock())
+        vllm_generation.vllm_client = MagicMock()
+        vllm_generation.model = MagicMock()
+        vllm_generation.model.merge_adapter = MagicMock()
+        vllm_generation.model.unmerge_adapter = MagicMock()
+        vllm_generation._save_lora_adapter = MagicMock(return_value="/tmp/adapter")
+
+        vllm_generation.sync_weights()
+
+        vllm_generation._save_lora_adapter.assert_called_once()
+        vllm_generation.vllm_client.load_lora_adapter.assert_called_once_with(
+            "trl_lora_adapter", "/tmp/adapter", load_inplace=True
+        )
+        vllm_generation.vllm_client.reset_prefix_cache.assert_called_once()
+        vllm_generation.model.merge_adapter.assert_not_called()
+        vllm_generation.model.unmerge_adapter.assert_not_called()
+
+    def test_vllm_lora_sync_colocate_loads_adapter_without_merging(self):
+        vllm_generation = object.__new__(VLLMGeneration)
+        vllm_generation.mode = "colocate"
+        vllm_generation.enable_sleep_mode = False
+        vllm_generation.lora_sync = True
+        vllm_generation.lora_name = "trl_lora_adapter"
+        vllm_generation._lora_request = None
+        vllm_generation.accelerator = SimpleNamespace(is_main_process=True, wait_for_everyone=MagicMock())
+        vllm_generation.llm = MagicMock()
+        vllm_generation.model = MagicMock()
+        vllm_generation.model.merge_adapter = MagicMock()
+        vllm_generation.model.unmerge_adapter = MagicMock()
+        vllm_generation._save_lora_adapter = MagicMock(return_value="/tmp/adapter")
+
+        vllm_generation.sync_weights()
+
+        vllm_generation._save_lora_adapter.assert_called_once()
+        # Each colocate rank reloads the adapter in-place into its own engine (the #42125 stale-prefix-cache guard).
+        vllm_generation.llm.llm_engine.add_lora.assert_called_once()
+        assert vllm_generation.llm.llm_engine.add_lora.call_args.args[0].load_inplace is True
+        vllm_generation.llm.reset_prefix_cache.assert_called_once()
+        # `generate` references the loaded adapter by `lora_request`.
+        assert vllm_generation._lora_request is not None
+        vllm_generation.model.merge_adapter.assert_not_called()
+        vllm_generation.model.unmerge_adapter.assert_not_called()
+
+    @staticmethod
+    def _run_server_autodetect(*, is_lora_model, server_enable_lora, server_max_lora_rank=None, model=None):
+        # Drive the server-mode auto-detect block of `VLLMGeneration._init_vllm` with a fake client, so we can assert
+        # the `lora_sync` decision without a live server or distributed setup.
+        vllm_generation = object.__new__(VLLMGeneration)
+        vllm_generation.mode = "server"
+        vllm_generation.is_lora_model = is_lora_model
+        vllm_generation.lora_sync = False
+        vllm_generation.server_base_url = "http://localhost:8000"
+        vllm_generation.group_port = 51216
+        vllm_generation.server_timeout = 0
+        if model is None:
+            model = MagicMock()
+            model.active_adapters = ["default"]
+            model.peft_config = {"default": LoraConfig()}
+        vllm_generation.model = model
+        vllm_generation.accelerator = SimpleNamespace(
+            is_main_process=True, wait_for_everyone=MagicMock(), device=torch.device("cpu")
+        )
+        fake_client = SimpleNamespace(
+            server_enable_lora=server_enable_lora,
+            server_max_lora_rank=server_max_lora_rank,
+            init_communicator=MagicMock(),
+        )
+        with (
+            patch("trl.generation.vllm_generation.is_vllm_available", return_value=True),
+            patch("trl.generation.vllm_generation.VLLMClient", return_value=fake_client),
+            patch("trl.generation.vllm_generation.broadcast_object_list"),  # single process: leave obj_list unchanged
+        ):
+            vllm_generation._init_vllm()
+        return vllm_generation, fake_client
+
+    @pytest.mark.parametrize("is_lora_model", [True, False])
+    @pytest.mark.parametrize("server_enable_lora", [True, False])
+    def test_vllm_lora_sync_auto_detect_decision(self, is_lora_model, server_enable_lora):
+        # Adapter-only sync activates iff the model is LoRA *and* the server was launched with `--enable-lora`.
+        vllm_generation, fake_client = self._run_server_autodetect(
+            is_lora_model=is_lora_model, server_enable_lora=server_enable_lora
+        )
+        assert vllm_generation.lora_sync is (is_lora_model and server_enable_lora)
+        # The merged-sync communicator is initialized only when adapter sync is off.
+        if vllm_generation.lora_sync:
+            fake_client.init_communicator.assert_not_called()
+        else:
+            fake_client.init_communicator.assert_called_once()
+
+    def test_vllm_lora_sync_warns_on_merged_fallback(self):
+        # A LoRA model against a non-LoRA server falls back to merged-weight sync and warns loudly.
+        with patch("trl.generation.vllm_generation.logger") as mock_logger:
+            vllm_generation, _ = self._run_server_autodetect(is_lora_model=True, server_enable_lora=False)
+        assert vllm_generation.lora_sync is False
+        mock_logger.warning.assert_called_once()
+        assert "--enable-lora" in mock_logger.warning.call_args.args[0]
+
+    def test_vllm_lora_sync_rejects_adapter_rank_above_server_max(self):
+        # The adapter rank must fit the server's `--max-lora-rank`; otherwise fail fast with a clear message.
+        model = MagicMock()
+        model.active_adapters = ["default"]
+        model.peft_config = {"default": LoraConfig(r=16)}
+        with pytest.raises(ValueError, match=r"adapter rank \(16\) exceeds the vLLM server's `--max-lora-rank` \(8\)"):
+            self._run_server_autodetect(
+                is_lora_model=True, server_enable_lora=True, server_max_lora_rank=8, model=model
+            )
+
+    def test_vllm_lora_sync_accepts_adapter_rank_within_server_max(self):
+        # rank_pattern can raise individual modules above the base `r`; the max must still fit.
+        model = MagicMock()
+        model.active_adapters = ["default"]
+        model.peft_config = {"default": LoraConfig(r=8, rank_pattern={"q_proj": 16})}
+        vllm_generation, _ = self._run_server_autodetect(
+            is_lora_model=True, server_enable_lora=True, server_max_lora_rank=16, model=model
+        )
+        assert vllm_generation.lora_sync is True
+
+    @pytest.mark.parametrize(("adapter_rank", "expected_max_lora_rank"), [(4, 8), (8, 8), (12, 16), (200, 256)])
+    def test_vllm_lora_sync_colocate_rounds_max_lora_rank(self, adapter_rank, expected_max_lora_rank):
+        # vLLM only accepts a fixed set of `max_lora_rank` values, so the inferred rank is rounded up to the smallest
+        # one that fits. Passing an adapter's raw `r` (e.g. 4) would crash the engine with a pydantic literal error.
+        model = MagicMock()
+        model.active_adapters = ["default"]
+        model.peft_config = {"default": LoraConfig(r=adapter_rank)}
+        model.named_modules = MagicMock(return_value=[])
+
+        vllm_generation = object.__new__(VLLMGeneration)
+        vllm_generation.mode = "colocate"
+        vllm_generation.is_lora_model = True
+        vllm_generation.model = model
+        vllm_generation.tensor_parallel_size = 1
+        vllm_generation.gpu_memory_utilization = 0.1
+        vllm_generation.max_model_length = None
+        vllm_generation.max_num_seqs = None
+        vllm_generation.enable_sleep_mode = False
+        vllm_generation.model_impl = "auto"
+        vllm_generation.trust_remote_code = False
+        vllm_generation.accelerator = SimpleNamespace(
+            is_main_process=True,
+            is_local_main_process=True,
+            wait_for_everyone=MagicMock(),
+            num_processes=1,
+            process_index=0,
+            local_process_index=0,
+        )
+        with (
+            patch("trl.generation.vllm_generation.is_vllm_available", return_value=True),
+            patch("trl.generation.vllm_generation.is_bitsandbytes_available", return_value=False),
+            patch("trl.generation.vllm_generation.ensure_master_addr_port"),
+            patch("trl.generation.vllm_generation.LLM") as mock_llm,
+            # `_init_vllm` sets RANK/LOCAL_RANK/WORLD_SIZE for vLLM; restore the environment afterwards so later tests
+            # don't see a half-configured distributed setup (MASTER_ADDR is never set, since the helper is patched).
+            patch.dict(os.environ),
+        ):
+            vllm_generation._init_vllm()
+
+        assert mock_llm.call_args.kwargs["enable_lora"] is True
+        assert mock_llm.call_args.kwargs["max_lora_rank"] == expected_max_lora_rank
+
+    def test_vllm_lora_sync_rejects_adapter_rank_above_vllm_max(self):
+        # vLLM cannot serve a rank above the largest value it accepts; fail with a clear message rather than the bare
+        # `StopIteration` that rounding would otherwise raise.
+        with pytest.raises(ValueError, match=r"exceeds the largest rank vLLM can serve \(512\)"):
+            round_lora_rank(1024)
+
+    @pytest.mark.parametrize(("lora_sync", "expected_level"), [(True, 1), (False, 2)])
+    def test_sleep_level_depends_on_lora_sync(self, lora_sync, expected_level):
+        # Sleep level 2 discards the weights, which merged sync re-pushes every step. Adapter-only sync never pushes
+        # the frozen base model, so it must use level 1, which offloads to CPU and restores on wake.
+        vllm_generation = object.__new__(VLLMGeneration)
+        vllm_generation.lora_sync = lora_sync
+        assert vllm_generation._sleep_level == expected_level
+
+    @require_vllm
+    @require_peft
+    def test_vllm_lora_sync_restores_weights_for_second_generate_in_one_step(self):
+        # Adapter-only sync sleeps at level 1, which offloads the weights to CPU rather than discarding them. The
+        # trainer only calls `sync_weights()` when the training step advanced, so a second `generate()` within the
+        # same step (an eval loop with more than one batch, say) has to bring them back itself. Without that, the
+        # forward pass runs against unmapped weight memory and hangs.
+        #
+        # This uses a real 0.5B model rather than a tiny test one: with a tiny model vLLM falls back to the
+        # flex-attention backend, whose inverse block table is sized by KV block count, and the resulting block
+        # count is large enough that cudagraph capture tries to allocate tens of GiB.
+        from accelerate import Accelerator
+
+        model_id = "Qwen/Qwen2.5-0.5B-Instruct"
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype=torch.bfloat16)
+        model = get_peft_model(model, LoraConfig(task_type="CAUSAL_LM", target_modules=["q_proj", "v_proj"], r=8))
+
+        accelerator = Accelerator()
+        model = model.to(accelerator.device)
+
+        vllm_generation = VLLMGeneration(
+            model=model,
+            accelerator=accelerator,
+            processing_class=tokenizer,
+            mode="colocate",
+            gpu_memory_utilization=0.15,
+            enable_sleep_mode=True,
+            is_lora_model=True,
+            max_model_length=512,
+            max_completion_length=8,
+            temperature=0.0,  # greedy, so the two runs are directly comparable
+            lora_sync_output_dir=self.tmp_dir,
+        )
+        assert vllm_generation.lora_sync, "adapter-only sync did not activate; this would not cover the bug"
+        assert vllm_generation._sleep_level == 1
+
+        prompts = [tokenizer("The capital of France is")["input_ids"]] * 2
+
+        # Step boundary: the trainer syncs once per step, which wakes the weights and pushes the adapter.
+        vllm_generation.sync_weights()
+        _, first_completions, _, _ = vllm_generation.generate(prompts, images=None, num_generations=1)
+
+        # Asserted before the second `generate()` on purpose. On the buggy path this is False, so the failure
+        # surfaces here rather than as a hang in the forward pass below.
+        assert vllm_generation._llm_weights_sleeping is True
+
+        # Second batch of the same step -- deliberately no `sync_weights()` in between.
+        _, second_completions, _, _ = vllm_generation.generate(prompts, images=None, num_generations=1)
+        assert second_completions == first_completions
+
+        # `generate()` leaves the engine asleep. Tearing the allocator down while its allocations are
+        # still unmapped makes its destructor fail with "CUDA Error: invalid argument", so wake it first.
+        vllm_generation.llm.wake_up()
+
+    @require_peft
+    def test_save_lora_adapter_writes_non_empty_adapter(self):
+        from safetensors.torch import load_file
+
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="float32")
+        model = get_peft_model(model, LoraConfig(task_type="CAUSAL_LM", target_modules=["q_proj", "v_proj"]))
+        vllm_generation = object.__new__(VLLMGeneration)
+        vllm_generation.mode = "server"
+        vllm_generation.model = model
+        vllm_generation.accelerator = SimpleNamespace(
+            is_main_process=True,
+            is_local_main_process=True,
+            wait_for_everyone=lambda: None,
+            state=SimpleNamespace(deepspeed_plugin=None),
+        )
+        vllm_generation._dist = SimpleNamespace(
+            gather_params=lambda params: nullcontext(),
+            summon_full_params=lambda model, **kwargs: nullcontext(),
+        )
+        vllm_generation.lora_sync_output_dir = self.tmp_dir
+        vllm_generation._lora_sync_version = 0
+
+        adapter_dir = vllm_generation._save_lora_adapter()
+
+        assert os.path.exists(os.path.join(adapter_dir, "adapter_config.json"))
+        adapter_state_dict = load_file(os.path.join(adapter_dir, "adapter_model.safetensors"))
+        assert adapter_state_dict
+
     def test_init_minimal(self):
         # Test that GRPOTrainer can be instantiated with only model, reward_model and train_dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
@@ -4195,6 +4516,47 @@ class TestGRPOTrainerSlow(TrlTestCase):
         gc.collect()
         backend_empty_cache(torch_device)
         gc.collect()
+
+    @require_bitsandbytes
+    @require_peft
+    @require_torch_accelerator
+    def test_save_lora_adapter_with_qlora_writes_non_empty_adapter(self):
+        from safetensors.torch import load_file
+
+        quantization_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_compute_dtype=torch.bfloat16,
+            bnb_4bit_use_double_quant=True,
+        )
+        model = AutoModelForCausalLM.from_pretrained(
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            quantization_config=quantization_config,
+        )
+        model = get_peft_model(model, LoraConfig(task_type="CAUSAL_LM", target_modules=["q_proj", "v_proj"]))
+        vllm_generation = object.__new__(VLLMGeneration)
+        vllm_generation.mode = "server"
+        vllm_generation.model = model
+        vllm_generation.accelerator = SimpleNamespace(
+            is_main_process=True,
+            is_local_main_process=True,
+            wait_for_everyone=lambda: None,
+            state=SimpleNamespace(deepspeed_plugin=None),
+        )
+        vllm_generation._dist = SimpleNamespace(
+            gather_params=lambda params: nullcontext(),
+            summon_full_params=lambda model, **kwargs: nullcontext(),
+        )
+        vllm_generation.lora_sync_output_dir = self.tmp_dir
+        vllm_generation._lora_sync_version = 0
+
+        adapter_dir = vllm_generation._save_lora_adapter()
+
+        assert os.path.exists(os.path.join(adapter_dir, "adapter_config.json"))
+        adapter_state_dict = load_file(os.path.join(adapter_dir, "adapter_model.safetensors"))
+        assert adapter_state_dict
+
+        release_memory(model)
 
     @pytest.mark.parametrize(
         "model_name",

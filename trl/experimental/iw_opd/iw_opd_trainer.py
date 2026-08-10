@@ -25,7 +25,7 @@ import torch
 import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
-from accelerate.utils import DistributedType, broadcast_object_list, gather_object
+from accelerate.utils import DistributedType, broadcast_object_list, gather_object, is_peft_model
 from datasets import Dataset
 from packaging.version import Version
 from torch.utils.data import DataLoader
@@ -680,6 +680,8 @@ class IWOPDTrainer(_BaseTrainer):
                 top_k=args.top_k,
                 max_completion_length=args.max_completion_length,
                 logprobs=0 if args.distillation_objective == "iw_opd" else None,
+                is_lora_model=is_peft_model(self.model),
+                lora_sync_output_dir=args.output_dir,
             )
             self.vllm_sync_frequency = args.vllm_sync_frequency
             self._last_vllm_sync_step = -1

@@ -1107,6 +1107,8 @@ class GOLDTrainer(SFTTrainer):
                 min_p=getattr(args, "min_p", 0.0),
                 max_completion_length=args.max_completion_length,
                 logprobs=None,
+                is_lora_model=is_peft_model(self.model),
+                lora_sync_output_dir=args.output_dir,
             )
             self.vllm_sync_frequency = args.vllm_sync_frequency
             self._last_vllm_sync_step = -self.vllm_sync_frequency

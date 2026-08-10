@@ -163,6 +163,8 @@ class VLLMClient:
             self.server_port = server_port
             self.base_url = f"http://{self.host}:{self.server_port}"
         self.group_port = group_port
+        self.server_enable_lora = False  # set from the /health/ response in check_server
+        self.server_max_lora_rank = None  # the server's `--max-lora-rank`, set from /health/ (`None` if unset)
         self.check_server(connection_timeout)  # check server and fail after timeout
 
     def check_server(self, total_timeout: float = 0.0, retry_interval: float = 2.0):
@@ -194,6 +196,11 @@ class VLLMClient:
                 if response.status_code == 200:
                     if "X-Forwarded-For" in response.headers:
                         self.host = response.headers["X-Forwarded-For"]
+                    # The server reports whether it was launched with `--enable-lora`, so the trainer can auto-detect
+                    # whether adapter-only LoRA sync is available.
+                    health = response.json()
+                    self.server_enable_lora = health.get("enable_lora", False)
+                    self.server_max_lora_rank = health.get("max_lora_rank")
                     logger.info("Server is up!")
                     return None
 
@@ -716,6 +723,26 @@ class VLLMClient:
             result["actual_logprobs"] = all_actual_lps
             result["actual_token_ids"] = all_actual_ids
         return result
+
+    def load_lora_adapter(self, lora_name: str, lora_path: str, load_inplace: bool = True):
+        """
+        Loads a LoRA adapter into the vLLM server.
+
+        Args:
+            lora_name (`str`):
+                Name the adapter is served under. Reusing the same name replaces the previously loaded adapter.
+            lora_path (`str`):
+                Path to the PEFT adapter directory, which must be readable by the server.
+            load_inplace (`bool`, *optional*, defaults to `True`):
+                Whether to swap the weights of the already-loaded adapter instead of registering a new one.
+        """
+        url = f"{self.base_url}/v1/load_lora_adapter"
+        response = self.session.post(
+            url,
+            json={"lora_name": lora_name, "lora_path": lora_path, "load_inplace": load_inplace},
+        )
+        if response.status_code != 200:
+            raise Exception(f"Request failed: {response.status_code}, {response.text}")
 
     def reset_prefix_cache(self):
         """
