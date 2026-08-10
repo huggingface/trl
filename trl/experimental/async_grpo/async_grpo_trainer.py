@@ -939,7 +939,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
         advantages = inputs["advantages"][mask_bool].unsqueeze(0)
 
         forward_start = time.time()
-        outputs = self.training_client.forward(
+        outputs = self.training_client.forward_no_grad(
             model,
             input_ids=input_ids,
             position_ids=position_ids,
@@ -954,7 +954,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
         # `log_probs` is a leaf, so `accelerator.backward(loss)` stops here and deposits d(loss)/d(log_probs) in its
         # `.grad`. This hook forwards that gradient to the client, which is what actually reaches the model. The
         # loss therefore never has to cross into the client, and the client never has to know what GRPO is.
-        log_probs.register_hook(self.training_client.backward)
+        log_probs.register_hook(self.training_client.forward_backward)
         self._last_forward_time_s = time.time() - forward_start
 
         completion_mask = completion_mask[:, 1:]

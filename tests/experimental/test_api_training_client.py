@@ -79,9 +79,9 @@ class TestLocalTrainingClient(TrlTestCase):
 
         self.model.zero_grad(set_to_none=True)
         client = LocalTrainingClient()
-        output = client.forward(self.model, self.input_ids, self.position_ids, self.completion_mask)
+        output = client.forward_no_grad(self.model, self.input_ids, self.position_ids, self.completion_mask)
         self._loss(output.log_probs).backward()
-        client.backward(output.log_probs.grad)
+        client.forward_backward(output.log_probs.grad)
 
         actual = self._grads()
         assert set(actual) == set(expected)
@@ -109,7 +109,7 @@ class TestLocalTrainingClient(TrlTestCase):
 
     def test_forward_hands_out_a_leaf(self):
         client = LocalTrainingClient()
-        output = client.forward(self.model, self.input_ids, self.position_ids, self.completion_mask)
+        output = client.forward_no_grad(self.model, self.input_ids, self.position_ids, self.completion_mask)
         assert output.log_probs.is_leaf
         assert output.log_probs.requires_grad
         assert not output.entropy.requires_grad
@@ -117,17 +117,17 @@ class TestLocalTrainingClient(TrlTestCase):
 
     def test_forward_matches_model_log_probs(self):
         client = LocalTrainingClient()
-        output = client.forward(self.model, self.input_ids, self.position_ids, self.completion_mask)
+        output = client.forward_no_grad(self.model, self.input_ids, self.position_ids, self.completion_mask)
         torch.testing.assert_close(output.log_probs, self._model_forward().detach(), rtol=0, atol=0)
 
     def test_hook_wiring_matches_manual_backward(self):
-        """The trainer registers `client.backward` as a hook on `log_probs` rather than calling it directly."""
+        """The trainer registers `client.forward_backward` as a hook on `log_probs` rather than calling it directly."""
         expected = self._inline_grads()
 
         self.model.zero_grad(set_to_none=True)
         client = LocalTrainingClient()
-        output = client.forward(self.model, self.input_ids, self.position_ids, self.completion_mask)
-        output.log_probs.register_hook(client.backward)
+        output = client.forward_no_grad(self.model, self.input_ids, self.position_ids, self.completion_mask)
+        output.log_probs.register_hook(client.forward_backward)
         self._loss(output.log_probs).backward()
 
         actual = self._grads()
