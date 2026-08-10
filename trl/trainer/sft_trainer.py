@@ -44,6 +44,7 @@ from transformers import (
     TrainingArguments,
 )
 from transformers.data.data_collator import DataCollatorMixin
+from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
 from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast
 from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_peft_available
@@ -185,9 +186,16 @@ def _chunked_cross_entropy_loss(
     valid = labels != -100
     n_valid_tensor = valid.sum()
 
+    # ZeRO-3 gathers the sharded lm_head inside each chunk. Every rank must therefore execute the same number of
+    # chunks, even when assistant-only masking leaves a different number of valid tokens on each rank. Otherwise the
+    # collective gather count diverges and distributed training stalls in the first step.
+    n_padded = (n_valid_tensor / chunk_size).ceil().to(torch.int64) * chunk_size
+    if is_deepspeed_zero3_enabled() and torch.distributed.is_initialized():
+        torch.distributed.all_reduce(n_padded, op=torch.distributed.ReduceOp.MAX)
+
     correct = hidden.new_zeros((), dtype=torch.float32)
     entropy_sum = hidden.new_zeros((), dtype=torch.float32)
-    if n_valid_tensor == 0:
+    if n_padded == 0:
         # Whole micro-batch masked (e.g. completion-only loss + truncation). Keep the loss connected
         # to the autograd graph through every trainable parameter so `.backward()` succeeds and DDP /
         # FSDP gradient sync doesn't hang on a missing param.
@@ -202,9 +210,6 @@ def _chunked_cross_entropy_loss(
     order = valid.to(torch.int8).argsort(descending=True, stable=True)
     hidden = hidden[order]
     labels = labels[order]
-
-    # Process only the whole chunks covering the valid prefix: bounds XLA recompiles and drops fully-masked chunks on GPU.
-    n_padded = (n_valid_tensor / chunk_size).ceil().to(torch.int64) * chunk_size
 
     loss = hidden.new_zeros((), dtype=torch.float32)
 
@@ -226,7 +231,7 @@ def _chunked_cross_entropy_loss(
         entropy_sum = entropy_sum + chunk_entropy
 
     if num_items_in_batch is None:
-        loss = loss / n_valid_tensor
+        loss = loss / n_valid_tensor.clamp_min(1)
     else:
         if isinstance(num_items_in_batch, torch.Tensor):
             num_items_in_batch = num_items_in_batch.to(loss.device)

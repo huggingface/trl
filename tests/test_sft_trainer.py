@@ -39,6 +39,7 @@ from transformers.utils import is_peft_available
 from trl import SFTConfig, SFTTrainer
 from trl.trainer.sft_trainer import (
     DataCollatorForLanguageModeling,
+    _chunk,
     _chunked_cross_entropy_loss,
     _patch_chunked_ce_lm_head,
     dft_loss,
@@ -2721,6 +2722,70 @@ class TestChunkedCrossEntropyLoss:
         assert hidden.grad is not None and hidden.grad.abs().sum().item() == 0.0
         assert weight.grad is not None and weight.grad.abs().sum().item() == 0.0
         assert bias.grad is not None and bias.grad.abs().sum().item() == 0.0
+
+    def test_zero3_synchronizes_chunk_count_across_ranks(self):
+        """ZeRO-3 ranks execute the global maximum chunk count when local valid-token counts differ."""
+        hidden, weight, labels = self._inputs(ignore_positions=slice(0, 6), requires_grad=True)
+        local_n_valid = (labels[..., 1:] != -100).sum()
+        global_n_padded = 2 * self.CHUNK_SIZE
+
+        def set_global_max(n_padded, op):
+            assert op == torch.distributed.ReduceOp.MAX
+            n_padded.fill_(global_n_padded)
+
+        with (
+            patch("trl.trainer.sft_trainer.is_deepspeed_zero3_enabled", return_value=True),
+            patch("torch.distributed.is_initialized", return_value=True),
+            patch("torch.distributed.all_reduce", side_effect=set_global_max) as all_reduce,
+            patch("trl.trainer.sft_trainer._chunk", wraps=_chunk) as chunk,
+        ):
+            loss, _, _, n_valid = _chunked_cross_entropy_loss(
+                hidden,
+                weight,
+                self.CHUNK_SIZE,
+                labels,
+                num_items_in_batch=local_n_valid,
+            )
+
+        assert all_reduce.call_count == 1
+        assert chunk.call_count == global_n_padded // self.CHUNK_SIZE
+        assert n_valid.item() == local_n_valid.item()
+        assert torch.isfinite(loss)
+        loss.backward()
+        assert hidden.grad is not None
+        assert weight.grad is not None
+
+    def test_zero3_all_ignored_rank_joins_chunk_loop(self):
+        """A fully masked ZeRO-3 rank still joins chunk gathers required by ranks with valid labels."""
+        hidden, weight, labels = self._inputs(requires_grad=True)
+        labels[:] = -100
+        global_n_padded = 2 * self.CHUNK_SIZE
+
+        def set_global_max(n_padded, op):
+            assert op == torch.distributed.ReduceOp.MAX
+            n_padded.fill_(global_n_padded)
+
+        with (
+            patch("trl.trainer.sft_trainer.is_deepspeed_zero3_enabled", return_value=True),
+            patch("torch.distributed.is_initialized", return_value=True),
+            patch("torch.distributed.all_reduce", side_effect=set_global_max),
+            patch("trl.trainer.sft_trainer._chunk", wraps=_chunk) as chunk,
+        ):
+            loss, correct, entropy_sum, n_valid = _chunked_cross_entropy_loss(
+                hidden,
+                weight,
+                self.CHUNK_SIZE,
+                labels,
+            )
+
+        assert chunk.call_count == global_n_padded // self.CHUNK_SIZE
+        assert loss.item() == 0.0
+        assert correct.item() == 0.0
+        assert entropy_sum.item() == 0.0
+        assert n_valid.item() == 0
+        loss.backward()
+        assert hidden.grad is not None and hidden.grad.abs().sum().item() == 0.0
+        assert weight.grad is not None and weight.grad.abs().sum().item() == 0.0
 
     def test_shift_labels_matches_labels(self):
         """`shift_labels` path (CP/SP) must match the default `labels` path after external shifting."""
