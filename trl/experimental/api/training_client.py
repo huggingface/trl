@@ -109,6 +109,10 @@ class TrainingClientProtocol(Protocol):
         log_probs)`, is already the same surrogate: pass `weights = -grad_log_probs`. That is how Tinker implements its
         custom-loss path on top of a fixed set of server-side losses.
 
+        A backend whose own API fuses the forward and the backward into one call issues that call from here, sending
+        `grad_log_probs` as the per-token weights, and treats the `forward` above as a separate scoring pass. The two
+        methods are a split in this interface, not a requirement that the backend split its own.
+
         Args:
             grad_log_probs (`torch.Tensor`):
                 `d(loss)/d(log_probs)`, same shape as the `log_probs` returned by `forward`.
