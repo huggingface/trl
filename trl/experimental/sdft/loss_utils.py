@@ -181,9 +181,9 @@ def compute_dopd_routed_loss(
     detached and used only for routing. Each token is routed into exactly one of:
 
         1. low gap, either side confident   -> light top-k reverse-KL toward the teacher.
-        2. low gap, both sides unsure       -> weak self-regularization, stop-gradient anchor.
+        2. low gap, both sides unsure       -> weak self-regularization, stop-gradient privileged-student anchor.
         3. high gap, teacher confident      -> full-vocabulary JSD toward the teacher.
-        4. high gap, student confident      -> light student-consistency nudge, stop-gradient.
+        4. high gap, student confident      -> light privileged-student consistency nudge, stop-gradient.
 
     Tokens where the gap is high but neither side is confident (no reliable regime 3/4 signal) fall back to the
     weak self-regularization of regime 2, matching the paper's intent that ambiguous tokens get the smallest,
@@ -219,12 +219,14 @@ def compute_dopd_routed_loss(
         topk_support="teacher",
     )
 
-    # Weak self-regularization: top-k reverse KL of student against a detached student anchor (paper's LL
-    # regime, weight beta_w). Forward value is ~0; the detached side breaks symmetry so autograd still
-    # produces a small regularizing gradient through the live student logits.
+    # Weak self-regularization (paper's LL regime, eq. 7, weight beta_w): top-k reverse KL of the bare student
+    # against a stop-gradient *privileged*-student anchor. The privileged student shares the student's parameters
+    # but sees the privileged context, so the anchor is a genuinely different distribution: KL against it is
+    # nonzero and its gradient regularizes the live student. (Anchoring on the bare student's own detached logits
+    # would make this term identically zero -- KL(p || sg(p)) has zero value and zero gradient.)
     loss2 = self_reg_weight * compute_topk_self_distillation_loss(
         student_logits,
-        student_logits.detach(),
+        privileged_student_logits.detach(),
         distillation_topk=light_topk,
         distillation_alpha=1.0,
         distillation_add_tail=True,
@@ -237,12 +239,12 @@ def compute_dopd_routed_loss(
         distillation_alpha=0.5,
     )
 
-    # Light privileged-student distillation (paper's HS regime, weight beta_l): top-k reverse KL against a
-    # detached student anchor. Preserves confident student exploration without pulling toward the unsure
-    # teacher on high-gap tokens.
+    # Light privileged-student distillation (paper's HS regime, eq. 9, weight beta_l): top-k reverse KL of the
+    # bare student against the same stop-gradient privileged-student anchor as regime 2. Preserves confident
+    # student exploration without pulling toward the unsure teacher on high-gap tokens.
     loss4 = student_consistency_weight * compute_topk_self_distillation_loss(
         student_logits,
-        student_logits.detach(),
+        privileged_student_logits.detach(),
         distillation_topk=light_topk,
         distillation_alpha=1.0,
         distillation_add_tail=True,

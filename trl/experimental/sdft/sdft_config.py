@@ -62,11 +62,13 @@ class SDFTConfig(_BaseConfig):
             Top-k support size used by the DOPD regimes that apply a "light" distillation signal (low-gap /
             high-gap-student-confident). Only used when `distillation_mode="dopd"`.
         distillation_dopd_self_reg_weight (`float`, *optional*, defaults to `0.01`):
-            Weight of the stop-gradient self-regularization term applied to low-confidence tokens. Only used when
+            Weight of the weak self-regularization term (paper's beta_w) applied to low-confidence tokens: top-k
+            reverse KL of the bare student against a stop-gradient *privileged*-student anchor. Only used when
             `distillation_mode="dopd"`.
         distillation_dopd_student_consistency_weight (`float`, *optional*, defaults to `0.1`):
-            Weight of the stop-gradient student-consistency term applied to high-gap, student-confident tokens. Only
-            used when `distillation_mode="dopd"`.
+            Weight of the light privileged-student consistency term (paper's beta_l) applied to high-gap,
+            student-confident tokens: top-k reverse KL of the bare student against a stop-gradient
+            *privileged*-student anchor. Only used when `distillation_mode="dopd"`.
         num_loss_tokens_to_skip (`int`, *optional*, defaults to `0`):
             Number of initial completion tokens to exclude from the distillation loss.
 
