@@ -483,7 +483,7 @@ class GRPOTrainer(_BaseTrainer):
                 # the reference explicitly (defensive: PEFT 0.20.0 housekeeping
                 # already freezes it) and rely on the trainability check below
                 # to catch the empty-optimizer case.
-                if not model.peft_config["ref"].is_prompt_learning:
+                if Version(peft.__version__) >= Version("0.18.0") and not model.peft_config["ref"].is_prompt_learning:
                     model.set_requires_grad("ref", requires_grad=False)
 
         if is_peft_model(model) and peft_config is None and not any(

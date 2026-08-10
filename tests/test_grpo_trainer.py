@@ -3698,7 +3698,6 @@ class TestGRPOTrainer(TrlTestCase):
         assert trainer.reward_processing_classes[0] == single_processing_class
 
 
-@require_vision
 class TestGRPOTrainerPEFTContinuation(TrlTestCase):
     """
     Regression tests for the silent no-op when continuing GRPO from a PEFT
@@ -3771,6 +3770,7 @@ class TestGRPOTrainerPEFTContinuation(TrlTestCase):
         assert any(p.requires_grad for p in trainer.model.parameters())
 
 
+@require_vision
 class TestGRPOTrainerVLM(TrlTestCase):
     @pytest.mark.parametrize(
         "model_id",
