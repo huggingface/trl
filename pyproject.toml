@@ -57,7 +57,7 @@ kernels = [  # transformers renamed the "hub-kernels" extra to "kernels" in 5.1.
     "transformers[hub-kernels]",  # transformers < 5.1.0
 ]
 liger = [
-    "liger-kernel>=0.8.1"
+    "liger-kernel>=0.8.2"
 ]
 peft = [
     "peft>=0.8.0"
