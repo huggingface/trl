@@ -15,7 +15,7 @@
 import torch
 from transformers import AutoModelForCausalLM
 
-from trl.experimental.api import LocalTrainingClient
+from trl.experimental.api import ForwardBackwardOutput, LocalTrainingClient
 from trl.trainer.utils import patch_chunked_lm_head
 
 from ..testing_utils import TrlTestCase
@@ -24,13 +24,49 @@ from ..testing_utils import TrlTestCase
 MODEL_ID = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
 
 
-def grpo_loss(log_probs, old_log_probs, advantages, completion_mask, epsilon_low=0.2, epsilon_high=0.2):
-    """`AsyncGRPOTrainer.compute_loss` from `log_probs` onward, kept in sync with the trainer."""
-    log_ratio = log_probs - old_log_probs
-    coef_1 = torch.exp(log_ratio)
-    coef_2 = torch.clamp(coef_1, 1 - epsilon_low, 1 + epsilon_high)
-    per_token_loss = -torch.min(coef_1 * advantages, coef_2 * advantages)
-    return (per_token_loss * completion_mask).sum()
+class RemoteStyleTrainingClient:
+    """The off-process implementation the protocol documents, with the wire replaced by a second forward.
+
+    A real backend scores the batch remotely and cannot return a loss attached to the model. So it evaluates `loss_fn`
+    locally on a leaf, takes `d(loss)/d(log_probs)`, and sends that back to be applied against a surrogate. Standing
+    the two "remote" calls up as local forwards keeps the test dependency-free while exercising the same arithmetic.
+    """
+
+    def __init__(self, model):
+        self.model = model
+
+    def _score(self, input_ids, position_ids, completion_mask):
+        return self.model(
+            input_ids=input_ids,
+            position_ids=position_ids,
+            labels=input_ids,
+            completion_mask=completion_mask,
+            use_cache=False,
+        )
+
+    def forward_backward(self, model, input_ids, position_ids, completion_mask, loss_fn, aux_loss_coef=0.0):
+        with torch.no_grad():
+            outputs = self._score(input_ids, position_ids, completion_mask)
+
+        leaf = outputs["log_probs"].detach().requires_grad_(True)
+        loss = loss_fn(leaf)
+        (grad_log_probs,) = torch.autograd.grad(loss, leaf)
+
+        def apply_surrogate(grad_loss):
+            # `grad_loss` is whatever scaling the trainer's backward carries into this scalar. Grad mode is off
+            # inside a backward hook, so the replay has to re-enable it or it builds nothing to back-propagate.
+            with torch.enable_grad():
+                replayed = self._score(input_ids, position_ids, completion_mask)
+                surrogate = (replayed["log_probs"] * grad_log_probs * grad_loss).sum()
+            surrogate.backward()
+
+        out = loss.detach().requires_grad_(True)
+        out.register_hook(apply_surrogate)
+        return ForwardBackwardOutput(
+            loss=out,
+            log_probs=outputs["log_probs"].detach(),
+            entropy=outputs["entropy"].detach(),
+        )
 
 
 class TestLocalTrainingClient(TrlTestCase):
@@ -52,6 +88,13 @@ class TestLocalTrainingClient(TrlTestCase):
         self.old_log_probs = torch.randn_like(shifted) * 0.1 - 1.0
         self.advantages = torch.randn_like(shifted)
 
+    def loss_fn(self, log_probs, epsilon_low=0.2, epsilon_high=0.2):
+        """`AsyncGRPOTrainer.compute_loss`'s closure, kept in sync with the trainer."""
+        coef_1 = torch.exp(log_probs - self.old_log_probs)
+        coef_2 = torch.clamp(coef_1, 1 - epsilon_low, 1 + epsilon_high)
+        per_token_loss = -torch.min(coef_1 * self.advantages, coef_2 * self.advantages)
+        return (per_token_loss * self.mask).sum()
+
     def _model_forward(self):
         outputs = self.model(
             input_ids=self.input_ids,
@@ -62,74 +105,66 @@ class TestLocalTrainingClient(TrlTestCase):
         )
         return outputs["log_probs"]
 
-    def _loss(self, log_probs):
-        return grpo_loss(log_probs, self.old_log_probs, self.advantages, self.mask)
-
     def _grads(self):
         return {n: p.grad.detach().clone() for n, p in self.model.named_parameters() if p.grad is not None}
 
     def _inline_grads(self):
         """Gradients from computing the loss on the live graph, i.e. the behavior before the client existed."""
         self.model.zero_grad(set_to_none=True)
-        self._loss(self._model_forward()).backward()
+        self.loss_fn(self._model_forward()).backward()
+        return self._grads()
+
+    def _client_grads(self, client):
+        self.model.zero_grad(set_to_none=True)
+        outputs = client.forward_backward(
+            self.model,
+            input_ids=self.input_ids,
+            position_ids=self.position_ids,
+            completion_mask=self.completion_mask,
+            loss_fn=self.loss_fn,
+        )
+        outputs.loss.backward()
         return self._grads()
 
     def test_gradients_match_inline_loss(self):
         expected = self._inline_grads()
+        actual = self._client_grads(LocalTrainingClient())
 
-        self.model.zero_grad(set_to_none=True)
-        client = LocalTrainingClient()
-        output = client.forward_no_grad(self.model, self.input_ids, self.position_ids, self.completion_mask)
-        self._loss(output.log_probs).backward()
-        client.forward_backward(output.log_probs.grad)
-
-        actual = self._grads()
         assert set(actual) == set(expected)
         for name in expected:
             torch.testing.assert_close(actual[name], expected[name], rtol=0, atol=0)
 
-    def test_gradients_match_when_log_probs_round_trip(self):
-        """A remote backend cannot share an autograd graph, so it replays the forward and applies the surrogate.
-
-        Same gradients, at the cost of a second forward pass.
-        """
+    def test_remote_style_client_matches_inline_loss(self):
+        """The off-process path: loss evaluated locally, gradient shipped, surrogate applied on a replayed forward."""
         expected = self._inline_grads()
+        actual = self._client_grads(RemoteStyleTrainingClient(self.model))
 
-        self.model.zero_grad(set_to_none=True)
-        with torch.no_grad():
-            shipped = self._model_forward().clone()
-        shipped.requires_grad_(True)
-        self._loss(shipped).backward()
-        # Second forward, standing in for the backend's replay; the surrogate is what carries the gradient.
-        (self._model_forward() * shipped.grad).sum().backward()
-
-        actual = self._grads()
+        assert set(actual) == set(expected)
         for name in expected:
             torch.testing.assert_close(actual[name], expected[name], rtol=0, atol=0)
 
-    def test_forward_hands_out_a_leaf(self):
-        client = LocalTrainingClient()
-        output = client.forward_no_grad(self.model, self.input_ids, self.position_ids, self.completion_mask)
-        assert output.log_probs.is_leaf
-        assert output.log_probs.requires_grad
-        assert not output.entropy.requires_grad
-        assert output.aux_loss is None
+    def test_loss_stays_attached_in_process(self):
+        outputs = LocalTrainingClient().forward_backward(
+            self.model,
+            input_ids=self.input_ids,
+            position_ids=self.position_ids,
+            completion_mask=self.completion_mask,
+            loss_fn=self.loss_fn,
+        )
+        # Attached rather than a leaf: the trainer's backward reaches the model without a second forward.
+        assert outputs.loss.requires_grad
+        assert not outputs.loss.is_leaf
+        assert not outputs.log_probs.requires_grad
+        assert not outputs.entropy.requires_grad
+        assert outputs.aux_loss is None
 
-    def test_forward_matches_model_log_probs(self):
-        client = LocalTrainingClient()
-        output = client.forward_no_grad(self.model, self.input_ids, self.position_ids, self.completion_mask)
-        torch.testing.assert_close(output.log_probs, self._model_forward().detach(), rtol=0, atol=0)
-
-    def test_hook_wiring_matches_manual_backward(self):
-        """The trainer registers `client.forward_backward` as a hook on `log_probs` rather than calling it directly."""
-        expected = self._inline_grads()
-
-        self.model.zero_grad(set_to_none=True)
-        client = LocalTrainingClient()
-        output = client.forward_no_grad(self.model, self.input_ids, self.position_ids, self.completion_mask)
-        output.log_probs.register_hook(client.forward_backward)
-        self._loss(output.log_probs).backward()
-
-        actual = self._grads()
-        for name in expected:
-            torch.testing.assert_close(actual[name], expected[name], rtol=0, atol=0)
+    def test_reported_log_probs_match_the_model(self):
+        outputs = LocalTrainingClient().forward_backward(
+            self.model,
+            input_ids=self.input_ids,
+            position_ids=self.position_ids,
+            completion_mask=self.completion_mask,
+            loss_fn=self.loss_fn,
+        )
+        torch.testing.assert_close(outputs.log_probs, self._model_forward().detach(), rtol=0, atol=0)
+        torch.testing.assert_close(outputs.loss.detach(), self.loss_fn(self._model_forward()).detach(), rtol=0, atol=0)

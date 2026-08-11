@@ -15,18 +15,21 @@
 """Training-compute backend interface for TRL trainers.
 
 The trainer keeps the RL algorithm (advantages, masks, the loss itself, the metrics) and delegates only the model
-compute. A backend scores a batch and returns per-token log probs; the trainer builds its loss on those log probs; the
-backend then applies `d(loss)/d(log_probs)` to the model. Because the loss never leaves the trainer, a backend does not
-need to know what GRPO is, and TRL's loss variants keep evolving without touching any backend.
+compute. It passes its loss down as a plain Python function of the per-token log probs, and the backend calls it on the
+log probs it just produced. Because the loss is a callable rather than a name, a backend does not need to know what
+GRPO is, and TRL's loss variants keep evolving without touching any backend.
 
-That split is what makes the interface implementable off-process: `log_probs` is a plain tensor, and its gradient is a
-plain tensor of the same shape.
+A backend that owns the model in the trainer's own process runs one forward, calls `loss_fn`, and returns a loss still
+connected to the graph, which the trainer back-propagates as usual. A backend that runs the model elsewhere cannot
+return a connected loss, so it evaluates `loss_fn` locally on the log probs the remote side sent back, takes
+`d(loss)/d(log_probs)`, and ships that gradient over the wire. The remote side then back-propagates `sum(grad_log_probs
+* log_probs)`, a first-order surrogate whose gradient with respect to every parameter equals the gradient of the real
+loss.
 
-The two methods are named for what a remote backend does on the wire: score the batch without building a graph, then
-run a forward and a backward together once the weights are known. See [`TrainingClientProtocol`] for why a co-located
-backend does less work than those names suggest.
+Either way `loss_fn` runs in the trainer's process, so a user-defined loss never has to exist on a backend.
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -34,24 +37,26 @@ import torch
 
 
 @dataclass
-class ForwardOutput:
-    """Per-token quantities returned by [`TrainingClientProtocol.forward_no_grad`].
+class ForwardBackwardOutput:
+    """What [`TrainingClientProtocol.forward_backward`] returns.
 
     Args:
+        loss (`torch.Tensor`):
+            The scalar returned by `loss_fn`, which the trainer passes to `accelerator.backward`. For an in-process
+            backend this is still attached to the model's graph. For an off-process backend it is a leaf carrying a
+            hook, so back-propagating it triggers the remote backward instead.
         log_probs (`torch.Tensor`):
-            Log probability of each target token, shape `(batch_size, sequence_length - 1)`. A leaf tensor with
-            `requires_grad=True`: the trainer builds its loss on it, and the gradient that accumulates here is what
-            gets handed back to [`TrainingClientProtocol.forward_backward`]. The tensor is differentiable even though
-            the backend built it without a graph of its own.
+            Log probability of each target token, shape `(batch_size, sequence_length - 1)`. Detached, and provided for
+            metrics: `loss_fn` already received the differentiable version.
         entropy (`torch.Tensor`):
             Per-token entropy of the model's next-token distribution, same shape as `log_probs`. Detached, since it is
             reported as a metric and never differentiated.
         aux_loss (`torch.Tensor`, *optional*):
-            Mixture-of-experts router load-balancing loss, if the model produces one. Detached: it is not a function of
-            `log_probs`, so it cannot reach the model through the backward pass above. The backend applies it directly,
-            scaled by the `aux_loss_coef` passed to `forward_no_grad`; this value is returned for logging only.
+            Mixture-of-experts router load-balancing loss, if the model produces one. Detached, and reported for
+            logging only: `aux_loss_coef * aux_loss` is already folded into `loss`.
     """
 
+    loss: torch.Tensor
     log_probs: torch.Tensor
     entropy: torch.Tensor
     aux_loss: torch.Tensor | None = None
@@ -64,32 +69,28 @@ class TrainingClientProtocol(Protocol):
     interface existed. Implement this protocol to run the model somewhere else (another process, another set of GPUs,
     or a remote service) while the trainer keeps owning the loss.
 
-    Calls always alternate: one `forward_no_grad`, then at most one `forward_backward` for the tensor it returned. A
-    backend may therefore hold the batch (or the remote request handle) from the first call until the second consumes
-    it. `forward_backward` is not called when the trainer skips a step, so a backend must tolerate a `forward_no_grad`
-    whose gradient never arrives.
-
-    The names describe the remote case, which is the one that constrains the design. A backend that cannot carry an
-    autograd graph across the boundary scores the batch with no graph, then runs a second forward together with the
-    backward once the trainer's gradient is known. A co-located backend does less: it keeps the graph from the first
-    call and resumes it in the second, so there is no second forward and nothing is run under `no_grad`.
-    [`LocalTrainingClient`] takes that route.
-
     Gradient clipping and the optimizer step are deliberately absent. [`~transformers.Trainer`] already accepts an
     optimizer through its `optimizers` argument, so a backend that owns the parameters supplies one whose `step`
     reaches them and clips them on the way. That matches how existing backends are built: Tinker carries
     `grad_clip_norm` in its optimizer params, and Arctic Platform clips inside its `step` call.
     """
 
-    def forward_no_grad(
+    def forward_backward(
         self,
         model: torch.nn.Module,
         input_ids: torch.Tensor,
         position_ids: torch.Tensor,
         completion_mask: torch.Tensor,
+        loss_fn: Callable[[torch.Tensor], torch.Tensor],
         aux_loss_coef: float = 0.0,
-    ) -> ForwardOutput:
-        """Score the batch and return per-token log probs.
+    ) -> ForwardBackwardOutput:
+        """Run the forward pass, build the trainer's loss on it, and prepare the backward.
+
+        The backward itself is left to the trainer, which calls `accelerator.backward` on the returned loss. Keeping it
+        there is what preserves gradient accumulation, the grad scaler, and the `no_sync` context that DDP relies on.
+
+        An off-process backend returns a detached loss carrying a hook, and does its remote backward from inside that
+        hook. Grad mode is off there, so anything the hook recomputes must re-enable it explicitly.
 
         Args:
             model (`torch.nn.Module`):
@@ -103,33 +104,13 @@ class TrainingClientProtocol(Protocol):
             completion_mask (`torch.Tensor`):
                 1 for tokens the policy generated, 0 for prompt and tool-result tokens, same shape as `input_ids`. Only
                 masked-in positions need log probs.
+            loss_fn (`Callable[[torch.Tensor], torch.Tensor]`):
+                The trainer's loss, as a function of per-token log probs of shape `(batch_size, sequence_length - 1)`.
+                It closes over everything algorithm-shaped (advantages, old log probs, the mask, clipping bounds), so
+                the backend never sees any of it. Called exactly once, in the trainer's process, with grad enabled.
             aux_loss_coef (`float`, *optional*, defaults to `0.0`):
                 Coefficient for the mixture-of-experts auxiliary loss, already scaled for gradient accumulation. The
-                backend adds `aux_loss_coef * aux_loss` to the backward pass it runs later. `0.0` disables it.
-        """
-        ...
-
-    def forward_backward(self, grad_log_probs: torch.Tensor) -> None:
-        """Run the backward pass for the gradient of the trainer's loss with respect to the log probs.
-
-        The backend backpropagates `sum(grad_log_probs * log_probs)`. That sum is a first-order surrogate whose
-        gradient with respect to every parameter equals the gradient of the trainer's real loss, so the loss itself
-        never has to cross the boundary.
-
-        A remote backend reaches those log probs by running the forward again, which is what the name refers to: the
-        scoring pass above could not keep a graph, so the graph is rebuilt here and consumed immediately. A co-located
-        backend skips that and resumes the graph it already holds.
-
-        A backend usually does not need a new loss function for this. A weighted cross-entropy, `sum(-weights *
-        log_probs)`, is already the same surrogate: pass `weights = -grad_log_probs`. That is how Tinker implements its
-        custom-loss path on top of a fixed set of server-side losses.
-
-        A backend whose own API already fuses the forward and the backward into one call issues that call from here,
-        sending `grad_log_probs` as the per-token weights.
-
-        Args:
-            grad_log_probs (`torch.Tensor`):
-                `d(loss)/d(log_probs)`, same shape as the `log_probs` returned by `forward_no_grad`.
+                backend folds `aux_loss_coef * aux_loss` into the returned loss. `0.0` disables it.
         """
         ...
 
@@ -137,35 +118,28 @@ class TrainingClientProtocol(Protocol):
 class LocalTrainingClient:
     """Runs the model in the trainer's own process.
 
-    The default backend, and the reference implementation of [`TrainingClientProtocol`]. It keeps the autograd graph
-    from `forward_no_grad` alive and resumes it in `forward_backward`, so despite the names there is no second forward
-    and nothing runs under `no_grad`. Gradients are bit-identical to computing the loss inline, which is what trainers
-    did before this interface existed.
+    The default backend, and the reference implementation of [`TrainingClientProtocol`]. One forward pass, and the
+    returned loss is still attached to it, so the trainer's backward reaches the model directly. Gradients are
+    bit-identical to computing the loss inline, which is what trainers did before this interface existed.
 
     Examples:
 
     ```python
     >>> client = LocalTrainingClient()
-    >>> output = client.forward_no_grad(model, input_ids, position_ids, completion_mask)
-    >>> loss = my_loss(output.log_probs)
-    >>> loss.backward()  # populates output.log_probs.grad
-    >>> client.forward_backward(output.log_probs.grad)
+    >>> outputs = client.forward_backward(model, input_ids, position_ids, completion_mask, loss_fn=my_loss)
+    >>> outputs.loss.backward()
     ```
     """
 
-    def __init__(self):
-        self._log_probs = None
-        self._aux_loss = None
-        self._aux_loss_coef = 0.0
-
-    def forward_no_grad(
+    def forward_backward(
         self,
         model: torch.nn.Module,
         input_ids: torch.Tensor,
         position_ids: torch.Tensor,
         completion_mask: torch.Tensor,
+        loss_fn: Callable[[torch.Tensor], torch.Tensor],
         aux_loss_coef: float = 0.0,
-    ) -> ForwardOutput:
+    ) -> ForwardBackwardOutput:
         outputs = model(
             input_ids=input_ids,
             position_ids=position_ids,
@@ -173,24 +147,16 @@ class LocalTrainingClient:
             completion_mask=completion_mask,
             use_cache=False,
         )
-        # Hold the differentiable tensor; hand out a leaf so the trainer's `loss.backward()` stops at the
-        # boundary and deposits `d(loss)/d(log_probs)` in `.grad` instead of reaching the model directly.
-        self._log_probs = outputs["log_probs"]
-        self._aux_loss = outputs["aux_loss"] if aux_loss_coef else None
-        self._aux_loss_coef = aux_loss_coef
-        return ForwardOutput(
-            log_probs=self._log_probs.detach().requires_grad_(True),
-            entropy=outputs["entropy"].detach(),
-            aux_loss=self._aux_loss.detach() if self._aux_loss is not None else None,
-        )
+        log_probs = outputs["log_probs"]
+        loss = loss_fn(log_probs)
 
-    def forward_backward(self, grad_log_probs: torch.Tensor) -> None:
-        # Trainers call this from a backward hook on `log_probs`, where grad mode is off, so building the surrogate
-        # there would produce a tensor with no graph to back-propagate.
-        with torch.enable_grad():
-            surrogate = (self._log_probs * grad_log_probs).sum()
-            if self._aux_loss is not None:
-                surrogate = surrogate + self._aux_loss_coef * self._aux_loss
-        surrogate.backward()
-        self._log_probs = None
-        self._aux_loss = None
+        aux_loss = outputs["aux_loss"] if aux_loss_coef else None
+        if aux_loss is not None:
+            loss = loss + aux_loss_coef * aux_loss
+
+        return ForwardBackwardOutput(
+            loss=loss,
+            log_probs=log_probs.detach(),
+            entropy=outputs["entropy"].detach(),
+            aux_loss=aux_loss.detach() if aux_loss is not None else None,
+        )
