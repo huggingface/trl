@@ -33,6 +33,7 @@ from torch.utils.data import DataLoader
 from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenizerBase, TrainerCallback
 from transformers.data.data_collator import DataCollatorMixin
 
+from ...models.utils import _ForwardRedirection
 from ...trainer.base_trainer import _BaseTrainer
 from ...trainer.utils import get_config_model_id, is_trackio_available, pad
 from .async_distillation_config import AsyncDistillationConfig
@@ -804,6 +805,12 @@ class AsyncDistillationTrainer(_BaseTrainer):
                 f"(max_staleness={self.args.max_staleness} × samples_per_step={samples_per_step})"
             )
 
+        # `compute_loss` bypasses `lm_head` by calling `unwrapped_model.base_model(...)` directly, which skips the
+        # wrapper's forward; route it through `_forward_redirection` so DDP.forward() fires `prepare_for_backward()`
+        # and FSDP keeps the student's sharded parameters materialized for the projection. Mirrors
+        # `DistillationTrainer`'s identical need for its own chunked JSD path.
+        self._forward_redirection = _ForwardRedirection()
+
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
         self._train_tokens_start_time = None
@@ -943,6 +950,15 @@ class AsyncDistillationTrainer(_BaseTrainer):
             ]
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+        # Route the whole loss (backbone + `lm_head` projection + JSD) through the DDP/FSDP wrapper via
+        # `_forward_redirection`, so DDP.forward() fires `prepare_for_backward()` and FSDP keeps the student's
+        # sharded parameters (including the `lm_head`) materialized for the projection. Mirrors
+        # `DistillationTrainer.compute_loss`.
+        unwrapped_model = self.accelerator.unwrap_model(model)
+        loss = self._forward_redirection(model, unwrapped_model, self._compute_loss, unwrapped_model, inputs)
+        return (loss, None) if return_outputs else loss
+
+    def _compute_loss(self, unwrapped_model, inputs):
         # Padding-free: the collator already packed this rank's samples into a single row (real tokens concatenated,
         # `position_ids` resetting per sequence), then padded the row to the longest rank's length so
         # DataLoaderDispatcher could scatter rectangular rows. Strip that trailing inter-rank padding here.
@@ -1004,9 +1020,10 @@ class AsyncDistillationTrainer(_BaseTrainer):
         # `DistillationTrainer._get_last_hidden_state` + `_chunked_divergence_loss`, adapted to one (student-only)
         # model and a sparse (already off-the-wire) teacher target instead of two locally-projected dense ones.
         # Calling `base_model` directly (instead of `model`) bypasses the mixed-precision autocast that Accelerate
-        # attaches to the outer model's `forward`, so it's re-applied explicitly here (a no-op if bf16/fp16 aren't
-        # enabled) — otherwise FlashAttention (which requires fp16/bf16 inputs) sees fp32 hidden states and errors.
-        unwrapped_model = self.accelerator.unwrap_model(model)
+        # attaches to the outer model's `forward` — `_forward_redirection` above preserves DDP/FSDP's own hooks, but
+        # not this one, since it also reaches `base_model` around the patched `forward`. Re-applied explicitly here
+        # (a no-op if bf16/fp16 aren't enabled) — otherwise FlashAttention (which requires fp16/bf16 inputs) sees
+        # fp32 hidden states and errors.
         forward_start = time.time()
         with self.accelerator.autocast():
             hidden_states = unwrapped_model.base_model(
