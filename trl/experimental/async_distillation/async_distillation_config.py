@@ -74,7 +74,7 @@ class AsyncDistillationConfig(_BaseConfig):
             A single entry scores every sample (plain single-teacher on-policy distillation, the default). Multiple
             entries enable MOPD (multi-teacher on-policy distillation, see
             [MOPD: Multi-Teacher On-Policy Distillation for Capability Integration in LLM Post-Training](
-            https://openreview.net/forum?id=Ir65sQ5tV6)): each training row's `teacher_id` column selects which
+            https://huggingface.co/papers/2606.30406)): each training row's `teacher_id` column selects which
             entry scores it, e.g. `{"math": "http://localhost:8002", "code": "http://localhost:8003"}` with a
             `teacher_id` of `"math"` or `"code"` per row.
         request_timeout (`int`, *optional*, defaults to `600`):

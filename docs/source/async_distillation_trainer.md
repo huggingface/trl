@@ -30,7 +30,7 @@ generates every completion it trains on.
 MOPD is not part of the [2306.13649](https://huggingface.co/papers/2306.13649) paper this trainer's core objective
 is based on (which describes a synchronous, single-teacher setting); it's a separate method, described in
 [MOPD: Multi-Teacher On-Policy Distillation for Capability Integration in LLM Post-Training](
-https://openreview.net/forum?id=Ir65sQ5tV6). There, MOPD is the third of three stages — general SFT, then
+https://huggingface.co/papers/2606.30406). There, MOPD is the third of three stages — general SFT, then
 independent per-domain RL training of one expert per domain, then MOPD fuses those frozen experts into a single
 student. `AsyncDistillationTrainer` implements that third, fusion stage only: the per-domain expert teachers must
 already exist (e.g. trained separately with [`GRPOTrainer`]/[`RLOOTrainer`]) and be served over HTTP before you
