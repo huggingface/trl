@@ -13,12 +13,29 @@
 # limitations under the License.
 
 import gc
+import logging
 import traceback
 from functools import wraps
 
 import pytest
 import torch
 from transformers.utils import is_torch_xpu_available
+
+
+# ============================================================================
+# Silence transformers "LOAD REPORT" tables
+# ============================================================================
+# transformers >= 5 prints a "LOAD REPORT" table whenever a checkpoint has missing/mismatched/unexpected keys
+# (transformers/utils/loading_report.py). TRL's tiny test models don't serialize the tied `lm_head.weight`, so
+# this fires on nearly every model load and floods the test output. It is emitted through `logging` at WARNING
+# level from three loggers; we drop only these records, keeping all other warnings visible.
+class _DropLoadReport(logging.Filter):
+    def filter(self, record):
+        return "LOAD REPORT" not in record.getMessage()
+
+
+for _logger_name in ("transformers.modeling_utils", "transformers.modeling_layers", "transformers.integrations.peft"):
+    logging.getLogger(_logger_name).addFilter(_DropLoadReport())
 
 
 @pytest.hookimpl(hookwrapper=True)
@@ -119,6 +136,32 @@ def apply_model_revisions(monkeypatch):
         ProcessorMixin,
     ]:
         monkeypatch.setattr(cls, "from_pretrained", create_classmethod_wrapper(cls.from_pretrained))
+
+
+@pytest.fixture(autouse=True)
+def force_use_cpu_without_accelerator(monkeypatch):
+    """Force `use_cpu=True` on all TRL configs when no accelerator is available.
+
+    TRL configs default `bf16` to `True` (see `_BaseConfig.__post_init__`), which makes
+    `transformers.TrainingArguments.__post_init__` raise `ValueError: Your setup doesn't support bf16/gpu. You need to
+    assign use_cpu ...` on machines without a GPU. Setting `use_cpu=True` before that validation runs lets the whole
+    suite run on CPU without editing every individual config in the tests. On a machine with an accelerator (CUDA, XPU,
+    NPU, ...) this fixture is a no-op, so on-device tests and explicit `use_cpu=False` are left untouched.
+    """
+    from transformers.testing_utils import torch_device
+
+    if torch_device is not None and torch_device != "cpu":
+        return
+
+    from trl.trainer.base_config import _BaseConfig
+
+    original_post_init = _BaseConfig.__post_init__
+
+    def patched_post_init(self):
+        self.use_cpu = True
+        original_post_init(self)
+
+    monkeypatch.setattr(_BaseConfig, "__post_init__", patched_post_init)
 
 
 @pytest.fixture(autouse=True)
