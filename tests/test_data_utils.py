@@ -515,8 +515,8 @@ class TestIsConversationalFromValue(TrlTestCase):
         }
         assert not is_conversational_from_value(example)
 
-    def test_negative_2(self):
-        example = {"text": "The sky is blue."}
+    @pytest.mark.parametrize("example", [{"text": "The sky is blue."}, {"conversations": []}])
+    def test_negative_2(self, example):
         assert not is_conversational_from_value(example)
 
 
