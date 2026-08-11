@@ -39,7 +39,6 @@ from trl.experimental.async_distillation.async_rollout_worker import (
     _AsyncRolloutLoop,
     _parse_teacher_logprobs_at_position,
 )
-from trl.experimental.async_distillation.vllm_client import VLLMClient
 from trl.experimental.server_distillation.server_distillation_trainer import (
     _jsd_divergence as _reference_jsd_divergence,
 )
@@ -610,43 +609,6 @@ class TestAsyncDistillationTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
-
-    def test_teacher_vocab_size_mismatch_raises(self, monkeypatch):
-        # compute_loss gathers the teacher's reported token ids directly against the student's logits, so a
-        # vocab_size mismatch would silently score garbage rather than error — mirrors DistillationTrainer's
-        # local-teacher `test_teacher_vocab_size_mismatch_raises`, adapted for a remote, HTTP-served teacher: no
-        # rollout_worker is injected here, so the real (non-stub) path that queries the teacher's `/v1/models` and
-        # checks its vocab_size actually runs.
-        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
-        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
-        monkeypatch.setattr(VLLMClient, "get_model_id", lambda self: "trl-internal-testing/tiny-LlamaForCausalLM-3.2")
-
-        training_args = AsyncDistillationConfig(
-            output_dir=self.tmp_dir,
-            teacher_server_urls={"default": "http://localhost:8001"},
-            report_to="none",
-        )
-        with pytest.raises(ValueError, match="vocab_size"):
-            AsyncDistillationTrainer(model=model_id, args=training_args, train_dataset=dataset)
-
-    def test_teacher_vocab_size_mismatch_identifies_teacher(self, monkeypatch):
-        # MOPD (multi-teacher on-policy distillation): the mismatch check must run per teacher and name the one
-        # that actually mismatches, not just whichever it happens to check first.
-        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
-        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
-
-        def fake_get_model_id(self):
-            return "trl-internal-testing/tiny-LlamaForCausalLM-3.2" if "8002" in self.server_url else model_id
-
-        monkeypatch.setattr(VLLMClient, "get_model_id", fake_get_model_id)
-
-        training_args = AsyncDistillationConfig(
-            output_dir=self.tmp_dir,
-            teacher_server_urls={"math": "http://localhost:8001", "code": "http://localhost:8002"},
-            report_to="none",
-        )
-        with pytest.raises(ValueError, match="'code'"):
-            AsyncDistillationTrainer(model=model_id, args=training_args, train_dataset=dataset)
 
     @pytest.mark.parametrize("beta", [0.25, 0.5, 0.75, 1.0])
     def test_train_with_nonzero_beta(self, beta):

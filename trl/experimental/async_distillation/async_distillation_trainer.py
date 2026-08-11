@@ -30,7 +30,7 @@ from accelerate.logging import get_logger
 from datasets import Dataset, IterableDataset
 from torch.distributed._tensor import DTensor
 from torch.utils.data import DataLoader
-from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenizerBase, TrainerCallback
+from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenizerBase, TrainerCallback
 from transformers.data.data_collator import DataCollatorMixin
 
 from ...trainer.base_trainer import _BaseTrainer
@@ -598,11 +598,12 @@ class AsyncDistillationTrainer(_BaseTrainer):
         "id": "2306.13649",
         # docstyle-ignore
         "citation": textwrap.dedent("""\
-            @article{gu2024onpolicy,
-                title        = {{On-Policy Distillation of Language Models: Learning from Self-Generated Mistakes}},
-                author       = {Yuxian Gu and Li Dong and Furu Wei and Minlie Huang},
+            @inproceedings{agarwal2024onpolicy,
+                title        = {On-Policy Distillation of Language Models: Learning from Self-Generated Mistakes},
+                author       = {Rishabh Agarwal and Nino Vieillard and Yongchao Zhou and Piotr Stanczyk and Sabela Ramos Garea and Matthieu Geist and Olivier Bachem},
+                booktitle    = {The Twelfth International Conference on Learning Representations},
                 year         = 2024,
-                eprint       = {arXiv:2306.13649},
+                url          = {https://openreview.net/forum?id=3zKtaqxLhW},
             }"""),
     }
 
@@ -672,6 +673,12 @@ class AsyncDistillationTrainer(_BaseTrainer):
             * self.args.gradient_accumulation_steps
             * self.accelerator.num_processes
         )
+        # Known limitation, shared verbatim with AsyncGRPOTrainer: this assumes `samples_per_step` samples per step,
+        # which only holds under `FixedCountBatcher`. Under `TokenBudgetBatcher` (the default once `token_budget` is
+        # set, see below), the number of samples per micro-batch is dynamic — driven by sequence lengths, not
+        # `per_device_train_batch_size` — so an inferred `max_steps`/`num_train_epochs` no longer corresponds exactly
+        # to the requested number of dataset passes. Fixing this requires touching AsyncGRPOTrainer's identical
+        # derivation too, out of scope for this PR.
         if self.args.max_steps <= 0 and train_dataset is not None and hasattr(train_dataset, "__len__"):
             samples_per_epoch = len(train_dataset)
             self.args.max_steps = math.ceil(self.args.num_train_epochs * samples_per_epoch / samples_per_step)
@@ -679,8 +686,9 @@ class AsyncDistillationTrainer(_BaseTrainer):
         # Infer max_inflight_tasks when not explicitly set. Generating more samples than the trainer can consume
         # before they become stale is wasteful. The useful upper bound is max_staleness * samples_per_step, floored
         # at samples_per_step so max_staleness=0 (a valid, strict discard policy) can't also zero out the rollout
-        # loop's own scheduling capacity and hang the trainer forever on an empty queue (AsyncGRPOTrainer's identical
-        # derivation shares this gap, unfixed there; see the plan doc).
+        # loop's own scheduling capacity and hang the trainer forever on an empty queue. This intentionally differs
+        # from AsyncGRPOTrainer's unfloored `max_staleness * samples_per_step`, which has the same edge case at
+        # max_staleness=0; fixing that there is out of scope for this PR.
         if self.args.max_inflight_tasks < 0:
             self.args.max_inflight_tasks = max(self.args.max_staleness, 1) * samples_per_step
             logger.info(
@@ -735,27 +743,6 @@ class AsyncDistillationTrainer(_BaseTrainer):
                 # Use the injected worker (e.g. a stub in tests). The queue is owned by the worker.
                 self.rollout_worker = rollout_worker
             else:
-                # `compute_loss` gathers each teacher's reported token ids directly against the student's logits
-                # (see `_jsd_divergence`), so every configured teacher must share the student's vocabulary — a
-                # mismatch wouldn't error there, it would silently score garbage. Mirrors DistillationTrainer's
-                # local-teacher `vocab_size` check, generalized to every entry in `teacher_server_urls` (MOPD) and
-                # adapted for a remote, HTTP-served teacher we never load: `/v1/models` reports the served model's
-                # id/path, then `AutoConfig` (config only, no weights) reads its `vocab_size`.
-                student_vocab_size = model.config.get_text_config().vocab_size
-                for teacher_id, teacher_url in self.args.teacher_server_urls.items():
-                    teacher_model_id = VLLMClient(teacher_url, self.args.vllm_server_timeout).get_model_id()
-                    teacher_vocab_size = (
-                        AutoConfig.from_pretrained(teacher_model_id, trust_remote_code=self.args.trust_remote_code)
-                        .get_text_config()
-                        .vocab_size
-                    )
-                    if teacher_vocab_size != student_vocab_size:
-                        raise ValueError(
-                            f"Teacher {teacher_id!r} ({teacher_model_id}) has vocab_size {teacher_vocab_size} but "
-                            f"the student model has vocab_size {student_vocab_size}. The divergence loss gathers "
-                            f"the teacher's reported token ids directly against the student's logits, which "
-                            f"requires a shared vocabulary. Use a teacher with the same vocab_size."
-                        )
                 self.rollout_worker = AsyncRolloutWorker(
                     model_name=get_config_model_id(model.config),
                     dataset=train_dataset,

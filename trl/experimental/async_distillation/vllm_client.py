@@ -70,12 +70,6 @@ class VLLMClient:
         response.raise_for_status()
         return response.json()["data"][0]["max_model_len"]
 
-    def get_model_id(self) -> str:
-        """Return the served model's id (the model name or path passed to `trl vllm-serve --model`)."""
-        response = requests.get(f"{self.server_url}/v1/models")
-        response.raise_for_status()
-        return response.json()["data"][0]["id"]
-
     def get_world_size(self) -> int:
         """Return the vLLM server's inference world size (tensor/pipeline parallel processes)."""
         response = requests.get(f"{self.server_url}/get_world_size")

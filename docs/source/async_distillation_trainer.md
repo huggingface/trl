@@ -27,6 +27,10 @@ generates every completion it trains on.
 
 ### Multi-teacher on-policy distillation (MOPD)
 
+MOPD is not part of the [2306.13649](https://huggingface.co/papers/2306.13649) paper this trainer's core objective
+is based on (which describes a synchronous, single-teacher setting); it's a separate method, described in
+[MOPD: Multi-Teacher On-Policy Distillation for Capability Integration in LLM Post-Training](
+https://openreview.net/forum?id=Ir65sQ5tV6).
 `teacher_server_urls` accepts more than one entry. With a single entry, every sample is scored by that one teacher
 (plain on-policy distillation). With multiple entries, each training sample's `teacher_id` column selects which
 teacher scores it — for example, routing math prompts to a math-specialist teacher and code prompts to a

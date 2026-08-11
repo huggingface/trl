@@ -1654,7 +1654,7 @@ Papers relating to training a student model with the help of a teacher model.
 
 **📜 Paper**: https://huggingface.co/papers/2306.13649
 
-Introduces Generalized Knowledge Distillation (GKD), which addresses distribution mismatch in KD for auto-regressive models by training the student on its own generated outputs with teacher feedback, instead of a fixed set of sequences. GKD supports flexible loss functions (e.g. beyond KL when the student cannot match the teacher) and integrates with RL fine-tuning (RLHF). The paper reports results on summarization, translation, arithmetic reasoning, and instruction-tuning. Used in TRL via [`experimental.gkd.GKDTrainer`], which exposes the paper's on/off-policy mixing (`lmbda`). [`experimental.distillation.DistillationTrainer`] implements the same generalized-JSD objective for the always-on-policy case. To reproduce the paper's setting, use this configuration:
+Introduces Generalized Knowledge Distillation (GKD), which addresses distribution mismatch in KD for auto-regressive models by training the student on its own generated outputs with teacher feedback, instead of a fixed set of sequences. GKD supports flexible loss functions (e.g. beyond KL when the student cannot match the teacher) and integrates with RL fine-tuning (RLHF). The paper reports results on summarization, translation, arithmetic reasoning, and instruction-tuning. Used in TRL via [`experimental.gkd.GKDTrainer`], which exposes the paper's on/off-policy mixing (`lmbda`). [`experimental.distillation.DistillationTrainer`] implements the same generalized-JSD objective for the always-on-policy case, synchronously (the paper's own setting: student generation, teacher scoring, and the gradient update all happen in the same process). [`experimental.async_distillation.AsyncDistillationTrainer`] implements the same objective but decouples generation from training via a background rollout worker, the way [`experimental.async_grpo.AsyncGRPOTrainer`] does for GRPO — this async execution is not described in this paper. [`AsyncDistillationTrainer`] also supports MOPD (multi-teacher on-policy distillation), routing different samples to different teachers via a `teacher_id` column; see the dedicated MOPD entry below. To reproduce the paper's setting, use this configuration:
 
 ```python
 from trl.experimental.gkd import GKDConfig
@@ -1671,6 +1671,12 @@ training_args = GKDConfig(
     max_new_tokens=64,  # max output tokens (Table A.1 of the paper)
 )
 ```
+
+### MOPD: Multi-Teacher On-Policy Distillation for Capability Integration in LLM Post-Training
+
+**📜 Paper**: https://openreview.net/forum?id=Ir65sQ5tV6
+
+Extends on-policy distillation to the multi-teacher setting: rather than a single teacher scoring every sample, each sample is routed to whichever teacher specializes in its domain (e.g. a math teacher, a code teacher), letting one student integrate capabilities from several teachers in one training run. Used in TRL via [`experimental.async_distillation.AsyncDistillationTrainer`]: passing more than one entry in `teacher_server_urls` enables MOPD, with each row's `teacher_id` column selecting which teacher scores it.
 
 ### On the Position Bias of On-Policy Distillation
 
