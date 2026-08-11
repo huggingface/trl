@@ -11,6 +11,8 @@ The `DistillationTrainer` trains a smaller student model to match a teacher's ne
 > [!NOTE]
 > The Distillation Trainer is currently part of the `trl.experimental` namespace. APIs may change without notice while the feature is iterated on.
 
+For an async counterpart that decouples generation from training and scores against a teacher served over HTTP instead of a local forward pass, see [`AsyncDistillationTrainer`](async_distillation_trainer).
+
 ## Quick start
 
 ```python
