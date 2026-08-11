@@ -17,6 +17,7 @@ from unittest.mock import patch
 import pytest
 import torch
 import transformers
+from PIL import Image
 from datasets import DatasetDict, IterableDatasetDict, load_dataset
 from packaging.version import Version
 from transformers import (
@@ -2090,6 +2091,65 @@ class TestRLOOTrainerVLM(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    def test_log_completions_with_some_prompts_missing_images(self):
+        """A batch may mix multimodal and text-only prompts, in which case the per-sample entry
+        in `_logs["images"]` is None rather than an empty list, because `_generate_and_score_completions`
+        builds it as `[example.get("image")] if example.get("image") is not None else None`.
+        Building the completions table has to survive that. GRPOTrainer already guards it."""
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
+
+        def reward_func(completions, **kwargs):
+            return [float(len(completion[0]["content"])) for completion in completions]
+
+        training_args = RLOOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            num_generations=2,
+            max_completion_length=8,
+            report_to="none",
+            log_completions=True,
+        )
+        trainer = RLOOTrainer(
+            model="trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
+            reward_funcs=reward_func,
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        class _Backend:
+            """Stands in for wandb / trackio: only Image, Table and log are used."""
+
+            logged = None
+
+            class Image:
+                def __init__(self, image):
+                    self.image = image
+
+            class Table:
+                def __init__(self, dataframe):
+                    self.dataframe = dataframe
+
+            @classmethod
+            def log(cls, payload):
+                cls.logged = payload
+
+        trainer._logs["prompt"] = ["a", "b"]
+        trainer._logs["completion"] = ["x", "y"]
+        trainer._logs["rewards"] = {"reward": [1.0, 2.0]}
+        trainer._logs["advantages"] = [0.5, -0.5]
+        trainer._logs["images"] = [[Image.new("RGB", (4, 4))], None]  # second prompt has no image
+
+        with (
+            patch.object(type(trainer.args), "report_to", ["wandb"]),
+            patch("trl.trainer.rloo_trainer.wandb", _Backend),
+            patch("trl.trainer.rloo_trainer.is_rich_available", return_value=False),
+        ):
+            _Backend.run = object()
+            trainer.log({})
+
+        table = _Backend.logged["completions"].dataframe
+        assert list(table["image"].map(len)) == [1, 0]
 
     def test_train_vlm_log_multimodal_false(self):
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
