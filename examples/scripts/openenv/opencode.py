@@ -78,6 +78,7 @@ from datasets import Dataset, load_dataset
 from opencode_env import harness as oc_harness
 from opencode_env.config import OpenCodeConfig
 from opencode_env.harness import OpenCodeSessionFactory
+from opencode_env.opencode_runtime import proxy_log_path, proxy_trace_path
 from opencode_env.sandbox.base import ExecResult, SandboxHandle
 from opencode_env.task import OpenCodeTask
 from openenv.core.harness import ResourceSession, ResourceSessionFactory, VerifyResult
@@ -417,8 +418,8 @@ class FreePortOpenCodeSessionFactory(OpenCodeSessionFactory):
 
     def _start_proxy(self, sandbox):
         port = _free_port()
-        trace_path = oc_harness._PROXY_TRACE_PATH
-        log_path = oc_harness._PROXY_LOG_PATH
+        trace_path = proxy_trace_path(self._config)
+        log_path = proxy_log_path(self._config)
         if not sandbox.exists("/home/user/proxy/interception.py"):
             self._exec_with_retry(
                 sandbox,
