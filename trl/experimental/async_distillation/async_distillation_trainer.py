@@ -1118,7 +1118,9 @@ class AsyncDistillationTrainer(_BaseTrainer):
             # MOPD (multi-teacher on-policy distillation): break jsd/teacher_entropy down per teacher, since the
             # blended versions above conflate teachers that can behave very differently (e.g. a "math" and a "code"
             # teacher). Student entropy isn't broken down here: it's a property of the student's own policy, not of
-            # which teacher scored the sample, so the blended `entropy` metric already covers it.
+            # which teacher scored the sample, so the blended `entropy` metric already covers it. Named
+            # `teacher_jsd/{teacher_id}` (not `jsd/{teacher_id}`) so it doesn't collide with the flat `jsd` metric
+            # above in dashboards that treat `/` as a grouping separator (e.g. wandb/trackio).
             # `teacher_id_idx` is either present on every rank or absent on every rank (it depends only on
             # `self.args.teacher_server_urls`, identical config on all ranks), so every rank takes this branch
             # together or skips it together — required for `accelerator.reduce` below to stay in sync across ranks.
@@ -1127,12 +1129,12 @@ class AsyncDistillationTrainer(_BaseTrainer):
                 for i, teacher_id in enumerate(self._teacher_ids):
                     t_count, t_jsd_sum, t_teacher_entropy_sum = per_teacher_stats[3 * i : 3 * i + 3]
                     if t_count > 0:
-                        self._metrics["train"][f"jsd/{teacher_id}"].append((t_jsd_sum / t_count).item())
+                        self._metrics["train"][f"teacher_jsd/{teacher_id}"].append((t_jsd_sum / t_count).item())
                         self._metrics["train"][f"teacher_entropy/{teacher_id}"].append(
                             (t_teacher_entropy_sum / t_count).item()
                         )
                     else:
-                        self._metrics["train"][f"jsd/{teacher_id}"].append(float("nan"))
+                        self._metrics["train"][f"teacher_jsd/{teacher_id}"].append(float("nan"))
                         self._metrics["train"][f"teacher_entropy/{teacher_id}"].append(float("nan"))
 
             # Logging metrics from the rollout worker (generation_tok_per_s, rollout_time_ms, etc.).
