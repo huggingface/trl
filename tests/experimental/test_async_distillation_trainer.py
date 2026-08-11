@@ -573,7 +573,7 @@ class TestAsyncDistillationTrainer(TrlTestCase):
         AsyncDistillationTrainer(
             model=model_id,
             train_dataset=dataset,
-            rollout_worker=_StubRolloutWorker(tokenizer, dataset, vocab_size=tokenizer.vocab_size),
+            rollout_worker=_StubRolloutWorker(tokenizer, dataset, vocab_size=len(tokenizer)),
             weight_transfer=_StubWeightTransfer(),
         )
 
@@ -596,7 +596,7 @@ class TestAsyncDistillationTrainer(TrlTestCase):
             model=model_id,
             args=training_args,
             train_dataset=dataset,
-            rollout_worker=_StubRolloutWorker(tokenizer, dataset, vocab_size=tokenizer.vocab_size),
+            rollout_worker=_StubRolloutWorker(tokenizer, dataset, vocab_size=len(tokenizer)),
             weight_transfer=_StubWeightTransfer(),
         )
 
@@ -634,7 +634,7 @@ class TestAsyncDistillationTrainer(TrlTestCase):
             model=model_id,
             args=training_args,
             train_dataset=dataset,
-            rollout_worker=_StubRolloutWorker(tokenizer, dataset, vocab_size=tokenizer.vocab_size),
+            rollout_worker=_StubRolloutWorker(tokenizer, dataset, vocab_size=len(tokenizer)),
             weight_transfer=_StubWeightTransfer(),
         )
         trainer.train()

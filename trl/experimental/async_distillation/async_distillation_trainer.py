@@ -134,6 +134,112 @@ def _narrow_top1_actual_support(
     return narrow_token_ids, teacher_support_logps, valid_candidate_mask
 
 
+# Number of valid completion positions projected through the `lm_head` per chunk (mirrors
+# `DistillationTrainer`'s `_CHUNKED_LM_HEAD_CHUNK_SIZE`).
+_CHUNKED_LM_HEAD_CHUNK_SIZE = 256
+
+
+def _jsd_loss_chunk(
+    hidden_chunk: torch.Tensor,
+    lm_head_weight: torch.Tensor,
+    lm_head_bias: torch.Tensor | None,
+    logit_scale: float,
+    final_logit_softcapping: float | None,
+    target_ids_chunk: torch.Tensor,
+    teacher_logps_chunk: torch.Tensor,
+    candidate_mask_chunk: torch.Tensor,
+    beta: float,
+    temperature: float,
+    add_tail_bucket: bool,
+    teacher_id_idx_chunk: torch.Tensor | None,
+    num_teachers: int,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Project one chunk of student hidden states through `lm_head` and accumulate this chunk's loss/metric sums.
+
+    Mirrors `DistillationTrainer`'s `_chunk`/`_chunked_divergence_loss`: the full `(chunk_size, vocab_size)` logits are
+    the only per-chunk tensor that scales with `vocab_size`, and `torch.utils.checkpoint.checkpoint` (see the caller)
+    discards it after this chunk's forward, recomputing it on demand during backward — so peak logits memory is
+    `chunk_size * vocab_size`, not `total_valid_tokens * vocab_size`. Unlike that sync-trainer function, there is only
+    one model here (the teacher's sparse candidates are already precomputed off the wire, no second `lm_head` to
+    chunk), and the target ids are a sparse candidate set (`teacher_top_k` wide, or narrowed to top-1+actual for `beta
+    != 0.0`), not the full vocabulary.
+
+    Args:
+        hidden_chunk: `(chunk_size, H)`, this chunk's student backbone output (before `lm_head`).
+        lm_head_weight: `(V, H)`, the student's `lm_head` weight (already `full_tensor()`-ed if it was a DTensor).
+        lm_head_bias: `(V,)` or `None`.
+        logit_scale: multiplier applied to the logits before the softmax (Cohere-style `logit_scale`; `1.0` if the
+            model has none).
+        final_logit_softcapping: if set, applies `softcap * tanh(logits / softcap)` (Gemma-style), after the scale.
+        target_ids_chunk: `(chunk_size, K)`, the teacher's candidate token ids to gather the student's log-probs at.
+        teacher_logps_chunk: `(chunk_size, K)`, the teacher's log-probs at `target_ids_chunk`.
+        candidate_mask_chunk: `(chunk_size, K)` bool, `True` where that candidate slot is a real (not padding)
+            candidate.
+        beta, temperature, add_tail_bucket: see `AsyncDistillationConfig`.
+        teacher_id_idx_chunk: `(chunk_size,)` long, or `None` with a single teacher (see MOPD in
+            `AsyncDistillationConfig.teacher_server_urls`).
+        num_teachers: `len(self._teacher_ids)`, fixed for the training run; sizes the (possibly all-zero)
+            per-teacher stats tensor so every chunk/rank returns the same shape regardless of `teacher_id_idx_chunk`.
+
+    Returns:
+        `(chunk_loss, chunk_jsd_sum, chunk_entropy_sum, chunk_teacher_entropy_sum, chunk_per_teacher_stats)`: the first
+        is connected to the autograd graph (student-parameter gradients only, the teacher data carries none); the rest
+        are `torch.no_grad()` sums for this chunk only — callers accumulate them across chunks and reduce across ranks,
+        exactly as the non-chunked path already did.
+    """
+    logits = hidden_chunk.float() @ lm_head_weight.float().t()
+    if lm_head_bias is not None:
+        logits = logits + lm_head_bias.float()
+    if logit_scale != 1.0:
+        logits = logits * logit_scale
+    if final_logit_softcapping is not None:
+        logits = final_logit_softcapping * torch.tanh(logits / final_logit_softcapping)
+    logits = logits / temperature
+
+    student_log_probs_full = F.log_softmax(logits, dim=-1)
+    neg_inf = torch.full((), float("-inf"), dtype=student_log_probs_full.dtype, device=student_log_probs_full.device)
+    student_support_logps = student_log_probs_full.gather(-1, target_ids_chunk.clamp_min(0))
+    student_support_logps = torch.where(candidate_mask_chunk, student_support_logps, neg_inf)
+    teacher_support_logps = torch.where(candidate_mask_chunk, teacher_logps_chunk, neg_inf)
+
+    if add_tail_bucket:
+        student_log_probs, support_mask = _add_tail_bucket(student_support_logps, candidate_mask_chunk)
+        teacher_log_probs, _ = _add_tail_bucket(teacher_support_logps, candidate_mask_chunk)
+    else:
+        student_log_probs = student_support_logps - torch.logsumexp(student_support_logps, dim=-1, keepdim=True)
+        teacher_log_probs = teacher_support_logps - torch.logsumexp(teacher_support_logps, dim=-1, keepdim=True)
+        support_mask = candidate_mask_chunk
+
+    jsd = _jsd_divergence(student_log_probs, teacher_log_probs, beta=beta, support_mask=support_mask)
+    chunk_loss = jsd.sum()
+
+    with torch.no_grad():
+        per_token_jsd = jsd.sum(dim=-1)
+        chunk_jsd_sum = per_token_jsd.sum()
+
+        student_probs_full = student_log_probs_full.exp()
+        per_token_entropy = -(student_probs_full * student_log_probs_full).sum(dim=-1)
+        chunk_entropy_sum = per_token_entropy.sum()
+
+        safe_teacher_log_probs = torch.where(support_mask, teacher_log_probs, torch.zeros_like(teacher_log_probs))
+        teacher_probs = torch.where(support_mask, teacher_log_probs.exp(), torch.zeros_like(teacher_log_probs))
+        per_token_teacher_entropy = torch.nan_to_num(-(teacher_probs * safe_teacher_log_probs).sum(dim=-1), nan=0.0)
+        chunk_teacher_entropy_sum = per_token_teacher_entropy.sum()
+
+        chunk_per_teacher_stats = jsd.new_zeros(3 * num_teachers)
+        if teacher_id_idx_chunk is not None:
+            stats = []
+            for idx in range(num_teachers):
+                teacher_mask = teacher_id_idx_chunk == idx
+                has_any = teacher_mask.any()
+                stats.append(teacher_mask.sum().float())
+                stats.append(per_token_jsd[teacher_mask].sum() if has_any else jsd.new_zeros(()))
+                stats.append(per_token_teacher_entropy[teacher_mask].sum() if has_any else jsd.new_zeros(()))
+            chunk_per_teacher_stats = torch.stack(stats)
+
+    return chunk_loss, chunk_jsd_sum, chunk_entropy_sum, chunk_teacher_entropy_sum, chunk_per_teacher_stats
+
+
 def _balance_by_squared_length(examples: list[dict[str, Any]], num_groups: int) -> list[list[dict[str, Any]]]:
     """Greedily partition `examples` into `num_groups` rows (one per DP rank), balancing each row's Σ Lᵢ².
 
@@ -628,9 +734,11 @@ class AsyncDistillationTrainer(_BaseTrainer):
         model_init_kwargs.setdefault("trust_remote_code", self.args.trust_remote_code)
         # FlashAttention is required: training runs in padding-free mode, where sequences are concatenated into a
         # single row and attention is derived from `position_ids` resets. SDPA/eager can't handle this. Unlike
-        # AsyncGRPOTrainer, the student's own lm_head is NOT patched to a chunked realized-token-only head: the
-        # divergence loss needs the student's full per-position logits (to gather at the teacher's candidate token
-        # ids), not just the realized token's logprob.
+        # AsyncGRPOTrainer, the student's own lm_head is NOT patched (via `patch_chunked_lm_head`) to a chunked
+        # realized-token-only head at load time: the divergence loss needs the student's log-probs at several
+        # candidate token ids per position (the teacher's top-k + tail), not just the realized token's logprob, which
+        # is all that patch supports. `compute_loss` chunks the lm_head projection itself instead (`_jsd_loss_chunk`),
+        # a different mechanism that does support multiple candidate ids per position.
         model = AutoModelForCausalLM.from_pretrained(
             model_name,
             device_map=None,
@@ -849,63 +957,37 @@ class AsyncDistillationTrainer(_BaseTrainer):
         # teacher; absent (None) with a single teacher, where every sample shares one teacher anyway.
         teacher_id_idx = inputs["teacher_id_idx"][mask_bool].unsqueeze(0) if "teacher_id_idx" in inputs else None
 
-        forward_start = time.time()
-        outputs = model(input_ids=input_ids, position_ids=position_ids, use_cache=False)
-        self._last_forward_time_s = time.time() - forward_start
-
-        # Next-token shift: student_logits[:, j] predicts input_ids[:, j+1], so it is compared against the teacher
-        # candidates recorded AT position j+1, teacher_topk_ids[i] holds the candidates for predicting input_ids[i]
-        # (it comes from the teacher's `/get_sequence_logprobs/` response, which conditions on tokens before i).
-        # The rollout worker already asked the teacher server for logprobs at `teacher_temperature` (passed through
-        # to vLLM's own SamplingParams there), so those values are exact as returned, only the student's logits,
-        # which are local and not yet passed through any temperature, need scaling here.
-        student_logits = outputs.logits[:, :-1, :] / self.args.teacher_temperature
+        # Next-token shift: position j predicts input_ids[:, j+1], so it is compared against the teacher candidates
+        # recorded AT position j+1; teacher_topk_ids[i] holds the candidates for predicting input_ids[i] (it comes
+        # from the teacher's `/get_sequence_logprobs/` response, which conditions on tokens before i).
         completion_mask = completion_mask[:, 1:]
         teacher_topk_ids = teacher_topk_ids[:, 1:, :]
         teacher_topk_logprobs = teacher_topk_logprobs[:, 1:, :]
         if teacher_id_idx is not None:
             teacher_id_idx = teacher_id_idx[:, 1:]
 
-        student_log_probs_full = F.log_softmax(student_logits, dim=-1)
-        neg_inf = torch.full(
-            (), float("-inf"), dtype=student_log_probs_full.dtype, device=student_log_probs_full.device
-        )
+        # Which candidate ids the student needs a log-prob at, and the teacher's log-prob at those same ids — pure
+        # teacher-side/input_ids bookkeeping, no student logits needed yet, so this happens before the forward pass.
         valid_candidate_mask_wide = teacher_topk_ids != -1
-
         if self.args.beta == 0.0:
             # Forward KL: the teacher's own top-k support (its weighting is exactly what this sum needs).
             valid_candidate_mask = valid_candidate_mask_wide
-            student_support_logps = student_log_probs_full.gather(-1, teacher_topk_ids.clamp_min(0))
-            student_support_logps = torch.where(valid_candidate_mask, student_support_logps, neg_inf)
-            teacher_support_logps = torch.where(valid_candidate_mask, teacher_topk_logprobs, neg_inf)
+            target_ids = teacher_topk_ids
+            teacher_target_logps = teacher_topk_logprobs
         else:
             # beta != 0.0: narrow the support to just the candidates a mixture/reverse-KL divergence needs,
             # mirroring `ServerDistillationTrainer`'s beta>0 path (including its beta==1.0 special case). A wider
             # support would only probabilistically (not guaranteed) cover what the student itself considers likely.
             actual_token_ids = input_ids[:, 1:]
-            narrow_token_ids, teacher_support_logps, valid_candidate_mask = _narrow_top1_actual_support(
+            target_ids, teacher_target_logps, valid_candidate_mask = _narrow_top1_actual_support(
                 teacher_topk_ids, teacher_topk_logprobs, actual_token_ids, valid_candidate_mask_wide, self.args.beta
             )
-            student_support_logps = student_log_probs_full.gather(-1, narrow_token_ids.clamp_min(0))
-            student_support_logps = torch.where(valid_candidate_mask, student_support_logps, neg_inf)
-            teacher_support_logps = torch.where(valid_candidate_mask, teacher_support_logps, neg_inf)
 
         # A completion position can carry no usable teacher signal at all (the server returned no `prompt_logprobs`
         # entry, or every candidate was NaN) while still being marked as a completion token. Without this, such a
         # position would degenerate through `_add_tail_bucket` into a fabricated "100% tail mass" distribution on
         # both sides, i.e. a synthetic near-zero divergence trained on, instead of being excluded like padding.
         has_teacher_signal = valid_candidate_mask.any(dim=-1)
-
-        if self.args.add_tail_bucket:
-            student_log_probs, support_mask = _add_tail_bucket(student_support_logps, valid_candidate_mask)
-            teacher_log_probs, _ = _add_tail_bucket(teacher_support_logps, valid_candidate_mask)
-        else:
-            student_log_probs = student_support_logps - torch.logsumexp(student_support_logps, dim=-1, keepdim=True)
-            teacher_log_probs = teacher_support_logps - torch.logsumexp(teacher_support_logps, dim=-1, keepdim=True)
-            support_mask = valid_candidate_mask
-
-        jsd = _jsd_divergence(student_log_probs, teacher_log_probs, beta=self.args.beta, support_mask=support_mask)
-
         # DDP/FSDP averages gradients across ranks (world_size). To get correct per-token normalization we scale by
         # 1/tokens_per_rank = world_size / global_n_tokens, so after DDP averaging the effective scale is 1/global_n_tokens.
         # Mirrors AsyncGRPOTrainer.compute_loss's scaling: this is infra-level (padding-free packing, DDP averaging,
@@ -913,9 +995,87 @@ class AsyncDistillationTrainer(_BaseTrainer):
         # computed by the collator from `completion_mask` alone, so it does not shrink when `has_teacher_signal`
         # excludes a position above; a run with such gaps is very slightly under-scaled rather than exactly
         # renormalized, which is an acceptable trade-off for what should be a rare, teacher-side data gap.
-        token_mask_1d = completion_mask.bool() & has_teacher_signal
-        token_mask = token_mask_1d.unsqueeze(-1).expand_as(jsd)
-        loss = jsd[token_mask].sum()
+        token_mask_1d = (completion_mask.bool() & has_teacher_signal)[0]  # (seq_len - 1,), batch dim always 1
+
+        # Memory-efficient path: get the student's backbone hidden states (skip `lm_head`, so this alone never
+        # materializes a vocab-sized tensor), then project only the *valid* positions' hidden states through
+        # `lm_head` in `_CHUNKED_LM_HEAD_CHUNK_SIZE`-sized chunks (see `_jsd_loss_chunk`), never materializing more
+        # than one chunk's `(chunk_size, vocab_size)` logits at a time — mirrors
+        # `DistillationTrainer._get_last_hidden_state` + `_chunked_divergence_loss`, adapted to one (student-only)
+        # model and a sparse (already off-the-wire) teacher target instead of two locally-projected dense ones.
+        # Calling `base_model` directly (instead of `model`) bypasses the mixed-precision autocast that Accelerate
+        # attaches to the outer model's `forward`, so it's re-applied explicitly here (a no-op if bf16/fp16 aren't
+        # enabled) — otherwise FlashAttention (which requires fp16/bf16 inputs) sees fp32 hidden states and errors.
+        unwrapped_model = self.accelerator.unwrap_model(model)
+        forward_start = time.time()
+        with self.accelerator.autocast():
+            hidden_states = unwrapped_model.base_model(
+                input_ids=input_ids, position_ids=position_ids, use_cache=False
+            ).last_hidden_state
+        self._last_forward_time_s = time.time() - forward_start
+        hidden_states = hidden_states[:, :-1, :][0]  # (seq_len - 1, H), drop the unused last-position prediction
+
+        lm_head = unwrapped_model.get_output_embeddings()
+        lm_head_weight = lm_head.weight
+        lm_head_bias = lm_head.bias
+        # Under FSDP2, lm_head.weight is a DTensor (Shard(0) or Replicate). Gathering it once here (instead of once
+        # per chunk) means only one all-gather happens, in `full_tensor()`'s own backward, not one per chunk.
+        if isinstance(lm_head_weight, DTensor):
+            lm_head_weight = lm_head_weight.full_tensor()
+            if lm_head_bias is not None:
+                lm_head_bias = lm_head_bias.full_tensor()
+        # NOTE(@aminediro): supporting Cohere2 models (mirrors `patch_chunked_lm_head`'s own handling).
+        logit_scale = getattr(unwrapped_model.config, "logit_scale", 1.0)
+        final_logit_softcapping = getattr(unwrapped_model.config, "final_logit_softcapping", None)
+
+        target_ids = target_ids[0][token_mask_1d]
+        teacher_target_logps = teacher_target_logps[0][token_mask_1d]
+        valid_candidate_mask = valid_candidate_mask[0][token_mask_1d]
+        teacher_id_idx_valid = teacher_id_idx[0][token_mask_1d] if teacher_id_idx is not None else None
+        hidden_valid = hidden_states[token_mask_1d]
+        n_valid = hidden_valid.size(0)
+        num_teachers = len(self._teacher_ids)
+
+        loss = hidden_valid.new_zeros(())
+        local_jsd_sum = hidden_valid.new_zeros(())
+        local_entropy_sum = hidden_valid.new_zeros(())
+        local_teacher_entropy_sum = hidden_valid.new_zeros(())
+        local_per_teacher_stats = hidden_valid.new_zeros(3 * num_teachers)
+        if n_valid == 0:
+            # Whole micro-batch has no usable teacher signal. Keep the loss connected to the autograd graph through
+            # every trainable parameter (backbone via `hidden_states`, `lm_head` via `lm_head_weight`) so
+            # `.backward()` succeeds and DDP/FSDP gradient sync doesn't hang on a "missing" parameter's grad.
+            loss = (hidden_states.sum() + lm_head_weight.sum()) * 0.0
+            if lm_head_bias is not None:
+                loss = loss + lm_head_bias.sum() * 0.0
+        else:
+            chunk_size = _CHUNKED_LM_HEAD_CHUNK_SIZE
+            for start in range(0, n_valid, chunk_size):
+                chunk_loss, chunk_jsd_sum, chunk_entropy_sum, chunk_teacher_entropy_sum, chunk_per_teacher_stats = (
+                    torch.utils.checkpoint.checkpoint(
+                        _jsd_loss_chunk,
+                        hidden_valid[start : start + chunk_size],
+                        lm_head_weight,
+                        lm_head_bias,
+                        logit_scale,
+                        final_logit_softcapping,
+                        target_ids[start : start + chunk_size],
+                        teacher_target_logps[start : start + chunk_size],
+                        valid_candidate_mask[start : start + chunk_size],
+                        self.args.beta,
+                        self.args.teacher_temperature,
+                        self.args.add_tail_bucket,
+                        teacher_id_idx_valid[start : start + chunk_size] if teacher_id_idx_valid is not None else None,
+                        num_teachers,
+                        use_reentrant=False,
+                    )
+                )
+                loss = loss + chunk_loss
+                local_jsd_sum = local_jsd_sum + chunk_jsd_sum
+                local_entropy_sum = local_entropy_sum + chunk_entropy_sum
+                local_teacher_entropy_sum = local_teacher_entropy_sum + chunk_teacher_entropy_sum
+                local_per_teacher_stats = local_per_teacher_stats + chunk_per_teacher_stats
+
         global_n_tokens = inputs["global_n_tokens"][0]
         world_size = self.accelerator.num_processes
         tokens_per_rank = (global_n_tokens / world_size).clamp(min=1.0)
@@ -923,35 +1083,7 @@ class AsyncDistillationTrainer(_BaseTrainer):
         loss = loss / self.current_gradient_accumulation_steps
 
         with torch.no_grad():
-            valid_mask = token_mask_1d
-            local_count = valid_mask.sum().float()
-            # Mean per-token divergence (summed over the candidate/tail dim, then masked-mean over completion tokens).
-            per_token_jsd = jsd.sum(dim=-1)
-            local_jsd_sum = per_token_jsd[valid_mask].sum() if valid_mask.any() else torch.zeros((), device=jsd.device)
-
-            # Student policy entropy per token, mirroring AsyncGRPOTrainer's `entropy` metric (there it comes for free
-            # from the chunked lm-head patch; here it's computed directly from the full log-probs already gathered
-            # above, since the student side of the divergence is never chunked, see the class docstring).
-            student_probs_full = student_log_probs_full.exp()
-            per_token_entropy = -(student_probs_full * student_log_probs_full).sum(dim=-1)
-            local_entropy_sum = (
-                per_token_entropy[valid_mask].sum() if valid_mask.any() else torch.zeros((), device=jsd.device)
-            )
-
-            # Teacher-side entropy over the same K+1 sparse support _jsd_divergence sees (top-k candidates + tail
-            # bucket), the only support the teacher ever reports. This underestimates the true full-vocab teacher
-            # entropy (the tail bucket collapses its whole residual mass into one outcome), but it's directly
-            # comparable step-to-step and mirrors distillation baselines (e.g. SDPO) that log it alongside the
-            # student's entropy as a drift diagnostic.
-            safe_teacher_log_probs = torch.where(support_mask, teacher_log_probs, torch.zeros_like(teacher_log_probs))
-            teacher_probs = torch.where(support_mask, teacher_log_probs.exp(), torch.zeros_like(teacher_log_probs))
-            per_token_teacher_entropy = torch.nan_to_num(
-                -(teacher_probs * safe_teacher_log_probs).sum(dim=-1), nan=0.0
-            )
-            local_teacher_entropy_sum = (
-                per_token_teacher_entropy[valid_mask].sum() if valid_mask.any() else torch.zeros((), device=jsd.device)
-            )
-
+            local_count = token_mask_1d.sum().float()
             stats = torch.stack([local_jsd_sum, local_entropy_sum, local_teacher_entropy_sum, local_count])
             stats = self.accelerator.reduce(stats, reduction="sum")
             global_jsd_sum, global_entropy_sum, global_teacher_entropy_sum, global_count = stats.unbind(0)
@@ -974,21 +1106,7 @@ class AsyncDistillationTrainer(_BaseTrainer):
             # `self.args.teacher_server_urls`, identical config on all ranks), so every rank takes this branch
             # together or skips it together — required for `accelerator.reduce` below to stay in sync across ranks.
             if teacher_id_idx is not None:
-                per_teacher_stats = []
-                for idx in range(len(self._teacher_ids)):
-                    teacher_mask = valid_mask & (teacher_id_idx == idx)
-                    has_any = teacher_mask.any()
-                    per_teacher_stats.append(teacher_mask.sum().float())
-                    per_teacher_stats.append(
-                        per_token_jsd[teacher_mask].sum() if has_any else torch.zeros((), device=jsd.device)
-                    )
-                    per_teacher_stats.append(
-                        per_token_teacher_entropy[teacher_mask].sum()
-                        if has_any
-                        else torch.zeros((), device=jsd.device)
-                    )
-                per_teacher_stats = torch.stack(per_teacher_stats)
-                per_teacher_stats = self.accelerator.reduce(per_teacher_stats, reduction="sum")
+                per_teacher_stats = self.accelerator.reduce(local_per_teacher_stats, reduction="sum")
                 for i, teacher_id in enumerate(self._teacher_ids):
                     t_count, t_jsd_sum, t_teacher_entropy_sum = per_teacher_stats[3 * i : 3 * i + 3]
                     if t_count > 0:
