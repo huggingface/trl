@@ -30,13 +30,20 @@ generates every completion it trains on.
 MOPD is not part of the [2306.13649](https://huggingface.co/papers/2306.13649) paper this trainer's core objective
 is based on (which describes a synchronous, single-teacher setting); it's a separate method, described in
 [MOPD: Multi-Teacher On-Policy Distillation for Capability Integration in LLM Post-Training](
-https://openreview.net/forum?id=Ir65sQ5tV6).
+https://openreview.net/forum?id=Ir65sQ5tV6). There, MOPD is the third of three stages — general SFT, then
+independent per-domain RL training of one expert per domain, then MOPD fuses those frozen experts into a single
+student. `AsyncDistillationTrainer` implements that third, fusion stage only: the per-domain expert teachers must
+already exist (e.g. trained separately with [`GRPOTrainer`]/[`RLOOTrainer`]) and be served over HTTP before you
+point `teacher_server_urls` at them. The paper's own Stage 3 uses reverse KL (`beta=1.0`), not this trainer's
+default `beta=0.0` (forward KL).
+
 `teacher_server_urls` accepts more than one entry. With a single entry, every sample is scored by that one teacher
 (plain on-policy distillation). With multiple entries, each training sample's `teacher_id` column selects which
 teacher scores it — for example, routing math prompts to a math-specialist teacher and code prompts to a
-code-specialist teacher, each served independently. A sample with a missing or unmapped `teacher_id` raises rather
-than silently falling back to the wrong teacher. See `examples/scripts/async_distillation_mopd.py` for a runnable
-two-teacher example.
+code-specialist teacher, each served independently. Each sample is dispatched to its one matching teacher, never
+averaged or ensembled across teachers. A sample with a missing or unmapped `teacher_id` raises rather than silently
+falling back to the wrong teacher. See `examples/scripts/async_distillation_mopd.py` for a runnable two-teacher
+example.
 
 ## How it differs from [`~trl.experimental.distillation.DistillationTrainer`]
 

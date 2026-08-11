@@ -1676,7 +1676,7 @@ training_args = GKDConfig(
 
 **📜 Paper**: https://openreview.net/forum?id=Ir65sQ5tV6
 
-Extends on-policy distillation to the multi-teacher setting: rather than a single teacher scoring every sample, each sample is routed to whichever teacher specializes in its domain (e.g. a math teacher, a code teacher), letting one student integrate capabilities from several teachers in one training run. Used in TRL via [`experimental.async_distillation.AsyncDistillationTrainer`]: passing more than one entry in `teacher_server_urls` enables MOPD, with each row's `teacher_id` column selecting which teacher scores it.
+Structures post-training as three stages: general SFT, independent per-domain RL training of one expert per domain (e.g. verifiable-answer RL for math, sandboxed agent RL for software engineering), and a final MOPD stage that fuses the frozen domain experts into a single unified student. In that final stage, the student generates a trajectory per prompt, each trajectory is dispatched to its corresponding domain teacher (never averaged or ensembled across teachers), and the student is updated by minimizing the per-token reverse KL against that one teacher's distribution along the trajectory. Used in TRL via [`experimental.async_distillation.AsyncDistillationTrainer`], which implements this third, fusion stage: passing more than one entry in `teacher_server_urls` enables MOPD, with each row's `teacher_id` column selecting which (already-trained) teacher scores it. Use `beta=1.0` to match the paper's reverse-KL objective.
 
 ### On the Position Bias of On-Policy Distillation
 
