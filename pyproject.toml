@@ -80,7 +80,7 @@ test = [
     "pytest"
 ]
 vllm = [
-    "vllm>=0.17.0,<=0.25.1",
+    "vllm>=0.17.0,<=0.26.0",
     "fastapi",
     "pydantic",
     "aiohttp>=3.13.3",
@@ -186,6 +186,7 @@ norecursedirs = [
 filterwarnings = [
     # SWIG deprecations from SWIG-generated C/C++ extensions: sentencepiece
     # Upstream issue: https://github.com/google/sentencepiece/issues/1150
+    # Remove once: no supported sentencepiece version emits it
     "ignore:builtin type SwigPyPacked has no __module__ attribute:DeprecationWarning",
     "ignore:builtin type SwigPyObject has no __module__ attribute:DeprecationWarning",
     "ignore:builtin type swigvarlink has no __module__ attribute:DeprecationWarning",
@@ -194,6 +195,7 @@ filterwarnings = [
     # Upstream issue: https://github.com/deepspeedai/DeepSpeed/issues/7835
     # Upstream PR: https://github.com/deepspeedai/DeepSpeed/pull/7840
     # Upstream fix released in deepspeed v0.18.6: https://github.com/deepspeedai/DeepSpeed/releases/tag/v0.18.6
+    # Remove once: deepspeed >= 0.18.6 is required
     "ignore:`torch.jit.script_method` is deprecated:DeprecationWarning",
     "ignore:`torch.jit.script` is deprecated:DeprecationWarning",
     # On Python 3.14+ the same deprecation is reworded to "is not supported in Python 3.14+ and may break"
@@ -202,6 +204,7 @@ filterwarnings = [
     # PyTorch DataLoader pin_memory device argument deprecations
     # Triggered internally by torch.utils.data, not by our code
     # Upstream issue: https://github.com/pytorch/pytorch/issues/174546
+    # Remove once: no supported torch version emits it
     "ignore:The argument 'device' of Tensor.pin_memory:DeprecationWarning",
     "ignore:The argument 'device' of Tensor.is_pinned:DeprecationWarning",
 
@@ -209,18 +212,38 @@ filterwarnings = [
     # Liger's SAPO branch assigns per-token loss with boolean-mask indexing, which graph-breaks under
     # torch.compile and is traced by AOTAutograd under anomaly mode
     # Tracking issue: https://github.com/huggingface/trl/issues/6435
-    # Upstream fix (merged, unreleased as of liger-kernel 0.8.0): https://github.com/linkedin/Liger-Kernel/pull/1274
+    # Upstream fix released in liger-kernel 0.8.1: https://github.com/linkedin/Liger-Kernel/pull/1274
+    # Remove once: liger-kernel >= 0.8.2 is required (0.8.1 has the fix but is excluded, see GH-6517)
     "ignore:Error detected in IndexPutBackward0:UserWarning",
 
     # bitsandbytes calls the deprecated torch._check_is_size in its CUDA quant ops (upstream, not actionable in TRL)
     # Triggered indirectly by loading bitsandbytes-quantized models in the PEFT + quantization tests
     # Tracking issue: https://github.com/huggingface/trl/issues/6447
-    # Upstream fix (merged, unreleased as of bitsandbytes 0.49.2): https://github.com/bitsandbytes-foundation/bitsandbytes/pull/1940
+    # Upstream fix released in bitsandbytes 0.50.0: https://github.com/bitsandbytes-foundation/bitsandbytes/pull/1940
+    # Remove once: bitsandbytes >= 0.50.0 is required
     "ignore:_check_is_size will be removed in a future PyTorch release:FutureWarning",
 
     # triton builds an ast.AnnAssign node without the required `simple` field during kernel compilation (upstream,
     # not actionable in TRL); a DeprecationWarning on Python 3.14 that becomes an error on 3.15
     # Tracking issue: https://github.com/huggingface/trl/issues/6466
     # Upstream issue: https://github.com/triton-lang/triton/issues/10981
+    # Upstream fix (merged, unreleased as of triton 3.7.1): https://github.com/triton-lang/triton/pull/10986
+    # Remove once: no supported torch resolves a triton without the fix
     "ignore:AnnAssign.__init__ missing 1 required positional argument:DeprecationWarning",
+
+    # kernels-community/mamba-ssm (a Hub-hosted build of state-spaces/mamba) calls the deprecated
+    # torch.get_autocast_gpu_dtype() in its Triton ssd_combined.py kernel (upstream, not actionable in TRL)
+    # Triggered by the NemotronH (Nemotron 3) Mamba2 mixer fast path during training under CUDA autocast
+    # Tracking issue: https://github.com/huggingface/trl/issues/6555
+    # Remove once: the resolved Hub kernel build no longer calls it
+    "ignore:torch.get_autocast_gpu_dtype\\(\\) is deprecated:DeprecationWarning",
+
+    # bitsandbytes warns, on every forward of a 4-bit layer whose inner dimension is not a multiple of the quantization
+    # blocksize, that it falls back to the slower dequantize + linear path (upstream, not actionable in TRL)
+    # Triggered by the tiny models in the PEFT + quantization tests: their hidden_size (8) and intermediate_size (32)
+    # are not multiples of the 64 blocksize, and transformers exposes no option to change it
+    # Tracking issue: https://github.com/huggingface/trl/issues/6580
+    # Upstream issue: https://github.com/bitsandbytes-foundation/bitsandbytes/issues/2027
+    # Remove once: no supported bitsandbytes version emits it
+    "ignore:inner dimension \\(\\d+\\) is not aligned for fast kernel:UserWarning",
 ]

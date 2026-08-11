@@ -59,8 +59,8 @@ class SFTConfig(_BaseConfig):
             Name of the column that contains text data in the dataset.
         dataset_kwargs (`dict[str, Any]`, *optional*):
             Dictionary of optional keyword arguments for the dataset preparation. The only supported key is
-            `skip_prepare_dataset`. When the model is a VLM, `skip_prepare_dataset` is automatically treated as `True`
-            regardless of the provided value, since preprocessing is done on the fly.
+            `skip_prepare_dataset`. When the dataset contains images, `skip_prepare_dataset` is automatically treated
+            as `True` regardless of the provided value, since preprocessing is done on the fly.
         dataset_num_proc (`int`, *optional*):
             Number of processes to use for processing the dataset.
         eos_token (`str`, *optional*):
@@ -187,9 +187,8 @@ class SFTConfig(_BaseConfig):
         default=None,
         metadata={
             "help": "Dictionary of optional keyword arguments for the dataset preparation. The only supported key is "
-            "`skip_prepare_dataset`. If the model is a VLM, `skip_prepare_dataset` value is ignored. When the model "
-            "is a VLM, `skip_prepare_dataset` is automatically treated as `True` regardless of the provided value, "
-            "since preprocessing is done on the fly."
+            "`skip_prepare_dataset`. When the dataset contains images, `skip_prepare_dataset` is automatically "
+            "treated as `True` regardless of the provided value, since preprocessing is done on the fly."
         },
     )
     dataset_num_proc: int | None = field(

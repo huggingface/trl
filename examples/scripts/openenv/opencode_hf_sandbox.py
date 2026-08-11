@@ -17,29 +17,42 @@
 #     "trl",
 #     "trackio",
 #     "datasets",
+#     "huggingface_hub>=1.22",
+#     "openenv @ git+https://github.com/huggingface/OpenEnv.git",
 #     "openenv-opencode-env @ git+https://github.com/huggingface/OpenEnv.git#subdirectory=envs/opencode_env",
 # ]
 # ///
 
-"""AsyncGRPO training of the real `opencode` coding agent (loop-owning) with a local subprocess sandbox.
+"""AsyncGRPO training of the real `opencode` coding agent (loop-owning) in REMOTE Hugging Face sandboxes.
 
-`opencode` is a genuine external coding agent that owns its own tool loop. Each rollout runs it as a local process
-(no container) via the `LocalSubprocessSandboxBackend` defined below, in `transparent_proxy` mode: an in-sandbox
-proxy forwards the agent's calls to your vLLM server and captures per-turn `(token_ids, logprobs)`. TRL reads that
-proxy trace, rebuilds training rows, scores the workspace with a held-out verifier, and trains with GRPO.
+Same training path as `opencode.py`, but each rollout runs opencode in its own remote Hugging Face sandbox
+(`HFSandboxBackend`) instead of a local subprocess, so rollouts scale out beyond a single node. opencode owns its
+own tool loop; an in-sandbox proxy (`transparent_proxy` mode) forwards its calls to your vLLM server and captures
+per-turn `(token_ids, logprobs)`. TRL reads that proxy trace, rebuilds training rows, scores the workspace with a
+held-out verifier, and trains with GRPO.
+
+Two vLLM URLs, on purpose:
+  - `--vllm-url` (default `http://localhost:8000`): the TRAINER <-> vLLM link. Stays local for NCCL weight-sync.
+  - `--sandbox-vllm-url`: a url the remote sandboxes use to reach that same vLLM (the in-sandbox proxy forwards
+    there). Remote sandboxes cannot see `localhost`, so this must be reachable from outside: a public vLLM
+    endpoint, or a tunnel to your local one (see below). Not tied to any tunnel provider.
+
+Where opencode lives: nothing is installed per rollout. The default sandbox image
+`ghcr.io/huggingface/openenv-opencode-sandbox:latest` pre-bakes the opencode CLI + the proxy (deps and
+`interception.py`) under `/root`, so the harness skips the cold install. Pass `--sandbox-image python:3.12` to fall
+back to cold-installing opencode + proxy deps per rollout.
 
 Task: competitive-coding problems from `agentica-org/DeepCoder-Preview-Dataset`. The agent writes `solution.py`
 (reads stdin, prints stdout); the verifier runs it against the problem's HELD-OUT tests (never shown to the agent)
-and returns a DENSE reward = fraction passed. `opencode_reward` then binarizes it and adds small degeneracy
+and returns a DENSE reward = fraction passed. `opencode_reward` keeps that dense signal and adds small degeneracy
 penalties. This whole file is self-contained and every training-facing object is module-level (picklable), so the
 rollout worker can pickle the factory + verifier into its spawned child process.
 
 Requirements:
-  - An OpenAI-compatible vLLM server (see below) reachable at `--vllm-url`.
-  - Internet on this node the first time: `warmup()` installs the `opencode` CLI into a template dir once.
-  - `pip install git+https://github.com/huggingface/OpenEnv.git#subdirectory=envs/opencode_env`
+  - An OpenAI-compatible vLLM server (see below), reachable locally by the trainer and publicly by the sandboxes.
+  - An HF token with Jobs + Sandbox access in the environment (`HF_TOKEN`); each rollout is one HF sandbox.
 
-Run (2 GPUs: vLLM on one, trainer on the other):
+Run (2 GPUs: vLLM on one, trainer on the other; a tunnel exposes vLLM to the sandboxes):
 
 ```sh
 # Terminal 1 - serve the policy. Tool-calling + token-ids + NCCL weight-sync are all required.
@@ -48,11 +61,17 @@ CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen3-4B-Instruct-
     --enable-auto-tool-choice --tool-call-parser hermes \
     --logprobs-mode processed_logprobs \
     --return-tokens-as-token-ids \
+    --max-model-len 98304 \
     --weight-transfer-config '{"backend":"nccl"}'
 
-# Terminal 2 - train.
-CUDA_VISIBLE_DEVICES=1 python examples/scripts/openenv/opencode.py \
-    --model Qwen/Qwen3-4B-Instruct-2507 --vllm-url http://localhost:8000
+# Terminal 2 - expose that vLLM publicly for the remote sandboxes.
+cloudflared tunnel --no-autoupdate --url http://localhost:8000   # prints https://<name>.trycloudflare.com
+
+# Terminal 3 - train. Trainer talks localhost (NCCL); sandboxes reach vLLM through the tunnel.
+CUDA_VISIBLE_DEVICES=1 python examples/scripts/openenv/opencode_hf_sandbox.py \
+    --model Qwen/Qwen3-4B-Instruct-2507 \
+    --vllm-url http://localhost:8000 \
+    --sandbox-vllm-url https://<name>.trycloudflare.com
 ```
 """
 
@@ -61,24 +80,13 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import os
 import random
-import shlex
-import shutil
-import signal
-import socket
-import subprocess
-import tempfile
-import time
-import uuid
-from pathlib import Path
 from typing import Any
 
 from datasets import Dataset, load_dataset
-from opencode_env import harness as oc_harness
 from opencode_env.config import OpenCodeConfig
 from opencode_env.harness import OpenCodeSessionFactory
-from opencode_env.sandbox.base import ExecResult, SandboxHandle
+from opencode_env.sandbox import HFSandboxBackend, SandboxHandle
 from opencode_env.task import OpenCodeTask
 from openenv.core.harness import ResourceSession, ResourceSessionFactory, VerifyResult
 from transformers import AutoTokenizer
@@ -92,169 +100,12 @@ from trl.experimental.async_grpo.openenv_harness import (
 )
 
 
-# ============================================================================================================
-# Local subprocess sandbox backend
-# ------------------------------------------------------------------------------------------------------------
-# OpenEnv's opencode harness only ships an E2B (cloud) backend, and a cloud sandbox can't reach a local vLLM.
-# The `SandboxBackend` protocol is small, so we run opencode + its proxy as local processes on this node. The
-# harness bakes the prefix `/home/user` into several paths, so each sandbox REMAPS that prefix to its own dir and
-# callers pass `OpenCodeConfig(sandbox_home="/home/user")` so config-driven paths funnel through the same remap.
-# ============================================================================================================
-
-_OPENCODE_INSTALL = "curl -fsSL https://opencode.ai/install | bash -s -- --no-modify-path"
-
-
-class LocalBgJob:
-    """A background process (the opencode agent or its proxy) running directly on the node."""
-
-    def __init__(self, popen: subprocess.Popen):
-        self._p = popen
-
-    @property
-    def pid(self) -> int:
-        return self._p.pid
-
-    def wait(self, timeout: float | None = None) -> int:
-        try:
-            return self._p.wait(timeout=timeout)
-        except subprocess.TimeoutExpired as e:
-            raise TimeoutError(str(e)) from e
-
-    def kill(self) -> None:
-        # Kill the whole process GROUP: opencode spawns a tree (node -> bash -> python); SIGTERM to only the parent
-        # orphans the children, which pile up across rollouts. `start_bg` launches each job in its own session.
-        if self._p.poll() is not None:
-            return
-        try:
-            pgid = os.getpgid(self._p.pid)
-        except ProcessLookupError:
-            return
-        try:
-            os.killpg(pgid, signal.SIGTERM)
-            self._p.wait(timeout=5)
-        except (subprocess.TimeoutExpired, Exception):
-            try:
-                os.killpg(pgid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-
-
-class LocalSandboxHandle:
-    """One local 'sandbox' = a real directory on the node. The harness's hardcoded `/home/user` prefix is remapped
-    to this directory in every command and path, and `$HOME` points at it. `kill()` removes the directory."""
-
-    def __init__(
-        self,
-        root: str,
-        *,
-        home_alias: str = "/home/user",
-        base_env: dict[str, str] | None = None,
-        cleanup: bool = False,
-    ):
-        self._root = root
-        self._alias = home_alias
-        self._cleanup = cleanup
-        self._env = {**os.environ, "HOME": root, **(base_env or {})}
-        self._bg: list[LocalBgJob] = []
-
-    @property
-    def sandbox_id(self) -> str:
-        return self._root
-
-    def _remap(self, s: str | None) -> str | None:
-        return s if s is None else s.replace(self._alias, self._root)
-
-    def _run_env(self, envs: dict[str, str] | None) -> dict[str, str]:
-        return {**self._env, **(envs or {})}
-
-    def exec(self, cmd: str, *, envs=None, cwd=None, timeout: float | None = 60) -> ExecResult:
-        try:
-            p = subprocess.run(
-                ["bash", "-lc", self._remap(cmd)],
-                cwd=self._remap(cwd) or self._root,
-                env=self._run_env(envs),
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                stdin=subprocess.DEVNULL,
-            )
-            return ExecResult(exit_code=p.returncode, stdout=p.stdout, stderr=p.stderr)
-        except subprocess.TimeoutExpired as e:
-            return ExecResult(exit_code=124, stdout=e.stdout or "", stderr=f"timeout after {timeout}s")
-
-    def start_bg(self, cmd: str, *, envs=None, cwd=None) -> LocalBgJob:
-        # stdin=/dev/null so the agent (and any `python solution.py` it runs) reads EOF instead of blocking forever.
-        p = subprocess.Popen(
-            ["bash", "-lc", self._remap(cmd)],
-            cwd=self._remap(cwd) or self._root,
-            env=self._run_env(envs),
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            stdin=subprocess.DEVNULL,
-            start_new_session=True,  # own process group so kill() reaps the whole opencode tree
-        )
-        job = LocalBgJob(p)
-        self._bg.append(job)
-        return job
-
-    def write_text(self, path: str, content: str) -> None:
-        path = self._remap(path)
-        Path(path).parent.mkdir(parents=True, exist_ok=True)
-        Path(path).write_text(content)
-
-    def read_text(self, path: str) -> str:
-        return Path(self._remap(path)).read_text()
-
-    def exists(self, path: str) -> bool:
-        return Path(self._remap(path)).exists()
-
-    def kill(self) -> None:
-        for job in self._bg:
-            try:
-                job.kill()
-            except Exception:
-                pass
-        self._bg.clear()
-        if self._cleanup:
-            shutil.rmtree(self._root, ignore_errors=True)
-
-
-class LocalSubprocessSandboxBackend:
-    """Produces per-rollout `LocalSandboxHandle`s, each in its own `uuid` dir hardlink-cloned from a template that
-    has opencode pre-installed (`warmup()`), so concurrent sandboxes never share state and never re-install."""
-
-    def __init__(self, root: str, *, home_alias: str = "/home/user"):
-        self._root = root
-        self._alias = home_alias
-        self._template = os.path.join(root, "_template")
-
-    def warmup(self) -> None:
-        """Install opencode ONCE into the template dir (run in the parent, before rollouts spawn)."""
-        marker = os.path.join(self._template, ".opencode", "bin", "opencode")
-        if os.path.exists(marker):
-            return
-        os.makedirs(self._template, exist_ok=True)
-        subprocess.run(
-            ["bash", "-lc", _OPENCODE_INSTALL],
-            env={**os.environ, "HOME": self._template},
-            check=True,
-            timeout=400,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-
-    def create(self, *, timeout_s: int = 900, envs=None, metadata=None) -> LocalSandboxHandle:
-        name = (metadata or {}).get("episode_id") or uuid.uuid4().hex
-        sdir = os.path.join(self._root, name)
-        shutil.rmtree(sdir, ignore_errors=True)
-        os.makedirs(sdir, exist_ok=True)
-        if os.path.isdir(self._template):
-            subprocess.run(["cp", "-al", f"{self._template}/.", f"{sdir}/"], check=True)  # hardlink-clone
-        for sub in ("workdir", "task", "logs/agent", "logs/verifier", ".config/opencode"):
-            d = os.path.join(sdir, sub)
-            shutil.rmtree(d, ignore_errors=True)
-            os.makedirs(d, exist_ok=True)
-        return LocalSandboxHandle(sdir, home_alias=self._alias, base_env=envs, cleanup=True)
+# The HF sandbox image bakes opencode + the proxy under `/root`, and the sandbox execs as root, so `$HOME` and every
+# harness path (`workdir`, `.opencode/bin`, `proxy/`) hang off `/root`. This is the only path difference from the
+# local `opencode.py`, whose subprocess sandbox uses `/home/user`.
+SANDBOX_IMAGE = "ghcr.io/huggingface/openenv-opencode-sandbox:latest"
+SANDBOX_HOME = "/root"
+WORKDIR = f"{SANDBOX_HOME}/workdir"
 
 
 # ============================================================================================================
@@ -337,12 +188,12 @@ print("SCORE: %.6f" % (passed / len(tests) if tests else 0.0))
 
 def _run_dense_tests(sandbox: SandboxHandle, tests: list[dict[str, str]]) -> float:
     """Run the sandbox's `solution.py` against `tests`; return the fraction passed."""
-    if not tests or not sandbox.exists("/home/user/workdir/solution.py"):
+    if not tests or not sandbox.exists(f"{WORKDIR}/solution.py"):
         return 0.0
     tests = tests[:N_TESTS_EVAL]
-    sandbox.write_text("/home/user/workdir/_tests.json", json.dumps(tests))
-    sandbox.write_text("/home/user/workdir/_run_tests.py", _RUNNER_SRC.format(per_test_timeout=PER_TEST_TIMEOUT))
-    r = sandbox.exec("cd /home/user/workdir && python3 _run_tests.py", timeout=PER_TEST_TIMEOUT * len(tests) + 30)
+    sandbox.write_text(f"{WORKDIR}/_tests.json", json.dumps(tests))
+    sandbox.write_text(f"{WORKDIR}/_run_tests.py", _RUNNER_SRC.format(per_test_timeout=PER_TEST_TIMEOUT))
+    r = sandbox.exec(f"cd {WORKDIR} && python3 _run_tests.py", timeout=PER_TEST_TIMEOUT * len(tests) + 30)
     for line in (r.stdout or "").splitlines():
         if line.startswith("SCORE:"):
             return float(line.split(":", 1)[1].strip())
@@ -388,7 +239,7 @@ def build_dataset(n_prompts: int, seed: int) -> tuple[list[dict], dict[str, list
 
 
 # ============================================================================================================
-# opencode session factory (local sandbox + per-session proxy port)
+# opencode session factory (remote HF sandbox + in-sandbox proxy)
 # ============================================================================================================
 
 
@@ -404,80 +255,22 @@ class OpencodeTaskFactory(ResourceSessionFactory):
         return self._inner.create(instruction, seed=seed, episode_id=episode_id)
 
 
-def _free_port() -> int:
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
-
-
-class FreePortOpenCodeSessionFactory(OpenCodeSessionFactory):
-    """Same as `OpenCodeSessionFactory` but binds the in-sandbox proxy to a free port per session instead of the
-    hardcoded `_PROXY_PORT = 7000`, so several opencode sandboxes can run at once on one node. Mirrors OpenEnv's
-    `_start_proxy` exactly except for the port."""
-
-    def _start_proxy(self, sandbox):
-        port = _free_port()
-        trace_path = oc_harness._PROXY_TRACE_PATH
-        log_path = oc_harness._PROXY_LOG_PATH
-        if not sandbox.exists("/home/user/proxy/interception.py"):
-            self._exec_with_retry(
-                sandbox,
-                "pip install --quiet 'fastapi>=0.104' 'uvicorn[standard]>=0.24' 'httpx>=0.27' 2>&1 | tail -20",
-                timeout=180,
-                attempts=3,
-                backoff_s=2.0,
-                label="proxy deps install",
-            )
-            sandbox.write_text("/home/user/proxy/interception.py", oc_harness._PROXY_SOURCE_PATH.read_text())
-            sandbox.write_text("/home/user/proxy/__init__.py", "")
-
-        proxy_args = [
-            "python", "interception.py", "--upstream-url", self._config.base_url,
-            "--trace", trace_path, "--port", str(port),
-            "--top-logprobs", str(self._config.proxy_top_logprobs),
-        ]  # fmt: skip
-        if self._config.proxy_max_tokens_cap is not None:
-            proxy_args += ["--max-tokens-cap", str(self._config.proxy_max_tokens_cap)]
-        if self._config.proxy_disable_thinking:
-            proxy_args.append("--disable-thinking")
-        if self._config.model:
-            proxy_args += ["--model-override", self._config.model]
-
-        quoted = " ".join(shlex.quote(a) for a in proxy_args)
-        proxy_cmd = f"cd /home/user/proxy && {quoted} > {shlex.quote(log_path)} 2>&1"
-        proxy_job = sandbox.start_bg(proxy_cmd, envs={"OPENCODE_UPSTREAM_API_KEY": self._config.api_key})
-
-        for _ in range(120):
-            if sandbox.exec(f"curl -sf http://127.0.0.1:{port}/healthz", timeout=5).exit_code == 0:
-                break
-            time.sleep(0.5)
-        else:
-            log = ""
-            try:
-                log = sandbox.read_text(log_path)
-            except Exception:
-                pass
-            proxy_job.kill()
-            raise RuntimeError(f"proxy did not start on :{port}\n{log[-2000:]}")
-
-        return proxy_job, f"http://127.0.0.1:{port}/v1", trace_path
-
-
-def build_factory(sandbox_root: str, vllm_url: str, model: str, tests_by_id: dict) -> OpencodeTaskFactory:
+def build_factory(
+    sandbox_vllm_url: str, model: str, tests_by_id: dict, image: str, flavor: str
+) -> OpencodeTaskFactory:
     config = OpenCodeConfig(
         provider="openai_compatible",
-        base_url=f"{vllm_url}/v1",
+        base_url=f"{sandbox_vllm_url}/v1",  # the in-sandbox proxy forwards here; remote, so a public url (tunnel)
         model=model,  # proxy --model-override forces this exact id on upstream requests
-        sandbox_home="/home/user",  # remapped to each sandbox's real dir by LocalSandboxHandle
-        agent_timeout_s=180.0,  # bounds edit/bash-loop blowups; legit solves finish in <90s
+        sandbox_home=SANDBOX_HOME,  # the HF sandbox execs as root; opencode + proxy are baked under /root
+        agent_timeout_s=600.0,  # remote hop adds latency vs the local backend; give the edit/bash loop more room
         disabled_tools=["webfetch", "question", "task"],  # no web, no user, no sub-agents
         run_format="json",
+        proxy_max_tokens_cap=8192,  # keep each turn's completion + the growing multi-turn prompt under --max-model-len
     )
-    backend = LocalSubprocessSandboxBackend(sandbox_root)
-    backend.warmup()  # install opencode ONCE (parent, before rollouts)
-    inner = FreePortOpenCodeSessionFactory(
+    inner = OpenCodeSessionFactory(
         config=config,
-        sandbox_backend=backend,
+        sandbox_backend=HFSandboxBackend(image=image, flavor=flavor),  # each rollout = its own remote HF sandbox
         mode="transparent_proxy",  # in-sandbox proxy captures completion_token_ids + per_token_logps
         verifier=DeepCoderStdinVerifier(tests_by_id),
     )
@@ -490,21 +283,22 @@ def build_factory(sandbox_root: str, vllm_url: str, model: str, tests_by_id: dic
 
 
 def opencode_reward(outcome: HarnessRolloutOutcome) -> float | None:
-    """Binary terminal verifier + degeneracy penalties. Long-horizon credit is carried by the terminal reward,
+    """Dense terminal verifier + degeneracy penalties. Long-horizon credit is carried by the terminal reward,
     propagated to every trained token through the group-relative advantage.
 
-      - unscorable rollout -> None (dropped from the group baseline)
+      - unscorable rollout (no verifier score) -> None (dropped from the group baseline)
       - never ran its code (no `bash`) -> -0.1 (kills blind-write / prose-dump / give-up)
-      - else BINARY base: all held-out tests pass -> 1.0; timed out or failed -> 0.0
+      - else DENSE base: the fraction of held-out tests passed (partial credit); timed out -> 0.0
       - minus a step penalty for tool calls beyond a budget (bounds runaway edit/bash loops), capped at 0.5
     """
-    step_budget, step_penalty, step_penalty_cap = 20, 0.03, 0.5
+    step_budget, step_penalty, step_penalty_cap = 30, 0.03, 0.5
     frac = outcome.env_reward
+    bash = outcome.tool_calls_by_name.get("bash", 0)
     if frac is None:
         return None
-    if outcome.tool_calls_by_name.get("bash", 0) == 0:
+    if bash == 0:
         return -0.1
-    base = 0.0 if outcome.timed_out else (1.0 if frac >= 1.0 - 1e-9 else 0.0)
+    base = 0.0 if outcome.timed_out else frac  # dense: fraction of held-out tests passed (partial credit)
     over = max(0, outcome.tool_call_count - step_budget)
     return base - min(step_penalty_cap, step_penalty * over)
 
@@ -541,11 +335,16 @@ def opencode_agent_turns(trace: list[TraceEntry]) -> list[TraceEntry]:
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--model", default="Qwen/Qwen3-4B-Instruct-2507")
-    p.add_argument("--vllm-url", default="http://localhost:8000")
+    p.add_argument("--vllm-url", default="http://localhost:8000")  # trainer <-> vLLM (weight sync, NCCL): local
+    p.add_argument("--sandbox-vllm-url", required=True)  # public url the remote sandboxes reach vLLM through (tunnel)
+    p.add_argument(
+        "--sandbox-image", default=SANDBOX_IMAGE
+    )  # pre-baked opencode+proxy; use python:3.12 to cold-install
+    p.add_argument("--sandbox-flavor", default="cpu-basic")  # the agent only runs python/bash, no GPU needed
     p.add_argument(
         "--num-generations", type=int, default=8
     )  # >1 gives within-group pass/fail split -> nonzero advantage
-    p.add_argument("--max-inflight", type=int, default=8)  # concurrent rollouts (each its own sandbox + proxy port)
+    p.add_argument("--max-inflight", type=int, default=8)  # concurrent rollouts (each its own remote sandbox)
     p.add_argument("--max-completion-length", type=int, default=16384)
     p.add_argument("--max-steps", type=int, default=100)
     p.add_argument("--n-prompts", type=int, default=64)
@@ -553,13 +352,16 @@ def main() -> None:
     p.add_argument("--temperature", type=float, default=1.0)
     p.add_argument("--max-staleness", type=int, default=4)  # lower -> fresher rollouts -> ratios near 1 (more stable)
     p.add_argument("--seed", type=int, default=0)
-    p.add_argument("--output-dir", default="async_grpo_opencode")
-    p.add_argument("--project", default="opencode")
+    p.add_argument("--output-dir", default="async_grpo_opencode_hf_sandbox")
+    p.add_argument("--project", default="opencode-hf-sandbox")
     p.add_argument("--trackio-space-id", default=None)  # optional: host the trackio dashboard on a HF Space
-    p.add_argument("--sandbox-root", default=None)  # where per-rollout sandbox dirs live (default: a fresh tempdir)
+    p.add_argument("--push-to-hub", action="store_true")  # push the trained policy to the Hub at --hub-model-id
+    p.add_argument("--hub-model-id", default=None)
+    p.add_argument("--optim", default="adamw_torch")  # e.g. paged_adamw_8bit to fit a larger policy on one GPU
+    p.add_argument("--gradient-checkpointing", action="store_true")  # trade compute for memory on a larger policy
+    p.add_argument("--gradient-accumulation-steps", type=int, default=1)  # more prompts per step -> smoother reward
     args = p.parse_args()
 
-    sandbox_root = args.sandbox_root or tempfile.mkdtemp(prefix="trl_opencode_")
     tokenizer = AutoTokenizer.from_pretrained(args.model)
     rows, tests_by_id = build_dataset(n_prompts=args.n_prompts, seed=args.seed)
     dataset = Dataset.from_list(rows)
@@ -568,6 +370,7 @@ def main() -> None:
         output_dir=args.output_dir,
         save_strategy="no",
         per_device_train_batch_size=4,
+        gradient_accumulation_steps=args.gradient_accumulation_steps,
         num_generations=args.num_generations,
         max_completion_length=args.max_completion_length,
         max_steps=args.max_steps,
@@ -579,10 +382,16 @@ def main() -> None:
         project=args.project,
         trackio_space_id=args.trackio_space_id,
         log_completions=True,
+        optim=args.optim,
+        gradient_checkpointing=args.gradient_checkpointing,
+        push_to_hub=args.push_to_hub,
+        hub_model_id=args.hub_model_id,
     )
 
     worker = HarnessRolloutWorker(
-        harness_session_factory=build_factory(sandbox_root, args.vllm_url, args.model, tests_by_id),
+        harness_session_factory=build_factory(
+            args.sandbox_vllm_url, args.model, tests_by_id, args.sandbox_image, args.sandbox_flavor
+        ),
         harness_adapter=None,  # loop-owning: opencode runs its own loop; TRL reads the proxy trace
         rollout_reward_fn=opencode_reward,  # reward policy (binary verifier + degeneracy penalties)
         train_turn_fn=has_tool_call,  # coding agent: reinforce only action turns, not prose
@@ -609,6 +418,8 @@ def main() -> None:
         rollout_worker=worker,
     )
     trainer.train()
+    if args.push_to_hub:
+        trainer.push_to_hub()
 
 
 if __name__ == "__main__":
