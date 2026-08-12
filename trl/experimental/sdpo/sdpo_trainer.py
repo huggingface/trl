@@ -1100,7 +1100,7 @@ class SDPOTrainer(_BaseTrainer):
             zip(self.reward_funcs, self.reward_processing_classes, strict=True)
         ):
             if isinstance(reward_func, nn.Module):
-                if is_conversational(inputs[0]):
+                if is_conversational({"prompt": prompts[0]}):
                     messages = [{"messages": p + c} for p, c in zip(prompts, completions, strict=True)]
                     texts = [
                         apply_chat_template(x, reward_processing_class, **self.chat_template_kwargs)["text"]

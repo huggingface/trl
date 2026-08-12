@@ -50,6 +50,19 @@ class AsyncGRPOConfig(_BaseConfig):
             Maximum length of the generated completion.
         temperature (`float`, *optional*, defaults to `1.0`):
             Temperature for sampling. The higher the temperature, the more random the completions.
+        top_p (`float`, *optional*, defaults to `1.0`):
+            Float that controls the cumulative probability of the top tokens to consider. Must be in (0, 1]. Set to 1.0
+            to consider all tokens.
+        top_k (`int`, *optional*, defaults to `0`):
+            Number of highest probability vocabulary tokens to keep for top-k-filtering. If `0`, top-k-filtering is
+            disabled and all tokens are considered.
+        min_p (`float`, *optional*):
+            Minimum token probability, which will be scaled by the probability of the most likely token. It must be a
+            value between 0.0 and 1.0. Typical values are in the 0.01-0.2 range.
+        repetition_penalty (`float`, *optional*, defaults to `1.0`):
+            Float that penalizes new tokens based on whether they appear in the prompt and the generated text so far.
+            Values > 1.0 encourage the model to use new tokens, while values < 1.0 encourage the model to repeat
+            tokens.
         chat_template_kwargs (`dict[str, Any]`, *optional*):
             Additional keyword arguments to pass to the `apply_chat_template` function when generating completions.
         max_tool_calling_iterations (`int`, *optional*):
@@ -122,6 +135,22 @@ class AsyncGRPOConfig(_BaseConfig):
     > - `gradient_checkpointing`: Defaults to `True` instead of `False`.
     > - `bf16`: Defaults to `True` if `fp16` is not set, instead of `False`.
     > - `learning_rate`: Defaults to `1e-6` instead of `5e-5`.
+    > - `lr_scheduler_type`: Defaults to `constant` instead of `linear` (see below).
+
+    > [!NOTE]
+    > Training duration and learning rate under message-mode reconciliation:
+    > A multi-turn conversation can fork into a variable number of training rows (a rewrite of the conversation
+    > starts a new row), so the number of samples, and therefore the number of optimizer steps, per epoch is not
+    > known up front. As a consequence:
+    > - `num_train_epochs` bounds training by full passes over the *prompt* dataset, counted as the number of
+    >   distinct prompts actually trained on. This is independent of how many rows the forks produce, so requesting
+    >   N epochs always trains on N passes over the data. When `max_steps` is left unset, this is the stop condition
+    >   and `max_steps` is only a safety ceiling.
+    > - `max_steps`, if set explicitly (`> 0`), takes over as the stop condition (bounding by optimizer steps rather
+    >   than by epochs) and disables the epoch-based stop.
+    > - `lr_scheduler_type` defaults to `constant` because a decay horizon is measured in optimizer steps, which
+    >   cannot be known up front when the step count depends on the fork rate. For a decaying learning rate, set a
+    >   decaying schedule together with an explicit `max_steps`.
     """
 
     _VALID_DICT_FIELDS = _BaseConfig._VALID_DICT_FIELDS + ["model_init_kwargs"]
@@ -162,6 +191,15 @@ class AsyncGRPOConfig(_BaseConfig):
             "will be interpreted as ratio of total training steps."
         },
     )
+    lr_scheduler_type: str = field(
+        default="constant",
+        metadata={
+            "help": "Learning-rate schedule. Defaults to `constant`: when training is bounded by `num_train_epochs`, "
+            "message-mode forks make the total step count unknown up front, so `max_steps` is only a safety ceiling "
+            "and a decay horizon can't be calibrated. Set a decaying schedule (e.g. `cosine`) together with an "
+            "explicit `max_steps` if you want LR decay."
+        },
+    )
 
     # Parameters that control generation
     num_generations: int = field(
@@ -175,6 +213,35 @@ class AsyncGRPOConfig(_BaseConfig):
     temperature: float = field(
         default=1.0,
         metadata={"help": "Temperature for sampling. The higher the temperature, the more random the completions."},
+    )
+    top_p: float = field(
+        default=1.0,
+        metadata={
+            "help": "Float that controls the cumulative probability of the top tokens to consider. Must be in (0, 1]. "
+            "Set to 1.0 to consider all tokens."
+        },
+    )
+    top_k: int = field(
+        default=0,
+        metadata={
+            "help": "Number of highest probability vocabulary tokens to keep for top-k-filtering. If `0`, "
+            "top-k-filtering is disabled and all tokens are considered."
+        },
+    )
+    min_p: float | None = field(
+        default=None,
+        metadata={
+            "help": "Minimum token probability, which will be scaled by the probability of the most likely token. It "
+            "must be a value between 0.0 and 1.0. Typical values are in the 0.01-0.2 range."
+        },
+    )
+    repetition_penalty: float = field(
+        default=1.0,
+        metadata={
+            "help": "Float that penalizes new tokens based on whether they appear in the prompt and the generated "
+            "text so far. Values > 1.0 encourage the model to use new tokens, while values < 1.0 encourage the model "
+            "to repeat tokens."
+        },
     )
     chat_template_kwargs: dict | None = field(
         default=None,
