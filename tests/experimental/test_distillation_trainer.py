@@ -528,6 +528,53 @@ class TestDistillationTrainer(TrlTestCase):
                 processing_class=self.tokenizer,
             )
 
+    @require_liger_kernel
+    def test_liger_incompatible_with_logit_softcapping_raises(self):
+        # The Liger fused JSD kernel can't apply Cohere `logit_scale` / Gemma `final_logit_softcapping`, so unlike the
+        # chunked path it would optimize a different objective than the model's real forward. Reject rather than train
+        # silently wrong.
+        student = AutoModelForCausalLM.from_pretrained(self.model_id)
+        student.config.final_logit_softcapping = 30.0
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        with pytest.raises(ValueError, match="final_logit_softcapping"):
+            DistillationTrainer(
+                model=student,
+                teacher_model=self.model_id,
+                args=self._make_args(use_liger_kernel=True),
+                train_dataset=dataset,
+                processing_class=self.tokenizer,
+            )
+
+    @require_liger_kernel
+    def test_liger_allows_none_logit_scale(self):
+        # `logit_scale = None` (e.g. MPT) means unscaled, like `1.0`; the Liger guard must not reject it.
+        student = AutoModelForCausalLM.from_pretrained(self.model_id)
+        student.config.logit_scale = None
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        DistillationTrainer(  # must not raise
+            model=student,
+            teacher_model=self.model_id,
+            args=self._make_args(use_liger_kernel=True),
+            train_dataset=dataset,
+            processing_class=self.tokenizer,
+        )
+
+    @require_liger_kernel
+    def test_liger_rejects_zero_logit_scale(self):
+        # `logit_scale = 0.0` is a real (degenerate) scale, not "unscaled" — it zeroes the logits. The Liger kernel
+        # can't apply it, so like any other non-1.0 scale it must be rejected, not silently read as 1.0.
+        student = AutoModelForCausalLM.from_pretrained(self.model_id)
+        student.config.logit_scale = 0.0
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        with pytest.raises(ValueError, match="logit_scale"):
+            DistillationTrainer(
+                model=student,
+                teacher_model=self.model_id,
+                args=self._make_args(use_liger_kernel=True),
+                train_dataset=dataset,
+                processing_class=self.tokenizer,
+            )
+
     def test_teacher_model_init_kwargs_with_instantiated_teacher_raises(self):
         # `teacher_model_init_kwargs` only applies when the teacher is a model id; passing it alongside an already
         # instantiated teacher is a mistake worth surfacing.
