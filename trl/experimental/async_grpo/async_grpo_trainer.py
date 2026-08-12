@@ -509,6 +509,19 @@ class DataCollatorForRollout(DataCollatorMixin):
         }
 
 
+def _segment_sum(values: torch.Tensor, sequence_id: torch.Tensor, n_samples: int) -> torch.Tensor:
+    """Sums `values` (1, T), grouped by `sequence_id` (1, T) — a 0-indexed id per packed sequence — into a
+    per-sequence tensor of shape (n_samples,).
+
+    GRPOTrainer's (B, T) batch layout gets per-sequence reductions "for free" from a plain `dim=-1` sum.
+    AsyncGRPOTrainer instead packs every sample for a rank into a single padding-free row (B=1), so the same
+    per-sequence reduction needs an explicit segment-sum over `sequence_id` (see `compute_loss`).
+    """
+    return torch.zeros(n_samples, device=values.device, dtype=values.dtype).scatter_add(
+        0, sequence_id.squeeze(0), values.squeeze(0)
+    )
+
+
 class AsyncGRPOTrainer(_BaseTrainer):
     """
     Trainer for the Group Relative Policy Optimization (GRPO) method. This algorithm was initially proposed in the
@@ -662,6 +675,28 @@ class AsyncGRPOTrainer(_BaseTrainer):
         self.epsilon_low = args.epsilon
         self.epsilon_high = args.epsilon_high if args.epsilon_high is not None else args.epsilon
         self.temperature = args.temperature
+        self.loss_type = args.loss_type
+        self.importance_sampling_level = args.importance_sampling_level
+
+        if args.loss_type == "luspo" and args.importance_sampling_level != "sequence":
+            logger.warning(
+                "When using `'luspo'` loss, `importance_sampling_level` should be set to `'sequence'` to mirror the "
+                "paper's setup."
+            )
+
+        if args.loss_type == "vespo" and args.importance_sampling_level != "token":
+            logger.warning(
+                "VESPO computes sequence-level importance weights internally. `importance_sampling_level` should be "
+                "set to `'token'` (the default)."
+            )
+
+        if args.importance_sampling_level == "sequence" and args.loss_type in ["bnpo", "dr_grpo", "dapo", "cispo"]:
+            logger.warning(
+                f"When using `importance_sampling_level='sequence'`, the `'{args.loss_type}'` loss sums per-token "
+                "contributions, which effectively weights each sequence by its completion length instead of "
+                "optimizing the per-sequence objective. To reproduce the GSPO paper's setup, set `loss_type='grpo'` "
+                "(see https://huggingface.co/docs/trl/main/en/paper_index#group-sequence-policy-optimization)."
+            )
 
         # Model
         model_init_kwargs = args.model_init_kwargs or {}
@@ -916,6 +951,64 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 "metrics",
             ]
 
+    def get_gamma_weights(
+        self,
+        advantages: torch.Tensor,
+        log_ratio_per_token: torch.Tensor,
+        mask: torch.Tensor,
+        sequence_id: torch.Tensor,
+        n_samples: int,
+        importance_sampling_ratio: torch.Tensor | None,
+        k_pos: float = 2.0,
+        lambda_pos: float = 3.0,
+        k_neg: float = 3.0,
+        lambda_neg: float = 2.0,
+    ) -> torch.Tensor:
+        """
+        Computes the Gamma weights for the VESPO loss. For reference:
+            φ(w) = e^λ × w^k × e^{-λw} is the gamma weighting (normalized so φ(1)=1)
+                with w = sequence-level importance sampling ratio
+        note: we will compute φ(w) in log space
+
+        φ(w) is detached via @torch.no_grad(), only acts as gradient scaling coefficient
+
+        VESPO loss = -φ(w) × A × log_prob, gradient naturally gives φ(w) × A × ∇log π
+
+        Unlike [`GRPOTrainer`]'s (B, T) batch layout, samples here are packed into a single padding-free row, so the
+        per-sequence log-ratio sum is a segment-sum over `sequence_id` (see `_segment_sum`) instead of a plain
+        `dim=-1` reduction, and the resulting per-sequence weight is re-expanded back to (1, T) at the end.
+        """
+        # reducing clamp range directly to log(1e-8) ~ -18.42, to avoid recomputing log_w=log(w.clamp(min=1e-8)) later
+        # This is solely for matching truthfully the original implementation, otherwise keeping -20 could be fine.
+        lower_clamp = math.log(1e-8)
+
+        # Sequence-level log ratio Σ log(π_θ/π_old) (not a mean like for `log_importance_weights`)
+        log_ratio_clamped = torch.clamp(log_ratio_per_token, -20.0, 20.0)
+        seq_log_ratio = _segment_sum(log_ratio_clamped * mask, sequence_id, n_samples)  # (n_samples,)
+
+        # Apply token-level TIS or MIS correction (in log space)
+        if importance_sampling_ratio is not None:
+            log_is_ratio = torch.clamp(torch.log(importance_sampling_ratio), lower_clamp, 20.0)
+            # log(w) = log(π_θ/π_old) + log(π_old/π_sampler)
+            seq_log_ratio = seq_log_ratio + _segment_sum(log_is_ratio, sequence_id, n_samples)
+
+        log_w_seq = torch.clamp(seq_log_ratio, lower_clamp, 20.0)
+        w_seq = torch.exp(log_w_seq)
+        log_w = log_w_seq[sequence_id.squeeze(0)].unsqueeze(0)  # (1, T)
+        w = w_seq[sequence_id.squeeze(0)].unsqueeze(0)  # (1, T)
+
+        # compute k and lambda based on advantage sign (advantages are constant within a sequence, so the sign
+        # check is equivalent whether taken per-token or per-sequence)
+        is_nonneg_adv = advantages >= 0
+        k = torch.where(is_nonneg_adv, k_pos, k_neg)
+        lambda_ = torch.where(is_nonneg_adv, lambda_pos, lambda_neg).clamp(min=1e-4)
+
+        # log(φ(w)) = λ + k × log(w) - λ × w
+        log_phi = lambda_ + k * log_w - lambda_ * w
+        phi = torch.exp(log_phi).nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)
+
+        return phi  # (1, T)
+
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         # Padding-free: the collator already packed this rank's samples into a single row (real tokens concatenated,
         # `position_ids` resetting per sequence, advantages expanded per-token), then padded the row to the longest
@@ -927,6 +1020,12 @@ class AsyncGRPOTrainer(_BaseTrainer):
         old_log_probs = inputs["old_log_probs"][mask_bool].unsqueeze(0)
         position_ids = inputs["position_ids"][mask_bool].unsqueeze(0)
         advantages = inputs["advantages"][mask_bool].unsqueeze(0)
+
+        # Samples are packed into a single row, so a per-sequence id (needed by the "grpo"/"sapo"/"luspo" loss
+        # types, `importance_sampling_level="sequence"`, and the VESPO gamma weights) has to be derived rather than
+        # read off a batch dimension. `position_ids` resets to 0 at the start of every packed sequence.
+        n_seqs = int((position_ids == 0).sum().item())
+        sequence_id = (position_ids == 0).cumsum(dim=1) - 1  # (1, T), 0-indexed per packed sequence
 
         forward_start = time.time()
         outputs = model(
@@ -942,23 +1041,83 @@ class AsyncGRPOTrainer(_BaseTrainer):
         completion_mask = completion_mask[:, 1:]
         old_log_probs = old_log_probs[:, 1:]
         advantages = advantages[:, 1:]
+        sequence_id = sequence_id[:, 1:]
+
         log_ratio = log_probs - old_log_probs
-        coef_1 = torch.exp(log_ratio)
-        coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
-        per_token_loss1 = coef_1 * advantages
-        per_token_loss2 = coef_2 * advantages
-        per_token_loss = -torch.min(per_token_loss1, per_token_loss2)
+        if self.importance_sampling_level == "token":
+            log_importance_weights = log_ratio
+        elif self.importance_sampling_level == "sequence":
+            seq_log_ratio = _segment_sum(log_ratio * completion_mask, sequence_id, n_seqs) / _segment_sum(
+                completion_mask, sequence_id, n_seqs
+            ).clamp(min=1.0)
+            log_importance_weights = seq_log_ratio[sequence_id.squeeze(0)].unsqueeze(0)  # (1, T)
+        else:
+            raise ValueError(
+                f"Unknown importance sampling level: {self.importance_sampling_level}. Possible values are 'token' "
+                "and 'sequence'."
+            )
+        coef_1 = torch.exp(log_importance_weights)
+
+        # From here, log_importance_weights (and all subsequent tensors, coef_1, coef_2, etc.) shape depends on
+        # importance_sampling_level: "token" level: (1, T); "sequence" level: also (1, T), broadcast from one value
+        # per packed sequence.
+        if self.loss_type == "cispo":
+            clamped_ratios = torch.clamp(coef_1, max=self.epsilon_high).detach()
+            per_token_loss = -clamped_ratios * advantages * log_probs
+        elif self.loss_type in ["grpo", "bnpo", "dr_grpo", "dapo", "luspo"]:
+            coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
+            # Two-sided clipping
+            if self.args.delta is not None:
+                coef_1 = torch.clamp(coef_1, max=self.args.delta)
+            per_token_loss1 = coef_1 * advantages
+            per_token_loss2 = coef_2 * advantages
+            per_token_loss = -torch.min(per_token_loss1, per_token_loss2)
+        elif self.loss_type == "sapo":
+            temperatures = torch.where(advantages > 0, self.args.sapo_temperature_pos, self.args.sapo_temperature_neg)
+            soft_coef_1 = torch.sigmoid(temperatures * (coef_1 - 1)) * 4 / temperatures
+            per_token_loss = -soft_coef_1 * advantages
+        elif self.loss_type == "vespo":
+            phi = self.get_gamma_weights(
+                advantages=advantages,
+                log_ratio_per_token=log_ratio,
+                mask=completion_mask,
+                sequence_id=sequence_id,
+                n_samples=n_seqs,
+                importance_sampling_ratio=None,
+                k_pos=self.args.vespo_k_pos,
+                lambda_pos=self.args.vespo_lambda_pos,
+                k_neg=self.args.vespo_k_neg,
+                lambda_neg=self.args.vespo_lambda_neg,
+            )
+            per_token_loss = -phi * advantages * log_probs
+        else:
+            raise ValueError(f"Unknown loss type: {self.loss_type}")
 
         # DDP/FSDP averages gradients across ranks (world_size).
         # To get correct per-token normalization we scale by 1/tokens_per_rank
         # = world_size / global_n_tokens, so after DDP averaging the effective
-        loss = (per_token_loss * completion_mask).sum()
         global_n_tokens = inputs["global_n_tokens"][0]
         world_size = self.accelerator.num_processes
         tokens_per_rank = (global_n_tokens / world_size).clamp(min=1.0)
-        loss = loss / tokens_per_rank.to(torch.float32)
-        # For DAPO, we would scale like this instead:
-        # loss = loss / max(per_token_loss.size(0), 1)
+        if self.loss_type in ["grpo", "sapo"]:
+            seq_loss = _segment_sum(per_token_loss * completion_mask, sequence_id, n_seqs) / _segment_sum(
+                completion_mask, sequence_id, n_seqs
+            ).clamp(min=1.0)
+            loss = seq_loss.mean()
+        elif self.loss_type == "bnpo":
+            loss = (per_token_loss * completion_mask).sum() / completion_mask.sum().clamp(min=1.0)
+        elif self.loss_type == "dr_grpo":
+            loss = (per_token_loss * completion_mask).sum() / (n_seqs * self.args.max_completion_length)
+        elif self.loss_type in ["cispo", "dapo", "vespo"]:
+            loss = (per_token_loss * completion_mask).sum() / tokens_per_rank.to(torch.float32)
+        elif self.loss_type == "luspo":
+            # `per_token_loss` is one value per packed sequence only in the recommended sequence-level setup
+            # (`importance_sampling_level="sequence"`); with the config default (`"token"`), the entropy mask and
+            # per-token KL terms broadcast it to per-token, so mask before aggregating.
+            seq_loss = _segment_sum(per_token_loss * completion_mask, sequence_id, n_seqs)
+            loss = seq_loss.mean()
+        else:
+            raise ValueError(f"Unknown loss type: {self.loss_type}")
         loss = loss / self.current_gradient_accumulation_steps
 
         # The policy loss above is scaled for gradient accumulation (HF auto-scaling is off here), so scale aux too
