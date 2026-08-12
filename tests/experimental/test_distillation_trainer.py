@@ -1106,6 +1106,14 @@ class TestDistillationTrainer(TrlTestCase):
             train_dataset=dataset,
         )
 
+        # The tiny models are randomly initialized, so their next-token distributions are nearly uniform over the
+        # ~150k vocab. At that scale the JSD sits at the float32 noise floor, where the chunked and fused paths' matmul
+        # reduction orders diverge by ~2x — a conditioning artifact, not a real objective difference. Scale the LM heads
+        # to peak the distributions so the two paths are compared on a well-conditioned batch.
+        with torch.no_grad():
+            trainer.model.get_output_embeddings().weight.mul_(50.0)
+            trainer.teacher_model.get_output_embeddings().weight.mul_(50.0)
+
         device = trainer.accelerator.device
         vocab_size = trainer.model.config.vocab_size
         gen = torch.Generator().manual_seed(1)
