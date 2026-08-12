@@ -91,9 +91,71 @@ class AsyncGRPOConfig(_BaseConfig):
 
         epsilon (`float`, *optional*, defaults to `0.2`):
             Epsilon value for clipping.
+        delta (`float`, *optional*):
+            Enables the upper clipping bound in two-sided GRPO loss when set to a float. If `None` (default), standard
+            GRPO clipping is used. Recommended to be greater than `1 + ε` when enabled. This method is introduced in
+            the [INTELLECT-2 tech report](https://huggingface.co/papers/2505.07291).
         epsilon_high (`float`, *optional*):
             Upper-bound epsilon value for clipping. If not specified, it defaults to the same value as the lower-bound
             specified in argument `epsilon`. Paper [DAPO](https://huggingface.co/papers/2503.14476) recommends `0.28`.
+            When used with `loss_type='cispo'`, this corresponds to the ε_max param specified in the [ScaleRL
+            paper](https://huggingface.co/papers/2510.13786) and the recommended value is `5.0`.
+        sapo_temperature_neg (`float`, *optional*, defaults to `1.05`):
+            Temperature for tokens with non-positive advantage scores used in the `sapo` loss function. This parameter
+            is introduced in the [Soft Adaptive Policy Optimization paper](https://huggingface.co/papers/2511.20347).
+        sapo_temperature_pos (`float`, *optional*, defaults to `1.0`):
+            Temperature for tokens with positive advantage scores used in the `sapo` loss function. This parameter is
+            introduced in the [Soft Adaptive Policy Optimization paper](https://huggingface.co/papers/2511.20347).
+        vespo_k_pos (`float`, *optional*, defaults to `2.0`):
+            k parameter for positive advantages, it is the power exponent in the VESPO loss. Controls how aggressively
+            we down-weight samples with low importance weights (when the importance sampling ratio < 1).
+        vespo_lambda_pos (`float`, *optional*, defaults to `3.0`):
+            lambda parameter for positive advantages, it is the decay factor in the VESPO loss. Controls how
+            aggressively we down-weight samples with high importance weights (when the importance sampling ratio > 1).
+        vespo_k_neg (`float`, *optional*, defaults to `3.0`):
+            k parameter for negative advantages, it is the power exponent in the VESPO loss. Controls how aggressively
+            we down-weight samples with low importance weights (when the importance sampling ratio < 1).
+        vespo_lambda_neg (`float`, *optional*, defaults to `2.0`):
+            lambda parameter for negative advantages, it is the exponential decay factor in the VESPO loss. Controls
+            how aggressively we down-weight samples with high importance weights (when the importance sampling ratio >
+            1).
+        importance_sampling_level (`str`, *optional*, defaults to `"token"`):
+            Controls whether importance sampling ratios are computed at the `"token"` or `"sequence"` level. `"token"`
+            keeps the raw per-token log-probability ratios (one weight per token). `"sequence"` averages the
+            log-probability ratios across valid tokens to produce a single ratio per sequence. The [GSPO
+            paper](https://huggingface.co/papers/2507.18071) shows that sequence-level sampling often yields more
+            stable training and better alignment with sequence-level rewards.
+        loss_type (`str`, *optional*, defaults to `"dapo"`):
+            Specifies the loss formulation to use. Supported values are:
+
+            - `"grpo"`: Aggregates token-level losses by normalizing over sequence length. Not recommended due to
+              length bias—this approach tends to prefer shorter completions with positive advantages and longer ones
+              with negative advantages.
+            - `"dr_grpo"`: Aggregates token-level losses by normalizing with a global constant. This method was
+              introduced in the [Dr. GRPO paper](https://huggingface.co/papers/2503.20783) to eliminate length bias.
+              The value of the constant corresponds to `max_completion_length`.
+            - `"dapo"` (default): Aggregates token-level losses by normalizing with the number of active token in the
+              global accumulated batch. This method was introduced in the [DAPO
+              paper](https://huggingface.co/papers/2503.14476) to eliminate length bias.
+            - `"bnpo"`: Aggregates token-level losses by normalizing with the number of active token in the local
+              batch. Note that normalization is performed over the local batch only, so results may slightly vary
+              depending on the local batch size, despite a constant effective batch size. When using
+              `per_device_train_batch_size==1`, the loss is equivalent to the GRPO loss.
+            - `"cispo"`: Clips the importance sampling weights instead of the advantage scaled importance weights. The
+              clipped weights are then multiplied with the advantages and policy model's log probs. Individual token
+              losses are aggregated by normalizing with the number of active tokens in the global accumulated batch.
+              This method was introduced in the [MiniMax-M1 paper](https://huggingface.co/papers/2506.13585).
+            - `"sapo"`: Soft Adaptive Policy Optimization loss, as introduced in the [Soft Adaptive Policy Optimization
+              paper](https://huggingface.co/papers/2511.20347). Replaces hard clipping with a smooth,
+              temperature-controlled gate that adaptively attenuates off-policy updates while preserving useful
+              learning signals.
+            - `"luspo"`: Length-Unbiased Sequence Policy Optimization loss. A sequence-level loss that scales each
+              sequence's loss by its length. This is a modification of GSPO and requires
+              `importance_sampling_level="sequence"`. Introduced in the [LUSPO
+              paper](https://huggingface.co/papers/2602.05261).
+            - `"vespo"`: Variational Sequence-Level Soft Policy Optimization. Replaces hard clipping with a smooth,
+              asymmetric Gamma weighting function applied directly to sequence-level importance weights. Introduced in
+              the [VESPO paper](https://huggingface.co/papers/2602.10693).
         token_budget (`int`, *optional*):
             Maximum number of real tokens packed into a single row (one DP rank's forward) for dynamic
             token-budgeted micro-batching. When `> 0`, a `TokenBudgetBatcher` forms Σ Lᵢ²-balanced micro-batches
@@ -290,11 +352,108 @@ class AsyncGRPOConfig(_BaseConfig):
         default=0.2,
         metadata={"help": "Epsilon value for clipping."},
     )
+    delta: float | None = field(
+        default=None,
+        metadata={
+            "help": "Enables the upper clipping bound in two-sided GRPO loss when set to a float. If `None` "
+            "(default), standard GRPO clipping is used. Recommended to be greater than `1 + ε` when enabled. This "
+            "method is introduced in the [INTELLECT-2 tech report](https://huggingface.co/papers/2505.07291)."
+        },
+    )
     epsilon_high: float | None = field(
         default=None,
         metadata={
             "help": "Upper-bound epsilon value for clipping. If not specified, it defaults to the same value as the "
-            "lower-bound specified in argument `epsilon`. Paper DAPO recommends `0.28`."
+            "lower-bound specified in argument `epsilon`. Paper DAPO recommends `0.28`. "
+            "When used with `loss_type='cispo'`, this corresponds to the ε_max param specified in the "
+            "[ScaleRL paper](https://huggingface.co/papers/2510.13786) and the recommended value is `5.0`."
+        },
+    )
+    sapo_temperature_neg: float = field(
+        default=1.05,
+        metadata={
+            "help": "Temperature for tokens with non-positive advantage scores used in the `sapo` loss function. "
+            "This parameter is introduced in the [Soft Adaptive Policy Optimization "
+            "paper](https://huggingface.co/papers/2511.20347)."
+        },
+    )
+    sapo_temperature_pos: float = field(
+        default=1.0,
+        metadata={
+            "help": "Temperature for tokens with positive advantage scores used in the `sapo` loss function. "
+            "This parameter is introduced in the [Soft Adaptive Policy Optimization "
+            "paper](https://huggingface.co/papers/2511.20347)."
+        },
+    )
+    vespo_k_pos: float = field(
+        default=2.0,
+        metadata={
+            "help": "k parameter for positive advantages, it is the power exponent in the VESPO loss. Controls how "
+            "aggressively we down-weight samples with low importance weights (when the importance sampling ratio < 1)."
+        },
+    )
+    vespo_lambda_pos: float = field(
+        default=3.0,
+        metadata={
+            "help": "lambda parameter for positive advantages, it is the decay factor in the VESPO loss. Controls "
+            "how aggressively we down-weight samples with high importance weights (when the importance sampling ratio "
+            "> 1)."
+        },
+    )
+    vespo_k_neg: float = field(
+        default=3.0,
+        metadata={
+            "help": "k parameter for negative advantages, it is the power exponent in the VESPO loss. Controls how "
+            "aggressively we down-weight samples with low importance weights (when the importance sampling ratio < 1)."
+        },
+    )
+    vespo_lambda_neg: float = field(
+        default=2.0,
+        metadata={
+            "help": "lambda parameter for negative advantages, it is the exponential decay factor in the VESPO loss. "
+            "Controls how aggressively we down-weight samples with high importance weights (when the importance "
+            "sampling ratio > 1)."
+        },
+    )
+    importance_sampling_level: str = field(
+        default="token",
+        metadata={
+            "help": "Controls whether importance sampling ratios are computed at the `'token'` or `'sequence'` level. "
+            "`'token'` keeps the raw per-token log-probability ratios (one weight per token).  `'sequence'` averages "
+            "the log-probability ratios across valid tokens to produce a single ratio per sequence. The GSPO paper "
+            "shows that sequence-level sampling often yields more stable training and better alignment with "
+            "sequence-level rewards."
+        },
+    )
+    loss_type: str = field(
+        default="dapo",
+        metadata={
+            "help": "Specifies the loss formulation to use. Supported values are 'grpo', 'dr_grpo', 'dapo', "
+            "'bnpo', 'cispo', 'sapo', 'luspo', and 'vespo'. "
+            "'grpo': Aggregates token-level losses by normalizing over sequence length. Not recommended due to length "
+            "bias—this approach tends to prefer shorter completions with positive advantages and longer ones with "
+            "negative advantages. "
+            "'dapo' (default): Aggregates token-level losses by normalizing with the number of active token in the "
+            "global accumulated batch. This method was introduced in the DAPO paper to eliminate length bias. "
+            "'dr_grpo': Aggregates token-level losses by normalizing with a global constant. This method was "
+            "introduced in the Dr. GRPO paper to eliminate length bias. The value of the constant corresponds to "
+            "`max_completion_length`. "
+            "'bnpo': Aggregates token-level losses by normalizing with the number of active token in the local batch. "
+            "Note that normalization is performed over the local batch only, so results may slightly vary depending "
+            "on the local batch size, despite a constant effective batch size. When using "
+            "`per_device_train_batch_size==1`, the loss is equivalent to the GRPO loss. "
+            "'cispo': Clips the importance sampling weights instead of the advantage scaled importance weights. The "
+            "clipped weights are then multiplied with the advantages and policy model's log probs. Individual token "
+            "losses are aggregated by normalizing with the number of active tokens in the global accumulated batch. "
+            "This method was introduced in the MiniMax-M1 paper. "
+            "'sapo': Soft Adaptive Policy Optimization loss. Replaces hard clipping with a smooth, "
+            "temperature-controlled gate that adaptively attenuates off-policy updates while preserving useful "
+            "learning signals. "
+            "'luspo': Length-Unbiased Sequence Policy Optimization loss. A sequence-level loss that scales each "
+            "sequence's loss by its length. This is a modification of GSPO and requires "
+            "`importance_sampling_level='sequence'`. "
+            "'vespo': Variational Sequence-Level Soft Policy Optimization. Replaces hard clipping with a smooth, "
+            "asymmetric Gamma weighting function applied directly to sequence-level importance weights."
         },
     )
     token_budget: int | None = field(
