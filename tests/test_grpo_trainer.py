@@ -4191,7 +4191,7 @@ class TestGRPOTrainerVLM(TrlTestCase):
         reason="Qwen3.5 models were introduced in transformers-5.2.0",
         strict=True,
     )
-    @require_jmespath
+    @require_response_parsing
     def test_train_with_tools_text_response_multimodal_prompt(self):
         # Test that tools returning text (non-multimodal response) work correctly with a VLM prompt having images.
         def screenshot_tool() -> str:
