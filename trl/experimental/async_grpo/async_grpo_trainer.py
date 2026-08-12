@@ -622,8 +622,15 @@ class DataCollatorForRollout(DataCollatorMixin):
 
         # Per-sample rewards, nan-aware: a reward func may return None for an unscorable sample, and a sample for which
         # every func returned None carries NaN rather than a misleading 0.
-        for key in all_examples[0]["metrics"]:
-            values = [example["metrics"][key] for example in all_examples]
+        #
+        # The key set is ragged, so it is the union over the micro-batch and each key averages over the samples that
+        # carry it. `tools/*` is stamped per GROUP (only when that group called a tool at least once) while a
+        # micro-batch is packed from whatever is on the queue, so one batch routinely mixes groups that have those keys
+        # with groups that do not. Keying off the first sample instead would raise `KeyError` on the collator path
+        # whenever it happened to hold tool keys, and silently drop them whenever it did not.
+        keys = dict.fromkeys(key for example in all_examples for key in example["metrics"])
+        for key in keys:
+            values = [example["metrics"][key] for example in all_examples if key in example["metrics"]]
             valid = [v for v in values if not math.isnan(v)]
             self.metrics[key].append(sum(valid) / len(valid) if valid else float("nan"))
 
