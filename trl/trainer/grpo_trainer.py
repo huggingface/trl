@@ -2127,22 +2127,19 @@ class GRPOTrainer(_BaseTrainer):
                 loop_multimodal_fields = {}
                 for k, v in split_fields.items():
                     selected = [v[i] for i in idxs_with_tool]
+                    # Per-token type-id fields may arrive as tensors (e.g. via the padding workaround);
+                    # convert them to lists so they follow the same left-padding path as list-valued
+                    # per-token fields below, keeping them aligned with the left-padded input_ids.
                     if k in ("token_type_ids", "mm_token_type_ids") and isinstance(selected[0], torch.Tensor):
-                        selected = [
-                            torch.cat([s, torch.zeros(len(pct) - len(s), dtype=s.dtype, device=s.device)])
-                            if len(s) < len(pct)
-                            else s
-                            for s, pct in zip(selected, prompt_completion_tool_ids, strict=True)
-                        ]
-                        selected = torch.stack(selected)
-                    elif isinstance(v, torch.Tensor):
-                        selected = torch.stack(selected)
+                        selected = [s.tolist() for s in selected]
                     # Per-token fields (e.g. token_type_ids) need zero-padding to match extended prompt length
-                    elif isinstance(selected[0], list):
+                    if isinstance(selected[0], list):
                         selected = [
                             s + [0] * (len(pct) - len(s))
                             for s, pct in zip(selected, prompt_completion_tool_ids, strict=True)
                         ]
+                    elif isinstance(v, torch.Tensor):
+                        selected = torch.stack(selected)
                     loop_multimodal_fields[k] = selected
                 loop_multimodal_fields = unsplit_pixel_values_by_grid(loop_multimodal_fields)
                 loop_multimodal_fields.pop("num_images", None)
