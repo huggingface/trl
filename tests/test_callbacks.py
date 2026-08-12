@@ -14,14 +14,53 @@
 
 import json
 import os
-from unittest.mock import call, patch
+import types
+from contextlib import nullcontext
+from unittest.mock import Mock, call, patch
 
+import pytest
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig, Trainer, TrainingArguments
 
 from trl import BEMACallback, LogCompletionsCallback
+from trl.trainer.callbacks import _generate_completions
 
 from .testing_utils import TrlTestCase, require_comet, require_wandb
+
+
+class TokenizedBatch(dict):
+    @property
+    def input_ids(self):
+        return self["input_ids"]
+
+    def to(self, device):
+        return self
+
+
+class TestGenerateCompletions:
+    @pytest.mark.parametrize("raise_error", [False, True])
+    def test_temporarily_uses_left_padding(self, raise_error):
+        tokenizer = Mock(padding_side="right")
+        tokenizer.return_value = TokenizedBatch(input_ids=[[1]])
+        tokenizer.decode.return_value = "completion"
+        model = Mock(device="cpu")
+
+        def generate(**kwargs):
+            assert tokenizer.padding_side == "left"
+            if raise_error:
+                raise RuntimeError("generation failed")
+            return [[1, 2]]
+
+        model.generate.side_effect = generate
+
+        with patch("trl.trainer.callbacks.unwrap_model_for_generation", return_value=nullcontext(model)):
+            if raise_error:
+                with pytest.raises(RuntimeError, match="generation failed"):
+                    _generate_completions(["prompt"], model, tokenizer, Mock(), None)
+            else:
+                assert _generate_completions(["prompt"], model, tokenizer, Mock(), None) == ["completion"]
+
+        assert tokenizer.padding_side == "right"
 
 
 class TestLogCompletionsCallback(TrlTestCase):
@@ -40,6 +79,25 @@ class TestLogCompletionsCallback(TrlTestCase):
         self.dataset = dataset.map(tokenize_function, batched=True)
 
         self.generation_config = GenerationConfig(max_length=32)
+
+    def test_does_not_change_tokenizer_padding_side(self):
+        trainer = types.SimpleNamespace(
+            eval_dataset={"prompt": ["prompt"]},
+            accelerator=types.SimpleNamespace(
+                is_main_process=False,
+                split_between_processes=lambda prompts: nullcontext(prompts),
+            ),
+            model_wrapped=self.model,
+        )
+        callback = LogCompletionsCallback(trainer, freq=1)
+        args = types.SimpleNamespace(per_device_eval_batch_size=1, report_to=[])
+        state = types.SimpleNamespace(global_step=1, eval_steps=1)
+        self.tokenizer.padding_side = "right"
+
+        with patch("trl.trainer.callbacks._generate_completions", return_value=["completion"]):
+            callback.on_step_end(args, state, None, processing_class=self.tokenizer)
+
+        assert self.tokenizer.padding_side == "right"
 
     @require_wandb
     def test_basic_wandb(self):
