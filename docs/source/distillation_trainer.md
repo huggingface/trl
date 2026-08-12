@@ -14,9 +14,6 @@ The `DistillationTrainer` trains a smaller student model to match a teacher's ne
 
 This trainer was contributed by [Carlos Miguel Patiño](https://huggingface.co/cmpatino).
 
-> [!NOTE]
-> The Distillation Trainer is currently part of the `trl.experimental` namespace. APIs may change without notice while the feature is iterated on.
-
 ## Quick start
 
 This example demonstrates how to train a model using the distillation method. We distill a [Qwen 2.5 0.5B Instruct model](https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct) from a [Qwen 2.5 1.5B Instruct teacher](https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct) on the prompts from the [UltraFeedback prompt dataset](https://huggingface.co/datasets/trl-lib/ultrafeedback-prompt). You can view the data in the dataset here:
@@ -33,7 +30,7 @@ Below is the script to train the model.
 ```python
 # train_distillation.py
 from datasets import load_dataset
-from trl.experimental.distillation import DistillationTrainer
+from trl import DistillationTrainer
 
 dataset = load_dataset("trl-lib/ultrafeedback-prompt", split="train")
 
@@ -111,7 +108,7 @@ We support two ways of using vLLM during training: **colocate mode** and **serve
 In this mode, vLLM runs inside the trainer process and shares GPU memory with the training model. This avoids launching a separate server and can improve GPU utilization, but may lead to memory contention on the training GPUs. This is the default mode.
 
 ```python
-from trl.experimental.distillation import DistillationConfig
+from trl import DistillationConfig
 
 training_args = DistillationConfig(
     ...,
@@ -132,7 +129,7 @@ In this mode, vLLM runs in a separate process (and using separate GPUs) and comm
 2. **Enable server mode in your training script**:
 
    ```python
-   from trl.experimental.distillation import DistillationConfig
+   from trl import DistillationConfig
 
    training_args = DistillationConfig(
        ...,
@@ -145,7 +142,7 @@ In this mode, vLLM runs in a separate process (and using separate GPUs) and comm
 > Make sure that the server is using different GPUs than the trainer, otherwise you may run into NCCL errors. You can specify the GPUs to use with the `CUDA_VISIBLE_DEVICES` environment variable.
 
 > [!TIP]
-> Depending on the model size and the overall GPU memory requirements for training, you may need to adjust the `vllm_gpu_memory_utilization` parameter in [`experimental.distillation.DistillationConfig`] to avoid underutilization or out-of-memory errors.
+> Depending on the model size and the overall GPU memory requirements for training, you may need to adjust the `vllm_gpu_memory_utilization` parameter in [`DistillationConfig`] to avoid underutilization or out-of-memory errors.
 
 For more information, see [Speeding up training with vLLM](speeding_up_training#vllm-for-fast-generation-in-online-methods).
 
@@ -155,7 +152,7 @@ We support tight integration with the 🤗 PEFT library, letting you train adapt
 
 ```python
 from datasets import load_dataset
-from trl.experimental.distillation import DistillationTrainer
+from trl import DistillationTrainer
 from peft import LoraConfig
 
 dataset = load_dataset("trl-lib/ultrafeedback-prompt", split="train")
@@ -176,7 +173,7 @@ trainer.train()
 
 Liger Kernel is a collection of Triton kernels for LLM training that boosts multi-GPU throughput, cuts memory use, and works seamlessly with tools like FlashAttention, PyTorch FSDP, and DeepSpeed. For more information, see [Liger Kernel Integration](liger_kernel_integration).
 
-Set `use_liger_kernel=True` in the [`experimental.distillation.DistillationConfig`] to compute the JSD with the fused Liger kernel instead of the chunked path.
+Set `use_liger_kernel=True` in the [`DistillationConfig`] to compute the JSD with the fused Liger kernel instead of the chunked path.
 
 > [!WARNING]
 > The fused Liger kernel cannot apply per-model `logit_scale` (e.g. Cohere) or `final_logit_softcapping` (e.g. Gemma), so it is rejected for models that set them — use the default chunked path for those.
@@ -216,11 +213,11 @@ python examples/scripts/distillation.py \
 
 ## DistillationTrainer
 
-[[autodoc]] experimental.distillation.DistillationTrainer
+[[autodoc]] DistillationTrainer
     - train
     - save_model
     - push_to_hub
 
 ## DistillationConfig
 
-[[autodoc]] experimental.distillation.DistillationConfig
+[[autodoc]] DistillationConfig
