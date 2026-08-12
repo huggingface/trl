@@ -20,9 +20,9 @@ from datasets import DatasetDict, IterableDatasetDict, load_dataset
 from transformers import AutoModelForCausalLM
 from transformers.utils import is_peft_available
 
-from trl.experimental.distillation import DistillationConfig, DistillationTrainer
-from trl.experimental.distillation.distillation_trainer import _chunked_divergence_loss
+from trl import DistillationConfig, DistillationTrainer
 from trl.experimental.gkd.gkd_trainer import GKDTrainer
+from trl.trainer.distillation_trainer import _chunked_divergence_loss
 
 from ..testing_utils import TrlTestCase, require_liger_kernel, require_peft, require_torch_accelerator, require_vllm
 
