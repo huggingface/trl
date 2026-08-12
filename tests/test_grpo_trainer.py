@@ -1832,30 +1832,84 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    @pytest.mark.parametrize("loss_type", ["grpo", "dr_grpo", "dapo", "luspo"])
-    def test_entropy_bonus_scale(self, loss_type):
+    @pytest.mark.parametrize("top_entropy_quantile", [1.0, 0.2])
+    def test_entropy_bonus_scale(self, top_entropy_quantile):
         # Regression test: the entropy bonus is the mean per-token entropy H for every loss type (documented
         # objective L = L_policy - entropy_coef * H), so it must not inherit any loss-type-specific policy
         # normalization. A previous "unified" formula divided H by a global token count for the
         # cispo/dapo/vespo family, making the bonus ~1/sequence_length too small; conversely, scaling the
         # bonus like the dr_grpo (fixed budget) or luspo (sequence-weighted) policy term would also be wrong.
-        # With gradient_accumulation_steps=1 the per-step entropy contribution to the loss is
-        # contrib = policy_loss - loss = entropy_coef * entropy_loss, so contrib / entropy must equal
-        # entropy_coef for all loss types.
+        #
+        # With gradient_accumulation_steps=1, contrib = policy_loss - loss = entropy_coef * entropy_loss, so
+        # contrib / entropy is entropy_coef * (H_eff / H_full): H_eff is what the bonus actually uses
+        # (over effective_mask, the entropy-quantile-filtered subset), while the logged "entropy" metric is
+        # H_full (global_masked_mean over the full completion mask, see `global_masked_mean(entropies)`
+        # above). These only coincide when top_entropy_quantile == 1.0. At 0.2, comparing contrib/entropy
+        # to a fixed entropy_coef is fixture-lucky: it only holds because this tiny, ~untrained model's
+        # entropy is ~uniform across tokens (H_eff/H_full ~= 1.0), which isn't true in general. The actual
+        # invariant this PR restores is loss-type independence, so assert that directly: every loss type's
+        # ratio must agree with every other's, at the same quantile.
         entropy_coef = 0.5
+
+        def ratio_for(loss_type):
+            dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+            training_args = GRPOConfig(
+                output_dir=self.tmp_dir,
+                importance_sampling_level="sequence" if loss_type == "luspo" else "token",
+                learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+                per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+                num_generations=3,  # reduce the number of generations to reduce memory usage
+                max_completion_length=16,  # reduce the completion length to reduce memory usage
+                gradient_accumulation_steps=1,  # so contrib == entropy_coef * entropy_loss holds per step
+                loss_type=loss_type,
+                top_entropy_quantile=top_entropy_quantile,
+                logging_steps=1,
+                report_to="none",
+                entropy_coef=entropy_coef,
+            )
+            trainer = GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
+            )
+
+            trainer.train()
+
+            logs = [h for h in trainer.state.log_history if "policy_loss" in h and "loss" in h and h.get("entropy")]
+            assert logs
+            ratios = sorted((h["policy_loss"] - h["loss"]) / h["entropy"] for h in logs)
+            return ratios[len(ratios) // 2]  # median, robust to per-step noise
+
+        ratios = {loss_type: ratio_for(loss_type) for loss_type in ["grpo", "dr_grpo", "dapo", "luspo"]}
+        baseline = ratios["grpo"]
+        for loss_type, ratio in ratios.items():
+            # Every loss type regularizes the same mean per-token entropy, so their ratios must agree with
+            # each other regardless of top_entropy_quantile, even though none of them individually needs to
+            # equal entropy_coef once quantile filtering makes H_eff diverge from the logged H_full.
+            assert ratio == pytest.approx(baseline, rel=0.3), (
+                f"entropy bonus ratio for loss_type={loss_type!r} at top_entropy_quantile={top_entropy_quantile} "
+                f"diverges from the grpo baseline ({ratio} vs {baseline})"
+            )
+
+    @pytest.mark.parametrize(
+        ("importance_sampling_level", "beta"),
+        [
+            ("sequence", 0.1),  # per_token_loss is (B, T) via the KL term
+            ("token", 0.0),  # per_token_loss is (B, T) via importance_sampling_level itself, the config default
+        ],
+    )
+    def test_luspo_loss_ignores_padding(self, importance_sampling_level, beta):
+        # Regression test: the luspo branch assumes per_token_loss is (B, 1) and uses `mask` only as a per-sequence
+        # length, not as an elementwise mask. That assumption breaks once per_token_loss is actually (B, T),
+        # letting padded positions leak into the loss. The loss must not depend on padded positions.
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
-            importance_sampling_level="sequence" if loss_type == "luspo" else "token",
-            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
-            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
-            num_generations=3,  # reduce the number of generations to reduce memory usage
-            max_completion_length=16,  # reduce the completion length to reduce memory usage
-            gradient_accumulation_steps=1,  # so contrib == entropy_coef * entropy_loss holds per step
-            loss_type=loss_type,
-            logging_steps=1,
+            loss_type="luspo",
+            beta=beta,
+            importance_sampling_level=importance_sampling_level,
             report_to="none",
-            entropy_coef=entropy_coef,
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
@@ -1863,15 +1917,62 @@ class TestGRPOTrainer(TrlTestCase):
             args=training_args,
             train_dataset=dataset,
         )
+        trainer.model.eval()
 
-        trainer.train()
+        # Trainer.__init__ moves the model to args.device, so on a GPU runner the inputs have to be built there too.
+        device = next(trainer.model.parameters()).device
+        batch_size, prompt_len, completion_len = 2, 3, 6
+        # This is the first test in this file to call _compute_loss with hand-built inputs; there is no other way
+        # to isolate padded positions directly, so a future refactor of _compute_loss's input contract should keep
+        # this pinned.
+        prompt_ids = torch.randint(1, 1000, (batch_size, prompt_len), device=device)
+        prompt_mask = torch.ones(batch_size, prompt_len, dtype=torch.long, device=device)
+        completion_ids = torch.randint(1, 1000, (batch_size, completion_len), device=device)
+        # trailing positions are padding for every sequence
+        completion_mask = torch.tensor([[1, 1, 1, 1, 0, 0], [1, 1, 1, 0, 0, 0]], device=device)
 
-        logs = [h for h in trainer.state.log_history if "policy_loss" in h and "loss" in h and h.get("entropy")]
-        assert logs
-        ratios = sorted((h["policy_loss"] - h["loss"]) / h["entropy"] for h in logs)
-        ratio = ratios[len(ratios) // 2]  # median, robust to per-step noise
-        # Every loss type regularizes the mean per-token entropy, so contrib == entropy_coef * entropy.
-        assert ratio == pytest.approx(entropy_coef, rel=0.3)
+        # old_per_token_logps/ref_per_token_logps must be close in scale to the model's actual per-token log-probs,
+        # not arbitrary noise: for this tiny, near-uniform model log-probs sit around -log(vocab_size) (~-11), so
+        # plain torch.randn() (mean 0) either makes the importance-sampling ratio astronomically small or the KL
+        # term astronomically large, and the resulting difference can fall below torch.testing.assert_close's
+        # tolerance regardless of whether the padding fix under test is correct. A small fixed offset from the
+        # model's real log-probs keeps both signals in a comparable, well-scaled range.
+        with torch.no_grad():
+            baseline_logps, _, _ = trainer._get_per_token_logps_and_entropies(
+                trainer.model,
+                torch.cat([prompt_ids, completion_ids], dim=1),
+                torch.cat([prompt_mask, completion_mask], dim=1),
+                completion_len,
+            )
+        inputs = {
+            "prompt_ids": prompt_ids,
+            "prompt_mask": prompt_mask,
+            "completion_ids": completion_ids,
+            "completion_mask": completion_mask,
+            "advantages": torch.tensor([1.0, -1.0], device=device),
+            # old_per_token_logps must be given explicitly: left unset, it falls back to per_token_logps.detach(),
+            # which makes the token-level importance-sampling ratio exactly 1 everywhere and defeats this test for
+            # importance_sampling_level="token" (per_token_loss would be (B, T) in shape but constant-valued, so
+            # masked vs. unmasked aggregation would coincidentally agree regardless of the bug).
+            "old_per_token_logps": baseline_logps + 0.05,
+            "ref_per_token_logps": baseline_logps + 0.05,
+        }
+
+        loss_before = trainer._compute_loss(trainer.model, inputs)
+
+        # Perturb both ref_per_token_logps (feeds the beta > 0 KL term) and old_per_token_logps (feeds the
+        # importance_sampling_level="token" ratio) at padded positions only. Whichever one the current
+        # parametrization doesn't route through padding is an unaffected no-op; the loss must be unaffected either
+        # way.
+        perturbed_inputs = dict(inputs)
+        for key in ("ref_per_token_logps", "old_per_token_logps"):
+            perturbed = inputs[key].clone()
+            perturbed[inputs["completion_mask"] == 0] += 1.0
+            perturbed_inputs[key] = perturbed
+
+        loss_after = trainer._compute_loss(trainer.model, perturbed_inputs)
+
+        torch.testing.assert_close(loss_before, loss_after)
 
     def test_train_with_adaptive_entropy_gradient_accumulation(self):
         # Adaptive entropy must behave correctly under gradient accumulation: the coefficient and gating are
@@ -4024,7 +4125,7 @@ class TestGRPOTrainerVLM(TrlTestCase):
             img = PILImage.new("RGB", (64, 64), color="red")
             return [{"type": "image", "image": img}, {"type": "text", "text": "Here is the screenshot"}]
 
-        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
@@ -4037,7 +4138,8 @@ class TestGRPOTrainerVLM(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            # Reward must vary across completions, otherwise GRPO advantages are all zero and no parameters update
+            reward_funcs=lambda completions, **kwargs: [float(len(str(c))) for c in completions],
             args=training_args,
             train_dataset=dataset,
             tools=[screenshot_tool],
@@ -4059,6 +4161,10 @@ class TestGRPOTrainerVLM(TrlTestCase):
                 )
                 # fmt: on
             else:  # second call: 1 tool call succeeded
+                assert "image_grid_thw" in kwargs, "image_grid_thw must be passed to generate"
+                assert kwargs["image_grid_thw"].shape[0] == 2, (
+                    f"Expected 2 images (1 original + 1 tool-returned), got {kwargs['image_grid_thw'].shape[0]}"
+                )
                 completion_ids = torch.tensor(
                     [
                         # 'Done!<|im_end|>'
@@ -4077,6 +4183,88 @@ class TestGRPOTrainerVLM(TrlTestCase):
         assert trainer.state.log_history[-1]["tools/failure_frequency"] == pytest.approx(0.0)
 
         # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @pytest.mark.xfail(
+        condition=Version(transformers.__version__) < Version("5.2.0"),
+        reason="Qwen3.5 models were introduced in transformers-5.2.0",
+        strict=True,
+    )
+    @require_response_parsing
+    def test_train_with_tools_text_response_multimodal_prompt(self):
+        # Test that tools returning text (non-multimodal response) work correctly with a VLM prompt having images.
+        def screenshot_tool() -> str:
+            """Simple text-returning tool."""
+            return "The image shows a red square."
+
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,
+            per_device_train_batch_size=2,
+            num_generations=2,
+            max_completion_length=512,
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
+            # Reward must vary across completions, otherwise GRPO advantages are all zero and no parameters update
+            reward_funcs=lambda completions, **kwargs: [float(len(str(c))) for c in completions],
+            args=training_args,
+            train_dataset=dataset,
+            tools=[screenshot_tool],
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        def fake_generate(input_ids, **kwargs):
+            if input_ids.shape[0] == 2:  # first call
+                completion_ids = torch.tensor(
+                    [
+                        [248058, 198, 27, 1628, 13744, 30091, 22076, 29, 198, 510, 1628, 29, 198, 248059, 248046],
+                        [
+                            40,
+                            1459,
+                            914,
+                            1366,
+                            866,
+                            5224,
+                            248046,
+                            248044,
+                            248044,
+                            248044,
+                            248044,
+                            248044,
+                            248044,
+                            248044,
+                            248044,
+                        ],
+                    ],
+                    device=input_ids.device,
+                )
+            else:  # second call after text tool response: original image grid thw should still be present
+                assert "image_grid_thw" in kwargs, "image_grid_thw must be passed to generate"
+                assert kwargs["image_grid_thw"].shape[0] == 1, (
+                    f"Expected 1 original image, got {kwargs['image_grid_thw'].shape[0]}"
+                )
+                completion_ids = torch.tensor(
+                    [
+                        [16936, 0, 248046],
+                    ],
+                    device=input_ids.device,
+                )
+            return torch.cat([input_ids, completion_ids], dim=-1)
+
+        with patch.object(trainer.model, "generate", side_effect=fake_generate):
+            trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+        assert trainer.state.log_history[-1]["tools/call_frequency"] == pytest.approx(1 / 2)
+        assert trainer.state.log_history[-1]["tools/failure_frequency"] == pytest.approx(0.0)
+
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
