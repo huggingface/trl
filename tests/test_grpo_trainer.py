@@ -4138,7 +4138,8 @@ class TestGRPOTrainerVLM(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
-            reward_funcs=lambda completions, **kwargs: [1.0] * len(completions),
+            # Reward must vary across completions, otherwise GRPO advantages are all zero and no parameters update
+            reward_funcs=lambda completions, **kwargs: [float(len(str(c))) for c in completions],
             args=training_args,
             train_dataset=dataset,
             tools=[screenshot_tool],
@@ -4210,7 +4211,8 @@ class TestGRPOTrainerVLM(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
-            reward_funcs=lambda completions, **kwargs: [1.0] * len(completions),
+            # Reward must vary across completions, otherwise GRPO advantages are all zero and no parameters update
+            reward_funcs=lambda completions, **kwargs: [float(len(str(c))) for c in completions],
             args=training_args,
             train_dataset=dataset,
             tools=[screenshot_tool],
