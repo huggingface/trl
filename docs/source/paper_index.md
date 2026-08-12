@@ -1726,7 +1726,6 @@ To train a model with on-policy distillation using TRL, you can use the followin
 from trl import DistillationConfig
 
 training_args = DistillationConfig(
-    lmbda=1.0,  # student produces rollouts for all batches
     beta=1.0,  # to ensure reverse-kl as the loss function
     teacher_model_name_or_path="teacher-model",  # specify the teacher model
 )
