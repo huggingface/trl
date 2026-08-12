@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import functools
 import json
+import time
 import uuid
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
@@ -179,6 +180,7 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
         The agent and its proxy are external, flaky processes; a single rollout that fails to launch or whose trace is
         malformed must NOT crash the worker (it would kill the whole run). Such rollouts are returned as unscorable
         (reward None, no rows) so training continues and the group baseline ignores them."""
+        t_dispatch = time.monotonic()
         rollout_id = uuid.uuid4().hex
         # Stable per-group seed so seed-driven factories hand every generation of a group the same task. Keyed on
         # `group_id` (not the prompt) so it works with or without a dataset: when there is no dataset the prompt is
@@ -235,8 +237,17 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
                 timed_out=timed_out,
             )
             reward = self._rollout_reward_fn(outcome) if self._rollout_reward_fn else env_reward
-            sequences = _chain_to_sequences(turns, rollout_id, self._fork_threshold_tokens)
+            sequences, tally = _chain_to_sequences(turns, rollout_id, self._fork_threshold_tokens)
             completion_ids = [tid for turn in turns for tid in turn.output_ids]
+            # Same rollout-structure metrics the built-in loop reports.
+            self._push_rollout_metrics(
+                turns=len(turns),
+                sequences=len(sequences),
+                completion_ids=completion_ids,
+                tally=tally,
+                loop_exhausted=timed_out,
+                duration_s=time.monotonic() - t_dispatch,
+            )
             return completion, completion_ids, sequences, tool_call_count, tool_failure_count, reward
         except Exception:
             logger.warning("harness rollout failed; scoring as unscorable", exc_info=True)
