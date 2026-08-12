@@ -546,10 +546,12 @@ class TestDistillationTrainer(TrlTestCase):
             )
 
     @require_liger_kernel
-    def test_liger_allows_none_logit_scale(self):
-        # `logit_scale = None` (e.g. MPT) means unscaled, like `1.0`; the Liger guard must not reject it.
+    @pytest.mark.parametrize("logit_scale", [None, 0])
+    def test_liger_allows_unscaled_logit_scale(self, logit_scale):
+        # `logit_scale` of `None` (e.g. MPT) or `0` means unscaled, like `1.0`; the Liger guard must not reject it,
+        # consistent with the chunked path which reads it as `logit_scale or 1.0`.
         student = AutoModelForCausalLM.from_pretrained(self.model_id)
-        student.config.logit_scale = None
+        student.config.logit_scale = logit_scale
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
         DistillationTrainer(  # must not raise
             model=student,
