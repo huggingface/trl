@@ -478,6 +478,13 @@ class DataCollatorForRollout(DataCollatorMixin):
         global_n_tokens = sum(sum(example["completion_mask"]) for example in all_examples)
         global_n_tokens = torch.full((self.num_processes,), float(global_n_tokens), dtype=torch.float32)
 
+        # Total packed sequences across all rows in the full batch. `TokenBudgetBatcher`/`FixedCountBatcher` balance
+        # rows by Σ Lᵢ² (compute cost), not by sequence count, so ranks can end up with different numbers of
+        # sequences per row; the "grpo"/"sapo"/"dr_grpo"/"luspo" loss types need this global count (see
+        # `compute_loss`) instead of each rank's local count to stay correctly normalized under DDP/FSDP gradient
+        # averaging.
+        global_n_seqs = torch.full((self.num_processes,), float(len(all_examples)), dtype=torch.float32)
+
         # Per-sample metrics grouped per rank, as a dict of 2D tensors (one row per rank) so that Accelerate's
         # recursive broadcast (dispatch_batches=True) can scatter them — it traverses nested dicts of tensors but
         # chokes on plain Python floats. Rows are padded with NaN so padded slots are ignored by the nan-aware
@@ -505,6 +512,7 @@ class DataCollatorForRollout(DataCollatorMixin):
             "position_ids": position_ids,
             "advantages": advantages,
             "global_n_tokens": global_n_tokens,
+            "global_n_seqs": global_n_seqs,
             "metrics": metrics,
         }
 
@@ -938,7 +946,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
         # If `self.args.remove_unused_columns` is True, non-signature columns are removed.
         # By default, this method sets `self._signature_columns` to the model's expected inputs (usually, "input_ids"
         # and "attention_mask"). In AsyncGRPOTrainer, we need additional columns ("completion_mask", "old_log_probs",
-        # "advantages", "global_n_tokens") to compute the loss, hence the override.
+        # "advantages", "global_n_tokens", "global_n_seqs") to compute the loss, hence the override.
         if self._signature_columns is None:
             self._signature_columns = [
                 "input_ids",
@@ -948,11 +956,13 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 "position_ids",
                 "advantages",
                 "global_n_tokens",
+                "global_n_seqs",
                 "metrics",
             ]
 
+    @staticmethod
+    @torch.no_grad()
     def get_gamma_weights(
-        self,
         advantages: torch.Tensor,
         log_ratio_per_token: torch.Tensor,
         mask: torch.Tensor,
@@ -1099,15 +1109,22 @@ class AsyncGRPOTrainer(_BaseTrainer):
         global_n_tokens = inputs["global_n_tokens"][0]
         world_size = self.accelerator.num_processes
         tokens_per_rank = (global_n_tokens / world_size).clamp(min=1.0)
+        # `TokenBudgetBatcher`/`FixedCountBatcher` balance rows by Σ Lᵢ² (compute cost), not by sequence count, so
+        # ranks can hold a different number of packed sequences. "grpo"/"sapo"/"dr_grpo"/"luspo" weight every
+        # sequence equally, so — like `tokens_per_rank` above — they need the global sequence count pre-divided by
+        # world_size, not each rank's local `n_seqs`, to stay correctly normalized once DDP/FSDP averages the
+        # gradient. "bnpo" is excluded: it intentionally normalizes over the local batch only (see `loss_type` docs).
+        global_n_seqs = inputs["global_n_seqs"][0]
+        seqs_per_rank = (global_n_seqs / world_size).clamp(min=1.0)
         if self.loss_type in ["grpo", "sapo"]:
             seq_loss = _segment_sum(per_token_loss * completion_mask, sequence_id, n_seqs) / _segment_sum(
                 completion_mask, sequence_id, n_seqs
             ).clamp(min=1.0)
-            loss = seq_loss.mean()
+            loss = seq_loss.sum() / seqs_per_rank
         elif self.loss_type == "bnpo":
             loss = (per_token_loss * completion_mask).sum() / completion_mask.sum().clamp(min=1.0)
         elif self.loss_type == "dr_grpo":
-            loss = (per_token_loss * completion_mask).sum() / (n_seqs * self.args.max_completion_length)
+            loss = (per_token_loss * completion_mask).sum() / (seqs_per_rank * self.args.max_completion_length)
         elif self.loss_type in ["cispo", "dapo", "vespo"]:
             loss = (per_token_loss * completion_mask).sum() / tokens_per_rank.to(torch.float32)
         elif self.loss_type == "luspo":
@@ -1115,7 +1132,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
             # (`importance_sampling_level="sequence"`); with the config default (`"token"`), the entropy mask and
             # per-token KL terms broadcast it to per-token, so mask before aggregating.
             seq_loss = _segment_sum(per_token_loss * completion_mask, sequence_id, n_seqs)
-            loss = seq_loss.mean()
+            loss = seq_loss.sum() / seqs_per_rank
         else:
             raise ValueError(f"Unknown loss type: {self.loss_type}")
         loss = loss / self.current_gradient_accumulation_steps
