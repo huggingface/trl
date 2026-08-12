@@ -469,7 +469,7 @@ class TestDistillationTrainer(TrlTestCase):
     def test_liger_loss_agrees_with_chunked(self):
         # The Liger fused path and the default chunked path compute the same JSD objective (they share the hidden-state
         # extraction and differ only in the final loss call), so they must agree on a fixed batch. Toggling
-        # `use_liger_loss` on one trainer keeps the same (un-patched) model, so only the loss kernel differs.
+        # `use_liger_kernel` on one trainer keeps the same (un-patched) model, so only the loss kernel differs.
         from liger_kernel.chunked_loss import LigerFusedLinearJSDLoss
 
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
@@ -502,7 +502,7 @@ class TestDistillationTrainer(TrlTestCase):
         trainer.model.eval()
         with torch.no_grad():
             chunked_loss = trainer.compute_loss(trainer.model, batch, num_items_in_batch=num_valid)
-            trainer.use_liger_loss = True
+            trainer.use_liger_kernel = True
             trainer.liger_loss = LigerFusedLinearJSDLoss(
                 beta=trainer.beta,
                 ignore_index=-100,
@@ -524,6 +524,53 @@ class TestDistillationTrainer(TrlTestCase):
                 model=self.model_id,
                 teacher_model="trl-internal-testing/tiny-LlamaForCausalLM-3.2",
                 args=self._make_args(),
+                train_dataset=dataset,
+                processing_class=self.tokenizer,
+            )
+
+    @require_liger_kernel
+    def test_liger_incompatible_with_logit_softcapping_raises(self):
+        # The Liger fused JSD kernel can't apply Cohere `logit_scale` / Gemma `final_logit_softcapping`, so unlike the
+        # chunked path it would optimize a different objective than the model's real forward. Reject rather than train
+        # silently wrong.
+        student = AutoModelForCausalLM.from_pretrained(self.model_id)
+        student.config.final_logit_softcapping = 30.0
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        with pytest.raises(ValueError, match="final_logit_softcapping"):
+            DistillationTrainer(
+                model=student,
+                teacher_model=self.model_id,
+                args=self._make_args(use_liger_kernel=True),
+                train_dataset=dataset,
+                processing_class=self.tokenizer,
+            )
+
+    @require_liger_kernel
+    def test_liger_allows_none_logit_scale(self):
+        # `logit_scale = None` (e.g. MPT) means unscaled, like `1.0`; the Liger guard must not reject it.
+        student = AutoModelForCausalLM.from_pretrained(self.model_id)
+        student.config.logit_scale = None
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        DistillationTrainer(  # must not raise
+            model=student,
+            teacher_model=self.model_id,
+            args=self._make_args(use_liger_kernel=True),
+            train_dataset=dataset,
+            processing_class=self.tokenizer,
+        )
+
+    @require_liger_kernel
+    def test_liger_rejects_zero_logit_scale(self):
+        # `logit_scale = 0.0` is a real (degenerate) scale, not "unscaled" — it zeroes the logits. The Liger kernel
+        # can't apply it, so like any other non-1.0 scale it must be rejected, not silently read as 1.0.
+        student = AutoModelForCausalLM.from_pretrained(self.model_id)
+        student.config.logit_scale = 0.0
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        with pytest.raises(ValueError, match="logit_scale"):
+            DistillationTrainer(
+                model=student,
+                teacher_model=self.model_id,
+                args=self._make_args(use_liger_kernel=True),
                 train_dataset=dataset,
                 processing_class=self.tokenizer,
             )
