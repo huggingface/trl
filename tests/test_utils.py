@@ -1585,6 +1585,9 @@ class TestWarnIfFp32WithMixedPrecision(TrlTestCase):
             (True, False, {"dtype": "bfloat16"}, False),  # explicit dtype → user chose, stay silent
             (True, False, {"dtype": "auto"}, False),  # "auto" is still an explicit choice
             (False, False, {}, False),  # no mixed precision → nothing to warn about
+            # A quantized load stores the weights in the quantized format, not in `dtype`, and takes its compute
+            # precision from the quantization config, so neither the diagnosis nor the suggested fix would apply.
+            (True, False, {"quantization_config": object()}, False),
         ],
     )
     def test_warns_only_on_silent_fp32(self, caplog, bf16, fp16, model_init_kwargs, should_warn):

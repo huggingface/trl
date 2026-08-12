@@ -1189,15 +1189,22 @@ def warn_if_fp32_with_mixed_precision(args, model_init_kwargs: dict | None) -> N
     applied only to the trainable (policy) model load; reference models are frozen and not optimized, so loading them
     in float32 raises no mixed-precision training concern.
 
+    Quantized loads are skipped as well. Under a `quantization_config` the weights are stored in the quantized format
+    (nf4 for a 4-bit QLoRA load, say) rather than in `dtype`, and the compute precision comes from the quantization
+    config itself (`bnb_4bit_compute_dtype`), so both the "loaded in float32" diagnosis and the suggested `dtype` fix
+    would be wrong there.
+
     Args:
         args ([`SFTConfig`], [`DPOConfig`], [`GRPOConfig`], [`RLOOConfig`], or [`RewardConfig`]):
             The trainer configuration. Read for `bf16` / `fp16` flags.
         model_init_kwargs (`dict`, *optional*):
-            The keyword arguments that will be forwarded to the model loader. Inspected for an explicit `dtype` key.
+            The keyword arguments that will be forwarded to the model loader. Inspected for an explicit `dtype` key and
+            for a `quantization_config`.
     """
     mixed_precision = bool(args.bf16) or bool(args.fp16)
     dtype_unset = "dtype" not in (model_init_kwargs or {})
-    if mixed_precision and dtype_unset:
+    quantized = "quantization_config" in (model_init_kwargs or {})
+    if mixed_precision and dtype_unset and not quantized:
         precision = "bf16" if args.bf16 else "fp16"
         suggested_dtype = "bfloat16" if args.bf16 else "float16"
         logger.warning(
