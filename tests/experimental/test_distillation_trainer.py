@@ -1163,7 +1163,6 @@ class TestDistillationTrainer(TrlTestCase):
             train_dataset=dataset,
         )
 
-
     @require_liger_kernel
     def test_liger_rejects_zero_logit_scale(self):
         # `logit_scale = 0.0` is a real (degenerate) scale, not "unscaled" — it zeroes the logits. The Liger kernel
