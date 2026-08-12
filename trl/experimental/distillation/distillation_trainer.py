@@ -1198,9 +1198,20 @@ class DistillationTrainer(_BaseTrainer):
         # `_forward_redirection`, so DDP.forward() fires `prepare_for_backward()` and FSDP/DeepSpeed keep the student's
         # sharded parameters (including the `lm_head`) materialized for the projection.
         unwrapped_student = self.accelerator.unwrap_model(model)
-        loss = self._forward_redirection(
+        loss, entropy_sum, num_valid_tokens = self._forward_redirection(
             model, unwrapped_student, self._compute_loss, unwrapped_student, inputs, num_items_in_batch
         )
+
+        # Log the mean per-token student entropy (in nats). The reduction runs here, after `_forward_redirection`
+        # returns, so the `gather_for_metrics` collective does not run inside the DDP/FSDP-wrapped forward (a hang/
+        # ordering risk). The Liger path produces no entropy, so it logs none. Mirrors `SFTTrainer.compute_loss`.
+        if entropy_sum is not None:
+            mode = "train" if self.model.training else "eval"
+            num_valid_tokens = self.accelerator.gather_for_metrics(num_valid_tokens).sum()
+            entropy_sum = self.accelerator.gather_for_metrics(entropy_sum).sum()
+            entropy = (entropy_sum / num_valid_tokens).item() if num_valid_tokens > 0 else 0.0
+            self._metrics[mode]["entropy"].append(entropy)
+
         return (loss, None) if return_outputs else loss
 
     def _compute_loss(self, unwrapped_student, inputs, num_items_in_batch):
@@ -1272,7 +1283,8 @@ class DistillationTrainer(_BaseTrainer):
                 if isinstance(num_items_in_batch, torch.Tensor):
                     num_items_in_batch = num_items_in_batch.to(loss.device)
                 loss = loss * num_valid_local / num_items_in_batch
-            return loss
+            # The fused kernel produces no entropy; `compute_loss` logs none for the Liger path.
+            return loss, None, None
 
         student_config, teacher_config = unwrapped_student.config, unwrapped_teacher.config
         # `logit_scale` is None on models that don't scale (e.g. MPT); read that as unscaled (1.0). A real 0.0 is kept
@@ -1281,7 +1293,7 @@ class DistillationTrainer(_BaseTrainer):
         teacher_logit_scale = getattr(teacher_config, "logit_scale", 1.0)
         student_logit_scale = 1.0 if student_logit_scale is None else student_logit_scale
         teacher_logit_scale = 1.0 if teacher_logit_scale is None else teacher_logit_scale
-        loss, _, _ = _chunked_divergence_loss(
+        loss, entropy_sum, n_valid = _chunked_divergence_loss(
             student_hidden_states,
             teacher_hidden_states,
             student_lm_head.weight,
@@ -1298,7 +1310,9 @@ class DistillationTrainer(_BaseTrainer):
             teacher_final_logit_softcapping=getattr(teacher_config, "final_logit_softcapping", None),
             temperature=self.temperature,
         )
-        return loss
+        # Return the raw entropy sum and valid-token count for `compute_loss` to aggregate and log after the forward
+        # returns (see there). Detached: the metric is gradient-free.
+        return loss, entropy_sum.detach(), n_valid
 
     def training_step(self, model, inputs, num_items_in_batch):
         time_before = time.perf_counter()
