@@ -17,9 +17,9 @@ from unittest.mock import patch
 import pytest
 import torch
 import transformers
-from PIL import Image
 from datasets import DatasetDict, IterableDatasetDict, load_dataset
 from packaging.version import Version
+from PIL import Image
 from transformers import (
     AutoModelForCausalLM,
     AutoModelForImageTextToText,
@@ -2141,8 +2141,9 @@ class TestRLOOTrainerVLM(TrlTestCase):
         trainer._logs["images"] = [[Image.new("RGB", (4, 4))], None]  # second prompt has no image
 
         with (
-            patch.object(type(trainer.args), "report_to", ["wandb"]),
-            patch("trl.trainer.rloo_trainer.wandb", _Backend),
+            patch.object(trainer.args, "report_to", ["wandb"]),
+            # wandb is imported only when it is installed, so the name may not exist
+            patch("trl.trainer.rloo_trainer.wandb", _Backend, create=True),
             patch("trl.trainer.rloo_trainer.is_rich_available", return_value=False),
         ):
             _Backend.run = object()
