@@ -154,7 +154,14 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
         # TODO(@openenv): provide an async version for performance
         #  OpenEnv's harness layer is synchronous, so run the whole session on the pool.
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(self._session_pool, self._run_session, prompt, group_id)
+        result, metrics = await loop.run_in_executor(self._session_pool, self._run_session, prompt, group_id)
+        # Pushed here, on the event loop, and NOT inside `_run_session`: the pool runs up to `max_inflight_tasks`
+        # sessions at once, and the metric accumulators are plain dicts that `_push_metrics` iterates and clears. A
+        # push from a pool thread would race the score loop's, losing counts or raising "dictionary changed size
+        # during iteration" — which `_run_session` would then catch and turn into a discarded rollout.
+        if metrics is not None:
+            self._push_rollout_metrics(**metrics)
+        return result
 
     async def _run_loops(self, stop_event) -> None:
         async def _close_live_sessions_on_stop() -> None:
@@ -175,7 +182,10 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
             self._session_pool.shutdown(wait=True)
 
     def _run_session(self, prompt, group_id=0):
-        """Drive one OpenEnv session to completion and return the `_generate_one` tuple + the verify reward.
+        """Drive one OpenEnv session to completion, on a pool thread.
+
+        Returns `(the _generate_one tuple, rollout metrics or None)`. The metrics are handed back rather than pushed
+        here because this runs off the event loop; `_generate_one` pushes them once it is back on it.
 
         The agent and its proxy are external, flaky processes; a single rollout that fails to launch or whose trace is
         malformed must NOT crash the worker (it would kill the whole run). Such rollouts are returned as unscorable
@@ -193,7 +203,7 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
             session = self._factory.create(prompt, seed=seed, episode_id=rollout_id)
         except Exception:
             logger.warning("harness session create failed; scoring rollout as unscorable", exc_info=True)
-            return self._EMPTY_ROLLOUT
+            return self._EMPTY_ROLLOUT, None
         self._live_sessions.add(session)  # tracked so a stop can close it (unblocks wait_for_completion below)
         timed_out = False
         trace: list[TraceEntry] = []
@@ -239,8 +249,8 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
             reward = self._rollout_reward_fn(outcome) if self._rollout_reward_fn else env_reward
             sequences, tally = _chain_to_sequences(turns, rollout_id, self._fork_threshold_tokens)
             completion_ids = [tid for turn in turns for tid in turn.output_ids]
-            # Same rollout-structure metrics the built-in loop reports.
-            self._push_rollout_metrics(
+            # Same rollout-structure metrics the built-in loop reports, for `_generate_one` to push on the loop.
+            metrics = dict(
                 turns=len(turns),
                 sequences=len(sequences),
                 completion_ids=completion_ids,
@@ -248,10 +258,10 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
                 loop_exhausted=timed_out,
                 duration_s=time.monotonic() - t_dispatch,
             )
-            return completion, completion_ids, sequences, tool_call_count, tool_failure_count, reward
+            return (completion, completion_ids, sequences, tool_call_count, tool_failure_count, reward), metrics
         except Exception:
             logger.warning("harness rollout failed; scoring as unscorable", exc_info=True)
-            return self._EMPTY_ROLLOUT
+            return self._EMPTY_ROLLOUT, None
         finally:
             self._live_sessions.discard(session)
             try:
