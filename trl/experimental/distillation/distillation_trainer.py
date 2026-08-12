@@ -24,7 +24,6 @@ from typing import Any, Optional
 
 import numpy as np
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 from accelerate.logging import get_logger
 from accelerate.utils import gather_object, is_peft_model, set_seed
@@ -74,7 +73,7 @@ if is_liger_kernel_available():
 
 if is_peft_available():
     import peft
-    from peft import PeftConfig, PromptLearningConfig, get_peft_model
+    from peft import PeftConfig, PeftModel, PromptLearningConfig, get_peft_model
     from peft.tuners.tuners_utils import BaseTunerLayer
 
 
@@ -380,8 +379,8 @@ class DistillationTrainer(_BaseTrainer):
 
     def __init__(
         self,
-        model: PreTrainedModel | nn.Module | str,
-        teacher_model: PreTrainedModel | nn.Module | str = None,
+        model: "str | PreTrainedModel | PeftModel",
+        teacher_model: str | PreTrainedModel = None,
         args: DistillationConfig | None = None,
         train_dataset: Dataset | None = None,
         eval_dataset: Dataset | dict[str, Dataset] | None = None,
