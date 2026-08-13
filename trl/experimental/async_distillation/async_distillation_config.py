@@ -116,7 +116,8 @@ class AsyncDistillationConfig(_BaseConfig):
             Maximum number of real tokens packed into a single row (one DP rank's forward) for dynamic
             token-budgeted micro-batching. When `> 0`, a `TokenBudgetBatcher` forms Σ Lᵢ²-balanced micro-batches
             whose rows each stay within this budget, bounding peak memory independently of the sample count. If
-            `None` (default), a fixed `per_device_train_batch_size × num_processes` samples are packed per
+            `None` (default), it is set to the student vLLM server's `max_model_len`, so no rollout sample can
+            exceed it. Set it to `0` to pack a fixed `per_device_train_batch_size × num_processes` samples per
             micro-batch instead, Σ Lᵢ²-balanced across the rows.
 
         > Parameters that control the async rollout pipeline
@@ -282,8 +283,9 @@ class AsyncDistillationConfig(_BaseConfig):
         metadata={
             "help": "Maximum number of real tokens packed into a single row (one DP rank's forward) for dynamic "
             "token-budgeted micro-batching. When > 0, a `TokenBudgetBatcher` forms Σ Lᵢ²-balanced micro-batches "
-            "whose rows each stay within this budget. If None (default), a fixed `per_device_train_batch_size × "
-            "num_processes` samples are packed per micro-batch instead, Σ Lᵢ²-balanced across the rows."
+            "whose rows each stay within this budget. If None (default), it is set to the student vLLM server's "
+            "`max_model_len`. Set it to 0 to pack a fixed `per_device_train_batch_size × num_processes` samples "
+            "per micro-batch instead, Σ Lᵢ²-balanced across the rows."
         },
     )
 
