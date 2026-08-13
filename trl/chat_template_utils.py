@@ -595,6 +595,10 @@ nemotron_3_super_chat_template = (_CHAT_TEMPLATES_DIR / "nemotron_3_super.jinja"
 
 nemotron_3_ultra_chat_template = (_CHAT_TEMPLATES_DIR / "nemotron_3_ultra.jinja").read_text(encoding="utf-8")
 
+nemotron_3_5_lightning_chat_template = (_CHAT_TEMPLATES_DIR / "nemotron_3_5_lightning.jinja").read_text(
+    encoding="utf-8"
+)
+
 phi3_chat_template = (_CHAT_TEMPLATES_DIR / "phi3.jinja").read_text(encoding="utf-8")
 
 phi3_5_chat_template = (_CHAT_TEMPLATES_DIR / "phi3_5.jinja").read_text(encoding="utf-8")
@@ -684,6 +688,7 @@ def add_response_schema(processing_class: ProcessingClassT) -> ProcessingClassT:
         nemotron_3_nano_chat_template,
         nemotron_3_super_chat_template,
         nemotron_3_ultra_chat_template,
+        nemotron_3_5_lightning_chat_template,
     ]:
         schema, template = qwen3_5_schema, nemotron_3_template
     elif chat_template == lfm2_2_5_chat_template:
@@ -951,6 +956,10 @@ nemotron_3_ultra_training_chat_template = (_CHAT_TEMPLATES_DIR / "nemotron_3_ult
     encoding="utf-8"
 )
 
+nemotron_3_5_lightning_training_chat_template = (
+    _CHAT_TEMPLATES_DIR / "nemotron_3_5_lightning_training.jinja"
+).read_text(encoding="utf-8")
+
 phi3_training_chat_template = (_CHAT_TEMPLATES_DIR / "phi3_training.jinja").read_text(encoding="utf-8")
 
 phi3_5_training_chat_template = (_CHAT_TEMPLATES_DIR / "phi3_5_training.jinja").read_text(encoding="utf-8")
@@ -1099,6 +1108,9 @@ def get_training_chat_template(
 
     if processing_class.chat_template == nemotron_3_ultra_chat_template:
         return nemotron_3_ultra_training_chat_template
+
+    if processing_class.chat_template == nemotron_3_5_lightning_chat_template:
+        return nemotron_3_5_lightning_training_chat_template
 
     if processing_class.chat_template == phi3_chat_template:
         return phi3_training_chat_template

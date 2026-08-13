@@ -169,6 +169,14 @@ class TestAddResponseSchema:
                     reason="Nemotron 3 tokenizer requires transformers>=5.3.0",
                 ),
             ),
+            pytest.param(
+                "trl-internal-testing/tiny-NemotronHForCausalLM-3.5-lightning",
+                id="nemotron_3_5_lightning",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.3.0"),
+                    reason="Nemotron 3.5 tokenizer requires transformers>=5.3.0",
+                ),
+            ),
             pytest.param("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", id="qwen2.5"),
             pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM", id="qwen3"),
             pytest.param("trl-internal-testing/tiny-Qwen3ForCausalLM-Instruct-2507", id="qwen3_instruct_2507"),
@@ -294,6 +302,14 @@ class TestSupportsToolCalling:
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.3.0"),
                     reason="Nemotron 3 tokenizer requires transformers>=5.3.0",
+                ),
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-NemotronHForCausalLM-3.5-lightning",
+                id="nemotron_3_5_lightning",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.3.0"),
+                    reason="Nemotron 3.5 tokenizer requires transformers>=5.3.0",
                 ),
             ),
             pytest.param("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", id="qwen2.5"),
@@ -657,6 +673,14 @@ class TestIsChatTemplateStopTokenTrained:
             marks=pytest.mark.skipif(
                 Version(transformers.__version__) < Version("5.3.0"),
                 reason="Nemotron 3 tokenizer requires transformers>=5.3.0",
+            ),
+        ),
+        pytest.param(
+            "trl-internal-testing/tiny-NemotronHForCausalLM-3.5-lightning",
+            id="nemotron_3_5_lightning",
+            marks=pytest.mark.skipif(
+                Version(transformers.__version__) < Version("5.3.0"),
+                reason="Nemotron 3.5 tokenizer requires transformers>=5.3.0",
             ),
         ),
         pytest.param("trl-internal-testing/tiny-Phi3ForCausalLM-3", id="phi3"),
@@ -1043,6 +1067,14 @@ class TestGetTrainingChatTemplate:
             marks=pytest.mark.skipif(
                 Version(transformers.__version__) < Version("5.3.0"),
                 reason="Nemotron 3 tokenizer requires transformers>=5.3.0",
+            ),
+        ),
+        pytest.param(
+            "trl-internal-testing/tiny-NemotronHForCausalLM-3.5-lightning",
+            id="nemotron_3_5_lightning",
+            marks=pytest.mark.skipif(
+                Version(transformers.__version__) < Version("5.3.0"),
+                reason="Nemotron 3.5 tokenizer requires transformers>=5.3.0",
             ),
         ),
         pytest.param("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", id="qwen2.5"),
