@@ -260,8 +260,8 @@ def _patch_chunked_ce_lm_head(model: torch.nn.Module, chunk_size: int, is_vlm: b
             `base_model_prefix = ""` there (so the backbone must be read off `model.model`), and they take the
             config-level MoE aux-loss parameters rather than the model-level ones.
     """
-    # On VLMs the logit post-processing (`logit_scale`, `final_logit_softcapping`) and the MoE
-    # `output_router_logits` flag live on `text_config`, so read them through `get_text_config()`.
+    # On VLMs the logit post-processing lives on `text_config`, so read it through `get_text_config()`. The MoE
+    # `output_router_logits` flag lives there too, and is read off the same config below.
     text_config = model.config.get_text_config()
     final_logit_softcapping = getattr(text_config, "final_logit_softcapping", None)
     # `logit_scale` is None on models that don't scale (e.g. MPT); read that as unscaled (1.0). A real 0.0 is kept
