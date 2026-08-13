@@ -614,6 +614,8 @@ llama3_2_chat_template = (_CHAT_TEMPLATES_DIR / "llama3_2.jinja").read_text(enco
 
 llava_next_chat_template = (_CHAT_TEMPLATES_DIR / "llava_next.jinja").read_text(encoding="utf-8")
 
+muse_glimmer_chat_template = (_CHAT_TEMPLATES_DIR / "muse_glimmer.jinja").read_text(encoding="utf-8")
+
 nemotron_3_nano_chat_template = (_CHAT_TEMPLATES_DIR / "nemotron_3_nano.jinja").read_text(encoding="utf-8")
 
 nemotron_3_super_chat_template = (_CHAT_TEMPLATES_DIR / "nemotron_3_super.jinja").read_text(encoding="utf-8")
@@ -980,6 +982,8 @@ llama3_training_chat_template = (_CHAT_TEMPLATES_DIR / "llama3_training.jinja").
 
 llava_next_training_chat_template = (_CHAT_TEMPLATES_DIR / "llava_next_training.jinja").read_text(encoding="utf-8")
 
+muse_glimmer_training_chat_template = (_CHAT_TEMPLATES_DIR / "muse_glimmer_training.jinja").read_text(encoding="utf-8")
+
 nemotron_3_nano_training_chat_template = (_CHAT_TEMPLATES_DIR / "nemotron_3_nano_training.jinja").read_text(
     encoding="utf-8"
 )
@@ -1034,9 +1038,9 @@ def get_training_chat_template(
 
     Returns a patched chat template that is prefix-preserving and includes `{%% generation %%}` / `{%% endgeneration
     %%}` markers for assistant-only loss masking. Returns `None` if the template already satisfies both requirements.
-    Currently Cohere, Cohere 2, DeepSeek-R1-Distill, DeepSeek-V3, Gemma, Gemma 2, Gemma 3, GLM-4-MoE, GPT-OSS,
-    Idefics3, LFM2, LLaMA 3, Phi-3, Phi-3.5, Qwen2-VL, Qwen2.5, Qwen2.5-VL, Qwen3 (including the Instruct-2507
-    variant), Qwen3-VL, Qwen3.5, Qwen3.6, and Qwen3.8 are supported.
+    Currently Cohere, Cohere 2, DeepSeek-V3, DeepSeek-R1-Distill, Gemma, Gemma 2, Gemma 3, GLM-4-MoE, GPT-OSS,
+    Idefics3, LFM2, LLaMA 3, Muse Glimmer, Phi-3, Phi-3.5, Qwen2-VL, Qwen2.5, Qwen2.5-VL, Qwen3 (including the
+    Instruct-2507 variant), Qwen3-VL, Qwen3.5, Qwen3.6, and Qwen3.8 are supported.
 
     Args:
         processing_class (`PreTrainedTokenizerBase` or `ProcessorMixin`):
@@ -1140,6 +1144,9 @@ def get_training_chat_template(
 
     if processing_class.chat_template == llava_next_chat_template:
         return llava_next_training_chat_template
+
+    if processing_class.chat_template == muse_glimmer_chat_template:
+        return muse_glimmer_training_chat_template
 
     if processing_class.chat_template == nemotron_3_nano_chat_template:
         return nemotron_3_nano_training_chat_template
