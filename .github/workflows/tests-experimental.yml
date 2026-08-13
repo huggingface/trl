@@ -18,7 +18,7 @@ jobs:
   check_code_quality:
     name: Check code quality
     runs-on: ubuntu-latest
-    if: false  # TEMP: disabled while validating the A10G runner group
+    if: false  # TEMP: disabled while validating the L40S runner group
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Set up Python 3.13
@@ -32,14 +32,14 @@ jobs:
   tests:
     name: Tests (experimental)
     runs-on:
-      group: aws-g5-4xlarge-cache
+      group: aws-g6e-4xlarge
     container:
       image: pytorch/pytorch:2.8.0-cuda12.8-cudnn9-devel
       options: --gpus all
     defaults:
       run:
         shell: bash
-    if: false  # TEMP: disabled while validating the A10G runner group
+    if: false  # TEMP: disabled while validating the L40S runner group
     steps:
       - name: Git checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
