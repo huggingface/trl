@@ -1806,7 +1806,7 @@ class GRPOTrainer(_BaseTrainer):
             multimodal_fields = {}
         return prompt_ids, images, multimodal_fields
 
-    def _generate_single_turn(self, prompt_ids, images, multimodal_fields):
+    def _generate_single_turn(self, prompt_ids, images, multimodal_fields, has_tool_images=False):
         device = self.accelerator.device
         mode = "train" if self.model.training else "eval"
 
@@ -1870,6 +1870,22 @@ class GRPOTrainer(_BaseTrainer):
                     generate_inputs[k] = pad([torch.tensor(x) for x in v], padding_value=0, padding_side="left")
                 else:
                     generate_inputs[k] = torch.tensor(np.array(v))
+
+            # For VLM tool images: build token type IDs from the padded input IDs.
+            if self._is_vlm and self.tools and has_tool_images:
+                mm_ids = torch.zeros_like(padded_ids)
+                if self._image_pad_token_id is not None:
+                    mm_ids[padded_ids == self._image_pad_token_id] = 1
+                if self._video_pad_token_id is not None:
+                    mm_ids[padded_ids == self._video_pad_token_id] = 2
+
+                # Use the same key the model expects: token_type_ids for models like Gemma,
+                # mm_token_type_ids for models like Qwen.
+                if "image_grid_thw" in generate_inputs:
+                    generate_inputs["mm_token_type_ids"] = mm_ids
+                else:
+                    generate_inputs["token_type_ids"] = mm_ids
+
             generate_inputs = super()._prepare_inputs(generate_inputs)
 
             with (
@@ -2093,23 +2109,52 @@ class GRPOTrainer(_BaseTrainer):
                         (existing or []) + new for existing, new in zip(merged_images, tool_images, strict=True)
                     ]
             loop_images = [merged_images[i] for i in idxs_with_tool] if merged_images else None
-            if multimodal_fields:
+            if self._is_vlm and self.tools and any(imgs for imgs in tool_images):
+                flat_loop_images = [img for img_list in loop_images if img_list for img in img_list]
+                if flat_loop_images:
+                    image_inputs = self.processing_class.image_processor(images=flat_loop_images, return_tensors="pt")
+                    image_inputs = super()._prepare_inputs(image_inputs)
+                    loop_multimodal_fields = dict(image_inputs)
+                else:
+                    loop_multimodal_fields = {}
+            elif multimodal_fields:
+                if "num_images" not in multimodal_fields and images is not None:
+                    multimodal_fields = {
+                        **multimodal_fields,
+                        "num_images": [len(img_list) if img_list else 0 for img_list in images],
+                    }
+                split_fields = split_pixel_values_by_grid(multimodal_fields)
                 loop_multimodal_fields = {}
-                for k, v in multimodal_fields.items():
+                for k, v in split_fields.items():
                     selected = [v[i] for i in idxs_with_tool]
+                    # Per-token type-id fields may arrive as tensors (e.g. via the padding workaround);
+                    # convert them to lists so they follow the same left-padding path as list-valued
+                    # per-token fields below, keeping them aligned with the left-padded input_ids.
+                    if k in ("token_type_ids", "mm_token_type_ids") and isinstance(selected[0], torch.Tensor):
+                        selected = [s.tolist() for s in selected]
                     # Per-token fields (e.g. token_type_ids) need zero-padding to match extended prompt length
                     if isinstance(selected[0], list):
                         selected = [
                             s + [0] * (len(pct) - len(s))
                             for s, pct in zip(selected, prompt_completion_tool_ids, strict=True)
                         ]
+                    elif isinstance(v, torch.Tensor):
+                        selected = torch.stack(selected)
                     loop_multimodal_fields[k] = selected
+                loop_multimodal_fields = unsplit_pixel_values_by_grid(loop_multimodal_fields)
+                loop_multimodal_fields.pop("num_images", None)
+                if "pixel_values" in loop_multimodal_fields and loop_multimodal_fields["pixel_values"].numel() == 0:
+                    for key in ["pixel_values", "image_grid_thw", "pixel_values_videos", "video_grid_thw"]:
+                        loop_multimodal_fields.pop(key, None)
             else:
                 loop_multimodal_fields = {}
 
             # Generate new completions after tool execution (using concatenated IDs, no re-tokenization)
             post_tool_ids, post_tool_logprobs = self._generate_single_turn(
-                prompt_completion_tool_ids, loop_images, loop_multimodal_fields
+                prompt_completion_tool_ids,
+                loop_images,
+                loop_multimodal_fields,
+                has_tool_images=any(imgs for imgs in tool_images),
             )
 
             # Truncate so that pct[len(prompt_ids[idx]) :] + post_tool does not exceed max_completion_length.
@@ -2246,6 +2291,12 @@ class GRPOTrainer(_BaseTrainer):
             completion_lengths = torch.tensor([len(ids) for ids in completion_ids], device=device)
         agg_prompt_lengths = self.accelerator.gather(prompt_lengths)
         agg_completion_lengths = self.accelerator.gather(completion_lengths)
+        # Fail clearly if the generation backend returned no completions (avoids a cryptic min() error below).
+        if agg_completion_lengths.numel() == 0:
+            raise RuntimeError(
+                "No completions were generated. This usually means the generation backend failed to return any "
+                "results; see the generation logs above for the underlying error."
+            )
         total_prompt_tokens = agg_prompt_lengths.sum()
 
         # Log the metrics
