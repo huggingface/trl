@@ -17,7 +17,7 @@ env:
 jobs:
   run_all_tests_single_gpu:
     runs-on:
-      group: aws-g4dn-2xlarge
+      group: aws-g5-4xlarge-cache
     env:
       CUDA_VISIBLE_DEVICES: "0"
       TEST_TYPE: "single_gpu"
@@ -27,6 +27,7 @@ jobs:
     defaults:
       run:
         shell: bash
+    if: false  # TEMP: disabled while validating the A10G runner group
     steps:
       - name: Git checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -64,7 +65,7 @@ jobs:
 
   run_all_tests_multi_gpu:
     runs-on:
-      group: aws-g4dn-2xlarge
+      group: aws-g5-12xlarge-cache
     env:
       CUDA_VISIBLE_DEVICES: "0,1"
       TEST_TYPE: "multi_gpu"
@@ -74,6 +75,7 @@ jobs:
     defaults:
       run:
         shell: bash
+    if: false  # TEMP: disabled while validating the A10G runner group
     steps:
       - name: Git checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
