@@ -1218,6 +1218,15 @@ class TestPackDatasetWrapped(TrlTestCase):
         assert next(iter(dataset.with_format(None).batch(batch_size=num_examples))) == expected_output
         assert formatting == dataset._formatting
 
+    def test_with_multiple_map_batches(self):
+        # Regression test: `_pack_wrapped` must not duplicate or drop rows when `map` splits the dataset into
+        # multiple batches, each handed to it as a table sliced from a larger underlying buffer.
+        dataset = Dataset.from_dict({"input_ids": [[1, 2], [3, 4], [5, 6], [7, 8], [9, 10], [11, 12]]})
+        seq_length = 4
+        expected_output = {"input_ids": [[1, 2, 3, 4], [5, 6], [7, 8, 9, 10], [11, 12]]}
+        dataset = pack_dataset(dataset, seq_length, strategy="wrapped", map_kwargs={"batch_size": 3})
+        assert dataset.to_dict() == expected_output
+
 
 class TestPackDatasetBfd(TrlTestCase):
     def test_with_dataset(self):

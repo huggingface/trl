@@ -836,7 +836,14 @@ def _pack_wrapped(examples: pa.Table, seq_length: int) -> pa.Table:
     offsets = np.arange(0, num_elements, seq_length, dtype=columns[0].offsets.type.to_pandas_dtype())
     offsets = np.concatenate((offsets, [num_elements]))
     columns = [
-        type(column).from_arrays(offsets.astype(column.offsets.type.to_pandas_dtype()), column.values)
+        type(column).from_arrays(
+            offsets.astype(column.offsets.type.to_pandas_dtype()),
+            # `column.values` is the child buffer of the *unsliced* array the table's column may be a view into, so
+            # it must be cut down to this table's own slice the same way `values` was above, before pairing it with
+            # the new 0-based offsets computed from `num_elements`. Reusing the raw, unsliced buffer here silently
+            # duplicated or dropped rows whenever the incoming table was itself a slice (e.g. a `map` batch).
+            column.values[column.offsets[0].as_py() : column.offsets[-1].as_py()],
+        )
         for column in columns
     ]
     return pa.Table.from_arrays(columns, names=examples.column_names)
