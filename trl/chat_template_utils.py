@@ -581,6 +581,8 @@ lfm2_chat_template = (_CHAT_TEMPLATES_DIR / "lfm2.jinja").read_text(encoding="ut
 
 lfm2_2_5_chat_template = (_CHAT_TEMPLATES_DIR / "lfm2_2_5.jinja").read_text(encoding="utf-8")
 
+lfm2_2_5_vl_chat_template = (_CHAT_TEMPLATES_DIR / "lfm2_2_5_vl.jinja").read_text(encoding="utf-8")
+
 llama3_chat_template = (_CHAT_TEMPLATES_DIR / "llama3.jinja").read_text(encoding="utf-8")
 
 llama3_1_chat_template = (_CHAT_TEMPLATES_DIR / "llama3_1.jinja").read_text(encoding="utf-8")
@@ -686,7 +688,7 @@ def add_response_schema(processing_class: ProcessingClassT) -> ProcessingClassT:
         nemotron_3_ultra_chat_template,
     ]:
         schema, template = qwen3_5_schema, nemotron_3_template
-    elif chat_template == lfm2_2_5_chat_template:
+    elif chat_template in [lfm2_2_5_chat_template, lfm2_2_5_vl_chat_template]:
         # Only the new-style template; the legacy schema is on its way out, so it isn't worth adding for a family whose
         # tokenizer already requires transformers >= 5.0.0.
         schema, template = None, lfm2_2_5_template
