@@ -1,7 +1,14 @@
 name: Runner probe
 
-# TEMP: probe which GPU runner groups this repo can actually use. Delete once done.
-# A job that stays queued means the group doesn't exist or isn't granted to this repo.
+# TEMP: discover which GPU runner groups exist for this repo. Delete once done.
+#
+# How to read the result:
+#   - fails in ~5s with "Required runner group 'X' not found"  -> name does not exist
+#   - queued / running                                          -> name exists and is granted
+#
+# IMPORTANT: cancel the run after ~60s (`gh run cancel <id>`). The not-found
+# failures land immediately, so a minute is enough to get the full inventory —
+# and cancelling avoids actually booting the expensive instances that do exist.
 
 on:
   workflow_dispatch:
@@ -14,20 +21,40 @@ jobs:
     strategy:
       matrix:
         group:
-          # Known working here (control)
-          - aws-g5-12xlarge-cache     # 4x A10G 24GB
-          - aws-g4dn-2xlarge          # 1x T4 16GB
-          # A10G 24GB
-          - aws-g5-4xlarge-cache      # used by transformers
-          # L4 24GB
-          - aws-g6-4xlarge-plus       # used by accelerate
-          - aws-g6-12xlarge-plus      # used by accelerate
-          # L40S 48GB — name guessed, group may not exist yet
-          - aws-g6e-4xlarge-plus
-          - aws-g6e-4xlarge-cache
-          - aws-g6e-12xlarge-plus
-          # A100 40GB (8 GPUs per instance)
-          - aws-p4d-24xlarge-plus
+          # --- controls (known to exist) ---
+          - aws-g5-12xlarge-cache
+          - aws-g4dn-2xlarge
+
+          # --- L40S 48GB: the target. suffix/size unknown, try the spread ---
+          - aws-g6e-xlarge-plus
+          - aws-g6e-xlarge-cache
+          - aws-g6e-2xlarge-plus
+          - aws-g6e-2xlarge-cache
+          - aws-g6e-4xlarge
+          - aws-g6e-12xlarge-cache
+          - aws-g6e-24xlarge-plus
+          - aws-g6e-48xlarge-plus
+
+          # --- A10G 24GB: other sizes / suffixes ---
+          - aws-g5-2xlarge-cache
+          - aws-g5-4xlarge-plus
+          - aws-g5-8xlarge-cache
+          - aws-g5-16xlarge-cache
+          - aws-g5-24xlarge-cache
+          - aws-g5-48xlarge-cache
+
+          # --- L4 24GB: other sizes / suffixes ---
+          - aws-g6-2xlarge-plus
+          - aws-g6-4xlarge-cache
+          - aws-g6-8xlarge-plus
+          - aws-g6-16xlarge-plus
+          - aws-g6-24xlarge-plus
+          - aws-g6-48xlarge-plus
+
+          # --- A100 80GB / H100 80GB: expensive, cancel before they boot ---
+          - aws-p4de-24xlarge-plus
+          - aws-p5-48xlarge-plus
+          - aws-p5en-48xlarge-plus
       fail-fast: false
     runs-on:
       group: ${{ matrix.group }}
