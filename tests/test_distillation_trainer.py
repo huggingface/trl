@@ -1201,7 +1201,13 @@ class TestDistillationTrainerVLM(TrlTestCase):
     @pytest.mark.parametrize(
         "model_id",
         [
-            "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
+            pytest.param(
+                "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("4.57.0"),
+                    reason="transformers<4.57 Gemma3 image processor can't batch variable-size images",
+                ),
+            ),
             pytest.param(
                 "trl-internal-testing/tiny-Gemma4ForConditionalGeneration",
                 marks=pytest.mark.skipif(
@@ -1257,7 +1263,13 @@ class TestDistillationTrainerVLM(TrlTestCase):
         "model_id",
         [
             "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",  # image_grid_thw path
-            "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",  # image_position_ids path
+            pytest.param(
+                "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",  # image_position_ids path
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("4.57.0"),
+                    reason="transformers<4.57 Gemma3 image processor can't batch variable-size images",
+                ),
+            ),
         ],
     )
     def test_train_vlm_gradient_accumulation(self, model_id):
