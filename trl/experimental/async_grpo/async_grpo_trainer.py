@@ -111,9 +111,14 @@ class RolloutWorkerProtocol(Protocol):
             structurally identical (`get` / `put_nowait` / `qsize`) but nominally unrelated, so both are allowed: the
             default [`AsyncRolloutWorker`] runs its loop in a spawned process and uses `multiprocessing.Queue`, while
             an in-process worker uses `queue.Queue`.
+        metrics_queue (`queue.Queue` or `multiprocessing.queues.Queue`):
+            Queue the trainer drains in `log()` for metrics the worker measured itself. Each item is one dict shaped
+            like the trainer's metric sink — `{key: float}` for a gauge or a counter, `{key: (numerator, denominator)}`
+            for a rate — so draining it is an append. A worker that measures nothing exposes an empty queue.
     """
 
     rollout_buffer: queue.Queue | MPQueue
+    metrics_queue: queue.Queue | MPQueue
 
     def start(self) -> None:
         """Begin producing rollouts. Called once on train begin, after the initial weight sync."""
@@ -622,12 +627,8 @@ class DataCollatorForRollout(DataCollatorMixin):
 
         # Per-sample rewards, nan-aware: a reward func may return None for an unscorable sample, and a sample for which
         # every func returned None carries NaN rather than a misleading 0.
-        #
-        # The key set is ragged, so it is the union over the micro-batch and each key averages over the samples that
-        # carry it. `tools/*` is stamped per GROUP (only when that group called a tool at least once) while a
-        # micro-batch is packed from whatever is on the queue, so one batch routinely mixes groups that have those keys
-        # with groups that do not. Keying off the first sample instead would raise `KeyError` on the collator path
-        # whenever it happened to hold tool keys, and silently drop them whenever it did not.
+        # Union of keys, not the first sample's: `tools/*` is stamped per group, so a micro-batch mixes samples that
+        # have those keys with samples that do not. Each key averages over the samples that carry it.
         keys = dict.fromkeys(key for example in all_examples for key in example["metrics"])
         for key in keys:
             values = [example["metrics"][key] for example in all_examples if key in example["metrics"]]

@@ -155,10 +155,8 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
         #  OpenEnv's harness layer is synchronous, so run the whole session on the pool.
         loop = asyncio.get_running_loop()
         result, metrics = await loop.run_in_executor(self._session_pool, self._run_session, prompt, group_id)
-        # Pushed here, on the event loop, and NOT inside `_run_session`: the pool runs up to `max_inflight_tasks`
-        # sessions at once, and the metric accumulators are plain dicts that `_push_metrics` iterates and clears. A
-        # push from a pool thread would race the score loop's, losing counts or raising "dictionary changed size
-        # during iteration" — which `_run_session` would then catch and turn into a discarded rollout.
+        # Pushed here and not in `_run_session`: the accumulators are plain dicts, and the pool runs many sessions at
+        # once, so a push off the event loop would race the score loop's.
         if metrics is not None:
             self._push_rollout_metrics(**metrics)
         return result

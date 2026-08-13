@@ -32,6 +32,7 @@ from trl.experimental.async_grpo import AsyncGRPOConfig, AsyncGRPOTrainer
 from trl.experimental.async_grpo.async_grpo_trainer import (
     DataCollatorForRollout,
     FixedCountBatcher,
+    RolloutWorkerProtocol,
     TokenBudgetBatcher,
     _balance_by_squared_length,
     _reduce_metric,
@@ -62,6 +63,7 @@ class _StubRolloutWorker:
         self, tokenizer, dataset, num_generations: int = 8, samples_per_weight_sync: int = 10, fork_k: int = 1
     ):
         self.rollout_buffer = queue.Queue()
+        self.metrics_queue = queue.Queue()  # drained by the trainer in `log()`; this stub measures nothing
         self._samples_per_weight_sync = samples_per_weight_sync
         self._model_version = 0
         self._fork_k = fork_k
@@ -471,10 +473,8 @@ class TestPackingAwareBatching(TrlTestCase):
         assert collator.metrics["batch/pad_frac"] == [(0, 10)]  # rows pack equal -> no inter-rank padding
 
     def test_collator_handles_a_ragged_metric_key_set(self):
-        # `tools/*` is stamped per GROUP, only on groups that called a tool, while a micro-batch is packed from
-        # whatever is on the queue — so one batch routinely mixes samples that carry those keys with samples that do
-        # not. Each key averages over the samples that have it, in both orderings (a first sample without the tool
-        # keys must not drop them; a first sample with them must not KeyError on the ones that lack them).
+        # A micro-batch mixes samples that carry `tools/*` with samples that do not. Both orderings matter: a first
+        # sample without the keys must not drop them, one with them must not KeyError on the rest.
         collator = DataCollatorForRollout(pad_token_id=0, num_processes=2)
         tooled = _rollout_sample(2, reward=1.0)
         tooled["metrics"] = {"reward": 1.0, "tools/call_frequency": 4.0}
@@ -490,6 +490,14 @@ class TestPackingAwareBatching(TrlTestCase):
 def _finalize(turns, rollout_id="r0", fork_threshold=1024):
     rows, _tally = _chain_to_sequences(turns, rollout_id, fork_threshold)
     return rows
+
+
+class TestRolloutWorkerProtocol(TrlTestCase):
+    def test_stub_worker_exposes_every_protocol_attribute(self):
+        # A stub that falls behind the protocol breaks training, and only the GPU-gated `test_train` would notice.
+        stub = _StubRolloutWorker(None, [])
+        missing = [name for name in RolloutWorkerProtocol.__annotations__ if not hasattr(stub, name)]
+        assert not missing
 
 
 class TestMetricReduction(TrlTestCase):
