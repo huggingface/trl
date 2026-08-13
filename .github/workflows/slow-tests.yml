@@ -15,7 +15,7 @@ env:
 jobs:
   run_all_tests_single_gpu:
     runs-on:
-      group: aws-g5-4xlarge-cache
+      group: aws-g6e-4xlarge
     env:
       CUDA_VISIBLE_DEVICES: "0"
       TEST_TYPE: "single_gpu"
@@ -25,7 +25,7 @@ jobs:
     defaults:
       run:
         shell: bash
-    if: false  # TEMP: disabled while validating the A10G runner group
+    if: false  # TEMP: disabled while validating the L40S runner group
     steps:
       - name: Git checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -79,7 +79,7 @@ jobs:
     defaults:
       run:
         shell: bash
-    if: false  # TEMP: disabled while validating the A10G runner group
+    if: false  # TEMP: disabled while validating the L40S runner group
     steps:
       - name: Git checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
