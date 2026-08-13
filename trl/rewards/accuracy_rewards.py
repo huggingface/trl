@@ -301,14 +301,19 @@ def reasoning_accuracy_reward(
         logging.getLogger("math_verify.grader").setLevel(logging.ERROR)
 
     for content, sol in zip(contents, solution, strict=True):
-        # Split final answer from reasoning content
-        is_reasoning_complete = False
+        # Split final answer from reasoning content. The final answer starts after the last occurrence of
+        # whichever delimiter appears furthest right in the text, not whichever is listed first in
+        # `reasoning_delimiters`.
+        split_pos = -1
         for delim in reasoning_delimiters:
-            if delim in content:
-                content = content.split(delim)[-1]
-                is_reasoning_complete = True
-                break
-        if not is_reasoning_complete:
+            pos = content.rfind(delim)
+            if pos > split_pos:
+                split_pos = pos
+                content_after_delim = content[pos + len(delim) :]
+        is_reasoning_complete = split_pos != -1
+        if is_reasoning_complete:
+            content = content_after_delim
+        else:
             # We assign zero reward instead of `None` to penalize incomplete reasoning
             rewards.append(0.0)
             gold_parsed_strs.append("[incomplete reasoning]")

@@ -293,6 +293,15 @@ class TestReasoningAccuracyReward:
         assert rewards[1] == 0.0
 
     @require_math_latex
+    def test_multiple_delimiters_uses_last_occurrence_in_text(self):
+        completions = [
+            [{"content": (r"<think> reasoning </think> \boxed{\frac{64}{400}} <answer> \boxed{\frac{63}{400}}")}],
+        ]
+        solutions = [r"\frac{63}{400}"]
+        rewards = reasoning_accuracy_reward(completions, solutions, reasoning_delimiters=["</think>", "<answer>"])
+        assert rewards[0] == 1.0
+
+    @require_math_latex
     def test_unparsable_gold_solution_yields_none_reward(self):
         completions = [
             [{"content": r"<think> Reasoning content </think> \boxed{42}"}],
