@@ -41,6 +41,31 @@ class TestLogCompletionsCallback(TrlTestCase):
 
         self.generation_config = GenerationConfig(max_length=32)
 
+    def test_padding_side_restored_after_generation(self):
+        self.tokenizer.padding_side = "right"
+
+        training_args = TrainingArguments(
+            output_dir=self.tmp_dir,
+            eval_strategy="steps",
+            eval_steps=2,  # evaluate every 2 steps
+            per_device_train_batch_size=2,  # 8 samples in total so 4 batches of 2 per epoch
+            per_device_eval_batch_size=2,
+            report_to="none",
+        )
+        trainer = Trainer(
+            model=self.model,
+            args=training_args,
+            train_dataset=self.dataset["train"],
+            eval_dataset=self.dataset["test"],
+            processing_class=self.tokenizer,
+        )
+        completions_callback = LogCompletionsCallback(trainer, self.generation_config, num_prompts=2)
+        trainer.add_callback(completions_callback)
+        trainer.train()
+
+        # Generation temporarily needs left padding, but it must not leak into later training/eval batches
+        assert self.tokenizer.padding_side == "right"
+
     @require_wandb
     def test_basic_wandb(self):
         import wandb

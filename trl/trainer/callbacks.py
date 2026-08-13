@@ -84,20 +84,27 @@ def _generate_completions(
         list[str]: A list of generated text completions corresponding to the input prompts.
     """
     completions = []
-    # TODO: Override model.generation_config with generation_kwargs
-    with unwrap_model_for_generation(model, accelerator) as unwrapped_model:
-        for idx in range(0, len(prompts), batch_size):
-            batch = prompts[idx : idx + batch_size]
-            tokenized_batch = tokenizer(batch, return_tensors="pt", padding=True, truncation=True).to(model.device)
-            generations = unwrapped_model.generate(
-                **tokenized_batch,
-                generation_config=generation_config,
-            )
-            for prompt, generation in zip(tokenized_batch.input_ids, generations, strict=True):
-                # Remove prompt from generation
-                generation = generation[len(prompt) :]
-                completion = tokenizer.decode(generation, skip_special_tokens=True)
-                completions.append(completion)
+    # Generation requires left padding; restore the tokenizer's original padding side afterwards so later
+    # training/evaluation batches aren't silently affected, even if generation raises.
+    original_padding_side = tokenizer.padding_side
+    tokenizer.padding_side = "left"
+    try:
+        # TODO: Override model.generation_config with generation_kwargs
+        with unwrap_model_for_generation(model, accelerator) as unwrapped_model:
+            for idx in range(0, len(prompts), batch_size):
+                batch = prompts[idx : idx + batch_size]
+                tokenized_batch = tokenizer(batch, return_tensors="pt", padding=True, truncation=True).to(model.device)
+                generations = unwrapped_model.generate(
+                    **tokenized_batch,
+                    generation_config=generation_config,
+                )
+                for prompt, generation in zip(tokenized_batch.input_ids, generations, strict=True):
+                    # Remove prompt from generation
+                    generation = generation[len(prompt) :]
+                    completion = tokenizer.decode(generation, skip_special_tokens=True)
+                    completions.append(completion)
+    finally:
+        tokenizer.padding_side = original_padding_side
     return completions
 
 
@@ -309,7 +316,6 @@ class LogCompletionsCallback(TrainerCallback):
             return
 
         tokenizer = kwargs["processing_class"]
-        tokenizer.padding_side = "left"
         accelerator = self.trainer.accelerator
         model = self.trainer.model_wrapped
         with accelerator.split_between_processes(self.eval_dataset["prompt"]) as prompts:
@@ -491,7 +497,6 @@ class WeaveCallback(TrainerCallback):
             return
 
         tokenizer = kwargs["processing_class"]
-        tokenizer.padding_side = "left"
         accelerator = self.trainer.accelerator
         model = self.trainer.model_wrapped
 
