@@ -12,7 +12,12 @@ jobs:
       with:
         fetch-depth: 0
     - name: Secret Scanning
-      uses: trufflesecurity/trufflehog@27b0417c16317ca9a472a9a8092acce143b49c55  # v3.95.9
+      uses: trufflesecurity/trufflehog@6f3c981e7b77f235fd2702dd74af25fc4b72bf11  # v3.96.0
       with:
-        # exclude buggy postgres detector that is causing false positives and not relevant to our codebase
-        extra_args: --results=verified,unknown --exclude-detectors=postgres
+        # the action runs the scanner as a container and defaults to the mutable `:latest` tag, so the SHA above
+        # pins only the wrapper. pin the image by digest too, and bump it together with the action SHA.
+        version: 3.96.0@sha256:aa821cf4ace8861c7d096d83818cdf7bb9719028a52d37a52eaad44086a52577
+        # exclude buggy detectors that cause false positives and are not relevant to our codebase.
+        # lob matches `(live|test)_[a-zA-Z0-9_]{35}`, which any pytest name of exactly 35 characters after
+        # `test_` satisfies (e.g. `test_reward_func_wrong_number_of_rewards`).
+        extra_args: --results=verified,unknown --exclude-detectors=postgres,lob
