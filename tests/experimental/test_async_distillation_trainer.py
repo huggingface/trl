@@ -309,7 +309,7 @@ class TestMultiTeacherRouting:
         assert posted_urls == ["http://math:8002"]
 
     def test_multi_teacher_raises_on_missing_teacher_id(self):
-        with pytest.raises(KeyError, match="teacher_id=None"):
+        with pytest.raises(ValueError, match="teacher_id=None"):
             self._run(
                 {"prompt": [{"role": "user", "content": "hi"}]},
                 {"math": "http://math:8002", "code": "http://code:8003"},
@@ -317,7 +317,7 @@ class TestMultiTeacherRouting:
             )
 
     def test_multi_teacher_raises_on_unmapped_teacher_id(self):
-        with pytest.raises(KeyError, match="teacher_id='unknown'"):
+        with pytest.raises(ValueError, match="teacher_id='unknown'"):
             self._run(
                 {"prompt": [{"role": "user", "content": "hi"}], "teacher_id": "unknown"},
                 {"math": "http://math:8002", "code": "http://code:8003"},

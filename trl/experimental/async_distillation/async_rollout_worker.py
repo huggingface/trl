@@ -389,9 +389,9 @@ class _AsyncRolloutLoop:
             return teacher_id, url
         teacher_id = row.get("teacher_id")
         if teacher_id not in self.teacher_server_urls:
-            raise KeyError(
-                f"No teacher server mapped for teacher_id={teacher_id!r}. Configured teacher_server_urls: "
-                f"{list(self.teacher_server_urls)}."
+            raise ValueError(
+                f"Example has `teacher_id={teacher_id!r}`, which is not among the teachers passed to "
+                f"`teacher_server_urls`. Expected one of: {list(self.teacher_server_urls)}."
             )
         return teacher_id, self.teacher_server_urls[teacher_id]
 
