@@ -1,0 +1,40 @@
+name: Runner probe
+
+# TEMP: probe which GPU runner groups this repo can actually use. Delete once done.
+# A job that stays queued means the group doesn't exist or isn't granted to this repo.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ci-*]
+
+jobs:
+  probe:
+    name: ${{ matrix.group }}
+    strategy:
+      matrix:
+        group:
+          # Known working here (control)
+          - aws-g5-12xlarge-cache     # 4x A10G 24GB
+          - aws-g4dn-2xlarge          # 1x T4 16GB
+          # A10G 24GB
+          - aws-g5-4xlarge-cache      # used by transformers
+          # L4 24GB
+          - aws-g6-4xlarge-plus       # used by accelerate
+          - aws-g6-12xlarge-plus      # used by accelerate
+          # L40S 48GB — name guessed, group may not exist yet
+          - aws-g6e-4xlarge-plus
+          - aws-g6e-4xlarge-cache
+          - aws-g6e-12xlarge-plus
+          # A100 40GB (8 GPUs per instance)
+          - aws-p4d-24xlarge-plus
+      fail-fast: false
+    runs-on:
+      group: ${{ matrix.group }}
+    container:
+      image: pytorch/pytorch:2.8.0-cuda12.8-cudnn9-devel
+      options: --gpus all
+    timeout-minutes: 10
+    steps:
+      - name: Show GPUs
+        run: nvidia-smi
