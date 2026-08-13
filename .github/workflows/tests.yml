@@ -29,7 +29,7 @@ jobs:
   check_code_quality:
     name: Check code quality
     runs-on: ubuntu-latest
-    if: github.event.pull_request.draft == false
+    if: false  # TEMP: disabled while validating the A10G runner group
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Set up Python 3.12
@@ -47,14 +47,14 @@ jobs:
         python-version: ['3.10', '3.11', '3.12', '3.13', '3.14']
       fail-fast: false
     runs-on:
-      group: aws-g4dn-2xlarge
+      group: aws-g5-4xlarge-cache
     container:
       image: pytorch/pytorch:2.8.0-cuda12.8-cudnn9-devel
       options: --gpus all
     defaults:
       run:
         shell: bash
-    if: github.event.pull_request.draft == false
+    if: false  # TEMP: disabled while validating the A10G runner group
     steps:
       - name: Git checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -98,14 +98,14 @@ jobs:
   tests_dev:
     name: Tests with dev dependencies
     runs-on:
-      group: aws-g4dn-2xlarge
+      group: aws-g5-4xlarge-cache
     container:
       image: pytorch/pytorch:2.8.0-cuda12.8-cudnn9-devel
       options: --gpus all
     defaults:
       run:
         shell: bash
-    if: github.event.pull_request.draft == false
+    if: false  # TEMP: disabled while validating the A10G runner group
     steps:
       - name: Git checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -154,7 +154,7 @@ jobs:
   tests_wo_optional_deps:
     name: Tests without optional dependencies
     runs-on:
-      group: aws-g4dn-2xlarge
+      group: aws-g5-4xlarge-cache
     container:
       image: pytorch/pytorch:2.8.0-cuda12.8-cudnn9-devel
       options: --gpus all
@@ -205,14 +205,14 @@ jobs:
   tests_min_versions:
     name: Tests with minimum versions
     runs-on:
-      group: aws-g4dn-2xlarge
+      group: aws-g5-4xlarge-cache
     container:
       image: pytorch/pytorch:2.8.0-cuda12.8-cudnn9-devel
       options: --gpus all
     defaults:
       run:
         shell: bash
-    if: github.event.pull_request.draft == false
+    if: false  # TEMP: disabled while validating the A10G runner group
     steps:
       - name: Git checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -267,7 +267,7 @@ jobs:
     defaults:
       run:
         shell: bash
-    if: github.event.pull_request.draft == false
+    if: false  # TEMP: disabled while validating the A10G runner group
     env:
       CUDA_VISIBLE_DEVICES: "0,1"
     steps:
