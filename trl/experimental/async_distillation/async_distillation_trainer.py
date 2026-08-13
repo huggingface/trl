@@ -241,6 +241,75 @@ def _jsd_loss_chunk(
     return chunk_loss, chunk_jsd_sum, chunk_entropy_sum, chunk_teacher_entropy_sum, chunk_per_teacher_stats
 
 
+def _chunked_jsd_loss(
+    hidden_valid: torch.Tensor,
+    lm_head_weight: torch.Tensor,
+    lm_head_bias: torch.Tensor | None,
+    logit_scale: float,
+    final_logit_softcapping: float | None,
+    target_ids: torch.Tensor,
+    teacher_target_logps: torch.Tensor,
+    valid_candidate_mask: torch.Tensor,
+    beta: float,
+    temperature: float,
+    add_tail_bucket: bool,
+    teacher_id_idx: torch.Tensor | None,
+    num_teachers: int,
+    chunk_size: int,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Run `_jsd_loss_chunk` over `hidden_valid` in `chunk_size`-sized chunks and sum the results.
+
+    Every position here is already known to carry usable teacher signal (the caller packs the valid ones to the front),
+    so there is no masked tail to skip, unlike `DistillationTrainer._chunked_divergence_loss`'s static-shape padding.
+    Each chunk runs under `torch.utils.checkpoint.checkpoint`, so its `(chunk_size, vocab_size)` logits are freed after
+    the chunk's forward and recomputed during backward.
+
+    Args:
+        hidden_valid: `(n_valid, H)`, student backbone output at the valid completion positions.
+        target_ids, teacher_target_logps, valid_candidate_mask: `(n_valid, K)`, the teacher-side candidates, already
+            restricted to the same valid positions.
+        teacher_id_idx: `(n_valid,)` long, or `None` with a single teacher.
+        chunk_size: number of positions projected through `lm_head` at a time.
+
+        The remaining arguments are passed through unchanged; see `_jsd_loss_chunk`.
+
+    Returns:
+        `(loss, jsd_sum, entropy_sum, teacher_entropy_sum, per_teacher_stats)`, each summed over all chunks.
+    """
+    loss = hidden_valid.new_zeros(())
+    jsd_sum = hidden_valid.new_zeros(())
+    entropy_sum = hidden_valid.new_zeros(())
+    teacher_entropy_sum = hidden_valid.new_zeros(())
+    per_teacher_stats = hidden_valid.new_zeros(3 * num_teachers)
+    for start in range(0, hidden_valid.size(0), chunk_size):
+        end = start + chunk_size
+        chunk_loss, chunk_jsd_sum, chunk_entropy_sum, chunk_teacher_entropy_sum, chunk_per_teacher_stats = (
+            torch.utils.checkpoint.checkpoint(
+                _jsd_loss_chunk,
+                hidden_valid[start:end],
+                lm_head_weight,
+                lm_head_bias,
+                logit_scale,
+                final_logit_softcapping,
+                target_ids[start:end],
+                teacher_target_logps[start:end],
+                valid_candidate_mask[start:end],
+                beta,
+                temperature,
+                add_tail_bucket,
+                teacher_id_idx[start:end] if teacher_id_idx is not None else None,
+                num_teachers,
+                use_reentrant=False,
+            )
+        )
+        loss = loss + chunk_loss
+        jsd_sum = jsd_sum + chunk_jsd_sum
+        entropy_sum = entropy_sum + chunk_entropy_sum
+        teacher_entropy_sum = teacher_entropy_sum + chunk_teacher_entropy_sum
+        per_teacher_stats = per_teacher_stats + chunk_per_teacher_stats
+    return loss, jsd_sum, entropy_sum, teacher_entropy_sum, per_teacher_stats
+
+
 def _balance_by_squared_length(examples: list[dict[str, Any]], num_groups: int) -> list[list[dict[str, Any]]]:
     """Greedily partition `examples` into `num_groups` rows (one per DP rank), balancing each row's Σ Lᵢ².
 
@@ -795,9 +864,7 @@ class AsyncDistillationTrainer(_BaseTrainer):
         # Infer max_inflight_tasks when not explicitly set. Generating more samples than the trainer can consume
         # before they become stale is wasteful. The useful upper bound is max_staleness * samples_per_step, floored
         # at samples_per_step so max_staleness=0 (a valid, strict discard policy) can't also zero out the rollout
-        # loop's own scheduling capacity and hang the trainer forever on an empty queue. This intentionally differs
-        # from AsyncGRPOTrainer's unfloored `max_staleness * samples_per_step`, which has the same edge case at
-        # max_staleness=0; fixing that there is out of scope for this PR.
+        # loop's own scheduling capacity and hang the trainer forever on an empty queue.
         if self.args.max_inflight_tasks < 0:
             self.args.max_inflight_tasks = max(self.args.max_staleness, 1) * samples_per_step
             logger.info(
@@ -1015,7 +1082,7 @@ class AsyncDistillationTrainer(_BaseTrainer):
 
         # Memory-efficient path: get the student's backbone hidden states (skip `lm_head`, so this alone never
         # materializes a vocab-sized tensor), then project only the *valid* positions' hidden states through
-        # `lm_head` in `_CHUNKED_LM_HEAD_CHUNK_SIZE`-sized chunks (see `_jsd_loss_chunk`), never materializing more
+        # `lm_head` in `_CHUNKED_LM_HEAD_CHUNK_SIZE`-sized chunks (see `_chunked_jsd_loss`), never materializing more
         # than one chunk's `(chunk_size, vocab_size)` logits at a time — mirrors
         # `DistillationTrainer._get_last_hidden_state` + `_chunked_divergence_loss`, adapted to one (student-only)
         # model and a sparse (already off-the-wire) teacher target instead of two locally-projected dense ones.
@@ -1053,11 +1120,6 @@ class AsyncDistillationTrainer(_BaseTrainer):
         n_valid = hidden_valid.size(0)
         num_teachers = len(self._teacher_ids)
 
-        loss = hidden_valid.new_zeros(())
-        local_jsd_sum = hidden_valid.new_zeros(())
-        local_entropy_sum = hidden_valid.new_zeros(())
-        local_teacher_entropy_sum = hidden_valid.new_zeros(())
-        local_per_teacher_stats = hidden_valid.new_zeros(3 * num_teachers)
         if n_valid == 0:
             # Whole micro-batch has no usable teacher signal. Keep the loss connected to the autograd graph through
             # every trainable parameter (backbone via `hidden_states`, `lm_head` via `lm_head_weight`) so
@@ -1065,33 +1127,29 @@ class AsyncDistillationTrainer(_BaseTrainer):
             loss = (hidden_states.sum() + lm_head_weight.sum()) * 0.0
             if lm_head_bias is not None:
                 loss = loss + lm_head_bias.sum() * 0.0
+            local_jsd_sum = hidden_valid.new_zeros(())
+            local_entropy_sum = hidden_valid.new_zeros(())
+            local_teacher_entropy_sum = hidden_valid.new_zeros(())
+            local_per_teacher_stats = hidden_valid.new_zeros(3 * num_teachers)
         else:
-            chunk_size = _CHUNKED_LM_HEAD_CHUNK_SIZE
-            for start in range(0, n_valid, chunk_size):
-                chunk_loss, chunk_jsd_sum, chunk_entropy_sum, chunk_teacher_entropy_sum, chunk_per_teacher_stats = (
-                    torch.utils.checkpoint.checkpoint(
-                        _jsd_loss_chunk,
-                        hidden_valid[start : start + chunk_size],
-                        lm_head_weight,
-                        lm_head_bias,
-                        logit_scale,
-                        final_logit_softcapping,
-                        target_ids[start : start + chunk_size],
-                        teacher_target_logps[start : start + chunk_size],
-                        valid_candidate_mask[start : start + chunk_size],
-                        self.args.beta,
-                        self.args.teacher_temperature,
-                        self.args.add_tail_bucket,
-                        teacher_id_idx_valid[start : start + chunk_size] if teacher_id_idx_valid is not None else None,
-                        num_teachers,
-                        use_reentrant=False,
-                    )
+            loss, local_jsd_sum, local_entropy_sum, local_teacher_entropy_sum, local_per_teacher_stats = (
+                _chunked_jsd_loss(
+                    hidden_valid,
+                    lm_head_weight,
+                    lm_head_bias,
+                    logit_scale,
+                    final_logit_softcapping,
+                    target_ids,
+                    teacher_target_logps,
+                    valid_candidate_mask,
+                    self.args.beta,
+                    self.args.teacher_temperature,
+                    self.args.add_tail_bucket,
+                    teacher_id_idx_valid,
+                    num_teachers,
+                    _CHUNKED_LM_HEAD_CHUNK_SIZE,
                 )
-                loss = loss + chunk_loss
-                local_jsd_sum = local_jsd_sum + chunk_jsd_sum
-                local_entropy_sum = local_entropy_sum + chunk_entropy_sum
-                local_teacher_entropy_sum = local_teacher_entropy_sum + chunk_teacher_entropy_sum
-                local_per_teacher_stats = local_per_teacher_stats + chunk_per_teacher_stats
+            )
 
         global_n_tokens = inputs["global_n_tokens"][0]
         world_size = self.accelerator.num_processes
