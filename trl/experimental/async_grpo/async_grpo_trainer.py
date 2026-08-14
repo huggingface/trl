@@ -370,7 +370,8 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
             # An empty queue with the trainer waiting is generation-bound; a full queue with no wait is trainer-bound
             # (and then `rollout/backpressure_s` is what generation lost to it).
             self.metrics["sample/rollout_queue_size"].append(float(self.queue.qsize()))
-            self.metrics["sample/time_in_queue_s"].append(now - sample.enqueued_at)
+            if sample.enqueued_at is not None:
+                self.metrics["sample/time_in_queue_s"].append(now - sample.enqueued_at)
             # Freshness
             self.metrics["sample/staleness_mean"].append(float(staleness))
             self.metrics["sample/staleness_max"].append(float(staleness))
@@ -915,8 +916,6 @@ class AsyncGRPOTrainer(_BaseTrainer):
 
         # The metric sink. Values are floats, or `(numerator, denominator)` pairs for rates
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
-        # Micro-batches seen
-        self._microbatches_seen = 0
         self._current_train_step_time = 0.0
         self._last_step_end_time = None
         self._rollout_dataset = None
@@ -1000,6 +999,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
         self.add_callback(_InitialWeightSyncCallback(self))
         self.add_callback(_StartRolloutWorkerCallback(self))
         self.add_callback(StepIntervalCallback(self._sync_weight, self.args.weight_sync_steps))
+        self.add_callback(StepIntervalCallback(self._log_step_metrics, 1))
         if self._epoch_stop_groups is not None:
             self.add_callback(_EpochStopCallback(self, self._epoch_stop_groups))
 
@@ -1226,16 +1226,16 @@ class AsyncGRPOTrainer(_BaseTrainer):
     def training_step(self, model, inputs, num_items_in_batch):
         time_before = time.perf_counter()
         output = super().training_step(model, inputs, num_items_in_batch)
-        self._microbatches_seen += 1
         self._step_microbatches += 1
-        time_after = time.perf_counter()
-        self._current_train_step_time += time_after - time_before
-        if self._microbatches_seen % self.current_gradient_accumulation_steps == 0:
-            self._log_step_metrics(time_after)
+        self._current_train_step_time += time.perf_counter() - time_before
         return output
 
-    def _log_step_metrics(self, time_after: float) -> None:
-        """Flush one optimizer step's worth of accounting: the time budget, what the batch held, and throughput."""
+    def _log_step_metrics(self) -> None:
+        """Flush one optimizer step's worth of accounting: the time budget, what the batch held, and throughput.
+
+        Called from `on_step_end`, i.e. after `optimizer.step()`, so `perf/optimizer_s` covers this step.
+        """
+        time_after = time.perf_counter()
         metrics = self._metrics["train"]
         fwd_bwd_s = self._current_train_step_time
         # The first step has no predecessor, so there is nothing to measure between yet.

@@ -201,7 +201,7 @@ class RolloutSample:
     model_version: int
     group_id: int
     metrics: dict[str, float]
-    enqueued_at: float = 0.0
+    enqueued_at: float | None = None
 
 
 # Env vars the child must drop so accelerate's `PartialState()` initialises in
@@ -638,7 +638,7 @@ class _AsyncRolloutLoop:
                             group.env_rewards.append(None)
                     if environment is not None:
                         self._environment_pool[name].append(environment)
-                    self._total_completion_tokens += sum(sum(s.completion_mask) for s in sequences)
+                    self._total_completion_tokens += len(completion_ids)
                     pending_completed[group_id] += 1
 
                     if pending_completed[group_id] == self.num_generations:
