@@ -24,8 +24,8 @@ logger = get_logger(__name__)
 class VLLMClient:
     """Synchronous HTTP client for the vLLM server used by async GRPO.
 
-    The trainer and [`WeightTransferClient`] both talk to the same `vllm serve` instance, so this client is the single
-    place that knows the server's HTTP API: readiness, model introspection, pause/resume, and the weight-update
+    The trainer and the weight-sync transports both talk to the same `vllm serve` instance, so this client is the
+    single place that knows the server's HTTP API: readiness, model introspection, pause/resume, and the weight-update
     endpoints. It is stateless (only a URL and a timeout), so it can be pickled and reused across the spawned rollout
     process. The rollout worker's generation calls are the one exception — they run on an async `aiohttp` session in a
     child process and are not routed through here.
@@ -70,10 +70,20 @@ class VLLMClient:
         response.raise_for_status()
         return response.json()["data"][0]["max_model_len"]
 
-    def get_world_size(self) -> int:
-        """Return the vLLM server's inference world size (tensor/pipeline parallel processes)."""
-        response = requests.get(f"{self.server_url}/get_world_size")
-        return response.json()["world_size"]
+    def get_world_size(self, attempts: int = 30, poll_interval_s: float = 2.0) -> int:
+        """Return the vLLM server's inference world size (tensor/pipeline parallel processes).
+
+        `/health` can go green before the engine RPC answers, so poll instead of indexing the first response blindly.
+        """
+        for _ in range(attempts):
+            try:
+                world_size = requests.get(f"{self.server_url}/get_world_size", timeout=5).json().get("world_size")
+                if world_size is not None:
+                    return int(world_size)
+            except (requests.RequestException, ValueError):
+                pass
+            time.sleep(poll_interval_s)
+        raise RuntimeError(f"vLLM /get_world_size did not return a world_size after {attempts} attempts")
 
     def pause(self) -> None:
         """Pause generation while keeping the KV cache warm (`mode=keep`), so weights can be swapped in."""
@@ -87,13 +97,44 @@ class VLLMClient:
         """Initialise the server side of the NCCL weight-transfer group."""
         requests.post(f"{self.server_url}/init_weight_transfer_engine", json={"init_info": init_info}, timeout=timeout)
 
-    def start_weight_update(self, timeout: int = 1800) -> None:
-        """Prepare the workers for a weight reload; must complete before any weights are sent."""
-        requests.post(f"{self.server_url}/start_weight_update", json={"is_checkpoint_format": True}, timeout=timeout)
+    def start_weight_update(self, is_checkpoint_format: bool = True, timeout: int = 1800) -> None:
+        """Prepare the workers for a weight reload; must complete before any weights are sent.
 
-    def update_weights(self, update_info: dict, timeout: int = 1800) -> None:
-        """Drive the workers' blocking NCCL recv (call on a thread, concurrently with the trainer-side broadcast)."""
-        requests.post(f"{self.server_url}/update_weights", json={"update_info": update_info}, timeout=timeout)
+        Full policies are sent in HF checkpoint format; sparse deltas are sent in kernel format and applied in place,
+        so they pass `is_checkpoint_format=False`.
+        """
+        requests.post(
+            f"{self.server_url}/start_weight_update",
+            json={"is_checkpoint_format": is_checkpoint_format},
+            timeout=timeout,
+        )
+
+    def update_weights(self, update_info: dict, timeout: int = 1800, retries: int = 1) -> None:
+        """Drive the weight reload on the workers.
+
+        For NCCL this blocks in the workers' recv, so it is called on a thread concurrently with the trainer-side
+        broadcast. For the bucket backend vLLM fetches the patch inside this call, which may transiently return 429
+        under load — `retries` bounds the retry, and the timeout must cover a full anchor download.
+        """
+        for attempt in range(retries):
+            try:
+                response = requests.post(
+                    f"{self.server_url}/update_weights", json={"update_info": update_info}, timeout=timeout
+                )
+                if response.status_code != 429:
+                    response.raise_for_status()
+                    return
+                status = response.status_code
+            except requests.RequestException as e:
+                logger.warning(f"[weight_sync] /update_weights failed: {e}")
+                status = "connection error"
+            if attempt < retries - 1:
+                wait = min(2**attempt, 30)
+                logger.warning(
+                    f"[weight_sync] /update_weights -> {status}, retry in {wait}s ({attempt + 1}/{retries})"
+                )
+                time.sleep(wait)
+        raise RuntimeError(f"[weight_sync] /update_weights failed after {retries} attempt(s)")
 
     def finish_weight_update(self, timeout: int = 1800) -> None:
         """Finalise the weight update on the server."""
