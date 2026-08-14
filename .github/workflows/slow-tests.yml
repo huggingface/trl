@@ -45,7 +45,6 @@ jobs:
         run: |
           source .venv/bin/activate
           uv pip install ".[dev]"
-          uv pip install pytest-reportlog
 
       - name: Run slow tests on single GPU
         run: |
@@ -56,7 +55,6 @@ jobs:
         if: always()
         run: |
           source .venv/bin/activate
-          uv pip install tabulate
           python scripts/log_reports.py >> $GITHUB_STEP_SUMMARY
 
       - name: Post to Slack
@@ -100,7 +98,6 @@ jobs:
         run: |
           source .venv/bin/activate
           uv pip install ".[dev]"
-          uv pip install pytest-reportlog
 
       - name: Run slow tests on Multi GPU
         run: |
@@ -111,7 +108,6 @@ jobs:
         if: always()
         run: |
           source .venv/bin/activate
-          uv pip install tabulate
           python scripts/log_reports.py >> $GITHUB_STEP_SUMMARY
 
       - name: Post to Slack
