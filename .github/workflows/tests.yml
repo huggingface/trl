@@ -87,7 +87,7 @@ jobs:
         uses: huggingface/hf-workflows/.github/actions/post-slack@main
         with:
           slack_channel: ${{ env.CI_SLACK_CHANNEL }}
-          title: Results with Python 3.12 and latest dependencies
+          title: Results with latest dependencies
           status: ${{ job.status }}
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
 
@@ -143,7 +143,7 @@ jobs:
         uses: huggingface/hf-workflows/.github/actions/post-slack@main
         with:
           slack_channel: ${{ env.CI_SLACK_CHANNEL }}
-          title: Results with Python 3.12 and dev dependencies
+          title: Results with dev dependencies
           status: ${{ job.status }}
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
 
@@ -194,7 +194,7 @@ jobs:
         uses: huggingface/hf-workflows/.github/actions/post-slack@main
         with:
           slack_channel: ${{ env.CI_SLACK_CHANNEL }}
-          title: Results with Python 3.12 without optional dependencies
+          title: Results without optional dependencies
           status: ${{ job.status }}
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
 
@@ -249,7 +249,7 @@ jobs:
         uses: huggingface/hf-workflows/.github/actions/post-slack@main
         with:
           slack_channel: ${{ env.CI_SLACK_CHANNEL }}
-          title: Results with Python 3.12 and minimum dependencies versions
+          title: Results with minimum dependencies versions
           status: ${{ job.status }}
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
 

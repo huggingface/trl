@@ -64,6 +64,6 @@ jobs:
         uses: huggingface/hf-workflows/.github/actions/post-slack@main
         with:
           slack_channel: ${{ env.CI_SLACK_CHANNEL }}
-          title: Results with Python ${{ matrix.python-version }} and latest dependencies
+          title: Results with Python ${{ matrix.python-version }}
           status: ${{ job.status }}
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
