@@ -7,10 +7,11 @@ Once you have trained a model using either the SFTTrainer, PPOTrainer, or DPOTra
 If you have fine-tuned a model fully, meaning without the use of PEFT you can simply load it like any other language model in transformers. E.g. the value head that was trained during the PPO training is no longer needed and if you load the model with the original transformer class it will be ignored:
 
 ```python
+import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
 model_name_or_path = "Qwen/Qwen3-0.6B" #path/to/your/model/or/name/on/hub
-device = "cpu" # or "cuda" if you have a GPU
+device = torch.accelerator.current_accelerator() if torch.accelerator.is_available() else "cpu"
 
 model = AutoModelForCausalLM.from_pretrained(model_name_or_path).to(device)
 tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
