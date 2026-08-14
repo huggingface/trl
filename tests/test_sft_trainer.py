@@ -270,6 +270,7 @@ class TestSFTTrainer(TrlTestCase):
         "model_id",
         [
             "trl-internal-testing/tiny-Cohere2ForCausalLM",
+            "trl-internal-testing/tiny-FalconMambaForCausalLM",
             pytest.param(
                 "trl-internal-testing/tiny-Glm4MoeForCausalLM",
                 marks=pytest.mark.skipif(
