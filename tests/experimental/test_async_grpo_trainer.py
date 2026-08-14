@@ -120,18 +120,12 @@ class _StubRolloutWorker:
 class _StubWeightTransfer:
     """No-op weight transfer for testing the trainer without a real vLLM server."""
 
-    def init_weight_transfer(self):
+    def init(self, accelerator):
         pass
 
-    def pause(self):
-        pass
-
-    def send_weights(self, iterator):
-        for _ in iterator:  # drain the param stream like the real client does
+    def sync(self, *, iter_fn, sparse, is_anchor, version, accelerator):
+        for _ in iter_fn(sparse):  # drain the param stream like the real transports do
             pass
-
-    def resume(self):
-        pass
 
     def destroy(self):
         pass
