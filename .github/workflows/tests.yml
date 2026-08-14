@@ -41,7 +41,7 @@ jobs:
           extra_args: --all-files
 
   tests:
-    name: Tests
+    name: Tests with latest dependencies
     runs-on:
       group: aws-g4dn-2xlarge
     container:
@@ -249,7 +249,7 @@ jobs:
         uses: huggingface/hf-workflows/.github/actions/post-slack@main
         with:
           slack_channel: ${{ env.CI_SLACK_CHANNEL }}
-          title: Results with minimum dependencies versions
+          title: Results with minimum versions
           status: ${{ job.status }}
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
 
