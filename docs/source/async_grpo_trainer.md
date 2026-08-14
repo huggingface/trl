@@ -76,6 +76,10 @@ CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen3-4B \
 CUDA_VISIBLE_DEVICES=1 accelerate launch train_async_grpo.py
 ```
 
+## Design philosophy
+
+This trainer is intentionally kept minimal and is not meant to grow into a general-purpose solution. If you need a feature that is not supported, we recommend cloning the repository and adapting the trainer to your needs directly. New features will only be considered when there is significant community demand.
+
 ## Logged metrics
 
 A rollout passes through several stages before it becomes a gradient. Let's first take a look at the different stages, from a prompt to our final batch composition:
@@ -258,10 +262,6 @@ The gap between them is `perf/rollout_wait_s` plus the optimizer and weight-sync
 | `perf/forwarded_tok_s_fwd_bwd`, `perf/forwarded_tok_s_wall_clock` | forwarded tokens per second on each basis                                                                                                             |
 | `perf/trained_tok_s_wall_clock`                                   | the same, counting only tokens the loss saw                                                                                                           |
 | `perf/mfu_fwd_bwd`, `perf/mfu_wall_clock`                         | model FLOPs utilisation on each basis                                                                                                                 |
-
-## Design philosophy
-
-This trainer is intentionally kept minimal and is not meant to grow into a general-purpose solution. If you need a feature that is not supported, we recommend cloning the repository and adapting the trainer to your needs directly. New features will only be considered when there is significant community demand.
 
 ## AsyncGRPOConfig
 
