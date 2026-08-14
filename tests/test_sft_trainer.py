@@ -1074,7 +1074,7 @@ class TestSFTTrainer(TrlTestCase):
     )
     @pytest.mark.xfail(
         reason="kernels-community/flash-attn2 has no build variant for torch 2.13; see "
-        "https://github.com/huggingface/kernels-community/issues/XXXX",
+        "https://github.com/huggingface/kernels-community/issues/1082",
     )
     def test_train_padding_free(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
