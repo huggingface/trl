@@ -1184,7 +1184,11 @@ class TestParseResponse:
         reasoning_field = (
             "thinking"
             if model_name
-            in ("trl-internal-testing/tiny-GptOssForCausalLM", "trl-internal-testing/tiny-Lfm2ForCausalLM-2.5")
+            in (
+                "trl-internal-testing/tiny-GptOssForCausalLM",
+                "trl-internal-testing/tiny-Lfm2ForCausalLM-2.5",
+                "trl-internal-testing/tiny-Lfm2VlForConditionalGeneration-2.5",
+            )
             else "reasoning_content"
         )
         messages = [
