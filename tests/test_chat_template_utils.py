@@ -32,7 +32,7 @@ from trl.chat_template_utils import (
 )
 from trl.data_utils import prepare_multimodal_messages
 
-from .testing_utils import TrlTestCase, require_jmespath, require_vision
+from .testing_utils import TrlTestCase, require_response_parsing, require_vision
 
 
 class TestCloneChatTemplate(TrlTestCase):
@@ -120,7 +120,7 @@ class TestCloneChatTemplate(TrlTestCase):
     reason="Response parsing is not supported in transformers versions below 5.0.0",
     strict=True,
 )
-@require_jmespath
+@require_response_parsing
 class TestAddResponseSchema:
     @pytest.mark.parametrize(
         "tokenizer_name",
@@ -205,6 +205,7 @@ class TestAddResponseSchema:
             pytest.param("trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6", id="qwen36"),
         ],
     )
+    @require_vision
     def test_add_response_schema_vlm(self, processor_name):
         # For VLM processors, `add_response_schema` must set the template/schema on the inner tokenizer, since
         # `parse_response` is a tokenizer method that reads `self.response_template` / `self.response_schema` from the
@@ -1046,18 +1047,39 @@ class TestGetTrainingChatTemplate:
         ),
         pytest.param("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", id="qwen2.5"),
         pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM", id="qwen3"),
+        pytest.param(
+            # Same model as `qwen3`, but shipping the response template itself instead of relying on
+            # `add_response_schema` to supply it — so `_load` must leave it alone.
+            "trl-internal-testing/tiny-Qwen3MoeForCausalLM-ResponseTemplate",
+            id="qwen3-response-template",
+            marks=pytest.mark.skipif(
+                not _SUPPORTS_RESPONSE_TEMPLATE,
+                reason="Fixture ships a new-style response template, which requires transformers>=5.13",
+            ),
+        ),
         pytest.param("trl-internal-testing/tiny-Qwen3ForCausalLM-Instruct-2507", id="qwen3_instruct_2507"),
-        pytest.param("trl-internal-testing/tiny-Qwen3VLForConditionalGeneration", id="qwen3_vl"),
-        pytest.param("trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink", id="qwen35-nothink"),
-        pytest.param("trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-Think", id="qwen35-think"),
-        pytest.param("trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6", id="qwen36"),
+        pytest.param("trl-internal-testing/tiny-Qwen3VLForConditionalGeneration", id="qwen3_vl", marks=require_vision),
+        pytest.param(
+            "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
+            id="qwen35-nothink",
+            marks=require_vision,
+        ),
+        pytest.param(
+            "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-Think", id="qwen35-think", marks=require_vision
+        ),
+        pytest.param(
+            "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6", id="qwen36", marks=require_vision
+        ),
         pytest.param(
             "trl-internal-testing/tiny-Gemma4ForConditionalGeneration",
             id="gemma4",
-            marks=pytest.mark.skipif(
-                Version(transformers.__version__) < Version("5.5.0"),
-                reason="Gemma4 models were introduced in transformers-5.5.0",
-            ),
+            marks=[
+                require_vision,
+                pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.5.0"),
+                    reason="Gemma4 models were introduced in transformers-5.5.0",
+                ),
+            ],
         ),
     ],
 )
@@ -1066,19 +1088,23 @@ class TestGetTrainingChatTemplate:
     reason="Response parsing is not supported in transformers versions below 5.0.0",
     strict=True,
 )
-@require_jmespath
+@require_response_parsing
 class TestParseResponse:
     def _load(self, model_name):
         if "ForCausalLM" in model_name:
             self.is_vlm = False
             processing_class = AutoTokenizer.from_pretrained(model_name)
-            response_schema = getattr(processing_class, "response_schema", None)
+            tokenizer = processing_class
         elif "ForConditionalGeneration" in model_name:
             self.is_vlm = True
             processing_class = AutoProcessor.from_pretrained(model_name)
-            response_schema = getattr(processing_class.tokenizer, "response_schema", None)
+            tokenizer = processing_class.tokenizer
 
-        if response_schema is None:
+        # Nothing to add for models that already ship a new-style `response_template` or a legacy
+        # `response_schema`; `add_response_schema` only knows a fixed set of chat templates and raises otherwise.
+        has_template = getattr(tokenizer, "response_template", None) is not None
+        has_schema = getattr(tokenizer, "response_schema", None) is not None
+        if not has_template and not has_schema:
             processing_class = add_response_schema(processing_class)
 
         return processing_class

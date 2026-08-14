@@ -158,11 +158,15 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
     async def _run_loops(self, stop_event) -> None:
         async def _close_live_sessions_on_stop() -> None:
             await stop_event.wait()
-            for session in list(self._live_sessions):
+
+            def _close(session):
                 try:
                     session.close()
                 except Exception:
                     logger.warning("closing in-flight harness session on stop failed", exc_info=True)
+
+            # TODO(@openenv): make session.close() awaitable so this cancels on the event loop, not a thread each.
+            await asyncio.gather(*(asyncio.to_thread(_close, session) for session in list(self._live_sessions)))
 
         try:
             await asyncio.gather(super()._run_loops(stop_event), _close_live_sessions_on_stop())
