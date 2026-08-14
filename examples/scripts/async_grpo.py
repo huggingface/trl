@@ -24,12 +24,23 @@
 """
 pip install math_verify
 
-CUDA_VISIBLE_DEVICES=1 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen3-0.6B \
+AsyncGRPO defaults to *sparse* weight sync over NCCL: only the bf16 weights changed by each optimizer step are
+broadcast and applied in place on vLLM (the changed set is recovered by inverting the AdamW step from the resident
+optimizer moments — no snapshot kept). This needs a vLLM with sparse weight transfer (vllm-project/vllm#40096), the
+`transformers` model impl (so vLLM's runtime param names match the trainer's HF names), and the V1 model runner
+(`apply_sparse_weight_patches` is V1-only):
+
+CUDA_VISIBLE_DEVICES=1 VLLM_SERVER_DEV_MODE=1 VLLM_USE_V2_MODEL_RUNNER=0 vllm serve Qwen/Qwen3-0.6B \
+    --model-impl transformers \
     --max-model-len 2048 \
     --logprobs-mode processed_logprobs \
     --weight-transfer-config '{"backend":"nccl"}'
 
 CUDA_VISIBLE_DEVICES=0 accelerate launch examples/scripts/async_grpo.py
+
+To fall back to broadcasting the full policy every sync (e.g. a non-AdamW optimizer), set
+`weight_sync_mode="full"` in the config and serve without the sparse-only flags (a plain
+`--weight-transfer-config '{"backend":"nccl"}'` is enough).
 """
 
 from datasets import load_dataset
