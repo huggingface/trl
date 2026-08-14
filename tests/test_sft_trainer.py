@@ -42,6 +42,7 @@ from trl.trainer.sft_trainer import (
     _chunked_cross_entropy_loss,
     _patch_chunked_ce_lm_head,
     dft_loss,
+    wit_loss,
 )
 
 from .testing_utils import (
@@ -94,6 +95,65 @@ class TestDFTLoss(TrlTestCase):
         torch.testing.assert_close(ce_loss / 2.0, predicted_dft_loss, atol=1e-4, rtol=1e-4)
 
 
+class TestWITLoss(TrlTestCase):
+    @pytest.mark.parametrize(
+        ("kwargs", "match"),
+        [
+            ({"prompt_loss_weight": -0.1}, "prompt_loss_weight"),
+            ({"completion_loss_weight": 1.1}, "completion_loss_weight"),
+            (
+                {"loss_type": "wit", "prompt_loss_weight": 0.0, "completion_loss_weight": 0.0},
+                "must be non-zero",
+            ),
+        ],
+    )
+    def test_invalid_config(self, kwargs, match):
+        with pytest.raises(ValueError, match=match):
+            SFTConfig(output_dir=self.tmp_dir, **kwargs)
+
+    def test_wit_loss(self):
+        logits = torch.zeros(2, 3, 2)
+        outputs = MagicMock(logits=logits)
+        labels = torch.tensor([[1, 0, 0], [0, 1, -100]])
+        token_weights = torch.tensor([[0.2, 0.4, 0.8], [0.2, 0.4, 0.0]])
+
+        loss = wit_loss(outputs, labels, token_weights)
+
+        expected = torch.log(torch.tensor(2.0)) * (0.4 + 0.8 + 0.4) / 3
+        torch.testing.assert_close(loss, expected)
+
+    def test_zero_weight_tokens_are_excluded_from_normalization(self):
+        logits = torch.zeros(1, 4, 2)
+        outputs = MagicMock(logits=logits)
+        labels = torch.tensor([[1, 0, 1, 0]])
+        token_weights = torch.tensor([[1.0, 0.0, 0.5, 1.0]])
+
+        loss = wit_loss(outputs, labels, token_weights)
+
+        expected = torch.log(torch.tensor(2.0)) * (0.5 + 1.0) / 2
+        torch.testing.assert_close(loss, expected)
+
+    def test_gradient_accumulation_normalization(self):
+        torch.manual_seed(0)
+        logits = torch.randn(4, 5, 7)
+        labels = torch.randint(0, 7, (4, 5))
+        token_weights = torch.tensor([[0.2, 0.2, 1.0, 1.0, 1.0]] * 4)
+        num_items_in_batch = labels[..., 1:].numel()
+
+        full_loss = wit_loss(MagicMock(logits=logits), labels, token_weights, num_items_in_batch)
+        accumulated_loss = sum(
+            wit_loss(
+                MagicMock(logits=logits[start : start + 2]),
+                labels[start : start + 2],
+                token_weights[start : start + 2],
+                num_items_in_batch,
+            )
+            for start in (0, 2)
+        )
+
+        torch.testing.assert_close(accumulated_loss, full_loss)
+
+
 class TestDataCollatorForLanguageModeling(TrlTestCase):
     def test_basic_padding(self):
         """Test basic padding."""
@@ -118,6 +178,29 @@ class TestDataCollatorForLanguageModeling(TrlTestCase):
         torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3], [4, 5, 0]]))
         torch.testing.assert_close(result["attention_mask"], torch.tensor([[1, 1, 1], [1, 1, 0]]))
         torch.testing.assert_close(result["labels"], torch.tensor([[1, 2, 3], [4, 5, -100]]))
+
+    def test_token_weights(self):
+        collator = DataCollatorForLanguageModeling(pad_token_id=0)
+        examples = [
+            {"input_ids": [1, 2, 3], "labels": [-100, 2, 3], "token_weights": [0.0, 0.2, 1.0]},
+            {"input_ids": [4, 5], "labels": [-100, 5], "token_weights": [0.0, 1.0]},
+        ]
+
+        result = collator(examples)
+
+        assert set(result.keys()) == {"input_ids", "attention_mask", "labels", "token_weights"}
+        torch.testing.assert_close(result["token_weights"], torch.tensor([[0.0, 0.2, 1.0], [0.0, 1.0, 0.0]]))
+
+    def test_token_weights_padding_free(self):
+        collator = DataCollatorForLanguageModeling(pad_token_id=0, padding_free=True)
+        examples = [
+            {"input_ids": [1, 2, 3], "labels": [1, 2, 3], "token_weights": [0.2, 0.2, 1.0]},
+            {"input_ids": [4, 5], "labels": [4, 5], "token_weights": [0.2, 1.0]},
+        ]
+
+        result = collator(examples)
+
+        torch.testing.assert_close(result["token_weights"], torch.tensor([[0.0, 0.2, 1.0, 0.0, 1.0]]))
 
     def test_provided_labels_not_reconstructed_from_masks(self):
         """Provided labels are used as is, never rebuilt from the mask columns. Here the labels match the input IDs
@@ -438,6 +521,36 @@ class TestSFTTrainer(TrlTestCase):
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    def test_train_wit_loss(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_completion")
+
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            loss_type="wit",
+            prompt_loss_weight=0.2,
+            completion_loss_weight=0.8,
+            gradient_accumulation_steps=2,
+            report_to="none",
+            eval_strategy="steps",
+            eval_steps=3,
+        )
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset["train"],
+            eval_dataset=dataset["test"],
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+        assert trainer.model_accepts_loss_kwargs
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
@@ -1301,6 +1414,33 @@ class TestSFTTrainer(TrlTestCase):
             assert any(label != -100 for label in labels)  # completion tokens contribute to the loss
             assert any(label == -100 for label in labels)  # prompt tokens are masked
 
+    @pytest.mark.parametrize("dataset_config", ["standard_prompt_completion", "conversational_prompt_completion"])
+    @pytest.mark.parametrize(("prompt_loss_weight", "completion_loss_weight"), [(0.2, 0.8), (0.0, 1.0), (1.0, 0.0)])
+    def test_dataset_preparation_builds_wit_loss_columns(
+        self, dataset_config, prompt_loss_weight, completion_loss_weight
+    ):
+        dataset = load_dataset("trl-internal-testing/zen", dataset_config, split="train")
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            loss_type="wit",
+            prompt_loss_weight=prompt_loss_weight,
+            completion_loss_weight=completion_loss_weight,
+            report_to="none",
+        )
+
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
+
+        assert {"input_ids", "labels", "token_weights"}.issubset(trainer.train_dataset.column_names)
+        assert "completion_mask" not in trainer.train_dataset.column_names
+        expected_weights = {prompt_loss_weight, completion_loss_weight}
+        for example in trainer.train_dataset:
+            assert len(example["input_ids"]) == len(example["labels"]) == len(example["token_weights"])
+            assert set(example["token_weights"]) == expected_weights
+            for label, weight in zip(example["labels"], example["token_weights"], strict=True):
+                assert (label == -100) == (weight == 0.0)
+
     def test_dataset_preparation_respects_existing_labels(self):
         """A user-provided labels column must be taken as is, even when mask columns are also present."""
         dataset = Dataset.from_list(
@@ -1350,6 +1490,35 @@ class TestSFTTrainer(TrlTestCase):
         # The packed dataset must still contain trainable (non -100) labels
         assert any(label != -100 for example in trainer.train_dataset for label in example["labels"])
 
+    def test_packing_carries_wit_token_weights(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_completion", split="train")
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            loss_type="wit",
+            prompt_loss_weight=0.2,
+            completion_loss_weight=0.8,
+            packing=True,
+            max_length=64,
+            report_to="none",
+        )
+
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
+
+        assert "token_weights" in trainer.train_dataset.column_names
+        for example in trainer.train_dataset:
+            assert len(example["input_ids"]) == len(example["labels"]) == len(example["token_weights"])
+
+    def test_wit_requires_prompt_completion_dataset(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        training_args = SFTConfig(output_dir=self.tmp_dir, loss_type="wit", report_to="none")
+
+        with pytest.raises(ValueError, match="requires a prompt-completion dataset"):
+            SFTTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+            )
+
     def test_skip_prepare_dataset_with_masks_but_no_labels_raises(self):
         """With `skip_prepare_dataset=True`, labels are not built at preparation time and the collator doesn't
         consume the mask columns; such datasets must be rejected instead of silently training on the full sequence."""
@@ -1359,6 +1528,22 @@ class TestSFTTrainer(TrlTestCase):
             output_dir=self.tmp_dir, dataset_kwargs={"skip_prepare_dataset": True}, report_to="none"
         )
         with pytest.raises(ValueError, match="Add a 'labels' column"):
+            SFTTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+            )
+
+    def test_wit_skip_prepare_dataset_requires_loss_columns(self):
+        dataset = Dataset.from_list(
+            [{"input_ids": [1, 2, 3, 4], "labels": [1, 2, 3, 4], "completion_mask": [0, 0, 1, 1]}]
+        )
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            loss_type="wit",
+            dataset_kwargs={"skip_prepare_dataset": True},
+            report_to="none",
+        )
+
+        with pytest.raises(ValueError, match="must contain 'labels' and 'token_weights'"):
             SFTTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
             )

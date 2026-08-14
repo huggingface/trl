@@ -1230,6 +1230,22 @@ trainer.train()
 
 Papers relating to the [`SFTTrainer`]
 
+### On the Effect of Instruction Tuning Loss on Generalization
+
+**📜 Paper**: https://huggingface.co/papers/2507.07817
+
+Weighted Instruction Tuning (WIT) assigns separate weights to prompt and response token losses and normalizes their weighted sum by the number of tokens with non-zero weight. The paper shows that conventional completion-only instruction tuning is often suboptimal and that low-to-moderate prompt weights combined with moderate-to-high response weights improve generalization across the studied models, datasets, and benchmarks. To use WIT with the [`SFTTrainer`], pass a prompt-completion dataset and configure:
+
+```python
+from trl import SFTConfig
+
+training_args = SFTConfig(
+    loss_type="wit",
+    prompt_loss_weight=0.2,
+    completion_loss_weight=0.8,
+)
+```
+
 ### EMA Without the Lag: Bias-Corrected Iterate Averaging Schemes
 
 **📜 Paper**: https://huggingface.co/papers/2508.00180

@@ -402,7 +402,8 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
     following keys:
     - `"input_ids"`: Tensor of input IDs, padded to the maximum length of the batch.
     - `"labels"`: Tensor of labels, padded with `-100` to the maximum length of the batch. If `padding_free` is set
-    to `False`, the following key is also returned:
+    to `False`, the following key is also returned. If the input contains `"token_weights"`, they are padded with `0.0`
+    and returned under the same key.
     - `"attention_mask"`: Tensor of attention masks, padded to the maximum length of the batch.
     If `padding_free` is set to `True`, the following key is also returned:
     - `"position_ids"`: Tensor of position IDs, padded to the maximum length of the batch.
@@ -463,10 +464,13 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
         input_ids = [example["input_ids"] for example in examples]
         batch_seq_lengths = [example["seq_lengths"] for example in examples] if "seq_lengths" in examples[0] else None
         labels = [example.get("labels", example["input_ids"]) for example in examples]
+        token_weights = [example["token_weights"] for example in examples] if "token_weights" in examples[0] else None
 
         # Convert to tensor
         input_ids = [torch.tensor(ids) for ids in input_ids]
         labels = [torch.tensor(lbl) for lbl in labels]
+        if token_weights is not None:
+            token_weights = [torch.tensor(weights, dtype=torch.float32) for weights in token_weights]
 
         # For padding-free, we should NOT create attention_mask as it causes FlashAttention to ignore position_ids and
         # compute wrong cu_seq_lens from the all-1s mask
@@ -483,6 +487,8 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
         if self.padding_free:
             input_ids = [torch.cat(input_ids, dim=0)]
             labels = [torch.cat(labels, dim=0)]
+            if token_weights is not None:
+                token_weights = [torch.cat(token_weights, dim=0)]
             position_ids = [torch.cat(position_ids, dim=0)]
 
         # Pad
@@ -495,11 +501,17 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
         output["labels"] = pad(
             labels, padding_value=-100, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
         )
+        if token_weights is not None:
+            output["token_weights"] = pad(
+                token_weights, padding_value=0.0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
+            )
         if self.padding_free:
             output["position_ids"] = pad(
                 position_ids, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
             )
             output["labels"][output["position_ids"] == 0] = -100
+            if token_weights is not None:
+                output["token_weights"][output["position_ids"] == 0] = 0.0
         else:
             output["attention_mask"] = pad(
                 attention_mask, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
@@ -787,6 +799,25 @@ def dft_loss(outputs, labels, num_items_in_batch=None):
     return loss
 
 
+def wit_loss(outputs, labels, token_weights, num_items_in_batch=None, num_virtual_tokens=0):
+    """
+    Weighted Instruction Tuning loss, as presented in [On the Effect of Instruction Tuning Loss on
+    Generalization](https://huggingface.co/papers/2507.07817).
+    """
+    logits = outputs.logits[:, num_virtual_tokens:]
+    labels = nn.functional.pad(labels, (0, 1), value=-100)
+    token_weights = nn.functional.pad(token_weights, (0, 1), value=0.0)
+    shift_labels = labels[..., 1:]
+    shift_token_weights = token_weights[..., 1:]
+    loss_mask = (shift_labels != -100) & (shift_token_weights != 0.0)
+    shift_labels[~loss_mask] = 0
+    logprobs = selective_log_softmax(logits, shift_labels)
+    if num_items_in_batch is None:
+        num_items_in_batch = loss_mask.sum()
+    loss = -(logprobs * shift_token_weights * loss_mask).sum() / num_items_in_batch
+    return loss
+
+
 class SFTTrainer(_BaseTrainer):
     """
     Trainer for Supervised Fine-Tuning (SFT) method.
@@ -932,6 +963,7 @@ class SFTTrainer(_BaseTrainer):
             if Version(transformers.__version__) < Version("5.0.0"):
                 dict_args.pop("push_to_hub_token")
             args = SFTConfig(**dict_args)
+        self._use_wit = args.loss_type == "wit"
 
         if train_dataset is None:
             raise ValueError("`train_dataset` is required")
@@ -1046,6 +1078,28 @@ class SFTTrainer(_BaseTrainer):
                 "drop them, causing pixel_values to be forwarded to the model with no corresponding visual "
                 "tokens in input_ids. Use truncation_mode='keep_start' (the default) or set max_length=None."
             )
+        if args.loss_type == "wit":
+            if self._is_vision_dataset:
+                raise ValueError("`loss_type='wit'` is not supported for vision-language datasets.")
+            if not (
+                "prompt" in dataset_sample
+                and "completion" in dataset_sample
+                or "completion_mask" in dataset_sample
+                or "token_weights" in dataset_sample
+            ):
+                raise ValueError("`loss_type='wit'` requires a prompt-completion dataset.")
+            if args.assistant_only_loss:
+                raise ValueError("`loss_type='wit'` is not compatible with `assistant_only_loss=True`.")
+            if formatting_func is not None:
+                raise ValueError("`loss_type='wit'` is not compatible with a formatting function.")
+            if args.use_liger_kernel:
+                raise ValueError("`loss_type='wit'` is not compatible with `use_liger_kernel=True`.")
+            if compute_loss_func is not None:
+                raise ValueError(
+                    "You passed a `compute_loss_func` together with `loss_type='wit'` to the `SFTTrainer`. "
+                    "When using `loss_type='wit'`, the loss function is internally set to the WIT loss, so "
+                    "passing a `compute_loss_func` is not allowed."
+                )
 
         # PEFT
         if peft_config is not None:
@@ -1299,6 +1353,8 @@ class SFTTrainer(_BaseTrainer):
                         "passing a `compute_loss_func` is not allowed."
                     )
                 compute_loss_func = dft_loss
+            elif args.loss_type == "wit":
+                pass  # handled in `compute_loss`, which also receives the per-token weights
             elif args.loss_type == "chunked_nll":
                 # Same math as `"nll"` but the `lm_head` matmul is skipped on ignored tokens and the CE is computed in
                 # chunks of tokens. Implemented by patching the model's forward before `super().__init__` so accelerate
@@ -1323,7 +1379,7 @@ class SFTTrainer(_BaseTrainer):
                 _patch_chunked_ce_lm_head(target, chunk_size=_CHUNKED_LM_HEAD_CHUNK_SIZE, is_vlm=self._is_vlm)
             else:
                 raise ValueError(
-                    f"Invalid `loss_type` {args.loss_type} passed. Supported values are 'nll', 'dft', and "
+                    f"Invalid `loss_type` {args.loss_type} passed. Supported values are 'nll', 'dft', 'wit', and "
                     "'chunked_nll'."
                 )
         elif args.loss_type == "chunked_nll":
@@ -1351,6 +1407,10 @@ class SFTTrainer(_BaseTrainer):
             optimizer_cls_and_kwargs=optimizer_cls_and_kwargs,
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         )
+        if args.loss_type == "wit":
+            # WIT consumes `num_items_in_batch` in `compute_loss`; ensure Trainer counts it even for models whose
+            # forward signature does not accept loss kwargs, and does not divide the loss by gradient accumulation.
+            self.model_accepts_loss_kwargs = True
 
         # Initialize activation offloading context
         if self.args.activation_offloading:
@@ -1543,12 +1603,45 @@ class SFTTrainer(_BaseTrainer):
                     **map_kwargs,
                 )
 
-            # Build a "labels" column, setting tokens that shouldn't contribute to the loss to -100 based on the
-            # available masks: "assistant_masks" always applies, "completion_mask" only when completion_only_loss
-            # is enabled. With no applicable mask, every token contributes (labels == input_ids). A dataset that
-            # already provides a "labels" column is left as is.
+            # Build the loss columns. WIT keeps the prompt/completion boundary as per-token weights and masks only
+            # tokens whose configured weight is zero. Other losses set tokens excluded by the applicable masks to
+            # -100. A dataset that already provides a "labels" column is left as is outside the WIT path.
             column_names = get_dataset_column_names(dataset)
-            if "labels" not in column_names:
+            if args.loss_type == "wit":
+                if "token_weights" not in column_names and "completion_mask" not in column_names:
+                    raise ValueError(
+                        "`loss_type='wit'` requires either a prompt-completion dataset or a pretokenized dataset "
+                        "with a 'completion_mask' or 'token_weights' column."
+                    )
+                if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
+                    map_kwargs["desc"] = f"Building WIT loss columns for {dataset_name} dataset"
+
+                def build_wit_loss_columns(example, prompt_loss_weight, completion_loss_weight):
+                    if "token_weights" in example:
+                        token_weights = example["token_weights"]
+                    else:
+                        token_weights = [
+                            completion_loss_weight if is_completion else prompt_loss_weight
+                            for is_completion in example["completion_mask"]
+                        ]
+                    labels = example.get("labels", example["input_ids"])
+                    labels = [
+                        label if label != -100 and weight != 0.0 else -100
+                        for label, weight in zip(labels, token_weights, strict=True)
+                    ]
+                    return {"labels": labels, "token_weights": token_weights}
+
+                mask_columns = [column for column in ("completion_mask", "assistant_masks") if column in column_names]
+                dataset = dataset.map(
+                    build_wit_loss_columns,
+                    fn_kwargs={
+                        "prompt_loss_weight": args.prompt_loss_weight,
+                        "completion_loss_weight": args.completion_loss_weight,
+                    },
+                    remove_columns=mask_columns,
+                    **map_kwargs,
+                )
+            elif "labels" not in column_names:
                 mask_columns = []
                 if self.completion_only_loss and "completion_mask" in column_names:
                     mask_columns.append("completion_mask")
@@ -1587,10 +1680,13 @@ class SFTTrainer(_BaseTrainer):
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Truncating {dataset_name} dataset"
 
-                def truncate(example, sl):
-                    return {"input_ids": example["input_ids"][sl], "labels": example["labels"][sl]}
+                def truncate(example, sl, use_wit):
+                    output = {"input_ids": example["input_ids"][sl], "labels": example["labels"][sl]}
+                    if use_wit:
+                        output["token_weights"] = example["token_weights"][sl]
+                    return output
 
-                dataset = dataset.map(truncate, fn_kwargs={"sl": sl}, **map_kwargs)
+                dataset = dataset.map(truncate, fn_kwargs={"sl": sl, "use_wit": args.loss_type == "wit"}, **map_kwargs)
 
                 # Drop examples left fully masked by truncation (e.g. a prompt alone filling `max_length` with
                 # `truncation_mode="keep_start"`), since they contribute no loss.
@@ -1608,7 +1704,10 @@ class SFTTrainer(_BaseTrainer):
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Packing {dataset_name} dataset"
 
-                dataset = dataset.select_columns(["input_ids", "labels"])
+                columns = ["input_ids", "labels"]
+                if args.loss_type == "wit":
+                    columns.append("token_weights")
+                dataset = dataset.select_columns(columns)
 
                 # Shuffle the dataset before packing. When using wrapped packing, it's important to shuffle before
                 # packing as well to avoid correlations between sequences packed together.
@@ -1638,6 +1737,8 @@ class SFTTrainer(_BaseTrainer):
                 self._signature_columns = ["messages", "prompt", "completion", "image", "images"]
             else:
                 self._signature_columns = ["input_ids", "labels", "seq_lengths"]
+                if self.args.loss_type == "wit":
+                    self._signature_columns.append("token_weights")
 
     def _reject_skip_prepare_without_labels(self, datasets: dict[str, Dataset], data_collator) -> None:
         # This guard may look defensive, but it covers a behavior change introduced when label building moved from
@@ -1654,6 +1755,11 @@ class SFTTrainer(_BaseTrainer):
             return
         for name, dataset in datasets.items():
             cols = get_dataset_column_names(dataset)
+            if self._use_wit and not {"labels", "token_weights"}.issubset(cols):
+                raise ValueError(
+                    f"The {name} dataset must contain 'labels' and 'token_weights' when using `loss_type='wit'` "
+                    "with `skip_prepare_dataset=True`."
+                )
             if "labels" not in cols and ("completion_mask" in cols or "assistant_masks" in cols):
                 raise ValueError(
                     f"The {name} dataset has mask columns but no 'labels', and `skip_prepare_dataset=True` skips "
@@ -1704,6 +1810,7 @@ class SFTTrainer(_BaseTrainer):
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         mode = "train" if self.model.training else "eval"
         prediction_loss_only = inputs.pop("_prediction_loss_only", None)
+        token_weights = inputs.pop("token_weights", None)
 
         # Set aside labels as it will be dropped by super().compute_loss() if a custom `compute_loss_func` is used.
         # This can be removed when this issue is fixed.
@@ -1741,9 +1848,31 @@ class SFTTrainer(_BaseTrainer):
             inputs["use_token_scaling"] = self.args.loss_type == "dft"
 
         try:
-            (loss, outputs) = super().compute_loss(
-                model, inputs, return_outputs=True, num_items_in_batch=num_items_in_batch
-            )
+            if self.args.loss_type == "wit":
+                if "shift_labels" in inputs:
+                    raise ValueError("`loss_type='wit'` is not supported with context or sequence parallelism.")
+                if token_weights is None:
+                    raise ValueError("`loss_type='wit'` requires a 'token_weights' tensor in every batch.")
+                labels = inputs.pop("labels")
+                outputs = model(**inputs)
+                num_virtual_tokens = 0
+                if (
+                    self.num_virtual_tokens > 0
+                    and model.peft_config[model.active_adapter].peft_type != PeftType.PREFIX_TUNING
+                ):
+                    num_virtual_tokens = self.num_virtual_tokens
+                loss = wit_loss(outputs, labels, token_weights, num_items_in_batch, num_virtual_tokens)
+                if self.aux_loss_enabled:
+                    loss = loss + self.args.router_aux_loss_coef * outputs.aux_loss
+                if self.args.average_tokens_across_devices and num_items_in_batch is not None:
+                    loss_scale = self.accelerator.num_processes
+                    if (pc := getattr(self.accelerator, "parallelism_config", None)) is not None:
+                        loss_scale //= pc.tp_size
+                    loss *= loss_scale if self.args.n_gpu <= 1 else self.args.n_gpu
+            else:
+                (loss, outputs) = super().compute_loss(
+                    model, inputs, return_outputs=True, num_items_in_batch=num_items_in_batch
+                )
         except ValueError as e:
             if "Image features and image tokens do not match" in str(e) and self.args.max_length is not None:
                 raise ValueError(
