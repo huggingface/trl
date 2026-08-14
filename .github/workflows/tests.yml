@@ -44,7 +44,7 @@ jobs:
     name: Tests
     strategy:
       matrix:
-        python-version: ['3.10', '3.11', '3.12', '3.13', '3.14']
+        python-version: ['3.13']  # TEMP: single version while validating the L40S runner group
       fail-fast: false
     runs-on:
       group: aws-g6e-4xlarge
@@ -54,7 +54,7 @@ jobs:
     defaults:
       run:
         shell: bash
-    if: false  # TEMP: disabled while validating the L40S runner group
+    if: github.event.pull_request.draft == false
     steps:
       - name: Git checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -161,7 +161,7 @@ jobs:
     defaults:
       run:
         shell: bash
-    if: github.event.pull_request.draft == false
+    if: false  # TEMP: disabled while validating the L40S runner group
     steps:
       - name: Git checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
