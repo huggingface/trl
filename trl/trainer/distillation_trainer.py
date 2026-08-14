@@ -24,43 +24,50 @@ from typing import Any, Optional
 
 import numpy as np
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
+import transformers
 from accelerate.logging import get_logger
 from accelerate.utils import gather_object, is_peft_model, set_seed
 from datasets import Dataset, IterableDataset
 from packaging.version import Version
 from torch.utils.data import DataLoader, Sampler
-from transformers import AutoTokenizer, BitsAndBytesConfig, TrainerCallback, is_trackio_available, is_wandb_available
-from transformers.feature_extraction_utils import FeatureExtractionMixin
-from transformers.generation.configuration_utils import GenerationConfig
-from transformers.image_processing_utils import BaseImageProcessor
-from transformers.modeling_utils import PreTrainedModel
-from transformers.processing_utils import ProcessorMixin
-from transformers.tokenization_utils_base import PreTrainedTokenizerBase
+from transformers import (
+    AutoProcessor,
+    BitsAndBytesConfig,
+    GenerationConfig,
+    PreTrainedModel,
+    PreTrainedTokenizerBase,
+    ProcessorMixin,
+    TrainerCallback,
+    is_trackio_available,
+    is_wandb_available,
+)
 from transformers.utils import is_liger_kernel_available, is_peft_available, is_rich_available
 
-from ...data_utils import is_conversational
-from ...distributed import DistributedBackend
-from ...extras.profiling import profiling_context, profiling_decorator
-from ...generation.vllm_generation import VLLMGeneration
-from ...import_utils import is_vllm_available
-from ...models import prepare_deepspeed
-from ...models.utils import _ForwardRedirection, unwrap_model_for_generation
-from ...trainer.base_trainer import _BaseTrainer
-from ...trainer.utils import (
+from ..data_utils import apply_chat_template, is_conversational, prepare_multimodal_messages
+from ..distributed import DistributedBackend
+from ..extras.profiling import profiling_context, profiling_decorator
+from ..generation.vllm_generation import VLLMGeneration
+from ..import_utils import is_vllm_available
+from ..models import prepare_deepspeed
+from ..models.utils import _ForwardRedirection, unwrap_model_for_generation
+from .base_trainer import _BaseTrainer
+from .distillation_config import DistillationConfig
+from .utils import (
     RepeatSampler,
     create_model_from_path,
     disable_dropout_in_model,
+    get_config_model_id,
     identity,
     maybe_gather_lm_head_ctx,
     pad,
     print_prompt_completions_sample,
     repeat_iterable_dataset,
     shuffle_sequence_dict,
+    split_pixel_values_by_grid,
     split_tensor_dict,
+    unsplit_pixel_values_by_grid,
 )
-from .distillation_config import DistillationConfig
 
 
 if is_liger_kernel_available():
@@ -69,7 +76,7 @@ if is_liger_kernel_available():
 
 if is_peft_available():
     import peft
-    from peft import PeftConfig, PromptLearningConfig, get_peft_model
+    from peft import PeftConfig, PeftModel, PromptLearningConfig, get_peft_model
     from peft.tuners.tuners_utils import BaseTunerLayer
 
 
@@ -281,14 +288,80 @@ def _chunked_divergence_loss(
 
 class DistillationTrainer(_BaseTrainer):
     """
-    Trainer for knowledge distillation from a teacher model to a student model.
+    Trainer for knowledge distillation. The student is trained on-policy — it generates the completions itself — to
+    match the teacher's next-token distribution under a generalized Jensen-Shannon divergence (interpolating forward
+    KL, reverse KL, and JSD via `beta`), as introduced in [On-Policy Distillation of Language
+    Models](https://huggingface.co/papers/2306.13649).
 
-    Supports:
-    - Generalized JSD loss (forward KL, reverse KL, or interpolated JSD via `beta`)
-    - On-policy distillation: the student generates completions, the teacher scores them
-    - Local teacher model
-    - Student on-policy generation via vLLM or model.generate()
-    - Liger kernel for memory-efficient fused JSD loss
+    Example:
+
+    ```python
+    >>> from trl import DistillationTrainer
+    >>> from datasets import load_dataset
+
+    >>> dataset = load_dataset("trl-lib/tldr", split="train")
+
+    >>> trainer = DistillationTrainer(
+    ...     model="Qwen/Qwen2.5-0.5B-Instruct",
+    ...     teacher_model="Qwen/Qwen2.5-1.5B-Instruct",
+    ...     train_dataset=dataset,
+    ... )
+    >>> trainer.train()
+    ```
+
+    Args:
+        model (`str` or [`~transformers.PreTrainedModel`] or [`~peft.PeftModel`]):
+            Model to be trained. Can be either:
+
+            - A string, being the *model id* of a pretrained model hosted inside a model repo on huggingface.co, or a
+              path to a *directory* containing model weights saved using
+              [`~transformers.PreTrainedModel.save_pretrained`], e.g., `'./my_model_directory/'`. The model is loaded
+              using `<ModelArchitecture>.from_pretrained` (where `<ModelArchitecture>` is derived from the model
+              config) with the keyword arguments in `args.model_init_kwargs`. If `dtype` is not specified in
+              `args.model_init_kwargs`, it defaults to `float32`. This differs from
+              [`~transformers.PreTrainedModel.from_pretrained`], where (since Transformers v5) the dtype is inferred
+              from the model config.
+            - A [`~transformers.PreTrainedModel`] object. Only causal language models are supported.
+            - A [`~peft.PeftModel`] object. Only causal language models are supported.
+        teacher_model (`str` or [`~transformers.PreTrainedModel`], *optional*):
+            Teacher model whose next-token distribution the student is trained to match. Can be a *model id* / path
+            (loaded like `model`, using `args.teacher_model_init_kwargs`) or an instantiated
+            [`~transformers.PreTrainedModel`]. It must share the student's vocabulary. May be omitted by subclasses
+            that supply the teacher another way (e.g. a remote server).
+        args ([`DistillationConfig`], *optional*):
+            Configuration for this trainer. If `None`, a default configuration is used.
+        train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`], *optional*):
+            Dataset to use for training. It must include a column `"prompt"`. Any additional columns in the dataset is
+            ignored. The format of the samples can be either:
+
+            - [Standard](dataset_formats#standard): Each sample contains plain text.
+            - [Conversational](dataset_formats#conversational): Each sample contains structured messages (e.g., role
+              and content).
+
+            When `train_dataset` is an [`~datasets.IterableDataset`] (e.g. a streaming dataset), `max_steps` must be
+            set in the training arguments, since its length cannot be inferred and the total number of training steps
+            is required to bound the training loop and configure the learning rate scheduler.
+        eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`], [`~datasets.DatasetDict`], [`~datasets.IterableDatasetDict`] or `dict[str, Dataset | IterableDataset]`):
+            Dataset to use for evaluation. It must meet the same requirements as `train_dataset`.
+        processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.ProcessorMixin`], *optional*):
+            Processing class used to process the data. The padding side must be set to "left". If `None`, the
+            processing class is loaded from the model's name with [`~transformers.AutoProcessor.from_pretrained`]. A
+            padding token, `tokenizer.pad_token`, must be set. If the processing class has not set a padding token,
+            `tokenizer.eos_token` will be used as the default.
+        callbacks (list of [`~transformers.TrainerCallback`], *optional*):
+            List of callbacks to customize the training loop. Will add those to the list of default callbacks detailed
+            in [here](https://huggingface.co/docs/transformers/main_classes/callback).
+
+            If you want to remove one of the default callbacks used, use the [`~transformers.Trainer.remove_callback`]
+            method.
+        optimizers (`tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None]`, *optional*, defaults to `(None, None)`):
+            A tuple containing the optimizer and the scheduler to use. Will default to an instance of `AdamW` on your
+            model and a scheduler given by [`~transformers.get_linear_schedule_with_warmup`] controlled by `args`.
+        quantization_config ([`~transformers.BitsAndBytesConfig`], *optional*):
+            Quantization configuration used when loading the model from a model identifier. Combine with `peft_config`
+            for QLoRA training. Ignored if the model is already instantiated.
+        peft_config ([`~peft.PeftConfig`], *optional*):
+            PEFT configuration used to wrap the model. If `None`, the model is not wrapped.
     """
 
     _tag_names = ["trl", "distillation"]
@@ -310,25 +383,23 @@ class DistillationTrainer(_BaseTrainer):
 
     def __init__(
         self,
-        model: PreTrainedModel | nn.Module | str,
-        teacher_model: PreTrainedModel | nn.Module | str = None,
+        model: "str | PreTrainedModel | PeftModel",
+        teacher_model: str | PreTrainedModel = None,
         args: DistillationConfig | None = None,
         train_dataset: Dataset | None = None,
         eval_dataset: Dataset | dict[str, Dataset] | None = None,
-        processing_class: PreTrainedTokenizerBase
-        | BaseImageProcessor
-        | FeatureExtractionMixin
-        | ProcessorMixin
-        | None = None,
+        processing_class: PreTrainedTokenizerBase | ProcessorMixin | None = None,
         callbacks: list[TrainerCallback] | None = None,
         optimizers: tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
         quantization_config: "BitsAndBytesConfig | None" = None,
         peft_config: Optional["PeftConfig"] = None,
     ):
         if args is None:
-            args = DistillationConfig(output_dir="tmp_distillation")
+            model_name = model if isinstance(model, str) else get_config_model_id(model.config)
+            model_name = model_name.split("/")[-1]
+            args = DistillationConfig(f"{model_name}-Distillation")
 
-        # ── Student model loading ──
+        # Student model loading
         # `_VALID_DICT_FIELDS` already parses any JSON-string form of these in `DistillationConfig.__post_init__`, so
         # they are dicts (or None) here; copy so the setdefaults below don't mutate the config.
         model_init_kwargs = dict(args.model_init_kwargs or {})
@@ -348,7 +419,7 @@ class DistillationTrainer(_BaseTrainer):
             model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
             model = create_model_from_path(model, **model_init_kwargs)
         else:
-            model_name_or_path = model.config._name_or_path
+            model_name_or_path = get_config_model_id(model.config)
             if args.model_init_kwargs is not None:
                 logger.warning(
                     "You passed `model_init_kwargs` to the `DistillationConfig`, but your model is already "
@@ -370,19 +441,29 @@ class DistillationTrainer(_BaseTrainer):
             else inspect.signature(model.get_base_model().forward).parameters.keys()
         )
 
-        # ── Processing class (tokenizer) ──
-        if processing_class is None and model_name_or_path is not None:
-            processing_class = AutoTokenizer.from_pretrained(
-                model_name_or_path, trust_remote_code=args.trust_remote_code
+        # Processing class
+        if processing_class is None:
+            processing_class = AutoProcessor.from_pretrained(
+                model_name_or_path,
+                truncation_side="left",
+                padding_side="left",
+                trust_remote_code=args.trust_remote_code,
             )
-        if processing_class is not None:
-            if processing_class.pad_token is None:
-                processing_class.pad_token = processing_class.eos_token
-        self._tokenizer = (
-            processing_class.tokenizer if isinstance(processing_class, ProcessorMixin) else processing_class
-        )
 
-        # ── PEFT ──
+        # Handle pad token for processors or tokenizers
+        if isinstance(processing_class, ProcessorMixin):
+            self._tokenizer = processing_class.tokenizer
+            self._is_vlm = True
+        elif isinstance(processing_class, PreTrainedTokenizerBase):
+            self._tokenizer = processing_class
+            self._is_vlm = False
+        else:
+            raise TypeError("The `processing_class` must be either a `PreTrainedTokenizerBase` or a `ProcessorMixin`")
+
+        if self._tokenizer.pad_token is None:
+            self._tokenizer.pad_token = self._tokenizer.eos_token
+
+        # PEFT
         if peft_config is not None:
             if not is_peft_available():
                 raise ImportError(
@@ -484,8 +565,8 @@ class DistillationTrainer(_BaseTrainer):
         # wrapper's forward; route them through `_forward_redirection` so `prepare_for_backward()` still fires.
         self._forward_redirection = _ForwardRedirection()
 
-        # ── Liger fused JSD loss ──
-        self.use_liger_loss = False
+        # Liger fused JSD loss
+        self.use_liger_kernel = False
         if args.use_liger_kernel:
             if not is_liger_kernel_available():
                 raise ImportError(
@@ -500,9 +581,9 @@ class DistillationTrainer(_BaseTrainer):
                 weight_hard_loss=0.0,
                 weight_soft_loss=1.0,
             )
-            self.use_liger_loss = True
+            self.use_liger_kernel = True
 
-        # ── Teacher model setup ──
+        # Teacher model setup
         # `teacher_model` may be None: subclasses (e.g. ServerDistillationTrainer) supply the teacher another way.
         if teacher_model is not None:
             if isinstance(teacher_model, str):
@@ -578,7 +659,7 @@ class DistillationTrainer(_BaseTrainer):
         # Add tags to the model
         self.model.add_model_tags(self._tag_names)
 
-        # ── Prepare teacher model (after super().__init__ so accelerator is ready) ──
+        # Prepare teacher model (after super().__init__ so accelerator is ready)
         if teacher_model is not None:
             # The divergence compares the full next-token distribution of the student against the teacher's, so both
             # must be defined over the same vocabulary.
@@ -591,6 +672,22 @@ class DistillationTrainer(_BaseTrainer):
                     f"requires a shared vocabulary. Use a teacher with the same vocab_size, or GOLD for "
                     f"cross-tokenizer distillation."
                 )
+            # The Liger fused JSD kernel projects `h @ Wᵀ` directly and has no `logit_scale` /
+            # `final_logit_softcapping` parameters, so (unlike the chunked path) it cannot reproduce Cohere
+            # `logit_scale` or Gemma `final_logit_softcapping`. Refuse rather than silently optimize a different
+            # objective than the model's real forward.
+            if self.use_liger_kernel:
+                for name, config in [("student", self.model.config), ("teacher", teacher_model.config)]:
+                    scaled = getattr(config, "logit_scale", 1.0) not in (None, 1.0)
+                    softcapped = getattr(config, "final_logit_softcapping", None) is not None
+                    if scaled or softcapped:
+                        raise ValueError(
+                            f"`use_liger_kernel=True` is incompatible with the {name} model's `logit_scale` / "
+                            f"`final_logit_softcapping` (e.g. Cohere / Gemma models): the Liger fused JSD loss reads "
+                            f"`lm_head.weight` directly and cannot apply them, so it would optimize a different "
+                            f"objective than the model's real forward. Set `use_liger_kernel=False` to use the chunked "
+                            f"loss, which applies both."
+                        )
             if self.is_deepspeed_enabled:
                 self.teacher_model = prepare_deepspeed(teacher_model, self.accelerator)
             else:
@@ -601,7 +698,7 @@ class DistillationTrainer(_BaseTrainer):
         if args.disable_dropout:
             disable_dropout_in_model(self.model)
 
-        # ── Store config values ──
+        # Store config values
         self.beta = args.beta
         self.temperature = args.temperature
         self.top_p = args.top_p
@@ -623,7 +720,7 @@ class DistillationTrainer(_BaseTrainer):
         # generating with transformers. We could skip it if we use vLLM, but it's safer to set it in all cases.
         set_seed(args.seed, device_specific=True)
 
-        # ── Generation config ──
+        # Generation config
         generation_kwargs = {
             "max_new_tokens": self.max_completion_length,
             "do_sample": True,
@@ -643,7 +740,7 @@ class DistillationTrainer(_BaseTrainer):
         # Keep training-specific generation kwargs to overwrite model's original generation config
         self.generation_kwargs = generation_kwargs
 
-        # ── Metrics & Logging ──
+        # Metrics & Logging
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
         self._total_train_tokens = 0
         self._current_train_step_time = 0.0
@@ -662,7 +759,7 @@ class DistillationTrainer(_BaseTrainer):
         if self.accelerator.is_main_process and self.log_completions:
             os.makedirs(os.path.join(self.args.output_dir, "completions"), exist_ok=True)
 
-        # ── vLLM for student generation ──
+        # vLLM for student generation
         self.use_vllm = args.use_vllm
         if self.use_vllm:
             if not is_vllm_available():
@@ -704,10 +801,6 @@ class DistillationTrainer(_BaseTrainer):
                 generation_kwargs=args.generation_kwargs,
             )
             self._last_loaded_step = -1  # tag to avoid useless loading during grad accumulation
-
-    # ──────────────────────────────────────────────────────────────────────
-    #  Dataset / Dataloader
-    # ──────────────────────────────────────────────────────────────────────
 
     def _set_signature_columns_if_needed(self):
         # If `self.args.remove_unused_columns` is True, non-signature columns are removed.
@@ -838,28 +931,52 @@ class DistillationTrainer(_BaseTrainer):
                 self.args.dataloader_num_workers = num_workers
 
     def _tokenize_prompts(self, prompts: list):
-        """Tokenize prompts and extract multimodal fields for generation.
-
-        Conversational prompts (a list of chat messages) are rendered with the chat template and a trailing generation
-        prompt; standard prompts (plain strings) are tokenized directly. The per-example tools/environments path and
-        the image extraction are added with VLM support later (issue #6449). Unwired until the GRPO generation stack
-        lands.
-        """
+        """Tokenize prompts and extract images/multimodal fields for generation."""
         if is_conversational({"prompt": prompts[0]}):
+            # Normalize string content to content blocks for VLM processors that don't handle plain strings.
+            if self._is_vlm:
+                prompts = [prepare_multimodal_messages(prompt) for prompt in prompts]
+
+            # Extract images from messages for VLM support
+            images = []
+            has_images = False
+            for prompt in prompts:
+                prompt_images = []
+                for message in prompt:
+                    if isinstance(message["content"], list):
+                        for part in message["content"]:
+                            if part["type"] == "image":
+                                prompt_images.append(part["image"])
+                                has_images = True
+                images.append(prompt_images if prompt_images else None)
+            images = images if has_images else None
+
+            # Workaround for a bug in transformers 5.3.0 where some processors (e.g. Qwen2.5-VL) crash on
+            # batched unpadded input (transformers#44514).
+            # Fixed in transformers 5.4.0 (transformers#44563).
+            needs_padding_workaround = Version("5.3.0") <= Version(transformers.__version__) < Version("5.4.0")
             tokenized = self.processing_class.apply_chat_template(
                 conversation=prompts,
                 add_generation_prompt=True,
                 tokenize=True,
                 return_dict=True,
+                **({"padding": True} if needs_padding_workaround else {}),
                 **self.chat_template_kwargs,
             )
-            prompt_ids = tokenized["input_ids"]
+            if needs_padding_workaround:
+                # Unpad input_ids: remove padding tokens using attention_mask to get per-sequence lists
+                prompt_ids = [
+                    [tok for tok, m in zip(ids, mask, strict=True) if m]
+                    for ids, mask in zip(tokenized["input_ids"], tokenized["attention_mask"], strict=True)
+                ]
+            else:
+                prompt_ids = tokenized["input_ids"]
             # For VLMs, the processor returns extra multimodal fields (pixel_values, image_grid_thw, etc.)
             multimodal_fields = {k: v for k, v in tokenized.items() if k not in ("input_ids", "attention_mask")}
         else:
             prompt_ids = self.processing_class(text=prompts)["input_ids"]
+            images = None
             multimodal_fields = {}
-        images = None  # extracted from the messages once VLM support lands
         return prompt_ids, images, multimodal_fields
 
     def _generate_single_turn(self, prompt_ids, images, multimodal_fields):
@@ -944,6 +1061,12 @@ class DistillationTrainer(_BaseTrainer):
         completion_lengths = torch.tensor([len(ids) for ids in completion_ids], device=device)
         agg_prompt_lengths = self.accelerator.gather(prompt_lengths)
         agg_completion_lengths = self.accelerator.gather(completion_lengths)
+        # Fail clearly if the generation backend returned no completions (avoids a cryptic min() error below).
+        if agg_completion_lengths.numel() == 0:
+            raise RuntimeError(
+                "No completions were generated. This usually means the generation backend failed to return any "
+                "results; see the generation logs above for the underlying error."
+            )
         total_prompt_tokens = agg_prompt_lengths.sum()
 
         # Log the metrics
@@ -982,6 +1105,8 @@ class DistillationTrainer(_BaseTrainer):
         pixel_attention_mask=None,
         spatial_shapes=None,
         image_sizes=None,
+        token_type_ids=None,
+        mm_token_type_ids=None,
         image_position_ids=None,
     ):
         if is_peft_model(unwrapped_model):
@@ -1005,6 +1130,10 @@ class DistillationTrainer(_BaseTrainer):
         # For LLaVa-Next
         if image_sizes is not None:
             model_inputs["image_sizes"] = image_sizes
+        if token_type_ids is not None:
+            model_inputs["token_type_ids"] = token_type_ids
+        if mm_token_type_ids is not None:
+            model_inputs["mm_token_type_ids"] = mm_token_type_ids
         if image_position_ids is not None:
             model_inputs["image_position_ids"] = image_position_ids
 
@@ -1018,7 +1147,12 @@ class DistillationTrainer(_BaseTrainer):
         # `base_model` gives the backbone model (skipping `lm_head`) — text decoder for LMs, multimodal wrapper for
         # VLMs (so vision-token injection runs before the text decoder). `get_decoder()` won't do: on VLMs it
         # returns just the text stack and feeds image-placeholder IDs through it.
-        backbone = unwrapped_model.base_model
+        # Pre-5.0 transformers VLMs set `base_model_prefix = ""` so `base_model is self` (re-runs `lm_head`).
+        # Fall back to `.model` there.
+        if self._is_vlm and Version(transformers.__version__) < Version("5.0.0"):
+            backbone = unwrapped_model.model
+        else:
+            backbone = unwrapped_model.base_model
         last_hidden_state = backbone(**model_inputs).last_hidden_state
         # Exclude the last value: it corresponds to the next token pred
         last_hidden_state = last_hidden_state[:, :-1, :]  # (B, L-1, H)
@@ -1031,6 +1165,32 @@ class DistillationTrainer(_BaseTrainer):
         device = self.accelerator.device
 
         prompts = [x["prompt"] for x in inputs]
+
+        if "images" in inputs[0]:
+            images = [example.get("images") for example in inputs]
+        elif "image" in inputs[0]:
+            images = [[example.get("image")] if example.get("image") is not None else None for example in inputs]
+        else:
+            images = None
+        # Transformers requires at least one image in the batch, otherwise it throws an error
+        if images is not None and all(img_list == [] for img_list in images):
+            images = None
+
+        # If the prompts are conversational and the inputs contain images, we need to convert the prompts from
+        # [{"role": "user", "content": "What color is the sky?"}] to
+        # [{"role": "user", "content": [{"type": "image", "image": <Image>}, {"type": "text", "text": "What color is the sky?"}]}]
+        if images is not None:
+            if not is_conversational(inputs[0]):
+                raise ValueError(
+                    "Multimodal training requires conversational prompts. It looks like the dataset contains "
+                    "non-conversational inputs, likely because a chat template was applied before passing the dataset "
+                    "to the trainer. Please provide the raw conversational prompts and let the trainer apply the chat "
+                    "template internally."
+                )
+            prompts = [
+                prepare_multimodal_messages(prompt, images=image_list)
+                for prompt, image_list in zip(prompts, images, strict=True)
+            ]
 
         prompt_ids_list, completion_ids_list = self._generate(prompts)
 
@@ -1060,6 +1220,59 @@ class DistillationTrainer(_BaseTrainer):
 
         num_items_in_batch = self.accelerator.gather(completion_mask.sum()).sum()
 
+        num_images = [len(img_list) if img_list else 0 for img_list in images] if images is not None else None
+
+        # Get forward_kwargs for models with multimodal inputs.
+        if images is not None:
+            prompts_text = [
+                apply_chat_template({"prompt": prompt}, self.processing_class, **self.chat_template_kwargs)["prompt"]
+                for prompt in prompts
+            ]
+            prompt_inputs = self.processing_class(images=images, text=prompts_text, padding=True, return_tensors="pt")
+            prompt_inputs = super()._prepare_inputs(prompt_inputs)
+            forward_kwargs = {k: v for k, v in prompt_inputs.items() if k not in ["input_ids", "attention_mask"]}
+        else:
+            forward_kwargs = {}
+
+        # Recover LFM2-VL tile counts; the full processor drops row/column metadata.
+        num_tiles = None
+        if images is not None and "spatial_shapes" in forward_kwargs:
+            image_info = self.processing_class.image_processor(
+                images=images, return_tensors="pt", return_row_col_info=True
+            )
+            tiles_per_image = image_info["image_rows"] * image_info["image_cols"]
+            if self.processing_class.image_processor.use_thumbnail:
+                tiles_per_image = tiles_per_image + (tiles_per_image > 1).to(tiles_per_image.dtype)
+            num_tiles = [group.sum().item() for group in torch.split(tiles_per_image, num_images)]
+
+        # If token_type_ids are used, extend them with zeros for the completion part
+        if "token_type_ids" in forward_kwargs:
+            token_type_ids = forward_kwargs["token_type_ids"]
+            if self.pad_to_multiple_of is not None:
+                # Needed only with pad_to_multiple_of: otherwise prompt_ids and token_type_ids must have equal len
+                padding_size = prompt_ids.size(1) - token_type_ids.size(1)
+                if padding_size > 0:
+                    token_type_ids = torch.cat(
+                        [token_type_ids.new_zeros((token_type_ids.size(0), padding_size)), token_type_ids], dim=1
+                    )
+            forward_kwargs["token_type_ids"] = torch.cat(
+                [token_type_ids, token_type_ids.new_zeros(completion_ids.shape)], dim=1
+            )
+        # If mm_token_type_ids are used, extend them with zeros for the completion part
+        if "mm_token_type_ids" in forward_kwargs:
+            mm_token_type_ids = forward_kwargs["mm_token_type_ids"]
+            if self.pad_to_multiple_of is not None:
+                # Needed only with pad_to_multiple_of: otherwise prompt_ids and mm_token_type_ids must have equal len
+                padding_size = prompt_ids.size(1) - mm_token_type_ids.size(1)
+                if padding_size > 0:
+                    mm_token_type_ids = torch.cat(
+                        [mm_token_type_ids.new_zeros((mm_token_type_ids.size(0), padding_size)), mm_token_type_ids],
+                        dim=1,
+                    )
+            forward_kwargs["mm_token_type_ids"] = torch.cat(
+                [mm_token_type_ids, mm_token_type_ids.new_zeros(completion_ids.shape)], dim=1
+            )
+
         # Log the prompt and completion texts
         if self.log_completions:
             prompts_text = self.processing_class.batch_decode(prompt_ids, skip_special_tokens=True)
@@ -1074,11 +1287,27 @@ class DistillationTrainer(_BaseTrainer):
             "completion_mask": completion_mask,
             "num_items_in_batch": num_items_in_batch,
         }
+        if "pixel_values" in forward_kwargs:
+            output["pixel_values"] = forward_kwargs["pixel_values"]
+        if "image_grid_thw" in forward_kwargs:
+            output["image_grid_thw"] = forward_kwargs["image_grid_thw"]
+        if "pixel_attention_mask" in forward_kwargs:
+            output["pixel_attention_mask"] = forward_kwargs["pixel_attention_mask"]
+        if "spatial_shapes" in forward_kwargs:
+            output["spatial_shapes"] = forward_kwargs["spatial_shapes"]
+        if "image_sizes" in forward_kwargs:
+            output["image_sizes"] = forward_kwargs["image_sizes"]
+        if "token_type_ids" in forward_kwargs:
+            output["token_type_ids"] = forward_kwargs["token_type_ids"]
+        if "mm_token_type_ids" in forward_kwargs:
+            output["mm_token_type_ids"] = forward_kwargs["mm_token_type_ids"]
+        if "image_position_ids" in forward_kwargs:
+            output["image_position_ids"] = forward_kwargs["image_position_ids"]
+        if images is not None:
+            output["num_images"] = num_images
+            if num_tiles is not None:
+                output["num_tiles"] = num_tiles
         return output
-
-    # ──────────────────────────────────────────────────────────────────────
-    #  Buffering across gradient accumulation steps
-    # ──────────────────────────────────────────────────────────────────────
 
     @profiling_decorator
     def _prepare_inputs(self, generation_batch: dict[str, torch.Tensor | Any]) -> dict[str, torch.Tensor | Any]:
@@ -1101,9 +1330,10 @@ class DistillationTrainer(_BaseTrainer):
             if self._step % generate_every == 0 or self._buffered_inputs is None:
                 # self._buffered_inputs=None can occur when resuming from a checkpoint
                 generation_batch = self._generate_and_score_completions(generation_batch)
+                generation_batch = split_pixel_values_by_grid(generation_batch)
                 generation_batch = shuffle_sequence_dict(generation_batch)
                 generation_batches = split_tensor_dict(generation_batch, self.args.gradient_accumulation_steps)
-                self._buffered_inputs = generation_batches
+                self._buffered_inputs = [unsplit_pixel_values_by_grid(batch) for batch in generation_batches]
             inputs = self._buffered_inputs[self._step % self.args.gradient_accumulation_steps]
         else:
             # In evaluation, there is neither batch grouping for generation, nor multiple iterations, hence
@@ -1111,25 +1341,33 @@ class DistillationTrainer(_BaseTrainer):
             inputs = self._generate_and_score_completions(generation_batch)
         return inputs
 
-    # ──────────────────────────────────────────────────────────────────────
-    #  Loss computation
-    # ──────────────────────────────────────────────────────────────────────
-
+    @profiling_decorator
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         # transformers computes `num_items_in_batch` from the raw dataloader labels, before on-policy generation
         # replaces the completions; use the count over the generated completions instead (computed in
         # `_generate_and_score_completions`). Divide by the process count so the per-process loss compensates for DDP
-        # gradient averaging (as GRPO does).
+        # gradient averaging.
         if self.model.training and inputs.get("num_items_in_batch") is not None:
             num_items_in_batch = inputs["num_items_in_batch"].clamp(min=1.0) / self.accelerator.num_processes
 
         # Route the whole loss (backbone + `lm_head` projection + JSD) through the DDP/FSDP wrapper via
         # `_forward_redirection`, so DDP.forward() fires `prepare_for_backward()` and FSDP/DeepSpeed keep the student's
-        # sharded parameters (including the `lm_head`) materialized for the projection. Mirrors GRPO's `compute_liger_loss`.
+        # sharded parameters (including the `lm_head`) materialized for the projection.
         unwrapped_student = self.accelerator.unwrap_model(model)
-        loss = self._forward_redirection(
+        loss, entropy_sum, num_valid_tokens = self._forward_redirection(
             model, unwrapped_student, self._compute_loss, unwrapped_student, inputs, num_items_in_batch
         )
+
+        # Log the mean per-token student entropy (in nats). The reduction runs here, after `_forward_redirection`
+        # returns, so the `gather_for_metrics` collective does not run inside the DDP/FSDP-wrapped forward (a hang/
+        # ordering risk). The Liger path produces no entropy, so it logs none. Mirrors `SFTTrainer.compute_loss`.
+        if entropy_sum is not None:
+            mode = "train" if self.model.training else "eval"
+            num_valid_tokens = self.accelerator.gather_for_metrics(num_valid_tokens).sum()
+            entropy_sum = self.accelerator.gather_for_metrics(entropy_sum).sum()
+            entropy = (entropy_sum / num_valid_tokens).item() if num_valid_tokens > 0 else 0.0
+            self._metrics[mode]["entropy"].append(entropy)
+
         return (loss, None) if return_outputs else loss
 
     def _compute_loss(self, unwrapped_student, inputs, num_items_in_batch):
@@ -1141,8 +1379,21 @@ class DistillationTrainer(_BaseTrainer):
         completion_mask = inputs["completion_mask"]
         logits_to_keep = inputs["completion_ids"].size(1)  # only the completion tokens are trained on
 
+        # Multimodal (VLM) fields, extracted during generation and split to this micro-batch by `_prepare_inputs`.
+        multimodal_keys = (
+            "pixel_values",
+            "image_grid_thw",
+            "pixel_attention_mask",
+            "spatial_shapes",
+            "image_sizes",
+            "token_type_ids",
+            "mm_token_type_ids",
+            "image_position_ids",
+        )
+        multimodal_inputs = {k: inputs[k] for k in multimodal_keys if k in inputs}
+
         student_hidden_states = self._get_last_hidden_state(
-            unwrapped_student, input_ids, attention_mask, logits_to_keep
+            unwrapped_student, input_ids, attention_mask, logits_to_keep, **multimodal_inputs
         )
 
         # Route the teacher backbone through its own wrapper via `_forward_redirection` too, so FSDP/DeepSpeed
@@ -1158,12 +1409,13 @@ class DistillationTrainer(_BaseTrainer):
                 input_ids,
                 attention_mask,
                 logits_to_keep,
+                **multimodal_inputs,
             )
 
         student_lm_head = unwrapped_student.get_output_embeddings()
         teacher_lm_head = unwrapped_teacher.get_output_embeddings()
 
-        if self.use_liger_loss:
+        if self.use_liger_kernel:
             # Fused JSD over the same hidden states as the chunked path. `true_labels` only masks positions (the
             # hard-loss weight is 0), so any non-ignore id marks a valid completion token; `_get_last_hidden_state`
             # already returns the completion-aligned positions, so no shift is needed.
@@ -1201,10 +1453,17 @@ class DistillationTrainer(_BaseTrainer):
                 if isinstance(num_items_in_batch, torch.Tensor):
                     num_items_in_batch = num_items_in_batch.to(loss.device)
                 loss = loss * num_valid_local / num_items_in_batch
-            return loss
+            # The fused kernel produces no entropy; `compute_loss` logs none for the Liger path.
+            return loss, None, None
 
         student_config, teacher_config = unwrapped_student.config, unwrapped_teacher.config
-        loss, _, _ = _chunked_divergence_loss(
+        # `logit_scale` is None on models that don't scale (e.g. MPT); read that as unscaled (1.0). A real 0.0 is kept
+        # as-is: the Liger guard rejects it, and the chunked path applies it faithfully.
+        student_logit_scale = getattr(student_config, "logit_scale", 1.0)
+        teacher_logit_scale = getattr(teacher_config, "logit_scale", 1.0)
+        student_logit_scale = 1.0 if student_logit_scale is None else student_logit_scale
+        teacher_logit_scale = 1.0 if teacher_logit_scale is None else teacher_logit_scale
+        loss, entropy_sum, n_valid = _chunked_divergence_loss(
             student_hidden_states,
             teacher_hidden_states,
             student_lm_head.weight,
@@ -1215,17 +1474,15 @@ class DistillationTrainer(_BaseTrainer):
             num_items_in_batch=num_items_in_batch,
             student_lm_head_bias=student_lm_head.bias,
             teacher_lm_head_bias=teacher_lm_head.bias,
-            student_logit_scale=getattr(student_config, "logit_scale", 1.0),
-            teacher_logit_scale=getattr(teacher_config, "logit_scale", 1.0),
+            student_logit_scale=student_logit_scale,
+            teacher_logit_scale=teacher_logit_scale,
             student_final_logit_softcapping=getattr(student_config, "final_logit_softcapping", None),
             teacher_final_logit_softcapping=getattr(teacher_config, "final_logit_softcapping", None),
             temperature=self.temperature,
         )
-        return loss
-
-    # ──────────────────────────────────────────────────────────────────────
-    #  Training step & Logging
-    # ──────────────────────────────────────────────────────────────────────
+        # Return the raw entropy sum and valid-token count for `compute_loss` to aggregate and log after the forward
+        # returns (see there). Detached: the metric is gradient-free.
+        return loss, entropy_sum.detach(), n_valid
 
     def training_step(self, model, inputs, num_items_in_batch):
         time_before = time.perf_counter()
