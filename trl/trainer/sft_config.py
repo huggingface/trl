@@ -112,7 +112,7 @@ class SFTConfig(_BaseConfig):
             - `"dft"`: Dynamic Fine-Tuning, as described in
               [this paper](https://huggingface.co/papers/2508.05629).
             - `"wit"`: Weighted Instruction Tuning, as described in
-              [this paper](https://direct.mit.edu/tacl/article/doi/10.1162/TACL.a.42/133798).
+              [this paper](https://huggingface.co/papers/2507.07817).
             - `"chunked_nll"`: same math as `"nll"`, but the `lm_head` projection is computed on non-ignored tokens
               only (positions with `labels == -100` are dropped before the matmul) and the cross-entropy is processed
               in chunks of tokens to reduce peak activation memory. Not compatible with `use_liger_kernel`.
@@ -292,7 +292,7 @@ class SFTConfig(_BaseConfig):
             "`use_liger_kernel=True`, in which case it defaults to `'nll'`. Possible values are `'nll'` (standard "
             "negative log-likelihood), `'dft'` (Dynamic Fine-Tuning, https://huggingface.co/papers/2508.05629), "
             "`'wit'` (Weighted Instruction Tuning, "
-            "https://direct.mit.edu/tacl/article/doi/10.1162/TACL.a.42/133798), and "
+            "https://huggingface.co/papers/2507.07817), and "
             "`'chunked_nll'` (same math as `'nll'`, but the `lm_head` projection is computed on non-ignored tokens "
             "only — positions with `labels == -100` are dropped before the matmul — and the cross-entropy is "
             "processed in chunks of tokens to reduce peak activation memory; not compatible with `use_liger_kernel`; "
