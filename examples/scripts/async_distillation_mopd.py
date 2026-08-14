@@ -67,6 +67,7 @@ def main() -> None:
         per_device_train_batch_size=16,
         gradient_accumulation_steps=2,
         max_completion_length=256,
+        beta=1.0,  # the paper's Stage 3 minimizes reverse KL against the routed teacher
         teacher_server_urls={
             "math": "http://localhost:8001",
             "code": "http://localhost:8002",
