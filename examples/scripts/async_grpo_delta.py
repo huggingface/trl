@@ -12,6 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# /// script
+# dependencies = [
+#     "trl",
+#     "math-verify",
+#     "latex2sympy2_extended",
+#     "huggingface-hub>=1.17.0",
+# ]
+# ///
+
 """
 AsyncGRPO with sparse weight sync over an HF Storage Bucket (`weight_sync_backend="bucket"`).
 

@@ -113,6 +113,9 @@ VLLM_USE_V2_MODEL_RUNNER=0  vllm serve Qwen/Qwen3-4B --model-impl transformers \
     --weight-transfer-config '{"backend":"hf_bucket"}'
 ```
 
+A runnable end-to-end script for the `"bucket"` backend is in
+[`examples/scripts/async_grpo_delta.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/async_grpo_delta.py).
+
 ### Disaggregating training and inference
 
 The `"bucket"` backend decouples _where training runs_ from _where generation runs_: the control plane is plain HTTP
@@ -122,7 +125,7 @@ training GPUs and serve generation from a **remote vLLM HF Space** (or several, 
 ~1% of weights that change each step.
 
 The end-to-end example (local trainer + remote vLLM Space + remote environment Space + bucket) is in
-[`examples/scripts/async_grpo_buckets/async_grpo_buckets.py`](https://github.com/huggingface/trl/tree/main/examples/scripts/async_grpo_buckets) (see its `README.md` for the deploy + run guide).
+[`examples/scripts/async_grpo_buckets/async_grpo_buckets.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/async_grpo_buckets/async_grpo_buckets.py) (see its `README.md` for the deploy + run guide).
 
 > [!TIP]
 > Sparse sync cost is roughly flat in model size (only the changed elements move), while a full broadcast grows with
