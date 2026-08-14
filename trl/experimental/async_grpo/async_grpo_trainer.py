@@ -1150,8 +1150,9 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 coef_1[valid_mask].sum() if valid_mask.any() else torch.zeros((), device=completion_mask.device)
             )
             # Approx KL: http://joschu.net/blog/kl-approx.html
+            # log_importance_weights, not log_ratio: they diverge under importance_sampling_level="sequence".
             local_kl_sum = (
-                ((coef_1[valid_mask] - 1) - log_ratio[valid_mask]).sum()
+                ((coef_1[valid_mask] - 1) - log_importance_weights[valid_mask]).sum()
                 if valid_mask.any()
                 else torch.zeros((), device=completion_mask.device)
             )
