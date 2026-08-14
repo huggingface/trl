@@ -33,8 +33,6 @@ if is_vllm_available(min_version="0.23.0"):
     from vllm.distributed.weight_transfer.nccl_engine import NCCLTrainerSendWeightsArgs, NCCLWeightTransferEngine
     from vllm.utils.network_utils import get_ip, get_open_port
 
-    from .delta_engine import HFBucketWeightTransferEngine
-
 
 logger = get_logger(__name__)
 
@@ -248,8 +246,10 @@ class BucketWeightTransfer(WeightTransfer):
     def init(self, accelerator) -> None:
         if not accelerator.is_main_process:
             return
-        # Lazy import: the bucket API (`create_bucket`) requires a recent huggingface_hub, so only the bucket
-        # backend depends on it — the default NCCL path must import cleanly without it.
+        # Lazy import: the HF Storage Bucket API requires huggingface_hub >= 1.17, which is not a TRL dependency
+        # (it ships in the `delta_weight_sync` extra), so only the bucket backend may depend on it — the default
+        # NCCL path must import cleanly without it. `delta_engine` is imported lazily in `_upload` for the same
+        # reason: its module-level `batch_bucket_files` / `download_bucket_files` imports need the same version.
         from huggingface_hub import create_bucket
 
         self.vllm.wait_for_server_ready()
@@ -280,6 +280,8 @@ class BucketWeightTransfer(WeightTransfer):
         accelerator.wait_for_everyone()
 
     def _upload(self, iterator, is_anchor: bool, version: int) -> None:
+        from .delta_engine import HFBucketWeightTransferEngine  # lazy: needs the bucket APIs (see `init`)
+
         if is_anchor:
             iterator = ((name, tensor, None) for name, tensor, _mask in iterator)  # strip masks -> full tensors
         subdir = "anchors" if is_anchor else "deltas"
