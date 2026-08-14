@@ -18,7 +18,7 @@ jobs:
   check_code_quality:
     name: Check code quality
     runs-on: ubuntu-latest
-    if: false  # TEMP: disabled while validating the L40S runner group
+    if: github.event.pull_request.draft == false
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Set up Python 3.13
@@ -39,7 +39,6 @@ jobs:
     defaults:
       run:
         shell: bash
-    if: false  # TEMP: disabled while validating the L40S runner group
     steps:
       - name: Git checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
