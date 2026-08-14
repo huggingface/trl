@@ -50,7 +50,7 @@ jobs:
       - name: Run slow tests on single GPU
         run: |
           source .venv/bin/activate
-          make slow_tests
+          make slow_tests PYTEST_ARGS="--report-log=slow_tests.log"
 
       - name: Generate Report
         if: always()
@@ -96,7 +96,7 @@ jobs:
       - name: Run slow tests on Multi GPU
         run: |
           source .venv/bin/activate
-          make slow_tests
+          make slow_tests PYTEST_ARGS="--report-log=slow_tests.log"
 
       - name: Generate Reports
         if: always()
