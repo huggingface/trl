@@ -111,7 +111,7 @@ where  \\( y_t \\) is the target token at timestep  \\( t \\), and the model is 
 > The paper [On the Generalization of SFT: A Reinforcement Learning Perspective with Reward Rectification](https://huggingface.co/papers/2508.05629) proposes an alternative loss function, called **Dynamic Fine-Tuning (DFT)**, which aims to improve generalization by rectifying the reward signal. This method can be enabled by setting `loss_type="dft"` in the [`SFTConfig`]. For more details, see [Paper Index - Dynamic Fine-Tuning](paper_index#on-the-generalization-of-sft-a-reinforcement-learning-perspective-with-reward-rectification).
 
 > [!TIP]
-> [Weighted Instruction Tuning (WIT)](https://huggingface.co/papers/2507.07817) assigns independent weights to prompt and completion token losses. Enable it with `loss_type="wit"` and configure `prompt_loss_weight` and `completion_loss_weight`. WIT requires a text [prompt-completion](dataset_formats#prompt-completion) dataset. For more details, see [Paper Index - Weighted Instruction Tuning](paper_index#on-the-effect-of-instruction-tuning-loss-on-generalization).
+> [Weighted Instruction Tuning (WIT)](https://direct.mit.edu/tacl/article/doi/10.1162/TACL.a.42/133798) assigns independent weights to prompt and completion token losses. Enable it with `loss_type="wit"` and configure `prompt_loss_weight` and `completion_loss_weight`. WIT requires a text [prompt-completion](dataset_formats#prompt-completion) dataset. For more details, see [Paper Index - Weighted Instruction Tuning](paper_index#on-the-effect-of-instruction-tuning-loss-on-generalization).
 
 > [!TIP]
 > By default, [`SFTTrainer`] uses `loss_type="chunked_nll"`: same math as `"nll"`, but the `lm_head` projection skips ignored-label tokens and the cross-entropy is processed in chunks, so peak activation memory does not scale with the full vocab × seq_len logits tensor. To fall back to the standard path, set `loss_type="nll"`. When `use_liger_kernel=True`, the default automatically resolves to `"nll"` (the two paths are not compatible). See [Chunked cross-entropy for reducing peak memory usage](reducing_memory_usage#chunked-cross-entropy-for-reducing-peak-memory-usage).
@@ -205,7 +205,7 @@ trainer.train()
 
 ### Weighted instruction tuning
 
-[Weighted Instruction Tuning (WIT)](https://huggingface.co/papers/2507.07817) generalizes completion-only SFT by assigning separate loss weights to prompt and completion tokens. The weighted token losses are normalized by the number of tokens whose weight is non-zero, rather than by the sum of the weights.
+[Weighted Instruction Tuning (WIT)](https://direct.mit.edu/tacl/article/doi/10.1162/TACL.a.42/133798) generalizes completion-only SFT by assigning separate loss weights to prompt and completion tokens. The weighted token losses are normalized by the number of tokens whose weight is non-zero, rather than by the sum of the weights.
 
 ```python
 from trl import SFTConfig

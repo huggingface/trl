@@ -401,12 +401,13 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
     the [`SFTTrainer`] takes care of this during dataset preparation. The collator returns a dictionary containing the
     following keys:
     - `"input_ids"`: Tensor of input IDs, padded to the maximum length of the batch.
-    - `"labels"`: Tensor of labels, padded with `-100` to the maximum length of the batch. If `padding_free` is set
-    to `False`, the following key is also returned. If the input contains `"token_weights"`, they are padded with `0.0`
-    and returned under the same key.
-    - `"attention_mask"`: Tensor of attention masks, padded to the maximum length of the batch.
-    If `padding_free` is set to `True`, the following key is also returned:
-    - `"position_ids"`: Tensor of position IDs, padded to the maximum length of the batch.
+    - `"labels"`: Tensor of labels, padded with `-100` to the maximum length of the batch.
+    - `"token_weights"`: Tensor of token weights, padded with `0.0` to the maximum length of the batch. Returned only
+    when the input contains `"token_weights"`.
+    - `"attention_mask"`: Tensor of attention masks, padded to the maximum length of the batch. Returned only when
+    `padding_free=False`.
+    - `"position_ids"`: Tensor of position IDs, padded to the maximum length of the batch. Returned only when
+    `padding_free=True`.
 
     Args:
         pad_token_id (`int`):
@@ -802,7 +803,7 @@ def dft_loss(outputs, labels, num_items_in_batch=None):
 def wit_loss(outputs, labels, token_weights, num_items_in_batch=None, num_virtual_tokens=0):
     """
     Weighted Instruction Tuning loss, as presented in [On the Effect of Instruction Tuning Loss on
-    Generalization](https://huggingface.co/papers/2507.07817).
+    Generalization](https://direct.mit.edu/tacl/article/doi/10.1162/TACL.a.42/133798).
     """
     logits = outputs.logits[:, num_virtual_tokens:]
     labels = nn.functional.pad(labels, (0, 1), value=-100)
