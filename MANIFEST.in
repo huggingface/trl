@@ -5,6 +5,6 @@ include trl/accelerate_configs/*.yaml
 include trl/templates/*.md
 include trl/chat_templates/*.jinja
 include trl/chat_templates/*.md
-include trl/skills/**/*.md
+include trl/.agents/skills/**/*
 recursive-exclude * __pycache__
 prune tests

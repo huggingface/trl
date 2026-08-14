@@ -12,10 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .skills import (
-    install_skill,
-    list_agent_names,
-    list_skills,
-    resolve_target_path,
-    uninstall_skill,
-)
+from pathlib import Path
+
+import trl
+from trl.cli.commands import get_commands
+
+
+def test_skill_uses_the_installed_library_convention():
+    skill = Path(trl.__file__).parent / ".agents" / "skills" / "trl" / "SKILL.md"
+
+    assert skill.is_file()
+    assert skill.read_text(encoding="utf-8").startswith("---\nname: trl\n")
+
+
+def test_registered_commands_do_not_include_per_library_skill_installer():
+    assert "skills" not in {command.name for command in get_commands()}
