@@ -362,9 +362,12 @@ def _patch_chunked_ce_lm_head(model: torch.nn.Module, chunk_size: int, is_vlm: b
         return _ChunkedCELMHeadOutput(
             loss=loss,
             logits=None,
-            past_key_values=outputs.past_key_values,
             hidden_states=outputs.hidden_states,
-            attentions=outputs.attentions,
+            # `past_key_values` and `attentions` are not read from `outputs`:
+            # - some model types don't declare them
+            # - the backbone runs with `use_cache=False` and no attentions, so both are None anyway
+            past_key_values=None,
+            attentions=None,
             num_correct_tokens=num_correct_tokens,
             entropy_sum=entropy_sum,
             num_valid_tokens=num_valid_tokens,
