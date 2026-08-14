@@ -1,0 +1,48 @@
+name: Runner probe
+
+# TEMP: report the actual hardware behind each runner group. Delete once done.
+# Only lists groups already known to exist for this repo. `aws-p4d-24xlarge-plus`
+# is left out on purpose: it boots 8x A100 at ~$33/h just to print nvidia-smi.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    name: ${{ matrix.group }}
+    strategy:
+      matrix:
+        group:
+          - aws-g6e-4xlarge        # what the CI now targets
+          - aws-g6e-xlarge-plus
+          - aws-g5-4xlarge-cache
+          - aws-g5-4xlarge-plus
+          - aws-g5-12xlarge-cache
+          - aws-g6-4xlarge-plus
+          - aws-g6-12xlarge-plus
+          - aws-g4dn-2xlarge       # current, for reference
+      fail-fast: false
+    runs-on:
+      group: ${{ matrix.group }}
+    container:
+      image: pytorch/pytorch:2.8.0-cuda12.8-cudnn9-devel
+      options: --gpus all
+    timeout-minutes: 10
+    steps:
+      - name: Report hardware
+        run: |
+          echo "== EC2 instance type =="
+          TOKEN=$(curl -sX PUT "http://169.254.169.254/latest/api/token" \
+            -H "X-aws-ec2-metadata-token-ttl-seconds: 60" --max-time 5 || true)
+          curl -s -H "X-aws-ec2-metadata-token: $TOKEN" --max-time 5 \
+            http://169.254.169.254/latest/meta-data/instance-type || echo "(IMDS unreachable)"
+          echo
+          echo "== GPUs =="
+          nvidia-smi --query-gpu=name,memory.total,compute_cap --format=csv
+          echo "== CPU / RAM =="
+          echo "nproc: $(nproc)"
+          python -c "import os; print('affinity:', len(os.sched_getaffinity(0)))"
+          free -g | head -2
+          echo "== pytest -n auto would use =="
+          pip install -q psutil
+          python -c "import psutil; print('physical:', psutil.cpu_count(logical=False), '| logical:', psutil.cpu_count())"
