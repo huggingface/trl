@@ -62,9 +62,9 @@ You can customize the server configuration by passing additional arguments. For 
 >
 > ```sh
 > CUDA_VISIBLE_DEVICES=0,1,2,3 VLLM_SERVER_DEV_MODE=1 vllm serve <model_name> \
-    --weight-transfer-config '{"backend": "nccl"}' \
-    --logprobs-mode processed_logprobs \
-    --max-logprobs -1
+>     --weight-transfer-config '{"backend": "nccl"}' \
+>     --logprobs-mode processed_logprobs \
+>     --max-logprobs -1
 > ```  
 >
 > And GPUs **4-7** for training:
@@ -102,9 +102,9 @@ You can customize the server configuration by passing additional arguments. For 
 >
 > ```sh
 > CUDA_VISIBLE_DEVICES=0,1,2,3 VLLM_SERVER_DEV_MODE=1 vllm serve <model_name> \
-    --weight-transfer-config '{"backend": "nccl"}' \
-    --logprobs-mode processed_logprobs \
-    --max-logprobs -1
+>     --weight-transfer-config '{"backend": "nccl"}' \
+>     --logprobs-mode processed_logprobs \
+>     --max-logprobs -1
 > ```  
 >
 > And GPUs **4-7** for training:

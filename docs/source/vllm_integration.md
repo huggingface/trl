@@ -154,43 +154,15 @@ CUDA_VISIBLE_DEVICES=4,5,6,7 accelerate launch train.py
 
 ## Why using vLLM?
 
-### 🎬 Flashback: Why do we need to use vLLM in online methods?
+Online methods generate completions during training, and generating them with the model's own `generate` is the
+bottleneck. vLLM serves those completions far faster, thanks to techniques like
+[PagedAttention](https://blog.vllm.ai/2023/06/20/vllm.html).
 
-Online methods like GRPO or Online DPO require the model to generate completions during training, which are then used to compute reward signals. However, generation can be extremely time-consuming, especially with large or reasoning models. In the default setup (without vLLM), completions are generated using the [(unwrapped) model's `generate` method](https://github.com/huggingface/trl/blob/f3e8c2304428ef16e9ae5de9e5741ed84d533b7b/trl/trainer/grpo_trainer.py#L965C39-L965C66). This approach quickly becomes a major bottleneck — generation is slow and inefficient, particularly for large batches or models. As a result, training times increase significantly, and overall efficiency drops. To address this, we turn to vLLM, which enables much faster and more scalable generation, helping eliminate this bottleneck in online methods.
-
-### 🤔 How does vLLM solve the slow generation issue?
-
-If you've ever done autoregressive decoder training, you know all the input tokens to the LLM produce their attention key and value tensors, and these tensors are kept in GPU memory to later generate subsequent tokens based on them. These cached key and value tensors are often referred to as the KV cache. However, storing the KV cache occupies a lot of memory, so vLLM uses a technique called **PagedAttention** to solve this problem. PagedAttention, which is inspired by the OS’s virtual memory concept, stores continuous keys and values in **non-contiguous memory space**, which is much more efficient. The details of this are beyond the scope of this document, but in short, it allows the model to store the keys and values in a more efficient way, reducing the memory footprint and speeding up the generation process. If you are interested, make sure to check out the [vLLM PagedAttention](https://blog.vllm.ai/2023/06/20/vllm.html) for more details.
-
-## How vLLM Works (Under the Hood) 🔍
-
-### 🤔 What exactly happens when you run `vllm serve <model_name>`?
-
-When you run for example
-
-```sh
-CUDA_VISIBLE_DEVICES=0,1,2,3 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen2.5-7B --tensor-parallel-size 4 \
-    --weight-transfer-config '{"backend": "nccl"}' \
-    --logprobs-mode processed_logprobs \
-    --max-logprobs -1
-```
-
-1. vLLM first spawns multiple workers to handle incoming requests in parallel. The number of workers is determined by multiplying the `--tensor-parallel-size` and `--data-parallel-size` values. In this example, it spawns 4 workers (4 × 1).
-Each worker operates independently and processes a chunk of the incoming requests — which are basically the prompts sent to the server for generation.
-
-2. Once the incoming requests (prompts) are distributed across the workers, the model starts generating completions. Internally, the model’s weights are split across multiple GPUs based on the `--tensor-parallel-size` argument — this is how tensor parallelism is handled.
-
-3. Although the GPUs process requests independently and in parallel, they still need to communicate with each other. Remember that each GPU handles only a slice of the incoming prompts (for example, with 4 GPUs and 8 prompts using `--tensor-parallel-size=4`, each GPU participates in serving the full model).
-This GPU-to-GPU communication is managed efficiently by NVIDIA’s NCCL library. The communication mainly ensures that each GPU gets its correct portion of the incoming requests — it’s lightweight and doesn’t interfere with generation itself.
-Separately, the number of completions to generate per prompt is controlled by the `num_generations` setting in the GRPO config. For instance, if you set `num_generations=2` (like in the picture above), each prompt will have 2 completions. So, with 8 prompts and `num_generations=2`, you would end up with 16 completions total — regardless of the number of GPUs or parallelism settings.
-
-### 🥸 More detail on what happens under the hood when running the server
+## How TRL uses the server 🔍
 
 - The vLLM server starts by running `vllm serve Qwen/Qwen2.5-7B` with the three settings TRL trainers rely on: the NCCL weight-transfer engine (`--weight-transfer-config`), processed logprobs (`--logprobs-mode processed_logprobs`) and no cap on the number of logprobs (`--max-logprobs -1`), plus `VLLM_SERVER_DEV_MODE=1` so that the weight-transfer and prefix-cache endpoints are exposed.
-- Once the server is running, it generates completions based on requests from the client (trainer), which calls the server's OpenAI-compatible `/v1/completions` endpoint with the prompt token IDs. Multimodal prompts take a different route: the server processes the images on their own, and the resulting features are paired with the same token IDs on `/inference/v1/generate`, since no OpenAI-compatible endpoint takes token IDs and images at once.
-- The client (trainer) then requests these completions from the server.
-- These completions are used to compute the reward signal.
-- Based on the reward signal and the model’s output, the loss is computed, and the backward pass is performed to update the model’s weights.
+- The trainer asks for completions on the server's OpenAI-compatible `/v1/completions` endpoint, sending the prompt token IDs. Multimodal prompts take a different route: the server processes the images on their own, and the resulting features are paired with the same token IDs on `/inference/v1/generate`, since no OpenAI-compatible endpoint takes token IDs and images at once.
+- Those completions are scored by the reward functions, and the loss and backward pass follow from the reward signal.
 - **Note**: The server only handles completion generation — it doesn’t train the model. Therefore, the model’s weights aren’t updated on the server. Once the backward pass is complete, the client streams the updated weights to the server over NCCL, announcing them with `/start_weight_update` and `/update_weights` and committing them with `/finish_weight_update`.
 
 When using vLLM, ensure the GPUs assigned for training and generation are separate to avoid NCCL communication conflicts. If you do not set the `CUDA_VISIBLE_DEVICES` environment variable, the training script will use all available GPUs by default, which may lead to device conflicts. Sharing a device between the trainer and the server typically shows up as a hang when the weights are synchronized.
@@ -221,11 +193,9 @@ Only the following are required by TRL:
 
 ### 💆🏻‍♀️ What's the best distributed setup?
 
-![tp dp throughput 8 gpus](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/tp_dp_throughput_8_gpus.png)
-![tp dp throughput 4 gpus](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/tp_dp_throughput_4_gpus.png)
-
-> [!WARNING]
-> The benchmark plots above were collected with older vLLM versions. Starting with [vLLM PR #30739](https://github.com/vllm-project/vllm/pull/30739) (released in `0.14.0`), offline data parallel scaling for non-MoE (dense) models is no longer supported. To follow the latest recommendations, do not scale DP for non-MoE models.
+Scale generation with `--tensor-parallel-size`. Data parallelism no longer helps dense models: since
+[vLLM PR #30739](https://github.com/vllm-project/vllm/pull/30739) (released in `0.14.0`), offline data parallel
+scaling for non-MoE models is not supported.
 
 ### vLLM with Transformers Backend
 
