@@ -160,18 +160,13 @@ bottleneck. vLLM serves those completions far faster, thanks to techniques like
 
 ## How TRL uses the server 🔍
 
-- The vLLM server starts by running `vllm serve Qwen/Qwen2.5-7B` with the three settings TRL trainers rely on: the NCCL weight-transfer engine (`--weight-transfer-config`), processed logprobs (`--logprobs-mode processed_logprobs`) and no cap on the number of logprobs (`--max-logprobs -1`), plus `VLLM_SERVER_DEV_MODE=1` so that the weight-transfer and prefix-cache endpoints are exposed.
-- The trainer asks for completions on the server's OpenAI-compatible `/v1/completions` endpoint, sending the prompt token IDs. Multimodal prompts take a different route: the server processes the images on their own, and the resulting features are paired with the same token IDs on `/inference/v1/generate`, since no OpenAI-compatible endpoint takes token IDs and images at once.
-- Those completions are scored by the reward functions, and the loss and backward pass follow from the reward signal.
-- **Note**: The server only handles completion generation — it doesn’t train the model. Therefore, the model’s weights aren’t updated on the server. Once the backward pass is complete, the client streams the updated weights to the server over NCCL, announcing them with `/start_weight_update` and `/update_weights` and committing them with `/finish_weight_update`.
+The trainer asks for completions on the OpenAI-compatible `/v1/completions` endpoint, sending the prompt token IDs.
+Multimodal prompts take a different route: the server processes the images on their own, and the resulting features
+are paired with the same token IDs on `/inference/v1/generate`, since no OpenAI-compatible endpoint takes token IDs
+and images at once.
 
-When using vLLM, ensure the GPUs assigned for training and generation are separate to avoid NCCL communication conflicts. If you do not set the `CUDA_VISIBLE_DEVICES` environment variable, the training script will use all available GPUs by default, which may lead to device conflicts. Sharing a device between the trainer and the server typically shows up as a hang when the weights are synchronized.
-
-For example, if you want to use GPUs 4–7 for training while the server runs on GPUs 0-3, set:
-
-```sh
-CUDA_VISIBLE_DEVICES=4,5,6,7 accelerate launch train.py
-```
+The server only generates. After each optimizer step the trainer streams the updated weights into it over NCCL,
+announcing them with `/start_weight_update` and `/update_weights` and committing them with `/finish_weight_update`.
 
 ## Advanced usage
 
