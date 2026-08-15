@@ -48,7 +48,12 @@ from transformers.trainer_utils import EvalPrediction
 from transformers.training_args import OptimizerNames
 from transformers.utils import is_peft_available, is_sagemaker_mp_enabled
 
-from ...data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
+from ...data_utils import (
+    apply_chat_template,
+    is_conversational,
+    maybe_apply_chat_template,
+    prepare_multimodal_messages,
+)
 from ...extras.profiling import profiling_context
 from ...generation.vllm_client import VLLMClient
 from ...import_utils import is_vllm_available
@@ -648,28 +653,32 @@ class OnlineDPOTrainer(_BaseTrainer):
         # Gather all prompts to main process
         all_prompts = gather_object(prompts_text)
         if has_images:
-            all_images = gather_object(images)
+            # The server can't take images alongside text prompts, so multimodal prompts are sent as messages, with
+            # the images inlined in place of their placeholders.
+            messages = [
+                prepare_multimodal_messages(prompt, images=[image])
+                for prompt, image in zip(prompts, images, strict=True)
+            ]
+            all_messages = gather_object(messages)
 
         if self.accelerator.is_main_process:
-            if has_images:
-                images_per_prompt = [[img] if img is not None else None for img in all_images]
-            else:
-                images_per_prompt = None
-            completion_ids = self.vllm_client.generate(
-                prompts=all_prompts,
-                images=images_per_prompt,
-                n=self.num_generations,
-                repetition_penalty=self.repetition_penalty,
-                temperature=self.temperature,
-                top_p=self.top_p,
-                top_k=-1 if self.top_k is None else self.top_k,
-                min_p=0.0 if self.min_p is None else self.min_p,
-                max_tokens=self.generation_config.max_tokens,
-                structured_outputs_regex=self.structured_outputs_regex
+            sampling_kwargs = {
+                "n": self.num_generations,
+                "repetition_penalty": self.repetition_penalty,
+                "temperature": self.temperature,
+                "top_p": self.top_p,
+                "top_k": -1 if self.top_k is None else self.top_k,
+                "min_p": 0.0 if self.min_p is None else self.min_p,
+                "max_tokens": self.generation_config.max_tokens,
+                "structured_outputs_regex": self.structured_outputs_regex
                 if hasattr(self, "structured_outputs_regex")
                 else None,
-                generation_kwargs=self.args.generation_kwargs,
-            )["completion_ids"]
+                "generation_kwargs": self.args.generation_kwargs,
+            }
+            if has_images:
+                completion_ids = self.vllm_client.chat(messages=all_messages, **sampling_kwargs)["completion_ids"]
+            else:
+                completion_ids = self.vllm_client.generate(prompts=all_prompts, **sampling_kwargs)["completion_ids"]
         else:
             completion_ids = [None] * (len(all_prompts) * 2)
 
@@ -763,6 +772,15 @@ class OnlineDPOTrainer(_BaseTrainer):
                 llm_model.load_weights([(name, param)])
 
     def _move_model_to_vllm(self):
+        if self.vllm_mode == "server":
+            # Announce one weight update for the whole model: the server prepares and finalizes it once, rather than
+            # once per tensor pushed below.
+            with self.vllm_client.weight_update():
+                self._move_model_to_vllm_inner()
+        else:
+            self._move_model_to_vllm_inner()
+
+    def _move_model_to_vllm_inner(self):
         # For DeepSpeed ZeRO-3 and FSDP, we need to gather all parameters before operations
         deepspeed_plugin = self.accelerator.state.deepspeed_plugin
         zero_stage_3 = deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3

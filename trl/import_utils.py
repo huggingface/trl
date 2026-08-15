@@ -61,10 +61,6 @@ def is_deepspeed_available() -> bool:
     return _is_package_available("deepspeed")
 
 
-def is_fastapi_available() -> bool:
-    return _is_package_available("fastapi")
-
-
 def is_harbor_available() -> bool:
     return _is_package_available("harbor")
 
@@ -94,20 +90,12 @@ def is_openreward_available() -> bool:
     return _is_package_available("openreward")
 
 
-def is_pydantic_available() -> bool:
-    return _is_package_available("pydantic")
-
-
 def is_requests_available() -> bool:
     return _is_package_available("requests")
 
 
 def is_unsloth_available() -> bool:
     return _is_package_available("unsloth")
-
-
-def is_uvicorn_available() -> bool:
-    return _is_package_available("uvicorn")
 
 
 def is_vllm_available(min_version: str | None = None) -> bool:
@@ -125,10 +113,6 @@ def is_vllm_available(min_version: str | None = None) -> bool:
         if min_version is not None and Version(_vllm_version) < Version(min_version):
             return False
     return _vllm_available
-
-
-def is_vllm_ascend_available() -> bool:
-    return _is_package_available("vllm_ascend")
 
 
 def is_weave_available() -> bool:

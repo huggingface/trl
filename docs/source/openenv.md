@@ -344,7 +344,10 @@ This runs vLLM in the same process as training, requiring only a single GPU.
 
 ```bash
 # Terminal 1: Start vLLM inference server
-CUDA_VISIBLE_DEVICES=0 trl vllm-serve --model Qwen/Qwen3-1.7B --host 0.0.0.0 --port 8000
+CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen3-1.7B --host 0.0.0.0 --port 8000 \
+    --weight-transfer-config '{"backend": "nccl"}' \
+    --logprobs-mode processed_logprobs \
+    --max-logprobs -1
 
 # Terminal 2: Run GRPO training with OpenEnv
 CUDA_VISIBLE_DEVICES=1 python examples/scripts/openenv/wordle.py --vllm-mode server --vllm-server-url http://localhost:8000

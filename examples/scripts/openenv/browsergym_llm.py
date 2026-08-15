@@ -52,7 +52,10 @@ python examples/scripts/openenv/browsergym_llm.py --vllm-mode colocate
 
 # Spin up vLLM server (Terminal 1)
 ```sh
-CUDA_VISIBLE_DEVICES=0 trl vllm-serve --model Qwen/Qwen3-0.6B --host 0.0.0.0 --port 8001
+CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen3-0.6B --host 0.0.0.0 --port 8001 \
+    --weight-transfer-config '{"backend": "nccl"}' \
+    --logprobs-mode processed_logprobs \
+    --max-logprobs -1
 ```
 
 # Run training (Terminal 2)
