@@ -13,13 +13,14 @@
 # limitations under the License.
 
 import types
+from contextlib import nullcontext
 from unittest.mock import patch
 
 import pytest
 from transformers import AutoModelForCausalLM
 
 from trl.import_utils import is_deepspeed_available
-from trl.models.utils import disable_gradient_checkpointing, prepare_deepspeed
+from trl.models.utils import _unwrap_model_for_generation, disable_gradient_checkpointing, prepare_deepspeed
 
 
 @pytest.mark.skipif(not is_deepspeed_available(), reason="deepspeed is not installed")
@@ -56,6 +57,49 @@ def test_prepare_deepspeed_strips_optimizer_for_cpu_offload(stage):
     assert "optimizer" not in captured["config"]
     assert "scheduler" not in captured["config"]
     assert "offload_optimizer" not in captured["config"]["zero_optimization"]
+
+
+class TestUnwrapModelForGeneration:
+    def test_restores_gradient_checkpointing_after_error(self):
+        model = types.SimpleNamespace(is_gradient_checkpointing=True)
+
+        def disable():
+            model.is_gradient_checkpointing = False
+
+        def enable():
+            model.is_gradient_checkpointing = True
+
+        model.gradient_checkpointing_disable = disable
+        model.gradient_checkpointing_enable = enable
+        accelerator = types.SimpleNamespace(unwrap_model=lambda model: model)
+
+        with patch("trl.distributed.DistributedBackend", return_value=types.SimpleNamespace(is_zero3=False)):
+            with pytest.raises(RuntimeError, match="generation failed"):
+                with _unwrap_model_for_generation(model, accelerator):
+                    assert model.is_gradient_checkpointing is False
+                    raise RuntimeError("generation failed")
+
+        assert model.is_gradient_checkpointing is True
+
+    def test_restores_deepspeed_hooks_after_error(self):
+        model = types.SimpleNamespace(is_gradient_checkpointing=False, parameters=lambda: [])
+        accelerator = types.SimpleNamespace(unwrap_model=lambda model: model)
+        deepspeed = types.SimpleNamespace(
+            zero=types.SimpleNamespace(GatheredParameters=lambda parameters: nullcontext())
+        )
+
+        with (
+            patch.dict("sys.modules", {"deepspeed": deepspeed}),
+            patch("trl.distributed.DistributedBackend", return_value=types.SimpleNamespace(is_zero3=True)),
+            patch("trl.models.utils.remove_hooks") as remove_hooks,
+            patch("trl.models.utils.add_hooks") as add_hooks,
+        ):
+            with pytest.raises(RuntimeError, match="generation failed"):
+                with _unwrap_model_for_generation(model, accelerator):
+                    raise RuntimeError("generation failed")
+
+        remove_hooks.assert_called_once_with(model)
+        add_hooks.assert_called_once_with(model)
 
 
 class TestDisableGradientCheckpointing:
