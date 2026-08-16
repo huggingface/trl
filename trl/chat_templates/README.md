@@ -69,6 +69,10 @@ Original Llama 3.1 / 3.2 chat templates. Both render tool calls as a single bare
 
 Original Llava-Next chat template (as shipped by `llava-hf/llava-v1.6-mistral-7b-hf`). Renders multimodal `content` blocks in the LLaVA / Mistral `[INST] ... [/INST]` format. Does not support tool calling.
 
+### `mistral.jinja`
+
+Original Mistral chat template (as shipped by `mistralai/Mistral-7B-Instruct-v0.3` and related checkpoints). Renders `[AVAILABLE_TOOLS]` / `[TOOL_CALLS]` / `[TOOL_RESULTS]` blocks for tool calling, gated on a strict requirement that every `tool_call.id` (and `tool_call_id`) be a 9-character alphanumeric string — a conversation missing this raises. Because TRL's `supports_tool_calling()` probe uses a generic tool call with no `id`, it triggers that raise and is correctly classified as *not* supporting tool calling, so no prefix-preservation fix is needed for the training variant below.
+
 ### `nemotron_3_nano.jinja`
 
 Original Nemotron Nano chat template (as shipped by `nvidia/NVIDIA-Nemotron-3-Nano-*` checkpoints). Renders tool calls in the same Hermes-style `<function=...>` / `<parameter=...>` format as Qwen3.5, so it reuses `qwen3_5_schema` for response parsing.
@@ -191,6 +195,12 @@ Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so
 Patched Llava-Next template. Diff vs `llava_next.jinja`:
 
 Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+
+### `mistral_training.jinja`
+
+Patched Mistral template. Diff vs `mistral.jinja`:
+
+Wrap both assistant branches (the `[TOOL_CALLS] ...` branch and the plain content branch) with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss. No prefix-preservation fix is needed (see `mistral.jinja` above).
 
 ### `nemotron_3_nano_training.jinja`
 
