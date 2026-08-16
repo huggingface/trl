@@ -178,6 +178,20 @@ Set `use_liger_kernel=True` in the [`DistillationConfig`] to compute the JSD wit
 > [!WARNING]
 > The fused Liger kernel cannot apply per-model `logit_scale` (e.g. Cohere) or `final_logit_softcapping` (e.g. Gemma), so it is rejected for models that set them — use the default chunked path for those.
 
+## Training Vision Language Models
+
+[`DistillationTrainer`] supports distilling Vision-Language Models (VLMs) on multimodal datasets containing both text and images. Pass a VLM as both the student and the teacher, and provide a prompt-only dataset with either an `image` column (single image per sample) or an `images` column (list of images per sample). For more information on the expected dataset structure, see the [Dataset Format — Vision datasets](dataset_formats#vision-datasets) section.
+
+Tested with:
+
+- **Gemma 3** — e.g., `google/gemma-3-4b-it`
+- **LLaVA-NeXT** — e.g., `llava-hf/llava-v1.6-mistral-7b-hf`
+- **Qwen2-VL** — e.g., `Qwen/Qwen2-VL-2B-Instruct`
+- **Qwen2.5-VL** — e.g., `Qwen/Qwen2.5-VL-3B-Instruct`
+
+> [!TIP]
+> Compatibility with all VLMs is not guaranteed. If you believe a model should be supported, feel free to open an issue on GitHub — or better yet, submit a pull request with the required changes.
+
 ## Example script
 
 Use [`examples/scripts/distillation.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/distillation.py) to launch distillation training from the command line. The script supports full training and LoRA via the standard `ModelConfig` flags.
