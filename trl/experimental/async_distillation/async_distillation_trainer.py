@@ -1042,7 +1042,7 @@ class AsyncDistillationTrainer(_BaseTrainer):
 
         # Next-token shift: position j predicts input_ids[:, j+1], so it is compared against the teacher candidates
         # recorded AT position j+1; teacher_topk_ids[i] holds the candidates for predicting input_ids[i] (it comes
-        # from the teacher's `/get_sequence_logprobs/` response, which conditions on tokens before i).
+        # from the teacher's `prompt_logprobs`, whose entry i conditions on the tokens before i).
         completion_mask = completion_mask[:, 1:]
         teacher_topk_ids = teacher_topk_ids[:, 1:, :]
         teacher_topk_logprobs = teacher_topk_logprobs[:, 1:, :]
@@ -1066,8 +1066,8 @@ class AsyncDistillationTrainer(_BaseTrainer):
                 teacher_topk_ids, teacher_topk_logprobs, actual_token_ids, valid_candidate_mask_wide, self.args.beta
             )
 
-        # A completion position can carry no usable teacher signal at all (the server returned no `prompt_logprobs`
-        # entry, or every candidate was NaN) while still being marked as a completion token. Without this, such a
+        # A completion position can carry no usable teacher signal at all (the teacher returned no `prompt_logprobs`
+        # entry for it, or every candidate was NaN) while still being marked as a completion token. Without this, such a
         # position would degenerate through `_add_tail_bucket` into a fabricated "100% tail mass" distribution on
         # both sides, i.e. a synthetic near-zero divergence trained on, instead of being excluded like padding.
         has_teacher_signal = valid_candidate_mask.any(dim=-1)

@@ -146,7 +146,7 @@ class _StubWeightTransfer:
         pass
 
 
-def _rollout_sample(length: int, top_k: int = TEACHER_TOP_K) -> dict:
+def _rollout_sample(length: int, top_k: int = TEACHER_TOP_K, teacher_id: str = "default") -> dict:
     # First token is a prompt token (completion_mask 0, empty teacher candidates); the rest are completion tokens.
     teacher_topk_ids = [[]] + [list(range(top_k))] * (length - 1)
     teacher_topk_logprobs = [[]] + [[-float(i) - 0.1 for i in range(top_k)]] * (length - 1)
@@ -155,6 +155,7 @@ def _rollout_sample(length: int, top_k: int = TEACHER_TOP_K) -> dict:
         "completion_mask": [0] + [1] * (length - 1),
         "teacher_topk_ids": teacher_topk_ids,
         "teacher_topk_logprobs": teacher_topk_logprobs,
+        "teacher_id": teacher_id,
         "metrics": {"rollout_time_ms": 1.0},
     }
 
@@ -221,26 +222,47 @@ class TestPackingAwareBatching:
         assert batch["completion_mask"].tolist() == [[0, 1, 1], [0, 1, 0]]
         assert batch["global_n_tokens"].tolist() == [3.0, 3.0]  # a: 2 + b: 1 completion tokens
 
+    def test_collator_packs_teacher_id_per_token_for_mopd(self):
+        # Packing concatenates samples from different teachers into one row, so compute_loss can only attribute a
+        # token's jsd/teacher_entropy to a teacher if the id is broadcast across that sample's own tokens here.
+        collator = DataCollatorForRollout(
+            pad_token_id=0, teacher_top_k=TEACHER_TOP_K, num_processes=1, teacher_id_to_idx={"math": 0, "code": 1}
+        )
+        batch = collator([[[_rollout_sample(3, teacher_id="math"), _rollout_sample(2, teacher_id="code")]]])
+
+        assert batch["teacher_id_idx"].tolist() == [[0, 0, 0, 1, 1]]
+
+        single = DataCollatorForRollout(pad_token_id=0, teacher_top_k=TEACHER_TOP_K, num_processes=1)
+        assert "teacher_id_idx" not in single([[[_rollout_sample(3)]]])
+
+
+def _position(*entries):
+    """A vLLM `prompt_logprobs[i]` entry: `{token_id: {"logprob": ..., "rank": ...}}`, JSON keys are strings."""
+    return {str(token_id): {"logprob": logprob, "rank": rank} for token_id, logprob, rank in entries}
+
 
 class TestParseTeacherLogprobs:
-    """`/get_sequence_logprobs/` returns already rank-sorted parallel lists; parsing here is just dropping NaNs."""
+    """vLLM's `prompt_logprobs` mapping is unordered; parsing sorts it by rank and drops NaNs."""
 
-    def test_passes_through_already_sorted_candidates(self):
-        ids, logprobs = _parse_teacher_logprobs_at_position([-0.1, -1.0, -2.0], [5, 1, 9])
-        assert ids == [5, 1, 9]
-        assert logprobs == pytest.approx([-0.1, -1.0, -2.0])
-
-    def test_drops_nan_entries(self):
-        # The server emits `None` for a NaN logprob (see trl/scripts/vllm_serve.py); such entries carry no signal.
-        ids, logprobs = _parse_teacher_logprobs_at_position([-0.1, None, -2.0], [5, 1, 9])
-        assert ids == [5, 9]
-        assert logprobs == pytest.approx([-0.1, -2.0])
-
-    def test_empty_position_returns_empty(self):
-        # A position with no teacher logprobs at all (e.g. `prompt_logprobs[pos] is None` server-side) comes back
-        # as an empty pair of lists, same convention as a masked-out prompt position.
-        ids, logprobs = _parse_teacher_logprobs_at_position([], [])
-        assert ids == [] and logprobs == []
+    @pytest.mark.parametrize(
+        ("position", "expected_ids", "expected_logprobs"),
+        [
+            (_position((9, -2.0, 3), (5, -0.1, 1), (1, -1.0, 2)), [5, 1, 9], [-0.1, -1.0, -2.0]),
+            # The realized token is reported whatever its rank, on top of the requested top-k. Truncating back to k
+            # (as `VLLMClient.get_sequence_logprobs` does for the sync trainers) would drop it here, zeroing the
+            # teacher signal at that position for beta=1.0.
+            (_position((5, -0.1, 1), (1, -1.0, 2), (9, -8.0, 4242)), [5, 1, 9], [-0.1, -1.0, -8.0]),
+            # NaN reflects an invalid score, not a padding slot, so the candidate is dropped rather than sentinelled.
+            (_position((5, -0.1, 1), (1, float("nan"), 2), (9, -2.0, 3)), [5, 9], [-0.1, -2.0]),
+            # A position vLLM scored nothing for yields the same empty pair as a masked-out prompt position.
+            (None, [], []),
+            ({}, [], []),
+        ],
+    )
+    def test_parses_position(self, position, expected_ids, expected_logprobs):
+        ids, logprobs = _parse_teacher_logprobs_at_position(position)
+        assert ids == expected_ids
+        assert logprobs == pytest.approx(expected_logprobs)
 
 
 def _bare_loop(tokenizer, teacher_server_urls):
@@ -251,78 +273,78 @@ def _bare_loop(tokenizer, teacher_server_urls):
     loop.tokenizer = tokenizer
     loop.chat_template_kwargs = {}
     loop.teacher_server_urls = teacher_server_urls
-    loop.teacher_top_k = 4
+    # Normally resolved from each teacher's /v1/models in _run_loops, which no bare loop ever reaches.
+    loop.teacher_model_names = {teacher_id: f"{teacher_id}-model" for teacher_id in teacher_server_urls}
+    loop.teacher_top_k = TEACHER_TOP_K
     loop.teacher_temperature = 1.0
     loop.request_timeout = 30
     loop._model_version_value = types.SimpleNamespace(value=0)
     return loop
 
 
+ONE_TEACHER = {"default": "http://default:8001"}
+TWO_TEACHERS = {"math": "http://math:8002", "code": "http://code:8003"}
+
+
 class TestMultiTeacherRouting:
     """A single configured teacher scores every row regardless of `teacher_id` (plain on-policy distillation).
 
     Multiple teachers enable MOPD: each row's `teacher_id` column selects among them; a missing or unmapped
-    `teacher_id` is a configuration error, not a silent fallback.
+    `teacher_id` is a configuration error, not a silent fallback. Each request must carry the URL *and* the served
+    model id of the teacher it routes to, since `/v1/completions` names the model it addresses and every teacher
+    serves its own.
     """
 
-    def _run(self, row, teacher_server_urls, posted_urls):
+    def _run(self, teacher_server_urls, *teacher_ids):
+        """Score one row per `teacher_ids` entry (`None` = no `teacher_id` column) and return the requests sent."""
         tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
         loop = _bare_loop(tokenizer, teacher_server_urls)
+        requests = []
 
         async def fake_generate_one_turn(prompt_ids):
             return [7]
 
-        loop._generate_one_turn = fake_generate_one_turn
-
         async def fake_post(base_url, path, payload, timeout):
-            posted_urls.append(base_url)
-            return {"logprobs": [[[0.0]]], "logprob_token_ids": [[[7]]]}
+            requests.append((base_url, payload))
+            # vLLM scores every token of the sequence it was handed, not just the completion region.
+            return {"choices": [{"prompt_logprobs": [_position((7, -0.5, 1))] * len(payload["prompt"])}]}
 
+        loop._generate_one_turn = fake_generate_one_turn
         loop._post = fake_post
-        return asyncio.run(loop._generate_and_score_one(row))
 
-    def test_single_teacher_ignores_teacher_id(self):
-        posted_urls = []
-        self._run(
-            {"prompt": [{"role": "user", "content": "hi"}], "teacher_id": "whatever"},
-            {"default": "http://default:8001"},
-            posted_urls,
-        )
-        assert posted_urls == ["http://default:8001"]
+        rows = [
+            {"prompt": [{"role": "user", "content": "hi"}], **({} if tid is None else {"teacher_id": tid})}
+            for tid in teacher_ids
+        ]
+        samples = [asyncio.run(loop._generate_and_score_one(row)) for row in rows]
+        return samples, requests
 
-    def test_single_teacher_works_with_no_teacher_id_column(self):
-        posted_urls = []
-        self._run(
-            {"prompt": [{"role": "user", "content": "hi"}]},
-            {"default": "http://default:8001"},
-            posted_urls,
-        )
-        assert posted_urls == ["http://default:8001"]
+    @pytest.mark.parametrize("teacher_id", ["whatever", None])
+    def test_single_teacher_scores_every_row(self, teacher_id):
+        samples, requests = self._run(ONE_TEACHER, teacher_id)
+        assert [url for url, _ in requests] == ["http://default:8001"]
+        assert [payload["model"] for _, payload in requests] == ["default-model"]
+        assert [sample.teacher_id for sample in samples] == ["default"]
 
-    def test_routes_to_matching_teacher_id(self):
-        posted_urls = []
-        self._run(
-            {"prompt": [{"role": "user", "content": "hi"}], "teacher_id": "math"},
-            {"math": "http://math:8002", "code": "http://code:8003"},
-            posted_urls,
-        )
-        assert posted_urls == ["http://math:8002"]
+    def test_each_row_is_addressed_to_its_own_teacher(self):
+        samples, requests = self._run(TWO_TEACHERS, "code", "math")
+        assert [url for url, _ in requests] == ["http://code:8003", "http://math:8002"]
+        assert [payload["model"] for _, payload in requests] == ["code-model", "math-model"]
+        # The routed id rides along on the sample so the collator can tag every token with it (MOPD metrics).
+        assert [sample.teacher_id for sample in samples] == ["code", "math"]
 
-    def test_multi_teacher_raises_on_missing_teacher_id(self):
-        with pytest.raises(ValueError, match="teacher_id=None"):
-            self._run(
-                {"prompt": [{"role": "user", "content": "hi"}]},
-                {"math": "http://math:8002", "code": "http://code:8003"},
-                [],
-            )
+    def test_scores_only_the_completion_region(self):
+        (sample,), ((_, payload),) = self._run(ONE_TEACHER, None)
+        n_prompt = len(sample.input_ids) - sum(sample.completion_mask)
+        assert payload["prompt"] == sample.input_ids
+        assert payload["prompt_logprobs"] == TEACHER_TOP_K
+        assert sample.teacher_topk_ids[:n_prompt] == [[]] * n_prompt
+        assert sample.teacher_topk_ids[n_prompt:] == [[7]] * sum(sample.completion_mask)
 
-    def test_multi_teacher_raises_on_unmapped_teacher_id(self):
-        with pytest.raises(ValueError, match="teacher_id='unknown'"):
-            self._run(
-                {"prompt": [{"role": "user", "content": "hi"}], "teacher_id": "unknown"},
-                {"math": "http://math:8002", "code": "http://code:8003"},
-                [],
-            )
+    @pytest.mark.parametrize(("teacher_id", "match"), [(None, "teacher_id=None"), ("unknown", "teacher_id='unknown'")])
+    def test_multi_teacher_raises_on_unroutable_row(self, teacher_id, match):
+        with pytest.raises(ValueError, match=match):
+            self._run(TWO_TEACHERS, teacher_id)
 
 
 class TestBetaRange:

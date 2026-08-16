@@ -67,12 +67,18 @@ class AsyncDistillationConfig(_BaseConfig):
         vllm_server_timeout (`float`, *optional*, defaults to `240.0`):
             Total timeout duration in seconds to wait for the student's vLLM server to be ready.
         teacher_server_urls (`dict[str, str]`, *optional*, defaults to `{"default": "http://localhost:8001"}`):
-            Teacher vLLM server(s), each started with `trl vllm-serve`. Every teacher is static: this trainer never
-            streams weight updates to any of them. Scoring is a forced-decode request (`temperature=0`,
-            `max_tokens=1`, `prompt_logprobs=teacher_top_k`) against the student's own completion tokens, following
-            the same request shape used for on-policy distillation reward hooks in the vime/slime rollout libraries.
-            A single entry scores every sample (plain single-teacher on-policy distillation, the default). Multiple
-            entries enable MOPD (multi-teacher on-policy distillation, see
+            Teacher vLLM server(s), each started with `vllm serve <teacher-model> --logprobs-mode processed_logprobs
+            --max-logprobs -1`. Every teacher is static: this trainer never streams weight updates to any of them, so
+            a teacher needs neither `VLLM_SERVER_DEV_MODE` nor a weight-transfer backend, only those two flags, which
+            make its scoring exact (see `teacher_temperature` and `teacher_top_k`). Every teacher must share the
+            student's tokenizer: completions are sent as raw token ids, and the ids a teacher reports back are used
+            directly to index the student's own vocabulary in `compute_loss`. A teacher with a different vocabulary
+            trains against the wrong tokens, silently if its vocabulary is no larger than the student's.
+            Scoring is a teacher-forced request against the student's own completion tokens (`max_tokens=1`,
+            `prompt_logprobs=teacher_top_k`, `temperature=teacher_temperature`), the same request
+            [`~trl.generation.vllm_client.VLLMClient.get_sequence_logprobs`] issues for the synchronous server-teacher
+            trainers. A single entry scores every sample (plain single-teacher on-policy distillation, the default).
+            Multiple entries enable MOPD (multi-teacher on-policy distillation, see
             [MOPD: Multi-Teacher On-Policy Distillation for Capability Integration in LLM Post-Training](
             https://huggingface.co/papers/2606.30406)): each training row's `teacher_id` column selects which
             entry scores it, e.g. `{"math": "http://localhost:8002", "code": "http://localhost:8003"}` with a
@@ -95,20 +101,24 @@ class AsyncDistillationConfig(_BaseConfig):
             guarantees a teacher logprob for without transmitting a wider (or full) vocabulary; anything wider would
             only be a probabilistic approximation of covering the student's own likely tokens, not a guarantee.
         teacher_temperature (`float`, *optional*, defaults to `1.0`):
-            Sampling temperature sent to the teacher's `/get_sequence_logprobs/` request, applied server-side to
-            vLLM's own logprob computation, the returned values are exact at this temperature, not a client-side
-            approximation.
+            Softmax temperature of the divergence, applied to *both* sides: sent to the teacher so vLLM computes its
+            logprobs at this temperature server-side (exact, not a client-side rescaling), and applied to the
+            student's own logits in `compute_loss`, mirroring
+            [`~trl.experimental.server_distillation.ServerDistillationTrainer`]'s single `temperature`. Unrelated to
+            `temperature`, which only controls how the student samples its completions. The teacher's server must run
+            with `--logprobs-mode processed_logprobs` for this to reach its returned logprobs at all; without it the
+            teacher silently reports raw logprobs and this setting only affects the student's side.
         teacher_top_k (`int`, *optional*, defaults to `8`):
-            Number of per-position candidate tokens requested from the teacher via `top_logprobs` on its
-            `/get_sequence_logprobs/` endpoint (the same endpoint [`~trl.experimental.distillation.
-            DistillationTrainer`]'s server-teacher path uses). Only these candidates (plus a tail bucket capturing
-            the remaining probability mass, see `add_tail_bucket`) are used
-            to approximate the teacher's distribution, the full vocabulary is never transmitted over HTTP. The
-            student side of the divergence is exact (computed locally, not approximated), since the student is the
-            model being trained and its full logits are already available in `compute_loss`. `8` is a light default
-            for smoke testing; production on-policy-distillation setups in adjacent RL frameworks use a sparse
-            teacher support in roughly the same range (miles defaults to `16`, EasyOPD to `64`), so raising this
-            towards `16`–`64` is reasonable once training for real.
+            Number of per-position candidate tokens requested from the teacher via `prompt_logprobs`. Only these
+            candidates (plus the realized token, which vLLM always reports even when it falls outside the top-k, plus
+            a tail bucket capturing the remaining probability mass, see `add_tail_bucket`) are used to approximate the
+            teacher's distribution, the full vocabulary is never transmitted over HTTP. The student side of the
+            divergence is exact (computed locally, not approximated), since the student is the model being trained and
+            its full logits are already available in `compute_loss`. `8` is a light default for smoke testing;
+            production on-policy-distillation setups in adjacent RL frameworks use a sparse teacher support in roughly
+            the same range (miles defaults to `16`, EasyOPD to `64`), so raising this towards `16`–`64` is reasonable
+            once training for real. Anything above `20` requires the teacher's server to have been started with
+            `--max-logprobs -1`, which lifts vLLM's default per-token logprob cap.
         add_tail_bucket (`bool`, *optional*, defaults to `True`):
             Whether to append a tail bucket representing the remaining probability mass outside `teacher_top_k`, to
             avoid a trivially small divergence when `teacher_top_k` is small.
@@ -238,10 +248,11 @@ class AsyncDistillationConfig(_BaseConfig):
     teacher_server_urls: dict[str, str] | str | None = field(
         default=None,
         metadata={
-            "help": "Teacher vLLM server(s), each started with `trl vllm-serve`; every teacher is static, no "
-            "weights are ever streamed to any of them. Defaults to a single teacher at 'http://localhost:8001'. A "
-            "single entry scores every sample (plain single-teacher on-policy distillation). Multiple entries "
-            "enable MOPD: each row's `teacher_id` column selects which entry scores it."
+            "help": "Teacher vLLM server(s), each started with `vllm serve <model> --logprobs-mode "
+            "processed_logprobs --max-logprobs -1`; every teacher is static, no weights are ever streamed to any of "
+            "them. Defaults to a single teacher at 'http://localhost:8001'. A single entry scores every sample "
+            "(plain single-teacher on-policy distillation). Multiple entries enable MOPD: each row's `teacher_id` "
+            "column selects which entry scores it."
         },
     )
     request_timeout: int = field(
@@ -262,13 +273,17 @@ class AsyncDistillationConfig(_BaseConfig):
     )
     teacher_temperature: float = field(
         default=1.0,
-        metadata={"help": "Softmax temperature applied to the teacher's returned logprobs."},
+        metadata={
+            "help": "Softmax temperature of the divergence, applied to both the teacher's returned logprobs "
+            "(server-side) and the student's own logits. Unrelated to `temperature`, which controls sampling."
+        },
     )
     teacher_top_k: int = field(
         default=8,
         metadata={
             "help": "Number of per-position candidate tokens requested from the teacher's `prompt_logprobs`, used "
-            "to approximate its distribution without transmitting the full vocabulary over HTTP."
+            "to approximate its distribution without transmitting the full vocabulary over HTTP. Above 20, the "
+            "teacher's server must have been started with `--max-logprobs -1`."
         },
     )
     add_tail_bucket: bool = field(

@@ -25,10 +25,13 @@ against a teacher served over HTTP, decoupling generation from the gradient-upda
 [`~trl.experimental.distillation.DistillationTrainer`], the teacher is never loaded locally — only a vLLM server URL
 is needed, so the teacher can live on entirely different hardware from the student/trainer.
 
-The teacher is a static server (`trl vllm-serve`, no weight sync); the student needs its own vLLM server that
-receives live weight updates from the trainer (`vllm serve` with `--weight-transfer-config`).
+The teacher is a static server that is only ever scored (no weight sync); the student needs its own vLLM server that
+receives live weight updates from the trainer (`--weight-transfer-config`).
 
-CUDA_VISIBLE_DEVICES=0 trl vllm-serve --model Qwen/Qwen2.5-1.5B-Instruct --port 8001
+CUDA_VISIBLE_DEVICES=0 vllm serve Qwen/Qwen2.5-1.5B-Instruct \
+    --port 8001 \
+    --logprobs-mode processed_logprobs \
+    --max-logprobs -1
 
 CUDA_VISIBLE_DEVICES=1 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen2.5-0.5B-Instruct \
     --port 8000 \

@@ -25,9 +25,15 @@ more than one entry in `teacher_server_urls`. Each training sample carries a `te
 teacher scores it — here, math prompts (GSM8K) route to a math teacher and code prompts
 (`iamtarun/python_code_instructions_18k_alpaca`) route to a code teacher, each served independently.
 
-CUDA_VISIBLE_DEVICES=0 trl vllm-serve --model Qwen/Qwen2.5-1.5B-Instruct --port 8001
+CUDA_VISIBLE_DEVICES=0 vllm serve Qwen/Qwen2.5-1.5B-Instruct \
+    --port 8001 \
+    --logprobs-mode processed_logprobs \
+    --max-logprobs -1
 
-CUDA_VISIBLE_DEVICES=1 trl vllm-serve --model Qwen/Qwen2.5-Coder-1.5B-Instruct --port 8002
+CUDA_VISIBLE_DEVICES=1 vllm serve Qwen/Qwen2.5-Coder-1.5B-Instruct \
+    --port 8002 \
+    --logprobs-mode processed_logprobs \
+    --max-logprobs -1
 
 CUDA_VISIBLE_DEVICES=2 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen2.5-0.5B-Instruct \
     --port 8000 \

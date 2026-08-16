@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import asyncio
+import math
 import multiprocessing as mp
 import os
 import pickle
@@ -158,18 +159,22 @@ def _child_main(
         raise
 
 
-def _parse_teacher_logprobs_at_position(
-    logprobs: list[float | None], token_ids: list[int]
-) -> tuple[list[int], list[float]]:
-    """Parse one completion position's entry from a `/get_sequence_logprobs/` response.
+def _parse_teacher_logprobs_at_position(position_logprobs: dict[str, dict] | None) -> tuple[list[int], list[float]]:
+    """Parse one completion position's entry of a vLLM `prompt_logprobs` response.
 
-    The server already returns candidates sorted by rank (best first) and capped at `top_logprobs` (plus the
-    realized/actual token if it fell outside that rank, since vLLM's `prompt_logprobs` sampling param always includes
-    it), so, unlike a raw vLLM `prompt_logprobs` dict, there is nothing left to sort here. A `None` logprob marks a NaN
-    value from the server (`math.isnan` guard in `trl/scripts/vllm_serve.py`); such entries are dropped rather than
-    coerced to a sentinel, since they reflect a genuinely invalid score, not a padding slot.
+    vLLM reports `{token_id: {"logprob": ..., "rank": ...}}` per position, holding the top-`teacher_top_k` candidates
+    plus the realized/actual token when that one fell outside the top-k, in unspecified order. Sorting by `rank` puts
+    the teacher's own top-1 candidate first, which is the ordering `_narrow_top1_actual_support` indexes into. Keeping
+    the whole mapping (rather than truncating back to `teacher_top_k`, the way
+    [`~trl.generation.vllm_client.VLLMClient.get_sequence_logprobs`] does for the sync trainers) is what guarantees the
+    realized token is always present, at any rank. A NaN logprob is dropped rather than coerced to a sentinel, since it
+    reflects a genuinely invalid score, not a padding slot; a position vLLM scored no candidate for at all (`None`,
+    e.g. the sequence's very first token) yields empty lists, masked out in `compute_loss`.
     """
-    parsed = [(tid, lp) for tid, lp in zip(token_ids, logprobs, strict=True) if lp is not None]
+    if not position_logprobs:
+        return [], []
+    items = sorted(position_logprobs.items(), key=lambda item: item[1]["rank"])
+    parsed = [(int(tid), entry["logprob"]) for tid, entry in items if not math.isnan(entry["logprob"])]
     if not parsed:
         return [], []
     ids, lps = zip(*parsed, strict=True)
@@ -186,14 +191,13 @@ class _AsyncRolloutLoop:
     loops connected by an internal queue, concurrency across in-flight samples still comes from running up to
     `max_inflight_tasks` such tasks at once, exactly as in the GRPO worker.
 
-    Talks to two kinds of servers, each with its own API: the student's vLLM server via its native OpenAI-compatible
-    `/v1/completions` (real sampling, started with plain `vllm serve`), and one or more teachers' via `trl`'s own
-    `/get_sequence_logprobs/` (teacher-forced scoring of the student's completion, started with `trl vllm-serve`; the
-    same endpoint [`~trl.experimental.distillation.DistillationTrainer`]'s server-teacher path already uses). With
-    multiple teachers configured (`teacher_server_urls`), `_resolve_teacher_server_url` routes each row to its
-    `teacher_id`'s server (MOPD: multi-teacher on-policy distillation). Pushes scored [`RolloutSample`]s into the
-    shared `mp.Queue` (`rollout_buffer`); reads the bumped policy version from the shared `mp.Value`
-    (`model_version_value`).
+    Every server it talks to is a plain `vllm serve`, reached through the same OpenAI-compatible `/v1/completions`
+    endpoint, in two different modes: the student's server samples a real completion (`_generate_one_turn`), and one or
+    more teachers' servers teacher-force that completion and report their own per-position distribution over it
+    (`_score_with_teacher`, no new tokens generated). With multiple teachers configured (`teacher_server_urls`),
+    `_resolve_teacher_server_url` routes each row to its `teacher_id`'s server (MOPD: multi-teacher on-policy
+    distillation). Pushes scored [`RolloutSample`]s into the shared `mp.Queue` (`rollout_buffer`); reads the bumped
+    policy version from the shared `mp.Value` (`model_version_value`).
     """
 
     def __init__(
@@ -254,6 +258,10 @@ class _AsyncRolloutLoop:
         self.teacher_top_k = teacher_top_k
         self.teacher_temperature = teacher_temperature
 
+        # Served model id per teacher, resolved from each teacher server's `/v1/models` in `_run_loops`, since
+        # `/v1/completions` names the model it is addressing and a teacher serves a different one than the student.
+        self.teacher_model_names: dict[str, str] = {}
+
         self._total_completion_tokens = 0
         self._total_samples_scored = 0
         self._generation_start_time: float | None = None
@@ -292,7 +300,24 @@ class _AsyncRolloutLoop:
                 f"top_p={self.top_p}, top_k={self.top_k}, min_p={self.min_p}, "
                 f"repetition_penalty={self.repetition_penalty}"
             )
+            await self._resolve_teacher_model_names()
             await self._generate_loop(stop_event=stop_event)
+
+    async def _resolve_teacher_model_names(self) -> None:
+        """Ask every teacher server which model it serves, so `_score_with_teacher` can name it in its request.
+
+        Doubles as the readiness wait for the teachers: the retry budget is the same generous one the generation and
+        scoring calls use, so a teacher still loading its weights when the worker starts is waited out rather than
+        failing the run.
+        """
+        for teacher_id, url in self.teacher_server_urls.items():
+            models = await _retry_on_http_error(
+                lambda url=url: self._get(url, "/v1/models", self.request_timeout),
+                max_attempts=30,
+                label=f"teacher {teacher_id} /v1/models",
+            )
+            self.teacher_model_names[teacher_id] = models["data"][0]["id"]
+            logger.info(f"teacher {teacher_id!r} at {url} serves {self.teacher_model_names[teacher_id]}")
 
     async def _generate_loop(self, stop_event: asyncio.Event) -> None:
         inflight_tasks: dict[asyncio.Task, int] = {}
@@ -408,7 +433,7 @@ class _AsyncRolloutLoop:
 
         teacher_id, teacher_server_url = self._resolve_teacher_server_url(row)
         teacher_topk_ids, teacher_topk_logprobs = await self._score_with_teacher(
-            prompt_ids, completion_ids, teacher_server_url
+            prompt_ids, completion_ids, teacher_server_url, self.teacher_model_names[teacher_id]
         )
 
         input_ids = prompt_ids + completion_ids
@@ -451,42 +476,53 @@ class _AsyncRolloutLoop:
         return output["choices"][0]["token_ids"]
 
     async def _score_with_teacher(
-        self, prompt_ids: list[int], completion_ids: list[int], teacher_server_url: str
+        self, prompt_ids: list[int], completion_ids: list[int], teacher_server_url: str, teacher_model_name: str
     ) -> tuple[list[list[int]], list[list[float]]]:
-        """Score the student's completion against a teacher via `trl`'s own `/get_sequence_logprobs/` endpoint.
+        """Teacher-force the student's completion through a teacher and read back its per-position distribution.
 
-        This is the same endpoint [`~trl.experimental.distillation.DistillationTrainer`]'s server-teacher path (and
-        `SDFTTrainer`/`SDPOTrainer`) call through [`~trl.generation.vllm_client.VLLMClient.get_sequence_logprobs`]:
-        teacher-forced scoring of an existing sequence (no new tokens generated), returning per-completion-position
-        top-k logprobs already sorted by rank. Unlike driving this by hand against a raw vLLM `/v1/completions`
-        request, this endpoint's `temperature` is applied server-side to vLLM's own logprob computation, so the
-        returned values are exact at whatever `teacher_temperature` is configured, no client-side rescaling needed.
-        `teacher_server_url` (resolved per sample, see `_generate_and_score_one`) must point at a server started with
-        `trl vllm-serve`, not a plain `vllm serve` (the latter only exposes vLLM's native OpenAI-compatible API and
-        NCCL weight-transfer endpoints, which is what the student's server uses instead, the two servers are different
-        binaries with different APIs).
+        `max_tokens=1` generates a single throwaway token (the teacher is never sampled from), and
+        `prompt_logprobs=teacher_top_k` makes the server score every position of the sequence it was handed, reporting
+        the top-`teacher_top_k` candidates plus the realized token when that one fell outside the top-k. This is the
+        request [`~trl.generation.vllm_client.VLLMClient.get_sequence_logprobs`] issues for the synchronous
+        server-teacher trainers; the response is parsed here rather than through that client because it truncates each
+        position back to exactly `top_logprobs` entries and reports the realized token in separate fields, whereas the
+        loss here wants one rank-sorted list per position (see `_parse_teacher_logprobs_at_position`).
+
+        `temperature` reaches the reported logprobs only on a server started with `--logprobs-mode processed_logprobs`,
+        and a `teacher_top_k` above vLLM's default cap of 20 additionally needs `--max-logprobs -1`; `trl vllm-serve`
+        passes both, see `AsyncDistillationConfig.teacher_server_urls` for the equivalent `vllm serve` command.
         """
         payload = {
-            "sequences": [prompt_ids + completion_ids],
-            "prompt_lengths": [len(prompt_ids)],
-            "top_logprobs": self.teacher_top_k,
+            "model": teacher_model_name,
+            "prompt": prompt_ids + completion_ids,
+            "max_tokens": 1,
             "temperature": self.teacher_temperature,
-            "response_format": "json",
+            "prompt_logprobs": self.teacher_top_k,
         }
         output = await _retry_on_http_error(
-            lambda: self._post(teacher_server_url, "/get_sequence_logprobs/", payload, self.request_timeout),
+            lambda: self._post(teacher_server_url, "/v1/completions", payload, self.request_timeout),
             max_attempts=30,
-            label="teacher /get_sequence_logprobs/",
+            label="teacher /v1/completions",
         )
-        # A batch of one sequence in, one sequence's rows out, already restricted to the completion region and
-        # already sorted by rank, so no per-position parsing beyond dropping NaN (`None`) entries is needed.
-        logprobs_row, token_ids_row = output["logprobs"][0], output["logprob_token_ids"][0]
+        # `prompt_logprobs[i]` scores `sequence[i]` conditioned on `sequence[:i]`, so the row spans the whole sequence
+        # and the completion region starts at `len(prompt_ids)`.
+        prompt_logprobs = output["choices"][0]["prompt_logprobs"]
         topk_ids, topk_logprobs = [], []
-        for logprobs, token_ids in zip(logprobs_row, token_ids_row, strict=True):
-            ids, lps = _parse_teacher_logprobs_at_position(logprobs, token_ids)
+        for position in range(len(prompt_ids), len(prompt_logprobs)):
+            ids, lps = _parse_teacher_logprobs_at_position(prompt_logprobs[position])
             topk_ids.append(ids)
             topk_logprobs.append(lps)
         return topk_ids, topk_logprobs
+
+    async def _get(self, base_url: str, path: str, timeout: float, max_retries: int = 3) -> dict:
+        client_timeout = aiohttp.ClientTimeout(total=timeout)
+
+        async def _do_get():
+            async with self.session.get(f"{base_url}{path}", timeout=client_timeout) as response:
+                response.raise_for_status()
+                return await response.json()
+
+        return await _retry_on_http_error(_do_get, label=f"GET {base_url}{path}", max_attempts=max_retries)
 
     async def _post(self, base_url: str, path: str, payload: dict, timeout: float, max_retries: int = 3) -> dict:
         client_timeout = aiohttp.ClientTimeout(total=timeout)
