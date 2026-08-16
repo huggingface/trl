@@ -1,0 +1,45 @@
+{%- if tools %}
+{{- '<|system|>\n' }}
+{%- if messages[0]['role'] == 'system' %}
+{{- messages[0]['content'] }}
+{%- set remaining_messages = messages[1:] %}
+{%- else %}
+{%- set remaining_messages = messages %}
+{%- endif %}
+{{- 'You are a Falcon assistant skilled in function calling. You are helpful, respectful, and concise.\n\n# Tools\n\nYou have access to the following functions. You MUST use them to answer questions when needed. For each function call, you MUST return a JSON object inside <tool_call></tool_call> tags.\n\n<tools>' + tools|tojson(indent=2) + '</tools>\n\n# Output Format\n\nYour response MUST follow this format when making function calls:\n<tool_call>\n[\n  {"name": "function_name", "arguments": {"arg1": "value1", "arg2": "value2"}},\n  {"name": "another_function", "arguments": {"arg": "value"}}\n]\n</tool_call>\nIf no function calls are needed, respond normally without the tool_call tags.\n' }}
+{%- for message in remaining_messages %}
+{%- if message['role'] == 'user' %}
+{{- '<|user|>\n' + message['content'] + '\n' }}
+{%- elif message['role'] == 'assistant' %}
+{%- if message.content %}
+{{- '<|assistant|>\n' + message['content'] }}
+{%- endif %}
+{%- if message.tool_calls %}
+{{- '\n<tool_call>\n' }}
+{{- message.tool_calls|tojson(indent=2) }}
+{{- '\n</tool_call>' }}
+{%- endif %}
+{{- eos_token + '\n' }}
+{%- elif message['role'] == 'tool' %}
+{{- '<|assistant|>\n<tool_response>\n' + message['content'] + '\n</tool_response>\n' }}
+{%- endif %}
+{%- endfor %}
+{{- '<|assistant|>\n' if add_generation_prompt }}
+{%- else %}
+{%- for message in messages %}
+{%- if message['role'] == 'system' %}
+{{- '<|system|>\n' + message['content'] + '\n' }}
+{%- elif message['role'] == 'user' %}
+{{- '<|user|>\n' + message['content'] + '\n' }}
+{%- elif message['role'] == 'assistant' %}
+{%- if not loop.last %}
+{{- '<|assistant|>\n' + message['content'] + eos_token + '\n' }}
+{%- else %}
+{{- '<|assistant|>\n' + message['content'] + eos_token }}
+{%- endif %}
+{%- endif %}
+{%- if loop.last and add_generation_prompt %}
+{{- '<|assistant|>\n' }}
+{%- endif %}
+{%- endfor %}
+{%- endif %}
