@@ -14,9 +14,11 @@
 
 import pickle
 import threading
+from unittest.mock import Mock, patch
 
 import pytest
 
+import trl.rewards.accuracy_rewards as accuracy_rewards_module
 from trl.rewards import (
     accuracy_reward,
     get_cosine_scaled_reward,
@@ -241,6 +243,30 @@ class TestAccuracyReward:
 
 
 class TestReasoningAccuracyReward:
+    def test_uses_last_matching_reasoning_delimiter(self):
+        def fake_parse(value, **kwargs):
+            return ["gold"] if value == "solution" else [value.strip()]
+
+        def fake_verify(gold, answer, **kwargs):
+            return gold == ["gold"] and answer == ["final"]
+
+        with patch.multiple(
+            accuracy_rewards_module,
+            is_math_verify_available=Mock(return_value=True),
+            parse=Mock(side_effect=fake_parse),
+            verify=Mock(side_effect=fake_verify),
+            LatexExtractionConfig=Mock(return_value=object()),
+            NormalizationConfig=Mock(return_value=object()),
+            create=True,
+        ):
+            rewards = reasoning_accuracy_reward(
+                [[{"content": "reasoning </think> stale answer </analysis> final"}]],
+                ["solution"],
+                reasoning_delimiters=["</think>", "</analysis>"],
+            )
+
+        assert rewards == [1.0]
+
     @require_math_latex
     def test_correct_answer_yields_unit_reward(self):
         completions = [
