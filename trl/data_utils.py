@@ -629,15 +629,17 @@ def extract_prompt(example: dict[str, Sequence]) -> dict[str, Sequence]:
      'rejected': [{'role': 'assistant', 'content': 'It is green.'}]}
     ```
     """
-    for idx in range(min(len(example["chosen"]), len(example["rejected"]))):
+    common_length = min(len(example["chosen"]), len(example["rejected"]))
+    for idx in range(common_length):
         if example["chosen"][idx] != example["rejected"][idx]:
-            if example["chosen"][idx - 1] == " ":  # remove space before the prompt
-                idx -= 1
+            common_length = idx
+            if idx > 0 and example["chosen"][idx - 1] == " ":  # remove space before the prompt
+                common_length -= 1
             break
     return {
-        "prompt": example["chosen"][:idx],
-        "chosen": example["chosen"][idx:],
-        "rejected": example["rejected"][idx:],
+        "prompt": example["chosen"][:common_length],
+        "chosen": example["chosen"][common_length:],
+        "rejected": example["rejected"][common_length:],
     }
 
 

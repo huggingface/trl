@@ -1169,6 +1169,26 @@ class TestExtractPrompt(TrlTestCase):
             "The prompt is not correctly extracted from the dataset."
         )
 
+    @pytest.mark.parametrize(
+        ("example", "expected"),
+        [
+            (
+                {"chosen": "same", "rejected": "same"},
+                {"prompt": "same", "chosen": "", "rejected": ""},
+            ),
+            (
+                {"chosen": "", "rejected": ""},
+                {"prompt": "", "chosen": "", "rejected": ""},
+            ),
+            (
+                {"chosen": "a ", "rejected": "b"},
+                {"prompt": "", "chosen": "a ", "rejected": "b"},
+            ),
+        ],
+    )
+    def test_extract_prompt_boundary_cases(self, example, expected):
+        assert extract_prompt(example) == expected
+
     def test_maybe_extract_prompt_standard(self):
         # Test that the prompt is correctly extracted from the dataset with maybe_extract_prompt
         example_extracted_prompt = maybe_extract_prompt(self.example_implicit_prompt_standard)
