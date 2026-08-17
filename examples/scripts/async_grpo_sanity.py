@@ -13,38 +13,36 @@
 # limitations under the License.
 
 """
-AsyncGRPO checkpoint round-trip: train a few steps, push the checkpoint to the Hub, resume in a second job.
+AsyncGRPO sanity run on `sail/Sanity-Test-R1D-1.5B`, checkpointed to the Hub so it can span several jobs.
 
-Launched by `hfjob_async_grpo_smoke.sh` (see it for the vLLM side and the two `hf jobs run` invocations). The two
-stages differ only in environment:
+Launched by `hfjob_async_grpo_smoke.sh` (see it for the GPU split and the vLLM side). Each job trains
+`STEPS_PER_JOB` optimizer steps, pushes its checkpoint to `<HUB_MODEL_ID>/last-checkpoint`, and the next job picks it
+up — so a 2400-step run that no single job could finish becomes a chain of jobs on one trackio run:
 
-    MAX_STEPS=4                 python3 async_grpo_checkpoint_smoke.py   # fresh: saves + pushes checkpoint-4
-    MAX_STEPS=8 RESUME_FROM_HUB=1 python3 async_grpo_checkpoint_smoke.py # resume: pulls it back, trains 5..8
+    ./hfjob_async_grpo_smoke.sh fresh     # steps 1..300
+    ./hfjob_async_grpo_smoke.sh resume    # steps 301..600   (repeat until TOTAL_STEPS)
 
-What the resume is expected to restore, and where each piece comes from:
+The recipe is the one that worked on Slurm (run 7280, final train reward 0.841 against the synchronous reference's
+0.864): oat's `scripts/sanity/bf16_grpo.sh` batch shape and optimizer, with `AsyncGRPOTrainer`'s own loss. Four things
+in here are load-bearing, each of them a run that failed before it was fixed:
 
-* weights, optimizer, LR scheduler, RNG, `global_step` — `Trainer._load_from_checkpoint` /
-  `_load_optimizer_and_scheduler`, i.e. plain `transformers` machinery, same as `SFTTrainer` and `GRPOTrainer`;
-* the position in the prompt dataset — `rollout_state.json`, written next to each checkpoint by
-  `AsyncGRPOTrainer._save_checkpoint`. `GRPOTrainer` gets this for free (its dataloader is a map-style dataset, so
-  `Trainer` fast-forwards the sampler through `skip_first_batches`); here the prompt stream lives in the rollout
-  worker's child process, which starts from scratch in the new job, so the position has to be checkpointed
-  explicitly;
-* the vLLM weights — `_InitialWeightSyncCallback` broadcasts the restored trainer weights on train begin, so the
-  server's copy of the policy is the checkpoint's, not the base model's.
+* `top_p=1.0`. R1-Distill's `generation_config.json` ships `top_p: 0.95`, and vLLM adopts that as a server-side
+  sampling default. Every async run that sampled at 0.95 collapsed (0.539 final reward, entropy 4.5-6.2); the same
+  recipe at 1.0 reached 0.861. `AsyncGRPOConfig` sends `top_p` explicitly on every request, so the default of 1.0 is
+  already correct here — the launcher also passes `--generation-config vllm` so the server's own defaults are out of
+  the picture either way.
+* `dtype="float32"` with bf16 *mixed precision* (fp32 master weights, bf16 autocast), not bf16 parameters. With bf16
+  parameters a 1e-6 Adam step rounds to zero and the reward simply does not move (+0.031 over 2400 steps).
+  Consequence: the trainer holds fp32 weights while vLLM serves bf16, so the trainer logs a precision-mismatch
+  warning at train begin. That warning is expected here and does not describe a problem — it is what every one of the
+  good runs did.
+* 128 completions per optimizer step (`per_device_train_batch_size x gradient_accumulation_steps x num_processes`),
+  with `token_budget=0` so the step size is an exact completion count and not a token target.
+* `adam_beta2=0.95` (oat's default; HF's is 0.999) and a constant 1e-6 LR. The constant schedule is also what makes
+  the job chain safe: there is no decay horizon for a per-job `max_steps` to distort.
 
-Not restored, and not restorable: rollouts that were in flight or sitting in the queue when the first job ended die
-with its process. Those prompts are skipped rather than regenerated — see the `rows_consumed` note in the trainer.
-
-The trackio run name is identical in both stages, and the HF trackio callback inits with `resume="allow"`, so the
-second job appends to the first job's run instead of starting a new one.
-
-The dataset is the sanity check from "Defeating the Training-Inference Mismatch via FP16"
-(https://huggingface.co/papers/2510.26788): 1460 MATH problems filtered so DeepSeek-R1-Distill-Qwen-1.5B solves each
-between 20% and 80% of the time. It is used here for its prompts and its rule-based ground truth, not for its pass
-mark — a handful of steps says nothing about training accuracy. Hyperparameters follow the reference
-`oat/scripts/sanity/bf16_grpo.sh` (lr 1e-6 constant, no KL penalty, 8 rollouts/prompt, temperature 1.0), except for
-the smoke-test budget: 8 completions per optimizer step instead of 128.
+Not the reference recipe: `AsyncGRPOTrainer` hard-codes std-normalized advantages, a token-mean loss normalizer and a
+vLLM-logprob PPO denominator, so this is vanilla async GRPO at the reference's batch size and lag, not Dr. GRPO.
 """
 
 import json
@@ -62,17 +60,43 @@ from trl.experimental.async_grpo import AsyncGRPOConfig, AsyncGRPOTrainer
 
 
 MODEL_ID = "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"
-# Same repo and same run name in both stages: the first job pushes `last-checkpoint/` here, the second pulls it back
-# and continues the same trackio run.
-HUB_MODEL_ID = os.environ.get("HUB_MODEL_ID", "aminediroHF/async-grpo-ckpt-smoke-r1d-1.5b")
-RUN_NAME = os.environ.get("RUN_NAME", "async-grpo-ckpt-smoke")
-OUTPUT_DIR = "/tmp/async-grpo-ckpt-smoke"
-MAX_STEPS = int(os.environ.get("MAX_STEPS", "4"))
-SAVE_STEPS = int(os.environ.get("SAVE_STEPS", "4"))
-# The reference recipe's `--generate_max_length 8192`, and it has to stay there even for a smoke test: at 2048 every
-# single completion hit the cap, oat's no-EOS rule scored all of them 0, and a group of equal rewards has zero
-# advantage — so the run trained on nothing (`loss=0, grad_norm=0`) and its checkpoint was the base model bit for bit.
+# Same repo and same run name in every job of the chain: each pushes `last-checkpoint`, the next pulls it, and trackio
+# appends to the run instead of starting a new one (the HF callback inits with `resume="allow"`).
+HUB_MODEL_ID = os.environ.get("HUB_MODEL_ID", "aminediroHF/async-grpo-sanity-r1d-1.5b")
+RUN_NAME = os.environ.get("RUN_NAME", "async-grpo-hfjobs")
+PROJECT = os.environ.get("PROJECT", "async-grpo-sanity-r1d-1.5b")
+OUTPUT_DIR = "/tmp/async-grpo-sanity"
+
+# How far this job trains, and how far the chain goes in total. `max_steps` is derived from the checkpoint's
+# `global_step`, so `resume` is the same command every time.
+STEPS_PER_JOB = int(os.environ.get("STEPS_PER_JOB", "300"))
+TOTAL_STEPS = int(os.environ.get("TOTAL_STEPS", "2400"))
+# Twice per job by default. The upload runs in a background thread, so an extra save costs a local write and not much
+# else — worth it, because a job that dies between saves loses everything since the last one.
+SAVE_STEPS = int(os.environ.get("SAVE_STEPS", str(max(STEPS_PER_JOB // 2, 1))))
+
+# The reference's `--generate_max_length 8192`. Do not lower it for a quick run: at 2048 every completion is truncated,
+# oat's no-EOS rule scores all of them 0, and a group of equal rewards has zero advantage — the run trains on nothing.
 MAX_COMPLETION_LENGTH = int(os.environ.get("MAX_COMPLETION_LENGTH", "8192"))
+
+# Batch shape. The product `PDTB x ACCUM x num_processes` must stay 128 (the recipe's `--train_batch_size`); the
+# launcher sets ACCUM from the number of trainer GPUs it gives this job. PDTB=2 (over 7127's 1) was measured at 1.6x
+# the throughput for the same final reward, because per-iteration overhead scales with the microbatch count.
+PDTB = int(os.environ.get("PDTB", "2"))
+ACCUM = int(os.environ.get("ACCUM", "16"))
+# The reference generates 512 completions per rollout batch and consumes them in 4 minibatches, so its samples are up
+# to ~3 optimizer steps stale; 5 with `weight_sync_steps=4` reproduces that lag.
+MAX_STALENESS = int(os.environ.get("MAX_STALENESS", "5"))
+WEIGHT_SYNC_STEPS = int(os.environ.get("WEIGHT_SYNC_STEPS", "4"))
+
+# `bf16` and `fp16` here mean mixed precision on top of fp32 master weights, which is what the paper's two arms are.
+# They finished 0.841 and 0.867, i.e. indistinguishable once `top_p` is correct. The launcher derives vLLM's `--dtype`
+# from the same variable so the two sides cannot drift apart.
+PRECISION = os.environ.get("PRECISION", "bf16")
+if PRECISION not in ("bf16", "fp16"):
+    raise ValueError(f"PRECISION must be 'bf16' or 'fp16', got {PRECISION!r}")
+# The dtype the *parameters* are held in. Leave at float32; `bfloat16` reproduces the run that went nowhere.
+DTYPE = os.environ.get("DTYPE", "float32")
 
 # Response template for the rollout worker. `add_response_schema` only knows a fixed allowlist of chat templates and
 # R1-Distill's is not one of them, so one has to be set up front (the worker skips its own lookup when one is present).
@@ -196,27 +220,38 @@ def format_sample(sample):
     return {"prompt": sample["prompt"], "solution": sample["reward_model"]["ground_truth"]}
 
 
-def pull_last_checkpoint() -> str:
-    """Download the `last-checkpoint/` folder pushed by the previous job, and return its local path.
+def pull_last_checkpoint() -> tuple[str, int]:
+    """Download the `last-checkpoint/` folder pushed by the previous job; return its path and its `global_step`.
 
     `hub_strategy="checkpoint"` uploads the whole checkpoint folder — weights, optimizer, scheduler, RNG,
-    `trainer_state.json` and this trainer's `rollout_state.json` — under that single path in the model repo, so a
-    job that starts on a bare filesystem can pick it up. Nothing in `Trainer` does this download for you.
+    `trainer_state.json` and this trainer's `rollout_state.json` — under that single path in the model repo, so a job
+    that starts on a bare filesystem can pick it up. Nothing in `Trainer` does this download for you.
 
-    Downloaded outside `output_dir` on purpose: every push also mirrors `output_dir` itself to the repo root, and a
-    copy of the old checkpoint sitting in there would be uploaded alongside — racing the new one.
+    Downloaded outside `output_dir` on purpose: every push also mirrors `output_dir` to the repo root, and a copy of
+    the old checkpoint sitting in there would be uploaded alongside — racing the new one.
     """
     path = snapshot_download(repo_id=HUB_MODEL_ID, allow_patterns="last-checkpoint/*", local_dir="/tmp/resume-from")
     checkpoint = os.path.join(path, "last-checkpoint")
     with open(os.path.join(checkpoint, "trainer_state.json")) as f:
         global_step = json.load(f)["global_step"]
     with open(os.path.join(checkpoint, "rollout_state.json")) as f:
-        rows_consumed = json.load(f)["rows_consumed"]
-    print(f"[resume] {HUB_MODEL_ID}/last-checkpoint: global_step={global_step}, rows_consumed={rows_consumed}")
-    return checkpoint
+        rollout_state = json.load(f)
+    print(f"[resume] {HUB_MODEL_ID}/last-checkpoint: global_step={global_step}, {rollout_state}")
+    return checkpoint, global_step
 
 
 def main() -> None:
+    if os.environ.get("RESUME_FROM_HUB") == "1":
+        checkpoint, done_steps = pull_last_checkpoint()
+    else:
+        checkpoint, done_steps = None, 0
+
+    max_steps = min(done_steps + STEPS_PER_JOB, TOTAL_STEPS)
+    if max_steps <= done_steps:
+        print(f"[skip] the chain is already at step {done_steps} of {TOTAL_STEPS}; nothing to do")
+        return
+    print(f"[plan] training steps {done_steps + 1}..{max_steps} of {TOTAL_STEPS}, saving every {SAVE_STEPS}")
+
     dataset = load_dataset("sail/Sanity-Test-R1D-1.5B", split="train")
     dataset = dataset.map(format_sample, remove_columns=dataset.column_names)
 
@@ -225,46 +260,38 @@ def main() -> None:
 
     config = AsyncGRPOConfig(
         output_dir=OUTPUT_DIR,
-        # The trainer defaults to float32; bfloat16 matches the dtype the launcher serves vLLM in, so the
-        # precision-mismatch warning stays silent, and it halves what every checkpoint push has to upload. Note this
-        # is *pure* bf16, not fp32 master weights — fine for exercising a checkpoint round-trip, wrong for measuring
-        # training quality at lr 1e-6. `bf16=True` only keeps accelerate's mixed precision consistent with the
-        # parameter dtype; with bf16 parameters its autocast is a formality.
-        dtype="bfloat16",
-        bf16=True,
+        dtype=DTYPE,
+        bf16=PRECISION == "bf16",
+        fp16=PRECISION == "fp16",
         num_generations=8,
         temperature=1.0,
+        top_p=1.0,
         max_completion_length=MAX_COMPLETION_LENGTH,
-        learning_rate=1e-6,
-        # oat's `PPOArgs` defaults to adam_beta_2=0.95; HF `TrainingArguments` defaults to 0.999.
+        # `learning_rate=1e-6`, `lr_scheduler_type="constant"`, `gradient_checkpointing=True` and `logging_steps=1` are
+        # already `AsyncGRPOConfig`'s defaults, and all four are what the recipe asks for.
         adam_beta2=0.95,
-        # Constant LR (the reference recipe's) is what makes the two stages comparable at all: with the default linear
-        # decay, the resumed job's larger `max_steps` would rescale the schedule under the restored optimizer.
-        lr_scheduler_type="constant",
-        # `token_budget=0` selects `FixedCountBatcher`, so the step size is an exact completion count rather than a
-        # token target: 1 x 8 accumulation x 1 process = 8 completions = 1 prompt group per optimizer step. Small on
-        # purpose — it keeps the dataset position small enough to eyeball in the logs across the two jobs.
-        per_device_train_batch_size=1,
-        gradient_accumulation_steps=8,
+        per_device_train_batch_size=PDTB,
+        gradient_accumulation_steps=ACCUM,
         token_budget=0,
-        max_staleness=4,
-        max_steps=MAX_STEPS,
+        max_staleness=MAX_STALENESS,
+        weight_sync_steps=WEIGHT_SYNC_STEPS,
+        # `max_inflight_tasks` is left to auto: `max_staleness x 128` = 640, matching the reference's rollout batch of
+        # 64 prompts x 8 samples times its staleness.
+        max_steps=max_steps,
         save_strategy="steps",
         save_steps=SAVE_STEPS,
         save_total_limit=1,
-        # `hub_strategy="checkpoint"` is the load-bearing part: it mirrors the full checkpoint folder to
-        # `last-checkpoint/` in the repo. `hub_always_push` stops a save from being skipped because the previous
-        # ~9 GB upload is still in flight.
+        # `hub_strategy="checkpoint"` is what mirrors the full checkpoint folder to `last-checkpoint/` in the repo, and
+        # `hub_always_push` stops a save from being skipped because the previous ~21 GB upload is still in flight.
         push_to_hub=True,
         hub_model_id=HUB_MODEL_ID,
         hub_strategy="checkpoint",
         hub_always_push=True,
-        logging_steps=1,
         vllm_server_base_url=os.environ.get("SERVE_URL", "http://localhost:8000"),
         report_to="trackio",
         run_name=RUN_NAME,
-        project="async-grpo-ckpt-smoke",
-        trackio_space_id="async-grpo-ckpt-smoke",
+        project=PROJECT,
+        trackio_space_id=PROJECT,
     )
     trainer = AsyncGRPOTrainer(
         model=MODEL_ID,
@@ -273,11 +300,10 @@ def main() -> None:
         processing_class=tokenizer,
         reward_funcs=r1_distill_math_reward,
     )
-
-    checkpoint = pull_last_checkpoint() if os.environ.get("RESUME_FROM_HUB") == "1" else None
     trainer.train(resume_from_checkpoint=checkpoint)
 
-    print(f"[done] global_step={trainer.state.global_step}, rows_consumed={trainer.rollout_worker.rows_consumed}")
+    if trainer.rollout_worker is not None:
+        print(f"[done] global_step={trainer.state.global_step}, rows_consumed={trainer.rollout_worker.rows_consumed}")
 
 
 if __name__ == "__main__":
