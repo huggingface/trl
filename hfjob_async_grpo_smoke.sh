@@ -24,13 +24,12 @@ MAX_MODEL_LEN=3072
 STAGE=${1:-}
 
 submit() {
-    local stage=$1 max_steps=$2 resume=$3 job_id
-    # `-q` reduces stdout to the job id so it can be captured; `--` keeps the inlined script below out of reach of the
-    # CLI's global flag stripper. --timeout covers image pull + vLLM load + the steps + a ~9 GB checkpoint upload.
-    job_id=$(uvx hf jobs run \
-        -q \
+    local stage=$1 max_steps=$2 resume=$3 out job_id
+    # `--` keeps the inlined script below out of reach of the CLI's global flag stripper. --timeout covers image pull +
+    # vLLM load + the steps + a ~9 GB checkpoint upload.
+    out=$(uvx hf jobs run \
         --flavor h200x2 \
-        --timeout 50m \
+        --timeout 60m \
         --detach \
         --name "async-grpo-ckpt-${stage}" \
         --secrets HF_TOKEN \
@@ -44,6 +43,9 @@ submit() {
         -- \
         vllm/vllm-openai:latest \
         bash -c "$(cat "$0")" async-grpo-ckpt-smoke in-job)
+    # The CLI formats that line differently depending on whether it thinks it is talking to a human, an agent or a
+    # script, and every one of those forms carries the 24-hex job id — so pull that out rather than trusting a shape.
+    job_id=$(printf '%s\n' "$out" | grep -oE '[0-9a-f]{24}' | head -1)
     echo "$job_id" > "/tmp/async-grpo-ckpt-${stage}.job"
     echo "submitted ${stage} (max_steps=${max_steps}, resume=${resume}): ${job_id}"
     echo "follow with: $0 logs"
@@ -60,7 +62,14 @@ in_job() {
     # nccl weight-transfer backend and the trainer, so nothing in that stack gets upgraded here. There is no `python`
     # and no `git` in this image: use `python3`, and fetch the branch as a tarball.
     python3 -c "import vllm, torch, transformers; print('vllm', vllm.__version__, '| torch', torch.__version__, '| transformers', transformers.__version__)"
-    curl -sL "https://github.com/huggingface/trl/archive/refs/heads/${BRANCH}.tar.gz" | tar xz -C /tmp
+    # codeload is where the /archive/ URL redirects anyway, and `-f` is load-bearing: GitHub rate-limits datacenter
+    # IPs, and without it curl pipes the "429: Too Many Requests" body straight into tar ("not in gzip format").
+    for attempt in 1 2 3 4 5; do
+        if curl -fsSL -o /tmp/trl.tar.gz "https://codeload.github.com/huggingface/trl/tar.gz/refs/heads/${BRANCH}"; then break; fi
+        echo "tarball fetch failed (attempt ${attempt}/5); retrying in 20s"
+        sleep 20
+    done
+    tar xzf /tmp/trl.tar.gz -C /tmp
     TRL_DIR=/tmp/trl-${BRANCH}
     # `kernels` is what fetches `kernels-community/flash-attn3` at the first forward (hardcoded by the trainer).
     pip install -q "$TRL_DIR" kernels trackio math-verify latex2sympy2_extended
