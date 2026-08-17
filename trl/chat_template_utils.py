@@ -556,10 +556,33 @@ gemma4_template = {
     },
 }
 
+deepseek_r1_distill_template = {
+    # DeepSeek-R1-Distill prefills the assistant turn with the `<think>` opener, so the start anchor consumes it.
+    # Reasoning content is therefore not framed by a `<think>` open in the model output; the zero-width `open_pattern`
+    # only activates the reasoning field when a closing `</think>` is actually present, so a turn with no reasoning is
+    # parsed entirely as content. No tool calls: the template drops `tool_calls` whenever `content` is set and never
+    # closes a single-call turn, so `supports_tool_calling` rejects it and there is nothing to parse.
+    "defaults": {"role": "assistant"},
+    "start_anchor": "<｜Assistant｜><think>\n",
+    "fields": {
+        "reasoning_content": {
+            "open_pattern": r"(?=[\s\S]*?</think>)",
+            "close_pattern": r"</think>\s*",
+            "content": "text",
+        },
+        "content": {
+            "close_pattern": r"<｜end▁of▁sentence｜>\s*|$",
+            "content": "text",
+        },
+    },
+}
+
 
 cohere_chat_template = (_CHAT_TEMPLATES_DIR / "cohere.jinja").read_text(encoding="utf-8")
 
 cohere2_chat_template = (_CHAT_TEMPLATES_DIR / "cohere2.jinja").read_text(encoding="utf-8")
+
+deepseek_r1_distill_chat_template = (_CHAT_TEMPLATES_DIR / "deepseek_r1_distill.jinja").read_text(encoding="utf-8")
 
 deepseekv3_chat_template = (_CHAT_TEMPLATES_DIR / "deepseekv3.jinja").read_text(encoding="utf-8")
 
@@ -697,6 +720,10 @@ def add_response_schema(processing_class: ProcessingClassT) -> ProcessingClassT:
         # Only the new-style template; recent Gemma 4 repos ship a `response_template` natively, and the legacy
         # `response_schema` is being removed upstream (huggingface/transformers#47320).
         schema, template = None, gemma4_template
+    elif chat_template == deepseek_r1_distill_chat_template:
+        # Only the new-style template; the legacy `response_schema` is being removed upstream
+        # (huggingface/transformers#47320).
+        schema, template = None, deepseek_r1_distill_template
     else:
         raise ValueError(
             "Unrecognized chat template, failed to add response schema. Please manually set the response schema on "
@@ -920,6 +947,10 @@ cohere_training_chat_template = (_CHAT_TEMPLATES_DIR / "cohere_training.jinja").
 
 cohere2_training_chat_template = (_CHAT_TEMPLATES_DIR / "cohere2_training.jinja").read_text(encoding="utf-8")
 
+deepseek_r1_distill_training_chat_template = (_CHAT_TEMPLATES_DIR / "deepseek_r1_distill_training.jinja").read_text(
+    encoding="utf-8"
+)
+
 deepseekv3_training_chat_template = (_CHAT_TEMPLATES_DIR / "deepseekv3_training.jinja").read_text(encoding="utf-8")
 
 diffusion_gemma_training_chat_template = (_CHAT_TEMPLATES_DIR / "diffusion_gemma_training.jinja").read_text(
@@ -992,9 +1023,9 @@ def get_training_chat_template(
 
     Returns a patched chat template that is prefix-preserving and includes `{%% generation %%}` / `{%% endgeneration
     %%}` markers for assistant-only loss masking. Returns `None` if the template already satisfies both requirements.
-    Currently Cohere, Cohere 2, DeepSeek-V3, Gemma, Gemma 2, Gemma 3, GLM-4-MoE, GPT-OSS, Idefics3, LFM2, LLaMA 3,
-    Phi-3, Phi-3.5, Qwen2-VL, Qwen2.5, Qwen2.5-VL, Qwen3 (including the Instruct-2507 variant), Qwen3-VL, Qwen3.5,
-    Qwen3.6, and Qwen3.8 are supported.
+    Currently Cohere, Cohere 2, DeepSeek-R1-Distill, DeepSeek-V3, Gemma, Gemma 2, Gemma 3, GLM-4-MoE, GPT-OSS,
+    Idefics3, LFM2, LLaMA 3, Phi-3, Phi-3.5, Qwen2-VL, Qwen2.5, Qwen2.5-VL, Qwen3 (including the Instruct-2507
+    variant), Qwen3-VL, Qwen3.5, Qwen3.6, and Qwen3.8 are supported.
 
     Args:
         processing_class (`PreTrainedTokenizerBase` or `ProcessorMixin`):
@@ -1065,6 +1096,9 @@ def get_training_chat_template(
 
     if processing_class.chat_template == cohere2_chat_template:
         return cohere2_training_chat_template
+
+    if processing_class.chat_template == deepseek_r1_distill_chat_template:
+        return deepseek_r1_distill_training_chat_template
 
     if processing_class.chat_template == deepseekv3_chat_template:
         return deepseekv3_training_chat_template

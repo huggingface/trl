@@ -104,7 +104,7 @@ def main(slack_channel_name):
                 ]
                 message += (
                     "\n```\n"
-                    + tabulate(failed_table, headers=["Test Location", "Test Name"], tablefmt="grid")
+                    + tabulate(failed_table, headers=["File", "Class", "Test Name"], tablefmt="grid")
                     + "\n```\n"
                 )
 

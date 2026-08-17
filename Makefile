@@ -12,7 +12,7 @@ precommit:
 	pre-commit run --all-files
 
 slow_tests:
-	pytest -m "slow" tests/ $(if $(IS_GITHUB_CI),--report-log "slow_tests.log",)
+	pytest -m "slow" tests/ $(if $(GITHUB_ACTIONS),--report-log "slow_tests.log",)
 
 test_experimental:
 	pytest -n auto -s -v tests/experimental

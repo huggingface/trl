@@ -8,8 +8,6 @@ on:
       - "trl/**.py"
       - "examples/**.py"
 env:
-  RUN_SLOW: "yes"
-  IS_GITHUB_CI: "1"
   SLACK_API_TOKEN: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
   HF_TOKEN: ${{ secrets.HF_TOKEN }}
   TRL_EXPERIMENTAL_SILENCE: 1
@@ -50,7 +48,6 @@ jobs:
           uv pip install pytest-reportlog
 
       - name: Run slow tests on single GPU
-        if: always()
         run: |
           source .venv/bin/activate
           make slow_tests
@@ -97,7 +94,6 @@ jobs:
           uv pip install pytest-reportlog
 
       - name: Run slow tests on Multi GPU
-        if: always()
         run: |
           source .venv/bin/activate
           make slow_tests
