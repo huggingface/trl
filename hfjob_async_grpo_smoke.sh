@@ -102,7 +102,17 @@ in_job() {
     tar xzf /ship/trl.tar.gz -C /tmp
     TRL_DIR=/tmp/trl-src
     # `kernels` is what fetches `kernels-community/flash-attn3` at the first forward (hardcoded by the trainer).
-    pip install -q "$TRL_DIR" kernels trackio math-verify latex2sympy2_extended
+    # Retried because this is the one step that can lose a whole scheduling slot to somebody else's outage: a run died
+    # here when files.pythonhosted.org answered 502 often enough to exhaust pip's own retries.
+    for attempt in 1 2 3 4 5; do
+        if pip install -q --retries 10 --timeout 60 "$TRL_DIR" kernels trackio math-verify latex2sympy2_extended; then
+            break
+        fi
+        echo "pip install failed (attempt ${attempt}/5); retrying in 30s"
+        sleep 30
+    done
+    # Fail here rather than 20 minutes later inside the trainer if the installs never landed.
+    python3 -c "import kernels, trackio, math_verify"
     python3 -c "import trl; print('trl', trl.__version__)"
 
     # The last N_VLLM devices serve, the first N_TRAIN train. Same node, so the weight-transfer group is local.
