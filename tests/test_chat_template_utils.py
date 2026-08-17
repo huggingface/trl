@@ -169,6 +169,14 @@ class TestAddResponseSchema:
                     reason="Nemotron 3 tokenizer requires transformers>=5.3.0",
                 ),
             ),
+            pytest.param(
+                "trl-internal-testing/tiny-NemotronHForCausalLM-3.5-lightning",
+                id="nemotron_3_5_lightning",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.3.0"),
+                    reason="Nemotron 3.5 tokenizer requires transformers>=5.3.0",
+                ),
+            ),
             pytest.param("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", id="qwen2.5"),
             pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM", id="qwen3"),
             pytest.param("trl-internal-testing/tiny-Qwen3ForCausalLM-Instruct-2507", id="qwen3_instruct_2507"),
@@ -315,6 +323,14 @@ class TestSupportsToolCalling:
                     reason="Nemotron 3 tokenizer requires transformers>=5.3.0",
                 ),
             ),
+            pytest.param(
+                "trl-internal-testing/tiny-NemotronHForCausalLM-3.5-lightning",
+                id="nemotron_3_5_lightning",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.3.0"),
+                    reason="Nemotron 3.5 tokenizer requires transformers>=5.3.0",
+                ),
+            ),
             pytest.param("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", id="qwen2.5"),
             pytest.param("trl-internal-testing/tiny-Qwen3ForCausalLM", id="qwen3"),
             pytest.param("trl-internal-testing/tiny-Qwen3ForCausalLM-Instruct-2507", id="qwen3_instruct_2507"),
@@ -402,6 +418,9 @@ class TestSupportsToolCalling:
             # emit <|tool_call_start|> / <|tool_call_end|> as plain text inside `content`.
             pytest.param("trl-internal-testing/tiny-Lfm2ForCausalLM", id="lfm2"),
             pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3", id="llama3"),
+            # DeepSeek-R1-Distill renders `tool_calls` only when `content` is `None`, and never closes a single-call
+            # turn with `<｜tool▁calls▁end｜>`.
+            pytest.param("trl-internal-testing/tiny-Qwen2ForCausalLM-R1-Distill", id="r1_distill"),
             pytest.param("trl-internal-testing/tiny-Qwen2VLForConditionalGeneration", id="qwen2_vl"),
             pytest.param("trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration", id="qwen2.5_vl"),
         ],
@@ -621,6 +640,7 @@ class TestIsChatTemplateStopTokenTrained:
     [
         pytest.param("trl-internal-testing/tiny-CohereForCausalLM", id="cohere"),
         pytest.param("trl-internal-testing/tiny-Cohere2ForCausalLM", id="cohere2"),
+        pytest.param("trl-internal-testing/tiny-Qwen2ForCausalLM-R1-Distill", id="r1_distill"),
         pytest.param("trl-internal-testing/tiny-DeepseekV3ForCausalLM", id="deepseekv3"),
         pytest.param(
             "trl-internal-testing/tiny-DiffusionGemmaForBlockDiffusion",
@@ -676,6 +696,14 @@ class TestIsChatTemplateStopTokenTrained:
             marks=pytest.mark.skipif(
                 Version(transformers.__version__) < Version("5.3.0"),
                 reason="Nemotron 3 tokenizer requires transformers>=5.3.0",
+            ),
+        ),
+        pytest.param(
+            "trl-internal-testing/tiny-NemotronHForCausalLM-3.5-lightning",
+            id="nemotron_3_5_lightning",
+            marks=pytest.mark.skipif(
+                Version(transformers.__version__) < Version("5.3.0"),
+                reason="Nemotron 3.5 tokenizer requires transformers>=5.3.0",
             ),
         ),
         pytest.param("trl-internal-testing/tiny-Phi3ForCausalLM-3", id="phi3"),
@@ -857,6 +885,11 @@ class TestGetTrainingChatTemplate:
             # by the following message's role marker. The training template appends that terminator to the final
             # assistant turn so the stop token is trained — here the `<|user|>` that would open the next turn.
             assert after == before + "<|user|>"
+        elif tokenizer_name == "trl-internal-testing/tiny-Qwen2ForCausalLM-R1-Distill":
+            # DeepSeek-R1-Distill's native template drops everything up to and including `</think>` when re-rendering
+            # an assistant turn. The training template keeps the reasoning, so it stays in the SFT target.
+            reasoning = "<think>\nThe sky scatters shorter wavelengths.\n</think>"
+            assert after == before.replace("<｜Assistant｜>", "<｜Assistant｜>" + reasoning)
         else:
             assert before == after
 
@@ -1073,6 +1106,14 @@ class TestGetTrainingChatTemplate:
             marks=pytest.mark.skipif(
                 Version(transformers.__version__) < Version("5.3.0"),
                 reason="Nemotron 3 tokenizer requires transformers>=5.3.0",
+            ),
+        ),
+        pytest.param(
+            "trl-internal-testing/tiny-NemotronHForCausalLM-3.5-lightning",
+            id="nemotron_3_5_lightning",
+            marks=pytest.mark.skipif(
+                Version(transformers.__version__) < Version("5.3.0"),
+                reason="Nemotron 3.5 tokenizer requires transformers>=5.3.0",
             ),
         ),
         pytest.param("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", id="qwen2.5"),

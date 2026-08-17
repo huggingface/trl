@@ -21,6 +21,10 @@ Original Cohere Command chat template (as shipped by `CohereForAI/c4ai-command-r
 
 Original Cohere2 chat template (as shipped by `CohereLabs/c4ai-command-r7b-12-2024` and related checkpoints).
 
+### `deepseek_r1_distill.jinja`
+
+Original DeepSeek-R1-Distill chat template, shipped byte-identically by every distill checkpoint (both the Qwen and the Llama ones). It prefills the assistant turn with `<｜Assistant｜><think>\n`, so the model's output starts inside the reasoning block; response parsing uses `deepseek_r1_distill_template`. Assistant turns are re-rendered without their reasoning (the template drops everything up to and including `</think>`), and `tool_calls` are silently dropped whenever `content` is set, so the template does not support tool calling.
+
 ### `deepseekv3.jinja`
 
 Original DeepSeek-V3 chat template.
@@ -85,6 +89,10 @@ Original Nemotron Super chat template (as shipped by `nvidia/NVIDIA-Nemotron-3-S
 
 Original Nemotron Ultra chat template (as shipped by `nvidia/NVIDIA-Nemotron-3-Ultra-*` checkpoints). Same as `nemotron_3_nano.jinja` except it adds a `medium_effort` flag that appends a `{reasoning effort: efficient}` hint to the last user message, and tightens the whitespace around the `<think>` block. Tool calls use the same Hermes-style format, so it also reuses `qwen3_5_schema` for response parsing.
 
+### `nemotron_3_5_lightning.jinja`
+
+Original Nemotron 3.5 Lightning chat template (as shipped by `nvidia/NVIDIA-Nemotron-3.5-Lightning-*` checkpoints). Same as `nemotron_3_ultra.jinja` except it drops the `medium_effort` flag. Tool calls use the same Hermes-style format, so it also reuses `qwen3_5_schema` for response parsing.
+
 ### `phi3.jinja`
 
 Original Phi-3 chat template.
@@ -135,6 +143,13 @@ Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so
 Patched Cohere2 template. Diff vs `cohere2.jinja`:
 
 Move the trailing `<|END_OF_TURN_TOKEN|>` from after the role-dispatch `{% endif %}` into each role branch, so it can be wrapped together with the assistant content. Wrap the assistant branch (`<|START_RESPONSE|>...<|END_RESPONSE|><|END_OF_TURN_TOKEN|>`) with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+
+### `deepseek_r1_distill_training.jinja`
+
+Patched DeepSeek-R1-Distill template. Diff vs `deepseek_r1_distill.jinja`:
+
+- Removes the `'</think>'` split on assistant content, so the reasoning block is always rendered. The original drops everything up to and including `</think>` — fine for inference history, but it would silently remove the reasoning from the SFT training target.
+- Wraps assistant message output with `{% generation %}` / `{% endgeneration %}` markers for SFT assistant-only loss.
 
 ### `deepseekv3_training.jinja`
 
@@ -213,6 +228,13 @@ Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so
 ### `nemotron_3_ultra_training.jinja`
 
 Patched Nemotron Ultra template. Diff vs `nemotron_3_ultra.jinja`:
+
+Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that
+`return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+
+### `nemotron_3_5_lightning_training.jinja`
+
+Patched Nemotron 3.5 Lightning template. Diff vs `nemotron_3_5_lightning.jinja`:
 
 Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that
 `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
