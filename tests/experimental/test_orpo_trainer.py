@@ -14,7 +14,7 @@
 
 import pytest
 import torch
-from datasets import Dataset, DatasetDict, load_dataset
+from datasets import DatasetDict, load_dataset
 from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokenizer
 
 from trl.experimental.orpo import ORPOConfig, ORPOTrainer
