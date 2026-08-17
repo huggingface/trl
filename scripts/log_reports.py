@@ -64,15 +64,15 @@ def main():
     for log in log_files:
         failed, passed = process_log_file(log)
 
-        if not failed and not passed:
-            print(f"⚠️ Empty log file `{log}`! Check the GitHub action job.")
-        elif failed:
+        if failed:
             print(f"### ❌ {len(failed)} failed test(s) in `{log}`")
             failed_table = [test[0].split("::")[:2] + [test[0].split("::")[-1][:30] + ".."] for test in failed]
             table = tabulate(failed_table, headers=["File", "Class", "Test Name"], tablefmt="grid")
             print(f"\n```\n{table}\n```\n")
-        else:
+        elif passed:
             print(f"### ✅ No failures, all {len(passed)} test(s) passed in `{log}`")
+        else:
+            print(f"⚠️ Empty log file `{log}`! Check the GitHub action job.")
 
         # Clean up log file
         try:
