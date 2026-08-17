@@ -15,6 +15,7 @@
 import asyncio
 import enum
 import inspect
+import itertools
 import multiprocessing as mp
 import os
 import pickle
@@ -244,6 +245,7 @@ def _child_main(
     loop_kwargs: dict[str, Any],
     samples_queue: MPQueue,
     model_version_value: MPValue,
+    rows_consumed_value: MPValue,
     stop_event: MPEvent,
     child_ready_event: MPEvent,
     heartbeat_value: MPValue,
@@ -260,6 +262,7 @@ def _child_main(
         **loop_kwargs,
         rollout_buffer=samples_queue,
         model_version_value=model_version_value,
+        rows_consumed_value=rows_consumed_value,
         heartbeat_value=heartbeat_value,
         failed_event=failed_event,
         exception_info_queue=exception_info_queue,
@@ -278,7 +281,8 @@ class _AsyncRolloutLoop:
 
     Owns the tokenizer, dataset iterator, reward funcs, environments, and the asyncio event loop. Talks to vLLM via
     `/v1/completions`. Pushes scored `RolloutSample`s into the shared `mp.Queue` (`rollout_buffer`); reads the bumped
-    policy version from the shared `mp.Value` (`model_version_value`).
+    policy version from the shared `mp.Value` (`model_version_value`) and publishes its position in the prompt dataset
+    to the shared `mp.Value` (`rows_consumed_value`), which the parent checkpoints and restores.
     """
 
     # Class attribute: declares that this loop produces its own per-rollout reward
@@ -293,6 +297,7 @@ class _AsyncRolloutLoop:
         processing_class: PreTrainedTokenizerBase,
         rollout_buffer: MPQueue,
         model_version_value: MPValue,
+        rows_consumed_value: MPValue,
         heartbeat_value: MPValue,
         failed_event: MPEvent,
         exception_info_queue: MPQueue,
@@ -317,7 +322,6 @@ class _AsyncRolloutLoop:
     ):
         self.model_name = model_name
         self.dataset = dataset
-        self._dataset_iter = iter(dataset)
         self.reward_funcs = reward_funcs
         self.reward_func_names = [get_callable_name(f) for f in reward_funcs]
         # `add_response_schema` sets the response template (transformers >= 5.13) or legacy schema for known chat
@@ -336,6 +340,7 @@ class _AsyncRolloutLoop:
         self.tokenizer = processing_class
         self.rollout_buffer = rollout_buffer  # shared mp.Queue
         self._model_version_value = model_version_value  # shared mp.Value
+        self._rows_consumed_value = rows_consumed_value  # shared mp.Value('l'); prompt-dataset position
         self._heartbeat_value = heartbeat_value  # shared mp.Value('d'); wall-clock seconds
         self._failed_event = failed_event  # shared mp.Event
         self._exception_info_queue = exception_info_queue  # shared mp.Queue(maxsize=1)
@@ -706,16 +711,22 @@ class _AsyncRolloutLoop:
             sample.metrics["buffer_qsize"] = self.rollout_buffer.qsize()
 
     def _repeat_iterator(self) -> Iterator[tuple[int, dict[str, Any]]]:
-        group_id = 0
+        # `group_id` advances by one per prompt consumed, so it *is* the position in the (endlessly cycled) prompt
+        # dataset. It starts from `rows_consumed`, which the parent restores from a checkpoint before `start()`, and is
+        # published back after every prompt so the next checkpoint records where generation got to. `islice` skips into
+        # the epoch the checkpoint stopped in.
+        group_id = int(self._rows_consumed_value.value)
+        dataset_iter = itertools.islice(iter(self.dataset), group_id % len(self.dataset), None)
         while True:
             try:
-                row = next(self._dataset_iter)
+                row = next(dataset_iter)
             except StopIteration:
-                self._dataset_iter = iter(self.dataset)
-                row = next(self._dataset_iter)
+                dataset_iter = iter(self.dataset)
+                row = next(dataset_iter)
             for _ in range(self.num_generations):
                 yield group_id, row
             group_id += 1
+            self._rows_consumed_value.value = group_id
 
     async def _generate_one(
         self, prompt: Messages, tool_dict: dict[str, Callable], tools: list[Callable], group_id: int = 0
@@ -956,6 +967,9 @@ class AsyncRolloutWorker:
         self._mp_ctx = ctx
         self.rollout_buffer = ctx.Queue(maxsize=queue_maxsize)
         self._model_version_value = ctx.Value("i", 0)
+        # Position in the prompt dataset, published by the child and checkpointed by the trainer. 'l' (not 'i') because
+        # it counts prompts across every epoch, not modulo the dataset length.
+        self._rows_consumed_value = ctx.Value("l", 0)
         self._stop_event_mp = ctx.Event()
         self._child_ready_event = ctx.Event()
         # Liveness state shared with the child. Wall-clock seconds because monotonic() is per-process.
@@ -982,6 +996,17 @@ class AsyncRolloutWorker:
     def update_model_version(self, model_version: int) -> None:
         self.model_version = model_version
 
+    @property
+    def rows_consumed(self) -> int:
+        return int(self._rows_consumed_value.value)
+
+    @rows_consumed.setter
+    def rows_consumed(self, value: int) -> None:
+        # Set before `start()` to resume the prompt stream where a checkpoint left it; the child reads it once, in
+        # `_repeat_iterator`, and owns the value from then on.
+        with self._rows_consumed_value.get_lock():
+            self._rows_consumed_value.value = int(value)
+
     def start(self) -> None:
         if self._process is not None:
             logger.warning("AsyncRolloutWorker.start() called but child process is already running; ignoring.")
@@ -1004,6 +1029,7 @@ class AsyncRolloutWorker:
                 self._loop_kwargs,
                 self.rollout_buffer,
                 self._model_version_value,
+                self._rows_consumed_value,
                 self._stop_event_mp,
                 self._child_ready_event,
                 self._heartbeat_value,

@@ -14,7 +14,9 @@
 
 
 import contextvars
+import json
 import math
+import os
 import queue
 import textwrap
 import threading
@@ -32,6 +34,7 @@ from torch.distributed._tensor import DTensor
 from torch.utils.data import DataLoader
 from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenizerBase, TrainerCallback
 from transformers.data.data_collator import DataCollatorMixin
+from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR
 
 from ...trainer.base_trainer import _BaseTrainer
 from ...trainer.utils import get_config_model_id, is_trackio_available, nanmax, nanmin, pad, patch_chunked_lm_head
@@ -72,9 +75,14 @@ class RolloutWorkerProtocol(Protocol):
             structurally identical (`get` / `put_nowait` / `qsize`) but nominally unrelated, so both are allowed: the
             default [`AsyncRolloutWorker`] runs its loop in a spawned process and uses `multiprocessing.Queue`, while
             an in-process worker uses `queue.Queue`.
+        rows_consumed (`int`):
+            How many prompts the worker has taken from the dataset so far. Read into every checkpoint and written back
+            before `start()` on resume, so the prompt stream continues where it stopped instead of replaying the
+            dataset from the top.
     """
 
     rollout_buffer: queue.Queue | MPQueue
+    rows_consumed: int
 
     def start(self) -> None:
         """Begin producing rollouts. Called once on train begin, after the initial weight sync."""
@@ -175,6 +183,11 @@ class _EpochStopCallback(TrainerCallback):
     of a conversation share one `group_id`, so a conversation forking into many rows still counts once. Only the main
     process collates (`dispatch_batches=True`), so the stop decision is reduced across ranks to keep data-parallel
     workers in lockstep.
+
+    On resume, `_trained_groups` restarts empty, so the prompts the previous run got through are added back from
+    `_groups_before_resume` — otherwise the resumed run would train `num_train_epochs` more passes on top of the ones
+    already done. That count is the position the *generator* reached, so it runs a few groups (whatever was in flight
+    when the previous run stopped) ahead of what was trained.
     """
 
     def __init__(self, trainer: "AsyncGRPOTrainer", target_groups: int):
@@ -183,7 +196,8 @@ class _EpochStopCallback(TrainerCallback):
 
     def on_step_end(self, _args, _state, control, **_kwargs):
         acc = self._trainer.accelerator
-        reached = torch.tensor(int(len(self._trainer._trained_groups) >= self._target), device=acc.device)
+        trained = self._trainer._groups_before_resume + len(self._trainer._trained_groups)
+        reached = torch.tensor(int(trained >= self._target), device=acc.device)
         if int(acc.reduce(reached, reduction="sum").item()) >= 1:
             control.should_training_stop = True
 
@@ -739,9 +753,16 @@ class AsyncGRPOTrainer(_BaseTrainer):
         # self.model_accepts_loss_kwargs to False to enable scaling.
         self.model_accepts_loss_kwargs = False
 
+        # The training stream is a live rollout queue, not a re-iterable dataset, so on resume there is no consumed
+        # prefix to fast-forward past: the parent class would burn `global_step × gradient_accumulation_steps`
+        # freshly generated micro-batches in `skip_first_batches`. Where the *prompt* dataset got to is restored
+        # separately, from the `rollout_state.json` written next to each checkpoint.
+        self.args.ignore_data_skip = True
+
         # Epoch handling: stop after num_train_epochs full passes over the PROMPT dataset, counted as distinct
         # prompt-groups trained (fork-independent).
         self._trained_groups: set[int] = set()
+        self._groups_before_resume = 0  # prompts a previous run got through; restored from the checkpoint
         self._epoch_stop_groups: int | None = None
         samples_per_step = (
             self.args.per_device_train_batch_size
@@ -1166,6 +1187,34 @@ class AsyncGRPOTrainer(_BaseTrainer):
         weight_sync_time_s = time.time() - t0
         self._metrics["train"]["weight_sync_time_s"].append(weight_sync_time_s)
         logger.info(f"Weight sync: done. Total {weight_sync_time_s:.1f}s")
+
+    def _save_checkpoint(self, model, trial):
+        # The prompt stream lives in the rollout worker's child process, so nothing the parent class saves records how
+        # far into the dataset generation got: a resumed run would replay the dataset from the top. Write the position
+        # into the checkpoint folder *before* `super()`, which is what uploads that folder to the Hub — a file added
+        # afterwards would miss the upload.
+        if self.args.should_save and self.rollout_worker is not None:
+            checkpoint_folder = f"{PREFIX_CHECKPOINT_DIR}-{self.state.global_step}"
+            output_dir = os.path.join(self._get_output_dir(trial=trial), checkpoint_folder)
+            os.makedirs(output_dir, exist_ok=True)
+            with open(os.path.join(output_dir, "rollout_state.json"), "w") as f:
+                json.dump({"rows_consumed": self.rollout_worker.rows_consumed}, f)
+        super()._save_checkpoint(model, trial)
+
+    def _load_optimizer_and_scheduler(self, checkpoint):
+        super()._load_optimizer_and_scheduler(checkpoint)
+        # Called from `_prepare_for_training`, i.e. before `_StartRolloutWorkerCallback` starts the worker on train
+        # begin, so the restored position is in place by the time the child reads it. Rollouts that were in flight or
+        # still queued when the previous run stopped are lost with its process, so those prompts are skipped rather
+        # than regenerated.
+        if checkpoint is not None and self.rollout_worker is not None:
+            path = os.path.join(checkpoint, "rollout_state.json")
+            if os.path.exists(path):
+                with open(path) as f:
+                    state = json.load(f)
+                self.rollout_worker.rows_consumed = state["rows_consumed"]
+                self._groups_before_resume = state["rows_consumed"]
+                logger.info(f"Resuming the prompt stream at dataset row {state['rows_consumed']}")
 
     def _inner_training_loop(self, *args, **kwargs):
         try:

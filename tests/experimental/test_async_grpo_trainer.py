@@ -14,8 +14,10 @@
 
 import asyncio
 import itertools
+import json
 import math
 import multiprocessing as mp
+import os
 import queue
 
 import numpy as np
@@ -63,10 +65,14 @@ class _StubRolloutWorker:
         self._samples_per_weight_sync = samples_per_weight_sync
         self._model_version = 0
         self._fork_k = fork_k
+        self.rows_consumed = 0
         self._sample_iter = self._make_sample_iter(tokenizer, dataset, num_generations)
 
     def _make_sample_iter(self, tokenizer, dataset, num_generations):
-        for group_id, row in enumerate(itertools.cycle(dataset)):
+        # A generator body runs on the first `next()`, i.e. from `start()` — after a resuming trainer has written the
+        # checkpointed `rows_consumed` back, so the stream picks up from there like the real worker's does.
+        rows = itertools.islice(itertools.cycle(dataset), self.rows_consumed % len(dataset), None)
+        for group_id, row in enumerate(rows, start=self.rows_consumed):
             completions = [
                 [{"role": "assistant", "content": f"{row['completion'][0]['content']} {idx}"}]
                 for idx in range(num_generations)
@@ -98,6 +104,7 @@ class _StubRolloutWorker:
                 # count, so identical duplicates are enough here (row shapes are covered by the reconciler tests).
                 for _ in range(self._fork_k):
                     yield sample
+            self.rows_consumed = group_id + 1
 
     def _fill_queue(self):
         for _ in range(self._samples_per_weight_sync):
@@ -187,6 +194,54 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    def test_resume_continues_the_prompt_stream(self):
+        # The prompt stream lives in the rollout worker, so nothing the parent class checkpoints records where it got
+        # to. `rollout_state.json` does, and a resumed run must continue from there instead of replaying the dataset.
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+
+        def make_trainer(max_steps):
+            args = AsyncGRPOConfig(
+                output_dir=self.tmp_dir,
+                max_steps=max_steps,
+                save_strategy="steps",
+                save_steps=2,
+                per_device_train_batch_size=3,
+                num_generations=3,
+                max_completion_length=8,
+                token_budget=-1,  # FixedCountBatcher: deterministic samples/step, so prompts accrue predictably
+                vllm_server_timeout=5.0,
+                report_to="none",
+            )
+            worker = _StubRolloutWorker(tokenizer, dataset, num_generations=3)
+            trainer = AsyncGRPOTrainer(
+                model=model_id,
+                reward_funcs=dummy_reward_func,
+                args=args,
+                train_dataset=dataset,
+                rollout_worker=worker,
+                weight_transfer=_StubWeightTransfer(),
+            )
+            return trainer, worker
+
+        trainer, _ = make_trainer(max_steps=2)
+        trainer.train()
+
+        checkpoint = os.path.join(self.tmp_dir, "checkpoint-2")
+        with open(os.path.join(checkpoint, "rollout_state.json")) as f:
+            rows_consumed = json.load(f)["rows_consumed"]
+        assert rows_consumed > 0
+
+        # A fresh trainer and a fresh worker, both starting from zero state, resuming from that checkpoint.
+        resumed, worker = make_trainer(max_steps=4)
+        resumed.train(resume_from_checkpoint=checkpoint)
+
+        assert resumed.state.global_step == 4
+        assert worker.rows_consumed > rows_consumed
+        # Every prompt trained after the resume is one the first run had not reached yet.
+        assert min(resumed._trained_groups) >= rows_consumed
 
     def test_dataset_required_without_environment(self):
         # The data has to come from somewhere: an external `train_dataset`, or an environment that owns it. With
