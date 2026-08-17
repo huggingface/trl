@@ -85,6 +85,10 @@ Original Nemotron Super chat template (as shipped by `nvidia/NVIDIA-Nemotron-3-S
 
 Original Nemotron Ultra chat template (as shipped by `nvidia/NVIDIA-Nemotron-3-Ultra-*` checkpoints). Same as `nemotron_3_nano.jinja` except it adds a `medium_effort` flag that appends a `{reasoning effort: efficient}` hint to the last user message, and tightens the whitespace around the `<think>` block. Tool calls use the same Hermes-style format, so it also reuses `qwen3_5_schema` for response parsing.
 
+### `nemotron_3_5_lightning.jinja`
+
+Original Nemotron 3.5 Lightning chat template (as shipped by `nvidia/NVIDIA-Nemotron-3.5-Lightning-*` checkpoints). Same as `nemotron_3_ultra.jinja` except it drops the `medium_effort` flag. Tool calls use the same Hermes-style format, so it also reuses `qwen3_5_schema` for response parsing.
+
 ### `phi3.jinja`
 
 Original Phi-3 chat template.
@@ -220,6 +224,13 @@ Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so
 ### `nemotron_3_ultra_training.jinja`
 
 Patched Nemotron Ultra template. Diff vs `nemotron_3_ultra.jinja`:
+
+Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that
+`return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+
+### `nemotron_3_5_lightning_training.jinja`
+
+Patched Nemotron 3.5 Lightning template. Diff vs `nemotron_3_5_lightning.jinja`:
 
 Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that
 `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.

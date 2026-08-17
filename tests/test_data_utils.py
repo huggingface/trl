@@ -572,6 +572,13 @@ class TestApplyChatTemplate(TrlTestCase):
             ),
         ),
         pytest.param(
+            "trl-internal-testing/tiny-NemotronHForCausalLM-3.5-lightning",
+            marks=pytest.mark.skipif(
+                Version(transformers.__version__) < Version("5.3.0"),
+                reason="Nemotron 3.5 tokenizer requires transformers>=5.3.0",
+            ),
+        ),
+        pytest.param(
             "trl-internal-testing/tiny-Olmo3ForCausalLM",
             marks=pytest.mark.skipif(
                 Version(transformers.__version__) < Version("4.57.0"),
