@@ -71,13 +71,21 @@ MAX_STEPS = int(os.environ.get("MAX_STEPS", "4"))
 SAVE_STEPS = int(os.environ.get("SAVE_STEPS", "4"))
 MAX_COMPLETION_LENGTH = int(os.environ.get("MAX_COMPLETION_LENGTH", "2048"))
 
-# Response schema for the rollout worker. `add_response_schema` only knows a fixed allowlist of chat templates and
-# R1-Distill's is not one of them, so a schema has to be set up front (the worker skips its own lookup when one is
-# present). `content` is the whole completion minus the EOS marker: all answer extraction lives in the reward below.
-R1_DISTILL_RESPONSE_SCHEMA = {
-    "x-regex": r"^(?P<content>[\s\S]*?)\s*(?:<｜end▁of▁sentence｜>|$)",
-    "type": "object",
-    "properties": {"role": {"const": "assistant"}, "content": {"type": "string"}},
+# Response template for the rollout worker. `add_response_schema` only knows a fixed allowlist of chat templates and
+# R1-Distill's is not one of them, so one has to be set up front (the worker skips its own lookup when one is present).
+#
+# It has to be a new-style `response_template`, not the legacy `response_schema`: on transformers >= 5.13
+# `tokenizer.parse_response` raises `AttributeError: This tokenizer does not have a response_template` when only the
+# schema is set, so the legacy path is already dead, not merely deprecated as the worker's FutureWarning suggests.
+#
+# `start_anchor` is the full generation prompt suffix — R1-Distill's chat template pre-writes the opening `<think>\n`,
+# so anchoring on `<｜Assistant｜>` alone would fold that tag into the parsed content. There is deliberately no
+# `reasoning_content` field: `content` stays the whole completion, `</think>` included, because that is what the reward
+# below splits on.
+R1_DISTILL_RESPONSE_TEMPLATE = {
+    "defaults": {"role": "assistant"},
+    "start_anchor": "<｜Assistant｜><think>\n",
+    "fields": {"content": {"close_pattern": r"<｜end▁of▁sentence｜>\s*", "content": "text"}},
 }
 
 # Port of the reference reward: oat's `r1_distill_qwen_math_reward_fn` -> `boxed_reward_fn`
@@ -210,7 +218,7 @@ def main() -> None:
     dataset = dataset.map(format_sample, remove_columns=dataset.column_names)
 
     tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
-    tokenizer.response_schema = R1_DISTILL_RESPONSE_SCHEMA
+    tokenizer.response_template = R1_DISTILL_RESPONSE_TEMPLATE
 
     config = AsyncGRPOConfig(
         output_dir=OUTPUT_DIR,
