@@ -70,6 +70,18 @@ class VLLMClient:
         response.raise_for_status()
         return response.json()["data"][0]["max_model_len"]
 
+    def get_dtype(self) -> str:
+        """Return the dtype the server holds its weights in, e.g. `"torch.bfloat16"`.
+
+        Read from vLLM's `/server_info`, which dumps the resolved `VllmConfig` (`config_format=json` keeps it a JSON
+        tree instead of a repr string; `torch.dtype` values are stringified, hence the `torch.` prefix). The endpoint
+        sits behind `VLLM_SERVER_DEV_MODE=1`, which this trainer already requires: `/pause` and
+        `/init_weight_transfer_engine` are gated by the same flag.
+        """
+        response = requests.get(f"{self.server_url}/server_info", params={"config_format": "json"})
+        response.raise_for_status()
+        return response.json()["vllm_config"]["model_config"]["dtype"]
+
     def get_world_size(self) -> int:
         """Return the vLLM server's inference world size (tensor/pipeline parallel processes)."""
         response = requests.get(f"{self.server_url}/get_world_size")
