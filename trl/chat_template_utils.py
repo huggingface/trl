@@ -604,6 +604,8 @@ lfm2_chat_template = (_CHAT_TEMPLATES_DIR / "lfm2.jinja").read_text(encoding="ut
 
 lfm2_2_5_chat_template = (_CHAT_TEMPLATES_DIR / "lfm2_2_5.jinja").read_text(encoding="utf-8")
 
+lfm2_2_5_vl_chat_template = (_CHAT_TEMPLATES_DIR / "lfm2_2_5_vl.jinja").read_text(encoding="utf-8")
+
 llama3_chat_template = (_CHAT_TEMPLATES_DIR / "llama3.jinja").read_text(encoding="utf-8")
 
 llama3_1_chat_template = (_CHAT_TEMPLATES_DIR / "llama3_1.jinja").read_text(encoding="utf-8")
@@ -617,6 +619,10 @@ nemotron_3_nano_chat_template = (_CHAT_TEMPLATES_DIR / "nemotron_3_nano.jinja").
 nemotron_3_super_chat_template = (_CHAT_TEMPLATES_DIR / "nemotron_3_super.jinja").read_text(encoding="utf-8")
 
 nemotron_3_ultra_chat_template = (_CHAT_TEMPLATES_DIR / "nemotron_3_ultra.jinja").read_text(encoding="utf-8")
+
+nemotron_3_5_lightning_chat_template = (_CHAT_TEMPLATES_DIR / "nemotron_3_5_lightning.jinja").read_text(
+    encoding="utf-8"
+)
 
 phi3_chat_template = (_CHAT_TEMPLATES_DIR / "phi3.jinja").read_text(encoding="utf-8")
 
@@ -710,9 +716,10 @@ def add_response_schema(processing_class: ProcessingClassT) -> ProcessingClassT:
         nemotron_3_nano_chat_template,
         nemotron_3_super_chat_template,
         nemotron_3_ultra_chat_template,
+        nemotron_3_5_lightning_chat_template,
     ]:
         schema, template = qwen3_5_schema, nemotron_3_template
-    elif chat_template == lfm2_2_5_chat_template:
+    elif chat_template in [lfm2_2_5_chat_template, lfm2_2_5_vl_chat_template]:
         # Only the new-style template; the legacy schema is on its way out, so it isn't worth adding for a family whose
         # tokenizer already requires transformers >= 5.0.0.
         schema, template = None, lfm2_2_5_template
@@ -985,6 +992,10 @@ nemotron_3_ultra_training_chat_template = (_CHAT_TEMPLATES_DIR / "nemotron_3_ult
     encoding="utf-8"
 )
 
+nemotron_3_5_lightning_training_chat_template = (
+    _CHAT_TEMPLATES_DIR / "nemotron_3_5_lightning_training.jinja"
+).read_text(encoding="utf-8")
+
 phi3_training_chat_template = (_CHAT_TEMPLATES_DIR / "phi3_training.jinja").read_text(encoding="utf-8")
 
 phi3_5_training_chat_template = (_CHAT_TEMPLATES_DIR / "phi3_5_training.jinja").read_text(encoding="utf-8")
@@ -1138,6 +1149,9 @@ def get_training_chat_template(
 
     if processing_class.chat_template == nemotron_3_ultra_chat_template:
         return nemotron_3_ultra_training_chat_template
+
+    if processing_class.chat_template == nemotron_3_5_lightning_chat_template:
+        return nemotron_3_5_lightning_training_chat_template
 
     if processing_class.chat_template == phi3_chat_template:
         return phi3_training_chat_template

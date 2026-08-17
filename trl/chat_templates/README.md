@@ -61,6 +61,10 @@ Original LFM2 chat template (as shipped by `LiquidAI/LFM2-*` checkpoints). ChatM
 
 Original LFM2.5 chat template (as shipped by `LiquidAI/LFM2.5-230M` and the other checkpoints in that generation). Unlike `lfm2.jinja`, it renders assistant `tool_calls` — as a single `<|tool_call_start|>[name(key=value, ...)]<|tool_call_end|>` block holding a comma-separated list of Python-style calls — supports a `<think>` block (read off `message.thinking`), and already carries `{% generation %}` markers, so no training patch is needed. Response parsing uses `lfm2_2_5_template`.
 
+### `lfm2_2_5_vl.jinja`
+
+Original LFM2.5-VL chat template (as shipped by `LiquidAI/LFM2.5-VL-3B`). Same rendering as `lfm2_2_5.jinja` — including the `{% generation %}` markers, so no training patch is needed — plus multimodal `content` blocks (each `image` item renders as `<image>`) and more defensive handling of non-string content and flat `tool_calls`. Response parsing reuses `lfm2_2_5_template`.
+
 ### `llama3.jinja`
 
 Original Llama 3 chat template.
@@ -84,6 +88,10 @@ Original Nemotron Super chat template (as shipped by `nvidia/NVIDIA-Nemotron-3-S
 ### `nemotron_3_ultra.jinja`
 
 Original Nemotron Ultra chat template (as shipped by `nvidia/NVIDIA-Nemotron-3-Ultra-*` checkpoints). Same as `nemotron_3_nano.jinja` except it adds a `medium_effort` flag that appends a `{reasoning effort: efficient}` hint to the last user message, and tightens the whitespace around the `<think>` block. Tool calls use the same Hermes-style format, so it also reuses `qwen3_5_schema` for response parsing.
+
+### `nemotron_3_5_lightning.jinja`
+
+Original Nemotron 3.5 Lightning chat template (as shipped by `nvidia/NVIDIA-Nemotron-3.5-Lightning-*` checkpoints). Same as `nemotron_3_ultra.jinja` except it drops the `medium_effort` flag. Tool calls use the same Hermes-style format, so it also reuses `qwen3_5_schema` for response parsing.
 
 ### `phi3.jinja`
 
@@ -224,6 +232,13 @@ Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so
 ### `nemotron_3_ultra_training.jinja`
 
 Patched Nemotron Ultra template. Diff vs `nemotron_3_ultra.jinja`:
+
+Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that
+`return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+
+### `nemotron_3_5_lightning_training.jinja`
+
+Patched Nemotron 3.5 Lightning template. Diff vs `nemotron_3_5_lightning.jinja`:
 
 Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that
 `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
