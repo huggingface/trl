@@ -17,6 +17,7 @@ import itertools
 import math
 import multiprocessing as mp
 import queue
+from unittest.mock import patch
 
 import numpy as np
 import pytest
@@ -135,6 +136,38 @@ class _StubWeightTransfer:
 
     def destroy(self):
         pass
+
+
+class TestAsyncGRPOTrainerModelLoading(TrlTestCase):
+    @pytest.mark.parametrize(
+        ("model_init_kwargs", "expected_dtype"),
+        [(None, torch.float32), ({"dtype": "bfloat16"}, "bfloat16")],
+    )
+    def test_model_init_dtype(self, model_init_kwargs, expected_dtype):
+        expected_model_init_kwargs = model_init_kwargs.copy() if model_init_kwargs is not None else None
+        args = AsyncGRPOConfig(
+            output_dir=self.tmp_dir,
+            use_cpu=True,
+            bf16=False,
+            report_to="none",
+            model_init_kwargs=model_init_kwargs,
+        )
+
+        with patch(
+            "trl.experimental.async_grpo.async_grpo_trainer.AutoModelForCausalLM.from_pretrained",
+            side_effect=RuntimeError("model loader called"),
+        ) as model_loader:
+            with pytest.raises(RuntimeError, match="model loader called"):
+                AsyncGRPOTrainer(model="dummy-model", args=args)
+
+        model_loader.assert_called_once_with(
+            "dummy-model",
+            device_map=None,
+            attn_implementation="kernels-community/flash-attn3",
+            dtype=expected_dtype,
+            trust_remote_code=False,
+        )
+        assert args.model_init_kwargs == expected_model_init_kwargs
 
 
 @pytest.mark.skipif(
