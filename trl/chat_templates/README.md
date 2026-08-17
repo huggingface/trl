@@ -21,6 +21,10 @@ Original Cohere Command chat template (as shipped by `CohereForAI/c4ai-command-r
 
 Original Cohere2 chat template (as shipped by `CohereLabs/c4ai-command-r7b-12-2024` and related checkpoints).
 
+### `deepseek_r1_distill.jinja`
+
+Original DeepSeek-R1-Distill chat template, shipped byte-identically by every distill checkpoint (both the Qwen and the Llama ones). It prefills the assistant turn with `<｜Assistant｜><think>\n`, so the model's output starts inside the reasoning block; response parsing uses `deepseek_r1_distill_template`. Assistant turns are re-rendered without their reasoning (the template drops everything up to and including `</think>`), and `tool_calls` are silently dropped whenever `content` is set, so the template does not support tool calling.
+
 ### `deepseekv3.jinja`
 
 Original DeepSeek-V3 chat template.
@@ -131,6 +135,13 @@ Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so
 Patched Cohere2 template. Diff vs `cohere2.jinja`:
 
 Move the trailing `<|END_OF_TURN_TOKEN|>` from after the role-dispatch `{% endif %}` into each role branch, so it can be wrapped together with the assistant content. Wrap the assistant branch (`<|START_RESPONSE|>...<|END_RESPONSE|><|END_OF_TURN_TOKEN|>`) with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+
+### `deepseek_r1_distill_training.jinja`
+
+Patched DeepSeek-R1-Distill template. Diff vs `deepseek_r1_distill.jinja`:
+
+- Removes the `'</think>'` split on assistant content, so the reasoning block is always rendered. The original drops everything up to and including `</think>` — fine for inference history, but it would silently remove the reasoning from the SFT training target.
+- Wraps assistant message output with `{% generation %}` / `{% endgeneration %}` markers for SFT assistant-only loss.
 
 ### `deepseekv3_training.jinja`
 
