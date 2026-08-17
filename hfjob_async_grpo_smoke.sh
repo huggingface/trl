@@ -1,20 +1,23 @@
 #!/usr/bin/env bash
-# AsyncGRPO sanity run on HF Jobs, chained across jobs by Hub checkpoints.
+# AsyncGRPO sanity run on HF Jobs, chained across jobs by checkpoints in a Storage Bucket.
 #
 #   ./hfjob_async_grpo_smoke.sh smoke     # h200x2, 4 steps, 1 trainer + 1 vLLM GPU: exercises the whole path cheaply
 #   ./hfjob_async_grpo_smoke.sh smoke-resume  # the same, resuming the smoke chain's checkpoint
-#   ./hfjob_async_grpo_smoke.sh fresh     # h200x8, 4 trainer + 4 vLLM GPUs: steps 1..STEPS_PER_JOB
-#   ./hfjob_async_grpo_smoke.sh resume    # same shape, continues from <HUB_MODEL_ID>/last-checkpoint
+#   ./hfjob_async_grpo_smoke.sh fresh     # h200x4, 2 trainer + 2 vLLM GPUs: steps 1..STEPS_PER_JOB
+#   ./hfjob_async_grpo_smoke.sh resume    # same shape, continues from the checkpoint in the bucket
 #   ./hfjob_async_grpo_smoke.sh logs      # follow the most recently submitted job
 #
 # `resume` is the same command every time: the in-job script reads `global_step` out of the checkpoint and trains
-# STEPS_PER_JOB more, up to TOTAL_STEPS. Every job in the chain reports to one trackio run.
+# STEPS_PER_JOB more, up to TOTAL_STEPS. Every job in the chain reports to one trackio run, and every checkpoint lands
+# in the bucket mounted at /ckpt — no 21 GB push and pull per save.
 #
-# The Slurm original (`sanity_run/async2n_job.sbatch`) had two nodes: 8 trainer ranks on one, 8 vLLM engines on the
-# other. One h200x8 has to hold both, so it is split 4 + 4 and `ACCUM` doubles to keep the recipe's 128 completions per
-# optimizer step (2 x 16 x 4 = 128, where the Slurm run had 2 x 8 x 8). Two GPUs is the floor, not a convenience: the
-# weight-transfer NCCL group has world_size = vllm_world_size + 1, and two ranks cannot share one device. FA3
-# (`kernels-community/flash-attn3`, hardcoded by the trainer) is why the flavor is Hopper.
+# The Slurm original (`sanity_run/async2n_job.sbatch`) had 16 H100s: 8 trainer ranks on one node, 8 vLLM engines on the
+# other. This runs on 4 H200s, 2 + 2, with `ACCUM` scaled to keep the recipe's 128 completions per optimizer step
+# (2 x 32 x 2 = 128, where the Slurm run had 2 x 8 x 8). The step count is what fixes the total compute, so a smaller
+# flavor costs about the same in dollars and only trades wall-clock — h200x4 is ~2x the per-step time of h200x8 at half
+# the hourly rate, and it schedules far sooner. Two GPUs is the floor, not a convenience: the weight-transfer NCCL group
+# has world_size = vllm_world_size + 1, and two ranks cannot share one device. FA3 (`kernels-community/flash-attn3`,
+# hardcoded by the trainer) is why the flavor is Hopper.
 #
 # The job's code comes from a `git archive` of this branch, synced to a bucket and mounted read-only — not from
 # GitHub. Fetching a branch tarball in-job failed three runs in a row with 429/503: GitHub rate-limits by IP and the
@@ -22,6 +25,9 @@
 set -euo pipefail
 
 BRANCH=${BRANCH:-trl-checkpoint}
+# Storage Bucket holding the checkpoints, mounted read-write at /ckpt. Persistent across jobs, which is the whole point:
+# `hf buckets create async-grpo-ckpt --private` once, then every job in the chain reads and writes the same directory.
+CKPT_BUCKET=${CKPT_BUCKET:-aminediroHF/async-grpo-ckpt}
 MODEL=deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B
 # Completions are capped at the recipe's 8192 tokens; 1280 of prompt headroom on top of that is plenty for this
 # dataset. Shorter caps are a false economy: at 2048 every completion is truncated, so every reward is 0 and the run
@@ -50,6 +56,7 @@ submit() {
         --name "async-grpo-${stage}" \
         --secrets HF_TOKEN \
         -v "$SHIP_DIR:/ship" \
+        -v "hf://buckets/${CKPT_BUCKET}:/ckpt" \
         -e "SMOKE_STAGE=${stage}" \
         -e "N_TRAIN=${n_train}" \
         -e "N_VLLM=${n_vllm}" \
@@ -57,7 +64,9 @@ submit() {
         -e "STEPS_PER_JOB=${steps_per_job}" \
         -e "TOTAL_STEPS=${TOTAL_STEPS}" \
         -e "SAVE_STEPS=${SAVE_STEPS}" \
-        -e "RESUME_FROM_HUB=${resume}" \
+        -e "RESUME=${resume}" \
+        -e "CKPT_DIR=${CKPT_DIR}" \
+        -e "SAVE_TOTAL_LIMIT=${SAVE_TOTAL_LIMIT:-}" \
         -e "HUB_MODEL_ID=${HUB_MODEL_ID}" \
         -e "RUN_NAME=${RUN_NAME}" \
         -e "PROJECT=${PROJECT}" \
@@ -162,8 +171,9 @@ case "$STAGE" in
         HUB_MODEL_ID=${HUB_MODEL_ID:-aminediroHF/async-grpo-ckpt-smoke-r1d-1.5b}
         RUN_NAME=${RUN_NAME:-async-grpo-ckpt-smoke}
         PROJECT=${PROJECT:-async-grpo-ckpt-smoke}
-        TOTAL_STEPS=${TOTAL_STEPS:-8} SAVE_STEPS=${SAVE_STEPS:-4}
+        TOTAL_STEPS=${TOTAL_STEPS:-8} SAVE_STEPS=${SAVE_STEPS:-4} SAVE_TOTAL_LIMIT=${SAVE_TOTAL_LIMIT:-1}
         [ "$STAGE" = "smoke-resume" ] && resume=1 || resume=0
+        CKPT_DIR=${CKPT_DIR:-/ckpt/smoke}
         submit "$STAGE" h200x2 1 1 8 "${STEPS_PER_JOB:-4}" "${TIMEOUT:-60m}" "$resume"
         ;;
     fresh|resume)
@@ -172,7 +182,8 @@ case "$STAGE" in
         PROJECT=${PROJECT:-async-grpo-sanity-r1d-1.5b}
         TOTAL_STEPS=${TOTAL_STEPS:-2400} SAVE_STEPS=${SAVE_STEPS:-150}
         [ "$STAGE" = "resume" ] && resume=1 || resume=0
-        submit "$STAGE" h200x8 4 4 16 "${STEPS_PER_JOB:-300}" "${TIMEOUT:-6h}" "$resume"
+        CKPT_DIR=${CKPT_DIR:-/ckpt/sanity-r1d-1.5b}
+        submit "$STAGE" h200x4 2 2 32 "${STEPS_PER_JOB:-800}" "${TIMEOUT:-8h}" "$resume"
         ;;
     logs)
         id_file=$(ls -t /tmp/async-grpo-*.job 2>/dev/null | head -1 || true)

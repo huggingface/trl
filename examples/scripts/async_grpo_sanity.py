@@ -16,11 +16,17 @@
 AsyncGRPO sanity run on `sail/Sanity-Test-R1D-1.5B`, checkpointed to the Hub so it can span several jobs.
 
 Launched by `hfjob_async_grpo_smoke.sh` (see it for the GPU split and the vLLM side). Each job trains
-`STEPS_PER_JOB` optimizer steps, pushes its checkpoint to `<HUB_MODEL_ID>/last-checkpoint`, and the next job picks it
-up — so a 2400-step run that no single job could finish becomes a chain of jobs on one trackio run:
+`STEPS_PER_JOB` optimizer steps into a Storage Bucket mounted read-write at `CKPT_DIR`, and the next job finds the
+checkpoint already sitting there — so a 2400-step run that no single job could finish becomes a chain of jobs on one
+trackio run:
 
-    ./hfjob_async_grpo_smoke.sh fresh     # steps 1..300
-    ./hfjob_async_grpo_smoke.sh resume    # steps 301..600   (repeat until TOTAL_STEPS)
+    ./hfjob_async_grpo_smoke.sh fresh     # steps 1..STEPS_PER_JOB
+    ./hfjob_async_grpo_smoke.sh resume    # the next STEPS_PER_JOB   (repeat until TOTAL_STEPS)
+
+The bucket is what makes this cheap. Pushing each checkpoint to a model repo and pulling it back in the next job moved
+21 GB (7 GB fp32 weights + 14 GB optimizer) in each direction per save; a mounted bucket is just a path, so
+`get_last_checkpoint` works exactly as it does on a local disk and there is nothing to upload or download. The final
+model still goes to the Hub, once, at the end of the chain.
 
 The recipe is the one that worked on Slurm (run 7280, final train reward 0.841 against the synchronous reference's
 0.864): oat's `scripts/sanity/bf16_grpo.sh` batch shape and optimizer, with `AsyncGRPOTrainer`'s own loss. Four things
@@ -52,20 +58,24 @@ import re
 import threading
 
 from datasets import load_dataset
-from huggingface_hub import snapshot_download
 from math_verify import parse, verify
 from transformers import AutoTokenizer
+from transformers.trainer_utils import get_last_checkpoint
 
 from trl.experimental.async_grpo import AsyncGRPOConfig, AsyncGRPOTrainer
 
 
 MODEL_ID = "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"
-# Same repo and same run name in every job of the chain: each pushes `last-checkpoint`, the next pulls it, and trackio
-# appends to the run instead of starting a new one (the HF callback inits with `resume="allow"`).
+# Same run name in every job of the chain, so trackio appends to the run instead of starting a new one (the HF callback
+# inits with `resume="allow"`). `HUB_MODEL_ID` only receives the finished model, at the end of the chain.
 HUB_MODEL_ID = os.environ.get("HUB_MODEL_ID", "aminediroHF/async-grpo-sanity-r1d-1.5b")
 RUN_NAME = os.environ.get("RUN_NAME", "async-grpo-hfjobs")
 PROJECT = os.environ.get("PROJECT", "async-grpo-sanity-r1d-1.5b")
-OUTPUT_DIR = "/tmp/async-grpo-sanity"
+# A Storage Bucket, mounted read-write at the same path in every job of the chain (`-v hf://buckets/...:/ckpt`).
+OUTPUT_DIR = os.environ.get("CKPT_DIR", "/ckpt/async-grpo-sanity")
+# Unset keeps every checkpoint of the chain, which is the point of a bucket: 10 saves of a 1.5B fp32 run is ~210 GB of
+# object storage, next to nothing against the GPU hours, and it makes any step of the run inspectable after the fact.
+SAVE_TOTAL_LIMIT = int(os.environ["SAVE_TOTAL_LIMIT"]) if os.environ.get("SAVE_TOTAL_LIMIT") else None
 
 # How far this job trains, and how far the chain goes in total. `max_steps` is derived from the checkpoint's
 # `global_step`, so `resume` is the same command every time.
@@ -220,29 +230,33 @@ def format_sample(sample):
     return {"prompt": sample["prompt"], "solution": sample["reward_model"]["ground_truth"]}
 
 
-def pull_last_checkpoint() -> tuple[str, int]:
-    """Download the `last-checkpoint/` folder pushed by the previous job; return its path and its `global_step`.
+def find_last_checkpoint() -> tuple[str | None, int]:
+    """Locate the checkpoint a previous job of the chain left in the bucket, and read how far it got.
 
-    `hub_strategy="checkpoint"` uploads the whole checkpoint folder — weights, optimizer, scheduler, RNG,
-    `trainer_state.json` and this trainer's `rollout_state.json` — under that single path in the model repo, so a job
-    that starts on a bare filesystem can pick it up. Nothing in `Trainer` does this download for you.
-
-    Downloaded outside `output_dir` on purpose: every push also mirrors `output_dir` to the repo root, and a copy of
-    the old checkpoint sitting in there would be uploaded alongside — racing the new one.
+    The bucket is mounted at the same path in every job, so a checkpoint written by one job is simply *there* for the
+    next: `get_last_checkpoint` is the ordinary `Trainer` helper working on an ordinary directory, and nothing about
+    resuming has to touch the Hub.
     """
-    path = snapshot_download(repo_id=HUB_MODEL_ID, allow_patterns="last-checkpoint/*", local_dir="/tmp/resume-from")
-    checkpoint = os.path.join(path, "last-checkpoint")
+    checkpoint = get_last_checkpoint(OUTPUT_DIR) if os.path.isdir(OUTPUT_DIR) else None
+    if checkpoint is None:
+        return None, 0
     with open(os.path.join(checkpoint, "trainer_state.json")) as f:
         global_step = json.load(f)["global_step"]
     with open(os.path.join(checkpoint, "rollout_state.json")) as f:
         rollout_state = json.load(f)
-    print(f"[resume] {HUB_MODEL_ID}/last-checkpoint: global_step={global_step}, {rollout_state}")
+    print(f"[found] {checkpoint}: global_step={global_step}, {rollout_state}")
     return checkpoint, global_step
 
 
 def main() -> None:
-    if os.environ.get("RESUME_FROM_HUB") == "1":
-        checkpoint, done_steps = pull_last_checkpoint()
+    checkpoint, done_steps = find_last_checkpoint()
+    if os.environ.get("RESUME") == "1":
+        if checkpoint is None:
+            raise RuntimeError(f"nothing to resume from in {OUTPUT_DIR}; start the chain with the `fresh` stage")
+    elif checkpoint is not None:
+        # A `fresh` job into a bucket that already holds a chain would either clobber it or silently continue it.
+        # Neither is worth a GPU-day, so refuse and make the caller choose.
+        raise RuntimeError(f"{OUTPUT_DIR} already holds {checkpoint}; use `resume`, or point CKPT_DIR somewhere new")
     else:
         checkpoint, done_steps = None, 0
 
@@ -280,13 +294,10 @@ def main() -> None:
         max_steps=max_steps,
         save_strategy="steps",
         save_steps=SAVE_STEPS,
-        save_total_limit=1,
-        # `hub_strategy="checkpoint"` is what mirrors the full checkpoint folder to `last-checkpoint/` in the repo, and
-        # `hub_always_push` stops a save from being skipped because the previous ~21 GB upload is still in flight.
-        push_to_hub=True,
+        save_total_limit=SAVE_TOTAL_LIMIT,
+        # No `push_to_hub`: checkpoints land in the mounted bucket, and pushing them would move 21 GB per save for
+        # nothing. `hub_model_id` is only used by the one-off push at the end of the chain.
         hub_model_id=HUB_MODEL_ID,
-        hub_strategy="checkpoint",
-        hub_always_push=True,
         vllm_server_base_url=os.environ.get("SERVE_URL", "http://localhost:8000"),
         report_to="trackio",
         run_name=RUN_NAME,
@@ -304,6 +315,10 @@ def main() -> None:
 
     if trainer.rollout_worker is not None:
         print(f"[done] global_step={trainer.state.global_step}, rows_consumed={trainer.rollout_worker.rows_consumed}")
+    # Only the job that finishes the chain publishes a model; the intermediate ones leave everything in the bucket.
+    if trainer.state.global_step >= TOTAL_STEPS:
+        print(f"[publish] chain complete at step {trainer.state.global_step}; pushing the model to {HUB_MODEL_ID}")
+        trainer.push_to_hub()
 
 
 if __name__ == "__main__":
