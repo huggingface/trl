@@ -44,7 +44,7 @@ The dataset is the sanity check from "Defeating the Training-Inference Mismatch 
 between 20% and 80% of the time. It is used here for its prompts and its rule-based ground truth, not for its pass
 mark — a handful of steps says nothing about training accuracy. Hyperparameters follow the reference
 `oat/scripts/sanity/bf16_grpo.sh` (lr 1e-6 constant, no KL penalty, 8 rollouts/prompt, temperature 1.0), except for
-the smoke-test budget: 8 completions per optimizer step instead of 128, and 2048-token completions instead of 8192.
+the smoke-test budget: 8 completions per optimizer step instead of 128.
 """
 
 import json
@@ -69,7 +69,10 @@ RUN_NAME = os.environ.get("RUN_NAME", "async-grpo-ckpt-smoke")
 OUTPUT_DIR = "/tmp/async-grpo-ckpt-smoke"
 MAX_STEPS = int(os.environ.get("MAX_STEPS", "4"))
 SAVE_STEPS = int(os.environ.get("SAVE_STEPS", "4"))
-MAX_COMPLETION_LENGTH = int(os.environ.get("MAX_COMPLETION_LENGTH", "2048"))
+# The reference recipe's `--generate_max_length 8192`, and it has to stay there even for a smoke test: at 2048 every
+# single completion hit the cap, oat's no-EOS rule scored all of them 0, and a group of equal rewards has zero
+# advantage — so the run trained on nothing (`loss=0, grad_norm=0`) and its checkpoint was the base model bit for bit.
+MAX_COMPLETION_LENGTH = int(os.environ.get("MAX_COMPLETION_LENGTH", "8192"))
 
 # Response template for the rollout worker. `add_response_schema` only knows a fixed allowlist of chat templates and
 # R1-Distill's is not one of them, so one has to be set up front (the worker skips its own lookup when one is present).

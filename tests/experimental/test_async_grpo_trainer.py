@@ -231,8 +231,10 @@ class TestAsyncGRPOTrainer(TrlTestCase):
 
         checkpoint = os.path.join(self.tmp_dir, "checkpoint-2")
         with open(os.path.join(checkpoint, "rollout_state.json")) as f:
-            rows_consumed = json.load(f)["rows_consumed"]
-        assert rows_consumed > 0
+            rollout_state = json.load(f)
+        rows_consumed = rollout_state["rows_consumed"]
+        # Generation runs ahead of training, so the two counts differ; both have to be recorded.
+        assert rows_consumed >= rollout_state["groups_trained"] > 0
 
         # A fresh trainer and a fresh worker, both starting from zero state, resuming from that checkpoint.
         resumed, worker = make_trainer(max_steps=4)
@@ -242,6 +244,8 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         assert worker.rows_consumed > rows_consumed
         # Every prompt trained after the resume is one the first run had not reached yet.
         assert min(resumed._trained_groups) >= rows_consumed
+        # Epochs stay measured in prompts trained, so the resumed run picks that count up too.
+        assert resumed._groups_before_resume == rollout_state["groups_trained"]
 
     def test_dataset_required_without_environment(self):
         # The data has to come from somewhere: an external `train_dataset`, or an environment that owns it. With

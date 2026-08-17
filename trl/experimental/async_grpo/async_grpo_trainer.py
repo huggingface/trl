@@ -186,8 +186,7 @@ class _EpochStopCallback(TrainerCallback):
 
     On resume, `_trained_groups` restarts empty, so the prompts the previous run got through are added back from
     `_groups_before_resume` — otherwise the resumed run would train `num_train_epochs` more passes on top of the ones
-    already done. That count is the position the *generator* reached, so it runs a few groups (whatever was in flight
-    when the previous run stopped) ahead of what was trained.
+    already done.
     """
 
     def __init__(self, trainer: "AsyncGRPOTrainer", target_groups: int):
@@ -1197,8 +1196,16 @@ class AsyncGRPOTrainer(_BaseTrainer):
             checkpoint_folder = f"{PREFIX_CHECKPOINT_DIR}-{self.state.global_step}"
             output_dir = os.path.join(self._get_output_dir(trial=trial), checkpoint_folder)
             os.makedirs(output_dir, exist_ok=True)
+            # Two different counts, because generation runs ahead of training: `rows_consumed` is where the generator
+            # got to (what the prompt stream has to resume from), `groups_trained` is how many prompts were actually
+            # trained on (what an epoch is measured in). Samples the generator produced beyond the second number were
+            # either dropped as stale or lost with the queue.
+            state = {
+                "rows_consumed": self.rollout_worker.rows_consumed,
+                "groups_trained": self._groups_before_resume + len(self._trained_groups),
+            }
             with open(os.path.join(output_dir, "rollout_state.json"), "w") as f:
-                json.dump({"rows_consumed": self.rollout_worker.rows_consumed}, f)
+                json.dump(state, f)
         super()._save_checkpoint(model, trial)
 
     def _load_optimizer_and_scheduler(self, checkpoint):
@@ -1213,8 +1220,11 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 with open(path) as f:
                     state = json.load(f)
                 self.rollout_worker.rows_consumed = state["rows_consumed"]
-                self._groups_before_resume = state["rows_consumed"]
-                logger.info(f"Resuming the prompt stream at dataset row {state['rows_consumed']}")
+                self._groups_before_resume = state["groups_trained"]
+                logger.info(
+                    f"Resuming the prompt stream at dataset row {state['rows_consumed']} "
+                    f"({state['groups_trained']} prompts trained so far)"
+                )
 
     def _inner_training_loop(self, *args, **kwargs):
         try:

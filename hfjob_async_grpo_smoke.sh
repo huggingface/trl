@@ -18,8 +18,10 @@ BRANCH=${BRANCH:-trl-checkpoint}
 MODEL=deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B
 HUB_MODEL_ID=${HUB_MODEL_ID:-aminediroHF/async-grpo-ckpt-smoke-r1d-1.5b}
 RUN_NAME=${RUN_NAME:-async-grpo-ckpt-smoke}
-# Completions are capped at 2048 tokens; 1024 of prompt headroom on top of that is plenty for this dataset.
-MAX_MODEL_LEN=3072
+# Completions are capped at the recipe's 8192 tokens; 1280 of prompt headroom on top of that is plenty for this
+# dataset. Shorter caps are a false economy: at 2048 every completion is truncated, so every reward is 0 and the run
+# trains on nothing.
+MAX_MODEL_LEN=9472
 
 STAGE=${1:-}
 
