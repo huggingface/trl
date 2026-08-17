@@ -157,6 +157,22 @@ in_job() {
     curl -s 'http://localhost:8000/server_info?config_format=json' \
       | python3 -c "import json,sys; print('--- served dtype:', json.load(sys.stdin)['vllm_config']['model_config']['dtype'])"
 
+    # Stage the checkpoint onto local disk before the trainer reads it. Loading straight off /ckpt killed a rank with
+    # SIGBUS (job 6a838456, exitcode -7): safetensors mmaps `model.safetensors`, and mmap over the bucket's FUSE layer
+    # does not survive two ranks reading 7 GB concurrently. A sequential copy is what the write path already does
+    # reliably, and it also stops the read cost from multiplying by the rank count. Writes still go to the bucket.
+    if [ "${RESUME}" = "1" ]; then
+        LAST=$(ls -d "$CKPT_DIR"/checkpoint-* 2>/dev/null | sed 's/.*checkpoint-//' | sort -n | tail -1)
+        [ -n "$LAST" ] || { echo "FATAL: nothing to resume from in ${CKPT_DIR}"; exit 1; }
+        echo "staging ${CKPT_DIR}/checkpoint-${LAST} -> /tmp/resume-from"
+        mkdir -p /tmp/resume-from
+        cp -r "${CKPT_DIR}/checkpoint-${LAST}" /tmp/resume-from/
+        # The abandoned safetensors temp objects are not part of the checkpoint, and they are 7 GB each.
+        find /tmp/resume-from -name '.tmp*' -type f -delete
+        du -sh /tmp/resume-from
+        export RESUME_DIR=/tmp/resume-from
+    fi
+
     echo "=== [4/5] training on GPUs ${TRAIN_DEVICES} (accum=${ACCUM}) ==="
     # `distributed_type: MULTI_GPU` is required for multi-rank runs: under `NO`, `accelerator.device` is an indexless
     # `cuda` and the NCCL weight transfer fails with "this nccl communicator is created to work on cuda, but the input

@@ -231,13 +231,15 @@ def format_sample(sample):
 
 
 def find_last_checkpoint() -> tuple[str | None, int]:
-    """Locate the checkpoint a previous job of the chain left in the bucket, and read how far it got.
+    """Locate the checkpoint a previous job of the chain left behind, and read how far it got.
 
-    The bucket is mounted at the same path in every job, so a checkpoint written by one job is simply *there* for the
-    next: `get_last_checkpoint` is the ordinary `Trainer` helper working on an ordinary directory, and nothing about
-    resuming has to touch the Hub.
+    Checkpoints are *written* to the mounted bucket, but they are *read* from `RESUME_DIR`, a local-disk copy the
+    launcher stages before starting the trainer. Loading straight off the mount killed a rank with SIGBUS: safetensors
+    mmaps `model.safetensors`, and mmap over the bucket's FUSE layer does not survive two ranks reading 7 GB
+    concurrently. A sequential copy does, which is also how the write path works.
     """
-    checkpoint = get_last_checkpoint(OUTPUT_DIR) if os.path.isdir(OUTPUT_DIR) else None
+    resume_dir = os.environ.get("RESUME_DIR") or OUTPUT_DIR
+    checkpoint = get_last_checkpoint(resume_dir) if os.path.isdir(resume_dir) else None
     if checkpoint is None:
         return None, 0
     with open(os.path.join(checkpoint, "trainer_state.json")) as f:
