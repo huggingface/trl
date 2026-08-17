@@ -111,9 +111,15 @@ class SFTConfig(_BaseConfig):
             - `"nll"`: standard negative log-likelihood.
             - `"dft"`: Dynamic Fine-Tuning, as described in
               [this paper](https://huggingface.co/papers/2508.05629).
+            - `"wit"`: Weighted Instruction Tuning, as described in
+              [this paper](https://huggingface.co/papers/2507.07817).
             - `"chunked_nll"`: same math as `"nll"`, but the `lm_head` projection is computed on non-ignored tokens
               only (positions with `labels == -100` are dropped before the matmul) and the cross-entropy is processed
               in chunks of tokens to reduce peak activation memory. Not compatible with `use_liger_kernel`.
+        prompt_loss_weight (`float`, *optional*, defaults to `0.0`):
+            Weight assigned to prompt-token losses when `loss_type="wit"`. Must be between `0.0` and `1.0`.
+        completion_loss_weight (`float`, *optional*, defaults to `1.0`):
+            Weight assigned to completion-token losses when `loss_type="wit"`. Must be between `0.0` and `1.0`.
 
         activation_offloading (`bool`, *optional*, defaults to `False`):
             Whether to offload the activations to the CPU.
@@ -284,13 +290,23 @@ class SFTConfig(_BaseConfig):
         metadata={
             "help": "Type of loss to use. When left unset, it defaults to `'chunked_nll'`, except when "
             "`use_liger_kernel=True`, in which case it defaults to `'nll'`. Possible values are `'nll'` (standard "
-            "negative log-likelihood), `'dft'` (Dynamic Fine-Tuning, https://huggingface.co/papers/2508.05629), and "
+            "negative log-likelihood), `'dft'` (Dynamic Fine-Tuning, https://huggingface.co/papers/2508.05629), "
+            "`'wit'` (Weighted Instruction Tuning, "
+            "https://huggingface.co/papers/2507.07817), and "
             "`'chunked_nll'` (same math as `'nll'`, but the `lm_head` projection is computed on non-ignored tokens "
             "only — positions with `labels == -100` are dropped before the matmul — and the cross-entropy is "
             "processed in chunks of tokens to reduce peak activation memory; not compatible with `use_liger_kernel`; "
             "the patched `lm_head` path covers standard causal LMs and VLMs whose language model exposes a top-level "
             "`lm_head`, architectures with a non-standard head are not supported)."
         },
+    )
+    prompt_loss_weight: float = field(
+        default=0.0,
+        metadata={"help": "Weight assigned to prompt-token losses when `loss_type='wit'`."},
+    )
+    completion_loss_weight: float = field(
+        default=1.0,
+        metadata={"help": "Weight assigned to completion-token losses when `loss_type='wit'`."},
     )
     activation_offloading: bool = field(
         default=False,
@@ -333,3 +349,9 @@ class SFTConfig(_BaseConfig):
         # When unset, default to "chunked_nll" unless `use_liger_kernel=True`, in which case default to "nll".
         if self.loss_type is None:
             self.loss_type = "nll" if self.use_liger_kernel else "chunked_nll"
+        if not 0.0 <= self.prompt_loss_weight <= 1.0:
+            raise ValueError("`prompt_loss_weight` must be between 0.0 and 1.0.")
+        if not 0.0 <= self.completion_loss_weight <= 1.0:
+            raise ValueError("`completion_loss_weight` must be between 0.0 and 1.0.")
+        if self.loss_type == "wit" and self.prompt_loss_weight == 0.0 and self.completion_loss_weight == 0.0:
+            raise ValueError("At least one of `prompt_loss_weight` and `completion_loss_weight` must be non-zero.")

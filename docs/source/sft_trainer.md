@@ -111,6 +111,9 @@ where  \\( y_t \\) is the target token at timestep  \\( t \\), and the model is 
 > The paper [On the Generalization of SFT: A Reinforcement Learning Perspective with Reward Rectification](https://huggingface.co/papers/2508.05629) proposes an alternative loss function, called **Dynamic Fine-Tuning (DFT)**, which aims to improve generalization by rectifying the reward signal. This method can be enabled by setting `loss_type="dft"` in the [`SFTConfig`]. For more details, see [Paper Index - Dynamic Fine-Tuning](paper_index#on-the-generalization-of-sft-a-reinforcement-learning-perspective-with-reward-rectification).
 
 > [!TIP]
+> [Weighted Instruction Tuning (WIT)](https://huggingface.co/papers/2507.07817) assigns independent weights to prompt and completion token losses. Enable it with `loss_type="wit"` and configure `prompt_loss_weight` and `completion_loss_weight`. WIT requires a text [prompt-completion](dataset_formats#prompt-completion) dataset. For more details, see [Paper Index - Weighted Instruction Tuning](paper_index#on-the-effect-of-instruction-tuning-loss-on-generalization).
+
+> [!TIP]
 > By default, [`SFTTrainer`] uses `loss_type="chunked_nll"`: same math as `"nll"`, but the `lm_head` projection skips ignored-label tokens and the cross-entropy is processed in chunks, so peak activation memory does not scale with the full vocab × seq_len logits tensor. To fall back to the standard path, set `loss_type="nll"`. When `use_liger_kernel=True`, the default automatically resolves to `"nll"` (the two paths are not compatible). See [Chunked cross-entropy for reducing peak memory usage](reducing_memory_usage#chunked-cross-entropy-for-reducing-peak-memory-usage).
 
 ### Label shifting and masking
@@ -199,6 +202,24 @@ trainer.train()
 
 > [!TIP]
 > Training on completion only is compatible with training on assistant messages only. In this case, use a [conversational](dataset_formats#conversational) [prompt-completion](dataset_formats#prompt-completion) dataset and set `assistant_only_loss=True` in the [`SFTConfig`].
+
+### Weighted instruction tuning
+
+[Weighted Instruction Tuning (WIT)](https://huggingface.co/papers/2507.07817) generalizes completion-only SFT by assigning separate loss weights to prompt and completion tokens. The weighted token losses are normalized by the number of tokens whose weight is non-zero, rather than by the sum of the weights.
+
+```python
+from trl import SFTConfig
+
+training_args = SFTConfig(
+    loss_type="wit",
+    prompt_loss_weight=0.2,
+    completion_loss_weight=0.8,
+)
+```
+
+Setting `(prompt_loss_weight, completion_loss_weight)` to `(0.0, 1.0)` recovers conventional completion-only SFT, while `(1.0, 1.0)` recovers full-sequence language modeling. WIT is supported for standard and conversational text prompt-completion datasets, including packing and padding-free training. It is not compatible with `assistant_only_loss`, vision-language datasets, Liger kernels, custom loss functions, or context/sequence parallelism.
+
+When `loss_type="wit"`, `prompt_loss_weight` and `completion_loss_weight` determine which tokens contribute to the loss; `completion_only_loss` does not alter the WIT objective.
 
 ### Train adapters with PEFT
 
