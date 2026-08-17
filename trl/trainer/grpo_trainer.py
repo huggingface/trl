@@ -3000,8 +3000,17 @@ class GRPOTrainer(_BaseTrainer):
         if self.use_liger_kernel:
             # Compute the loss using the liger grpo loss
             unwrapped_model = self.accelerator.unwrap_model(model)
-            return self._forward_redirection(model, unwrapped_model, self.compute_liger_loss, unwrapped_model, inputs)
-        return self._compute_loss(model, inputs)
+            loss = self._forward_redirection(model, unwrapped_model, self.compute_liger_loss, unwrapped_model, inputs)
+        else:
+            loss = self._compute_loss(model, inputs)
+
+        # A non-finite loss is still backpropagated, but `Trainer` replaces it in the logged running loss with the
+        # average of the previous losses (`logging_nan_inf_filter`, enabled by default), so a run whose weights are
+        # being corrupted reports a clean loss curve. Log the fraction of non-finite losses to make it visible.
+        mode = "train" if self.model.training else "eval"
+        is_non_finite = (~torch.isfinite(loss)).float()
+        self._metrics[mode]["frac_non_finite_loss"].append(self.accelerator.gather(is_non_finite).max().item())
+        return loss
 
     @staticmethod
     def get_off_policy_mask(

@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import math
 from unittest.mock import patch
 
 import pytest
@@ -102,6 +103,48 @@ class TestRLOOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    def test_non_finite_loss_is_logged(self):
+        # Regression test for #6702: a step whose loss is NaN is still backpropagated, but `Trainer` replaces it in
+        # the reported loss with the average of the previous losses (`logging_nan_inf_filter`, on by default), so a
+        # run that is corrupting its weights logs a clean loss curve. `frac_non_finite_loss` is the only trace.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        training_args = RLOOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            logging_steps=1,  # one log entry per step, so the poisoned step has its own entry
+            report_to="none",
+        )
+        trainer = RLOOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        # Poison the first loss only. Adding a NaN constant makes the loss non-finite while leaving its gradients
+        # untouched, so the following steps stay healthy and the first step is the only one to report anything.
+        original_compute_loss = trainer._compute_loss
+
+        def compute_nan_loss_once(model, inputs):
+            trainer._compute_loss = original_compute_loss
+            return original_compute_loss(model, inputs) + float("nan")
+
+        trainer._compute_loss = compute_nan_loss_once
+
+        trainer.train()
+
+        logs = [log for log in trainer.state.log_history if "frac_non_finite_loss" in log]
+        assert logs, "no step reported whether its loss was finite, so nothing was verified"
+        assert logs[0]["frac_non_finite_loss"] > 0.0, "the NaN loss left no trace in the logs"
+        assert all(log["frac_non_finite_loss"] == 0.0 for log in logs[1:]), (
+            "a step with a finite loss was reported as non-finite"
+        )
+        # The reported loss of that same step is finite, which is what makes the metric necessary.
+        assert math.isfinite(logs[0]["loss"])
 
     def test_reward_func_wrong_number_of_rewards(self):
         # A reward function that returns the wrong number of rewards should raise a clear error instead of silently

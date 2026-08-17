@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import gc
+import math
 import os
 import warnings
 from collections.abc import Callable
@@ -1691,6 +1692,48 @@ class TestGRPOTrainer(TrlTestCase):
                 "an unscorable token caused sequences to be dropped by the off-policy mask, even though the "
                 "threshold is high enough to keep every sequence"
             )
+
+    def test_non_finite_loss_is_logged(self):
+        # Regression test for #6702: a step whose loss is NaN is still backpropagated, but `Trainer` replaces it in
+        # the reported loss with the average of the previous losses (`logging_nan_inf_filter`, on by default), so a
+        # run that is corrupting its weights logs a clean loss curve. `frac_non_finite_loss` is the only trace.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,
+            num_generations=3,
+            max_completion_length=8,
+            logging_steps=1,  # one log entry per step, so the poisoned step has its own entry
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        # Poison the first loss only. Adding a NaN constant makes the loss non-finite while leaving its gradients
+        # untouched, so the following steps stay healthy and the first step is the only one to report anything.
+        original_compute_loss = trainer._compute_loss
+
+        def compute_nan_loss_once(model, inputs):
+            trainer._compute_loss = original_compute_loss
+            return original_compute_loss(model, inputs) + float("nan")
+
+        trainer._compute_loss = compute_nan_loss_once
+
+        trainer.train()
+
+        logs = [log for log in trainer.state.log_history if "frac_non_finite_loss" in log]
+        assert logs, "no step reported whether its loss was finite, so nothing was verified"
+        assert logs[0]["frac_non_finite_loss"] > 0.0, "the NaN loss left no trace in the logs"
+        assert all(log["frac_non_finite_loss"] == 0.0 for log in logs[1:]), (
+            "a step with a finite loss was reported as non-finite"
+        )
+        # The reported loss of that same step is finite, which is what makes the metric necessary.
+        assert math.isfinite(logs[0]["loss"])
 
     def test_train_with_off_policy_mask(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")

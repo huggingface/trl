@@ -205,6 +205,7 @@ While training and evaluating, we record the following metrics:
 - `cispo_clip_ratio`: The ratio of token (or sequence, if `importance_sampling_level="sequence"`) importance sampling weights that were clipped at `epsilon_high` while having a positive advantage:  \\(r_{i,t}(\theta) > \epsilon_\mathrm{high}\\). Logged only when `loss_type="cispo"`.
 - `vespo/phi_seq_mean`: The average value of the VESPO Gamma weighting  \\(\varphi(w)\\)  applied to the sequence-level importance weights. Values below `1.0` mean sequences are being down-weighted. Logged only when `loss_type="vespo"`.
 - `clip_ratio`: The ratio of clipped tokens reported by the fused Liger GRPO loss. Logged only when `use_liger_kernel=True`, in which case it replaces the `clip_ratio/*` metrics above.
+- `frac_non_finite_loss`: The fraction of forward passes in the logging window whose loss was NaN or infinite. Such a loss is still backpropagated, but [`~transformers.Trainer`] hides it from the reported loss by replacing it with the average of the previous losses (`logging_nan_inf_filter`, enabled by default), so this metric is the only trace it leaves. Any nonzero value means the update was computed from a non-finite loss.
 
 ## Customization
 

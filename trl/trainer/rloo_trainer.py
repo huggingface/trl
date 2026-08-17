@@ -1678,7 +1678,15 @@ class RLOOTrainer(_BaseTrainer):
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         if return_outputs:
             raise ValueError("The RLOOTrainer does not support returning outputs")
-        return self._compute_loss(model, inputs)
+        loss = self._compute_loss(model, inputs)
+
+        # A non-finite loss is still backpropagated, but `Trainer` replaces it in the logged running loss with the
+        # average of the previous losses (`logging_nan_inf_filter`, enabled by default), so a run whose weights are
+        # being corrupted reports a clean loss curve. Log the fraction of non-finite losses to make it visible.
+        mode = "train" if self.model.training else "eval"
+        is_non_finite = (~torch.isfinite(loss)).float()
+        self._metrics[mode]["frac_non_finite_loss"].append(self.accelerator.gather(is_non_finite).max().item())
+        return loss
 
     def _compute_loss(self, model, inputs):
         # Compute the per-token log probabilities for the model
