@@ -49,7 +49,6 @@ jobs:
           uv pip install pytest-reportlog
 
       - name: Run slow tests on single GPU
-        if: always()
         run: |
           source .venv/bin/activate
           make slow_tests
@@ -96,7 +95,6 @@ jobs:
           uv pip install pytest-reportlog
 
       - name: Run slow tests on Multi GPU
-        if: always()
         run: |
           source .venv/bin/activate
           make slow_tests
