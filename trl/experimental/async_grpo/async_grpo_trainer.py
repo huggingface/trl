@@ -30,7 +30,7 @@ from accelerate.logging import get_logger
 from datasets import Dataset, IterableDataset
 from torch.distributed._tensor import DTensor
 from torch.utils.data import DataLoader
-from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenizerBase, TrainerCallback
+from transformers import AutoModelForCausalLM, AutoProcessor, PreTrainedTokenizerBase, ProcessorMixin, TrainerCallback
 from transformers.data.data_collator import DataCollatorMixin
 
 from ...trainer.base_trainer import _BaseTrainer
@@ -574,9 +574,9 @@ class AsyncGRPOTrainer(_BaseTrainer):
             May be omitted only when an `environment_factory` is provided and the environment owns (or procedurally
             generates) the data, returning the prompt from its `reset()` method. In that case, `max_steps` must be set
             to define the training length.
-        processing_class ([`~transformers.PreTrainedTokenizerBase`], *optional*):
+        processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.ProcessorMixin`], *optional*):
             Processing class used to process the data. The padding side must be set to "left". If `None`, the
-            processing class is loaded from the model's name with [`~transformers.AutoTokenizer.from_pretrained`]. A
+            processing class is loaded from the model's name with [`~transformers.AutoProcessor.from_pretrained`]. A
             padding token, `tokenizer.pad_token`, must be set. If the processing class has not set a padding token,
             `tokenizer.eos_token` will be used as the default.
         callbacks (list of [`~transformers.TrainerCallback`], *optional*):
@@ -645,7 +645,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
         reward_funcs: RewardFunc | list[RewardFunc] | None = None,
         args: AsyncGRPOConfig | None = None,
         train_dataset: Dataset | IterableDataset | None = None,
-        processing_class: PreTrainedTokenizerBase | None = None,
+        processing_class: PreTrainedTokenizerBase | ProcessorMixin | None = None,
         callbacks: list[TrainerCallback] | None = None,
         optimizers: tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None] = (None, None),
         tools: list[Callable] | None = None,
@@ -691,11 +691,23 @@ class AsyncGRPOTrainer(_BaseTrainer):
 
         # Processing class
         if processing_class is None:
-            processing_class = AutoTokenizer.from_pretrained(
-                get_config_model_id(model.config), trust_remote_code=args.trust_remote_code
+            processing_class = AutoProcessor.from_pretrained(
+                get_config_model_id(model.config),
+                truncation_side="left",
+                padding_side="left",
+                trust_remote_code=args.trust_remote_code,
             )
-        if processing_class.pad_token is None:
-            processing_class.pad_token = processing_class.eos_token
+
+        # Handle pad token for processors or tokenizers
+        if isinstance(processing_class, ProcessorMixin):
+            self._tokenizer = processing_class.tokenizer
+        elif isinstance(processing_class, PreTrainedTokenizerBase):
+            self._tokenizer = processing_class
+        else:
+            raise TypeError("The `processing_class` must be either a `PreTrainedTokenizerBase` or a `ProcessorMixin`")
+
+        if self._tokenizer.pad_token is None:
+            self._tokenizer.pad_token = self._tokenizer.eos_token
 
         # Reward functions
         if reward_funcs is None:
@@ -817,7 +829,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
                     model_name=get_config_model_id(model.config),
                     dataset=train_dataset,
                     reward_funcs=reward_funcs,
-                    processing_class=processing_class,
+                    processing_class=self._tokenizer,
                     tools=tools,
                     environment_factory=environment_factory,
                     num_generations=self.args.num_generations,
@@ -890,7 +902,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 dataset,
                 batch_size=1,
                 collate_fn=DataCollatorForRollout(
-                    self.processing_class.pad_token_id, num_processes, groups_trained=self._trained_groups
+                    self._tokenizer.pad_token_id, num_processes, groups_trained=self._trained_groups
                 ),
                 num_workers=0,
                 # NOTE(@aminediro):
