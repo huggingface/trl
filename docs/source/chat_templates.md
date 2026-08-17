@@ -20,7 +20,7 @@ TRL ships patched templates under [`trl/chat_templates/`](https://github.com/hug
 
 ## Supported model families
 
-TRL stores reference copies of the original templates so it can identify supported models at init and swap in a training template when needed. The following families are recognized: Cohere, Cohere2, DeepSeek-V3, Gemma, Gemma3, Gemma4, GLM-4-MoE, GPT-OSS, Idefics3, LFM2, LFM2.5, Llama 3 / 3.1 / 3.2, Llava-Next, Nemotron 3 (Nano, Super, Ultra), Phi-3, Phi-3.5, Qwen2-VL, Qwen2.5, Qwen2.5-VL, Qwen3 (including the Instruct-2507 variant), Qwen3-VL, Qwen3.5, Qwen3.6.
+TRL stores reference copies of the original templates so it can identify supported models at init and swap in a training template when needed. The following families are recognized: Cohere, Cohere2, DeepSeek-R1-Distill, DeepSeek-V3, Gemma, Gemma3, Gemma4, GLM-4-MoE, GPT-OSS, Idefics3, LFM2, LFM2.5, Llama 3 / 3.1 / 3.2, Llava-Next, Nemotron 3 (Nano, Super, Ultra), Phi-3, Phi-3.5, Qwen2-VL, Qwen2.5, Qwen2.5-VL, Qwen3 (including the Instruct-2507 variant), Qwen3-VL, Qwen3.5, Qwen3.6.
 
 ## Training templates
 
@@ -37,6 +37,13 @@ Wrap assistant message output with `&#123;% generation %&#125;` / `&#123;% endge
 Patched Cohere2 template. Diff vs `cohere2.jinja`:
 
 Move the trailing `<|END_OF_TURN_TOKEN|>` from after the role-dispatch `&#123;% endif %&#125;` into each role branch, and wrap the assistant branch (`<|START_RESPONSE|>...<|END_RESPONSE|><|END_OF_TURN_TOKEN|>`) with `&#123;% generation %&#125;` / `&#123;% endgeneration %&#125;` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+
+### `deepseek_r1_distill_training.jinja`
+
+Patched DeepSeek-R1-Distill template. Diff vs `deepseek_r1_distill.jinja`:
+
+- Removes the `'</think>'` split on assistant content. The original drops everything up to and including `</think>`, which would silently remove the reasoning from the training target.
+- Wraps assistant message output with `&#123;% generation %&#125;` / `&#123;% endgeneration %&#125;` markers for SFT assistant-only loss.
 
 ### `deepseekv3_training.jinja`
 
