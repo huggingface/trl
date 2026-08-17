@@ -25,6 +25,13 @@
 """
 Fine-tune NVIDIA Nemotron 3 models with SFT.
 
+Nemotron 3 uses a hybrid Mamba-Attention architecture. The LoRA target modules
+must cover both Mamba layers (in_proj, out_proj) and Attention/MLP layers
+(q_proj, k_proj, v_proj, o_proj, up_proj, down_proj). Using only attention
+modules (q/k/v/o_proj) would leave the Mamba layers frozen, which are the
+majority of layers in NemotronH models. See
+https://github.com/huggingface/peft/issues/3554 for details.
+
 Prerequisites:
 
     pip install "transformers>=5.7.0"
@@ -52,7 +59,7 @@ accelerate launch \
     --use_peft \
     --lora_r 8 \
     --lora_alpha 16 \
-    --lora_target_modules q_proj k_proj v_proj o_proj gate_proj up_proj down_proj
+    --lora_target_modules q_proj k_proj v_proj o_proj in_proj out_proj up_proj down_proj
 """
 
 from datasets import load_dataset
