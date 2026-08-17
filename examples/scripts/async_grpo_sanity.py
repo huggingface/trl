@@ -249,6 +249,16 @@ def find_last_checkpoint() -> tuple[str | None, int]:
 
 
 def main() -> None:
+    # trl logs through `accelerate.logging`, i.e. the stdlib root logger, which has no handler in a bare script — so
+    # INFO records fall to `logging.lastResort`, a stderr handler pinned at WARNING, and vanish. That silently hides the
+    # lines a chained run is checked against: "Resuming the prompt stream at dataset row N", the weight-sync timings and
+    # the stale-sample drops. Scoped to `trl` rather than `basicConfig`, which would also unleash urllib3 and aiohttp.
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
+    trl_logger = logging.getLogger("trl")
+    trl_logger.addHandler(handler)
+    trl_logger.setLevel(logging.INFO)
+
     checkpoint, done_steps = find_last_checkpoint()
     if os.environ.get("RESUME") == "1":
         if checkpoint is None:
