@@ -152,7 +152,7 @@ While training and evaluating, we record the following metrics:
 - `clip_ratio/low_min`: The smallest per-completion clip indicator on the lower bound of the trust region:  \\(r_{i,t}(\theta) < 1 - \epsilon_\mathrm{low}\\).
 - `clip_ratio/high_mean`: The average ratio of sequence probabilities that were clipped on the upper bound of the trust region:  \\(r_{i,t}(\theta) > 1 + \epsilon_\mathrm{high}\\).
 - `clip_ratio/high_max`: The largest per-completion clip indicator on the upper bound of the trust region:  \\(r_{i,t}(\theta) > 1 + \epsilon_\mathrm{high}\\).
-- `frac_non_finite_loss`: The fraction of forward passes in the logging window whose loss was NaN or infinite. Such a loss is still backpropagated, but [`~transformers.Trainer`] hides it from the reported loss by replacing it with the average of the previous losses (`logging_nan_inf_filter`, enabled by default), so this metric is the only trace it leaves. Any nonzero value means the update was computed from a non-finite loss.
+- `frac_non_finite_loss`: The fraction of forward passes in the logging window whose loss was NaN or infinite on at least one process. Such a loss is still backpropagated, but [`~transformers.Trainer`] hides it from the reported loss by replacing it with the average of the previous losses (`logging_nan_inf_filter`, enabled by default), so this metric is the only trace it leaves. Any nonzero value means the update was computed from a non-finite loss.
 
 ## Customization
 
