@@ -54,7 +54,7 @@ def process_log_file(log):
 
 
 def main():
-    print(f"## 🤗 Results of the {os.environ.get('TEST_TYPE', '')} TRL tests.")
+    print(f"## 🤗 Results of the {os.environ['TEST_TYPE']} TRL tests.")
 
     log_files = list(Path().glob("*.log"))
     if not log_files:
