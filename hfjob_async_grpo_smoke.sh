@@ -81,6 +81,9 @@ in_job() {
     export PYTHONUNBUFFERED=1
     # trl warns on every import from trl.experimental; silence it to keep the log readable.
     export TRL_EXPERIMENTAL_SILENCE=1
+    # `accelerate.logging` sits at WARNING by default, which hides exactly the lines a chained run has to be checked
+    # against: "Resuming the prompt stream at dataset row N", the weight-sync timings, and the stale-sample drops.
+    export ACCELERATE_LOG_LEVEL=INFO
 
     echo "=== [1/5] deps (stage=${SMOKE_STAGE}, ${N_TRAIN} trainer + ${N_VLLM} vLLM GPUs, precision=${PRECISION}) ==="
     # The image ships python3.12 with torch 2.13/cu130, vllm 0.27.1 and transformers 5.15 — new enough for both the
