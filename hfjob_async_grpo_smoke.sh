@@ -2,6 +2,7 @@
 # AsyncGRPO sanity run on HF Jobs, chained across jobs by Hub checkpoints.
 #
 #   ./hfjob_async_grpo_smoke.sh smoke     # h200x2, 4 steps, 1 trainer + 1 vLLM GPU: exercises the whole path cheaply
+#   ./hfjob_async_grpo_smoke.sh smoke-resume  # the same, resuming the smoke chain's checkpoint
 #   ./hfjob_async_grpo_smoke.sh fresh     # h200x8, 4 trainer + 4 vLLM GPUs: steps 1..STEPS_PER_JOB
 #   ./hfjob_async_grpo_smoke.sh resume    # same shape, continues from <HUB_MODEL_ID>/last-checkpoint
 #   ./hfjob_async_grpo_smoke.sh logs      # follow the most recently submitted job
@@ -152,14 +153,15 @@ in_job() {
 }
 
 case "$STAGE" in
-    smoke)
-        # Cheapest end-to-end rehearsal of the same code path: 1 + 1 GPUs, 8 completions per step, its own Hub repo
+    smoke|smoke-resume)
+        # Cheapest end-to-end rehearsal of the same code path: 1 + 1 GPUs, 16 completions per step, its own Hub repo
         # and trackio project so it cannot land next to the real curves.
         HUB_MODEL_ID=${HUB_MODEL_ID:-aminediroHF/async-grpo-ckpt-smoke-r1d-1.5b}
         RUN_NAME=${RUN_NAME:-async-grpo-ckpt-smoke}
         PROJECT=${PROJECT:-async-grpo-ckpt-smoke}
         TOTAL_STEPS=${TOTAL_STEPS:-8} SAVE_STEPS=${SAVE_STEPS:-4}
-        submit smoke h200x2 1 1 8 "${STEPS_PER_JOB:-4}" "${TIMEOUT:-60m}" "${RESUME:-0}"
+        [ "$STAGE" = "smoke-resume" ] && resume=1 || resume=0
+        submit "$STAGE" h200x2 1 1 8 "${STEPS_PER_JOB:-4}" "${TIMEOUT:-60m}" "$resume"
         ;;
     fresh|resume)
         HUB_MODEL_ID=${HUB_MODEL_ID:-aminediroHF/async-grpo-sanity-r1d-1.5b}
@@ -175,5 +177,5 @@ case "$STAGE" in
         uvx hf jobs logs --follow "$(cat "$id_file")"
         ;;
     in-job) in_job ;;
-    *)      echo "usage: $0 {smoke|fresh|resume|logs}" >&2; exit 2 ;;
+    *)      echo "usage: $0 {smoke|smoke-resume|fresh|resume|logs}" >&2; exit 2 ;;
 esac
