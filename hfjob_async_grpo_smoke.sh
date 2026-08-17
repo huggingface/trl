@@ -159,6 +159,10 @@ in_job() {
         CUDA_VISIBLE_DEVICES=$TRAIN_DEVICES python3 examples/scripts/async_grpo_sanity.py
     fi
 
+    # safetensors writes to a hidden temp file and renames it, and on the bucket the rename leaves the temp object
+    # behind — 7 GB of dead weight per checkpoint. Nothing is saving by now, so anything matching is garbage.
+    find "$CKPT_DIR" -name '.tmp*' -type f -delete 2>/dev/null || true
+
     echo "=== [5/5] done; vLLM tail ==="
     tail -20 /tmp/vllm.log
     kill "$VLLM_PID" 2>/dev/null || true
