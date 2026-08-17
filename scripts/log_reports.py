@@ -70,7 +70,7 @@ def main():
             table = tabulate(failed_table, headers=["File", "Class", "Test Name"], tablefmt="grid")
             print(f"\n```\n{table}\n```\n")
         elif passed:
-            print(f"### ✅ No failures, all {len(passed)} test(s) passed in `{log}`")
+            print(f"### ✅ No failures in `{log}`")
         else:
             print(f"⚠️ Empty log file `{log}`! Check the GitHub action job.")
 
