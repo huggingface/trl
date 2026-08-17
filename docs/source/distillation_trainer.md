@@ -58,13 +58,19 @@ At each training step, the student generates a batch of completions for the samp
 
 ### Computing the loss
 
-The loss is the **generalized Jensen-Shannon divergence (JSD)** between the student distribution  \\( p_S \\)  and the teacher distribution  \\( p_T \\)  over the generated completion tokens, interpolated by `beta` and defined as:
+The loss interpolates between the forward KL, the **generalized Jensen-Shannon divergence (JSD)**, and the reverse KL for the student distribution  \\( p_S \\)  and teacher distribution  \\( p_T \\)  over the generated completion tokens:
 
 $$
-\mathcal{L}_\beta = \beta \, \mathbb{D}_{\mathrm{KL}}\!\left[ p_T \| p_M \right] + (1 - \beta) \, \mathbb{D}_{\mathrm{KL}}\!\left[ p_S \| p_M \right], \qquad p_M = (1 - \beta) \, p_S + \beta \, p_T,
+\mathcal{L}_\beta =
+\begin{cases}
+\mathbb{D}_{\mathrm{KL}}\!\left[ p_T \| p_S \right], & \beta = 0, \\
+\beta \, \mathbb{D}_{\mathrm{KL}}\!\left[ p_T \| p_M \right] + (1 - \beta) \, \mathbb{D}_{\mathrm{KL}}\!\left[ p_S \| p_M \right], & 0 < \beta < 1, \\
+\mathbb{D}_{\mathrm{KL}}\!\left[ p_S \| p_T \right], & \beta = 1,
+\end{cases}
+\qquad p_M = (1 - \beta) \, p_S + \beta \, p_T.
 $$
 
-where  \\( p_M \\)  is the  \\( \beta \\) -mixture of the two distributions. The endpoints reduce to the pure divergences:  `beta=0.0`  gives the forward KL  \\( \mathbb{D}_{\mathrm{KL}}\!\left[ p_T \| p_S \right] \\)  and  `beta=1.0`  the reverse KL  \\( \mathbb{D}_{\mathrm{KL}}\!\left[ p_S \| p_T \right] \\).
+For  \\( 0 < \beta < 1 \\),  \\( p_M \\)  is the  \\( \beta \\)-mixture of the two distributions. The endpoints are defined explicitly rather than obtained by substituting into the mixture formula: `beta=0.0` gives the forward KL and `beta=1.0` gives the reverse KL.
 
 In practice, the projection to vocabulary logits and the divergence are computed in chunks, so peak activation memory does not scale with the full vocabulary × sequence-length logits tensor. See [Reducing Memory Usage](reducing_memory_usage).
 
