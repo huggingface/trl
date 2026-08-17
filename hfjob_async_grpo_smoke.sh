@@ -12,8 +12,11 @@
 # in the bucket mounted at /ckpt — no 21 GB push and pull per save.
 #
 # The Slurm original (`sanity_run/async2n_job.sbatch`) had 16 H100s: 8 trainer ranks on one node, 8 vLLM engines on the
-# other. This runs on 4 H200s, 2 + 2, with `ACCUM` scaled to keep the recipe's 128 completions per optimizer step
-# (2 x 32 x 2 = 128, where the Slurm run had 2 x 8 x 8). The step count is what fixes the total compute, so a smaller
+# other. This runs on 4 H200s, 2 + 2, with the microbatch shape scaled to keep the recipe's 128 completions per
+# optimizer step (8 x 8 x 2 = 128, where the Slurm run had 2 x 8 x 8). `per_device_train_batch_size=8` rather than the
+# Slurm run's 2 because H200 has the memory for it and the *number* of microbatches is what costs: 2 x 32 measured
+# 35.5s per iteration against ~26s expected, matching the README's finding that per-iteration overhead outside the
+# training step scales with the microbatch count (4.82s -> 0.71s when 7280 halved it). The step count is what fixes the total compute, so a smaller
 # flavor costs about the same in dollars and only trades wall-clock — h200x4 is ~2x the per-step time of h200x8 at half
 # the hourly rate, and it schedules far sooner. Two GPUs is the floor, not a convenience: the weight-transfer NCCL group
 # has world_size = vllm_world_size + 1, and two ranks cannot share one device. FA3 (`kernels-community/flash-attn3`,
@@ -42,7 +45,7 @@ STAGE=${1:-}
 SHIP_DIR=/tmp/async-grpo-ship
 
 submit() {
-    local stage=$1 flavor=$2 n_train=$3 n_vllm=$4 accum=$5 steps_per_job=$6 timeout=$7 resume=$8 out job_id
+    local stage=$1 flavor=$2 n_train=$3 n_vllm=$4 pdtb=$5 accum=$6 steps_per_job=$7 timeout=$8 resume=$9 out job_id
     # The tarball is built from the committed branch, so what runs is exactly what is on `origin`.
     rm -rf "$SHIP_DIR" && mkdir -p "$SHIP_DIR"
     git archive --format=tar.gz --prefix=trl-src/ "$BRANCH" > "$SHIP_DIR/trl.tar.gz"
@@ -60,6 +63,7 @@ submit() {
         -e "SMOKE_STAGE=${stage}" \
         -e "N_TRAIN=${n_train}" \
         -e "N_VLLM=${n_vllm}" \
+        -e "PDTB=${pdtb}" \
         -e "ACCUM=${accum}" \
         -e "STEPS_PER_JOB=${steps_per_job}" \
         -e "TOTAL_STEPS=${TOTAL_STEPS}" \
@@ -81,7 +85,7 @@ submit() {
     # script, and every one of those forms carries the 24-hex job id — so pull that out rather than trusting a shape.
     job_id=$(printf '%s\n' "$out" | grep -oE '[0-9a-f]{24}' | head -1)
     echo "$job_id" > "/tmp/async-grpo-${stage}.job"
-    echo "submitted ${stage} on ${flavor}: ${job_id}  (${n_train} trainer + ${n_vllm} vLLM GPUs, ${steps_per_job} steps)"
+    echo "submitted ${stage} on ${flavor}: ${job_id}  (${n_train} trainer + ${n_vllm} vLLM GPUs, ${pdtb}x${accum} per rank, ${steps_per_job} steps)"
     echo "follow with: $0 logs"
 }
 
@@ -185,7 +189,7 @@ case "$STAGE" in
         TOTAL_STEPS=${TOTAL_STEPS:-8} SAVE_STEPS=${SAVE_STEPS:-4} SAVE_TOTAL_LIMIT=${SAVE_TOTAL_LIMIT:-1}
         [ "$STAGE" = "smoke-resume" ] && resume=1 || resume=0
         CKPT_DIR=${CKPT_DIR:-/ckpt/smoke}
-        submit "$STAGE" h200x2 1 1 8 "${STEPS_PER_JOB:-4}" "${TIMEOUT:-60m}" "$resume"
+        submit "$STAGE" h200x2 1 1 2 8 "${STEPS_PER_JOB:-4}" "${TIMEOUT:-60m}" "$resume"
         ;;
     fresh|resume)
         HUB_MODEL_ID=${HUB_MODEL_ID:-aminediroHF/async-grpo-sanity-r1d-1.5b}
@@ -194,7 +198,7 @@ case "$STAGE" in
         TOTAL_STEPS=${TOTAL_STEPS:-2400} SAVE_STEPS=${SAVE_STEPS:-150}
         [ "$STAGE" = "resume" ] && resume=1 || resume=0
         CKPT_DIR=${CKPT_DIR:-/ckpt/sanity-r1d-1.5b}
-        submit "$STAGE" h200x4 2 2 32 "${STEPS_PER_JOB:-800}" "${TIMEOUT:-8h}" "$resume"
+        submit "$STAGE" h200x4 2 2 "${PDTB:-8}" "${ACCUM:-8}" "${STEPS_PER_JOB:-800}" "${TIMEOUT:-8h}" "$resume"
         ;;
     logs)
         id_file=$(ls -t /tmp/async-grpo-*.job 2>/dev/null | head -1 || true)
