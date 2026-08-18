@@ -4629,7 +4629,7 @@ class TestGRPOTrainerSlow(TrlTestCase):
     @pytest.mark.xfail(
         reason="kernels-community/flash-attn2 is currently unusable for training: no build variant for torch 2.13 "
         "(https://github.com/huggingface/kernels-community/issues/1082), and the v3 stable-ABI build raises in the "
-        "backward pass for GQA models",
+        "backward pass for GQA models (https://github.com/huggingface/kernels-community/issues/1085)",
     )
     @require_kernels
     @require_bitsandbytes
