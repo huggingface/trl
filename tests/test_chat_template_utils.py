@@ -32,7 +32,7 @@ from trl.chat_template_utils import (
 )
 from trl.data_utils import prepare_multimodal_messages
 
-from .testing_utils import TrlTestCase, require_jmespath, require_vision
+from .testing_utils import TrlTestCase, require_response_parsing, require_vision
 
 
 class TestCloneChatTemplate(TrlTestCase):
@@ -120,7 +120,7 @@ class TestCloneChatTemplate(TrlTestCase):
     reason="Response parsing is not supported in transformers versions below 5.0.0",
     strict=True,
 )
-@require_jmespath
+@require_response_parsing
 class TestAddResponseSchema:
     @pytest.mark.parametrize(
         "tokenizer_name",
@@ -169,6 +169,14 @@ class TestAddResponseSchema:
                     reason="Nemotron 3 tokenizer requires transformers>=5.3.0",
                 ),
             ),
+            pytest.param(
+                "trl-internal-testing/tiny-NemotronHForCausalLM-3.5-lightning",
+                id="nemotron_3_5_lightning",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.3.0"),
+                    reason="Nemotron 3.5 tokenizer requires transformers>=5.3.0",
+                ),
+            ),
             pytest.param("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", id="qwen2.5"),
             pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM", id="qwen3"),
             pytest.param("trl-internal-testing/tiny-Qwen3ForCausalLM-Instruct-2507", id="qwen3_instruct_2507"),
@@ -199,12 +207,22 @@ class TestAddResponseSchema:
     @pytest.mark.parametrize(
         "processor_name",
         [
+            pytest.param(
+                "trl-internal-testing/tiny-Lfm2VlForConditionalGeneration-2.5",
+                id="lfm2-2.5-vl",
+                marks=pytest.mark.skipif(
+                    not _SUPPORTS_RESPONSE_TEMPLATE,
+                    reason="LFM2.5 only ships a new-style response template, which requires transformers>=5.13",
+                ),
+            ),
             pytest.param("trl-internal-testing/tiny-Qwen3VLForConditionalGeneration", id="qwen3_vl"),
             pytest.param("trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink", id="qwen35-nothink"),
             pytest.param("trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-Think", id="qwen35-think"),
             pytest.param("trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6", id="qwen36"),
+            pytest.param("trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-3.8", id="qwen38"),
         ],
     )
+    @require_vision
     def test_add_response_schema_vlm(self, processor_name):
         # For VLM processors, `add_response_schema` must set the template/schema on the inner tokenizer, since
         # `parse_response` is a tokenizer method that reads `self.response_template` / `self.response_schema` from the
@@ -269,8 +287,30 @@ class TestSupportsToolCalling:
                     reason="LFM2.5 tokenizer requires transformers>=5.0.0",
                 ),
             ),
+            pytest.param(
+                "trl-internal-testing/tiny-Lfm2VlForConditionalGeneration-2.5",
+                id="lfm2-2.5-vl",
+                marks=[
+                    require_vision,
+                    pytest.mark.skipif(
+                        Version(transformers.__version__) < Version("5.0.0"),
+                        reason="LFM2.5-VL requires transformers>=5.0.0",
+                    ),
+                ],
+            ),
             pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3.1", id="llama3.1"),
             pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3.2", id="llama3.2"),
+            pytest.param(
+                "trl-internal-testing/tiny-MuseGlimmerForConditionalGeneration",
+                id="muse_glimmer",
+                marks=[
+                    require_vision,
+                    pytest.mark.skipif(
+                        Version(transformers.__version__) < Version("5.15.0"),
+                        reason="Muse Glimmer was introduced in transformers-5.15.0",
+                    ),
+                ],
+            ),
             pytest.param(
                 "trl-internal-testing/tiny-NemotronHForCausalLM-nano",
                 id="nemotron_3_nano",
@@ -293,6 +333,14 @@ class TestSupportsToolCalling:
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.3.0"),
                     reason="Nemotron 3 tokenizer requires transformers>=5.3.0",
+                ),
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-NemotronHForCausalLM-3.5-lightning",
+                id="nemotron_3_5_lightning",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.3.0"),
+                    reason="Nemotron 3.5 tokenizer requires transformers>=5.3.0",
                 ),
             ),
             pytest.param("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", id="qwen2.5"),
@@ -326,6 +374,14 @@ class TestSupportsToolCalling:
             pytest.param(
                 "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
                 id="qwen36",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.0.0"),
+                    reason="Qwen3.5 tokenizer requires transformers>=5.0.0",
+                ),
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-3.8",
+                id="qwen38",
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.0.0"),
                     reason="Qwen3.5 tokenizer requires transformers>=5.0.0",
@@ -382,6 +438,9 @@ class TestSupportsToolCalling:
             # emit <|tool_call_start|> / <|tool_call_end|> as plain text inside `content`.
             pytest.param("trl-internal-testing/tiny-Lfm2ForCausalLM", id="lfm2"),
             pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3", id="llama3"),
+            # DeepSeek-R1-Distill renders `tool_calls` only when `content` is `None`, and never closes a single-call
+            # turn with `<｜tool▁calls▁end｜>`.
+            pytest.param("trl-internal-testing/tiny-Qwen2ForCausalLM-R1-Distill", id="r1_distill"),
             pytest.param("trl-internal-testing/tiny-Qwen2VLForConditionalGeneration", id="qwen2_vl"),
             pytest.param("trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration", id="qwen2.5_vl"),
         ],
@@ -601,6 +660,7 @@ class TestIsChatTemplateStopTokenTrained:
     [
         pytest.param("trl-internal-testing/tiny-CohereForCausalLM", id="cohere"),
         pytest.param("trl-internal-testing/tiny-Cohere2ForCausalLM", id="cohere2"),
+        pytest.param("trl-internal-testing/tiny-Qwen2ForCausalLM-R1-Distill", id="r1_distill"),
         pytest.param("trl-internal-testing/tiny-DeepseekV3ForCausalLM", id="deepseekv3"),
         pytest.param(
             "trl-internal-testing/tiny-DiffusionGemmaForBlockDiffusion",
@@ -635,6 +695,17 @@ class TestIsChatTemplateStopTokenTrained:
             "trl-internal-testing/tiny-LlavaNextForConditionalGeneration", id="llava_next", marks=require_vision
         ),
         pytest.param(
+            "trl-internal-testing/tiny-MuseGlimmerForConditionalGeneration",
+            id="muse_glimmer",
+            marks=[
+                require_vision,
+                pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.15.0"),
+                    reason="Muse Glimmer was introduced in transformers-5.15.0",
+                ),
+            ],
+        ),
+        pytest.param(
             "trl-internal-testing/tiny-NemotronHForCausalLM-nano",
             id="nemotron_3_nano",
             marks=pytest.mark.skipif(
@@ -656,6 +727,14 @@ class TestIsChatTemplateStopTokenTrained:
             marks=pytest.mark.skipif(
                 Version(transformers.__version__) < Version("5.3.0"),
                 reason="Nemotron 3 tokenizer requires transformers>=5.3.0",
+            ),
+        ),
+        pytest.param(
+            "trl-internal-testing/tiny-NemotronHForCausalLM-3.5-lightning",
+            id="nemotron_3_5_lightning",
+            marks=pytest.mark.skipif(
+                Version(transformers.__version__) < Version("5.3.0"),
+                reason="Nemotron 3.5 tokenizer requires transformers>=5.3.0",
             ),
         ),
         pytest.param("trl-internal-testing/tiny-Phi3ForCausalLM-3", id="phi3"),
@@ -703,6 +782,17 @@ class TestIsChatTemplateStopTokenTrained:
         pytest.param(
             "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
             id="qwen36",
+            marks=[
+                require_vision,
+                pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.0.0"),
+                    reason="Qwen3.5 tokenizer requires transformers>=5.0.0",
+                ),
+            ],
+        ),
+        pytest.param(
+            "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-3.8",
+            id="qwen38",
             marks=[
                 require_vision,
                 pytest.mark.skipif(
@@ -837,6 +927,11 @@ class TestGetTrainingChatTemplate:
             # by the following message's role marker. The training template appends that terminator to the final
             # assistant turn so the stop token is trained — here the `<|user|>` that would open the next turn.
             assert after == before + "<|user|>"
+        elif tokenizer_name == "trl-internal-testing/tiny-Qwen2ForCausalLM-R1-Distill":
+            # DeepSeek-R1-Distill's native template drops everything up to and including `</think>` when re-rendering
+            # an assistant turn. The training template keeps the reasoning, so it stays in the SFT target.
+            reasoning = "<think>\nThe sky scatters shorter wavelengths.\n</think>"
+            assert after == before.replace("<｜Assistant｜>", "<｜Assistant｜>" + reasoning)
         else:
             assert before == after
 
@@ -1018,8 +1113,30 @@ class TestGetTrainingChatTemplate:
                 reason="LFM2.5 only ships a new-style response template, which requires transformers>=5.13",
             ),
         ),
+        pytest.param(
+            "trl-internal-testing/tiny-Lfm2VlForConditionalGeneration-2.5",
+            id="lfm2-2.5-vl",
+            marks=[
+                require_vision,
+                pytest.mark.skipif(
+                    not _SUPPORTS_RESPONSE_TEMPLATE,
+                    reason="LFM2.5 only ships a new-style response template, which requires transformers>=5.13",
+                ),
+            ],
+        ),
         pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3.1", id="llama3.1"),
         pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3.2", id="llama3.2"),
+        pytest.param(
+            "trl-internal-testing/tiny-MuseGlimmerForConditionalGeneration",
+            id="muse_glimmer",
+            marks=[
+                require_vision,
+                pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.15.0"),
+                    reason="Muse Glimmer was introduced in transformers-5.15.0",
+                ),
+            ],
+        ),
         pytest.param(
             "trl-internal-testing/tiny-NemotronHForCausalLM-nano",
             id="nemotron_3_nano",
@@ -1044,6 +1161,14 @@ class TestGetTrainingChatTemplate:
                 reason="Nemotron 3 tokenizer requires transformers>=5.3.0",
             ),
         ),
+        pytest.param(
+            "trl-internal-testing/tiny-NemotronHForCausalLM-3.5-lightning",
+            id="nemotron_3_5_lightning",
+            marks=pytest.mark.skipif(
+                Version(transformers.__version__) < Version("5.3.0"),
+                reason="Nemotron 3.5 tokenizer requires transformers>=5.3.0",
+            ),
+        ),
         pytest.param("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", id="qwen2.5"),
         pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM", id="qwen3"),
         pytest.param(
@@ -1057,17 +1182,31 @@ class TestGetTrainingChatTemplate:
             ),
         ),
         pytest.param("trl-internal-testing/tiny-Qwen3ForCausalLM-Instruct-2507", id="qwen3_instruct_2507"),
-        pytest.param("trl-internal-testing/tiny-Qwen3VLForConditionalGeneration", id="qwen3_vl"),
-        pytest.param("trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink", id="qwen35-nothink"),
-        pytest.param("trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-Think", id="qwen35-think"),
-        pytest.param("trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6", id="qwen36"),
+        pytest.param("trl-internal-testing/tiny-Qwen3VLForConditionalGeneration", id="qwen3_vl", marks=require_vision),
+        pytest.param(
+            "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
+            id="qwen35-nothink",
+            marks=require_vision,
+        ),
+        pytest.param(
+            "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-Think", id="qwen35-think", marks=require_vision
+        ),
+        pytest.param(
+            "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6", id="qwen36", marks=require_vision
+        ),
+        pytest.param(
+            "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-3.8", id="qwen38", marks=require_vision
+        ),
         pytest.param(
             "trl-internal-testing/tiny-Gemma4ForConditionalGeneration",
             id="gemma4",
-            marks=pytest.mark.skipif(
-                Version(transformers.__version__) < Version("5.5.0"),
-                reason="Gemma4 models were introduced in transformers-5.5.0",
-            ),
+            marks=[
+                require_vision,
+                pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.5.0"),
+                    reason="Gemma4 models were introduced in transformers-5.5.0",
+                ),
+            ],
         ),
     ],
 )
@@ -1076,7 +1215,7 @@ class TestGetTrainingChatTemplate:
     reason="Response parsing is not supported in transformers versions below 5.0.0",
     strict=True,
 )
-@require_jmespath
+@require_response_parsing
 class TestParseResponse:
     def _load(self, model_name):
         if "ForCausalLM" in model_name:
@@ -1142,7 +1281,11 @@ class TestParseResponse:
         reasoning_field = (
             "thinking"
             if model_name
-            in ("trl-internal-testing/tiny-GptOssForCausalLM", "trl-internal-testing/tiny-Lfm2ForCausalLM-2.5")
+            in (
+                "trl-internal-testing/tiny-GptOssForCausalLM",
+                "trl-internal-testing/tiny-Lfm2ForCausalLM-2.5",
+                "trl-internal-testing/tiny-Lfm2VlForConditionalGeneration-2.5",
+            )
             else "reasoning_content"
         )
         messages = [
@@ -1213,6 +1356,11 @@ class TestParseResponse:
         assistant = {"role": "assistant", "tool_calls": tool_calls}
         if model_name == "trl-internal-testing/tiny-GptOssForCausalLM":
             assistant["thinking"] = "Let's call the tool."
+            assistant["content"] = ""
+        elif model_name == "trl-internal-testing/tiny-MuseGlimmerForConditionalGeneration":
+            # Muse Glimmer renders one ATEM channel per assistant turn: a turn carrying tool calls has no `to=user`
+            # channel, so plain content is dropped. Text alongside a tool call belongs in the `to=self` channel.
+            assistant["reasoning_content"] = "Let's call the tool."
             assistant["content"] = ""
         else:
             assistant["content"] = "Let's call the tool."
