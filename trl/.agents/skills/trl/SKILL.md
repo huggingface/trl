@@ -14,9 +14,10 @@ Each method pairs a `*Trainer` class with a `*Config` dataclass. Configs extend 
 | Trainer | Dataset type |
 |---|---|
 | `SFTTrainer` | language modeling or prompt-completion |
-| `DPOTrainer`, `RewardTrainer` | preference (chosen/rejected pairs) |
+| `DPOTrainer` | preference (chosen/rejected pairs) |
 | `GRPOTrainer` | prompt-only + reward function(s) |
 | `KTOTrainer` | unpaired preference (per-sample bool label) |
+| `RewardTrainer` | preference (chosen/rejected pairs); trains a scalar reward model, not a policy |
 
 ```python
 from datasets import load_dataset
