@@ -126,6 +126,14 @@ R1_DISTILL_RESPONSE_TEMPLATE = {
     "fields": {"content": {"close_pattern": r"<｜end▁of▁sentence｜>\s*", "content": "text"}},
 }
 
+# The legacy equivalent, for transformers < 5.13, whose `parse_response` reads `response_schema` and raises without it.
+# Both are set: each version uses the one it understands, so the same script runs on either stack.
+R1_DISTILL_RESPONSE_SCHEMA = {
+    "x-regex": r"^(?P<content>[\s\S]*?)\s*(?:<｜end▁of▁sentence｜>|$)",
+    "type": "object",
+    "properties": {"role": {"const": "assistant"}, "content": {"type": "string"}},
+}
+
 # Port of the reference reward: oat's `r1_distill_qwen_math_reward_fn` -> `boxed_reward_fn`
 # (https://github.com/sail-sg/oat, selected by the recipe's `--prompt_template r1_distill_qwen`).
 # `trl.rewards.accuracy_reward` is not equivalent: it returns `None` when the gold fails to parse (160 of this
@@ -284,6 +292,7 @@ def main() -> None:
 
     tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
     tokenizer.response_template = R1_DISTILL_RESPONSE_TEMPLATE
+    tokenizer.response_schema = R1_DISTILL_RESPONSE_SCHEMA
 
     config = AsyncGRPOConfig(
         output_dir=OUTPUT_DIR,
