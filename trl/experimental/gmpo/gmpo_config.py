@@ -19,7 +19,6 @@ from ...trainer.grpo_config import GRPOConfig
 
 @dataclass
 class GMPOConfig(GRPOConfig):
-    # docstyle-ignore
     r"""
     Configuration class for the [`GMPOTrainer`].
 
