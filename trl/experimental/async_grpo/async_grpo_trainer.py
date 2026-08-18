@@ -478,11 +478,8 @@ class DataCollatorForRollout(DataCollatorMixin):
         global_n_tokens = sum(sum(example["completion_mask"]) for example in all_examples)
         global_n_tokens = torch.full((self.num_processes,), float(global_n_tokens), dtype=torch.float32)
 
-        # Total packed sequences across all rows in the full batch. `TokenBudgetBatcher`/`FixedCountBatcher` balance
-        # rows by Σ Lᵢ² (compute cost), not by sequence count, so ranks can end up with different numbers of
-        # sequences per row; the "grpo"/"sapo"/"dr_grpo"/"luspo" loss types need this global count (see
-        # `compute_loss`) instead of each rank's local count to stay correctly normalized under DDP/FSDP gradient
-        # averaging.
+        # Total packed sequences across all rows. Rows are balanced by Σ Lᵢ², not sequence count, so ranks can hold
+        # different numbers of sequences; "grpo"/"sapo"/"dr_grpo"/"luspo" need this global count (see compute_loss).
         global_n_seqs = torch.full((self.num_processes,), float(len(all_examples)), dtype=torch.float32)
 
         # Per-sample metrics grouped per rank, as a dict of 2D tensors (one row per rank) so that Accelerate's
