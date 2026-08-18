@@ -669,6 +669,19 @@ def _segment_sum(values: torch.Tensor, sequence_id: torch.Tensor, n_samples: int
     )
 
 
+def _segment_sum(values: torch.Tensor, sequence_id: torch.Tensor, n_samples: int) -> torch.Tensor:
+    """Sums `values` (1, T), grouped by `sequence_id` (1, T) — a 0-indexed id per packed sequence — into a
+    per-sequence tensor of shape (n_samples,).
+
+    GRPOTrainer's (B, T) batch layout gets per-sequence reductions "for free" from a plain `dim=-1` sum.
+    AsyncGRPOTrainer instead packs every sample for a rank into a single padding-free row (B=1), so the same
+    per-sequence reduction needs an explicit segment-sum over `sequence_id` (see `compute_loss`).
+    """
+    return torch.zeros(n_samples, device=values.device, dtype=values.dtype).scatter_add(
+        0, sequence_id.squeeze(0), values.squeeze(0)
+    )
+
+
 class AsyncGRPOTrainer(_BaseTrainer):
     """
     Trainer for the Group Relative Policy Optimization (GRPO) method. This algorithm was initially proposed in the
