@@ -256,9 +256,9 @@ def _patch_chunked_ce_lm_head(model: torch.nn.Module, chunk_size: int, is_vlm: b
         chunk_size (`int`):
             Number of valid tokens processed per CE chunk.
         is_vlm (`bool`):
-            Set to `True` for VLMs. Only used for the transformers < 5.0.0 fallbacks: VLMs set
-            `base_model_prefix = ""` there (so the backbone must be read off `model.model`), and they take the
-            config-level MoE aux-loss parameters rather than the model-level ones.
+            Set to `True` for VLMs. Only used for the transformers < 5.0.0 fallbacks: VLMs set `base_model_prefix = ""`
+            there (so the backbone must be read off `model.model`), and they take the config-level MoE aux-loss
+            parameters rather than the model-level ones.
     """
     # On VLMs the logit post-processing lives on `text_config`, so read it through `get_text_config()`. The MoE
     # `output_router_logits` flag lives there too, and is read off the same config below.
