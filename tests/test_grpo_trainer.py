@@ -4627,9 +4627,9 @@ class TestGRPOTrainerSlow(TrlTestCase):
         reason="Flash Attention 2 requires Ampere or newer GPU, or XPU",
     )
     @pytest.mark.xfail(
-        condition=Version(torch.__version__) >= Version("2.13"),
-        reason="kernels-community/flash-attn2 has no build variant for torch 2.13; see "
-        "https://github.com/huggingface/kernels-community/issues/1082",
+        reason="kernels-community/flash-attn2 is currently unusable for training: no build variant for torch 2.13 "
+        "(https://github.com/huggingface/kernels-community/issues/1082), and the v3 stable-ABI build raises in the "
+        "backward pass for GQA models",
     )
     @require_kernels
     @require_bitsandbytes
