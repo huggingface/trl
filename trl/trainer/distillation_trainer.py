@@ -482,6 +482,20 @@ class DistillationTrainer(_BaseTrainer):
         if self._tokenizer.pad_token is None:
             self._tokenizer.pad_token = self._tokenizer.eos_token
 
+        # Resolve vision placeholder token IDs once. Used by the forward pass to rebuild mm_token_type_ids
+        # when tool responses inject images into the completion (see _generate forward_kwargs block).
+        self._image_pad_token_id = None
+        self._video_pad_token_id = None
+        if self._is_vlm:
+            for candidate in ("<|image_pad|>", "<|image|>"):
+                tid = self._tokenizer.convert_tokens_to_ids(candidate)
+                if tid != self._tokenizer.unk_token_id:
+                    self._image_pad_token_id = tid
+                    break
+            tid = self._tokenizer.convert_tokens_to_ids("<|video_pad|>")
+            if tid != self._tokenizer.unk_token_id:
+                self._video_pad_token_id = tid
+
         # Tools
         if tools:
             if not Version(transformers.__version__) >= Version("5.0.0"):
@@ -1058,7 +1072,7 @@ class DistillationTrainer(_BaseTrainer):
             multimodal_fields = {}
         return prompt_ids, images, multimodal_fields
 
-    def _generate_single_turn(self, prompt_ids, images, multimodal_fields):
+    def _generate_single_turn(self, prompt_ids, images, multimodal_fields, has_tool_images=False):
         device = self.accelerator.device
 
         # Generate completions using either vLLM or regular generation
@@ -1093,6 +1107,22 @@ class DistillationTrainer(_BaseTrainer):
                     generate_inputs[k] = pad([torch.tensor(x) for x in v], padding_value=0, padding_side="left")
                 else:
                     generate_inputs[k] = torch.tensor(np.array(v))
+
+            # For VLM tool images: build token type IDs from the padded input IDs.
+            if self._is_vlm and self.tools and has_tool_images:
+                mm_ids = torch.zeros_like(padded_ids)
+                if self._image_pad_token_id is not None:
+                    mm_ids[padded_ids == self._image_pad_token_id] = 1
+                if self._video_pad_token_id is not None:
+                    mm_ids[padded_ids == self._video_pad_token_id] = 2
+
+                # Use the same key the model expects: token_type_ids for models like Gemma,
+                # mm_token_type_ids for models like Qwen.
+                if "image_grid_thw" in generate_inputs:
+                    generate_inputs["mm_token_type_ids"] = mm_ids
+                else:
+                    generate_inputs["token_type_ids"] = mm_ids
+
             generate_inputs = super()._prepare_inputs(generate_inputs)
 
             with (
@@ -1292,22 +1322,53 @@ class DistillationTrainer(_BaseTrainer):
                         (existing or []) + new for existing, new in zip(merged_images, tool_images, strict=True)
                     ]
             loop_images = [merged_images[i] for i in idxs_with_tool] if merged_images else None
-            if multimodal_fields:
+            if self._is_vlm and self.tools and any(imgs for imgs in tool_images):
+                flat_loop_images = [img for img_list in loop_images if img_list for img in img_list]
+                if flat_loop_images:
+                    image_inputs = self.processing_class.image_processor(images=flat_loop_images, return_tensors="pt")
+                    image_inputs = super()._prepare_inputs(image_inputs)
+                    loop_multimodal_fields = dict(image_inputs)
+                else:
+                    loop_multimodal_fields = {}
+            elif multimodal_fields:
+                if "num_images" not in multimodal_fields and images is not None:
+                    multimodal_fields = {
+                        **multimodal_fields,
+                        "num_images": [len(img_list) if img_list else 0 for img_list in images],
+                    }
+                split_fields = split_pixel_values_by_grid(multimodal_fields)
                 loop_multimodal_fields = {}
-                for k, v in multimodal_fields.items():
+                for k, v in split_fields.items():
                     selected = [v[i] for i in idxs_with_tool]
+                    # Per-token type-id fields may arrive as tensors (e.g. via the padding workaround);
+                    # convert them to lists so they follow the same left-padding path as list-valued
+                    # per-token fields below, keeping them aligned with the left-padded input_ids.
+                    if k in ("token_type_ids", "mm_token_type_ids") and isinstance(selected[0], torch.Tensor):
+                        selected = [s.tolist() for s in selected]
                     # Per-token fields (e.g. token_type_ids) need zero-padding to match extended prompt length
                     if isinstance(selected[0], list):
                         selected = [
                             s + [0] * (len(pct) - len(s))
                             for s, pct in zip(selected, prompt_completion_tool_ids, strict=True)
                         ]
+                    elif isinstance(v, torch.Tensor):
+                        selected = torch.stack(selected)
                     loop_multimodal_fields[k] = selected
+                loop_multimodal_fields = unsplit_pixel_values_by_grid(loop_multimodal_fields)
+                loop_multimodal_fields.pop("num_images", None)
+                if "pixel_values" in loop_multimodal_fields and loop_multimodal_fields["pixel_values"].numel() == 0:
+                    for key in ["pixel_values", "image_grid_thw", "pixel_values_videos", "video_grid_thw"]:
+                        loop_multimodal_fields.pop(key, None)
             else:
                 loop_multimodal_fields = {}
 
             # Generate new completions after tool execution (using concatenated IDs, no re-tokenization)
-            post_tool_ids = self._generate_single_turn(prompt_completion_tool_ids, loop_images, loop_multimodal_fields)
+            post_tool_ids = self._generate_single_turn(
+                prompt_completion_tool_ids,
+                loop_images,
+                loop_multimodal_fields,
+                has_tool_images=any(imgs for imgs in tool_images),
+            )
 
             # Truncate so that pct[len(prompt_ids[idx]) :] + post_tool does not exceed max_completion_length.
             # The pre-regen check guarantees len(completion_tool_ids) <= max_completion_length, so any
@@ -1452,7 +1513,7 @@ class DistillationTrainer(_BaseTrainer):
             )
             self._metrics[mode]["tools/failure_frequency"].append(failure_frequency)
 
-        return prompt_ids, completion_ids, tool_mask, images
+        return prompt_ids, completion_ids, tool_mask, images, tool_images
 
     @profiling_decorator
     def _get_last_hidden_state(
@@ -1553,7 +1614,7 @@ class DistillationTrainer(_BaseTrainer):
                 for prompt, image_list in zip(prompts, images, strict=True)
             ]
 
-        prompt_ids_list, completion_ids_list, tool_mask_list, images = self._generate(prompts)
+        prompt_ids_list, completion_ids_list, tool_mask_list, images, tool_images = self._generate(prompts)
 
         # Convert lists of token IDs to padded tensors
         prompt_ids = [torch.tensor(ids) for ids in prompt_ids_list]
@@ -1592,9 +1653,19 @@ class DistillationTrainer(_BaseTrainer):
         num_images = [len(img_list) if img_list else 0 for img_list in images] if images is not None else None
 
         # Get forward_kwargs for models with multimodal inputs.
-        if images is not None:
+        # When tool images are present (from _tool_call_loop), use image_processor directly and build
+        # mm_token_type_ids from prompt_completion_ids. Otherwise, use the full processor pipeline
+        # which returns model-specific keys (image_sizes, pixel_attention_mask, etc.).
+        if self.tools and any(imgs for imgs in tool_images) and self._is_vlm:
+            flat_images = [img for img_list in images if img_list for img in img_list]
+            image_inputs = self.processing_class.image_processor(images=flat_images, return_tensors="pt")
+            image_inputs = super()._prepare_inputs(image_inputs)
+            forward_kwargs = dict(image_inputs)
+        elif images is not None:
             prompts_text = [
-                apply_chat_template({"prompt": prompt}, self.processing_class, **self.chat_template_kwargs)["prompt"]
+                apply_chat_template(
+                    {"prompt": prompt}, self.processing_class, tools=self.tools or None, **self.chat_template_kwargs
+                )["prompt"]
                 for prompt in prompts
             ]
             prompt_inputs = self.processing_class(images=images, text=prompts_text, padding=True, return_tensors="pt")
@@ -1641,6 +1712,54 @@ class DistillationTrainer(_BaseTrainer):
             forward_kwargs["mm_token_type_ids"] = torch.cat(
                 [mm_token_type_ids, mm_token_type_ids.new_zeros(completion_ids.shape)], dim=1
             )
+
+        # For VLM tool images: build token type IDs from the full prompt_completion_ids.
+        # This must happen AFTER the token_type_ids/mm_token_type_ids extension blocks above,
+        # because our version already covers the full sequence (images are in the completion,
+        # not just the prompt).
+        if self.tools and any(imgs for imgs in tool_images) and self._is_vlm:
+            prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)  # (B, P+C)
+            mm_ids = torch.zeros_like(prompt_completion_ids)
+            if self._image_pad_token_id is not None:
+                mm_ids[prompt_completion_ids == self._image_pad_token_id] = 1
+            if self._video_pad_token_id is not None:
+                mm_ids[prompt_completion_ids == self._video_pad_token_id] = 2
+
+            # Use the same key the model expects: token_type_ids for models like Gemma,
+            # mm_token_type_ids for models like Qwen.
+            image_grid_thw = forward_kwargs.get("image_grid_thw")
+            if image_grid_thw is not None:
+                forward_kwargs["mm_token_type_ids"] = mm_ids
+            else:
+                forward_kwargs["token_type_ids"] = mm_ids
+
+            # Truncation safety (Qwen-style models with image_grid_thw only): if
+            # max_completion_length truncated some image tokens, the number of image pad tokens
+            # in input_ids won't match pixel_values features. Check per-sample and drop ALL
+            # images for any sample with a mismatch (safe fallback).
+            if image_grid_thw is not None and num_images is not None:
+                merge_length = getattr(self.processing_class.image_processor, "merge_size", 2) ** 2
+                img_offset = 0
+                has_mismatch = False
+                for b in range(mm_ids.shape[0]):
+                    sample_tokens = (mm_ids[b] == 1).sum().item()
+                    sample_features = 0
+                    for i in range(num_images[b]):
+                        grid_idx = img_offset + i
+                        if grid_idx < image_grid_thw.shape[0]:
+                            sample_features += image_grid_thw[grid_idx].prod().item() // merge_length
+                    if sample_tokens != sample_features:
+                        has_mismatch = True
+                        break
+                    img_offset += num_images[b]
+
+                if has_mismatch:
+                    # Drop all images: safer than partial trim which is error-prone
+                    forward_kwargs.pop("pixel_values", None)
+                    forward_kwargs.pop("image_grid_thw", None)
+                    mm_ids.zero_()
+                    forward_kwargs["mm_token_type_ids"] = mm_ids
+                    num_images = None
 
         # Log the prompt and completion texts
         if self.log_completions:
