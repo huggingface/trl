@@ -16,6 +16,7 @@ import atexit
 import base64
 import copy
 import logging
+import os
 import socket
 import time
 from io import BytesIO
@@ -469,13 +470,19 @@ class VLLMClient:
                 host_name=self.host, port=self.group_port, world_size=world_size, is_master=(self.rank == 0)
             )
             prefixed_store = c10d.PrefixStore("client2server", store)
-            xccl_options = c10d.ProcessGroupXCCL.Options()
-            pg = c10d.ProcessGroupXCCL(
-                store=prefixed_store,
-                rank=self.rank,
-                size=world_size,
-                options=xccl_options,
-            )
+            if os.environ.get("TRL_XPU_WEIGHT_SYNC_BACKEND", "xccl") == "gloo":
+                # On some XPU stacks (e.g. multi-card Intel Arc), the cross-device XCCL weight-sync
+                # collective never completes. Setting TRL_XPU_WEIGHT_SYNC_BACKEND=gloo routes the sync
+                # through a host-staged GLOO group instead (weights go via CPU, see update_named_param).
+                pg = c10d.ProcessGroupGloo(prefixed_store, self.rank, world_size)
+            else:
+                xccl_options = c10d.ProcessGroupXCCL.Options()
+                pg = c10d.ProcessGroupXCCL(
+                    store=prefixed_store,
+                    rank=self.rank,
+                    size=world_size,
+                    options=xccl_options,
+                )
             self.communicator = pg
         else:
             pg = StatelessProcessGroup.create(
@@ -503,9 +510,17 @@ class VLLMClient:
             raise Exception(f"Request failed: {response.status_code}, {response.text}")
 
         if is_torch_xpu_available():
-            # Use XCCL to broadcast the updated weights from the client (src) to all workers.
-            self.communicator.broadcast(weights, root=self.rank)
-            self.communicator.barrier()
+            if os.environ.get("TRL_XPU_WEIGHT_SYNC_BACKEND", "xccl") == "gloo":
+                # GLOO is host-only: send the weights from CPU (see init_communicator).
+                weights_cpu = weights.detach().to("cpu").contiguous()
+                broadcast_options = c10d.BroadcastOptions()
+                broadcast_options.rootRank = self.rank
+                self.communicator.broadcast([weights_cpu], broadcast_options).wait()
+                self.communicator.barrier().wait()
+            else:
+                # Use XCCL to broadcast the updated weights from the client (src) to all workers.
+                self.communicator.broadcast(weights, root=self.rank)
+                self.communicator.barrier()
         else:
             # Use NCCL to broadcast the updated weights from the client (src) to all workers.
             self.communicator.broadcast(weights, src=self.rank)

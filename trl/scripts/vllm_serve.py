@@ -97,13 +97,19 @@ class WeightSyncWorkerExtension:
         if is_torch_xpu_available():
             store = torch.distributed.TCPStore(host_name=host, port=port, world_size=world_size, is_master=(rank == 0))
             prefixed_store = c10d.PrefixStore("client2server", store)
-            xccl_options = c10d.ProcessGroupXCCL.Options()
-            pg = c10d.ProcessGroupXCCL(
-                store=prefixed_store,
-                rank=rank,
-                size=world_size,
-                options=xccl_options,
-            )
+            if os.environ.get("TRL_XPU_WEIGHT_SYNC_BACKEND", "xccl") == "gloo":
+                # On some XPU stacks (e.g. multi-card Intel Arc), the cross-device XCCL weight-sync
+                # collective never completes. Setting TRL_XPU_WEIGHT_SYNC_BACKEND=gloo routes the sync
+                # through a host-staged GLOO group instead (weights go via CPU, see update_named_param).
+                pg = c10d.ProcessGroupGloo(prefixed_store, rank, world_size)
+            else:
+                xccl_options = c10d.ProcessGroupXCCL.Options()
+                pg = c10d.ProcessGroupXCCL(
+                    store=prefixed_store,
+                    rank=rank,
+                    size=world_size,
+                    options=xccl_options,
+                )
             self.communicator = pg
         else:
             # Create a stateless process group to manage communication between training processes and vLLM workers.
@@ -137,9 +143,20 @@ class WeightSyncWorkerExtension:
         weight = torch.empty(shape, dtype=dtype, device=self.device)
 
         if is_torch_xpu_available():
-            # Use XCCL to broadcast the updated weights from the client (src) to all workers.
-            self.communicator.broadcast(weight, root=self.client_rank)
-            self.communicator.barrier()
+            if os.environ.get("TRL_XPU_WEIGHT_SYNC_BACKEND", "xccl") == "gloo":
+                # GLOO is host-only: receive the weight on CPU, then move it to the XPU device.
+                import torch.distributed.distributed_c10d as c10d
+
+                weight_cpu = torch.empty(shape, dtype=dtype, device="cpu")
+                broadcast_options = c10d.BroadcastOptions()
+                broadcast_options.rootRank = self.client_rank
+                self.communicator.broadcast([weight_cpu], broadcast_options).wait()
+                self.communicator.barrier().wait()
+                weight = weight_cpu.to(self.device)
+            else:
+                # Use XCCL to broadcast the updated weights from the client (src) to all workers.
+                self.communicator.broadcast(weight, root=self.client_rank)
+                self.communicator.barrier()
         else:
             # Use NCCL to broadcast the updated weights from the client (src) to all workers.
             self.communicator.broadcast(weight, src=self.client_rank)
