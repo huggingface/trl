@@ -44,6 +44,22 @@ PRECISION=${PRECISION:-bf16}
 STAGE=${1:-}
 SHIP_DIR=/tmp/async-grpo-ship
 
+# A checkpoint is only usable if the big three landed. The bucket mount silently discarded writes once it hit its ~100 GB
+# quota — `torch.save` returned success, `model.safetensors`/`optimizer.pt`/`trainer_state.json` never appeared, and the
+# next job only found out when it tried to resume. Fail the job that produced it instead.
+verify_checkpoint() {
+    local dir=$1 missing=""
+    for f in model.safetensors optimizer.pt trainer_state.json rollout_state.json; do
+        [ -s "$dir/$f" ] || missing="$missing $f"
+    done
+    if [ -n "$missing" ]; then
+        echo "FATAL: ${dir} is incomplete, missing:${missing}"
+        ls -la "$dir" || true
+        return 1
+    fi
+    echo "verified ${dir} ($(du -sh "$dir" | cut -f1))"
+}
+
 submit() {
     local stage=$1 flavor=$2 n_train=$3 n_vllm=$4 pdtb=$5 accum=$6 steps_per_job=$7 timeout=$8 resume=$9 out job_id
     # The tarball is built from the committed branch, so what runs is exactly what is on `origin`.
@@ -168,6 +184,7 @@ in_job() {
     if [ "${RESUME}" = "1" ]; then
         LAST=$(ls -d "$CKPT_DIR"/checkpoint-* 2>/dev/null | sed 's/.*checkpoint-//' | sort -n | tail -1)
         [ -n "$LAST" ] || { echo "FATAL: nothing to resume from in ${CKPT_DIR}"; exit 1; }
+        verify_checkpoint "${CKPT_DIR}/checkpoint-${LAST}"
         echo "staging ${CKPT_DIR}/checkpoint-${LAST} -> /tmp/resume-from"
         mkdir -p /tmp/resume-from
         cp -r "${CKPT_DIR}/checkpoint-${LAST}" /tmp/resume-from/
@@ -189,6 +206,9 @@ in_job() {
     else
         CUDA_VISIBLE_DEVICES=$TRAIN_DEVICES python3 /ship/train.py
     fi
+
+    LAST_WRITTEN=$(ls -d "$CKPT_DIR"/checkpoint-* 2>/dev/null | sed 's/.*checkpoint-//' | sort -n | tail -1)
+    [ -n "$LAST_WRITTEN" ] && verify_checkpoint "${CKPT_DIR}/checkpoint-${LAST_WRITTEN}"
 
     # safetensors writes to a hidden temp file and renames it, and on the bucket the rename leaves the temp object
     # behind — 7 GB of dead weight per checkpoint. Nothing is saving by now, so anything matching is garbage.
