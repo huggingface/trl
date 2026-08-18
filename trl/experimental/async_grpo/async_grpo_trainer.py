@@ -1190,11 +1190,8 @@ class AsyncGRPOTrainer(_BaseTrainer):
             os.makedirs(checkpoint_dir, exist_ok=True)
             trained = self._trained_groups
             first_untrained = next(g for g in itertools.count() if g not in trained)
-            rollout_state = {
-                "prompt_index": self.rollout_worker._loop_kwargs["dataset_start_index"] + first_untrained,
-                # This counts prompts trained, which is what an epoch is measured in
-                "groups_trained": self._groups_before_resume + len(trained),
-            }
+            prompt_index = self.rollout_worker._loop_kwargs["dataset_start_index"] + first_untrained
+            rollout_state = {"prompt_index": prompt_index}
             with open(os.path.join(checkpoint_dir, "rollout_state.json"), "w") as f:
                 json.dump(rollout_state, f)
         super()._save_checkpoint(model, trial)
@@ -1221,7 +1218,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
                     with open(rollout_state_file) as f:
                         rollout_state = json.load(f)
                     self.rollout_worker._loop_kwargs["dataset_start_index"] = rollout_state["prompt_index"]
-                    self._groups_before_resume = rollout_state["groups_trained"]
+                    self._groups_before_resume = rollout_state["prompt_index"]
         try:
             return super()._inner_training_loop(*args, **kwargs)
         finally:

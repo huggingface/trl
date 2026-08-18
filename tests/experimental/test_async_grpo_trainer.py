@@ -339,7 +339,6 @@ class TestRolloutStateCheckpoint(TrlTestCase):
         with open(os.path.join(self.tmp_dir, "checkpoint-5", "rollout_state.json")) as f:
             data = json.load(f)
         assert data["prompt_index"] == 15  # dataset_start_index(10) + first_untrained(5)
-        assert data["groups_trained"] == 45  # groups_before_resume(40) + len(trained)(5)
 
     def test_save_checkpoint_writes_rollout_state_before_the_hub_push(self):
         # `super()._save_checkpoint` is what uploads the checkpoint folder under `hub_strategy="checkpoint"`, so the
@@ -380,7 +379,7 @@ class TestRolloutStateCheckpoint(TrlTestCase):
         checkpoint_dir = os.path.join(self.tmp_dir, "checkpoint-10")
         os.makedirs(checkpoint_dir)
         with open(os.path.join(checkpoint_dir, "rollout_state.json"), "w") as f:
-            json.dump({"prompt_index": 77, "groups_trained": 90}, f)
+            json.dump({"prompt_index": 77}, f)
 
         # __new__ skips __init__ (requires GPU + model)
         trainer = AsyncGRPOTrainer.__new__(AsyncGRPOTrainer)
@@ -397,7 +396,7 @@ class TestRolloutStateCheckpoint(TrlTestCase):
         assert trainer.rollout_worker._loop_kwargs["dataset_start_index"] == 77
         # Epochs are counted in prompts trained, so a resumed run has to pick that count up too, or it would train
         # `num_train_epochs` more passes on top of the ones already done.
-        assert trainer._groups_before_resume == 90
+        assert trainer._groups_before_resume == 77
 
 
 class TestAsyncRolloutWorkerEnvironments(TrlTestCase):
