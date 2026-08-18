@@ -14,12 +14,13 @@
 
 import gc
 import logging
+import sys
 import traceback
 from functools import wraps
 
 import pytest
 import torch
-from transformers.utils import is_torch_xpu_available
+from transformers.utils import is_liger_kernel_available, is_torch_xpu_available
 
 
 # ============================================================================
@@ -200,3 +201,45 @@ def cleanup_vllm_dist_env():
         from vllm.distributed.parallel_state import cleanup_dist_env_and_memory
 
         cleanup_dist_env_and_memory()
+
+
+@pytest.fixture(autouse=True)
+def undo_liger_kernel_patching(monkeypatch):
+    """
+    Restore the transformers modeling modules that Liger Kernel patches process-wide.
+
+    `use_liger_kernel=True` makes transformers call `liger_kernel.transformers._apply_liger_kernel_to_instance`, which
+    patches the model instance but also rebinds module-level names in `transformers.models.<arch>.modeling_<arch>`
+    (`Qwen3RMSNorm` -> `LigerRMSNorm`, `Qwen3MLP` -> `LigerSwiGLUMLP`, `apply_rotary_pos_emb` ->
+    `liger_rotary_pos_emb`, ...). Liger never restores them, so every model of that architecture instantiated later in
+    the same process silently gets Triton kernels and fails on CPU tensors with `ValueError: Pointer argument cannot be
+    accessed from Triton (cpu tensor?)`. Which test trips over it depends on how pytest-xdist spreads tests across
+    workers, so the failure surfaces in an unrelated test (e.g. `TestUseAdapter`, whose PEFT model has a Qwen3 base)
+    and only in some runs. Snapshot the modeling modules when Liger patches, and restore them once the test is over.
+
+    Only the trigger is transformers-version dependent, not the leak itself: transformers < 5.3 applies the kernels in
+    `Trainer.__init__`, so a test that merely builds a trainer leaks, while transformers >= 5.3 applies them in
+    `Trainer.train()`. Either way they are never reverted, which is why only the minimum-versions CI job fails: the
+    Liger tests that use a Qwen3 model build a trainer but never train.
+    """
+    if not is_liger_kernel_available():
+        yield
+        return
+
+    import liger_kernel.transformers as liger_transformers
+
+    apply_to_instance = liger_transformers._apply_liger_kernel_to_instance
+    snapshots = {}
+
+    def apply_to_instance_and_snapshot(*args, **kwargs):
+        # Liger imports the modeling modules it patches inside the patch function, but a module can only be patched
+        # if the model being patched already uses it, so it is imported by now.
+        for name, module in list(sys.modules.items()):
+            if name.startswith("transformers.models.") and ".modeling_" in name:
+                snapshots.setdefault(name, (module, vars(module).copy()))
+        return apply_to_instance(*args, **kwargs)
+
+    monkeypatch.setattr(liger_transformers, "_apply_liger_kernel_to_instance", apply_to_instance_and_snapshot)
+    yield
+    for module, snapshot in snapshots.values():
+        vars(module).update(snapshot)

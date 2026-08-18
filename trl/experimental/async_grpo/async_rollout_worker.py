@@ -950,10 +950,8 @@ class AsyncRolloutWorker:
         child_ready_timeout: int = 300,
         **loop_kwargs: Any,
     ):
-        if not is_vllm_available(min_version="0.17.1"):
-            raise ImportError(
-                "vLLM >= 0.17.1 is required to use AsyncRolloutWorker. Install it with: pip install 'vllm>=0.17.1'"
-            )
+        if not is_vllm_available():
+            raise ImportError("vLLM is required to use AsyncRolloutWorker. Install it with: pip install vllm")
         ctx = mp.get_context("spawn")
         self._mp_ctx = ctx
         self.rollout_buffer = ctx.Queue(maxsize=queue_maxsize)
