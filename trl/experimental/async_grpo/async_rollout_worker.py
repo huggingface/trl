@@ -24,6 +24,7 @@ import time
 import traceback
 import uuid
 import warnings
+from collections import defaultdict
 from collections.abc import Awaitable, Callable, Iterator
 from dataclasses import dataclass, field
 from multiprocessing.queues import Queue as MPQueue
@@ -54,19 +55,6 @@ Messages: TypeAlias = list[dict[str, str]]
 RolloutId: TypeAlias = str
 
 _RETRYABLE_HTTP_ERRORS = (aiohttp.ClientError, asyncio.TimeoutError, TimeoutError, ConnectionResetError)
-
-
-async def _retry_on_http_error(coro_factory: Callable[[], Awaitable], *, label: str, max_attempts: int = 1):
-    """Retry an aiohttp coroutine on transport errors with bounded exponential backoff."""
-    for attempt in range(max_attempts):
-        try:
-            return await coro_factory()
-        except _RETRYABLE_HTTP_ERRORS as e:
-            if attempt >= max_attempts - 1:
-                raise
-            sleep = min(2 ** min(attempt, 4), 16)
-            logger.warning(f"{label} failed ({type(e).__name__}: {e}); retry {attempt + 1}/{max_attempts} in {sleep}s")
-            await asyncio.sleep(sleep)
 
 
 @dataclass(frozen=True)
@@ -117,24 +105,25 @@ class _SampleBuilder:
         self.logprobs: list[float] = []
         self.last_response_start_idx: int | None = None
 
-    def classify_token_drift(self, turn: TurnRecord) -> DriftKind:
+    def classify_token_drift(self, turn: TurnRecord) -> tuple[DriftKind, int]:
+        """Classify this turn's re-tokenization against the held tokens, and report by how many tokens it drifted."""
         matched = _common_prefix_len(self.tokens, turn.prompt_ids)
         drift = len(self.tokens) - matched
         if drift == 0:
-            return DriftKind.CLEAN
+            return DriftKind.CLEAN, 0
         start = self.last_response_start_idx
         if start is not None and matched >= start and drift < self._fork_threshold:
-            return DriftKind.REALIGN
-        return DriftKind.FORK
+            return DriftKind.REALIGN, drift
+        return DriftKind.FORK, drift
 
-    def append_turn(self, turn: TurnRecord, kind: DriftKind, *, trained: bool = True) -> None:
+    def append_turn(self, turn: TurnRecord, kind: DriftKind) -> None:
         assert kind is not DriftKind.FORK
         if kind is DriftKind.REALIGN:
             self._align_to_prompt(turn.prompt_ids)  # overwrite drifted tail as context
         else:  # CLEAN: held tokens are a prefix of the new prompt; append the tail as context
             self._append(turn.prompt_ids[len(self.tokens) :], mask=0)
         self.last_response_start_idx = len(self.tokens)
-        self._append(turn.output_ids, mask=int(trained), logprobs=turn.output_log_probs if trained else None)
+        self._append(turn.output_ids, mask=1, logprobs=turn.output_log_probs)
 
     def _align_to_prompt(self, prompt_ids: list[int]) -> None:
         matched = _common_prefix_len(self.tokens, prompt_ids)
@@ -155,17 +144,34 @@ class _SampleBuilder:
         return TrainingSequence(list(self.tokens), list(self.loss_mask), list(self.logprobs), rollout_id)
 
 
-def _chain_to_sequences(turns: list[TurnRecord], rollout_id: RolloutId, fork_threshold: int) -> list[TrainingSequence]:
-    """Reconcile one conversation's turns (in order) into training rows; fork when re-tokenization drifts."""
+def _chain_to_sequences(
+    turns: list[TurnRecord], rollout_id: RolloutId, fork_threshold: int
+) -> tuple[list[TrainingSequence], dict[str, float]]:
+    """Reconcile one conversation's turns (in order) into training rows; fork when re-tokenization drifts.
+
+    Also returns the drift tally over the T-1 turn *transitions*: how many appended cleanly, realigned or forked, and
+    the total and largest drift in tokens. That tally is the only observability on `fork_threshold_tokens`, which is
+    otherwise a threshold tuned blind.
+    """
     builders: list[_SampleBuilder] = []
+    tally = {"clean": 0.0, "realign": 0.0, "fork": 0.0, "transitions": 0.0, "drift_tokens": 0.0, "drift_max": 0.0}
     for turn in turns:
-        if not builders or (kind := builders[-1].classify_token_drift(turn)) is DriftKind.FORK:
+        if not builders:
+            builders.append(_SampleBuilder(fork_threshold))
+            builders[-1].append_turn(turn, DriftKind.CLEAN)
+            continue
+        kind, drift = builders[-1].classify_token_drift(turn)
+        tally[kind.value] += 1
+        tally["transitions"] += 1
+        tally["drift_tokens"] += drift
+        tally["drift_max"] = max(tally["drift_max"], drift)
+        if kind is DriftKind.FORK:
             builder = _SampleBuilder(fork_threshold)
             builder.append_turn(turn, DriftKind.CLEAN)
             builders.append(builder)
         else:
             builders[-1].append_turn(turn, kind)
-    return [b.to_training_sequence(rollout_id) for b in builders if b.has_trained_token()]
+    return [b.to_training_sequence(rollout_id) for b in builders if b.has_trained_token()], tally
 
 
 @dataclass(slots=True)
@@ -195,6 +201,7 @@ class RolloutSample:
     model_version: int
     group_id: int
     metrics: dict[str, float]
+    enqueued_at: float | None = None
 
 
 # Env vars the child must drop so accelerate's `PartialState()` initialises in
@@ -249,6 +256,7 @@ def _child_main(
     heartbeat_value: MPValue,
     failed_event: MPEvent,
     exception_info_queue: MPQueue,
+    metrics_queue: MPQueue,
 ) -> None:
     _scrub_child_env()
     # `accelerate.logging.get_logger` requires `PartialState()` to have been called.
@@ -263,6 +271,7 @@ def _child_main(
         heartbeat_value=heartbeat_value,
         failed_event=failed_event,
         exception_info_queue=exception_info_queue,
+        metrics_queue=metrics_queue,
     )
     child_ready_event.set()
     _spawn_stop_watcher(rollout_loop, stop_event)
@@ -296,11 +305,13 @@ class _AsyncRolloutLoop:
         heartbeat_value: MPValue,
         failed_event: MPEvent,
         exception_info_queue: MPQueue,
+        metrics_queue: MPQueue,
         tools: list[Callable] | None = None,
         environment_factory: Callable[[], object] | dict[str, Callable[[], object]] | None = None,
         num_generations: int = 8,
         max_inflight_tasks: int = 128,
         queue_maxsize: int = 0,
+        score_queue_maxsize: int = 16,
         vllm_server_url: str = "http://localhost:8000",
         max_tokens: int = 32,
         temperature: float = 1.0,
@@ -339,6 +350,13 @@ class _AsyncRolloutLoop:
         self._heartbeat_value = heartbeat_value  # shared mp.Value('d'); wall-clock seconds
         self._failed_event = failed_event  # shared mp.Event
         self._exception_info_queue = exception_info_queue  # shared mp.Queue(maxsize=1)
+        self._metrics_queue = metrics_queue  # shared mp.Queue; drained by the trainer in `log()`
+        # Metric accumulators
+        self._counters: dict[str, float] = defaultdict(float)
+        self._rates: dict[str, list[float]] = defaultdict(lambda: [0.0, 0.0])
+        self._inflight = 0  # set by the generate loop, reported by the score loop
+        self._pushed_completion_tokens = 0
+        self._pushed_at = time.monotonic()
 
         self.num_generations = num_generations
         self.max_inflight_tasks = max_inflight_tasks
@@ -430,7 +448,7 @@ class _AsyncRolloutLoop:
         else:
             self.chat_template = None
 
-        self._groups_to_score: asyncio.Queue[RolloutGroup | None] = asyncio.Queue(maxsize=16)
+        self._groups_to_score: asyncio.Queue[RolloutGroup | None] = asyncio.Queue(maxsize=score_queue_maxsize)
         self._total_completion_tokens = 0
         self._total_groups_scored = 0
         self._generation_start_time: float | None = None
@@ -571,6 +589,7 @@ class _AsyncRolloutLoop:
                     )
                     inflight_tasks[task] = (group_id, slot, name, environment, prompt)
 
+                self._inflight = len(inflight_tasks)  # gauge, reported by the score loop's push
                 if not inflight_tasks:
                     if stop_event.is_set():
                         return
@@ -619,11 +638,12 @@ class _AsyncRolloutLoop:
                             group.env_rewards.append(None)
                     if environment is not None:
                         self._environment_pool[name].append(environment)
-                    self._total_completion_tokens += sum(sum(s.completion_mask) for s in sequences)
+                    self._total_completion_tokens += len(completion_ids)
                     pending_completed[group_id] += 1
 
                     if pending_completed[group_id] == self.num_generations:
                         group.queued_at = time.monotonic()
+                        t_blocked = None
                         while True:
                             try:
                                 self._groups_to_score.put_nowait(group)
@@ -631,7 +651,12 @@ class _AsyncRolloutLoop:
                             except asyncio.QueueFull:
                                 if stop_event.is_set():
                                     return
+                                if t_blocked is None:
+                                    t_blocked = time.monotonic()
                                 await asyncio.sleep(0.1)
+                        if t_blocked is not None:
+                            # Generation held back by scoring
+                            self._push_metrics({"rollout/score_block_s": time.monotonic() - t_blocked})
                         del pending_groups[group_id]
                         del pending_completed[group_id]
         finally:
@@ -645,20 +670,20 @@ class _AsyncRolloutLoop:
                 pass
 
     async def _score_loop(self, stop_event: asyncio.Event) -> None:
+        t_idle_start = time.monotonic()
         while not stop_event.is_set():
             self._heartbeat_value.value = time.time()
-            t_wait = time.monotonic()
             try:
                 group = await asyncio.wait_for(self._groups_to_score.get(), timeout=0.5)
             except asyncio.TimeoutError:
                 continue
             if group is None:
                 return
-            score_queue_wait = time.monotonic() - t_wait
+            score_idle = time.monotonic() - t_idle_start
             wait_scoring = time.monotonic() - group.queued_at
 
-            if score_queue_wait > 0.5:
-                logger.info(f"[score] waited {score_queue_wait:.1f}s for a group to score")
+            if score_idle > 0.5:
+                logger.info(f"[score] waited {score_idle:.1f}s for a group to score")
 
             t0 = time.monotonic()
             samples = await self._score_group(group)
@@ -668,7 +693,22 @@ class _AsyncRolloutLoop:
                 f"buffer_qsize={self.rollout_buffer.qsize()}"
             )
 
-            self._compute_rollout_metrics(samples, scoring_time, wait_scoring)
+            now = time.monotonic()
+            self._push_metrics(
+                {
+                    "rollout/score_s": scoring_time,
+                    "rollout/score_wait_s": wait_scoring,
+                    "rollout/score_queue_size": float(self._groups_to_score.qsize()),
+                    "rollout/inflight": float(self._inflight),
+                    # Windowed, not cumulative.  A cumulative average cannot show a generation stall.
+                    "rollout/generated_tok_s": (
+                        float(self._total_completion_tokens - self._pushed_completion_tokens),
+                        now - self._pushed_at,
+                    ),
+                }
+            )
+            self._pushed_completion_tokens = self._total_completion_tokens
+            self._pushed_at = now
 
             if self.log_completions and samples:
                 print_prompt_completions_sample(
@@ -682,28 +722,106 @@ class _AsyncRolloutLoop:
             self._total_groups_scored += 1
 
             for sample in samples:
+                t_blocked = None
                 while True:
                     try:
+                        sample.enqueued_at = time.time()
                         self.rollout_buffer.put_nowait(sample)
                         break
                     except queue.Full:
                         if stop_event.is_set():
                             return
-                        logger.info(
-                            f"[score] rollout buffer full (maxsize={self.queue_maxsize}), "
-                            "waiting for trainer to consume..."
-                        )
+                        if t_blocked is None:
+                            t_blocked = time.monotonic()
+                            logger.info(
+                                f"[score] rollout buffer full (maxsize={self.queue_maxsize}), "
+                                "waiting for trainer to consume..."
+                            )
                         await asyncio.sleep(0.1)
+                if t_blocked is not None:
+                    self._push_metrics({"rollout/backpressure_s": time.monotonic() - t_blocked})
 
-    def _compute_rollout_metrics(self, samples: list[RolloutSample], scoring_time: float, wait_scoring: float) -> None:
-        assert self._generation_start_time is not None
-        elapsed = time.monotonic() - self._generation_start_time
-        generation_tok_per_sec = self._total_completion_tokens / elapsed if elapsed > 0 else 0.0
-        for sample in samples:
-            sample.metrics["generation_tok_per_s"] = generation_tok_per_sec
-            sample.metrics["scoring_time_ms"] = scoring_time * 1000
-            sample.metrics["wait_scoring_ms"] = wait_scoring * 1000
-            sample.metrics["buffer_qsize"] = self.rollout_buffer.qsize()
+            t_idle_start = time.monotonic()
+
+    async def _retry(self, coro_factory: Callable[[], Awaitable], *, label: str, max_attempts: int = 1):
+        """Retry an aiohttp coroutine on transport errors with bounded exponential backoff, counting the retries.
+
+        Every retried call in this loop targets vLLM, so the counter is named for the dependency rather than for the
+        transport.
+        """
+        for attempt in range(max_attempts):
+            try:
+                return await coro_factory()
+            except _RETRYABLE_HTTP_ERRORS as e:
+                if attempt >= max_attempts - 1:
+                    raise
+                self._counters["rollout/vllm_retry_total"] += 1
+                sleep = min(2 ** min(attempt, 4), 16)
+                logger.warning(
+                    f"{label} failed ({type(e).__name__}: {e}); retry {attempt + 1}/{max_attempts} in {sleep}s"
+                )
+                await asyncio.sleep(sleep)
+
+    def _push_metrics(self, values: dict[str, float | tuple[float, float]]) -> None:
+        """Send metrics to the trainer, along with the counters and rates accumulated since the last push."""
+        payload = dict(values)
+        payload.update(self._counters)
+        payload.update({key: (num, den) for key, (num, den) in self._rates.items()})
+        self._counters.clear()
+        self._rates.clear()
+        try:
+            self._metrics_queue.put_nowait(payload)
+        except queue.Full:
+            pass  # never block generation
+
+    def _push_rollout_metrics(
+        self,
+        *,
+        turns: int,
+        sequences: int,
+        completion_ids: list[int],
+        tally: dict[str, float],
+        loop_exhausted: bool,
+        duration_s: float,
+    ) -> None:
+        """One conversation's structure and its completion, aggregated per rollout."""
+        transitions = tally["transitions"]
+        completion_tokens = len(completion_ids)
+        self._rates["completions/mean_length"][0] += completion_tokens
+        self._rates["completions/mean_length"][1] += 1
+        self._rates["rollout/samples_per_rollout"][0] += sequences
+        self._rates["rollout/samples_per_rollout"][1] += 1
+        self._rates["rollout/turns_mean"][0] += turns
+        self._rates["rollout/turns_mean"][1] += 1
+        if completion_ids:
+            # NOTE(@aminediro):
+            # Truncation is read off the same way [`GRPOTrainer`] and [`RLOOTrainer`] define
+            # `completions/clipped_ratio`: a completion that does not end on EOS (or pad) was cut off by `max_tokens`
+            # rather than finishing. Deliberately NOT vLLM's `finish_reason`, so the metric means the same thing here
+            eos_and_pad = (self.tokenizer.eos_token_id, self.tokenizer.pad_token_id)
+            self._rates["completions/clipped_ratio"][0] += completion_ids[-1] not in eos_and_pad
+            self._rates["completions/clipped_ratio"][1] += 1
+        if self.tools:
+            # Only meaningful when the model has tools to call: with none, the loop always ends on the first turn and
+            # the metric would be a constant 0 cluttering every run that does not use tools.
+            self._rates["tools/loop_exhausted_frac"][0] += loop_exhausted
+            self._rates["tools/loop_exhausted_frac"][1] += 1
+        if transitions:
+            self._rates["rollout/fork_frac"][0] += tally["fork"]
+            self._rates["rollout/fork_frac"][1] += transitions
+            self._rates["rollout/realign_frac"][0] += tally["realign"]
+            self._rates["rollout/realign_frac"][1] += transitions
+            self._rates["rollout/drift_tokens_mean"][0] += tally["drift_tokens"]
+            self._rates["rollout/drift_tokens_mean"][1] += transitions
+        self._push_metrics(
+            {
+                "rollout/duration_s": duration_s,
+                "rollout/turns_max": float(turns),
+                "rollout/drift_tokens_max": tally["drift_max"],
+                "completions/max_length": float(completion_tokens),
+                "completions/min_length": float(completion_tokens),
+            }
+        )
 
     def _repeat_iterator(self) -> Iterator[tuple[int, dict[str, Any]]]:
         group_id = 0
@@ -733,6 +851,7 @@ class _AsyncRolloutLoop:
         tool-call count, tool-failure count, rollout reward)`; the built-in worker's rollout reward is always `None`
         (it scores via `reward_funcs`/env), a trailing slot loop subclasses override.
         """
+        t_dispatch = time.monotonic()
         messages = list(prompt)  # a MESSAGE list, not a token list
         rollout_id = uuid.uuid4().hex
         turns: list[TurnRecord] = []
@@ -740,6 +859,7 @@ class _AsyncRolloutLoop:
         tool_call_count = 0
         tool_failure_count = 0
         iteration_num = 0
+        loop_exhausted = False
         max_iterations = self.max_tool_calling_iterations
         while True:
             prompt_ids = self.tokenizer.apply_chat_template(  # re-tokenize the WHOLE conversation
@@ -757,7 +877,12 @@ class _AsyncRolloutLoop:
             messages.append(assistant_message)
             turns.append(TurnRecord(prompt_ids, turn_ids, turn_logprobs))
             tool_calls = assistant_message.get("tool_calls")
-            if tool_calls is None or (max_iterations is not None and iteration_num >= max_iterations):
+            if tool_calls is None:
+                break
+            if max_iterations is not None and iteration_num >= max_iterations:
+                # Cut off mid-loop: the model asked for another tool and we refused. The conversation is trained as if
+                # it had finished, so this is a silent truncation — hence the metric.
+                loop_exhausted = True
                 break
             tool_messages, n_calls, n_failures = self._execute_tool_calls(tool_calls, tool_dict)
             tool_call_count += n_calls
@@ -765,7 +890,16 @@ class _AsyncRolloutLoop:
             completion.extend(tool_messages)
             messages.extend(tool_messages)  # tool result goes back as a MESSAGE, re-tokenized next turn
             iteration_num += 1
-        sequences = _chain_to_sequences(turns, rollout_id, self._fork_threshold_tokens)  # >= 1 row per conversation
+        # >= 1 row per conversation; `tally` is the drift bookkeeping over the turn transitions.
+        sequences, tally = _chain_to_sequences(turns, rollout_id, self._fork_threshold_tokens)
+        self._push_rollout_metrics(
+            turns=len(turns),
+            sequences=len(sequences),
+            completion_ids=completion_ids,
+            tally=tally,
+            loop_exhausted=loop_exhausted,
+            duration_s=time.monotonic() - t_dispatch,
+        )
         return completion, completion_ids, sequences, tool_call_count, tool_failure_count, None
 
     def _execute_tool_calls(
@@ -778,13 +912,34 @@ class _AsyncRolloutLoop:
             n_calls += 1
             function = tool_call["function"]
             name = function["name"]
+            self._counters[f"tools/{name}_call_total"] += 1
+            tool = tool_dict.get(name)
+            if tool is None:
+                # A hallucinated tool name is a policy error that should decay with training, unlike a tool that ran
+                # and raised — which is an environment problem. Counted apart so the two are not one number.
+                n_failures += 1
+                self._counters["tools/unknown_name_total"] += 1
+                self._counters[f"tools/{name}_failure_total"] += 1
+                tool_messages.append({"role": "tool", "name": name, "content": str({"error": f"unknown tool {name}"})})
+                continue
+            # Tools run SYNCHRONOUSLY inside the asyncio loop, so a slow one stalls every concurrent rollout, not just
+            # this one. That failure mode is otherwise only visible as an unattributed drop in generation throughput.
+            t0 = time.monotonic()
             try:
                 arguments = function.get("arguments", {})
-                result = tool_dict[name](**arguments)
+                result = tool(**arguments)
             except Exception as error:
                 n_failures += 1
+                self._counters[f"tools/{name}_failure_total"] += 1
                 result = {"error": str(error)}
+            elapsed = time.monotonic() - t0
+            self._rates["tools/latency_s"][0] += elapsed
+            self._rates["tools/latency_s"][1] += 1
+            self._rates[f"tools/{name}_latency_s"][0] += elapsed
+            self._rates[f"tools/{name}_latency_s"][1] += 1
             tool_messages.append({"role": "tool", "name": name, "content": str(result)})
+        self._rates["tools/parallel_calls_mean"][0] += len(tool_calls)
+        self._rates["tools/parallel_calls_mean"][1] += 1
         return tool_messages, n_calls, n_failures
 
     async def _generate_one_turn(self, prompt_ids: list[int]) -> tuple[list[int], list[float]]:
@@ -802,7 +957,7 @@ class _AsyncRolloutLoop:
         }
         if self.min_p is not None:
             payload["min_p"] = self.min_p
-        output = await _retry_on_http_error(
+        output = await self._retry(
             lambda: self._post("/v1/completions", payload, self.request_timeout),
             max_attempts=30,
             label="vllm /v1/completions",
@@ -907,7 +1062,7 @@ class _AsyncRolloutLoop:
                         advantage=float(advantage),
                         model_version=group.model_version,
                         group_id=group.group_id,
-                        metrics=dict(metrics),  # own copy per row; _compute_rollout_metrics mutates it
+                        metrics=dict(metrics),  # own copy per row
                     )
                 )
         return samples
@@ -923,7 +1078,7 @@ class _AsyncRolloutLoop:
                 content = await response.json()
                 return content if content else {}
 
-        return await _retry_on_http_error(_do_post, label=f"POST {path}", max_attempts=max_retries)
+        return await self._retry(_do_post, label=f"POST {path}", max_attempts=max_retries)
 
 
 class AsyncRolloutWorker:
@@ -962,6 +1117,9 @@ class AsyncRolloutWorker:
         self._heartbeat_value = ctx.Value("d", 0.0)
         self._failed_event = ctx.Event()
         self._exception_info_queue = ctx.Queue(maxsize=1)
+        # Metrics the child measures, drained by the trainer in `log()`. Bounded and dropped-on-full in the child, so a
+        # trainer that stops draining can never block generation.
+        self.metrics_queue = ctx.Queue(maxsize=4096)
         # Forwarded verbatim to _AsyncRolloutLoop in the child. queue_maxsize is also
         # forwarded — the child reads it for "rollout buffer full" log lines.
         loop_kwargs["queue_maxsize"] = queue_maxsize
@@ -1009,6 +1167,7 @@ class AsyncRolloutWorker:
                 self._heartbeat_value,
                 self._failed_event,
                 self._exception_info_queue,
+                self.metrics_queue,
             ),
             name="grpo-rollout-worker-child",
             daemon=True,
