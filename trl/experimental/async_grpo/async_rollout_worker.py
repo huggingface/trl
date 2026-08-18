@@ -304,6 +304,10 @@ class _AsyncRolloutLoop:
         vllm_server_url: str = "http://localhost:8000",
         max_tokens: int = 32,
         temperature: float = 1.0,
+        top_p: float = 1.0,
+        top_k: int = 0,
+        min_p: float | None = None,
+        repetition_penalty: float = 1.0,
         request_timeout: int = 120,
         chat_template_kwargs: dict[str, Any] | None = None,
         max_tool_calling_iterations: int | None = None,
@@ -341,6 +345,10 @@ class _AsyncRolloutLoop:
         self.queue_maxsize = queue_maxsize
         self.max_tokens = max_tokens
         self.temperature = temperature
+        self.top_p = top_p
+        self.top_k = top_k
+        self.min_p = min_p
+        self.repetition_penalty = repetition_penalty
         self.request_timeout = request_timeout
         self.chat_template_kwargs = chat_template_kwargs or {}
         self.max_tool_calling_iterations = max_tool_calling_iterations
@@ -458,7 +466,9 @@ class _AsyncRolloutLoop:
             self.session = session
             logger.info(
                 f"vllm worker started: num_generations={self.num_generations}, "
-                f"max_inflight_tasks={self.max_inflight_tasks}"
+                f"max_inflight_tasks={self.max_inflight_tasks}, temperature={self.temperature}, "
+                f"top_p={self.top_p}, top_k={self.top_k}, min_p={self.min_p}, "
+                f"repetition_penalty={self.repetition_penalty}"
             )
             await asyncio.gather(
                 asyncio.create_task(self._generate_loop(stop_event=stop_event)),
@@ -783,10 +793,15 @@ class _AsyncRolloutLoop:
             "prompt": prompt_ids,
             "max_tokens": self.max_tokens,
             "temperature": self.temperature,
+            "top_p": self.top_p,
+            "top_k": self.top_k,
+            "repetition_penalty": self.repetition_penalty,
             "n": 1,
             "return_token_ids": True,
             "logprobs": 0,
         }
+        if self.min_p is not None:
+            payload["min_p"] = self.min_p
         output = await _retry_on_http_error(
             lambda: self._post("/v1/completions", payload, self.request_timeout),
             max_attempts=30,
@@ -935,10 +950,8 @@ class AsyncRolloutWorker:
         child_ready_timeout: int = 300,
         **loop_kwargs: Any,
     ):
-        if not is_vllm_available(min_version="0.17.1"):
-            raise ImportError(
-                "vLLM >= 0.17.1 is required to use AsyncRolloutWorker. Install it with: pip install 'vllm>=0.17.1'"
-            )
+        if not is_vllm_available():
+            raise ImportError("vLLM is required to use AsyncRolloutWorker. Install it with: pip install vllm")
         ctx = mp.get_context("spawn")
         self._mp_ctx = ctx
         self.rollout_buffer = ctx.Queue(maxsize=queue_maxsize)

@@ -263,7 +263,12 @@ def _patch_chunked_ce_lm_head(model: torch.nn.Module, chunk_size: int, is_vlm: b
     # text-only models keep them on the top-level config.
     text_config = model.config.text_config if is_vlm else model.config
     final_logit_softcapping = getattr(text_config, "final_logit_softcapping", None)
-    logit_scale = getattr(text_config, "logit_scale", 1.0)
+    # Muse Glimmer applies the same pre-softcap multiplier as Cohere's `logit_scale`, under the name
+    # `output_multiplier`. A real `logit_scale` of 0.0 is kept as-is and applied faithfully.
+    logit_scale = getattr(text_config, "logit_scale", None)
+    if logit_scale is None:
+        logit_scale = getattr(text_config, "output_multiplier", None)
+    logit_scale = 1.0 if logit_scale is None else logit_scale
     original_forward = model.forward
     lm_head = model.get_output_embeddings()
 
@@ -362,9 +367,12 @@ def _patch_chunked_ce_lm_head(model: torch.nn.Module, chunk_size: int, is_vlm: b
         return _ChunkedCELMHeadOutput(
             loss=loss,
             logits=None,
-            past_key_values=outputs.past_key_values,
             hidden_states=outputs.hidden_states,
-            attentions=outputs.attentions,
+            # `past_key_values` and `attentions` are not read from `outputs`:
+            # - some model types don't declare them
+            # - the backbone runs with `use_cache=False` and no attentions, so both are None anyway
+            past_key_values=None,
+            attentions=None,
             num_correct_tokens=num_correct_tokens,
             entropy_sum=entropy_sum,
             num_valid_tokens=num_valid_tokens,
