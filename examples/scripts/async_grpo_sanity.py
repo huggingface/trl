@@ -326,8 +326,7 @@ def main() -> None:
     )
     trainer.train(resume_from_checkpoint=checkpoint)
 
-    if trainer.rollout_worker is not None:
-        print(f"[done] global_step={trainer.state.global_step}, rows_consumed={trainer.rollout_worker.rows_consumed}")
+    print(f"[done] global_step={trainer.state.global_step}")
     # Only the job that finishes the chain publishes a model; the intermediate ones leave everything in the bucket.
     if trainer.state.global_step >= TOTAL_STEPS:
         print(f"[publish] chain complete at step {trainer.state.global_step}; pushing the model to {HUB_MODEL_ID}")
