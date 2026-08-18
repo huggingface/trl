@@ -21,7 +21,6 @@ from .base_config import _BaseConfig
 
 @dataclass
 class RewardConfig(_BaseConfig):
-    # docstyle-ignore
     r"""
     Configuration class for the [`RewardTrainer`].
 
