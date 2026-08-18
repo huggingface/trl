@@ -20,7 +20,6 @@ from .base_config import _BaseConfig
 
 @dataclass
 class DistillationConfig(_BaseConfig):
-    # docstyle-ignore
     r"""
     Configuration class for the [`DistillationTrainer`].
 
@@ -35,12 +34,12 @@ class DistillationConfig(_BaseConfig):
         > Parameters that control the model and the teacher model
 
         model_init_kwargs (`str` or `dict[str, Any]`, *optional*):
-            Keyword arguments for `AutoModelForCausalLM.from_pretrained`, used when the `model` argument of the
-            trainer is provided as a string.
+            Keyword arguments for `AutoModelForCausalLM.from_pretrained`, used when the `model` argument of the trainer
+            is provided as a string.
         trust_remote_code (`bool`, *optional*, defaults to `False`):
             Whether to allow loading models and tokenizers that ship custom Python code from the Hub. Forwarded to
-            [`~transformers.AutoModelForCausalLM.from_pretrained`] and
-            [`~transformers.AutoTokenizer.from_pretrained`], for both the student and teacher.
+            [`~transformers.AutoModelForCausalLM.from_pretrained`] and [`~transformers.AutoTokenizer.from_pretrained`],
+            for both the student and teacher.
         teacher_model_name_or_path (`str`, *optional*):
             Model name or path for the teacher model. Used when the teacher is loaded locally.
         teacher_model_revision (`str`, *optional*):
@@ -140,9 +139,9 @@ class DistillationConfig(_BaseConfig):
         > Parameters that control the logging
 
         log_completions (`bool`, *optional*, defaults to `False`):
-            Whether to log a sample of (prompt, completion) pairs every `logging_steps` steps. If `rich` is
-            installed, it prints the sample. If `wandb` and/or `trackio` logging is enabled, it logs it to `wandb`
-            and/or `trackio`.
+            Whether to log a sample of (prompt, completion) pairs every `logging_steps` steps. If `rich` is installed,
+            it prints the sample. If `wandb` and/or `trackio` logging is enabled, it logs it to `wandb` and/or
+            `trackio`.
         num_completions_to_print (`int`, *optional*):
             Number of completions to print with `rich`. If `None`, all completions are logged.
         log_unique_prompts (`bool`, *optional*, defaults to `False`):

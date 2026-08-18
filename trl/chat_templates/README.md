@@ -61,6 +61,10 @@ Original LFM2 chat template (as shipped by `LiquidAI/LFM2-*` checkpoints). ChatM
 
 Original LFM2.5 chat template (as shipped by `LiquidAI/LFM2.5-230M` and the other checkpoints in that generation). Unlike `lfm2.jinja`, it renders assistant `tool_calls` — as a single `<|tool_call_start|>[name(key=value, ...)]<|tool_call_end|>` block holding a comma-separated list of Python-style calls — supports a `<think>` block (read off `message.thinking`), and already carries `{% generation %}` markers, so no training patch is needed. Response parsing uses `lfm2_2_5_template`.
 
+### `lfm2_2_5_vl.jinja`
+
+Original LFM2.5-VL chat template (as shipped by `LiquidAI/LFM2.5-VL-3B`). Same rendering as `lfm2_2_5.jinja` — including the `{% generation %}` markers, so no training patch is needed — plus multimodal `content` blocks (each `image` item renders as `<image>`) and more defensive handling of non-string content and flat `tool_calls`. Response parsing reuses `lfm2_2_5_template`.
+
 ### `llama3.jinja`
 
 Original Llama 3 chat template.
@@ -73,6 +77,10 @@ Original Llama 3.1 / 3.2 chat templates. Both render tool calls as a single bare
 
 Original Llava-Next chat template (as shipped by `llava-hf/llava-v1.6-mistral-7b-hf`). Renders multimodal `content` blocks in the LLaVA / Mistral `[INST] ... [/INST]` format. Does not support tool calling.
 
+### `muse_glimmer.jinja`
+
+Original Muse Glimmer chat template (as shipped by `meta-models/Muse-Glimmer-30B`). Renders the ATEM protocol: one `<|start|>assistant to=<recipient><|message|>...` block per channel, where the recipient is `self` for reasoning, a tool name for tool calls (`<atem:function_calls>` / `<atem:invoke>` / `<atem:parameter>` XML), and `user` for content. The checkpoint ships its own `response_template`, so `add_response_schema` leaves it alone.
+
 ### `nemotron_3_nano.jinja`
 
 Original Nemotron Nano chat template (as shipped by `nvidia/NVIDIA-Nemotron-3-Nano-*` checkpoints). Renders tool calls in the same Hermes-style `<function=...>` / `<parameter=...>` format as Qwen3.5, so it reuses `qwen3_5_schema` for response parsing.
@@ -84,6 +92,10 @@ Original Nemotron Super chat template (as shipped by `nvidia/NVIDIA-Nemotron-3-S
 ### `nemotron_3_ultra.jinja`
 
 Original Nemotron Ultra chat template (as shipped by `nvidia/NVIDIA-Nemotron-3-Ultra-*` checkpoints). Same as `nemotron_3_nano.jinja` except it adds a `medium_effort` flag that appends a `{reasoning effort: efficient}` hint to the last user message, and tightens the whitespace around the `<think>` block. Tool calls use the same Hermes-style format, so it also reuses `qwen3_5_schema` for response parsing.
+
+### `nemotron_3_5_lightning.jinja`
+
+Original Nemotron 3.5 Lightning chat template (as shipped by `nvidia/NVIDIA-Nemotron-3.5-Lightning-*` checkpoints). Same as `nemotron_3_ultra.jinja` except it drops the `medium_effort` flag. Tool calls use the same Hermes-style format, so it also reuses `qwen3_5_schema` for response parsing.
 
 ### `phi3.jinja`
 
@@ -119,6 +131,10 @@ Original Qwen3.5 chat templates. The two differ only in the default value of the
 ### `qwen3_6.jinja`
 
 Original Qwen3.6 chat template (shared across `Qwen3.6-27B`, `Qwen3.6-35B-A3B`, and their FP8 variants). Differs from `qwen3_5_think.jinja` by adding a `preserve_thinking` flag and tweaking how non-string tool-call argument values are stringified.
+
+### `qwen3_8.jinja`
+
+Original Qwen3.8 chat template (as shipped by `Qwen/Qwen3.8-27B` and its FP8 variant). Differs from `qwen3_6.jinja` by adding a `reasoning_effort` flag (`xhigh` — the default — `medium` or `low`) that prepends a reasoning-effort instruction to the system prompt, and by defaulting `preserve_thinking` to enabled. Tool calls use the same Hermes-style format, so it also reuses `qwen3_5_schema` for response parsing.
 
 ## Training templates
 
@@ -203,6 +219,12 @@ Patched Llava-Next template. Diff vs `llava_next.jinja`:
 
 Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
 
+### `muse_glimmer_training.jinja`
+
+Patched Muse Glimmer template. Diff vs `muse_glimmer.jinja`:
+
+Wrap the whole assistant branch — every ATEM channel of the turn — with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss. Same treatment as `gptoss_training.jinja`, which shares the `<|start|>assistant` generation cue and the one-block-per-channel layout.
+
 ### `nemotron_3_nano_training.jinja`
 
 Patched Nemotron Nano template. Diff vs `nemotron_3_nano.jinja`:
@@ -220,6 +242,13 @@ Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so
 ### `nemotron_3_ultra_training.jinja`
 
 Patched Nemotron Ultra template. Diff vs `nemotron_3_ultra.jinja`:
+
+Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that
+`return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+
+### `nemotron_3_5_lightning_training.jinja`
+
+Patched Nemotron 3.5 Lightning template. Diff vs `nemotron_3_5_lightning.jinja`:
 
 Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that
 `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
@@ -291,3 +320,7 @@ Patched Qwen3.5 templates. Same diff as `qwen3_training.jinja` (require both `<t
 ### `qwen3_6_training.jinja`
 
 Patched Qwen3.6 template. Same diff as `qwen3_training.jinja` (require both `<think>` and `</think>` before parsing, drop the `loop.index0 > ns.last_query_index` conditional so the thinking block is always emitted, wrap assistant output in `{% generation %}` / `{% endgeneration %}`), applied to the Qwen3.6 base template.
+
+### `qwen3_8_training.jinja`
+
+Patched Qwen3.8 template. Diff vs `qwen3_8.jinja`: drop the `preserve_thinking` / `loop.index0 > ns.last_query_index` conditional so the thinking block is always emitted (prefix-preservation holds even when the caller passes `preserve_thinking=False`), and wrap assistant output in `{% generation %}` / `{% endgeneration %}` for SFT assistant-only loss.

@@ -21,7 +21,6 @@ from .base_config import _BaseConfig
 
 @dataclass
 class GRPOConfig(_BaseConfig):
-    # docstyle-ignore
     r"""
     Configuration class for the [`GRPOTrainer`].
 
@@ -41,8 +40,8 @@ class GRPOConfig(_BaseConfig):
             argument of the [`GRPOTrainer`] is provided as a string.
         trust_remote_code (`bool`, *optional*, defaults to `False`):
             Whether to allow loading models and tokenizers that ship custom Python code from the Hub. Forwarded to
-            [`~transformers.AutoModelForCausalLM.from_pretrained`] and
-            [`~transformers.AutoProcessor.from_pretrained`]. Also applied to reward-model and reward-tokenizer loads.
+            [`~transformers.AutoModelForCausalLM.from_pretrained`] and [`~transformers.AutoProcessor.from_pretrained`].
+            Also applied to reward-model and reward-tokenizer loads.
         router_aux_loss_coef (`float`, *optional*, defaults to `0.001`):
             Coefficient of the load-balancing auxiliary loss. Only has an effect when training a Mixture-of-Experts
             (MoE) model; for other models it does nothing. The auxiliary loss is added to the training loss with this
@@ -300,14 +299,14 @@ class GRPOConfig(_BaseConfig):
             encourages exploration by keeping the policy from collapsing to near-deterministic outputs. The bonus is
             always the mean per-token entropy regardless of `loss_type`; it is not rescaled to match a loss type's
             policy normalization, so `entropy_coef` has the same meaning for every loss type. When
-            `use_adaptive_entropy=True`, this serves as the initial coefficient and is updated each optimizer step.
-            Has no effect when set to `0.0` (default).
+            `use_adaptive_entropy=True`, this serves as the initial coefficient and is updated each optimizer step. Has
+            no effect when set to `0.0` (default).
         use_adaptive_entropy (`bool`, *optional*, defaults to `False`):
             Whether to use adaptive entropy control, introduced in
             [Skywork-OR1](https://huggingface.co/papers/2505.22312). When enabled, the entropy coefficient
-            `entropy_coef` is updated each optimizer step: incremented by `entropy_coef_delta` when the current
-            entropy is below `entropy_target`, and decremented otherwise. The coefficient is only applied when
-            entropy is at or below `entropy_target`.
+            `entropy_coef` is updated each optimizer step: incremented by `entropy_coef_delta` when the current entropy
+            is below `entropy_target`, and decremented otherwise. The coefficient is only applied when entropy is at or
+            below `entropy_target`.
         entropy_coef_min (`float`, *optional*, defaults to `0.0`):
             Lower bound for the entropy coefficient when using adaptive entropy control.
         entropy_coef_max (`float`, *optional*, defaults to `1.0`):
@@ -315,14 +314,13 @@ class GRPOConfig(_BaseConfig):
         entropy_coef_delta (`float`, *optional*, defaults to `0.005`):
             Step size for adjusting the entropy coefficient at each optimizer step during adaptive entropy control.
         entropy_target (`float`, *optional*, defaults to `0.2`):
-            Target mean per-token entropy (in nats) used by adaptive entropy control. The coefficient is only
-            applied when the current entropy falls at or below this value. Measured over the same token set as
-            the policy loss: all completion tokens by default, or only the high-entropy subset when
-            `top_entropy_quantile < 1.0`. Typical language models have per-token entropies in the range 2–10
-            nats, so the default of `0.2` almost never triggers regularization (only on near-complete entropy
-            collapse); set it close to the entropy you observe early in training (logged as the `entropy`
-            metric) so the bonus engages before the policy collapses (and account for the token subset when
-            using `top_entropy_quantile`).
+            Target mean per-token entropy (in nats) used by adaptive entropy control. The coefficient is only applied
+            when the current entropy falls at or below this value. Measured over the same token set as the policy loss:
+            all completion tokens by default, or only the high-entropy subset when `top_entropy_quantile < 1.0`.
+            Typical language models have per-token entropies in the range 2–10 nats, so the default of `0.2` almost
+            never triggers regularization (only on near-complete entropy collapse); set it close to the entropy you
+            observe early in training (logged as the `entropy` metric) so the bonus engages before the policy collapses
+            (and account for the token subset when using `top_entropy_quantile`).
         max_tool_calling_iterations (`int`, *optional*):
             Maximum number of tool-calling turns when training an agent. If `None`, there is no limit and generation
             stops when the model generates a response turn with no tool calls or when the total response length reaches
@@ -358,10 +356,10 @@ class GRPOConfig(_BaseConfig):
             paper](https://huggingface.co/papers/2512.02556). It expects a positive value (e.g., 0.5).
         use_bias_correction_kl (`bool`, *optional*, defaults to `True`):
             Whether to multiply the KL term by the importance sampling ratio, so that the KL gradient becomes the
-            unbiased reverse-KL gradient, as described in the
-            [DeepSeek-V3.2 paper](https://huggingface.co/papers/2512.02556). This changes the KL gradient whenever
-            `beta != 0`, including on-policy: the ratio is differentiable, so it affects the gradient even where its
-            value is exactly 1. The unbiased reverse-KL property holds for `importance_sampling_level="token"`; with
+            unbiased reverse-KL gradient, as described in the [DeepSeek-V3.2
+            paper](https://huggingface.co/papers/2512.02556). This changes the KL gradient whenever `beta != 0`,
+            including on-policy: the ratio is differentiable, so it affects the gradient even where its value is
+            exactly 1. The unbiased reverse-KL property holds for `importance_sampling_level="token"`; with
             `"sequence"` a sequence-level weight is broadcast onto the per-token KL.
 
         > Parameters that control the logging

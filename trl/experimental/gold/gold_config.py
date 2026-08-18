@@ -21,7 +21,6 @@ from ...trainer.sft_config import SFTConfig
 
 @dataclass
 class GOLDConfig(SFTConfig):
-    # docstyle-ignore
     r"""
     Configuration class for [`GOLDTrainer`].
 
@@ -75,8 +74,8 @@ class GOLDConfig(SFTConfig):
             Whether to use Universal Logit Distillation (ULD) loss instead of Generalized Jensen-Shannon Divergence
             loss.
         use_extended_uld (`bool`, *optional*, defaults to `True`):
-            Whether to enable extended ULD alignment that uses tokenizers to align and merge token probabilities
-            across student and teacher tokenizations. When `True`, the trainer will compute token mappings and merge
+            Whether to enable extended ULD alignment that uses tokenizers to align and merge token probabilities across
+            student and teacher tokenizations. When `True`, the trainer will compute token mappings and merge
             probabilities for split tokens; when `False`, ULD will use simple positional truncation like in the
             original ULD paper.
         uld_token_merge_strategy (`str`, *optional*, defaults to `"observed"`):

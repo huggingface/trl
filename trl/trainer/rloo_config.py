@@ -21,7 +21,6 @@ from .base_config import _BaseConfig
 
 @dataclass
 class RLOOConfig(_BaseConfig):
-    # docstyle-ignore
     r"""
     Configuration class for the [`RLOOTrainer`].
 
@@ -41,8 +40,8 @@ class RLOOConfig(_BaseConfig):
             argument of the [`RLOOTrainer`] is provided as a string.
         trust_remote_code (`bool`, *optional*, defaults to `False`):
             Whether to allow loading models and tokenizers that ship custom Python code from the Hub. Forwarded to
-            [`~transformers.AutoModelForCausalLM.from_pretrained`] and
-            [`~transformers.AutoProcessor.from_pretrained`]. Also applied to reward-model and reward-tokenizer loads.
+            [`~transformers.AutoModelForCausalLM.from_pretrained`] and [`~transformers.AutoProcessor.from_pretrained`].
+            Also applied to reward-model and reward-tokenizer loads.
         router_aux_loss_coef (`float`, *optional*, defaults to `0.001`):
             Coefficient of the load-balancing auxiliary loss. Only has an effect when training a Mixture-of-Experts
             (MoE) model; for other models it does nothing. The auxiliary loss is added to the training loss with this

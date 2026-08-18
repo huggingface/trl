@@ -604,6 +604,8 @@ lfm2_chat_template = (_CHAT_TEMPLATES_DIR / "lfm2.jinja").read_text(encoding="ut
 
 lfm2_2_5_chat_template = (_CHAT_TEMPLATES_DIR / "lfm2_2_5.jinja").read_text(encoding="utf-8")
 
+lfm2_2_5_vl_chat_template = (_CHAT_TEMPLATES_DIR / "lfm2_2_5_vl.jinja").read_text(encoding="utf-8")
+
 llama3_chat_template = (_CHAT_TEMPLATES_DIR / "llama3.jinja").read_text(encoding="utf-8")
 
 llama3_1_chat_template = (_CHAT_TEMPLATES_DIR / "llama3_1.jinja").read_text(encoding="utf-8")
@@ -612,11 +614,17 @@ llama3_2_chat_template = (_CHAT_TEMPLATES_DIR / "llama3_2.jinja").read_text(enco
 
 llava_next_chat_template = (_CHAT_TEMPLATES_DIR / "llava_next.jinja").read_text(encoding="utf-8")
 
+muse_glimmer_chat_template = (_CHAT_TEMPLATES_DIR / "muse_glimmer.jinja").read_text(encoding="utf-8")
+
 nemotron_3_nano_chat_template = (_CHAT_TEMPLATES_DIR / "nemotron_3_nano.jinja").read_text(encoding="utf-8")
 
 nemotron_3_super_chat_template = (_CHAT_TEMPLATES_DIR / "nemotron_3_super.jinja").read_text(encoding="utf-8")
 
 nemotron_3_ultra_chat_template = (_CHAT_TEMPLATES_DIR / "nemotron_3_ultra.jinja").read_text(encoding="utf-8")
+
+nemotron_3_5_lightning_chat_template = (_CHAT_TEMPLATES_DIR / "nemotron_3_5_lightning.jinja").read_text(
+    encoding="utf-8"
+)
 
 phi3_chat_template = (_CHAT_TEMPLATES_DIR / "phi3.jinja").read_text(encoding="utf-8")
 
@@ -638,6 +646,8 @@ qwen3_5_nothink_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_5_nothink.jinja").
 qwen3_5_think_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_5_think.jinja").read_text(encoding="utf-8")
 
 qwen3_6_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_6.jinja").read_text(encoding="utf-8")
+
+qwen3_8_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_8.jinja").read_text(encoding="utf-8")
 
 
 ProcessingClassT = TypeVar("ProcessingClassT", PreTrainedTokenizerBase, ProcessorMixin)
@@ -701,15 +711,17 @@ def add_response_schema(processing_class: ProcessingClassT) -> ProcessingClassT:
         qwen3_5_nothink_chat_template,
         qwen3_5_think_chat_template,
         qwen3_6_chat_template,
+        qwen3_8_chat_template,
     ]:
         schema, template = qwen3_5_schema, qwen3_5_template
     elif chat_template in [
         nemotron_3_nano_chat_template,
         nemotron_3_super_chat_template,
         nemotron_3_ultra_chat_template,
+        nemotron_3_5_lightning_chat_template,
     ]:
         schema, template = qwen3_5_schema, nemotron_3_template
-    elif chat_template == lfm2_2_5_chat_template:
+    elif chat_template in [lfm2_2_5_chat_template, lfm2_2_5_vl_chat_template]:
         # Only the new-style template; the legacy schema is on its way out, so it isn't worth adding for a family whose
         # tokenizer already requires transformers >= 5.0.0.
         schema, template = None, lfm2_2_5_template
@@ -970,6 +982,8 @@ llama3_training_chat_template = (_CHAT_TEMPLATES_DIR / "llama3_training.jinja").
 
 llava_next_training_chat_template = (_CHAT_TEMPLATES_DIR / "llava_next_training.jinja").read_text(encoding="utf-8")
 
+muse_glimmer_training_chat_template = (_CHAT_TEMPLATES_DIR / "muse_glimmer_training.jinja").read_text(encoding="utf-8")
+
 nemotron_3_nano_training_chat_template = (_CHAT_TEMPLATES_DIR / "nemotron_3_nano_training.jinja").read_text(
     encoding="utf-8"
 )
@@ -981,6 +995,10 @@ nemotron_3_super_training_chat_template = (_CHAT_TEMPLATES_DIR / "nemotron_3_sup
 nemotron_3_ultra_training_chat_template = (_CHAT_TEMPLATES_DIR / "nemotron_3_ultra_training.jinja").read_text(
     encoding="utf-8"
 )
+
+nemotron_3_5_lightning_training_chat_template = (
+    _CHAT_TEMPLATES_DIR / "nemotron_3_5_lightning_training.jinja"
+).read_text(encoding="utf-8")
 
 phi3_training_chat_template = (_CHAT_TEMPLATES_DIR / "phi3_training.jinja").read_text(encoding="utf-8")
 
@@ -1008,6 +1026,8 @@ qwen3_5_think_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_5_think_tra
 
 qwen3_6_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_6_training.jinja").read_text(encoding="utf-8")
 
+qwen3_8_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_8_training.jinja").read_text(encoding="utf-8")
+
 
 def get_training_chat_template(
     processing_class: PreTrainedTokenizerBase | ProcessorMixin | None = None,
@@ -1018,9 +1038,9 @@ def get_training_chat_template(
 
     Returns a patched chat template that is prefix-preserving and includes `{%% generation %%}` / `{%% endgeneration
     %%}` markers for assistant-only loss masking. Returns `None` if the template already satisfies both requirements.
-    Currently Cohere, Cohere 2, DeepSeek-R1-Distill, DeepSeek-V3, Gemma, Gemma 2, Gemma 3, GLM-4-MoE, GPT-OSS,
-    Idefics3, LFM2, LLaMA 3, Phi-3, Phi-3.5, Qwen2-VL, Qwen2.5, Qwen2.5-VL, Qwen3 (including the Instruct-2507
-    variant), Qwen3-VL, Qwen3.5, and Qwen3.6 are supported.
+    Currently Cohere, Cohere 2, DeepSeek-V3, DeepSeek-R1-Distill, Gemma, Gemma 2, Gemma 3, GLM-4-MoE, GPT-OSS,
+    Idefics3, LFM2, LLaMA 3, Muse Glimmer, Phi-3, Phi-3.5, Qwen2-VL, Qwen2.5, Qwen2.5-VL, Qwen3 (including the
+    Instruct-2507 variant), Qwen3-VL, Qwen3.5, Qwen3.6, and Qwen3.8 are supported.
 
     Args:
         processing_class (`PreTrainedTokenizerBase` or `ProcessorMixin`):
@@ -1125,6 +1145,9 @@ def get_training_chat_template(
     if processing_class.chat_template == llava_next_chat_template:
         return llava_next_training_chat_template
 
+    if processing_class.chat_template == muse_glimmer_chat_template:
+        return muse_glimmer_training_chat_template
+
     if processing_class.chat_template == nemotron_3_nano_chat_template:
         return nemotron_3_nano_training_chat_template
 
@@ -1133,6 +1156,9 @@ def get_training_chat_template(
 
     if processing_class.chat_template == nemotron_3_ultra_chat_template:
         return nemotron_3_ultra_training_chat_template
+
+    if processing_class.chat_template == nemotron_3_5_lightning_chat_template:
+        return nemotron_3_5_lightning_training_chat_template
 
     if processing_class.chat_template == phi3_chat_template:
         return phi3_training_chat_template
@@ -1163,6 +1189,9 @@ def get_training_chat_template(
 
     if processing_class.chat_template == qwen3_6_chat_template:
         return qwen3_6_training_chat_template
+
+    if processing_class.chat_template == qwen3_8_chat_template:
+        return qwen3_8_training_chat_template
 
     raise ValueError(
         "The chat template is not training-compatible (missing prefix-preservation or `{% generation %}` markers) "
