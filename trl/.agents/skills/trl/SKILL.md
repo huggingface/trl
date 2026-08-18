@@ -34,7 +34,7 @@ Pass `model` as a string and route loading kwargs through `model_init_kwargs` (e
 
 ## Dataset formats
 
-Standard (`{"prompt": "...", "completion": "..."}`) or conversational (`{"messages": [{"role": ..., "content": ...}]}`), auto-detected. Conversational data gets the chat template applied automatically — never apply it yourself. Extra columns are allowed; GRPO forwards them to reward functions. Reference: https://huggingface.co/docs/trl/dataset_formats
+Conversational: `{"messages": [{"role": ..., "content": ...}]}` (language modeling) or `{"prompt": [...], "completion": [...]}`. The chat template is applied automatically — never apply it yourself. Extra columns are allowed; GRPO forwards them to reward functions. Reference: https://huggingface.co/docs/trl/dataset_formats
 
 ## SFT: the fields that matter
 
@@ -44,6 +44,7 @@ SFTConfig(
     packing=True,           # pack sequences into max_length blocks: fewer pad tokens, higher throughput
     padding_free=True,      # flatten batch, no padding; requires FlashAttention; implied by packing
     use_liger_kernel=True,  # fused Liger kernels, reduces peak memory
+    assistant_only_loss=True,  # loss only on assistant turns (conversational datasets)
 )
 ```
 
