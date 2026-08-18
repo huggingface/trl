@@ -65,6 +65,8 @@ Reward functions are called with keyword arguments `prompts`, `completions`, `co
 
 The generation batch is `per_device_train_batch_size × num_processes × steps_per_generation` (or set `generation_batch_size` directly) and must be divisible by `num_generations` (default 8). Generation is the usual bottleneck — enable vLLM with `use_vllm=True`: `vllm_mode="colocate"` shares the training GPUs (size with `vllm_gpu_memory_utilization`); `vllm_mode="server"` uses a separate `trl vllm-serve --model <model_id>`.
 
+`AsyncGRPOTrainer` (`trl.experimental.async_grpo`) implements the same algorithm with generation decoupled from training: a background worker streams completions from a vLLM server while the training loop consumes them, so the two overlap instead of alternating.
+
 ## CLI
 
 Flags mirror the config fields: `trl sft --model_name_or_path Qwen/Qwen2.5-0.5B --dataset_name trl-lib/Capybara`. YAML via `--config`; distributed presets via `--accelerate_config zero3` (Python scripts: `accelerate launch train.py`).
