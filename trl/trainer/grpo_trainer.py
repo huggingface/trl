@@ -205,13 +205,21 @@ class GRPOTrainer(_BaseTrainer):
             types within the list (e.g., a string model ID and a custom reward function) is allowed.
         args ([`GRPOConfig`], *optional*):
             Configuration for this trainer. If `None`, a default configuration is used.
-        train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
+        train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`], *optional*):
             Dataset to use for training. It must include a column `"prompt"`. Any additional columns in the dataset is
             ignored. The format of the samples can be either:
 
             - [Standard](dataset_formats#standard): Each sample contains plain text.
             - [Conversational](dataset_formats#conversational): Each sample contains structured messages (e.g., role
               and content).
+
+            May be omitted only when an `environment_factory` is provided and the environment owns (or procedurally
+            generates) the data, returning the prompt from its `reset()` method. In that case, `max_steps` must be set
+            to define the training length.
+
+            When `train_dataset` is an [`~datasets.IterableDataset`] (e.g. a streaming dataset), `max_steps` must be
+            set in the training arguments, since its length cannot be inferred and the total number of training steps
+            is required to bound the training loop and configure the learning rate scheduler.
         eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`], [`~datasets.DatasetDict`], [`~datasets.IterableDatasetDict`] or `dict[str, Dataset | IterableDataset]`):
             Dataset to use for evaluation. It must meet the same requirements as `train_dataset`.
         processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.ProcessorMixin`], *optional*):
@@ -440,18 +448,24 @@ class GRPOTrainer(_BaseTrainer):
 
         elif is_peft_model(model) and args.beta != 0.0:
             # If the model is a PEFT model with a pretrained adapter, we need to create a "ref" adapter that is a copy
-            # of the "default" adapter, so that we can use it as the reference model during GRPO training. PEFT only
-            # supports one adapter per model when the LoRA config uses `target_parameters` (see peft#3340), so in that
-            # case we skip the "ref" adapter and compute the reference log probs with adapters disabled, i.e. with the
-            # base model.
+            # of the "default" adapter, so that we can use it as the reference model during GRPO training. Before PEFT
+            # 0.20.0, only one adapter per model was supported when the LoRA config uses `target_parameters` (see
+            # peft#3340, fixed in peft#3350), so in that case we skip the "ref" adapter and compute the reference log
+            # probs with adapters disabled, i.e. with the base model. The fix only allows adapters targeting the same
+            # parameters, which holds here since the "ref" adapter reuses the "default" config.
             default_config = model.peft_config["default"]
-            if isinstance(default_config, LoraConfig) and default_config.target_parameters:
+            if (
+                isinstance(default_config, LoraConfig)
+                and default_config.target_parameters
+                and Version(peft.__version__) < Version("0.20.0")
+            ):
                 logger.warning(
-                    "PEFT can't add a frozen reference adapter alongside one that uses `target_parameters` "
+                    "PEFT<0.20.0 can't add a frozen reference adapter alongside one that uses `target_parameters` "
                     "(peft#3340), so the reference log probs are computed from the base model (adapters disabled). "
-                    "If you wrapped the model only to apply LoRA, pass a `peft_config` to the trainer instead; if you "
-                    "wrapped it deliberately (pretrained adapter or custom init), note that the base model matches "
-                    "your adapter only when it's freshly zero-initialized. If it is, this warning is safe to ignore."
+                    "Upgrade to `peft>=0.20.0` to train against a copy of your adapter instead. If you wrapped the "
+                    "model only to apply LoRA, pass a `peft_config` to the trainer instead; if you wrapped it "
+                    "deliberately (pretrained adapter or custom init), note that the base model matches your adapter "
+                    "only when it's freshly zero-initialized. If it is, this warning is safe to ignore."
                 )
             else:
                 model.add_adapter("ref", default_config)
@@ -589,10 +603,13 @@ class GRPOTrainer(_BaseTrainer):
                     "git+https://github.com/huggingface/transformers.git@main` to use this feature."
                 )
         if tools or environment_factory:
-            if not is_jmespath_available():
+            # jmespath is only needed by the legacy `response_schema` parser, which is all transformers < 5.13 ships.
+            # The new-style `response_template` parser doesn't use it, so don't require it on newer versions.
+            if not _SUPPORTS_RESPONSE_TEMPLATE and not is_jmespath_available():
                 raise ImportError(
-                    "Using tools with GRPOTrainer requires the jmespath library for response parsing. Please install "
-                    "it with `pip install jmespath` to use this feature."
+                    "Using tools with GRPOTrainer on transformers below 5.13.0 requires the jmespath library for "
+                    "response parsing. Please install it with `pip install jmespath`, or upgrade transformers to "
+                    "5.13.0 or higher, which doesn't need it."
                 )
             if not supports_tool_calling(processing_class):
                 raise ValueError(
@@ -831,7 +848,29 @@ class GRPOTrainer(_BaseTrainer):
         self.shuffle_dataset = args.shuffle_dataset
 
         if train_dataset is None:
-            raise ValueError("`train_dataset` is required")
+            # A dataset is optional when an environment owns the data and returns the prompt from `reset()`; then
+            # `max_steps` sets the length. Build a placeholder dataset of empty prompts to drive the loop — one
+            # generation round's worth of rows, cycled across steps.
+            if self.environment_factories is None:
+                raise ValueError("`train_dataset` is required unless an `environment_factory` is provided.")
+            if self._multi_environment:
+                raise ValueError(
+                    "A `dict` `environment_factory` (multiple environments) requires a `train_dataset` with an "
+                    "`environment` column to route each example to its environment. Provide a dataset, or pass a "
+                    "single environment factory."
+                )
+            if args.max_steps <= 0:
+                raise ValueError(
+                    "When training without a `train_dataset` (the environment owns the data and returns the prompt "
+                    "from `reset()`), `max_steps` must be set to a positive value to define the training length. Set "
+                    "it via `GRPOConfig(max_steps=...)`."
+                )
+            num_placeholder_rows = args.generation_batch_size // args.num_generations
+            train_dataset = Dataset.from_dict({"prompt": [[{"role": "user", "content": ""}]] * num_placeholder_rows})
+        elif not isinstance(train_dataset, (Dataset, IterableDataset)):
+            raise TypeError(
+                f"`train_dataset` must be a `Dataset` or `IterableDataset`, got `{type(train_dataset).__name__}`."
+            )
 
         # Iterable datasets can't be indexed, so the RepeatSampler can't be attached to them. Instead, the sampler's
         # ordering is reproduced by streaming (see `get_train_dataloader`/`get_eval_dataloader` and
@@ -1490,7 +1529,7 @@ class GRPOTrainer(_BaseTrainer):
             logits = logits[:, -logits_to_keep:, :]  # (B, logits_to_keep, H)
             # Divide logits by sampling temperature.
             # See https://huggingface.co/blog/the_n_implementation_details_of_rlhf_with_ppo#policy-training-implementation-details
-            logits.div_(self.temperature)
+            logits = logits / self.temperature
             completion_ids = input_ids_batch[:, -logits_to_keep:]
             logps = selective_log_softmax(logits, completion_ids)  # compute logprobs
             all_logps.append(logps)
@@ -1611,7 +1650,7 @@ class GRPOTrainer(_BaseTrainer):
         ):
             if isinstance(reward_func, nn.Module):  # Module (no PretrainedModel) for compat with compiled models
                 with profiling_context(self, reward_func_name):
-                    if is_conversational(inputs[0]):
+                    if is_conversational({"prompt": prompts[0]}):
                         messages = [{"messages": p + c} for p, c in zip(prompts, completions, strict=True)]
                         texts = [
                             apply_chat_template(x, reward_processing_class, **self.chat_template_kwargs)["text"]
@@ -1635,6 +1674,12 @@ class GRPOTrainer(_BaseTrainer):
                     )
                     # Convert None values to NaN
                     output_reward_func = [reward if reward is not None else torch.nan for reward in output_reward_func]
+                    if len(output_reward_func) != len(prompts):
+                        raise ValueError(
+                            f"The reward function '{reward_func_name}' returned {len(output_reward_func)} rewards, but "
+                            f"{len(prompts)} were expected (one per prompt-completion pair). Make sure the reward "
+                            f"function returns exactly one reward per completion."
+                        )
                     rewards_per_func[:, i] = torch.tensor(output_reward_func, dtype=torch.float32, device=device)
 
         # Execute async custom functions in parallel using asyncio.gather
@@ -1646,6 +1691,12 @@ class GRPOTrainer(_BaseTrainer):
                         prompts=prompts, completions=completions, completion_ids=completion_ids_list, **reward_kwargs
                     )
                     output = [r if r is not None else torch.nan for r in output]
+                    if len(output) != len(prompts):
+                        raise ValueError(
+                            f"The reward function '{func_name}' returned {len(output)} rewards, but {len(prompts)} "
+                            f"were expected (one per prompt-completion pair). Make sure the reward function returns "
+                            f"exactly one reward per completion."
+                        )
                     return index, output
 
             async def _run_async_funcs():
@@ -1755,7 +1806,7 @@ class GRPOTrainer(_BaseTrainer):
             multimodal_fields = {}
         return prompt_ids, images, multimodal_fields
 
-    def _generate_single_turn(self, prompt_ids, images, multimodal_fields):
+    def _generate_single_turn(self, prompt_ids, images, multimodal_fields, has_tool_images=False):
         device = self.accelerator.device
         mode = "train" if self.model.training else "eval"
 
@@ -1819,6 +1870,22 @@ class GRPOTrainer(_BaseTrainer):
                     generate_inputs[k] = pad([torch.tensor(x) for x in v], padding_value=0, padding_side="left")
                 else:
                     generate_inputs[k] = torch.tensor(np.array(v))
+
+            # For VLM tool images: build token type IDs from the padded input IDs.
+            if self._is_vlm and self.tools and has_tool_images:
+                mm_ids = torch.zeros_like(padded_ids)
+                if self._image_pad_token_id is not None:
+                    mm_ids[padded_ids == self._image_pad_token_id] = 1
+                if self._video_pad_token_id is not None:
+                    mm_ids[padded_ids == self._video_pad_token_id] = 2
+
+                # Use the same key the model expects: token_type_ids for models like Gemma,
+                # mm_token_type_ids for models like Qwen.
+                if "image_grid_thw" in generate_inputs:
+                    generate_inputs["mm_token_type_ids"] = mm_ids
+                else:
+                    generate_inputs["token_type_ids"] = mm_ids
+
             generate_inputs = super()._prepare_inputs(generate_inputs)
 
             with (
@@ -2042,23 +2109,52 @@ class GRPOTrainer(_BaseTrainer):
                         (existing or []) + new for existing, new in zip(merged_images, tool_images, strict=True)
                     ]
             loop_images = [merged_images[i] for i in idxs_with_tool] if merged_images else None
-            if multimodal_fields:
+            if self._is_vlm and self.tools and any(imgs for imgs in tool_images):
+                flat_loop_images = [img for img_list in loop_images if img_list for img in img_list]
+                if flat_loop_images:
+                    image_inputs = self.processing_class.image_processor(images=flat_loop_images, return_tensors="pt")
+                    image_inputs = super()._prepare_inputs(image_inputs)
+                    loop_multimodal_fields = dict(image_inputs)
+                else:
+                    loop_multimodal_fields = {}
+            elif multimodal_fields:
+                if "num_images" not in multimodal_fields and images is not None:
+                    multimodal_fields = {
+                        **multimodal_fields,
+                        "num_images": [len(img_list) if img_list else 0 for img_list in images],
+                    }
+                split_fields = split_pixel_values_by_grid(multimodal_fields)
                 loop_multimodal_fields = {}
-                for k, v in multimodal_fields.items():
+                for k, v in split_fields.items():
                     selected = [v[i] for i in idxs_with_tool]
+                    # Per-token type-id fields may arrive as tensors (e.g. via the padding workaround);
+                    # convert them to lists so they follow the same left-padding path as list-valued
+                    # per-token fields below, keeping them aligned with the left-padded input_ids.
+                    if k in ("token_type_ids", "mm_token_type_ids") and isinstance(selected[0], torch.Tensor):
+                        selected = [s.tolist() for s in selected]
                     # Per-token fields (e.g. token_type_ids) need zero-padding to match extended prompt length
                     if isinstance(selected[0], list):
                         selected = [
                             s + [0] * (len(pct) - len(s))
                             for s, pct in zip(selected, prompt_completion_tool_ids, strict=True)
                         ]
+                    elif isinstance(v, torch.Tensor):
+                        selected = torch.stack(selected)
                     loop_multimodal_fields[k] = selected
+                loop_multimodal_fields = unsplit_pixel_values_by_grid(loop_multimodal_fields)
+                loop_multimodal_fields.pop("num_images", None)
+                if "pixel_values" in loop_multimodal_fields and loop_multimodal_fields["pixel_values"].numel() == 0:
+                    for key in ["pixel_values", "image_grid_thw", "pixel_values_videos", "video_grid_thw"]:
+                        loop_multimodal_fields.pop(key, None)
             else:
                 loop_multimodal_fields = {}
 
             # Generate new completions after tool execution (using concatenated IDs, no re-tokenization)
             post_tool_ids, post_tool_logprobs = self._generate_single_turn(
-                prompt_completion_tool_ids, loop_images, loop_multimodal_fields
+                prompt_completion_tool_ids,
+                loop_images,
+                loop_multimodal_fields,
+                has_tool_images=any(imgs for imgs in tool_images),
             )
 
             # Truncate so that pct[len(prompt_ids[idx]) :] + post_tool does not exceed max_completion_length.
@@ -2195,12 +2291,17 @@ class GRPOTrainer(_BaseTrainer):
             completion_lengths = torch.tensor([len(ids) for ids in completion_ids], device=device)
         agg_prompt_lengths = self.accelerator.gather(prompt_lengths)
         agg_completion_lengths = self.accelerator.gather(completion_lengths)
+        # Fail clearly if the generation backend returned no completions (avoids a cryptic min() error below).
+        if agg_completion_lengths.numel() == 0:
+            raise RuntimeError(
+                "No completions were generated. This usually means the generation backend failed to return any "
+                "results; see the generation logs above for the underlying error."
+            )
         total_prompt_tokens = agg_prompt_lengths.sum()
-        total_completion_tokens = agg_completion_lengths.sum()  # = num_items_in_batch, required for the DAPO loss
 
         # Log the metrics
         if mode == "train":
-            self.state.num_input_tokens_seen += (total_prompt_tokens + total_completion_tokens).item()
+            self.state.num_input_tokens_seen += (total_prompt_tokens + agg_completion_lengths.sum()).item()
         self._metrics[mode]["num_tokens"] = [self.state.num_input_tokens_seen]
 
         # Log completion lengths, mean, min, max
@@ -2230,17 +2331,7 @@ class GRPOTrainer(_BaseTrainer):
             )
             self._metrics[mode]["tools/failure_frequency"].append(failure_frequency)
 
-        return (
-            prompt_ids,
-            completion_ids,
-            tool_mask,
-            completions,
-            total_completion_tokens,
-            logprobs,
-            extra_fields,
-            images,
-            tool_images,
-        )
+        return prompt_ids, completion_ids, tool_mask, completions, logprobs, extra_fields, images, tool_images
 
     def _generate_and_score_completions(
         self, inputs: list[dict[str, torch.Tensor | Any]]
@@ -2248,7 +2339,15 @@ class GRPOTrainer(_BaseTrainer):
         device = self.accelerator.device
         mode = "train" if self.model.training else "eval"
 
-        prompts = [x["prompt"] for x in inputs]
+        # `prompt` is optional only when an environment owns the data (e.g. a multi-environment routing dataset that
+        # carries only an `environment` column); each rollout's `reset()` then supplies it. Default it here rather than
+        # writing it back onto the row, so the placeholder stays out of the `reset()` kwargs built below, while every
+        # prompt-derived check downstream (conversational detection, multimodal handling) stays consistent. Without an
+        # environment, a missing `prompt` is a malformed dataset and must still fail fast.
+        if self.environment_factories is not None:
+            prompts = [x.get("prompt", [{"role": "user", "content": ""}]) for x in inputs]
+        else:
+            prompts = [x["prompt"] for x in inputs]
 
         # Resolve each example's environment and draw one reusable instance per rollout from the pool, creating more
         # only when this batch needs more concurrent instances of an environment than exist. `_batch_environments`
@@ -2341,7 +2440,6 @@ class GRPOTrainer(_BaseTrainer):
             completion_ids_list,
             tool_mask_list,
             completions,
-            num_items_in_batch,
             sampling_per_token_logps_list,
             extra_fields,
             images,
@@ -2374,7 +2472,13 @@ class GRPOTrainer(_BaseTrainer):
             completion_mask, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
         ).to(device=device)
         if sampling_per_token_logps_list is not None:
-            sampling_per_token_logps = [torch.tensor(logps) for logps in sampling_per_token_logps_list]
+            # vLLM replaces a NaN token logprob with `None` (see `extract_logprobs`); map it back to NaN so the
+            # tensor builds (`torch.tensor([..., None, ...])` raises "Could not infer dtype of NoneType"). The NaN
+            # positions are neutralized in the importance-sampling ratio below so they contribute no correction.
+            sampling_per_token_logps = [
+                torch.tensor([float("nan") if x is None else x for x in logps])
+                for logps in sampling_per_token_logps_list
+            ]
             sampling_per_token_logps = pad(
                 sampling_per_token_logps,
                 padding_value=0.0,
@@ -2400,6 +2504,9 @@ class GRPOTrainer(_BaseTrainer):
             # Also mask tool_mask for consistency in multi-turn training
             if tool_mask is not None:
                 tool_mask = tool_mask * (~is_truncated).unsqueeze(1).int()
+
+        loss_mask = completion_mask if tool_mask is None else completion_mask * tool_mask
+        num_items_in_batch = self.accelerator.gather(loss_mask.sum()).sum()
 
         # Concatenate prompt_mask with completion_mask for logit computation
         prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)  # (B, P+C)
@@ -2554,6 +2661,9 @@ class GRPOTrainer(_BaseTrainer):
             if self.use_vllm and self.vllm_importance_sampling_correction:
                 mask = completion_mask if tool_mask is None else completion_mask * tool_mask
                 per_token_logps_diff = (old_per_token_logps - sampling_per_token_logps) * mask
+                # Tokens whose sampling logprob was NaN (unavailable from vLLM) get a zero difference, so their
+                # importance ratio is exactly 1 (no correction) rather than propagating NaN through the loss.
+                per_token_logps_diff = torch.nan_to_num(per_token_logps_diff, nan=0.0)
 
                 sequence_level_is = self.vllm_importance_sampling_mode in ["sequence_mask", "sequence_truncate"]
                 if sequence_level_is:
@@ -2754,7 +2864,9 @@ class GRPOTrainer(_BaseTrainer):
         if self.use_vllm and self.vllm_importance_sampling_correction:
             delta = torch.abs(old_per_token_logps - sampling_per_token_logps)
             mask = completion_mask.bool() if tool_mask is None else (completion_mask * tool_mask).bool()
-            delta = delta[mask]
+            # Tokens vLLM could not score carry NaN, so exclude them rather than let them turn the reported
+            # divergence into NaN. Counting them as zero instead would understate the divergence.
+            delta = delta[mask & ~torch.isnan(delta)]
             mean_delta = torch.mean(delta) if delta.numel() > 0 else torch.tensor(0.0, device=device)
             max_delta = torch.max(delta) if delta.numel() > 0 else torch.tensor(0.0, device=device)
             self._metrics[mode]["sampling/sampling_logp_difference/mean"].append(
@@ -2905,6 +3017,10 @@ class GRPOTrainer(_BaseTrainer):
         """
         # forward KL div: log(pi_old) - log(pi_theta)
         kl_div = sampling_per_token_logps - per_token_logps.detach()
+        # Tokens vLLM could not score carry NaN and provide no KL evidence. Left in, the sequence mean is NaN,
+        # `avg_seq_kl <= off_policy_threshold` is then False, and a negative-advantage sequence would be dropped
+        # on the strength of a single unscorable token.
+        kl_div = torch.nan_to_num(kl_div, nan=0.0)
         # Sequence-level Mean KL (ignoring prompt+padding)
         seq_kl_sum = (kl_div * mask).sum(dim=1, keepdim=True)
         avg_seq_kl = seq_kl_sum / mask.sum(dim=1, keepdim=True).clamp(min=1.0)
@@ -3112,12 +3228,17 @@ class GRPOTrainer(_BaseTrainer):
             policy_loss = loss.detach()
             loss = loss / normalizer
         elif self.loss_type in ["cispo", "dapo", "vespo"]:
-            normalizer = inputs["num_items_in_batch"] / self.accelerator.num_processes
+            # `num_items_in_batch` spans the generation batch, so rescale it to one accumulation window
+            normalizer = inputs["num_items_in_batch"].clamp(min=1.0) / self.accelerator.num_processes
+            if mode == "train":  # in eval, the batch is neither split across steps nor accumulated
+                normalizer = normalizer * self.current_gradient_accumulation_steps / self.args.steps_per_generation
             loss = (per_token_loss * mask).sum() / normalizer
             policy_loss = loss.detach()
         elif self.loss_type == "luspo":
-            # Unless importance_sampling_level="token" (not recommended here), per_token_loss is expected to be (B, 1)
-            loss = (per_token_loss * mask.sum(1, keepdim=True)).mean()
+            # `per_token_loss` is (B, 1) only in the recommended sequence-level setup; importance_sampling_level=
+            # "token" (the config default), the KL term, token-level vLLM IS ratios, and the entropy mask all
+            # broadcast it to (B, T), so mask before aggregating.
+            loss = (per_token_loss * mask).sum(-1).mean()
             normalizer = self.current_gradient_accumulation_steps if mode == "train" else 1.0
             policy_loss = loss.detach()
             loss = loss / normalizer
@@ -3132,18 +3253,14 @@ class GRPOTrainer(_BaseTrainer):
             # tokens. Use the same effective mask for the entropy bonus so it acts on the same tokens.
             effective_mask = mask if entropy_mask is None else mask * entropy_mask
             # Entropy bonus = mean per-token entropy H (the documented objective L = L_policy - coef * H), so
-            # H does not depend on how each loss type normalizes its policy term. The term is computed so that
-            # it accumulates to H over the optimizer step for every loss type and matches world_entropy below.
-            # The only wrinkle is the normalizer: most loss types divide by the gradient accumulation step
-            # count, but cispo/dapo/vespo divide by a global token count.
-            if self.loss_type in ["cispo", "dapo", "vespo"]:
-                # normalizer is a global token count, so summing the entropies (instead of averaging them
-                # again) makes the term accumulate over the optimizer step to the global mean per-token
-                # entropy, like the other loss types.
-                entropy_loss = (entropies * effective_mask).sum() / normalizer
-            else:
-                # Mean per-token entropy of active tokens, scaled for gradient accumulation.
-                entropy_loss = (entropies * effective_mask).sum() / effective_mask.sum().clamp(min=1.0) / normalizer
+            # H does not depend on how each loss type normalizes its policy term. The bonus is a mean over the
+            # tokens it acts on (effective_mask), scaled only for gradient accumulation, never by a loss-type-
+            # specific policy normalizer. (The adaptive controller below tracks a window-global token-weighted mean,
+            # which can differ from this per-micro-batch mean when token counts vary across micro-batches.)
+            accumulation_factor = self.current_gradient_accumulation_steps if mode == "train" else 1.0
+            entropy_loss = (
+                (entropies * effective_mask).sum() / effective_mask.sum().clamp(min=1.0) / accumulation_factor
+            )
 
             # Apply the coefficient and gating from the end of the previous optimizer step, so that every
             # micro-batch in the current accumulation window applies the same entropy bonus. The adaptive
@@ -3196,47 +3313,41 @@ class GRPOTrainer(_BaseTrainer):
             self._metrics[mode]["aux_loss"].append(self.accelerator.gather_for_metrics(aux_loss).mean().item())
 
         # Log the metrics
-        completion_token_count = mask.sum().clamp(min=1.0)
+        def masked_seq_mean(x):
+            if x.shape[1] == 1:  # when importance_sampling_level == "sequence": already one value per sequence
+                return x.squeeze(1)
+            return (x * mask).sum(-1) / mask.sum(-1)
 
-        def masked_batch_mean(x):
-            if x.shape[1] == 1:  # when importance_sampling_level == "sequence"
-                return x.mean()
+        def global_masked_mean(x):
+            if x.shape[1] == 1:  # when importance_sampling_level == "sequence": one value per sequence
+                local_sum, local_count = x.sum(), torch.tensor(float(x.shape[0]), device=x.device)
             else:
-                return (x * mask).sum() / completion_token_count
+                local_sum, local_count = (x * mask).sum(), mask.sum().float()
+            totals = self.accelerator.reduce(torch.stack([local_sum, local_count]), reduction="sum")
+            return (totals[0] / totals[1].clamp(min=1.0)).item()
 
         if self.beta != 0.0:
-            mean_kl = masked_batch_mean(per_token_kl)
-            self._metrics[mode]["kl"].append(self.accelerator.gather(mean_kl).nanmean().item())
+            self._metrics[mode]["kl"].append(global_masked_mean(per_token_kl))
 
-        mean_entropy = masked_batch_mean(entropies)
-        self._metrics[mode]["entropy"].append(self.accelerator.gather(mean_entropy).nanmean().item())
+        self._metrics[mode]["entropy"].append(global_masked_mean(entropies))
 
         if self.loss_type in ["grpo", "bnpo", "dr_grpo", "dapo", "luspo"]:
             # Compute the clipped probability ratios
             is_low_clipped = (coef_1 < 1 - self.epsilon_low) & (advantages < 0)
             is_high_clipped = (coef_1 > 1 + self.epsilon_high) & (advantages > 0)
             is_region_clipped = is_low_clipped | is_high_clipped
-
-            low_clip = masked_batch_mean(is_low_clipped.float())
-            high_clip = masked_batch_mean(is_high_clipped.float())
-            clip_ratio = masked_batch_mean(is_region_clipped.float())
-
-            gathered_low_clip = self.accelerator.gather(low_clip)
-            self._metrics[mode]["clip_ratio/low_mean"].append(gathered_low_clip.nanmean().item())
+            self._metrics[mode]["clip_ratio/low_mean"].append(global_masked_mean(is_low_clipped.float()))
+            self._metrics[mode]["clip_ratio/high_mean"].append(global_masked_mean(is_high_clipped.float()))
+            self._metrics[mode]["clip_ratio/region_mean"].append(global_masked_mean(is_region_clipped.float()))
+            gathered_low_clip = self.accelerator.gather(masked_seq_mean(is_low_clipped.float()))
             self._metrics[mode]["clip_ratio/low_min"].append(nanmin(gathered_low_clip).item())
-            gathered_high_clip = self.accelerator.gather(high_clip)
-            self._metrics[mode]["clip_ratio/high_mean"].append(gathered_high_clip.nanmean().item())
+            gathered_high_clip = self.accelerator.gather(masked_seq_mean(is_high_clipped.float()))
             self._metrics[mode]["clip_ratio/high_max"].append(nanmax(gathered_high_clip).item())
-            gathered_clip_ratio = self.accelerator.gather(clip_ratio)
-            self._metrics[mode]["clip_ratio/region_mean"].append(gathered_clip_ratio.nanmean().item())
         elif self.loss_type == "cispo":
             is_cispo_clipped = (coef_1 > self.epsilon_high) & (advantages > 0)
-            cispo_clip_ratio = masked_batch_mean(is_cispo_clipped.float())
-            gathered_cispo_clip_ratio = self.accelerator.gather(cispo_clip_ratio)
-            self._metrics[mode]["cispo_clip_ratio"].append(gathered_cispo_clip_ratio.nanmean().item())
+            self._metrics[mode]["cispo_clip_ratio"].append(global_masked_mean(is_cispo_clipped.float()))
         elif self.loss_type == "vespo":
-            gathered_phi_seq = self.accelerator.gather(phi_seq)
-            self._metrics[mode]["vespo/phi_seq_mean"].append(gathered_phi_seq.nanmean().item())
+            self._metrics[mode]["vespo/phi_seq_mean"].append(global_masked_mean(phi_seq))
 
         return loss
 

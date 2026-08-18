@@ -47,7 +47,7 @@ from ...models import prepare_deepspeed
 from ...models.utils import _ForwardRedirection, unwrap_model_for_generation
 from ...trainer.base_trainer import _BaseTrainer
 from ...trainer.utils import RepeatSampler, create_model_from_path, disable_dropout_in_model, pad, split_tensor_dict
-from .distillation_config import DistillationConfig
+from .iw_opd_config import IWOPDConfig
 
 
 if is_liger_kernel_available():
@@ -353,32 +353,40 @@ class _RepeatBatchDataLoader:
         return getattr(self.dataloader, attr)
 
 
-class DistillationTrainer(_BaseTrainer):
+class IWOPDTrainer(_BaseTrainer):
     """
-    Trainer for knowledge distillation from a teacher model to a student model.
+    Trainer for Importance-Weighted On-Policy Distillation (IW-OPD).
+
+    IW-OPD ([On the Position Bias of On-Policy Distillation](https://huggingface.co/papers/2606.22600)) reweights the
+    sampled-token distillation signal by accumulated teacher-student prefix discrepancy, downweighting later tokens
+    whose supervision has drifted out of distribution. Select it with `distillation_objective="iw_opd"`.
+
+    .. note::
+        This trainer is a frozen snapshot of the pre-refactor ``DistillationTrainer``, kept as the home for IW-OPD (a
+        teacher-guided policy-gradient method that does not fit the stable, full-vocabulary ``DistillationTrainer``).
+        It is not actively maintained and will not track that trainer's later improvements.
 
     Supports:
     - Generalized JSD loss (forward KL, reverse KL, or interpolated JSD via `beta`)
+    - Sampled-token IW-OPD objective (`distillation_objective="iw_opd"`)
     - On-policy / off-policy mixing via `lmbda` (buffered across gradient accumulation)
     - Local teacher model or external teacher via vLLM server
     - Student on-policy generation via vLLM or model.generate()
     - Liger kernel for memory-efficient fused JSD loss
     """
 
-    _tag_names = ["trl", "distillation"]
-    _name = "Distillation"
+    _tag_names = ["trl", "iw-opd"]
+    _name = "IW-OPD"
     _paper = {
-        "title": "On-Policy Distillation of Language Models: Learning from Self-Generated Mistakes",
-        "id": "2306.13649",
+        "title": "On the Position Bias of On-Policy Distillation",
+        "id": "2606.22600",
         # docstyle-ignore
         "citation": textwrap.dedent("""\
-            @inproceedings{agarwal2024on-policy,
-                title        = {{On-Policy Distillation of Language Models: Learning from Self-Generated Mistakes}},
-                author       = {Rishabh Agarwal and Nino Vieillard and Yongchao Zhou and Piotr Stanczyk and Sabela Ramos Garea and Matthieu Geist and Olivier Bachem},
-                year         = 2024,
-                booktitle    = {The Twelfth International Conference on Learning Representations, {ICLR} 2024, Vienna, Austria, May 7-11, 2024},
-                publisher    = {OpenReview.net},
-                url          = {https://openreview.net/forum?id=3zKtaqxLhW},
+            @article{xie2026position,
+                title        = {{On the Position Bias of On-Policy Distillation}},
+                author       = {Yan Xie and Sijie Zhu and Tiansheng Wen and Bo Chen and Yifei Wang},
+                year         = 2026,
+                eprint       = {arXiv:2606.22600},
             }"""),
     }
 
@@ -386,7 +394,7 @@ class DistillationTrainer(_BaseTrainer):
         self,
         model: PreTrainedModel | nn.Module | str | None = None,
         teacher_model: PreTrainedModel | nn.Module | str = None,
-        args: DistillationConfig | None = None,
+        args: IWOPDConfig | None = None,
         data_collator: DataCollator | None = None,  # type: ignore
         train_dataset: Dataset | None = None,
         eval_dataset: Dataset | dict[str, Dataset] | None = None,
@@ -402,7 +410,7 @@ class DistillationTrainer(_BaseTrainer):
         peft_config: Optional["PeftConfig"] = None,
     ):
         if args is None:
-            args = DistillationConfig(output_dir="tmp_distillation")
+            args = IWOPDConfig(output_dir="tmp_iw_opd")
 
         # ── Student model loading ──
         model_init_kwargs = args.model_init_kwargs or {}
@@ -516,7 +524,7 @@ class DistillationTrainer(_BaseTrainer):
             )
             if teacher_model_name_or_path is None:
                 raise ValueError(
-                    "DistillationTrainer requires a local teacher model with `config._name_or_path` set so its "
+                    "IWOPDTrainer requires a local teacher model with `config._name_or_path` set so its "
                     "tokenizer can be validated against the student tokenizer."
                 )
 
@@ -536,10 +544,10 @@ class DistillationTrainer(_BaseTrainer):
             )
             if not self._local_teacher_tokenizer_matches_student:
                 warnings.warn(
-                    "DistillationTrainer's built-in local-teacher loss assumes the student and teacher share the "
+                    "IWOPDTrainer's built-in local-teacher loss assumes the student and teacher share the "
                     "same tokenizer. The loaded local teacher tokenizer does not match the student tokenizer, so "
                     "the teacher weights will be left unchanged for subclass overrides. Direct use of the base "
-                    "DistillationTrainer with this local teacher remains unsupported.",
+                    "IWOPDTrainer with this local teacher remains unsupported.",
                     UserWarning,
                     stacklevel=2,
                 )
@@ -688,7 +696,7 @@ class DistillationTrainer(_BaseTrainer):
         """Guard the base local-teacher JSD path, while still allowing subclass overrides."""
         if self.teacher_model is not None and not self._local_teacher_tokenizer_matches_student:
             raise ValueError(
-                "DistillationTrainer's built-in local-teacher loss only supports student/teacher pairs that use "
+                "IWOPDTrainer's built-in local-teacher loss only supports student/teacher pairs that use "
                 "the same tokenizer. Use a same-tokenizer local teacher, set `use_teacher_server=True`, or "
                 "override the local teacher loss path in a subclass."
             )
@@ -1202,7 +1210,7 @@ class DistillationTrainer(_BaseTrainer):
             teacher_log_probs = F.log_softmax(teacher_logits, dim=-1)
 
         jsd = _jsd_divergence(student_log_probs, teacher_log_probs, beta, support_mask)
-        return DistillationTrainer._reduce_divergence_loss(
+        return IWOPDTrainer._reduce_divergence_loss(
             jsd, labels=labels, reduction=reduction, num_items_in_batch=num_items_in_batch
         )
 

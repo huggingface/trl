@@ -24,8 +24,8 @@ import torch.nn.functional as F
 from datasets import Dataset, DatasetDict, IterableDatasetDict, load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from trl.experimental.distillation import DistillationConfig, DistillationTrainer
-from trl.experimental.distillation.distillation_trainer import (
+from trl.experimental.iw_opd import IWOPDConfig, IWOPDTrainer
+from trl.experimental.iw_opd.iw_opd_trainer import (
     _add_tail_bucket,
     _jsd_divergence,
     _RepeatBatchDataLoader,
@@ -140,7 +140,7 @@ def _variable_length_dataset():
 
 def test_distillation_config_rejects_liger_with_teacher_server(tmp_path):
     with pytest.raises(ValueError, match="use_liger_kernel=True is not supported with use_teacher_server=True"):
-        DistillationConfig(
+        IWOPDConfig(
             **_make_distillation_config_kwargs(tmp_path),
             use_teacher_server=True,
             teacher_model_server_url="http://localhost:8000",
@@ -150,29 +150,29 @@ def test_distillation_config_rejects_liger_with_teacher_server(tmp_path):
 
 def test_distillation_config_rejects_invalid_reverse_kl_top_1_mode(tmp_path):
     with pytest.raises(ValueError, match="reverse_kl_top_1_mode must be one of"):
-        DistillationConfig(**_make_distillation_config_kwargs(tmp_path), reverse_kl_top_1_mode="invalid")
+        IWOPDConfig(**_make_distillation_config_kwargs(tmp_path), reverse_kl_top_1_mode="invalid")
 
 
 def test_distillation_config_rejects_invalid_distillation_objective(tmp_path):
     with pytest.raises(ValueError, match="distillation_objective must be one of"):
-        DistillationConfig(**_make_distillation_config_kwargs(tmp_path), distillation_objective="invalid")
+        IWOPDConfig(**_make_distillation_config_kwargs(tmp_path), distillation_objective="invalid")
 
 
 def test_distillation_config_rejects_invalid_iw_opd_gamma(tmp_path):
     with pytest.raises(ValueError, match="iw_opd_gamma must be non-negative"):
-        DistillationConfig(**_make_distillation_config_kwargs(tmp_path), iw_opd_gamma=-0.1)
+        IWOPDConfig(**_make_distillation_config_kwargs(tmp_path), iw_opd_gamma=-0.1)
 
 
 def test_distillation_config_rejects_invalid_iw_opd_epsilon(tmp_path):
     with pytest.raises(ValueError, match="iw_opd_epsilon must be positive"):
-        DistillationConfig(**_make_distillation_config_kwargs(tmp_path), iw_opd_epsilon=0.0)
+        IWOPDConfig(**_make_distillation_config_kwargs(tmp_path), iw_opd_epsilon=0.0)
 
 
 def test_distillation_config_rejects_iw_opd_with_liger(tmp_path):
     with pytest.raises(
         ValueError, match="use_liger_kernel=True is not supported with distillation_objective='iw_opd'"
     ):
-        DistillationConfig(
+        IWOPDConfig(
             **_make_distillation_config_kwargs(tmp_path),
             distillation_objective="iw_opd",
             use_liger_kernel=True,
@@ -181,7 +181,7 @@ def test_distillation_config_rejects_iw_opd_with_liger(tmp_path):
 
 def test_distillation_config_rejects_iw_opd_when_not_fully_on_policy(tmp_path):
     with pytest.raises(ValueError, match="distillation_objective='iw_opd' requires lmbda=1.0"):
-        DistillationConfig(
+        IWOPDConfig(
             **_make_distillation_config_kwargs(tmp_path),
             distillation_objective="iw_opd",
             lmbda=0.5,
@@ -190,7 +190,7 @@ def test_distillation_config_rejects_iw_opd_when_not_fully_on_policy(tmp_path):
 
 def test_distillation_config_rejects_iw_opd_with_argmax_top_1_mode(tmp_path):
     with pytest.raises(ValueError, match="distillation_objective='iw_opd' requires reverse_kl_top_1_mode='sampled'"):
-        DistillationConfig(
+        IWOPDConfig(
             **_make_distillation_config_kwargs(tmp_path),
             distillation_objective="iw_opd",
             reverse_kl_top_1_mode="argmax",
@@ -199,8 +199,9 @@ def test_distillation_config_rejects_iw_opd_with_argmax_top_1_mode(tmp_path):
 
 def test_distillation_config_rejects_teacher_server_with_reverse_kl_argmax(tmp_path):
     with pytest.raises(ValueError, match="reverse_kl_top_1_mode='argmax' is not supported"):
-        DistillationConfig(
+        IWOPDConfig(
             **_make_distillation_config_kwargs(tmp_path),
+            distillation_objective="jsd",
             use_teacher_server=True,
             teacher_model_server_url="http://localhost:8000",
             reverse_kl_top_1_mode="argmax",
@@ -209,7 +210,7 @@ def test_distillation_config_rejects_teacher_server_with_reverse_kl_argmax(tmp_p
 
 def test_distillation_config_rejects_teacher_server_mixed_loss_without_top_1(tmp_path):
     with pytest.raises(ValueError, match="loss_top_k must be 1 when using use_teacher_server=True with beta>0"):
-        DistillationConfig(
+        IWOPDConfig(
             **_make_distillation_config_kwargs(tmp_path),
             use_teacher_server=True,
             teacher_model_server_url="http://localhost:8000",
@@ -220,7 +221,7 @@ def test_distillation_config_rejects_teacher_server_mixed_loss_without_top_1(tmp
 
 def test_distillation_config_requires_teacher_server_url(tmp_path):
     with pytest.raises(ValueError, match="teacher_model_server_url must be set when use_teacher_server=True"):
-        DistillationConfig(
+        IWOPDConfig(
             **_make_distillation_config_kwargs(tmp_path),
             use_teacher_server=True,
             beta=0.5,
@@ -320,7 +321,7 @@ class TestGetTeacherTokenLogprobsFromServer(TrlTestCase):
             "labels": torch.tensor([[-100, -100, 90, -100, -100], [-100, -100, 90, 9217, 100]]),
         }
 
-        out = DistillationTrainer._get_teacher_token_logprobs_from_server(mock_self, inputs, aligned_prompt_length=2)
+        out = IWOPDTrainer._get_teacher_token_logprobs_from_server(mock_self, inputs, aligned_prompt_length=2)
 
         assert out["actual_logprobs"].shape == (2, 3)
         assert out["topk_logprobs"].shape == (2, 3, 1)
@@ -377,7 +378,7 @@ class TestGeneralizedJSDLoss(TrlTestCase):
 
     def test_uniform_distribution(self):
         logits = torch.ones(1, 1, self.vocab_size)
-        loss = DistillationTrainer.generalized_jsd_loss(logits, logits)
+        loss = IWOPDTrainer.generalized_jsd_loss(logits, logits)
         assert round(abs(loss.item() - 0), 5) == 0
 
     def test_generalized_jsd_loss_edge_cases(self):
@@ -386,45 +387,41 @@ class TestGeneralizedJSDLoss(TrlTestCase):
         teacher_logits = torch.log(torch.tensor([[0.9, 0.1]])).unsqueeze(0)
 
         # Case 1: beta = 1 (should be equivalent to KL(student || teacher))
-        loss_beta_1 = DistillationTrainer.generalized_jsd_loss(student_logits, teacher_logits, beta=1)
+        loss_beta_1 = IWOPDTrainer.generalized_jsd_loss(student_logits, teacher_logits, beta=1)
         expected_loss_beta_1 = F.kl_div(
             F.log_softmax(teacher_logits, dim=-1), F.softmax(student_logits, dim=-1), reduction="batchmean"
         )
         assert round(abs(loss_beta_1.item() - expected_loss_beta_1.item()), 5) == 0
 
         # Case 2: beta = 0 (should be equivalent to KL(teacher || student))
-        loss_beta_0 = DistillationTrainer.generalized_jsd_loss(student_logits, teacher_logits, beta=0)
+        loss_beta_0 = IWOPDTrainer.generalized_jsd_loss(student_logits, teacher_logits, beta=0)
         expected_loss_beta_0 = F.kl_div(
             F.log_softmax(student_logits, dim=-1), F.softmax(teacher_logits, dim=-1), reduction="batchmean"
         )
         assert round(abs(loss_beta_0.item() - expected_loss_beta_0.item()), 5) == 0
 
     def test_output_shape(self):
-        loss = DistillationTrainer.generalized_jsd_loss(self.student_logits, self.teacher_logits)
+        loss = IWOPDTrainer.generalized_jsd_loss(self.student_logits, self.teacher_logits)
         assert torch.is_tensor(loss)
         assert loss.shape == torch.Size([])
 
     def test_beta_values(self):
-        loss_beta_0 = DistillationTrainer.generalized_jsd_loss(self.student_logits, self.teacher_logits, beta=0)
-        loss_beta_1 = DistillationTrainer.generalized_jsd_loss(self.student_logits, self.teacher_logits, beta=1)
+        loss_beta_0 = IWOPDTrainer.generalized_jsd_loss(self.student_logits, self.teacher_logits, beta=0)
+        loss_beta_1 = IWOPDTrainer.generalized_jsd_loss(self.student_logits, self.teacher_logits, beta=1)
         assert loss_beta_0 != loss_beta_1
 
     def test_temperature_scaling(self):
-        loss_temp_1 = DistillationTrainer.generalized_jsd_loss(self.student_logits, self.teacher_logits, temperature=1)
-        loss_temp_2 = DistillationTrainer.generalized_jsd_loss(self.student_logits, self.teacher_logits, temperature=2)
+        loss_temp_1 = IWOPDTrainer.generalized_jsd_loss(self.student_logits, self.teacher_logits, temperature=1)
+        loss_temp_2 = IWOPDTrainer.generalized_jsd_loss(self.student_logits, self.teacher_logits, temperature=2)
         assert loss_temp_1 != loss_temp_2
 
     def test_reduction_methods(self):
-        loss_batchmean = DistillationTrainer.generalized_jsd_loss(
+        loss_batchmean = IWOPDTrainer.generalized_jsd_loss(
             self.student_logits, self.teacher_logits, reduction="batchmean"
         )
-        loss_sum = DistillationTrainer.generalized_jsd_loss(self.student_logits, self.teacher_logits, reduction="sum")
-        loss_mean = DistillationTrainer.generalized_jsd_loss(
-            self.student_logits, self.teacher_logits, reduction="mean"
-        )
-        loss_none = DistillationTrainer.generalized_jsd_loss(
-            self.student_logits, self.teacher_logits, reduction="none"
-        )
+        loss_sum = IWOPDTrainer.generalized_jsd_loss(self.student_logits, self.teacher_logits, reduction="sum")
+        loss_mean = IWOPDTrainer.generalized_jsd_loss(self.student_logits, self.teacher_logits, reduction="mean")
+        loss_none = IWOPDTrainer.generalized_jsd_loss(self.student_logits, self.teacher_logits, reduction="none")
 
         assert loss_batchmean.shape == torch.Size([])
         assert loss_sum.shape == torch.Size([])
@@ -432,21 +429,21 @@ class TestGeneralizedJSDLoss(TrlTestCase):
         assert loss_none.shape == self.student_logits.shape
 
     def test_symmetry(self):
-        student_teacher = DistillationTrainer.generalized_jsd_loss(self.student_logits, self.teacher_logits, beta=0.1)
-        teacher_student = DistillationTrainer.generalized_jsd_loss(self.teacher_logits, self.student_logits, beta=0.1)
+        student_teacher = IWOPDTrainer.generalized_jsd_loss(self.student_logits, self.teacher_logits, beta=0.1)
+        teacher_student = IWOPDTrainer.generalized_jsd_loss(self.teacher_logits, self.student_logits, beta=0.1)
         assert student_teacher != teacher_student
 
-        student_teacher = DistillationTrainer.generalized_jsd_loss(self.student_logits, self.teacher_logits, beta=0.5)
-        teacher_student = DistillationTrainer.generalized_jsd_loss(self.teacher_logits, self.student_logits, beta=0.5)
+        student_teacher = IWOPDTrainer.generalized_jsd_loss(self.student_logits, self.teacher_logits, beta=0.5)
+        teacher_student = IWOPDTrainer.generalized_jsd_loss(self.teacher_logits, self.student_logits, beta=0.5)
         assert student_teacher == teacher_student
 
     def test_zero_loss_for_identical_inputs(self):
         identical_logits = torch.randn(self.batch_size, self.seq_length, self.vocab_size)
-        loss = DistillationTrainer.generalized_jsd_loss(identical_logits, identical_logits)
+        loss = IWOPDTrainer.generalized_jsd_loss(identical_logits, identical_logits)
         assert round(abs(loss.item() - 0), 6) == 0
 
 
-class TestDistillationTrainer(TrlTestCase):
+class TestIWOPDTrainer(TrlTestCase):
     def setup_method(self):
         self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
@@ -464,17 +461,20 @@ class TestDistillationTrainer(TrlTestCase):
             "use_cpu": True,
             "bf16": False,
             "lmbda": 0.0,
+            # These are the JSD-path tests inherited from the DistillationTrainer suite; IWOPDConfig now defaults
+            # distillation_objective to "iw_opd", so pin "jsd" here. IW-OPD tests override it via kwargs.
+            "distillation_objective": "jsd",
             "max_length": 128,
             "max_completion_length": 32,
             "model_init_kwargs": {"dtype": "float32", "device_map": None},
             "teacher_model_init_kwargs": {"dtype": "float32", "device_map": None},
         }
         args.update(kwargs)
-        return DistillationConfig(**args)
+        return IWOPDConfig(**args)
 
     def _make_local_trainer(self, **kwargs):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
-        return DistillationTrainer(
+        return IWOPDTrainer(
             model=self.model_id,
             teacher_model=self.model_id,
             args=self._make_args(**kwargs),
@@ -484,7 +484,7 @@ class TestDistillationTrainer(TrlTestCase):
 
     def _make_server_trainer(self, **kwargs):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
-        return DistillationTrainer(
+        return IWOPDTrainer(
             model=self.model_id,
             teacher_model=None,
             args=self._make_args(use_teacher_server=True, teacher_model_server_url="http://localhost:8000", **kwargs),
@@ -511,7 +511,7 @@ class TestDistillationTrainer(TrlTestCase):
             per_device_eval_batch_size=2,
         )
         dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling")
-        trainer = DistillationTrainer(
+        trainer = IWOPDTrainer(
             model=self.model_id,
             teacher_model=self.model_id,
             args=training_args,
@@ -557,8 +557,8 @@ class TestDistillationTrainer(TrlTestCase):
             else:  # "dict_of_dataset" or "dict_of_iterable_dataset"
                 eval_dataset = {"data1": eval_split, "data2": eval_split}
 
-        training_args = DistillationConfig(output_dir=self.tmp_dir, report_to="none")
-        trainer = DistillationTrainer(
+        training_args = IWOPDConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = IWOPDTrainer(
             model=self.model_id,
             teacher_model=self.model_id,
             args=training_args,
@@ -614,7 +614,7 @@ class TestDistillationTrainer(TrlTestCase):
         training_args = self._make_args(use_liger_kernel=True, use_cpu=False)
         dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
 
-        trainer = DistillationTrainer(
+        trainer = IWOPDTrainer(
             model=self.model_id,
             teacher_model=self.model_id,
             args=training_args,
@@ -669,7 +669,7 @@ class TestDistillationTrainer(TrlTestCase):
         torch.testing.assert_close(local_loss, server_loss)
 
     def test_iw_opd_prefix_weights_and_loss(self):
-        trainer = DistillationTrainer.__new__(DistillationTrainer)
+        trainer = IWOPDTrainer.__new__(IWOPDTrainer)
         trainer.temperature = 1.0
         trainer.iw_opd_gamma = 0.5
         trainer.iw_opd_epsilon = 1e-8
@@ -717,7 +717,7 @@ class TestDistillationTrainer(TrlTestCase):
         assert torch.isfinite(student_logits.grad).all()
 
     def test_iw_opd_uses_cached_rollout_logprobs(self):
-        trainer = DistillationTrainer.__new__(DistillationTrainer)
+        trainer = IWOPDTrainer.__new__(IWOPDTrainer)
         trainer.temperature = 1.0
         trainer.iw_opd_gamma = 0.0
         trainer.iw_opd_epsilon = 1e-8
@@ -753,7 +753,7 @@ class TestDistillationTrainer(TrlTestCase):
             def batch_decode(sequences, skip_special_tokens=False, clean_up_tokenization_spaces=False):
                 return [" ".join(str(int(t)) for t in seq) for seq in sequences]
 
-        trainer = DistillationTrainer.__new__(DistillationTrainer)
+        trainer = IWOPDTrainer.__new__(IWOPDTrainer)
         trainer.accelerator = SimpleNamespace(device=torch.device("cpu"))
         trainer.processing_class = _Tok()
         trainer.generation_config = SimpleNamespace(max_new_tokens=3)
@@ -825,7 +825,7 @@ class TestDistillationTrainer(TrlTestCase):
         assert teacher_client.calls[0]["top_logprobs"] == 1
 
 
-class TestDistillationTrainerServerPath(TrlTestCase):
+class TestIWOPDTrainerServerPath(TrlTestCase):
     @classmethod
     def setup_class(cls):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
@@ -841,7 +841,7 @@ class TestDistillationTrainerServerPath(TrlTestCase):
         fake_client.get_sequence_logprobs.side_effect = _canned_teacher_logprobs
         monkeypatch.setattr(vllm_client_module, "VLLMClient", lambda *a, **kw: fake_client)
 
-        config = DistillationConfig(
+        config = IWOPDConfig(
             output_dir=self.tmp_dir,
             per_device_train_batch_size=bs,
             gradient_accumulation_steps=ga,
@@ -854,6 +854,7 @@ class TestDistillationTrainerServerPath(TrlTestCase):
             loss_top_k=1,
             beta=1.0,
             lmbda=0.0,
+            distillation_objective="jsd",
             loss_add_tail=True,
             save_strategy="no",
             report_to="none",
@@ -862,7 +863,7 @@ class TestDistillationTrainerServerPath(TrlTestCase):
             bf16=False,
         )
         model = AutoModelForCausalLM.from_pretrained(self.model_id, dtype=torch.float32).to(self.device)
-        trainer = DistillationTrainer(
+        trainer = IWOPDTrainer(
             model=model,
             args=config,
             train_dataset=_variable_length_dataset(),
