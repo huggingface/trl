@@ -20,7 +20,6 @@ from ...trainer.base_config import _BaseConfig
 
 @dataclass
 class AsyncGRPOConfig(_BaseConfig):
-    # docstyle-ignore
     r"""
     Configuration class for the [`AsyncGRPOTrainer`].
 
@@ -74,9 +73,9 @@ class AsyncGRPOConfig(_BaseConfig):
             and reconciling the result against the tokens held so far: a clean append stays one row, a rewrite (dropped
             reasoning, summarized history) forks a new row. When a turn's re-tokenized prompt drifts inside the last
             generated answer, the decision is made on the **drift size** — how many previously-trained tokens the
-            realign would mask to context. A drift smaller than this many tokens is treated as a re-tokenization
-            wobble (realigned as context); a larger drift — e.g. a long reasoning block dropped by the template —
-            forks a new row so those trained tokens keep their training signal instead of being silently masked.
+            realign would mask to context. A drift smaller than this many tokens is treated as a re-tokenization wobble
+            (realigned as context); a larger drift — e.g. a long reasoning block dropped by the template — forks a new
+            row so those trained tokens keep their training signal instead of being silently masked.
 
         > Parameters that control the vLLM server
 
@@ -95,22 +94,22 @@ class AsyncGRPOConfig(_BaseConfig):
             Upper-bound epsilon value for clipping. If not specified, it defaults to the same value as the lower-bound
             specified in argument `epsilon`. Paper [DAPO](https://huggingface.co/papers/2503.14476) recommends `0.28`.
         token_budget (`int`, *optional*):
-            Maximum number of real tokens packed into a single row (one DP rank's forward) for dynamic
-            token-budgeted micro-batching. When `> 0`, a `TokenBudgetBatcher` forms Σ Lᵢ²-balanced micro-batches
-            whose rows each stay within this budget, bounding peak memory independently of the sample count (the
-            number of samples per row becomes dynamic). If `None` (default), it is set to the vLLM server's
-            `max_model_len` (queried at train start) — the cap on prompt + completion length — so no rollout sample
-            can ever exceed the budget. A sample longer than `token_budget` fits in no row and is dropped with a
-            warning. Set `<= 0` to disable token budgeting and instead pack a fixed `per_device_train_batch_size ×
-            num_processes` samples per micro-batch, Σ Lᵢ²-balanced across the rows.
+            Maximum number of real tokens packed into a single row (one DP rank's forward) for dynamic token-budgeted
+            micro-batching. When `> 0`, a `TokenBudgetBatcher` forms Σ Lᵢ²-balanced micro-batches whose rows each stay
+            within this budget, bounding peak memory independently of the sample count (the number of samples per row
+            becomes dynamic). If `None` (default), it is set to the vLLM server's `max_model_len` (queried at train
+            start) — the cap on prompt + completion length — so no rollout sample can ever exceed the budget. A sample
+            longer than `token_budget` fits in no row and is dropped with a warning. Set `<= 0` to disable token
+            budgeting and instead pack a fixed `per_device_train_batch_size × num_processes` samples per micro-batch, Σ
+            Lᵢ²-balanced across the rows.
 
         > Parameters that control the async rollout pipeline
 
         max_inflight_tasks (`int`, *optional*, defaults to `-1`):
-            Maximum number of concurrent generation tasks sent to the vLLM server. Defaults to `-1` (auto), which
-            sets it to `max_staleness * per_device_train_batch_size * gradient_accumulation_steps * num_processes`.
-            If using tool-use environments, you may want to set this manually based on how many parallel environments
-            you can run.
+            Maximum number of concurrent generation tasks sent to the vLLM server. Defaults to `-1` (auto), which sets
+            it to `max_staleness * per_device_train_batch_size * gradient_accumulation_steps * num_processes`. If using
+            tool-use environments, you may want to set this manually based on how many parallel environments you can
+            run.
         max_staleness (`int`, *optional*, defaults to `4`):
             Maximum number of weight update steps a rollout sample can lag behind the current model version before
             being discarded.
@@ -119,8 +118,7 @@ class AsyncGRPOConfig(_BaseConfig):
         weight_sync_steps (`int`, *optional*, defaults to `1`):
             Number of training steps between weight synchronizations to the vLLM server.
         heartbeat_stale_after_s (`float`, *optional*, defaults to `300.0`):
-            Seconds since the rollout worker's last heartbeat after which the trainer treats it as
-            hung and aborts.
+            Seconds since the rollout worker's last heartbeat after which the trainer treats it as hung and aborts.
 
         > Parameters that control the logging
 
