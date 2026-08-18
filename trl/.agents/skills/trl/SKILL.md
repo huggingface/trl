@@ -56,13 +56,13 @@ SFTConfig(
 
 ```python
 def reward_len(completions, **kwargs):
-    return [-abs(20 - len(c)) for c in completions]
+    return [-abs(20 - len(c[0]["content"])) for c in completions]
 
 trainer = GRPOTrainer(
     model="Qwen/Qwen2.5-0.5B-Instruct",
     reward_funcs=reward_len,  # or a list; rewards are summed
     args=GRPOConfig(output_dir="Qwen2.5-0.5B-GRPO", max_completion_length=512),
-    train_dataset=load_dataset("trl-lib/tldr", split="train"),
+    train_dataset=load_dataset("trl-lib/DeepMath-103K", split="train"),
 )
 ```
 
