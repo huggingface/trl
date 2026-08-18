@@ -745,8 +745,14 @@ class DistillationTrainer(_BaseTrainer):
             # `logit_scale` or Gemma `final_logit_softcapping`. Refuse rather than silently optimize a different
             # objective than the model's real forward.
             if self.use_liger_kernel:
-                for name, config in [("student", self.model.config), ("teacher", teacher_model.config)]:
-                    scaled = getattr(config, "logit_scale", 1.0) not in (None, 1.0)
+                for name, model in [("student", self.model), ("teacher", teacher_model)]:
+                    # On VLMs the logit post-processing lives on `text_config`, so read it through
+                    # `get_text_config()`. Muse Glimmer names its pre-softcap multiplier `output_multiplier`.
+                    config = model.config.get_text_config()
+                    logit_scale = getattr(config, "logit_scale", None)
+                    if logit_scale is None:
+                        logit_scale = getattr(config, "output_multiplier", None)
+                    scaled = logit_scale not in (None, 1.0)
                     softcapped = getattr(config, "final_logit_softcapping", None) is not None
                     if scaled or softcapped:
                         raise ValueError(
@@ -1406,6 +1412,12 @@ class DistillationTrainer(_BaseTrainer):
             completion_lengths = torch.tensor([len(ids) for ids in completion_ids], device=device)
         agg_prompt_lengths = self.accelerator.gather(prompt_lengths)
         agg_completion_lengths = self.accelerator.gather(completion_lengths)
+        # Fail clearly if the generation backend returned no completions (avoids a cryptic min() error below).
+        if agg_completion_lengths.numel() == 0:
+            raise RuntimeError(
+                "No completions were generated. This usually means the generation backend failed to return any "
+                "results; see the generation logs above for the underlying error."
+            )
         total_prompt_tokens = agg_prompt_lengths.sum()
 
         # Log the metrics
@@ -1817,11 +1829,18 @@ class DistillationTrainer(_BaseTrainer):
             # The fused kernel produces no entropy; `compute_loss` logs none for the Liger path.
             return loss, None, None
 
-        student_config, teacher_config = unwrapped_student.config, unwrapped_teacher.config
+        # On VLMs the logit post-processing lives on `text_config`, so read it through `get_text_config()`.
+        student_config = unwrapped_student.config.get_text_config()
+        teacher_config = unwrapped_teacher.config.get_text_config()
         # `logit_scale` is None on models that don't scale (e.g. MPT); read that as unscaled (1.0). A real 0.0 is kept
-        # as-is: the Liger guard rejects it, and the chunked path applies it faithfully.
-        student_logit_scale = getattr(student_config, "logit_scale", 1.0)
-        teacher_logit_scale = getattr(teacher_config, "logit_scale", 1.0)
+        # as-is: the Liger guard rejects it, and the chunked path applies it faithfully. Muse Glimmer applies the same
+        # pre-softcap multiplier under the name `output_multiplier`.
+        student_logit_scale = getattr(student_config, "logit_scale", None)
+        if student_logit_scale is None:
+            student_logit_scale = getattr(student_config, "output_multiplier", None)
+        teacher_logit_scale = getattr(teacher_config, "logit_scale", None)
+        if teacher_logit_scale is None:
+            teacher_logit_scale = getattr(teacher_config, "output_multiplier", None)
         student_logit_scale = 1.0 if student_logit_scale is None else student_logit_scale
         teacher_logit_scale = 1.0 if teacher_logit_scale is None else teacher_logit_scale
         loss, entropy_sum, n_valid = _chunked_divergence_loss(
