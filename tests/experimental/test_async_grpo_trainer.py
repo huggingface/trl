@@ -36,7 +36,6 @@ from trl.experimental.async_grpo.async_grpo_trainer import (
     FixedCountBatcher,
     TokenBudgetBatcher,
     _balance_by_squared_length,
-    _SaveRolloutStateCallback,
 )
 from trl.experimental.async_grpo.async_rollout_worker import (
     AsyncRolloutWorker,
@@ -50,6 +49,7 @@ from trl.experimental.async_grpo.async_rollout_worker import (
     _common_prefix_len,
     _SampleBuilder,
 )
+from trl.trainer.base_trainer import _BaseTrainer
 
 from ..testing_utils import TrlTestCase, is_ampere_or_newer
 
@@ -317,26 +317,57 @@ class TestRolloutStateCheckpoint(TrlTestCase):
         with patch("trl.experimental.async_grpo.async_rollout_worker.add_response_schema", side_effect=lambda x: x):
             return _AsyncRolloutLoop(**kwargs)
 
-    def test_save_rollout_state_callback_writes_json(self):
-        checkpoint_dir = os.path.join(self.tmp_dir, "checkpoint-5")
-        os.makedirs(checkpoint_dir)
-
-        trainer = MagicMock()
+    def _stub_trainer_for_save(self, trained_groups, dataset_start_index=10, groups_before_resume=0):
+        trainer = AsyncGRPOTrainer.__new__(AsyncGRPOTrainer)  # __new__ skips __init__ (requires GPU + model)
+        trainer.accelerator = MagicMock()
         trainer.accelerator.is_main_process = True
         trainer.rollout_worker = MagicMock(spec=AsyncRolloutWorker)
-        trainer.rollout_worker._loop_kwargs = {"dataset_start_index": 10}
-        trainer._trained_groups = {0, 1, 2, 3, 4}
+        trainer.rollout_worker._loop_kwargs = {"dataset_start_index": dataset_start_index}
+        trainer._trained_groups = trained_groups
+        trainer._groups_before_resume = groups_before_resume
+        trainer.state = MagicMock()
+        trainer.state.global_step = 5
+        trainer._get_output_dir = lambda trial: self.tmp_dir
+        return trainer
 
-        args = MagicMock()
-        args.output_dir = self.tmp_dir
-        state = MagicMock()
-        state.global_step = 5
+    def test_save_checkpoint_writes_rollout_state(self):
+        trainer = self._stub_trainer_for_save({0, 1, 2, 3, 4}, dataset_start_index=10, groups_before_resume=40)
 
-        _SaveRolloutStateCallback(trainer).on_save(args, state, None)
+        with patch.object(_BaseTrainer, "_save_checkpoint"):
+            trainer._save_checkpoint(MagicMock(), None)
 
-        with open(os.path.join(checkpoint_dir, "rollout_state.json")) as f:
+        with open(os.path.join(self.tmp_dir, "checkpoint-5", "rollout_state.json")) as f:
             data = json.load(f)
         assert data["prompt_index"] == 15  # dataset_start_index(10) + first_untrained(5)
+        assert data["groups_trained"] == 45  # groups_before_resume(40) + len(trained)(5)
+
+    def test_save_checkpoint_writes_rollout_state_before_the_hub_push(self):
+        # `super()._save_checkpoint` is what uploads the checkpoint folder under `hub_strategy="checkpoint"`, so the
+        # file has to exist by the time it runs. Writing it from an `on_save` callback would not: `Trainer` fires
+        # `on_save` only after `_save_checkpoint` returns, leaving the Hub copy without it.
+        trainer = self._stub_trainer_for_save({0, 1})
+        written_before_super = []
+
+        def record(*_args, **_kwargs):
+            written_before_super.append(
+                os.path.isfile(os.path.join(self.tmp_dir, "checkpoint-5", "rollout_state.json"))
+            )
+
+        with patch.object(_BaseTrainer, "_save_checkpoint", side_effect=record):
+            trainer._save_checkpoint(MagicMock(), None)
+
+        assert written_before_super == [True]
+
+    def test_save_checkpoint_skips_holes_left_by_stale_drops(self):
+        # Group 2 was never trained (all of its rollouts were dropped as stale), so the cursor stops there: those
+        # prompts get re-generated on resume instead of being silently skipped.
+        trainer = self._stub_trainer_for_save({0, 1, 3, 4, 5}, dataset_start_index=0)
+
+        with patch.object(_BaseTrainer, "_save_checkpoint"):
+            trainer._save_checkpoint(MagicMock(), None)
+
+        with open(os.path.join(self.tmp_dir, "checkpoint-5", "rollout_state.json")) as f:
+            assert json.load(f)["prompt_index"] == 2
 
     def test_rollout_loop_skips_to_start_index(self):
         dataset = Dataset.from_dict({"prompt": [f"row_{i}" for i in range(10)]})
@@ -349,7 +380,7 @@ class TestRolloutStateCheckpoint(TrlTestCase):
         checkpoint_dir = os.path.join(self.tmp_dir, "checkpoint-10")
         os.makedirs(checkpoint_dir)
         with open(os.path.join(checkpoint_dir, "rollout_state.json"), "w") as f:
-            json.dump({"prompt_index": 77}, f)
+            json.dump({"prompt_index": 77, "groups_trained": 90}, f)
 
         # __new__ skips __init__ (requires GPU + model)
         trainer = AsyncGRPOTrainer.__new__(AsyncGRPOTrainer)
@@ -358,13 +389,15 @@ class TestRolloutStateCheckpoint(TrlTestCase):
         trainer.train_dataset = Dataset.from_dict({"prompt": list(range(100))})
         trainer.accelerator = MagicMock()
         trainer.accelerator.is_main_process = False  # skip finally-block teardown
-
-        from trl.trainer.base_trainer import _BaseTrainer
+        trainer._groups_before_resume = 0
 
         with patch.object(_BaseTrainer, "_inner_training_loop", return_value=None):
             trainer._inner_training_loop(resume_from_checkpoint=checkpoint_dir)
 
         assert trainer.rollout_worker._loop_kwargs["dataset_start_index"] == 77
+        # Epochs are counted in prompts trained, so a resumed run has to pick that count up too, or it would train
+        # `num_train_epochs` more passes on top of the ones already done.
+        assert trainer._groups_before_resume == 90
 
 
 class TestAsyncRolloutWorkerEnvironments(TrlTestCase):

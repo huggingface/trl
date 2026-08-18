@@ -970,6 +970,7 @@ class AsyncRolloutWorker:
         # Forwarded verbatim to _AsyncRolloutLoop in the child. queue_maxsize is also
         # forwarded — the child reads it for "rollout buffer full" log lines.
         loop_kwargs["queue_maxsize"] = queue_maxsize
+        loop_kwargs.setdefault("dataset_start_index", 0)
         self._loop_kwargs = loop_kwargs
         self._child_ready_timeout = child_ready_timeout
         self._process: mp.Process | None = None
