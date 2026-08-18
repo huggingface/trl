@@ -1100,7 +1100,7 @@ class SDPOTrainer(_BaseTrainer):
             zip(self.reward_funcs, self.reward_processing_classes, strict=True)
         ):
             if isinstance(reward_func, nn.Module):
-                if is_conversational(inputs[0]):
+                if is_conversational({"prompt": prompts[0]}):
                     messages = [{"messages": p + c} for p, c in zip(prompts, completions, strict=True)]
                     texts = [
                         apply_chat_template(x, reward_processing_class, **self.chat_template_kwargs)["text"]
@@ -1646,6 +1646,12 @@ class SDPOTrainer(_BaseTrainer):
         device = self.accelerator.device
         completion_ids_list = self._get_completion_ids_list(batch)
         agg_completion_lengths = self.accelerator.gather(batch["raw_completion_lengths"])
+        # Fail clearly if the generation backend returned no completions (avoids a cryptic min() error below).
+        if agg_completion_lengths.numel() == 0:
+            raise RuntimeError(
+                "No completions were generated. This usually means the generation backend failed to return any "
+                "results; see the generation logs above for the underlying error."
+            )
         self._metrics[mode]["completions/mean_length"].append(agg_completion_lengths.float().mean().item())
         self._metrics[mode]["completions/min_length"].append(agg_completion_lengths.float().min().item())
         self._metrics[mode]["completions/max_length"].append(agg_completion_lengths.float().max().item())

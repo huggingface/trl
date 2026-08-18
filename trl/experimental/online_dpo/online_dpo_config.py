@@ -21,7 +21,6 @@ from ...trainer.base_config import _BaseConfig
 
 @dataclass
 class OnlineDPOConfig(_BaseConfig):
-    # docstyle-ignore
     r"""
     Configuration class for the [`experimental.online_dpo.OnlineDPOTrainer`].
 
