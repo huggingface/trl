@@ -20,7 +20,7 @@ TRL ships patched templates under [`trl/chat_templates/`](https://github.com/hug
 
 ## Supported model families
 
-TRL stores reference copies of the original templates so it can identify supported models at init and swap in a training template when needed. The following families are recognized: Cohere, Cohere2, DeepSeek-R1-Distill, DeepSeek-V3, Gemma, Gemma3, Gemma4, GLM-4-MoE, GPT-OSS, Idefics3, LFM2, LFM2.5, LFM2.5-VL, Llama 3 / 3.1 / 3.2, Llava-Next, Nemotron 3 (Nano, Super, Ultra), Nemotron 3.5 Lightning, Phi-3, Phi-3.5, Qwen2-VL, Qwen2.5, Qwen2.5-VL, Qwen3 (including the Instruct-2507 variant), Qwen3-VL, Qwen3.5, Qwen3.6, Qwen3.8.
+TRL stores reference copies of the original templates so it can identify supported models at init and swap in a training template when needed. The following families are recognized: Cohere, Cohere2, DeepSeek-V3, DeepSeek-R1-Distill, Gemma, Gemma3, Gemma4, GLM-4-MoE, GPT-OSS, Idefics3, LFM2, LFM2.5, LFM2.5-VL, Llama 3 / 3.1 / 3.2, Llava-Next, Muse Glimmer, Nemotron 3 (Nano, Super, Ultra), Nemotron 3.5 Lightning, Phi-3, Phi-3.5, Qwen2-VL, Qwen2.5, Qwen2.5-VL, Qwen3 (including the Instruct-2507 variant), Qwen3-VL, Qwen3.5, Qwen3.6, Qwen3.8.
 
 ## Training templates
 
@@ -138,6 +138,10 @@ Wrap assistant message output with `&#123;% generation %&#125;` / `&#123;% endge
 Patched Llava-Next template. Diff vs `llava_next.jinja`:
 
 Wrap assistant message output with `&#123;% generation %&#125;` / `&#123;% endgeneration %&#125;` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+
+### `muse_glimmer_training.jinja`
+
+Patched Muse Glimmer template. Diff vs `muse_glimmer.jinja`: wrap the whole assistant branch — every ATEM channel of the turn — with `&#123;% generation %&#125;` / `&#123;% endgeneration %&#125;` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
 
 ### `nemotron_3_nano_training.jinja`
 

@@ -77,6 +77,10 @@ Original Llama 3.1 / 3.2 chat templates. Both render tool calls as a single bare
 
 Original Llava-Next chat template (as shipped by `llava-hf/llava-v1.6-mistral-7b-hf`). Renders multimodal `content` blocks in the LLaVA / Mistral `[INST] ... [/INST]` format. Does not support tool calling.
 
+### `muse_glimmer.jinja`
+
+Original Muse Glimmer chat template (as shipped by `meta-models/Muse-Glimmer-30B`). Renders the ATEM protocol: one `<|start|>assistant to=<recipient><|message|>...` block per channel, where the recipient is `self` for reasoning, a tool name for tool calls (`<atem:function_calls>` / `<atem:invoke>` / `<atem:parameter>` XML), and `user` for content. The checkpoint ships its own `response_template`, so `add_response_schema` leaves it alone.
+
 ### `nemotron_3_nano.jinja`
 
 Original Nemotron Nano chat template (as shipped by `nvidia/NVIDIA-Nemotron-3-Nano-*` checkpoints). Renders tool calls in the same Hermes-style `<function=...>` / `<parameter=...>` format as Qwen3.5, so it reuses `qwen3_5_schema` for response parsing.
@@ -214,6 +218,12 @@ Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so
 Patched Llava-Next template. Diff vs `llava_next.jinja`:
 
 Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+
+### `muse_glimmer_training.jinja`
+
+Patched Muse Glimmer template. Diff vs `muse_glimmer.jinja`:
+
+Wrap the whole assistant branch — every ATEM channel of the turn — with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss. Same treatment as `gptoss_training.jinja`, which shares the `<|start|>assistant` generation cue and the one-block-per-channel layout.
 
 ### `nemotron_3_nano_training.jinja`
 

@@ -301,6 +301,17 @@ class TestSupportsToolCalling:
             pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3.1", id="llama3.1"),
             pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3.2", id="llama3.2"),
             pytest.param(
+                "trl-internal-testing/tiny-MuseGlimmerForConditionalGeneration",
+                id="muse_glimmer",
+                marks=[
+                    require_vision,
+                    pytest.mark.skipif(
+                        Version(transformers.__version__) < Version("5.15.0"),
+                        reason="Muse Glimmer was introduced in transformers-5.15.0",
+                    ),
+                ],
+            ),
+            pytest.param(
                 "trl-internal-testing/tiny-NemotronHForCausalLM-nano",
                 id="nemotron_3_nano",
                 marks=pytest.mark.skipif(
@@ -682,6 +693,17 @@ class TestIsChatTemplateStopTokenTrained:
         pytest.param("trl-internal-testing/tiny-LlavaForConditionalGeneration", id="llava", marks=require_vision),
         pytest.param(
             "trl-internal-testing/tiny-LlavaNextForConditionalGeneration", id="llava_next", marks=require_vision
+        ),
+        pytest.param(
+            "trl-internal-testing/tiny-MuseGlimmerForConditionalGeneration",
+            id="muse_glimmer",
+            marks=[
+                require_vision,
+                pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.15.0"),
+                    reason="Muse Glimmer was introduced in transformers-5.15.0",
+                ),
+            ],
         ),
         pytest.param(
             "trl-internal-testing/tiny-NemotronHForCausalLM-nano",
@@ -1105,6 +1127,17 @@ class TestGetTrainingChatTemplate:
         pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3.1", id="llama3.1"),
         pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3.2", id="llama3.2"),
         pytest.param(
+            "trl-internal-testing/tiny-MuseGlimmerForConditionalGeneration",
+            id="muse_glimmer",
+            marks=[
+                require_vision,
+                pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.15.0"),
+                    reason="Muse Glimmer was introduced in transformers-5.15.0",
+                ),
+            ],
+        ),
+        pytest.param(
             "trl-internal-testing/tiny-NemotronHForCausalLM-nano",
             id="nemotron_3_nano",
             marks=pytest.mark.skipif(
@@ -1323,6 +1356,11 @@ class TestParseResponse:
         assistant = {"role": "assistant", "tool_calls": tool_calls}
         if model_name == "trl-internal-testing/tiny-GptOssForCausalLM":
             assistant["thinking"] = "Let's call the tool."
+            assistant["content"] = ""
+        elif model_name == "trl-internal-testing/tiny-MuseGlimmerForConditionalGeneration":
+            # Muse Glimmer renders one ATEM channel per assistant turn: a turn carrying tool calls has no `to=user`
+            # channel, so plain content is dropped. Text alongside a tool call belongs in the `to=self` channel.
+            assistant["reasoning_content"] = "Let's call the tool."
             assistant["content"] = ""
         else:
             assistant["content"] = "Let's call the tool."
