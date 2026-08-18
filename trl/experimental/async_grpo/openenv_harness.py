@@ -116,7 +116,7 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
     _provides_rollout_reward = True
 
     # An unscorable rollout: no training rows, reward None -> `_score_group` NaNs it out of the group baseline.
-    _EMPTY_ROLLOUT = ([], [], [], 0, 0, None)
+    _EMPTY_ROLLOUT = ([], [], [], 0, 0, None, None)
 
     def __init__(
         self,
@@ -149,7 +149,7 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
         # In-flight sessions, so `_run_loops` can close them on stop (see there). set ops are atomic under the GIL.
         self._live_sessions: set = set()
 
-    async def _generate_one(self, prompt, tool_dict, tools, group_id=0):
+    async def _generate_one(self, prompt, tool_dict, tools, images=None, group_id=0):
         # TODO(@openenv): provide an async version for performance
         #  OpenEnv's harness layer is synchronous, so run the whole session on the pool.
         loop = asyncio.get_running_loop()
@@ -218,7 +218,9 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
                 trace = loop_session.fetch_proxy_trace()
                 # Resolve the real agent turns ONCE (dropping any framework aux calls), then derive everything from them.
                 entries = self._agent_turn_fn(trace)
-                turns = _turns_from_trace(entries, self.tokenizer, self._train_turn_fn)
+                turns = _turns_from_trace(
+                    entries, self.tokenizer, self._train_turn_fn, self.chat_template, self.chat_template_kwargs
+                )
                 completion = _messages_from_trace(entries)
                 tool_calls_by_name = _tool_call_counts_by_name(entries)
                 tool_call_count = sum(tool_calls_by_name.values())
@@ -237,7 +239,8 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
             reward = self._rollout_reward_fn(outcome) if self._rollout_reward_fn else env_reward
             sequences = _chain_to_sequences(turns, rollout_id, self._fork_threshold_tokens)
             completion_ids = [tid for turn in turns for tid in turn.output_ids]
-            return completion, completion_ids, sequences, tool_call_count, tool_failure_count, reward
+            # The harness drives text-only sessions, so there are no multimodal inputs to carry.
+            return completion, completion_ids, sequences, tool_call_count, tool_failure_count, None, reward
         except Exception:
             logger.warning("harness rollout failed; scoring as unscorable", exc_info=True)
             return self._EMPTY_ROLLOUT
@@ -311,8 +314,51 @@ def _entry_to_turn(entry: TraceEntry) -> HarnessTurn:
     )
 
 
+def _decode_tool_call_arguments(messages: list[Message]) -> list[Message]:
+    """Return `messages` with every tool call's `arguments` decoded from its JSON string into a mapping.
+
+    The trace records what went over the wire, and the OpenAI format sends `arguments` as a JSON *string*. Chat
+    templates disagree on what they expect: Hermes-style ones interpolate the string directly, while Qwen3.5 and other
+    XML-style templates iterate it (`{%- for k, v in tool_call.arguments|items %}`), which raises `TypeError: Can only
+    get item pairs from a mapping` on a string. Decoding first satisfies both, and matches what `_msg_to_llm_response`
+    already does on the white-box path.
+
+    Copies the messages it rewrites: the same trace entries are read again by `_messages_from_trace` and
+    `_tool_call_counts_by_name`, which expect the wire format.
+    """
+    decoded = []
+    for message in messages:
+        tool_calls = message.get("tool_calls")
+        if not tool_calls:
+            decoded.append(message)
+            continue
+        new_calls = []
+        for tool_call in tool_calls:
+            function = tool_call.get("function")
+            arguments = (function or tool_call).get("arguments")
+            if not isinstance(arguments, str):
+                new_calls.append(tool_call)
+                continue
+            try:
+                arguments = json.loads(arguments)
+            except json.JSONDecodeError:
+                # A template that iterates the mapping would raise on the raw string; an empty one renders a
+                # call with no parameters, which is closer to what the model actually emitted than a crash.
+                arguments = {}
+            if function is None:
+                new_calls.append({**tool_call, "arguments": arguments})
+            else:
+                new_calls.append({**tool_call, "function": {**function, "arguments": arguments}})
+        decoded.append({**message, "tool_calls": new_calls})
+    return decoded
+
+
 def _turns_from_trace(
-    entries: list[TraceEntry], tokenizer, train_turn_fn: Callable[[HarnessTurn], bool] | None = None
+    entries: list[TraceEntry],
+    tokenizer,
+    train_turn_fn: Callable[[HarnessTurn], bool] | None = None,
+    chat_template: str | None = None,
+    chat_template_kwargs: dict[str, Any] | None = None,
 ) -> list[TurnRecord]:
     """Loop-owning path: rebuild per-turn `TurnRecord`s from the real agent turns (`entries`, already selected by the
     loop's `agent_turn_fn`). Re-tokenize each request's messages (passing its `tools` so the prompt matches what the
@@ -329,11 +375,15 @@ def _turns_from_trace(
     for entry in entries:
         request = entry["request"]
         prompt_ids = tokenizer.apply_chat_template(
-            request["messages"],
+            _decode_tool_call_arguments(request["messages"]),
             tools=request.get("tools"),
             add_generation_prompt=True,
             tokenize=True,
             return_dict=False,
+            # Must match `_sample_turn`: training on a prompt rendered by a different template than the one the
+            # rollout was generated with is silent skew, not an error.
+            chat_template=chat_template,
+            **(chat_template_kwargs or {}),
         )
         turns.append(TurnRecord(prompt_ids, _trace_output_ids(entry), entry.get("per_token_logps") or []))
     return turns
