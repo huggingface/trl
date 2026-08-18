@@ -25,6 +25,8 @@ _import_structure = {
         "SyncRefModelCallback",
         "WeaveCallback",
     ],
+    "distillation_config": ["DistillationConfig"],
+    "distillation_trainer": ["DistillationTrainer"],
     "dpo_config": ["DPOConfig"],
     "dpo_trainer": ["DPOTrainer"],
     "grpo_config": ["GRPOConfig"],
@@ -55,6 +57,8 @@ if TYPE_CHECKING:
         SyncRefModelCallback,
         WeaveCallback,
     )
+    from .distillation_config import DistillationConfig
+    from .distillation_trainer import DistillationTrainer
     from .dpo_config import DPOConfig
     from .dpo_trainer import DPOTrainer
     from .grpo_config import GRPOConfig
