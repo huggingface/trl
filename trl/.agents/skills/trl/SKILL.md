@@ -16,10 +16,11 @@ Each method pairs a `*Trainer` class with a `*Config` dataclass. Configs extend 
 | `SFTTrainer` | language modeling or prompt-completion |
 | `DPOTrainer` | preference (chosen/rejected pairs) |
 | `GRPOTrainer` | prompt-only + reward function(s) |
+| `DistillationTrainer` | prompt-only + a teacher model (on-policy distillation) |
 | `KTOTrainer` | unpaired preference (per-sample bool label) |
 | `RewardTrainer` | preference (chosen/rejected pairs); trains a scalar reward model, not a policy |
 
-Many more trainers (PPO, OnlineDPO, ORPO, CPO, GKD, distillation, …) live in `trl.experimental` with unstable APIs: https://huggingface.co/docs/trl/experimental_overview
+Many more trainers (PPO, OnlineDPO, ORPO, CPO, GKD, …) live in `trl.experimental` with unstable APIs: https://huggingface.co/docs/trl/experimental_overview
 
 ```python
 from datasets import load_dataset
