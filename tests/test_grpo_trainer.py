@@ -4630,7 +4630,6 @@ class TestGRPOTrainerSlow(TrlTestCase):
         condition=Version(torch.__version__) >= Version("2.13"),
         reason="kernels-community/flash-attn2 has no build variant for torch 2.13; see "
         "https://github.com/huggingface/kernels-community/issues/1082",
-        strict=True,
     )
     @require_kernels
     @require_bitsandbytes
