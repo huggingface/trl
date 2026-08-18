@@ -20,7 +20,7 @@ import threading
 import time
 from collections import defaultdict
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from multiprocessing.queues import Queue as MPQueue
 from typing import Any, Protocol
 
@@ -35,7 +35,13 @@ from transformers.data.data_collator import DataCollatorMixin
 
 from ...models.utils import _ForwardRedirection
 from ...trainer.base_trainer import _BaseTrainer
-from ...trainer.utils import get_config_model_id, is_trackio_available, pad
+from ...trainer.utils import (
+    compute_flops_per_token,
+    compute_mfu,
+    get_config_model_id,
+    is_trackio_available,
+    pad,
+)
 from .async_distillation_config import AsyncDistillationConfig
 from .async_rollout_worker import AsyncRolloutWorker, RolloutSample
 from .vllm_client import VLLMClient
@@ -46,6 +52,37 @@ logger = get_logger(__name__)
 
 if is_trackio_available():
     import trackio
+
+# One logged value is either a float or a `(numerator, denominator)` pair; see `_reduce_metric`.
+MetricValue = float | tuple[float, float]
+
+
+def _reduce_metric(key: str, values: list[MetricValue]) -> float:
+    """Reduce one logging window into the number that gets logged.
+
+    Ported verbatim from [`~trl.experimental.async_grpo.async_grpo_trainer._reduce_metric`]. The value's shape and the
+    key's suffix declare the reduction, so nothing has to be registered or configured:
+
+    - `(numerator, denominator)` pairs are a rate, reduced as Σnum / Σden. A rate is never stored *as* a rate, which is
+      what makes a mean-of-ratios impossible — the defect that made `training_tok/s` unusable.
+    - a `total` word in the name is a counter, summed over the window (producers push deltas).
+    - a `max` or `min` word is an extremum. Matching whole words rather than a suffix keeps the upstream spellings
+      (`completions/max_length`) working alongside this trainer's own (`row_tokens_max`).
+    - anything else is a gauge, and its window mean is meaningful.
+
+    A key must always be logged with the same shape, since the reduction is picked from the first value seen.
+    """
+    if isinstance(values[0], tuple):
+        numerator, denominator = (sum(v) for v in zip(*values, strict=True))
+        return numerator / denominator if denominator else float("nan")
+    words = key.split("/")[-1].split("_")
+    if "total" in words:
+        return sum(values)
+    if "max" in words:
+        return max(values)
+    if "min" in words:
+        return min(values)
+    return sum(values) / len(values)
 
 
 def _add_tail_bucket(log_probs, valid_mask):
@@ -352,10 +389,11 @@ class TokenBudgetBatcher(torch.utils.data.IterableDataset):
     Ported verbatim from [`~trl.experimental.async_grpo.async_grpo_trainer.TokenBudgetBatcher`].
     """
 
-    def __init__(self, dataset: "RolloutQueueDataset", num_processes: int, token_budget: int):
+    def __init__(self, dataset: "RolloutQueueDataset", num_processes: int, token_budget: int, metrics: dict):
         self.dataset = dataset
         self.num_processes = num_processes
         self.token_budget = token_budget
+        self.metrics = metrics  # the trainer's sink, for the drop counter below
 
     def __iter__(self):
         rows = [[] for _ in range(self.num_processes)]
@@ -368,6 +406,7 @@ class TokenBudgetBatcher(torch.utils.data.IterableDataset):
                     f"Dropping a rollout sample of {n} tokens that exceeds token_budget={self.token_budget}. "
                     "Raise token_budget to avoid dropping samples."
                 )
+                self.metrics["batch/dropped_oversize_total"].append(1.0)
                 continue
             fits = [i for i in range(self.num_processes) if token_counts[i] + n <= self.token_budget]
             if not fits:
@@ -393,9 +432,14 @@ class RolloutWorkerProtocol(Protocol):
             structurally identical (`get` / `put_nowait` / `qsize`) but nominally unrelated, so both are allowed: the
             default [`AsyncRolloutWorker`] runs its loop in a spawned process and uses `multiprocessing.Queue`, while
             an in-process worker uses `queue.Queue`.
+        metrics_queue (`queue.Queue` or `multiprocessing.queues.Queue`):
+            Queue the trainer drains in `log()` for metrics the worker measured itself. Each item is one dict shaped
+            like the trainer's metric sink — `{key: float}` for a gauge or a counter, `{key: (numerator, denominator)}`
+            for a rate — so draining it is an append. A worker that measures nothing exposes an empty queue.
     """
 
     rollout_buffer: queue.Queue | MPQueue
+    metrics_queue: queue.Queue | MPQueue
 
     def start(self) -> None: ...
     def stop(self) -> None: ...
@@ -429,6 +473,24 @@ class StepIntervalCallback(TrainerCallback):
     def on_step_end(self, _args, state, _control, **_kwargs):
         if state.global_step % self.every_n_steps == 0:
             self.fn()
+
+
+class _OptimizerTimeCallback(TrainerCallback):
+    """Times the optimizer step, which `training_step` cannot see.
+
+    Without it, clip + step + zero_grad land in the same unmeasured gap as the rollout-queue wait and get read as
+    starvation. Covers `optimizer.step()` only, not the gradient clipping that precedes it.
+    """
+
+    def __init__(self, trainer: "AsyncDistillationTrainer"):
+        self._trainer = trainer
+        self._t0 = None
+
+    def on_pre_optimizer_step(self, _args, _state, _control, **_kwargs):
+        self._t0 = time.perf_counter()
+
+    def on_optimizer_step(self, _args, _state, _control, **_kwargs):
+        self._trainer._step_optimizer_s += time.perf_counter() - self._t0
 
 
 class _InitialWeightSyncCallback(TrainerCallback):
@@ -489,8 +551,9 @@ def log_rollout_traces(samples: list[RolloutSample], step: int, report_to: list[
             trackio.Trace(
                 messages=list(sample.prompt) + list(sample.completion),
                 metadata={
-                    **sample.metrics,  # rollout_time_ms, generation_tok_per_s, queue_wait_time_s, ...
+                    **sample.metrics,
                     "model_version": int(sample.model_version),
+                    "teacher_id": sample.teacher_id,  # which teacher scored it; the one thing MOPD traces need
                     "prompt_tokens": len(sample.input_ids) - int(sum(sample.completion_mask)),
                     "completion_tokens": int(sum(sample.completion_mask)),
                 },
@@ -509,6 +572,7 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
         model_version_fn,
         check_health_fn,
         stale_after_s,
+        metrics,
         max_staleness=3,
         poll_interval_s=5.0,
         report_to=None,
@@ -517,11 +581,26 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
         self.model_version_fn = model_version_fn
         self.check_health_fn = check_health_fn
         self.stale_after_s = stale_after_s
+        # The trainer's metric sink, shared by reference. This dataset lives in the main process (`num_workers=0`,
+        # `dispatch_batches=True`), which is also the only process where the queue wait is real, so its metrics need no
+        # communication at all — they are appended straight into the sink the trainer reduces in `log()`.
+        self.metrics = metrics
+        # Blocking-get time, accumulated here and flushed by `_log_step_metrics` at the optimizer-step boundary — the
+        # only place that knows when a step's worth of waiting is done.
+        self.wait_s = 0.0
         self.max_staleness = max_staleness
         self.poll_interval_s = poll_interval_s
         self.report_to = report_to or []
         self._trace_buf: list = []
+        # Traces exist to be read, not to cover the run: a handful per sampled policy version is enough to eyeball
+        # what the generator produced. Both numbers are therefore per *policy version* — `_traces_per_log` samples,
+        # once every `_trace_log_interval` versions. Flushing every `_trace_log_interval` *samples* instead fired
+        # ~60x per optimizer step at 484 samples/step, and since trackio writes a `metrics` row for every `log()`
+        # call — empty, because the payload is all traces — the real per-step metrics ended up buried under ~60x
+        # their own number of `{}` rows, which is what made the dashboard slow to query.
+        self._traces_per_log = 8
         self._trace_log_interval = 8
+        self._last_traced_version = -1
         # Log traces off the training path: __iter__ enqueues, a daemon thread drains. Bounded + drop-on-full so a
         # slow trackio backend never blocks sample delivery.
         self._trace_queue: queue.Queue = queue.Queue(maxsize=4)
@@ -543,29 +622,48 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
                     break
                 except queue.Empty:
                     # Returning here would broadcast None through accelerate's dispatch loop. A single `t0` is kept
-                    # across repeated empty polls (rather than restarting the outer loop) so `queue_wait_time_s`
+                    # across repeated empty polls (rather than restarting the outer loop) so `perf/rollout_wait_s`
                     # reflects the true time blocked on an empty queue, not just the last poll interval (see
                     # huggingface/trl#6489, the same bug in `AsyncGRPOTrainer.RolloutQueueDataset`).
                     self.check_health_fn(self.stale_after_s)
-            queue_wait_time_s = time.time() - t0
-            if queue_wait_time_s > 1.0:
-                logger.info(f"waited {queue_wait_time_s:.1f}s for sample (qsize={self.queue.qsize()})")
+            now = time.time()
+            wait_s = now - t0
+            self.wait_s += wait_s
+            if wait_s > 1.0:
+                logger.info(f"waited {wait_s:.1f}s for sample (qsize={self.queue.qsize()})")
 
-            staleness = self.model_version_fn() - sample.model_version
+            version = self.model_version_fn()
+            staleness = version - sample.model_version
             if staleness > self.max_staleness:
                 logger.info(f"dropping stale sample (staleness={staleness}, max={self.max_staleness})")
+                self.metrics["sample/dropped_stale_total"].append(1.0)
                 continue  # drop stale, pull next
 
-            self._trace_buf.append(sample)
-            if len(self._trace_buf) >= self._trace_log_interval:
-                try:
-                    # Capture the main-thread context (holds trackio's run) so the drain thread can replay it.
-                    self._trace_queue.put_nowait(
-                        (self._trace_buf, self.model_version_fn(), contextvars.copy_context())
-                    )
-                except queue.Full:
-                    pass
-                self._trace_buf = []
+            # Three different views of the same queue, and they must not be confused with each other:
+            #   `sample/rollout_queue_size`  how many scored samples are in it, counted where the TRAINER consumes
+            #                                them rather than where the worker filled it
+            #   `sample/time_in_queue_s`     how long THIS sample sat in it — its own idle time, and the seconds
+            #                                half of its off-policyness
+            #   `perf/rollout_wait_s`        how long the TRAINER sat blocked because the queue was empty
+            # An empty queue with the trainer waiting is generation-bound; a full queue with no wait is trainer-bound
+            # (and then `rollout/backpressure_s` is what generation lost to it).
+            self.metrics["sample/rollout_queue_size"].append(float(self.queue.qsize()))
+            if sample.enqueued_at is not None:
+                self.metrics["sample/time_in_queue_s"].append(now - sample.enqueued_at)
+            # Freshness
+            self.metrics["sample/staleness_mean"].append(float(staleness))
+            self.metrics["sample/staleness_max"].append(float(staleness))
+
+            if version % self._trace_log_interval == 0 and version != self._last_traced_version:
+                self._trace_buf.append(sample)
+                if len(self._trace_buf) >= self._traces_per_log:
+                    try:
+                        # Capture the main-thread context (holds trackio's run) so the drain thread can replay it.
+                        self._trace_queue.put_nowait((self._trace_buf, version, contextvars.copy_context()))
+                    except queue.Full:
+                        pass
+                    self._trace_buf = []
+                    self._last_traced_version = version
 
             yield {
                 "input_ids": sample.input_ids,
@@ -573,7 +671,7 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
                 "teacher_topk_ids": sample.teacher_topk_ids,
                 "teacher_topk_logprobs": sample.teacher_topk_logprobs,
                 "teacher_id": sample.teacher_id,
-                "metrics": {**sample.metrics, "queue_wait_time_s": queue_wait_time_s},
+                "metrics": sample.metrics,  # per-sample scalars a custom worker stamped; aggregated by the collator
             }
 
 
@@ -610,6 +708,10 @@ class DataCollatorForRollout(DataCollatorMixin):
             Maps each configured `teacher_server_urls` key to a stable integer index, packed per-position (like every
             other per-token field) as `teacher_id_idx` so `compute_loss` can break `jsd`/`entropy`/ `teacher_entropy`
             down per teacher (MOPD). `None` when there's only one teacher (no breakdown needed).
+        metrics (`dict[str, list]`, *optional*):
+            The trainer's metric sink, appended to with this micro-batch's sample and packing metrics.
+        token_budget (`int`, *optional*, defaults to `0`):
+            Per-row token cap of the planner, or `0` when batching by fixed sample count.
     """
 
     pad_token_id: int
@@ -617,6 +719,10 @@ class DataCollatorForRollout(DataCollatorMixin):
     num_processes: int = 1
     teacher_id_to_idx: dict[str, int] | None = None
     return_tensors: str = "pt"
+    # The trainer's metric sink, shared by reference.
+    metrics: dict[str, list] = field(default_factory=lambda: defaultdict(list))
+    # Per-row token cap of the planner,
+    token_budget: int = 0
 
     def torch_call(self, examples: list[Any]) -> dict[str, Any]:
         # The dataloader uses batch_size=1 over a planner that pre-partitions each micro-batch into `num_processes`
@@ -670,26 +776,16 @@ class DataCollatorForRollout(DataCollatorMixin):
 
         # Total valid completion tokens across the micro-batch. Repeated per rank so that DataLoaderDispatcher
         # (dispatch_batches=True) slices correctly on dim=0.
-        global_n_tokens = sum(sum(example["completion_mask"]) for example in all_examples)
-        global_n_tokens = torch.full((self.num_processes,), float(global_n_tokens), dtype=torch.float32)
+        n_trained_tokens = sum(sum(example["completion_mask"]) for example in all_examples)
+        global_n_tokens = torch.full((self.num_processes,), float(n_trained_tokens), dtype=torch.float32)
 
-        # Per-sample metrics grouped per rank, as a dict of 2D tensors (one row per rank) so that Accelerate's
-        # recursive broadcast (dispatch_batches=True) can scatter them. Rows are padded with NaN so padded slots are
-        # ignored by the nan-aware aggregation in `compute_loss`.
-        metrics = (
-            {
-                key: pad(
-                    [
-                        torch.tensor([example["metrics"].get(key, 0.0) for example in group], dtype=torch.float32)
-                        for group in groups
-                    ],
-                    padding_value=float("nan"),
-                )
-                for key in all_examples[0]["metrics"]
-            }
-            if all_examples[0]["metrics"]
-            else {}
-        )
+        sample_tokens = [len(example["input_ids"]) for example in all_examples]
+        n_forward_tokens = sum(sample_tokens)
+        mean_seq_len = n_forward_tokens / len(all_examples)
+        global_n_forward_tokens = torch.full((self.num_processes,), float(n_forward_tokens), dtype=torch.float32)
+        mean_seq_len_t = torch.full((self.num_processes,), float(mean_seq_len), dtype=torch.float32)
+
+        self._log_metrics(groups=groups, all_examples=all_examples, padded=attention_mask)
 
         batch = {
             "input_ids": input_ids,
@@ -699,11 +795,54 @@ class DataCollatorForRollout(DataCollatorMixin):
             "teacher_topk_ids": teacher_topk_ids,
             "teacher_topk_logprobs": teacher_topk_logprobs,
             "global_n_tokens": global_n_tokens,
-            "metrics": metrics,
+            "global_n_forward_tokens": global_n_forward_tokens,
+            "mean_seq_len": mean_seq_len_t,
         }
         if teacher_id_idx is not None:
             batch["teacher_id_idx"] = teacher_id_idx
         return batch
+
+    def _log_metrics(
+        self, groups: list[list[dict[str, Any]]], all_examples: list[dict[str, Any]], padded: torch.Tensor
+    ) -> None:
+        """Append this micro-batch's sample and packing metrics straight into the trainer's sink.
+
+        Rank 0 holds the whole micro-batch, so anything that is a property of the batch rather than of the model can be
+        aggregated here instead of being packed into NaN-padded tensors, broadcast to every rank and reduced back —
+        which is what this trainer used to do to compute a number rank 0 already had.
+        """
+        # A training row's tokens split in two: those the loss is taken over (`completion_mask == 1`) and those merely
+        # forwarded — the prompt, and any completion position the teacher scored no candidate for. FLOPs are spent on
+        # both, so both are worth a number, and their ratio is what says how much of the forward earns no gradient.
+        forwarded = [len(example["input_ids"]) for example in all_examples]
+        trained = [sum(example["completion_mask"]) for example in all_examples]
+        self.metrics["sample/forwarded_tokens_mean"].append(sum(forwarded) / len(forwarded))
+        self.metrics["sample/forwarded_tokens_max"].append(float(max(forwarded)))
+        self.metrics["sample/trained_tokens_mean"].append(sum(trained) / len(trained))
+        self.metrics["batch/masked_token_frac"].append((sum(forwarded) - sum(trained), sum(forwarded)))
+
+        # Per-sample scalars, nan-aware. Empty for the built-in worker — distillation has no reward function, so it
+        # measures nothing per sample — but a custom worker can stamp its own, and each key averages over the samples
+        # that carry it rather than over the whole micro-batch.
+        keys = dict.fromkeys(key for example in all_examples for key in example["metrics"])
+        for key in keys:
+            values = [example["metrics"][key] for example in all_examples if key in example["metrics"]]
+            valid = [v for v in values if not math.isnan(v)]
+            self.metrics[key].append(sum(valid) / len(valid) if valid else float("nan"))
+
+        # Packing quality. `row_imbalance` is what the Σ Lᵢ²-balancing planner exists to keep near 1.0: attention is
+        # O(L²), so it is Σ Lᵢ² and not the token count that predicts which rank stalls the gradient all-reduce.
+        row_tokens = [sum(len(example["input_ids"]) for example in group) for group in groups]
+        squared_loads = [sum(len(example["input_ids"]) ** 2 for example in group) for group in groups]
+        self.metrics["batch/samples_per_row"].append(len(all_examples) / len(groups))
+        self.metrics["batch/row_tokens_mean"].append(sum(row_tokens) / len(row_tokens))
+        self.metrics["batch/row_tokens_max"].append(float(max(row_tokens)))
+        self.metrics["batch/row_imbalance"].append(max(squared_loads) / (sum(squared_loads) / len(squared_loads)))
+        if self.token_budget:
+            self.metrics["batch/row_fill_frac"].append((sum(row_tokens), self.token_budget * len(row_tokens)))
+        # Inter-rank padding, added so the batch is rectangular for the dispatcher. It costs broadcast bytes only:
+        # `compute_loss` strips it before the forward, so no FLOPs are spent on it.
+        self.metrics["batch/pad_frac"].append((padded.numel() - int(padded.sum()), padded.numel()))
 
 
 class AsyncDistillationTrainer(_BaseTrainer):
@@ -878,17 +1017,23 @@ class AsyncDistillationTrainer(_BaseTrainer):
         # `DistillationTrainer`'s identical need for its own chunked JSD path.
         self._forward_redirection = _ForwardRedirection()
 
-        # Initialize the metrics
+        # The metric sink. Values are floats, or `(numerator, denominator)` pairs for rates
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
-        self._train_tokens_start_time = None
         # MOPD (multi-teacher on-policy distillation): a stable teacher_id -> index mapping so compute_loss can
         # break jsd/entropy/teacher_entropy down per teacher. Skipped (no per-teacher breakdown) with one teacher.
         self._teacher_ids = list(self.args.teacher_server_urls)
         self._teacher_id_to_idx = {tid: i for i, tid in enumerate(self._teacher_ids)}
-        # Tracks the number of iterations (forward + backward passes), including those within a grad accum cycle
-        self._step = 0
         self._current_train_step_time = 0.0
         self._last_step_end_time = None
+        self._rollout_dataset = None
+        # Accumulated across one optimizer step's micro-batches, flushed by `_log_step_metrics`.
+        self._step_forward_s = 0.0
+        self._step_optimizer_s = 0.0
+        self._step_microbatches = 0
+        self._step_forward_tokens = 0.0
+        self._step_trained_tokens = 0.0
+        self._step_seq_len_weighted = 0.0
+        self._step_samples = 0.0
         self.model_version = 0
         # Create worker and queue on rank 0
         if self.accelerator.is_main_process:
@@ -955,9 +1100,11 @@ class AsyncDistillationTrainer(_BaseTrainer):
             self.weight_transfer = None
 
         # Add callbacks. Registration order matters: weight sync first, then worker start.
+        self.add_callback(_OptimizerTimeCallback(self))
         self.add_callback(_InitialWeightSyncCallback(self))
         self.add_callback(_StartRolloutWorkerCallback(self))
         self.add_callback(StepIntervalCallback(self._sync_weight, self.args.weight_sync_steps))
+        self.add_callback(StepIntervalCallback(self._log_step_metrics, 1))
 
     def get_train_dataloader(self) -> DataLoader:
         num_processes = self.accelerator.num_processes
@@ -967,9 +1114,13 @@ class AsyncDistillationTrainer(_BaseTrainer):
                 model_version_fn=lambda: self.model_version,
                 check_health_fn=self.rollout_worker.check_health,
                 stale_after_s=self.args.heartbeat_stale_after_s,
+                metrics=self._metrics["train"],
                 max_staleness=self.args.max_staleness,
                 report_to=self.args.report_to,
             )
+            # Kept so `_log_step_metrics` can flush the queue wait at the optimizer-step boundary, which is the only
+            # place that knows a step's worth of waiting is over.
+            self._rollout_dataset = dataset
             # Default the token budget to the student vLLM server's max_model_len, so no rollout sample can exceed
             # it. Wait for the server like weight sync does, so a still-loading vLLM doesn't fail training here.
             if self.args.token_budget is None:
@@ -977,7 +1128,7 @@ class AsyncDistillationTrainer(_BaseTrainer):
                 self.args.token_budget = self.vllm_client.get_max_model_len()
                 logger.info(f"token_budget unset; defaulting to vLLM max_model_len={self.args.token_budget}")
             if self.args.token_budget > 0:
-                dataset = TokenBudgetBatcher(dataset, num_processes, self.args.token_budget)
+                dataset = TokenBudgetBatcher(dataset, num_processes, self.args.token_budget, self._metrics["train"])
             else:
                 dataset = FixedCountBatcher(
                     dataset, num_processes, self.args.per_device_train_batch_size * num_processes
@@ -994,6 +1145,10 @@ class AsyncDistillationTrainer(_BaseTrainer):
                     self.args.teacher_top_k,
                     num_processes,
                     self._teacher_id_to_idx if len(self._teacher_ids) > 1 else None,
+                    metrics=self._metrics["train"],
+                    # `or 0` because only rank 0 fills an unset budget from the vLLM server above; the other ranks
+                    # construct the collator (and never use it) while `token_budget` is still `None`.
+                    token_budget=max(self.args.token_budget or 0, 0),
                 ),
                 num_workers=0,
             )
@@ -1013,7 +1168,8 @@ class AsyncDistillationTrainer(_BaseTrainer):
                 "teacher_id",
                 "teacher_id_idx",
                 "global_n_tokens",
-                "metrics",
+                "global_n_forward_tokens",
+                "mean_seq_len",
             ]
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
@@ -1109,8 +1265,15 @@ class AsyncDistillationTrainer(_BaseTrainer):
             if lm_head_bias is not None:
                 lm_head_bias = lm_head_bias.full_tensor()
         # NOTE(@aminediro): supporting Cohere2 models (mirrors `patch_chunked_lm_head`'s own handling).
-        logit_scale = getattr(unwrapped_model.config, "logit_scale", 1.0)
-        final_logit_softcapping = getattr(unwrapped_model.config, "final_logit_softcapping", None)
+        # Read through `get_text_config()` like [`~trl.trainer.DistillationTrainer`] does: on VLMs the logit
+        # post-processing lives on `text_config`. Muse Glimmer applies the same pre-softcap multiplier under the name
+        # `output_multiplier`, and a real `logit_scale` of 0.0 is kept as-is and applied faithfully.
+        config = unwrapped_model.config.get_text_config()
+        logit_scale = getattr(config, "logit_scale", None)
+        if logit_scale is None:
+            logit_scale = getattr(config, "output_multiplier", None)
+        logit_scale = 1.0 if logit_scale is None else logit_scale
+        final_logit_softcapping = getattr(config, "final_logit_softcapping", None)
 
         target_ids = target_ids[0][token_mask_1d]
         teacher_target_logps = teacher_target_logps[0][token_mask_1d]
@@ -1163,7 +1326,8 @@ class AsyncDistillationTrainer(_BaseTrainer):
             stats = self.accelerator.reduce(stats, reduction="sum")
             global_jsd_sum, global_entropy_sum, global_teacher_entropy_sum, global_count = stats.unbind(0)
             # A micro-batch can have completion tokens but zero usable teacher signal across every rank (see
-            # `has_teacher_signal` above), making `global_count` 0; guard the same way `sample_metrics` below does.
+            # `has_teacher_signal` above), making `global_count` 0; NaN then marks the window as having no measurement
+            # rather than reporting a divergence of zero, and `log` drops it before reducing.
             if global_count > 0:
                 self._metrics["train"]["jsd"].append((global_jsd_sum / global_count).item())
                 self._metrics["train"]["entropy"].append((global_entropy_sum / global_count).item())
@@ -1195,63 +1359,95 @@ class AsyncDistillationTrainer(_BaseTrainer):
                         self._metrics["train"][f"teacher_jsd/{teacher_id}"].append(float("nan"))
                         self._metrics["train"][f"teacher_entropy/{teacher_id}"].append(float("nan"))
 
-            # Logging metrics from the rollout worker (generation_tok_per_s, rollout_time_ms, etc.).
-            sample_metrics = inputs["metrics"]  # dict[str, Tensor(shape=[1, n_samples_local])]
-            keys = list(sample_metrics.keys())
-            device = completion_mask.device
-            # `position_ids` is intentionally NOT shifted (unlike completion_mask/teacher_topk_*): it's only used here
-            # and below to count/report over the full packed row, mirroring AsyncGRPOTrainer.compute_loss exactly.
-            n_samples = (position_ids == 0).sum().to(torch.float32)
-            if keys:
-                local_sums = torch.stack([torch.nansum(sample_metrics[k].to(device)) for k in keys])
-                local_counts = torch.stack(
-                    [(~torch.isnan(sample_metrics[k].to(device))).sum().to(torch.float32) for k in keys]
-                )
-                stats = torch.cat([local_sums, local_counts])
-                stats = self.accelerator.reduce(stats, reduction="sum")
-                n = len(keys)
-                global_sums, global_counts = stats[:n], stats[n:]
-                for k, global_sum, global_count in zip(keys, global_sums, global_counts, strict=True):
-                    metric = (global_sum / global_count).item() if global_count > 0 else float("nan")
-                    self._metrics["train"][k].append(metric)
-
-            length_stats = torch.stack([completion_mask.sum().float(), n_samples])
-            length_stats = self.accelerator.reduce(length_stats, reduction="sum")
-            self._metrics["train"]["completions/mean_length"].append((length_stats[0] / length_stats[1]).item())
-
-            now = time.time()
-            if self._train_tokens_start_time is not None:
-                train_elapsed = now - self._train_tokens_start_time
-                if train_elapsed > 0:
-                    self._metrics["train"]["training_tok/s"].append(global_n_tokens.item() / train_elapsed)
-            self._train_tokens_start_time = now
-
-            self._metrics["train"]["forward_time_s"].append(self._last_forward_time_s)
-            self._metrics["train"]["train_seq_len"].append(float(position_ids.max() + 1))
+        # Per-step accounting, accumulated across the micro-batches of one optimizer step and flushed in
+        # `_log_step_metrics`. The counts are batch-wide (the collator broadcasts one value per rank), so they are read
+        # off rank-local inputs without a collective. Sample and packing metrics are NOT gathered here — rank 0 already
+        # logged them in the collator.
+        n_forward_tokens = float(inputs["global_n_forward_tokens"][0])
+        mean_seq_len = float(inputs["mean_seq_len"][0])
+        self._step_forward_tokens += n_forward_tokens
+        self._step_trained_tokens += float(global_n_tokens)
+        self._step_seq_len_weighted += mean_seq_len * n_forward_tokens
+        self._step_samples += n_forward_tokens / mean_seq_len
+        self._step_forward_s += self._last_forward_time_s
         return loss
 
     def training_step(self, model, inputs, num_items_in_batch):
         time_before = time.perf_counter()
         output = super().training_step(model, inputs, num_items_in_batch)
-        self._step += 1
-        time_after = time.perf_counter()
-        self._current_train_step_time += time_after - time_before
-        if self._step % self.current_gradient_accumulation_steps == 0:
-            self._metrics["train"]["step_time"].append(self._current_train_step_time)
-            self._current_train_step_time = 0.0
-            # Async-only end-to-end latency: unlike the fwd+bwd-only `step_time`, this also covers the optimizer
-            # step, weight sync, and rollout-queue waits.
-            if self._last_step_end_time is not None:
-                self._metrics["train"]["iteration_time_s"].append(time_after - self._last_step_end_time)
-            self._last_step_end_time = time_after
+        self._step_microbatches += 1
+        self._current_train_step_time += time.perf_counter() - time_before
         return output
+
+    def _log_step_metrics(self) -> None:
+        """Flush one optimizer step's worth of accounting: the time budget, what the batch held, and throughput.
+
+        Called from `on_step_end`, i.e. after `optimizer.step()`, so `perf/optimizer_s` covers this step.
+        """
+        time_after = time.perf_counter()
+        metrics = self._metrics["train"]
+        fwd_bwd_s = self._current_train_step_time
+        # The first step has no predecessor, so there is nothing to measure between yet.
+        step_s = time_after - self._last_step_end_time if self._last_step_end_time is not None else None
+
+        metrics["perf/fwd_bwd_s"].append(fwd_bwd_s)
+        metrics["perf/fwd_s"].append(self._step_forward_s)
+        metrics["perf/optimizer_s"].append(self._step_optimizer_s)
+        metrics["batch/microbatches_per_step"].append(float(self._step_microbatches))
+        metrics["batch/forwarded_tokens_per_step"].append(self._step_forward_tokens)
+        metrics["batch/trained_tokens_per_step"].append(self._step_trained_tokens)
+        metrics["batch/samples_per_step"].append(self._step_samples)
+        if step_s is not None:
+            metrics["perf/step_s"].append(step_s)
+
+        if self.accelerator.is_main_process:
+            metrics["perf/rollout_wait_s"].append(self._rollout_dataset.wait_s)
+            self._rollout_dataset.wait_s = 0.0
+
+        # Throughput and MFU are reported on TWO bases, because for async distillation one number cannot answer both
+        # questions.
+        ## `_fwd_bwd` divides by `perf/fwd_bwd_s`: the compute alone.
+        ## `_wall_clock` divides by `perf/step_s`: the whole step, rollout waits included  and says what fraction of the allocation actually became training.
+        if self._step_forward_tokens > 0:
+            mean_seq_len = self._step_seq_len_weighted / self._step_forward_tokens
+            flops_per_token = compute_flops_per_token(self.model.config, int(mean_seq_len))
+            world_size = self.accelerator.num_processes
+            metrics["perf/forwarded_tok_s_fwd_bwd"].append((self._step_forward_tokens, fwd_bwd_s))
+            metrics["perf/mfu_fwd_bwd"].append(
+                compute_mfu(flops_per_token, self._step_forward_tokens / fwd_bwd_s, world_size)
+            )
+            if step_s is not None:
+                metrics["perf/forwarded_tok_s_wall_clock"].append((self._step_forward_tokens, step_s))
+                metrics["perf/trained_tok_s_wall_clock"].append((self._step_trained_tokens, step_s))
+                metrics["perf/mfu_wall_clock"].append(
+                    compute_mfu(flops_per_token, self._step_forward_tokens / step_s, world_size)
+                )
+
+        self._last_step_end_time = time_after
+        self._current_train_step_time = 0.0
+        self._step_forward_s = 0.0
+        self._step_optimizer_s = 0.0
+        self._step_microbatches = 0
+        self._step_forward_tokens = 0.0
+        self._step_trained_tokens = 0.0
+        self._step_seq_len_weighted = 0.0
+        self._step_samples = 0.0
 
     def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
         mode = "train" if self.model.training else "eval"
+        if self.accelerator.is_main_process and self.rollout_worker:
+            while True:
+                try:
+                    for key, value in self.rollout_worker.metrics_queue.get_nowait().items():
+                        # NOTE(@aminediro): we might be filling train metrics dict even in eval mode
+                        self._metrics["train"][key].append(value)
+                except queue.Empty:
+                    break
+
         metrics = {}
         for key, val in self._metrics[mode].items():
-            valid = [v for v in val if not math.isnan(v)]
-            metrics[key] = sum(valid) / len(valid) if valid else None
+            valid = [v for v in val if isinstance(v, tuple) or not math.isnan(v)]
+            metrics[key] = _reduce_metric(key, valid) if valid else None
 
         if mode == "eval":
             metrics = {f"eval_{key}": val for key, val in metrics.items()}
@@ -1300,9 +1496,13 @@ class AsyncDistillationTrainer(_BaseTrainer):
             self.model_version += 1
             if self.rollout_worker:
                 self.rollout_worker.update_model_version(self.model_version)
-        weight_sync_time_s = time.time() - t0
-        self._metrics["train"]["weight_sync_time_s"].append(weight_sync_time_s)
-        logger.info(f"Weight sync: done. Total {weight_sync_time_s:.1f}s")
+        weight_sync_s = time.time() - t0
+        # log the three phases  of weight sync
+        self._metrics["train"]["perf/weight_sync_s"].append(weight_sync_s)
+        self._metrics["train"]["perf/weight_sync_pause_s"].append(t_pause - t0)
+        self._metrics["train"]["perf/weight_sync_barrier_s"].append(t_barrier - t_pause)
+        self._metrics["train"]["perf/weight_sync_transfer_s"].append(t_transfer - t_barrier)
+        logger.info(f"Weight sync: done. Total {weight_sync_s:.1f}s")
 
     def _inner_training_loop(self, *args, **kwargs):
         try:

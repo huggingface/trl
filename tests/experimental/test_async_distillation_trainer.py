@@ -15,8 +15,10 @@
 import asyncio
 import itertools
 import math
+import multiprocessing as mp
 import queue
 import types
+from collections import defaultdict
 
 import pytest
 import torch
@@ -28,11 +30,13 @@ from trl.experimental.async_distillation import AsyncDistillationConfig, AsyncDi
 from trl.experimental.async_distillation.async_distillation_trainer import (
     DataCollatorForRollout,
     FixedCountBatcher,
+    RolloutWorkerProtocol,
     TokenBudgetBatcher,
     _add_tail_bucket,
     _balance_by_squared_length,
     _jsd_divergence,
     _narrow_top1_actual_support,
+    _reduce_metric,
 )
 from trl.experimental.async_distillation.async_rollout_worker import (
     RolloutSample,
@@ -78,6 +82,7 @@ class _StubRolloutWorker:
 
     def __init__(self, tokenizer, dataset, vocab_size: int, samples_per_weight_sync: int = 10):
         self.rollout_buffer = queue.Queue()
+        self.metrics_queue = queue.Queue()  # drained by the trainer in `log()`; this stub measures nothing
         self._samples_per_weight_sync = samples_per_weight_sync
         self._model_version = 0
         self._vocab_size = vocab_size
@@ -105,7 +110,7 @@ class _StubRolloutWorker:
                 teacher_topk_logprobs=[[] for _ in prompt_ids] + teacher_topk_logprobs,
                 model_version=self._model_version,
                 teacher_id="default",
-                metrics={"rollout_time_ms": 1.0},
+                metrics={},
             )
 
     def _fill_queue(self):
@@ -156,7 +161,7 @@ def _rollout_sample(length: int, top_k: int = TEACHER_TOP_K, teacher_id: str = "
         "teacher_topk_ids": teacher_topk_ids,
         "teacher_topk_logprobs": teacher_topk_logprobs,
         "teacher_id": teacher_id,
-        "metrics": {"rollout_time_ms": 1.0},
+        "metrics": {},
     }
 
 
@@ -178,7 +183,7 @@ class TestPackingAwareBatching:
 
     def test_token_budget_batcher_respects_budget_and_fills_every_row(self):
         source = (_rollout_sample(3) for _ in range(100))
-        batcher = TokenBudgetBatcher(source, num_processes=2, token_budget=8)
+        batcher = TokenBudgetBatcher(source, num_processes=2, token_budget=8, metrics=defaultdict(list))
 
         micro_batches = list(itertools.islice(iter(batcher), 5))
         assert len(micro_batches) == 5
@@ -221,6 +226,18 @@ class TestPackingAwareBatching:
         assert batch["attention_mask"].tolist() == [[1, 1, 1], [1, 1, 0]]
         assert batch["completion_mask"].tolist() == [[0, 1, 1], [0, 1, 0]]
         assert batch["global_n_tokens"].tolist() == [3.0, 3.0]  # a: 2 + b: 1 completion tokens
+        assert batch["global_n_forward_tokens"].tolist() == [5.0, 5.0]  # every token forwarded, prompts included
+        assert batch["mean_seq_len"].tolist() == [2.5, 2.5]
+
+        # Sample and packing metrics are aggregated here on rank 0, not broadcast with the batch and reduced back.
+        assert collator.metrics["sample/forwarded_tokens_mean"] == [2.5]
+        assert collator.metrics["sample/trained_tokens_mean"] == [1.5]
+        assert collator.metrics["batch/masked_token_frac"] == [(2, 5)]  # the two prompt tokens earn no gradient
+        assert collator.metrics["batch/samples_per_row"] == [1.0]
+        assert collator.metrics["batch/row_tokens_max"] == [3.0]
+        assert collator.metrics["batch/row_imbalance"] == [9 / 6.5]  # Σ Lᵢ² of 9 and 4, against their mean
+        assert collator.metrics["batch/pad_frac"] == [(1, 6)]  # the one slot row b was padded with
+        assert "batch/row_fill_frac" not in collator.metrics  # no budget passed, so nothing to fill
 
     def test_collator_packs_teacher_id_per_token_for_mopd(self):
         # Packing concatenates samples from different teachers into one row, so compute_loss can only attribute a
@@ -234,6 +251,39 @@ class TestPackingAwareBatching:
 
         single = DataCollatorForRollout(pad_token_id=0, teacher_top_k=TEACHER_TOP_K, num_processes=1)
         assert "teacher_id_idx" not in single([[[_rollout_sample(3)]]])
+
+
+class TestMetricReduction:
+    """The value's shape and the key's suffix are the whole reduction API; nothing is registered or configured."""
+
+    @pytest.mark.parametrize(
+        ("key", "values", "expected"),
+        [
+            ("perf/fwd_bwd_s", [1.0, 2.0, 6.0], 3.0),  # gauge -> window mean
+            ("sample/dropped_stale_total", [1.0, 1.0, 1.0], 3.0),  # counter -> sum of the pushed deltas
+            ("sample/forwarded_tokens_max", [3.0, 9.0, 5.0], 9.0),
+            # A `max`/`min` WORD, not a suffix, so the upstream spellings reduce correctly too...
+            ("completions/max_length", [3.0, 9.0, 5.0], 9.0),
+            ("completions/min_length", [3.0, 9.0, 5.0], 3.0),
+            # ... while a name that merely contains those letters stays a gauge.
+            ("perf/maximal_s", [2.0, 4.0], 3.0),
+            # Rates reduce as Σnum / Σden. These two windows ran at 1 and 100 tok/s; meaning the ratios would report
+            # 50.5, the defect that made `training_tok/s` unusable.
+            ("perf/forwarded_tok_s_wall_clock", [(100.0, 100.0), (100.0, 1.0)], 200 / 101),
+        ],
+    )
+    def test_reduces_by_shape_and_name(self, key, values, expected):
+        assert _reduce_metric(key, values) == pytest.approx(expected)
+
+    def test_rate_with_zero_denominator_is_nan(self):
+        assert math.isnan(_reduce_metric("perf/forwarded_tok_s_wall_clock", [(0.0, 0.0)]))
+
+
+class TestRolloutWorkerProtocol:
+    def test_stub_worker_exposes_every_protocol_attribute(self):
+        # A stub that falls behind the protocol breaks training, and only the GPU-gated trainer test would notice.
+        stub = _StubRolloutWorker(tokenizer=None, dataset=[], vocab_size=8)
+        assert not [name for name in RolloutWorkerProtocol.__annotations__ if not hasattr(stub, name)]
 
 
 def _position(*entries):
@@ -279,6 +329,11 @@ def _bare_loop(tokenizer, teacher_server_urls):
     loop.teacher_temperature = 1.0
     loop.request_timeout = 30
     loop._model_version_value = types.SimpleNamespace(value=0)
+    # `_generate_and_score_one` pushes its rollout metrics; collect them instead of sending them to a queue.
+    loop._pushed_metrics = []
+    loop._counters = defaultdict(float)
+    loop._rates = defaultdict(lambda: [0.0, 0.0])
+    loop._push_metrics = loop._pushed_metrics.append
     return loop
 
 
@@ -286,13 +341,69 @@ ONE_TEACHER = {"default": "http://default:8001"}
 TWO_TEACHERS = {"math": "http://math:8002", "code": "http://code:8003"}
 
 
+class TestWorkerMetrics:
+    """The worker's payload has the same shape as the trainer's sink, so draining it in `log()` is an append."""
+
+    def _loop(self, teacher_server_urls=ONE_TEACHER, maxsize=0):
+        loop = object.__new__(_AsyncRolloutLoop)
+        loop._metrics_queue = mp.Queue(maxsize=maxsize)
+        loop._counters = defaultdict(float)
+        loop._rates = defaultdict(lambda: [0.0, 0.0])
+        loop.teacher_server_urls = teacher_server_urls
+        loop.tokenizer = types.SimpleNamespace(eos_token_id=0, pad_token_id=0)
+        return loop
+
+    def test_counters_and_rates_ride_along_and_reset(self):
+        loop = self._loop()
+        loop._counters["rollout/vllm_retry_total"] += 2
+        loop._rates["rollout/score_s"][0] += 3.0
+        loop._rates["rollout/score_s"][1] += 2
+        loop._push_metrics({"rollout/inflight": 4.0})
+
+        assert loop._metrics_queue.get(timeout=5) == {
+            "rollout/inflight": 4.0,
+            "rollout/vllm_retry_total": 2.0,
+            "rollout/score_s": (3.0, 2.0),
+        }
+        # Counters and rates carry deltas, so what one push reported must not ride along on the next.
+        loop._push_metrics({})
+        assert loop._metrics_queue.get(timeout=5) == {}
+
+    def test_push_never_blocks_when_the_trainer_stops_draining(self):
+        loop = self._loop(maxsize=1)
+        for _ in range(50):
+            loop._push_metrics({"rollout/inflight": 1.0})  # drops rather than stalling generation
+
+    @pytest.mark.parametrize(
+        ("teacher_server_urls", "completion_ids", "clipped", "per_teacher"),
+        [
+            (ONE_TEACHER, [7, 8, 0], 0.0, False),  # ends on eos: the model stopped on its own
+            (TWO_TEACHERS, [7, 8, 9], 1.0, True),  # ends mid-sentence: cut off by max_completion_length
+        ],
+    )
+    def test_rollout_push_reports_the_completion_and_the_teacher_call(
+        self, teacher_server_urls, completion_ids, clipped, per_teacher
+    ):
+        loop = self._loop(teacher_server_urls)
+        loop._push_rollout_metrics(completion_ids=completion_ids, teacher_id="math", score_s=0.25, duration_s=1.5)
+        payload = loop._metrics_queue.get(timeout=5)
+
+        assert payload["rollout/duration_s"] == 1.5
+        assert payload["completions/mean_length"] == (3.0, 1.0)
+        assert payload["completions/max_length"] == 3.0
+        assert payload["completions/clipped_ratio"] == (clipped, 1.0)
+        assert payload["rollout/score_s"] == (0.25, 1.0)
+        # A per-teacher latency series only exists under MOPD; with one teacher the blended mean is the whole story.
+        assert ("teacher_score_s/math" in payload) is per_teacher
+
+
 class TestMultiTeacherRouting:
     """A single configured teacher scores every row regardless of `teacher_id` (plain on-policy distillation).
 
     Multiple teachers enable MOPD: each row's `teacher_id` column selects among them; a missing or unmapped
     `teacher_id` is a configuration error, not a silent fallback. Each request must carry the URL *and* the served
-    model id of the teacher it routes to, since `/v1/completions` names the model it addresses and every teacher
-    serves its own.
+    model id of the teacher it routes to, since `/v1/completions` names the model it addresses and every teacher serves
+    its own.
     """
 
     def _run(self, teacher_server_urls, *teacher_ids):

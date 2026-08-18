@@ -20,13 +20,12 @@ from ...trainer.base_config import _BaseConfig
 
 @dataclass
 class AsyncDistillationConfig(_BaseConfig):
-    # docstyle-ignore
     r"""
     Configuration class for the [`AsyncDistillationTrainer`].
 
-    This class includes only the parameters that are specific to asynchronous on-policy distillation. For a full
-    list of training arguments, please refer to the [`~transformers.TrainingArguments`] documentation. Note that
-    default values in this class may differ from those in [`~transformers.TrainingArguments`]. Its structure mirrors
+    This class includes only the parameters that are specific to asynchronous on-policy distillation. For a full list
+    of training arguments, please refer to the [`~transformers.TrainingArguments`] documentation. Note that default
+    values in this class may differ from those in [`~transformers.TrainingArguments`]. Its structure mirrors
     [`~trl.experimental.async_grpo.AsyncGRPOConfig`] (async pipeline, vLLM server, logging fields are the same), with
     GRPO's clipping/group fields replaced by the teacher-distillation loss fields below.
 
@@ -68,19 +67,18 @@ class AsyncDistillationConfig(_BaseConfig):
             Total timeout duration in seconds to wait for the student's vLLM server to be ready.
         teacher_server_urls (`dict[str, str]`, *optional*, defaults to `{"default": "http://localhost:8001"}`):
             Teacher vLLM server(s), each started with `vllm serve <teacher-model> --logprobs-mode processed_logprobs
-            --max-logprobs -1`. Every teacher is static: this trainer never streams weight updates to any of them, so
-            a teacher needs neither `VLLM_SERVER_DEV_MODE` nor a weight-transfer backend, only those two flags, which
+            --max-logprobs -1`. Every teacher is static: this trainer never streams weight updates to any of them, so a
+            teacher needs neither `VLLM_SERVER_DEV_MODE` nor a weight-transfer backend, only those two flags, which
             make its scoring exact (see `teacher_temperature` and `teacher_top_k`). Every teacher must share the
             student's tokenizer: completions are sent as raw token ids, and the ids a teacher reports back are used
             directly to index the student's own vocabulary in `compute_loss`. A teacher with a different vocabulary
-            trains against the wrong tokens, silently if its vocabulary is no larger than the student's.
-            Scoring is a teacher-forced request against the student's own completion tokens (`max_tokens=1`,
+            trains against the wrong tokens, silently if its vocabulary is no larger than the student's. Scoring is a
+            teacher-forced request against the student's own completion tokens (`max_tokens=1`,
             `prompt_logprobs=teacher_top_k`, `temperature=teacher_temperature`), the same request
             [`~trl.generation.vllm_client.VLLMClient.get_sequence_logprobs`] issues for the synchronous server-teacher
             trainers. A single entry scores every sample (plain single-teacher on-policy distillation, the default).
             Multiple entries enable MOPD (multi-teacher on-policy distillation, see
-            [MOPD: Multi-Teacher On-Policy Distillation for Capability Integration in LLM Post-Training](
-            https://huggingface.co/papers/2606.30406)): each training row's `teacher_id` column selects which
+            [MOPD](https://huggingface.co/papers/2606.30406)): each training row's `teacher_id` column selects which
             entry scores it, e.g. `{"math": "http://localhost:8002", "code": "http://localhost:8003"}` with a
             `teacher_id` of `"math"` or `"code"` per row.
         request_timeout (`int`, *optional*, defaults to `600`):
@@ -90,28 +88,28 @@ class AsyncDistillationConfig(_BaseConfig):
 
         beta (`float`, *optional*, defaults to `0.0`):
             Interpolation coefficient for the generalized Jensen-Shannon Divergence. `0.0` is forward KL
-            (mean-seeking), `1.0` is reverse KL (mode-seeking), and values in between interpolate, following the
-            same generalized-JSD formulation [`~trl.experimental.distillation.DistillationTrainer`] computes
-            internally. The support the divergence is computed over differs by regime, mirroring
-            [`~trl.experimental.server_distillation.
-            ServerDistillationTrainer`]: at `beta=0.0`, the full `teacher_top_k`-wide teacher-reported support (plus
-            tail bucket) is used, since forward KL's weighting is exactly what that support provides. At
-            `beta != 0.0`, the support is narrowed to just two candidates — the teacher's own top-1 token and the
-            completion's actual/realized token — since those are the only two token identities the wire protocol
-            guarantees a teacher logprob for without transmitting a wider (or full) vocabulary; anything wider would
-            only be a probabilistic approximation of covering the student's own likely tokens, not a guarantee.
+            (mean-seeking), `1.0` is reverse KL (mode-seeking), and values in between interpolate, following the same
+            generalized-JSD formulation [`~trl.experimental.distillation.DistillationTrainer`] computes internally. The
+            support the divergence is computed over differs by regime, mirroring
+            [`~trl.experimental.server_distillation.ServerDistillationTrainer`]: at `beta=0.0`, the full
+            `teacher_top_k`-wide teacher-reported support (plus tail bucket) is used, since forward KL's weighting is
+            exactly what that support provides. At `beta != 0.0`, the support is narrowed to just two candidates — the
+            teacher's own top-1 token and the completion's actual/realized token — since those are the only two token
+            identities the wire protocol guarantees a teacher logprob for without transmitting a wider (or full)
+            vocabulary; anything wider would only be a probabilistic approximation of covering the student's own likely
+            tokens, not a guarantee.
         teacher_temperature (`float`, *optional*, defaults to `1.0`):
             Softmax temperature of the divergence, applied to *both* sides: sent to the teacher so vLLM computes its
-            logprobs at this temperature server-side (exact, not a client-side rescaling), and applied to the
-            student's own logits in `compute_loss`, mirroring
+            logprobs at this temperature server-side (exact, not a client-side rescaling), and applied to the student's
+            own logits in `compute_loss`, mirroring
             [`~trl.experimental.server_distillation.ServerDistillationTrainer`]'s single `temperature`. Unrelated to
             `temperature`, which only controls how the student samples its completions. The teacher's server must run
             with `--logprobs-mode processed_logprobs` for this to reach its returned logprobs at all; without it the
             teacher silently reports raw logprobs and this setting only affects the student's side.
         teacher_top_k (`int`, *optional*, defaults to `8`):
             Number of per-position candidate tokens requested from the teacher via `prompt_logprobs`. Only these
-            candidates (plus the realized token, which vLLM always reports even when it falls outside the top-k, plus
-            a tail bucket capturing the remaining probability mass, see `add_tail_bucket`) are used to approximate the
+            candidates (plus the realized token, which vLLM always reports even when it falls outside the top-k, plus a
+            tail bucket capturing the remaining probability mass, see `add_tail_bucket`) are used to approximate the
             teacher's distribution, the full vocabulary is never transmitted over HTTP. The student side of the
             divergence is exact (computed locally, not approximated), since the student is the model being trained and
             its full logits are already available in `compute_loss`. `8` is a light default for smoke testing;
@@ -123,12 +121,14 @@ class AsyncDistillationConfig(_BaseConfig):
             Whether to append a tail bucket representing the remaining probability mass outside `teacher_top_k`, to
             avoid a trivially small divergence when `teacher_top_k` is small.
         token_budget (`int`, *optional*):
-            Maximum number of real tokens packed into a single row (one DP rank's forward) for dynamic
-            token-budgeted micro-batching. When `> 0`, a `TokenBudgetBatcher` forms Σ Lᵢ²-balanced micro-batches
-            whose rows each stay within this budget, bounding peak memory independently of the sample count. If
-            `None` (default), it is set to the student vLLM server's `max_model_len`, so no rollout sample can
-            exceed it. Set it to `0` to pack a fixed `per_device_train_batch_size × num_processes` samples per
-            micro-batch instead, Σ Lᵢ²-balanced across the rows.
+            Maximum number of real tokens packed into a single row (one DP rank's forward) for dynamic token-budgeted
+            micro-batching. When `> 0`, a `TokenBudgetBatcher` forms Σ Lᵢ²-balanced micro-batches whose rows each stay
+            within this budget, bounding peak memory independently of the sample count (the number of samples per row
+            becomes dynamic). If `None` (default), it is set to the student vLLM server's `max_model_len` (queried at
+            train start) — the cap on prompt + completion length — so no rollout sample can ever exceed the budget. A
+            sample longer than `token_budget` fits in no row and is dropped with a warning, counted as
+            `batch/dropped_oversize_total`. Set `<= 0` to disable token budgeting and instead pack a fixed
+            `per_device_train_batch_size × num_processes` samples per micro-batch, Σ Lᵢ²-balanced across the rows.
 
         > Parameters that control the async rollout pipeline
 
@@ -151,18 +151,16 @@ class AsyncDistillationConfig(_BaseConfig):
         log_completions (`bool`, *optional*, defaults to `False`):
             Whether to log a sample of (prompt, completion) pairs every `log_completions_steps` samples scored.
         log_completions_steps (`int`, *optional*, defaults to `100`):
-            Number of scored samples between logging completions. Only used if `log_completions` is `True`. Counted
-            in samples the rollout worker has scored, not optimizer steps: the worker runs in a separate process
-            from the trainer and has no visibility into `self.state.global_step`.
+            Number of scored samples between logging completions. Only used if `log_completions` is `True`. Counted in
+            samples the rollout worker has scored, not optimizer steps: the worker runs in a separate process from the
+            trainer and has no visibility into `self.state.global_step`.
         num_completions_to_print (`int`, *optional*):
             Number of completions to print with `rich`. If `None`, all completions are logged.
 
-    > [!NOTE]
-    > These parameters have default values different from [`~transformers.TrainingArguments`]:
-    > - `logging_steps`: Defaults to `1` instead of `500`.
-    > - `gradient_checkpointing`: Defaults to `True` instead of `False`.
-    > - `bf16`: Defaults to `True` if `fp16` is not set, instead of `False`.
-    > - `learning_rate`: Defaults to `1e-6` instead of `5e-5`.
+    > [!NOTE] > These parameters have default values different from [`~transformers.TrainingArguments`]: > -
+    `logging_steps`: Defaults to `1` instead of `500`. > - `gradient_checkpointing`: Defaults to `True` instead of
+    `False`. > - `bf16`: Defaults to `True` if `fp16` is not set, instead of `False`. > - `learning_rate`: Defaults to
+    `1e-6` instead of `5e-5`.
     """
 
     _VALID_DICT_FIELDS = _BaseConfig._VALID_DICT_FIELDS + ["model_init_kwargs", "teacher_server_urls"]
@@ -299,8 +297,9 @@ class AsyncDistillationConfig(_BaseConfig):
             "help": "Maximum number of real tokens packed into a single row (one DP rank's forward) for dynamic "
             "token-budgeted micro-batching. When > 0, a `TokenBudgetBatcher` forms Σ Lᵢ²-balanced micro-batches "
             "whose rows each stay within this budget. If None (default), it is set to the student vLLM server's "
-            "`max_model_len`. Set it to 0 to pack a fixed `per_device_train_batch_size × num_processes` samples "
-            "per micro-batch instead, Σ Lᵢ²-balanced across the rows."
+            "`max_model_len`. A sample longer than token_budget fits in no row and is dropped with a warning. Set "
+            "<= 0 to pack a fixed `per_device_train_batch_size × num_processes` samples per micro-batch instead, Σ "
+            "Lᵢ²-balanced across the rows."
         },
     )
 
