@@ -49,6 +49,9 @@ submit() {
     # The tarball is built from the committed branch, so what runs is exactly what is on `origin`.
     rm -rf "$SHIP_DIR" && mkdir -p "$SHIP_DIR"
     git archive --format=tar.gz --prefix=trl-src/ "$BRANCH" > "$SHIP_DIR/trl.tar.gz"
+    # Copied alongside rather than taken from the tarball, so BRANCH can point at a revision that does not carry it
+    # (e.g. a PR branch under test).
+    cp "${SCRIPT_SRC:-examples/scripts/async_grpo_sanity.py}" "$SHIP_DIR/train.py"
 
     # `--` keeps the inlined script below out of reach of the CLI's global flag stripper, and every option has to come
     # before the image: `hf jobs run` takes IMAGE as a positional, so a flag after it is swallowed as the image name.
@@ -78,6 +81,7 @@ submit() {
         -e "SERVE_DTYPE=${SERVE_DTYPE}" \
         -e "MAX_MODEL_LEN=${MAX_MODEL_LEN}" \
         -e "MODEL=${MODEL}" \
+        -e "DTYPE=${DTYPE-float32}" \
         -- \
         vllm/vllm-openai:latest \
         bash -c "$(cat "$0")" async-grpo-sanity in-job)
@@ -181,9 +185,9 @@ in_job() {
     if [ "$N_TRAIN" -gt 1 ]; then
         CUDA_VISIBLE_DEVICES=$TRAIN_DEVICES accelerate launch \
             --num_processes "$N_TRAIN" --num_machines 1 --multi_gpu --mixed_precision "$PRECISION" \
-            examples/scripts/async_grpo_sanity.py
+            /ship/train.py
     else
-        CUDA_VISIBLE_DEVICES=$TRAIN_DEVICES python3 examples/scripts/async_grpo_sanity.py
+        CUDA_VISIBLE_DEVICES=$TRAIN_DEVICES python3 /ship/train.py
     fi
 
     # safetensors writes to a hidden temp file and renames it, and on the bucket the rename leaves the temp object

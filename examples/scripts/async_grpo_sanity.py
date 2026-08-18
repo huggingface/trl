@@ -105,7 +105,8 @@ WEIGHT_SYNC_STEPS = int(os.environ.get("WEIGHT_SYNC_STEPS", "4"))
 PRECISION = os.environ.get("PRECISION", "bf16")
 if PRECISION not in ("bf16", "fp16"):
     raise ValueError(f"PRECISION must be 'bf16' or 'fp16', got {PRECISION!r}")
-# The dtype the *parameters* are held in. Leave at float32; `bfloat16` reproduces the run that went nowhere.
+# The dtype the *parameters* are held in. Leave at float32; `bfloat16` reproduces the run that went nowhere. Set it
+# empty to omit the argument entirely, for a trl revision predating `AsyncGRPOConfig.dtype` (PR #6774).
 DTYPE = os.environ.get("DTYPE", "float32")
 
 # Response template for the rollout worker. `add_response_schema` only knows a fixed allowlist of chat templates and
@@ -286,7 +287,7 @@ def main() -> None:
 
     config = AsyncGRPOConfig(
         output_dir=OUTPUT_DIR,
-        dtype=DTYPE,
+        **({"dtype": DTYPE} if DTYPE else {}),
         bf16=PRECISION == "bf16",
         fp16=PRECISION == "fp16",
         num_generations=8,
