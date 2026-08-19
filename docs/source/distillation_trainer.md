@@ -14,6 +14,8 @@ The `DistillationTrainer` trains a smaller student model to match a teacher's ne
 
 This trainer was contributed by [Carlos Miguel Patiño](https://huggingface.co/cmpatino).
 
+For an async counterpart that decouples generation from training and scores against a teacher served over HTTP instead of a local forward pass, see [`AsyncDistillationTrainer`](async_distillation_trainer).
+
 ## Quick start
 
 This example demonstrates how to train a model using the distillation method. We distill a [Qwen 2.5 0.5B Instruct model](https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct) from a [Qwen 2.5 1.5B Instruct teacher](https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct) on the prompts from the [UltraFeedback prompt dataset](https://huggingface.co/datasets/trl-lib/ultrafeedback-prompt). You can view the data in the dataset here:
