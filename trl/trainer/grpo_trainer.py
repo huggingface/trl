@@ -2291,6 +2291,12 @@ class GRPOTrainer(_BaseTrainer):
             completion_lengths = torch.tensor([len(ids) for ids in completion_ids], device=device)
         agg_prompt_lengths = self.accelerator.gather(prompt_lengths)
         agg_completion_lengths = self.accelerator.gather(completion_lengths)
+        # Fail clearly if the generation backend returned no completions (avoids a cryptic min() error below).
+        if agg_completion_lengths.numel() == 0:
+            raise RuntimeError(
+                "No completions were generated. This usually means the generation backend failed to return any "
+                "results; see the generation logs above for the underlying error."
+            )
         total_prompt_tokens = agg_prompt_lengths.sum()
 
         # Log the metrics
@@ -2466,7 +2472,13 @@ class GRPOTrainer(_BaseTrainer):
             completion_mask, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
         ).to(device=device)
         if sampling_per_token_logps_list is not None:
-            sampling_per_token_logps = [torch.tensor(logps) for logps in sampling_per_token_logps_list]
+            # vLLM replaces a NaN token logprob with `None` (see `extract_logprobs`); map it back to NaN so the
+            # tensor builds (`torch.tensor([..., None, ...])` raises "Could not infer dtype of NoneType"). The NaN
+            # positions are neutralized in the importance-sampling ratio below so they contribute no correction.
+            sampling_per_token_logps = [
+                torch.tensor([float("nan") if x is None else x for x in logps])
+                for logps in sampling_per_token_logps_list
+            ]
             sampling_per_token_logps = pad(
                 sampling_per_token_logps,
                 padding_value=0.0,
@@ -2649,6 +2661,9 @@ class GRPOTrainer(_BaseTrainer):
             if self.use_vllm and self.vllm_importance_sampling_correction:
                 mask = completion_mask if tool_mask is None else completion_mask * tool_mask
                 per_token_logps_diff = (old_per_token_logps - sampling_per_token_logps) * mask
+                # Tokens whose sampling logprob was NaN (unavailable from vLLM) get a zero difference, so their
+                # importance ratio is exactly 1 (no correction) rather than propagating NaN through the loss.
+                per_token_logps_diff = torch.nan_to_num(per_token_logps_diff, nan=0.0)
 
                 sequence_level_is = self.vllm_importance_sampling_mode in ["sequence_mask", "sequence_truncate"]
                 if sequence_level_is:
@@ -2849,7 +2864,9 @@ class GRPOTrainer(_BaseTrainer):
         if self.use_vllm and self.vllm_importance_sampling_correction:
             delta = torch.abs(old_per_token_logps - sampling_per_token_logps)
             mask = completion_mask.bool() if tool_mask is None else (completion_mask * tool_mask).bool()
-            delta = delta[mask]
+            # Tokens vLLM could not score carry NaN, so exclude them rather than let them turn the reported
+            # divergence into NaN. Counting them as zero instead would understate the divergence.
+            delta = delta[mask & ~torch.isnan(delta)]
             mean_delta = torch.mean(delta) if delta.numel() > 0 else torch.tensor(0.0, device=device)
             max_delta = torch.max(delta) if delta.numel() > 0 else torch.tensor(0.0, device=device)
             self._metrics[mode]["sampling/sampling_logp_difference/mean"].append(
@@ -3010,6 +3027,10 @@ class GRPOTrainer(_BaseTrainer):
         """
         # forward KL div: log(pi_old) - log(pi_theta)
         kl_div = sampling_per_token_logps - per_token_logps.detach()
+        # Tokens vLLM could not score carry NaN and provide no KL evidence. Left in, the sequence mean is NaN,
+        # `avg_seq_kl <= off_policy_threshold` is then False, and a negative-advantage sequence would be dropped
+        # on the strength of a single unscorable token.
+        kl_div = torch.nan_to_num(kl_div, nan=0.0)
         # Sequence-level Mean KL (ignoring prompt+padding)
         seq_kl_sum = (kl_div * mask).sum(dim=1, keepdim=True)
         avg_seq_kl = seq_kl_sum / mask.sum(dim=1, keepdim=True).clamp(min=1.0)

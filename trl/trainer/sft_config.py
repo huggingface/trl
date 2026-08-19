@@ -21,7 +21,6 @@ from .base_config import _BaseConfig
 
 @dataclass
 class SFTConfig(_BaseConfig):
-    # docstyle-ignore
     r"""
     Configuration class for the [`SFTTrainer`].
 
@@ -41,8 +40,7 @@ class SFTConfig(_BaseConfig):
             argument of the [`SFTTrainer`] is provided as a string.
         trust_remote_code (`bool`, *optional*, defaults to `False`):
             Whether to allow loading models and tokenizers that ship custom Python code from the Hub. Forwarded to
-            [`~transformers.AutoModelForCausalLM.from_pretrained`] and
-            [`~transformers.AutoProcessor.from_pretrained`].
+            [`~transformers.AutoModelForCausalLM.from_pretrained`] and [`~transformers.AutoProcessor.from_pretrained`].
         router_aux_loss_coef (`float`, *optional*, defaults to `0.001`):
             Coefficient of the load-balancing auxiliary loss. Only has an effect when training a Mixture-of-Experts
             (MoE) model; for other models it does nothing. The auxiliary loss is added to the training loss with this
@@ -67,12 +65,12 @@ class SFTConfig(_BaseConfig):
             Token used to indicate the end of a turn or sequence. If `None`, it defaults to
             `processing_class.eos_token`.
         max_length (`int` or `None`, *optional*, defaults to `1024`):
-            Maximum length of the tokenized sequence. Sequences longer than `max_length` are truncated from the left
-            or right depending on `truncation_mode`. If `None`, no truncation is applied. When packing is enabled,
-            this value sets the sequence length.
+            Maximum length of the tokenized sequence. Sequences longer than `max_length` are truncated from the left or
+            right depending on `truncation_mode`. If `None`, no truncation is applied. When packing is enabled, this
+            value sets the sequence length.
         truncation_mode (`str`, *optional*, defaults to `"keep_start"`):
-            Truncation mode to use when the sequence exceeds `max_length`. The only supported value is
-            `"keep_start"`. The `"keep_end"` value is deprecated and will be removed in v2.0.0.
+            Truncation mode to use when the sequence exceeds `max_length`. The only supported value is `"keep_start"`.
+            The `"keep_end"` value is deprecated and will be removed in v2.0.0.
         shuffle_dataset (`bool`, *optional*, defaults to `False`):
             Whether to shuffle the dataset.
         packing (`bool`, *optional*, defaults to `False`):
@@ -109,8 +107,7 @@ class SFTConfig(_BaseConfig):
             in which case it defaults to `"nll"`. Possible values are:
 
             - `"nll"`: standard negative log-likelihood.
-            - `"dft"`: Dynamic Fine-Tuning, as described in
-              [this paper](https://huggingface.co/papers/2508.05629).
+            - `"dft"`: Dynamic Fine-Tuning, as described in [this paper](https://huggingface.co/papers/2508.05629).
             - `"chunked_nll"`: same math as `"nll"`, but the `lm_head` projection is computed on non-ignored tokens
               only (positions with `labels == -100` are dropped before the matmul) and the cross-entropy is processed
               in chunks of tokens to reduce peak activation memory. Not compatible with `use_liger_kernel`.

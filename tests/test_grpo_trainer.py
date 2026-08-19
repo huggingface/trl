@@ -1563,6 +1563,135 @@ class TestGRPOTrainer(TrlTestCase):
 
         torch.testing.assert_close(off_policy_mask_keep, expected_mask_keep)
 
+    @pytest.mark.parametrize(
+        "vllm_importance_sampling_mode", ["token_truncate", "token_mask", "sequence_truncate", "sequence_mask"]
+    )
+    def test_sampling_logps_none_yields_neutral_importance_ratio(self, vllm_importance_sampling_mode):
+        # Regression test for #6166: when vLLM cannot score a token it returns a NaN logprob, which
+        # `extract_logprobs` replaces with `None`. That `None` reaches `torch.tensor(logps)` in
+        # `_generate_and_score_completions` and raises "Could not infer dtype of NoneType". The fix builds the
+        # tensor with those positions as NaN, then zeroes them out of the importance-sampling difference so the
+        # ratio is exactly 1 (no correction) for that token while every other token is untouched.
+        #
+        # This drives the real trainer instead of re-deriving the arithmetic, so removing either half of the fix
+        # fails the test. vLLM itself is not needed: the weight sync lives inside `_generate`, so replacing that
+        # method bypasses vLLM while still exercising both fix sites. All four importance-sampling modes are
+        # covered, because the sequence-level ones sum the per-token difference and a NaN there would poison the
+        # whole sequence and evade the clipping guard as well (comparisons against NaN are False).
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,
+            num_generations=3,
+            max_completion_length=8,
+            max_steps=1,
+            report_to="none",
+            # Exercise the off-policy mask as well, which is the third consumer of the sampling logprobs. The
+            # threshold is large enough that every sequence is under it, so with the fix in place nothing is
+            # dropped; a NaN sequence KL would compare false and drop the negative-advantage ones instead.
+            off_policy_mask_threshold=1e9,
+        )
+
+        def varied_reward(completions, **kwargs):
+            # Distinct rewards guarantee a non-degenerate group, so some advantages are negative. Without that,
+            # every sequence would be kept on `advantages >= 0` alone and the off-policy mask would prove nothing.
+            return [float(i) for i in range(len(completions))]
+
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs=varied_reward,
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        # Enable the correction after construction so that no vLLM server is required.
+        trainer.use_vllm = True
+        trainer.vllm_importance_sampling_correction = True
+        trainer.vllm_importance_sampling_mode = vllm_importance_sampling_mode
+
+        # Wrap the real `_generate` and inject an unscorable token into its own output, so the shapes come from the
+        # trainer rather than being fixed here.
+        original_generate = trainer._generate
+
+        def generate_with_one_unscorable_token(prompts):
+            # Generation itself must take the ordinary path, so drop the flag for the duration of the call and
+            # restore it afterwards for the loss, which is where the correction is applied.
+            trainer.use_vllm = False
+            try:
+                outputs = list(original_generate(prompts))
+            finally:
+                trainer.use_vllm = True
+            completion_ids = outputs[1]
+            outputs[4] = [[-0.5] * len(ids) for ids in completion_ids]
+            for logps in outputs[4]:
+                if logps:
+                    logps[0] = None  # vLLM returned no logprob for this token
+            return tuple(outputs)
+
+        trainer._generate = generate_with_one_unscorable_token
+
+        # Snapshot the divergence metric as soon as it is produced. Reading `_metrics` after training is useless,
+        # because the dict is cleared on every log.
+        original_score = trainer._generate_and_score_completions
+        recorded_metrics = []
+
+        def record_metrics(inputs):
+            outputs = original_score(inputs)
+            for key in ["sampling/sampling_logp_difference/mean", "sampling/sampling_logp_difference/max"]:
+                recorded_metrics.extend((key, value) for value in trainer._metrics["train"][key])
+            return outputs
+
+        trainer._generate_and_score_completions = record_metrics
+
+        # Capture the off-policy mask, the third consumer of the sampling logprobs.
+        original_off_policy_mask = trainer.get_off_policy_mask
+        off_policy_masks = []
+
+        def record_off_policy_mask(*args, **kwargs):
+            off_policy_mask = original_off_policy_mask(*args, **kwargs)
+            off_policy_masks.append(off_policy_mask)
+            return off_policy_mask
+
+        trainer.get_off_policy_mask = record_off_policy_mask
+
+        # Assert on every loss the trainer actually returns. The aggregate reported in `log_history` is not a
+        # reliable witness here, since it can stay finite while an individual step's loss carries NaN.
+        original_compute_loss = trainer._compute_loss
+        losses = []
+
+        def record_loss(model, inputs):
+            loss = original_compute_loss(model, inputs)
+            losses.append(loss)
+            return loss
+
+        trainer._compute_loss = record_loss
+
+        trainer.train()
+
+        assert losses, "the training step never computed a loss, so nothing was verified"
+        for loss in losses:
+            assert torch.isfinite(loss).all(), (
+                f"NaN or inf reached the loss in {vllm_importance_sampling_mode} mode: an unscorable token must "
+                f"contribute a neutral importance ratio instead of poisoning the update"
+            )
+
+        # The raw sampling logprobs feed another consumer: the logged divergence. It must stay a real number
+        # rather than NaN.
+        assert recorded_metrics, "the divergence metric was never recorded, so nothing was verified"
+        for key, value in recorded_metrics:
+            assert torch.isfinite(torch.tensor(value)), f"{key} became NaN because of an unscorable token"
+
+        # And a third: the off-policy mask. The threshold above is far larger than any real sequence KL, so every
+        # sequence must be kept. A NaN sequence KL compares false against it, which would silently drop exactly the
+        # negative-advantage sequences.
+        assert off_policy_masks, "the off-policy mask was never computed, so nothing was verified"
+        for off_policy_mask in off_policy_masks:
+            assert off_policy_mask.all(), (
+                "an unscorable token caused sequences to be dropped by the off-policy mask, even though the "
+                "threshold is high enough to keep every sequence"
+            )
+
     def test_train_with_off_policy_mask(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
@@ -4506,6 +4635,11 @@ class TestGRPOTrainerSlow(TrlTestCase):
             "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
             "trl-internal-testing/tiny-MistralForCausalLM-0.2",
         ],
+    )
+    @pytest.mark.skipif(
+        not is_ampere_or_newer() and torch_device != "xpu",
+        reason="transformers continuous batching switches attention to Flash Attention, which requires an Ampere or "
+        "newer GPU, or XPU (see https://github.com/huggingface/transformers/issues/47926)",
     )
     def test_train_with_transformers_continuous_batching(self, model_name):
         """Test that training works with transformers continuous batching (requires GPU)."""
