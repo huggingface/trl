@@ -178,6 +178,8 @@ class VLLMGeneration:
             - "vllm" will use the vLLM model implementation.
             - "transformers" will use the Transformers model implementation.
             - "terratorch" will use the TerraTorch model implementation.
+        trust_remote_code (`bool`, *optional*, defaults to `False`):
+            Trust remote code (e.g., from HuggingFace) when downloading the model and tokenizer.
 
         > Parameters for generation:
 
@@ -240,6 +242,7 @@ class VLLMGeneration:
         max_num_seqs: int | None = None,
         enable_sleep_mode: bool = False,
         model_impl: str = "auto",
+        trust_remote_code: bool = False,
         # Generation configuration
         repetition_penalty: float = 1.0,
         temperature: float = 1.0,
@@ -273,6 +276,7 @@ class VLLMGeneration:
         self.max_num_seqs = max_num_seqs
         self.enable_sleep_mode = enable_sleep_mode
         self.model_impl = model_impl
+        self.trust_remote_code = trust_remote_code
 
         # Generation configuration
         self.repetition_penalty = repetition_penalty
@@ -283,6 +287,10 @@ class VLLMGeneration:
         self.max_completion_length = max_completion_length
         self.logprobs = logprobs
         self.generation_kwargs = generation_kwargs or {}
+
+        # Size in bytes of each per-push weight bucket. Reduces the number of HTTP round trips (server mode) and
+        # NCCL/XCCL broadcasts when syncing weights to vLLM.
+        self._weight_sync_buffer_bytes = 256 * 1024 * 1024
 
         self._init_vllm()
 
@@ -306,7 +314,7 @@ class VLLMGeneration:
                 self.vllm_client = VLLMClient(
                     base_url=base_url, group_port=self.group_port, connection_timeout=self.server_timeout
                 )
-                self.vllm_client.init_communicator(device=torch.cuda.current_device())
+                self.vllm_client.init_communicator(device=accelerator.device)
 
         elif self.mode == "colocate":
             # Make sure tensor_parallel_size group size evenly divides the world size - each group should have
@@ -360,9 +368,12 @@ class VLLMGeneration:
                 # Important so temperature scaling/logit tweaking affects the TIS log probs
                 logprobs_mode="processed_logprobs",
                 quantization=quantization,
+                trust_remote_code=self.trust_remote_code,
             )
             if self.enable_sleep_mode:
                 self.llm.sleep(level=2)
+            # Sleep level 2 discards the weights; track it so that generate() knows it must re-push them
+            self._llm_weights_sleeping = self.enable_sleep_mode
         else:
             raise ValueError(f"vllm_mode must be either 'server' or 'colocate', got '{self.mode}'.")
 
@@ -379,12 +390,46 @@ class VLLMGeneration:
             name = name.replace(prefix, "")
         return name
 
-    def _push_param_to_vllm(self, name: str, param) -> None:
-        """Push a single parameter tensor to the vLLM engine (server or colocate mode)."""
+    def _push_params_to_vllm(self, names: list[str], params: list[torch.Tensor]) -> None:
+        """Push a batch of parameter tensors to the vLLM engine (server or colocate mode)."""
         if self.mode == "server" and self.accelerator.is_main_process:
-            self.vllm_client.update_named_param(name, param)
+            self.vllm_client.update_named_params(names, params)
         elif self.mode == "colocate":
-            self.llm.llm_engine.model_executor.driver_worker.model_runner.model.load_weights([(name, param)])
+            self.llm.llm_engine.model_executor.driver_worker.model_runner.model.load_weights(
+                list(zip(names, params, strict=True))
+            )
+
+    def _bucket_push(self, named_params) -> None:
+        """Accumulate `(name, param)` pairs up to ``_weight_sync_buffer_bytes`` and push each bucket to vLLM.
+
+        For each bucket, gathers the params (no-op for non-sharded backends, FSDP, and params already gathered by an
+        outer ``gather_params`` context) and calls ``_push_params_to_vllm`` once for the whole batch.
+        """
+        names: list[str] = []
+        params: list[torch.Tensor] = []
+        bytes_used = 0
+        for name, param in named_params:
+            size = param.numel() * param.element_size()
+            if bytes_used + size > self._weight_sync_buffer_bytes and names:
+                with self._dist.gather_params(params):
+                    self._push_params_to_vllm(names, [p.data for p in params])
+                names, params, bytes_used = [], [], 0
+            names.append(name)
+            params.append(param)
+            bytes_used += size
+        if names:
+            with self._dist.gather_params(params):
+                self._push_params_to_vllm(names, [p.data for p in params])
+
+    def _iter_peft_named_params(self, model: nn.Module):
+        """Yield ``(fixed_name, param)`` pairs for a PEFT model, skipping adapter-only/original-module entries."""
+        for name, param in model.named_parameters():
+            name = name.removeprefix("base_model.model.").replace(".base_layer", "")
+            if model.prefix in name:
+                continue
+            if "original_module" in name:
+                continue
+            yield self._fix_param_name_to_vllm(name, extra_prefixes=["modules_to_save.default."]), param
 
     def _sync_fsdp1_params_to_vllm(self, module: nn.Module, prefix: str = "", visited: set[str] | None = None):
         """Memory-efficient post-order traversal of FSDP modules to extract full parameters and sync with vLLM."""
@@ -399,6 +444,7 @@ class VLLMGeneration:
 
         if isinstance(module, FSDP):
             with FSDP.summon_full_params(module, recurse=False, writeback=False):
+                items = []
                 for param_name, param in module.named_parameters():
                     full_name = f"{prefix}.{param_name}" if prefix else param_name
                     full_name = self._fix_param_name_to_vllm(full_name, extra_prefixes=["_fsdp_wrapped_module."])
@@ -406,12 +452,13 @@ class VLLMGeneration:
                     if full_name in visited:
                         continue  # skip FSDP subtrees already traversed
                     visited.add(full_name)
-
-                    self._push_param_to_vllm(full_name, param.data)
+                    items.append((full_name, param))
+                self._bucket_push(items)
 
     def _sync_fsdp2_params_to_vllm(self, module: nn.Module):
         """FSDP2-specific parameter synchronization."""
         # For FSDP2, module.state_dict() already covers all parameters, so no need for recursion
+        items = []
         for name, param in module.state_dict().items():
             # When using PEFT, we need to recover the original parameter name
             name = name.removeprefix("base_model.model.").replace(".base_layer", "")
@@ -424,10 +471,11 @@ class VLLMGeneration:
             name = self._fix_param_name_to_vllm(name, extra_prefixes=["modules_to_save.default."])
 
             if param.is_cpu:
-                param = param.to(torch.device("cuda"))
+                param = param.to(self.accelerator.device)
             param = param.full_tensor()
 
-            self._push_param_to_vllm(name, param)
+            items.append((name, param))
+        self._bucket_push(items)
 
     def _sync_fsdp_params_to_vllm(self, model: nn.Module):
         """Dispatch FSDP weight sync to the version-appropriate method."""
@@ -447,6 +495,7 @@ class VLLMGeneration:
         if self.mode == "colocate" and self.enable_sleep_mode:
             empty_cache()  # required to avoid OOM in some cases
             self.llm.wake_up(tags=["weights"])
+            self._llm_weights_sleeping = False
 
         model = self.model
         accelerator = self.accelerator
@@ -464,18 +513,7 @@ class VLLMGeneration:
                     self._sync_fsdp_params_to_vllm(model)
                 else:
                     # DeepSpeed ZeRO-3 with PEFT
-                    for name, param in model.named_parameters():
-                        # When using PEFT, we need to recover the original parameter name
-                        name = name.removeprefix("base_model.model.").replace(".base_layer", "")
-                        # Skip PEFT layers: they don't exist in vLLM, and they are merged already.
-                        if model.prefix in name:
-                            continue
-                        # When module to save, remove its prefix and discard the original module
-                        if "original_module" in name:
-                            continue
-                        name = self._fix_param_name_to_vllm(name, extra_prefixes=["modules_to_save.default."])
-
-                        self._push_param_to_vllm(name, param.data)
+                    self._bucket_push(self._iter_peft_named_params(model))
                 # Unmerge adapters while parameters are still gathered
                 model.unmerge_adapter()
                 # Parameters will automatically be repartitioned when exiting the context
@@ -484,10 +522,9 @@ class VLLMGeneration:
             if self._dist.is_fsdp:
                 self._sync_fsdp_params_to_vllm(model)
             else:
-                for name, param in model.named_parameters():
-                    name = self._fix_param_name_to_vllm(name)
-                    with self._dist.gather_params([param]):
-                        self._push_param_to_vllm(name, param.data)
+                self._bucket_push(
+                    ((self._fix_param_name_to_vllm(name), param) for name, param in model.named_parameters())
+                )
 
         # Reset cache on vLLM
         if self.mode == "server" and accelerator.is_main_process:
@@ -531,16 +568,11 @@ class VLLMGeneration:
         repetition_penalty = self.repetition_penalty
         max_completion_length = self.max_completion_length
 
-        # Wake up colocated vLLM weights if needed (idempotent if already awake from sync_weights)
-        if self.mode == "colocate" and self.enable_sleep_mode:
-            empty_cache()  # required to avoid OOM in some cases
-            self.llm.wake_up(tags=["weights"])
-            # Work around for https://github.com/vllm-project/vllm/issues/29341
-            try:
-                self.llm.collective_rpc("reload_weights")
-            except NotImplementedError:
-                # Non-CUDA vLLM backends (e.g., vllm-ascend's NPUWorkerV1), don't implement reload_weights
-                pass
+        # Sleep level 2 discards the weights, so waking up isn't enough: they must be re-pushed from the training
+        # model. vLLM's `reload_weights` can't be used here, as it reloads the initial checkpoint from disk rather
+        # than the current training weights. See https://github.com/vllm-project/vllm/issues/29341
+        if self.mode == "colocate" and self.enable_sleep_mode and self._llm_weights_sleeping:
+            self.sync_weights()
 
         # Generate completions using vLLM: gather all prompts and use them in a single call in the main process
         if self.mode == "server":
@@ -661,6 +693,16 @@ class VLLMGeneration:
             else:
                 vllm_prompts = [{"prompt_token_ids": ids} for ids in all_prompts]
 
+            # When PEFT is used, DDP gradient all-reduce only covers the small LoRA parameters, so
+            # NCCL operations complete very quickly. On non-NVLink hardware (e.g. A40/A100), vLLM's
+            # TP NCCL collective can race with NCCL's internal P2P/SHM channel cleanup from that
+            # all-reduce, causing llm.generate() to hang. A barrier on the default process group
+            # forces NCCL to fully drain before vLLM's TP communication starts. We pass device_ids
+            # so NCCL uses this rank's device rather than guessing, which itself risks a hang.
+            # See https://github.com/huggingface/trl/issues/3671
+            if is_peft_model(self.model) and self.tensor_parallel_size > 1:
+                torch.distributed.barrier(device_ids=[accelerator.local_process_index])
+
             with profiler:
                 all_outputs = self.llm.generate(vllm_prompts, sampling_params=sampling_params, use_tqdm=False)
 
@@ -685,5 +727,6 @@ class VLLMGeneration:
 
             if self.enable_sleep_mode:
                 self.llm.sleep(level=2)
+                self._llm_weights_sleeping = True
 
         return prompt_ids, completion_ids, logprobs, logprob_token_ids

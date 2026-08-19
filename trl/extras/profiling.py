@@ -20,14 +20,16 @@ from transformers import Trainer
 from transformers.integrations import is_mlflow_available, is_trackio_available, is_wandb_available
 
 
-if is_wandb_available():
-    import wandb
-
 if is_mlflow_available():
     import mlflow
 
+
 if is_trackio_available():
     import trackio
+
+
+if is_wandb_available():
+    import wandb
 
 
 class ProfilingContext:
@@ -147,17 +149,17 @@ def profiling_context(trainer: Trainer, name: str) -> ProfilingContext:
 
     Example:
     ```python
-    from transformers import Trainer
-    from trl.extras.profiling import profiling_context
+    >>> from transformers import Trainer
+    >>> from trl.extras.profiling import profiling_context
 
 
-    class MyTrainer(Trainer):
-        def some_method(self):
-            A = np.random.rand(1000, 1000)
-            B = np.random.rand(1000, 1000)
-            with profiling_context(self, "matrix_multiplication"):
-                # Code to profile: simulate a computationally expensive operation
-                result = A @ B  # Matrix multiplication
+    >>> class MyTrainer(Trainer):
+    ...     def some_method(self):
+    ...         A = np.random.rand(1000, 1000)
+    ...         B = np.random.rand(1000, 1000)
+    ...         with profiling_context(self, "matrix_multiplication"):
+    ...             # Code to profile: simulate a computationally expensive operation
+    ...             result = A @ B  # Matrix multiplication
     ```
     """
     context_name = f"{trainer.__class__.__name__}.{name}"
@@ -187,17 +189,17 @@ def profiling_decorator(func: Callable) -> Callable:
 
     Example:
     ```python
-    from transformers import Trainer
-    from trl.extras.profiling import profiling_decorator
+    >>> from transformers import Trainer
+    >>> from trl.extras.profiling import profiling_decorator
 
 
-    class MyTrainer(Trainer):
-        @profiling_decorator
-        def some_method(self):
-            A = np.random.rand(1000, 1000)
-            B = np.random.rand(1000, 1000)
-            # Code to profile: simulate a computationally expensive operation
-            result = A @ B
+    >>> class MyTrainer(Trainer):
+    ...     @profiling_decorator
+    ...     def some_method(self):
+    ...         A = np.random.rand(1000, 1000)
+    ...         B = np.random.rand(1000, 1000)
+    ...         # Code to profile: simulate a computationally expensive operation
+    ...         result = A @ B
     ```
     """
 

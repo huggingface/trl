@@ -53,17 +53,17 @@ class MiniLLMTrainer(GRPOTrainer):
     Example:
 
     ```python
-    from datasets import load_dataset
-    from trl.experimental.minillm import MiniLLMTrainer
+    >>> from datasets import load_dataset
+    >>> from trl.experimental.minillm import MiniLLMTrainer
 
-    dataset = load_dataset("trl-lib/tldr", split="train")
+    >>> dataset = load_dataset("trl-lib/tldr", split="train")
 
-    trainer = MiniLLMTrainer(
-        model="Qwen/Qwen3-0.6B",
-        teacher_model="Qwen/Qwen3-1.7B",
-        train_dataset=dataset,
-    )
-    trainer.train()
+    >>> trainer = MiniLLMTrainer(
+    ...     model="Qwen/Qwen3-0.6B",
+    ...     teacher_model="Qwen/Qwen3-1.7B",
+    ...     train_dataset=dataset,
+    ... )
+    >>> trainer.train()
     ```
 
     Args:
@@ -224,6 +224,7 @@ class MiniLLMTrainer(GRPOTrainer):
             )
 
         if isinstance(teacher_model, str):
+            teacher_model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
             teacher_model = AutoModelForCausalLM.from_pretrained(teacher_model, **teacher_model_init_kwargs)
 
         # Disable dropout in the model

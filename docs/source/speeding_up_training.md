@@ -172,7 +172,7 @@ training_args = GRPOConfig(..., use_liger_kernel=True)
 <hfoption id="KTO">
 
 ```python
-from trl.experimental.kto import KTOConfig
+from trl import KTOConfig
 
 training_args = KTOConfig(..., use_liger_kernel=True)
 ```

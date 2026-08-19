@@ -39,6 +39,14 @@ class RLOOConfig(_BaseConfig):
         model_init_kwargs (`str`, `dict[str, Any]`, *optional*):
             Keyword arguments for [`~transformers.AutoModelForCausalLM.from_pretrained`], used when the `model`
             argument of the [`RLOOTrainer`] is provided as a string.
+        trust_remote_code (`bool`, *optional*, defaults to `False`):
+            Whether to allow loading models and tokenizers that ship custom Python code from the Hub. Forwarded to
+            [`~transformers.AutoModelForCausalLM.from_pretrained`] and
+            [`~transformers.AutoProcessor.from_pretrained`]. Also applied to reward-model and reward-tokenizer loads.
+        router_aux_loss_coef (`float`, *optional*, defaults to `0.001`):
+            Coefficient of the load-balancing auxiliary loss. Only has an effect when training a Mixture-of-Experts
+            (MoE) model; for other models it does nothing. The auxiliary loss is added to the training loss with this
+            weight. Set to `0.0` to disable it.
         disable_dropout (`bool`, *optional*, defaults to `False`):
             Whether to disable dropout in the model. This is useful for training with a reference model, as it prevents
             the model from generating different logprobs for the same input.
@@ -54,7 +62,7 @@ class RLOOConfig(_BaseConfig):
         num_generations_eval (`int` or `None`, *optional*):
             Number of generations to sample during evaluation. This allows using fewer generations during evaluation to
             save computation. If `None`, uses the value of `num_generations`.
-        max_completion_length (`int` or `None`, *optional*, defaults to `256`):
+        max_completion_length (`int` or `None`, *optional*, defaults to `512`):
             Maximum length of the generated completion.
         ds3_gather_for_generation (`bool`, *optional*, defaults to `True`):
             This setting applies to DeepSpeed ZeRO-3. If enabled, the policy model weights are gathered for generation,
@@ -153,6 +161,14 @@ class RLOOConfig(_BaseConfig):
             Enable vLLM sleep mode to offload weights/cache during the optimizer step. Keeps GPU memory usage low, but
             waking the engine adds host–device transfer latency.
 
+        > Parameters that control generation acceleration powered by transformers continuous batching
+
+        use_transformers_continuous_batching (`bool`, *optional*, defaults to `False`):
+            Whether to use transformers' continuous batching engine for generating completions. Requires
+            `transformers>=5.8.0`.
+        transformers_continuous_batching_config (`dict`, *optional*):
+            Keyword arguments for [`~transformers.generation.ContinuousBatchingConfig`].
+
         > Parameters that control the training
 
         beta (`float`, *optional*, defaults to `0.05`):
@@ -197,6 +213,9 @@ class RLOOConfig(_BaseConfig):
             Whether to log a sample of (prompt, completion) pairs every `logging_steps` steps. If `rich` is installed,
             it prints the sample. If `wandb` and/or `trackio` logging is enabled, it logs it to `wandb` and/or
             `trackio`.
+        log_multimodal (`bool`, *optional*, defaults to `True`):
+            Whether to log multimodal content (images, videos, etc.) together with completions. Disable this to reduce
+            log size when using high-resolution multimodal data.
         num_completions_to_print (`int`, *optional*):
             Number of completions to print with `rich`. If `None`, all completions are logged.
         log_unique_prompts (`bool`, *optional*, defaults to `False`):
@@ -209,8 +228,8 @@ class RLOOConfig(_BaseConfig):
 
             <Deprecated version="1.2.0">
 
-            Parameter `use_transformers_paged` is deprecated and will be removed in version v2.0.0. It will be
-            replaced by `transformers` continuous batching support in an upcoming release.
+            Parameter `use_transformers_paged` is deprecated and will be removed in version v2.0.0. Use
+            `use_transformers_continuous_batching` instead.
 
             </Deprecated>
 
@@ -222,7 +241,10 @@ class RLOOConfig(_BaseConfig):
     > - `learning_rate`: Defaults to `1e-6` instead of `5e-5`.
     """
 
-    _VALID_DICT_FIELDS = _BaseConfig._VALID_DICT_FIELDS + ["model_init_kwargs"]
+    _VALID_DICT_FIELDS = _BaseConfig._VALID_DICT_FIELDS + [
+        "model_init_kwargs",
+        "transformers_continuous_batching_config",
+    ]
 
     # Parameters whose default values are overridden from TrainingArguments
     learning_rate: float = field(
@@ -236,6 +258,22 @@ class RLOOConfig(_BaseConfig):
         metadata={
             "help": "Keyword arguments for `transformers.AutoModelForCausalLM.from_pretrained`, used when the `model` "
             "argument of the `RLOOTrainer` is provided as a string."
+        },
+    )
+    trust_remote_code: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to allow loading models and tokenizers that ship custom Python code from the Hub. "
+            "Forwarded to `AutoModelForCausalLM.from_pretrained` and `AutoProcessor.from_pretrained`. Also applied to "
+            "reward-model and reward-tokenizer loads."
+        },
+    )
+    router_aux_loss_coef: float = field(
+        default=0.001,
+        metadata={
+            "help": "Coefficient of the load-balancing auxiliary loss. Only has an effect when training a "
+            "Mixture-of-Experts (MoE) model; for other models it does nothing. The auxiliary loss is added to the "
+            "training loss with this weight. Set to `0.0` to disable it."
         },
     )
     disable_dropout: bool = field(
@@ -271,7 +309,7 @@ class RLOOConfig(_BaseConfig):
         },
     )
     max_completion_length: int | None = field(
-        default=256,
+        default=512,
         metadata={"help": "Maximum length of the generated completion."},
     )
     ds3_gather_for_generation: bool = field(
@@ -532,6 +570,13 @@ class RLOOConfig(_BaseConfig):
             "installed, it prints the sample. If `wandb` logging is enabled, it logs it to `wandb`."
         },
     )
+    log_multimodal: bool = field(
+        default=True,
+        metadata={
+            "help": "Whether to log multimodal content (images, videos, etc.) together with completions. Disable this "
+            "to reduce log size when using high-resolution multimodal data."
+        },
+    )
     num_completions_to_print: int | None = field(
         default=None,
         metadata={"help": "Number of completions to print with `rich`. If `None`, all completions are logged."},
@@ -544,13 +589,23 @@ class RLOOConfig(_BaseConfig):
         },
     )
 
+    # Parameters that control generation acceleration powered by transformers continuous batching
+    use_transformers_continuous_batching: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to use transformers' continuous batching engine for generating completions. Requires "
+            "transformers>=5.8.0."
+        },
+    )
+    transformers_continuous_batching_config: dict | None = field(
+        default=None,
+        metadata={"help": "Keyword arguments for `transformers.generation.ContinuousBatchingConfig`."},
+    )
+
     # Deprecated parameters
     use_transformers_paged: bool = field(
         default=False,
-        metadata={
-            "help": "Deprecated. It will be replaced by `transformers` continuous batching support in an upcoming "
-            "release."
-        },
+        metadata={"help": "Deprecated. Use `use_transformers_continuous_batching` instead."},
     )
 
     def __post_init__(self):
@@ -558,11 +613,12 @@ class RLOOConfig(_BaseConfig):
 
         if self.use_transformers_paged:
             warnings.warn(
-                "`use_transformers_paged` is deprecated and will be removed in v2.0.0. It will be replaced by "
-                "`transformers` continuous batching support in an upcoming release.",
+                "`use_transformers_paged` is deprecated and will be removed in v2.0.0. Use "
+                "`use_transformers_continuous_batching` instead.",
                 FutureWarning,
                 stacklevel=3,
             )
+            self.use_transformers_continuous_batching = True
 
         if self.parallelism_config is not None and (
             self.parallelism_config.cp_enabled or self.parallelism_config.sp_enabled
@@ -572,6 +628,16 @@ class RLOOConfig(_BaseConfig):
                 "`parallelism_config.sp_size > 1`) yet. RLOO builds model inputs after generation inside the trainer, "
                 "so Transformers' context-parallel / Ulysses sequence-parallel input sharding cannot be applied to the "
                 "raw generation batch. Set both `cp_size=1` and `sp_size=1`, or disable `parallelism_config`."
+            )
+
+        # `auto_find_batch_size` halves the train batch size on OOM, and the generation batch is derived from it. The
+        # reduced batch is no longer guaranteed to hold full prompt groups, which breaks grouping the rewards by
+        # prompt. There's no way to preserve the invariant while shrinking the batch, so reject it up front.
+        if self.auto_find_batch_size:
+            raise ValueError(
+                "auto_find_batch_size is not supported by RLOO, because the generation batch must contain full "
+                "prompt groups of num_generations completions, and reducing the batch size on out-of-memory breaks "
+                "this invariant. Set auto_find_batch_size=False and lower per_device_train_batch_size instead."
             )
 
         num_processes = self.world_size

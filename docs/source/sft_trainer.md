@@ -6,6 +6,8 @@
 
 TRL supports the Supervised Fine-Tuning (SFT) Trainer for training language models.
 
+[`SFTTrainer`] doesn't natively support diffusion models like DiffusionGemma, but it can be easily extended to do so, see the [block-diffusion SFT example](https://github.com/huggingface/trl/blob/main/examples/scripts/sft_diffusion_gemma.py).
+
 This post-training method was contributed by [Younes Belkada](https://huggingface.co/ybelkada).
 
 ## Quick start
@@ -118,7 +120,7 @@ Padding tokens (if present) are ignored in the loss computation by applying an i
 
 ## Logged metrics
 
-While training and evaluating we record the following reward metrics:
+While training and evaluating, we record the following metrics:
 
 * `global_step`: The total number of optimizer steps taken so far.
 * `epoch`: The current epoch number, based on dataset iteration.

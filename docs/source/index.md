@@ -12,7 +12,9 @@ The library is integrated with 🤗 [transformers](https://github.com/huggingfac
 
 ## 🎉 What's New
 
-**TRL v1:** We released TRL v1 — a major milestone that marks a real shift in what TRL is. Read the [blog post](https://huggingface.co/blog/trl-v1) to learn more.
+**🌍 Multi-environment agentic RL:** [`GRPOTrainer`](grpo_trainer) now supports per-example environment selection and environment-owned rewards — mix multiple sandboxed task suites in one run and let each environment define its own scoring, with [Harbor](harbor) and [OpenEnv](openenv).
+
+**🎯 KTO is now stable:** [`KTOTrainer`](kto_trainer) graduates to the stable API after a full alignment pass with [`DPOTrainer`](dpo_trainer).
 
 ## Taxonomy
 
@@ -42,9 +44,9 @@ Below is the current list of TRL trainers, organized by method type (⚡️ = vL
 
 - [`SFTTrainer`](sft_trainer)
 - [`DPOTrainer`](dpo_trainer)
+- [`KTOTrainer`](kto_trainer)
 - [`BCOTrainer`](bco_trainer) 🧪
 - [`CPOTrainer`](cpo_trainer) 🧪
-- [`KTOTrainer`](kto_trainer) 🧪
 - [`ORPOTrainer`](orpo_trainer) 🧪
 
 ### Knowledge distillation

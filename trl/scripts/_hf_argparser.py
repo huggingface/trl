@@ -101,18 +101,19 @@ def HfArg(
     ```
 
     Args:
-        aliases (Union[str, list[str]], optional):
+        aliases (Union[str, list[str]], *optional*):
             Single string or list of strings of aliases to pass on to argparse, e.g. `aliases=["--example", "-e"]`.
             Defaults to None.
-        help (str, optional): Help string to pass on to argparse that can be displayed with --help. Defaults to None.
-        default (Any, optional):
+        help (str, *optional*):
+            Help string to pass on to argparse that can be displayed with --help. Defaults to None.
+        default (Any, *optional*):
             Default value for the argument. If not default or default_factory is specified, the argument is required.
             Defaults to dataclasses.MISSING.
-        default_factory (Callable[[], Any], optional):
+        default_factory (Callable[[], Any], *optional*):
             The default_factory is a 0-argument function called to initialize a field's value. It is useful to provide
             default values for mutable types, e.g. lists: `default_factory=list`. Mutually exclusive with `default=`.
             Defaults to dataclasses.MISSING.
-        metadata (dict, optional): Further metadata to pass on to `dataclasses.field`. Defaults to None.
+        metadata (dict, *optional*): Further metadata to pass on to `dataclasses.field`. Defaults to None.
 
     Returns:
         Field: A `dataclasses.Field` with the desired properties.

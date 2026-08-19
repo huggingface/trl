@@ -21,7 +21,8 @@ import numpy as np
 import torch
 import torch.nn as nn
 import transformers
-from accelerate import PartialState, logging
+from accelerate import PartialState
+from accelerate.logging import get_logger
 from accelerate.utils import is_peft_model
 from datasets import Dataset, features
 from packaging.version import Version
@@ -47,7 +48,8 @@ from .prm_config import PRMConfig
 if is_peft_available():
     from peft import PeftConfig
 
-logger = logging.get_logger(__name__)
+
+logger = get_logger(__name__)
 
 
 def compute_accuracy(eval_pred: EvalPrediction) -> dict[str, float]:

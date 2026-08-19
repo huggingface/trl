@@ -16,9 +16,9 @@
 from datasets import Dataset, load_dataset
 from transformers import AutoTokenizer
 
-from trl.experimental.utils import DataCollatorForChatML, truncate_dataset
+from trl.experimental.utils import DataCollatorForChatML, prepare_peft_model, truncate_dataset
 
-from ..testing_utils import TrlTestCase
+from ..testing_utils import TrlTestCase, require_bitsandbytes, require_peft, require_torch_accelerator
 
 
 class TestDataCollatorForChatML(TrlTestCase):
@@ -158,3 +158,27 @@ class TestTruncateExamples(TrlTestCase):
         }
         dataset = truncate_dataset(dataset, max_length)
         assert dataset.to_dict() == expected_output
+
+
+class TestPreparePeftModel(TrlTestCase):
+    @require_peft
+    @require_bitsandbytes
+    @require_torch_accelerator
+    def test_qlora_bf16_yields_uniform_dtype(self):
+        import torch
+        from peft import LoraConfig
+        from transformers import AutoModelForCausalLM, BitsAndBytesConfig, TrainingArguments
+
+        model = AutoModelForCausalLM.from_pretrained(
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            quantization_config=BitsAndBytesConfig(
+                load_in_4bit=True, bnb_4bit_compute_dtype=torch.bfloat16, bnb_4bit_quant_type="nf4"
+            ),
+            dtype=torch.bfloat16,
+        )
+        args = TrainingArguments(output_dir=self.tmp_dir, bf16=True, report_to=[])
+        peft_config = LoraConfig(r=8, target_modules=["q_proj", "k_proj", "v_proj", "o_proj"], task_type="CAUSAL_LM")
+        model = prepare_peft_model(model, peft_config, args)
+
+        fp32 = [name for name, param in model.named_parameters() if param.dtype == torch.float32]
+        assert fp32 == [], f"expected no float32 params after prepare_peft_model, got e.g. {fp32[:5]}"

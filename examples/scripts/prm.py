@@ -52,13 +52,7 @@ from accelerate import logging
 from datasets import load_dataset
 from transformers import AutoModelForTokenClassification, AutoTokenizer, HfArgumentParser
 
-from trl import (
-    ModelConfig,
-    ScriptArguments,
-    get_kbit_device_map,
-    get_peft_config,
-    get_quantization_config,
-)
+from trl import ModelConfig, ScriptArguments, get_peft_config, get_quantization_config
 from trl.experimental.prm import PRMConfig, PRMTrainer
 
 
@@ -80,14 +74,11 @@ if __name__ == "__main__":
     quantization_config = get_quantization_config(model_args)
     if quantization_config is not None:
         # Passing None would not be treated the same as omitting the argument, so we include it only when valid.
-        model_kwargs["device_map"] = get_kbit_device_map()
         model_kwargs["quantization_config"] = quantization_config
 
-    tokenizer = AutoTokenizer.from_pretrained(
-        model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code, use_fast=True
-    )
+    tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path, use_fast=True)
     model = AutoModelForTokenClassification.from_pretrained(
-        model_args.model_name_or_path, num_labels=2, trust_remote_code=model_args.trust_remote_code, **model_kwargs
+        model_args.model_name_or_path, num_labels=2, **model_kwargs
     )
 
     if model_args.use_peft and model_args.lora_task_type != "TOKEN_CLS":

@@ -1,7 +1,5 @@
 {#- Training variant of the Qwen3.5 chat template, NoThink flavor (see qwen3_5_nothink.jinja for the original).
     Modifications vs the original:
-    - {%- if '</think>' in content %} → {%- if '<think>' in content and '</think>' in content %}
-      Always check for both tags to avoid edge cases where the model generates only one tag.
     - Removed the loop.index0 > ns.last_query_index conditional; always include thinking block.
       This makes the template prefix-preserving for the [user, assistant] → [user, assistant, tool] transition.
     - Added {% generation %} / {% endgeneration %} around assistant message output to support
@@ -100,7 +98,7 @@
         {%- if message.reasoning_content is string %}
             {%- set reasoning_content = message.reasoning_content %}
         {%- else %}
-            {%- if '<think>' in content and '</think>' in content %}
+            {%- if '</think>' in content %}
                 {%- set reasoning_content = content.split('</think>')[0].rstrip('\n').split('<think>')[-1].lstrip('\n') %}
                 {%- set content = content.split('</think>')[-1].lstrip('\n') %}
             {%- endif %}

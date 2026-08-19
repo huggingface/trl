@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import logging
+import math
 import threading
 from collections.abc import Callable
 
@@ -112,6 +113,111 @@ def accuracy_reward(
         log_extra("answer_parsed", answer_parsed_strs)
 
     return rewards
+
+
+def get_cosine_scaled_reward(
+    max_len: int,
+    min_value_wrong: float = -1.0,
+    max_value_wrong: float = -0.5,
+    min_value_correct: float = 0.5,
+    max_value_correct: float = 1.0,
+) -> Callable:
+    # docstyle-ignore
+    r"""
+    Reward function that scales a correctness reward by the completion length following a cosine schedule, to favor
+    concise reasoning. Reference: Appendix C.1 of the "Demystifying Long Chain-of-Thought Reasoning" paper
+    (https://huggingface.co/papers/2502.03373).
+
+    Correctness is determined by math verification (as in [`~rewards.accuracy_reward`]), and the length is the number
+    of completion tokens. The reward interpolates along a cosine schedule between a short-completion and a
+    long-completion bound:
+
+    $$
+    R_{\text{cosine}}(y) = v_{\min} + \frac{1}{2}(v_{\max} - v_{\min})\left(1 + \cos\left(\frac{|y|}{L_{\max}}\pi\right)\right)
+    $$
+
+    For a **correct** completion, $(v_{\min}, v_{\max}) = (\texttt{min\_value\_correct}, \texttt{max\_value\_correct})$,
+    so a shorter completion is rewarded more. For a **wrong** completion, the bounds are swapped to
+    $(v_{\min}, v_{\max}) = (\texttt{max\_value\_wrong}, \texttt{min\_value\_wrong})$, so a shorter completion is
+    penalized more (a longer wrong completion is penalized less, preserving exploration). When the gold solution is not
+    parseable, the example is skipped (reward `None`), as in [`~rewards.accuracy_reward`].
+
+    Args:
+        max_len (`int`):
+            Maximum completion length (in tokens) used to normalize the cosine schedule, $L_{\max}$.
+        min_value_wrong (`float`, *optional*, defaults to `-1.0`):
+            Reward of a wrong completion at the shortest length.
+        max_value_wrong (`float`, *optional*, defaults to `-0.5`):
+            Reward of a wrong completion at the longest length.
+        min_value_correct (`float`, *optional*, defaults to `0.5`):
+            Reward of a correct completion at the longest length.
+        max_value_correct (`float`, *optional*, defaults to `1.0`):
+            Reward of a correct completion at the shortest length.
+
+    Returns:
+        `Callable`:
+            A reward function that takes completions, their solutions and token ids, and returns a list of rewards
+            (`None` for examples with an unparseable gold solution).
+
+    Example:
+    ```python
+    >>> from trl.rewards import get_cosine_scaled_reward
+
+    >>> cosine_scaled_reward = get_cosine_scaled_reward(max_len=100)
+    >>> completions = [[{"content": r"\boxed{\frac{1}{3}}"}], [{"content": r"\boxed{\frac{1}{2}}"}]]
+    >>> solution = [r"\frac{1}{3}", r"\frac{1}{3}"]
+    >>> completion_ids = [[1] * 50, [1] * 50]  # both completions are 50 tokens, half of max_len
+    >>> cosine_scaled_reward(completions, solution, completion_ids)
+    [0.75, -0.75]
+    ```
+    """
+    return _CosineScaledReward(max_len, min_value_wrong, max_value_wrong, min_value_correct, max_value_correct)
+
+
+class _CosineScaledReward:
+    # Callable class rather than a closure so the reward stays picklable: the async GRPO rollout
+    # worker forwards reward funcs to a spawned child process, and closures can't be pickled.
+    __name__ = "cosine_scaled_reward"
+
+    def __init__(
+        self,
+        max_len: int,
+        min_value_wrong: float,
+        max_value_wrong: float,
+        min_value_correct: float,
+        max_value_correct: float,
+    ):
+        self.max_len = max_len
+        self.min_value_wrong = min_value_wrong
+        self.max_value_wrong = max_value_wrong
+        self.min_value_correct = min_value_correct
+        self.max_value_correct = max_value_correct
+
+    def __call__(
+        self,
+        completions: list[list[dict[str, str]]],
+        solution: list[str],
+        completion_ids: list[list[int]],
+        **kwargs,
+    ) -> list[float | None]:
+        is_correct = accuracy_reward(completions, solution)
+        rewards = []
+        for correct, ids in zip(is_correct, completion_ids, strict=True):
+            if correct is None:
+                # Gold solution was not parseable; skip the example, as in accuracy_reward.
+                rewards.append(None)
+                continue
+            # Clamp to 1.0 so completions longer than max_len stay at the long-length bound: cos is periodic, so
+            # without clamping the schedule would climb back up past max_len and reward very long completions.
+            progress = min(len(ids) / self.max_len, 1.0)
+            cosine = math.cos(progress * math.pi)
+            if correct:
+                min_value, max_value = self.min_value_correct, self.max_value_correct
+            else:
+                # Swap the bounds so that a shorter wrong completion is penalized more than a longer one.
+                min_value, max_value = self.max_value_wrong, self.min_value_wrong
+            rewards.append(float(min_value + 0.5 * (max_value - min_value) * (1.0 + cosine)))
+        return rewards
 
 
 def reasoning_accuracy_reward(

@@ -111,7 +111,7 @@ python examples/scripts/nash_md.py \
 
 ## Logged metrics
 
-While training and evaluating, we record the following reward metrics:
+While training and evaluating, we record the following metrics:
 
 * `loss/kl`: The mean KL divergence between the model and reference data.
 * `objective/entropy`: The mean entropy of the model and reference data.

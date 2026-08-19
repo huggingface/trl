@@ -31,9 +31,10 @@ from transformers import (
 )
 
 from ...data_utils import maybe_apply_chat_template
-from ...models import create_reference_model, unwrap_model_for_generation
+from ...models import unwrap_model_for_generation
 from ...trainer.base_trainer import _BaseTrainer
 from ...trainer.utils import selective_log_softmax
+from ..utils import create_reference_model
 from .a2po_config import A2POConfig
 
 
@@ -114,7 +115,9 @@ class A2POTrainer(_BaseTrainer):
 
         # Models
         if isinstance(model, str):
-            model = AutoModelForCausalLM.from_pretrained(model, **(args.model_init_kwargs or {}))
+            model_init_kwargs = args.model_init_kwargs or {}
+            model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
+            model = AutoModelForCausalLM.from_pretrained(model, **model_init_kwargs)
         model_id = model.config._name_or_path
 
         # Some models (e.g. SmolVLM/Idefics3) don't support the `logits_to_keep` argument and error out if we pass it.
@@ -126,7 +129,9 @@ class A2POTrainer(_BaseTrainer):
 
         # Processing class
         if processing_class is None:
-            processing_class = AutoTokenizer.from_pretrained(model_id, padding_side="left")
+            processing_class = AutoTokenizer.from_pretrained(
+                model_id, padding_side="left", trust_remote_code=args.trust_remote_code
+            )
 
         # Reward functions
         if not isinstance(reward_funcs, list):

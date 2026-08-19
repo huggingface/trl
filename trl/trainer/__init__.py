@@ -41,7 +41,6 @@ _import_structure = {
     "utils": [
         "disable_dropout_in_model",
         "ensure_master_addr_port",
-        "get_kbit_device_map",
         "get_peft_config",
         "get_quantization_config",
         "patch_chunked_lm_head",
@@ -72,7 +71,6 @@ if TYPE_CHECKING:
     from .utils import (
         disable_dropout_in_model,
         ensure_master_addr_port,
-        get_kbit_device_map,
         get_peft_config,
         get_quantization_config,
         patch_chunked_lm_head,

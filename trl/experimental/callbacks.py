@@ -74,13 +74,13 @@ class PEFTAdapterEMACallback(TrainerCallback):
 
     Usage:
         ```python
-        trainer.add_callback(
-            PEFTAdapterEMACallback(
-                model=model,
-                teacher_adapter_name="teacher",
-                update_rate=0.05,
-            )
-        )
+        >>> trainer.add_callback(
+        ...     PEFTAdapterEMACallback(
+        ...         model=model,
+        ...         teacher_adapter_name="teacher",
+        ...         update_rate=0.05,
+        ...     )
+        ... )
         ```
     """
 

@@ -15,6 +15,71 @@
 from collections.abc import Callable
 
 
+def get_repetition_penalty_reward(ngram_size: int = 3, max_penalty: float = -1.0) -> Callable:
+    # docstyle-ignore
+    r"""
+    Reward function that penalizes repeated n-grams in a completion, used to discourage degenerate, repetitive text
+    (a common failure mode and reward-hacking strategy when length- or format-shaping rewards are used). Reference:
+    Appendix C.2 of the "Demystifying Long Chain-of-Thought Reasoning" paper (https://huggingface.co/papers/2502.03373).
+
+    The penalty is proportional to the fraction of repeated n-grams in the completion:
+
+    $$
+    R_{\text{repetition}}(y) = \left(1 - \frac{\#\,\text{unique } n\text{-grams}}{\#\,\text{total } n\text{-grams}}\right) \times p
+    $$
+
+    where $p$ is `max_penalty`. A completion with no repeated n-gram gets a reward of `0.0`, while a fully repetitive
+    one approaches `max_penalty`. The n-grams are computed over the completion token ids (the paper applies the penalty
+    to repeated tokens), so the reward is tokenizer-defined and language-agnostic. Completions with fewer than
+    `ngram_size` tokens get a reward of `0.0`.
+
+    Args:
+        ngram_size (`int`, *optional*, defaults to `3`):
+            Size of the token n-grams to consider.
+        max_penalty (`float`, *optional*, defaults to `-1.0`):
+            Most negative penalty, applied to a fully repetitive completion. Must be non-positive.
+
+    Returns:
+        `Callable`:
+            A reward function that takes a list of completion token ids and returns a list of penalties (each in
+            `[max_penalty, 0.0]`).
+
+    Example:
+    ```python
+    >>> from trl.rewards import get_repetition_penalty_reward
+
+    >>> repetition_penalty = get_repetition_penalty_reward(ngram_size=2, max_penalty=-1.0)
+    >>> completion_ids = [[1, 2, 3, 4], [5, 5, 5, 5, 5]]
+    >>> repetition_penalty(completion_ids)
+    [0.0, -0.75]
+    ```
+    """
+    if max_penalty > 0:
+        raise ValueError(f"max_penalty {max_penalty} should not be positive")
+    return _RepetitionPenalty(ngram_size, max_penalty)
+
+
+class _RepetitionPenalty:
+    # Callable class rather than a closure so the reward stays picklable: the async GRPO rollout
+    # worker forwards reward funcs to a spawned child process, and closures can't be pickled.
+    __name__ = "repetition_penalty_reward"
+
+    def __init__(self, ngram_size: int, max_penalty: float):
+        self.ngram_size = ngram_size
+        self.max_penalty = max_penalty
+
+    def __call__(self, completion_ids: list[list[int]], **kwargs) -> list[float]:
+        rewards = []
+        for ids in completion_ids:
+            if len(ids) < self.ngram_size:
+                rewards.append(0.0)
+                continue
+            ngrams = list(zip(*[ids[i:] for i in range(self.ngram_size)], strict=False))
+            scaling = 1 - len(set(ngrams)) / len(ngrams)
+            rewards.append(scaling * self.max_penalty if scaling else 0.0)
+        return rewards
+
+
 def get_soft_overlong_punishment(max_completion_len: int, soft_punish_cache: int) -> Callable:
     # docstyle-ignore
     r"""
@@ -37,12 +102,12 @@ def get_soft_overlong_punishment(max_completion_len: int, soft_punish_cache: int
 
     Example:
     ```python
-    from trl.rewards import get_soft_overlong_punishment
+    >>> from trl.rewards import get_soft_overlong_punishment
 
-    soft_overlong_punishment = get_soft_overlong_punishment(max_completion_len=100, soft_punish_cache=20)
-    completion_ids = [[1] * 90]  # simulating a completion with 90 tokens. 90 is between 80 and 100.
-    rewards = soft_overlong_punishment(completion_ids)
-    print(rewards)  # [-0.5]
+    >>> soft_overlong_punishment = get_soft_overlong_punishment(max_completion_len=100, soft_punish_cache=20)
+    >>> completion_ids = [[1] * 90]  # simulating a completion with 90 tokens. 90 is between 80 and 100.
+    >>> soft_overlong_punishment(completion_ids)
+    >>> [-0.5]
     ```
     """
     return _SoftOverlongPunishment(max_completion_len, soft_punish_cache)
