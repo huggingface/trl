@@ -17,7 +17,7 @@
 #     "trl",
 #     "trackio",
 #     "datasets",
-#     "openenv-opencode @ git+https://github.com/meta-pytorch/OpenEnv.git#subdirectory=envs/opencode_env",
+#     "openenv-opencode-env @ git+https://github.com/huggingface/OpenEnv.git#subdirectory=envs/opencode_env",
 # ]
 # ///
 
@@ -37,7 +37,7 @@ rollout worker can pickle the factory + verifier into its spawned child process.
 Requirements:
   - An OpenAI-compatible vLLM server (see below) reachable at `--vllm-url`.
   - Internet on this node the first time: `warmup()` installs the `opencode` CLI into a template dir once.
-  - `pip install git+https://github.com/meta-pytorch/OpenEnv.git#subdirectory=envs/opencode_env`
+  - `pip install git+https://github.com/huggingface/OpenEnv.git#subdirectory=envs/opencode_env`
 
 Run (2 GPUs: vLLM on one, trainer on the other):
 
@@ -417,8 +417,8 @@ class FreePortOpenCodeSessionFactory(OpenCodeSessionFactory):
 
     def _start_proxy(self, sandbox):
         port = _free_port()
-        trace_path = oc_harness._PROXY_TRACE_PATH
-        log_path = oc_harness._PROXY_LOG_PATH
+        trace_path = oc_harness.proxy_trace_path(self._config)
+        log_path = oc_harness.proxy_log_path(self._config)
         if not sandbox.exists("/home/user/proxy/interception.py"):
             self._exec_with_retry(
                 sandbox,

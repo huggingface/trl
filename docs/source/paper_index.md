@@ -557,7 +557,7 @@ $$
 \right).
 $$
 
-To enable this feature, set the `use_bias_correction_kl` parameter to `True` in the [`GRPOConfig`], and `beta > 0`:
+This feature is enabled by default (`use_bias_correction_kl=True` in the [`GRPOConfig`]), so you only need to set `beta > 0`:
 
 ```python
 from trl import GRPOConfig
@@ -565,7 +565,6 @@ from trl import GRPOConfig
 training_args = GRPOConfig(
     ...,
     beta=0.001,  # the paper doesn't specify the value used, so we use the value from "DeepSeek-R1 incentivizes reasoning in LLMs through reinforcement learning"
-    use_bias_correction_kl=True,
 )
 ```
 
@@ -1655,7 +1654,7 @@ Papers relating to training a student model with the help of a teacher model.
 
 **📜 Paper**: https://huggingface.co/papers/2306.13649
 
-Introduces Generalized Knowledge Distillation (GKD), which addresses distribution mismatch in KD for auto-regressive models by training the student on its own generated outputs with teacher feedback, instead of a fixed set of sequences. GKD supports flexible loss functions (e.g. beyond KL when the student cannot match the teacher) and integrates with RL fine-tuning (RLHF). The paper reports results on summarization, translation, arithmetic reasoning, and instruction-tuning. Used in TRL via [`experimental.gkd.GKDTrainer`], which exposes the paper's on/off-policy mixing (`lmbda`). [`experimental.distillation.DistillationTrainer`] implements the same generalized-JSD objective for the always-on-policy case. To reproduce the paper's setting, use this configuration:
+Introduces Generalized Knowledge Distillation (GKD), which addresses distribution mismatch in KD for auto-regressive models by training the student on its own generated outputs with teacher feedback, instead of a fixed set of sequences. GKD supports flexible loss functions (e.g. beyond KL when the student cannot match the teacher) and integrates with RL fine-tuning (RLHF). The paper reports results on summarization, translation, arithmetic reasoning, and instruction-tuning. Used in TRL via [`experimental.gkd.GKDTrainer`], which exposes the paper's on/off-policy mixing (`lmbda`). [`DistillationTrainer`] implements the same generalized-JSD objective for the always-on-policy case. To reproduce the paper's setting, use this configuration:
 
 ```python
 from trl.experimental.gkd import GKDConfig
@@ -1721,13 +1720,12 @@ On-Policy Distillation has been shown to outperform SFT, GRPO and can be used to
 
 Additionally on-policy distillation is more compute efficient and is less prone to overfitting when trained with limited data.
 
-To train a model with on-policy distillation using TRL, you can use the following configuration, with the [`experimental.distillation.DistillationTrainer`] and [`experimental.distillation.DistillationConfig`]:
+To train a model with on-policy distillation using TRL, you can use the following configuration, with the [`DistillationTrainer`] and [`DistillationConfig`]:
 
 ```python
-from trl.experimental.distillation import DistillationConfig
+from trl import DistillationConfig
 
 training_args = DistillationConfig(
-    lmbda=1.0,  # student produces rollouts for all batches
     beta=1.0,  # to ensure reverse-kl as the loss function
     teacher_model_name_or_path="teacher-model",  # specify the teacher model
 )
