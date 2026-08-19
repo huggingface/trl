@@ -72,7 +72,11 @@ class OPSDConfig(_BaseConfig):
         model_init_kwargs (`dict[str, Any]`, *optional*):
             Keyword arguments for `transformers.AutoModelForCausalLM.from_pretrained`, used when the `model` argument
             of the `OPSDTrainer` is provided as a string.
-        disable_dropout (`bool`, *optional*, defaults to `True`):
+        trust_remote_code (`bool`, *optional*, defaults to `False`):
+            Whether to allow loading models and tokenizers that ship custom Python code from the Hub. Forwarded to
+            [`~transformers.AutoModelForCausalLM.from_pretrained`] and [`~transformers.AutoProcessor.from_pretrained`],
+            for both the student and teacher.
+        disable_dropout (`bool`, *optional*, defaults to `False`):
             Whether to disable dropout in the student and teacher models.
 
         > Parameters that control data preprocessing
@@ -188,8 +192,16 @@ class OPSDConfig(_BaseConfig):
             "help": "Keyword arguments for `transformers.AutoModelForCausalLM.from_pretrained`, used when the `model` argument of the `OPSDTrainer` is provided as a string."
         },
     )
+    trust_remote_code: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to allow loading models and tokenizers that ship custom Python code from the Hub. "
+            "Forwarded to `AutoModelForCausalLM.from_pretrained` and `AutoProcessor.from_pretrained`, for both the "
+            "student and teacher."
+        },
+    )
     disable_dropout: bool = field(
-        default=True,
+        default=False,
         metadata={"help": "Whether to disable dropout in the student and teacher models."},
     )
     remove_unused_columns: bool = field(

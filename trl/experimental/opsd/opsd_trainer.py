@@ -29,6 +29,7 @@ from torch import nn
 from torch.utils.data import DataLoader, Sampler
 from transformers import (
     AutoProcessor,
+    BitsAndBytesConfig,
     GenerationConfig,
     PreTrainedModel,
     PreTrainedTokenizerBase,
@@ -68,7 +69,8 @@ from .opsd_config import OPSDConfig
 
 
 if is_peft_available():
-    from peft import PeftConfig
+    from peft import PeftConfig, PromptLearningConfig
+    from peft.tuners.tuners_utils import BaseTunerLayer
 
 if is_liger_kernel_available():
     from liger_kernel.chunked_loss import LigerFusedLinearJSDLoss
@@ -233,6 +235,7 @@ class OPSDTrainer(_BaseTrainer):
         processing_class: PreTrainedTokenizerBase | ProcessorMixin | None = None,
         callbacks: list[TrainerCallback] | None = None,
         optimizers: tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None] = (None, None),
+        quantization_config: "BitsAndBytesConfig | None" = None,
         peft_config: "PeftConfig | None" = None,
     ):
         if isinstance(train_dataset, IterableDataset):
@@ -249,14 +252,30 @@ class OPSDTrainer(_BaseTrainer):
 
         if isinstance(model, str):
             model_init_kwargs = args.model_init_kwargs or {}
+            if quantization_config is not None:
+                if "quantization_config" in model_init_kwargs:
+                    raise ValueError(
+                        "You set `quantization_config` both as a trainer argument and in `args.model_init_kwargs`. "
+                        "Please set it in only one place, preferably as a trainer argument."
+                    )
+                model_init_kwargs["quantization_config"] = quantization_config
             if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 model_init_kwargs["device_map"] = None
+            model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
             model = create_model_from_path(model, **model_init_kwargs)
-        elif args.model_init_kwargs is not None:
-            logger.warning(
-                "You passed `model_init_kwargs` to the self-distillation config, but `model` is already "
-                "instantiated. The `model_init_kwargs` will be ignored."
-            )
+        else:
+            if args.model_init_kwargs is not None:
+                logger.warning(
+                    "You passed `model_init_kwargs` to the self-distillation config, but `model` is already "
+                    "instantiated. The `model_init_kwargs` will be ignored."
+                )
+            if quantization_config is not None:
+                logger.warning(
+                    "You passed `quantization_config` to the trainer, but your model is already instantiated. "
+                    "The `quantization_config` will be ignored."
+                )
+        # Non-quantized models do not have the `is_loaded_in_{8,4}bit` attributes, whereas quantized models do.
+        is_quantized_model = getattr(model, "is_loaded_in_4bit", False) or getattr(model, "is_loaded_in_8bit", False)
 
         self.model_kwarg_keys = (
             inspect.signature(model.forward).parameters.keys()
@@ -291,15 +310,29 @@ class OPSDTrainer(_BaseTrainer):
         if peft_config is not None or (is_peft_available() and getattr(model, "peft_config", None) is not None):
             model = prepare_peft_model(model, peft_config, args)
 
+        # When using QLoRA, the PEFT adapter weights are converted to bf16 to follow the recommendations from the
+        # original paper (see https://huggingface.co/papers/2305.14314, paragraph 3). Normally, this can be done by
+        # passing `autocast_adapter_dtype=False` to `get_peft_model`, but this option is not yet supported for
+        # quantized models. See: https://github.com/huggingface/peft/issues/2889
+        if is_quantized_model:
+            for param in model.parameters():
+                if param.requires_grad:
+                    param.data = param.data.to(torch.bfloat16)
+
         # The EMA teacher adapter must exist before accelerate/DeepSpeed wraps the model: ZeRO-3 registers every
         # module exactly once at initialization and cannot adopt modules added afterwards.
         if args.teacher_model_kind == "ema" and is_peft_model(model) and is_pure_lora_training(model):
             active_adapter = model.active_adapter or "default"
             model.add_adapter("teacher", model.peft_config[active_adapter])
+            # `PEFTAdapterEMACallback` zeroes the adapter too, but not until `Trainer.train()` starts.
+            PEFTAdapterEMACallback(model=model)._initialize_teacher_adapter()
 
         if processing_class is None:
             processing_class = AutoProcessor.from_pretrained(
-                get_config_model_id(model.config), truncation_side="left", padding_side="left"
+                get_config_model_id(model.config),
+                truncation_side="left",
+                padding_side="left",
+                trust_remote_code=args.trust_remote_code,
             )
 
         if isinstance(processing_class, ProcessorMixin):
@@ -384,6 +417,21 @@ class OPSDTrainer(_BaseTrainer):
                     "Liger is required to use `use_liger_kernel` as the self-distillation loss. Run "
                     "`pip install liger-kernel`."
                 )
+            if is_peft_model(model):
+                # The fused kernel reads `lm_head.weight` directly and forwards the backbone via
+                # `_forward_redirection`, bypassing `PeftModel.forward()`.
+                if isinstance(model.get_output_embeddings(), BaseTunerLayer):
+                    raise ValueError(
+                        "`use_liger_kernel` does not support a PEFT adapter on `lm_head`: the fused kernel reads "
+                        "`lm_head.weight` directly, so the adapter is ignored and never trained. Remove "
+                        "`'lm_head'` from your `target_modules`."
+                    )
+                if any(isinstance(cfg, PromptLearningConfig) for cfg in model.peft_config.values()):
+                    raise ValueError(
+                        "`use_liger_kernel` does not support prompt-learning PEFT methods (PromptTuning, "
+                        "PrefixTuning, P-Tuning): the fused kernel calls the backbone directly, so virtual tokens "
+                        "are never prepended. Use a weight-based adapter such as LoRA instead."
+                    )
             if args.distillation_mode != "full_logits":
                 raise ValueError(
                     "`use_liger_kernel` only supports `distillation_mode='full_logits'`, got "
@@ -446,6 +494,7 @@ class OPSDTrainer(_BaseTrainer):
                 * args.steps_per_generation,
                 enable_sleep_mode=args.vllm_enable_sleep_mode,
                 model_impl=args.vllm_model_impl,
+                trust_remote_code=args.trust_remote_code,
                 repetition_penalty=args.repetition_penalty,
                 temperature=self.temperature,
                 top_p=args.top_p,
@@ -557,6 +606,7 @@ class OPSDTrainer(_BaseTrainer):
         model_init_kwargs = self.args.model_init_kwargs or {}
         if self.args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
             model_init_kwargs["device_map"] = None
+        model_init_kwargs.setdefault("trust_remote_code", self.args.trust_remote_code)
         self.teacher_model = create_model_from_path(get_config_model_id(self.model.config), **model_init_kwargs)
         self.teacher_model.requires_grad_(False)
         self.teacher_model.eval()

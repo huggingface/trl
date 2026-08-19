@@ -68,7 +68,7 @@ class SDFTConfig(_BaseConfig):
             Whether to allow loading models and tokenizers that ship custom Python code from the Hub. Forwarded to
             [`~transformers.AutoModelForCausalLM.from_pretrained`] and [`~transformers.AutoProcessor.from_pretrained`],
             for both the student and teacher.
-        disable_dropout (`bool`, *optional*, defaults to `True`):
+        disable_dropout (`bool`, *optional*, defaults to `False`):
             Whether to disable dropout in the student and teacher models.
 
         > Parameters that control data preprocessing
@@ -196,7 +196,7 @@ class SDFTConfig(_BaseConfig):
         },
     )
     disable_dropout: bool = field(
-        default=True,
+        default=False,
         metadata={"help": "Whether to disable dropout in the student and teacher models."},
     )
     remove_unused_columns: bool = field(

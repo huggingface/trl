@@ -123,7 +123,7 @@ class SDPOConfig(_BaseConfig):
             Whether to allow loading models and tokenizers that ship custom Python code from the Hub. Forwarded to
             [`~transformers.AutoModelForCausalLM.from_pretrained`] and [`~transformers.AutoProcessor.from_pretrained`].
             Also applied to reward-model and reward-tokenizer loads.
-        disable_dropout (`bool`, *optional*, defaults to `True`):
+        disable_dropout (`bool`, *optional*, defaults to `False`):
             Whether to disable dropout in the model. This is useful for training with a reference model, as it prevents
             the model from generating different logprobs for the same input.
 
@@ -269,7 +269,7 @@ class SDPOConfig(_BaseConfig):
         },
     )
     disable_dropout: bool = field(
-        default=True,
+        default=False,
         metadata={
             "help": "Whether to disable dropout in the model. This is useful for training with a reference model, as it prevents the model from generating different logprobs for the same input."
         },
