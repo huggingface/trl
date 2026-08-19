@@ -421,6 +421,10 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
         padding_free (`bool`, *optional*, defaults to `False`):
             If set to `True`, the sequences will be flattened into a single sequence, and the position IDs will be
             generated accordingly and returned instead of the attention mask.
+        return_position_ids (`bool`, *optional*, defaults to `False`):
+            If set to `True`, position IDs are returned alongside the attention mask in the padded (non-padding-free)
+            mode. Required by sequence parallelism (Ulysses/ALST), which shards batches along the sequence dimension
+            and needs each token's global position.
         pad_to_multiple_of (`int`, *optional*):
             If set, the sequences will be padded to a multiple of this value.
         return_tensors (`str`, *optional*, defaults to `"pt"`):
@@ -464,6 +468,7 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
 
     pad_token_id: int
     padding_free: bool = False
+    return_position_ids: bool = False
     pad_to_multiple_of: int | None = None
     return_tensors: str = "pt"
 
@@ -478,12 +483,12 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
 
         # For padding-free, we should NOT create attention_mask as it causes FlashAttention to ignore position_ids and
         # compute wrong cu_seq_lens from the all-1s mask
-        if self.padding_free:
+        if self.padding_free or self.return_position_ids:
             if batch_seq_lengths is not None:
                 position_ids = self.get_position_ids_from_packed_seq_lengths(batch_seq_lengths)
             else:
                 position_ids = [torch.arange(len(ids)) for ids in input_ids]
-        else:
+        if not self.padding_free:
             attention_mask = [torch.ones_like(ids) for ids in input_ids]
 
         # If padding_free, flatten everything into a single sequence
@@ -509,6 +514,10 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
             )
             output["labels"][output["position_ids"] == 0] = -100
         else:
+            if self.return_position_ids:
+                output["position_ids"] = pad(
+                    position_ids, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
+                )
             output["attention_mask"] = pad(
                 attention_mask, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
             )
@@ -1359,6 +1368,16 @@ class SFTTrainer(_BaseTrainer):
             optimizer_cls_and_kwargs=optimizer_cls_and_kwargs,
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         )
+
+        # Sequence parallelism (Ulysses/ALST) shards batches along the sequence dimension and requires
+        # `position_ids` in every batch to preserve each token's global position.
+        parallelism_config = self.accelerator.parallelism_config
+        if (
+            parallelism_config is not None
+            and parallelism_config.sp_enabled
+            and isinstance(self.data_collator, DataCollatorForLanguageModeling)
+        ):
+            self.data_collator.return_position_ids = True
 
         # Initialize activation offloading context
         if self.args.activation_offloading:
