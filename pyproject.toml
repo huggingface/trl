@@ -75,9 +75,11 @@ scikit = [
 test = [
     "pytest-cov",
     "pytest-datadir>=1.7.0",  # lazy datadirs
+    "pytest-reportlog",  # test report consumed by scripts/log_reports.py
     "pytest-rerunfailures==15.1",
     "pytest-xdist",
-    "pytest"
+    "pytest",
+    "tabulate"  # test report rendering in scripts/log_reports.py
 ]
 vllm = [
     "vllm>=0.18.0,<=0.27.1",
@@ -125,9 +127,11 @@ dev = [
     # test
     "pytest-cov",
     "pytest-datadir>=1.7.0",  # lazy datadirs
+    "pytest-reportlog",  # test report consumed by scripts/log_reports.py
     "pytest-rerunfailures==15.1",
     "pytest-xdist",
     "pytest",
+    "tabulate",  # test report rendering in scripts/log_reports.py
     # vllm: not included in dev by default due to CUDA error; see GH-4228
     # vlm
     "Pillow",
