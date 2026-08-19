@@ -1,5 +1,13 @@
 on:
+  # scan the pushed commits, not the whole history: on `pull_request` and on a push to main the action
+  # derives a base commit, while a bare `push` has none on a new branch and walks every commit ever
+  # made. if a base is ever set explicitly, pass a sha: a ref name does not resolve in the scanner clone.
+  pull_request:
   push:
+    branches:
+      - main
+  schedule:
+    - cron: '0 3 * * 1'  # weekly full-history sweep, so history stays in scope
 
 name: Secret Leaks
 

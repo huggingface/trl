@@ -22,13 +22,13 @@ logger = get_logger(__name__)
 
 
 class VLLMClient:
-    """Synchronous HTTP client for the vLLM server used by async GRPO.
+    """Synchronous HTTP client for a vLLM server used by async distillation.
 
-    The trainer and [`WeightTransferClient`] both talk to the same `vllm serve` instance, so this client is the single
-    place that knows the server's HTTP API: readiness, model introspection, pause/resume, and the weight-update
-    endpoints. It is stateless (only a URL and a timeout), so it can be pickled and reused across the spawned rollout
-    process. The rollout worker's generation calls are the one exception — they run on an async `aiohttp` session in a
-    child process and are not routed through here.
+    Ported from [`~trl.experimental.async_grpo.vllm_client.VLLMClient`]. The student's server uses the full API
+    (readiness, world size, pause/resume, weight-update endpoints) since [`WeightTransferClient`] streams updated
+    weights to it; the teacher's server only ever needs [`wait_for_server_ready`], since the teacher is static and is
+    otherwise queried directly over `/v1/completions` from the rollout worker's `aiohttp` session, not through this
+    client.
 
     Args:
         server_url (`str`):
@@ -57,8 +57,8 @@ class VLLMClient:
             if elapsed >= self.server_timeout:
                 raise TimeoutError(
                     f"Timed out after {self.server_timeout:.0f}s waiting for vLLM server at {self.server_url}. "
-                    "Make sure the vLLM server is running and reachable. If the server needs more time to load "
-                    "the model, increase `vllm_server_timeout` in your AsyncGRPOConfig."
+                    "Make sure the vLLM server is running and reachable. If the server needs more time to load the "
+                    "model, increase `vllm_server_timeout` in your AsyncDistillationConfig."
                 )
             if int(elapsed) % 10 < poll_interval_s:
                 logger.info(f"Still waiting for vLLM server... ({elapsed:.0f}s)")
@@ -69,18 +69,6 @@ class VLLMClient:
         response = requests.get(f"{self.server_url}/v1/models")
         response.raise_for_status()
         return response.json()["data"][0]["max_model_len"]
-
-    def get_dtype(self) -> str:
-        """Return the dtype the server holds its weights in, e.g. `"torch.bfloat16"`.
-
-        Read from vLLM's `/server_info`, which dumps the resolved `VllmConfig` (`config_format=json` keeps it a JSON
-        tree instead of a repr string; `torch.dtype` values are stringified, hence the `torch.` prefix). The endpoint
-        sits behind `VLLM_SERVER_DEV_MODE=1`, which this trainer already requires: `/pause` and
-        `/init_weight_transfer_engine` are gated by the same flag.
-        """
-        response = requests.get(f"{self.server_url}/server_info", params={"config_format": "json"})
-        response.raise_for_status()
-        return response.json()["vllm_config"]["model_config"]["dtype"]
 
     def get_world_size(self) -> int:
         """Return the vLLM server's inference world size (tensor/pipeline parallel processes)."""
