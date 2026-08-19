@@ -8,7 +8,7 @@ on:
       - "trl/**.py"
       - "examples/**.py"
 env:
-  SLACK_API_TOKEN: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
+  CI_SLACK_CHANNEL: ${{ secrets.CI_PUSH_MAIN_CHANNEL }}
   HF_TOKEN: ${{ secrets.HF_TOKEN }}
   TRL_EXPERIMENTAL_SILENCE: 1
 
@@ -45,19 +45,26 @@ jobs:
         run: |
           source .venv/bin/activate
           uv pip install ".[dev]"
-          uv pip install pytest-reportlog
 
       - name: Run slow tests on single GPU
         run: |
           source .venv/bin/activate
-          make slow_tests
+          make slow_tests PYTEST_ARGS="--report-log=slow_tests.log"
 
       - name: Generate Report
         if: always()
         run: |
           source .venv/bin/activate
-          uv pip install slack_sdk tabulate
           python scripts/log_reports.py >> $GITHUB_STEP_SUMMARY
+
+      - name: Post to Slack
+        if: always()
+        uses: huggingface/hf-workflows/.github/actions/post-slack@main
+        with:
+          slack_channel: ${{ env.CI_SLACK_CHANNEL }}
+          title: Results of the slow tests on a single GPU
+          status: ${{ job.status }}
+          slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
 
   run_all_tests_multi_gpu:
     runs-on:
@@ -91,16 +98,23 @@ jobs:
         run: |
           source .venv/bin/activate
           uv pip install ".[dev]"
-          uv pip install pytest-reportlog
 
       - name: Run slow tests on Multi GPU
         run: |
           source .venv/bin/activate
-          make slow_tests
+          make slow_tests PYTEST_ARGS="--report-log=slow_tests.log"
 
       - name: Generate Reports
         if: always()
         run: |
           source .venv/bin/activate
-          uv pip install slack_sdk tabulate
           python scripts/log_reports.py >> $GITHUB_STEP_SUMMARY
+
+      - name: Post to Slack
+        if: always()
+        uses: huggingface/hf-workflows/.github/actions/post-slack@main
+        with:
+          slack_channel: ${{ env.CI_SLACK_CHANNEL }}
+          title: Results of the slow tests on multiple GPUs
+          status: ${{ job.status }}
+          slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
