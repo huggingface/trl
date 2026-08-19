@@ -34,7 +34,7 @@ class AsyncGRPOConfig(_BaseConfig):
             Keyword arguments for [`~transformers.AutoModelForCausalLM.from_pretrained`], used when instantiating the
             model from a path.
         dtype (`str`, *optional*, defaults to `"float32"`):
-            Dtype to load the model under, one of `"auto"`, `"bfloat16"`, `"float16"` or `"float32"`. It defaults to
+            Data type to load the model under, one of `"auto"`, `"bfloat16"`, `"float16"` or `"float32"`. It defaults to
             `"float32"` because the training-inference mismatch this trainer is measured against
             ([Defeating the Training-Inference Mismatch via FP16](https://huggingface.co/papers/2510.26788), walked
             through for this trainer in
