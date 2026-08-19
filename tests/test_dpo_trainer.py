@@ -1600,6 +1600,7 @@ class TestDPOTrainerVLM(TrlTestCase):
         "model_id",
         [
             "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            "trl-internal-testing/tiny-LlavaForConditionalGeneration",
         ],
     )
     @pytest.mark.parametrize(

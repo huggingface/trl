@@ -3830,8 +3830,15 @@ class TestGRPOTrainer(TrlTestCase):
 
 @require_vision
 class TestGRPOTrainerVLM(TrlTestCase):
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            "trl-internal-testing/tiny-LlavaForConditionalGeneration",
+        ],
+    )
     @pytest.mark.parametrize("streaming", [False, True])
-    def test_text_only_dataset_freezes_non_language_parameters(self, streaming):
+    def test_text_only_dataset_freezes_non_language_parameters(self, model_id, streaming):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
         if streaming:
             dataset = dataset.to_iterable_dataset()
@@ -3848,7 +3855,7 @@ class TestGRPOTrainerVLM(TrlTestCase):
             report_to="none",
         )
         trainer = GRPOTrainer(
-            model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            model=model_id,
             reward_funcs=reward_func,
             args=training_args,
             train_dataset=dataset,
