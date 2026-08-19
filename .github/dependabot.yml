@@ -9,3 +9,11 @@ updates:
     groups:
       actions:
         patterns: ["*"]
+
+  # Not grouped, so that a ruff bump, which reformats code, stays separate from a doc-builder bump
+  - package-ecosystem: "pre-commit"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
