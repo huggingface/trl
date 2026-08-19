@@ -83,16 +83,17 @@ if __name__ == "__main__":
 
     training_args.model_init_kwargs = model_kwargs
 
+    # The teacher is deliberately left unquantized: quantizing it degrades the reference distribution the student is
+    # trained to match. To quantize it anyway, override the default below with
+    # `--teacher_model_init_kwargs '{"quantization_config": {...}}'`.
     teacher_model_kwargs = dict(
         revision=model_args.model_revision,
         attn_implementation=model_args.attn_implementation,
         dtype=model_args.dtype,
         use_cache=True,
     )
-    if quantization_config is not None:
-        # Passing None would not be treated the same as omitting the argument, so we include it only when valid.
-        teacher_model_kwargs["quantization_config"] = quantization_config
-
+    if training_args.teacher_model_init_kwargs is not None:
+        teacher_model_kwargs.update(training_args.teacher_model_init_kwargs)
     training_args.teacher_model_init_kwargs = teacher_model_kwargs
 
     tokenizer = AutoTokenizer.from_pretrained(
