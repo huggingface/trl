@@ -12,9 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from types import SimpleNamespace
+
 import pytest
 import torch
 from datasets import DatasetDict, load_dataset
+from transformers import PretrainedConfig
 
 from trl.experimental.gmpo import GMPOConfig, GMPOTrainer
 
@@ -31,6 +34,87 @@ class TestGMPOConfig:
 
 
 class TestGMPOTrainer(TrlTestCase):
+    def test_rejects_liger_kernel(self, monkeypatch):
+        monkeypatch.setattr("trl.experimental.gmpo.gmpo_trainer.GRPOTrainer.__init__", lambda *args, **kwargs: None)
+        args = GMPOConfig(output_dir=self.tmp_dir, use_liger_kernel=True)
+
+        with pytest.raises(NotImplementedError, match="Liger kernel is not supported by GMPOTrainer"):
+            GMPOTrainer(PretrainedConfig(), reward_funcs=None, args=args)
+
+    @pytest.mark.parametrize("use_adaptive_entropy", [False, True])
+    def test_aux_loss_and_entropy_bonus(self, use_adaptive_entropy):
+        trainer = GMPOTrainer.__new__(GMPOTrainer)
+        trainer.model = torch.nn.Linear(1, 1)
+        trainer.beta = 0.0
+        trainer.top_entropy_quantile = 1.0
+        trainer.epsilon_low = 0.4
+        trainer.epsilon_high = 0.4
+        trainer.current_gradient_accumulation_steps = 1
+        trainer.aux_loss_enabled = True
+        trainer.router_aux_loss_coef = 0.1
+        trainer._entropy_bonus_enabled = True
+        trainer.use_adaptive_entropy = use_adaptive_entropy
+        trainer.entropy_coef = 0.25
+        trainer._last_world_entropy = 1.0
+        trainer._entropy_window_stats = None
+        trainer.args = SimpleNamespace(
+            entropy_target=2.0, entropy_coef_delta=0.01, entropy_coef_max=1.0, entropy_coef_min=0.0
+        )
+        trainer._metrics = {
+            "train": {
+                "policy_loss": [],
+                "aux_loss": [],
+                "entropy_coef": [],
+                "entropy": [],
+                "clip_ratio/low_mean": [],
+                "clip_ratio/high_mean": [],
+                "clip_ratio/region_mean": [],
+                "clip_ratio/low_min": [],
+                "clip_ratio/high_max": [],
+            }
+        }
+
+        class Accelerator:
+            sync_gradients = True
+
+            @staticmethod
+            def gather(value):
+                return value.reshape(1)
+
+            @staticmethod
+            def gather_for_metrics(value):
+                return value.reshape(1)
+
+            @staticmethod
+            def reduce(value, reduction):
+                return value
+
+        trainer.accelerator = Accelerator()
+        per_token_logps = torch.zeros((1, 2), requires_grad=True)
+        entropies = torch.full((1, 2), 2.0, requires_grad=True)
+        aux_loss = torch.tensor(3.0, requires_grad=True)
+
+        def get_per_token_logps_and_entropies(*args, **kwargs):
+            assert kwargs["compute_aux_loss"] is True
+            assert "spatial_shapes" in kwargs
+            assert "num_tiles" in kwargs
+            return per_token_logps, entropies, aux_loss
+
+        trainer._get_per_token_logps_and_entropies = get_per_token_logps_and_entropies
+        inputs = {
+            "prompt_ids": torch.tensor([[1]]),
+            "prompt_mask": torch.ones((1, 1)),
+            "completion_ids": torch.tensor([[2, 3]]),
+            "completion_mask": torch.ones((1, 2)),
+            "advantages": torch.tensor([1.0]),
+        }
+
+        loss = trainer._compute_loss(trainer.model, inputs)
+
+        torch.testing.assert_close(loss, torch.tensor(-1.2))
+        assert trainer._metrics["train"]["policy_loss"] == [-1.0]
+        assert trainer._metrics["train"]["aux_loss"] == [3.0]
+
     def test_train(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
