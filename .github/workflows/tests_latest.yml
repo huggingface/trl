@@ -16,7 +16,9 @@ jobs:
   tests:
     name: Tests latest TRL release with dev dependencies
     runs-on:
-      group: aws-g6e-4xlarge
+      # TODO: move to aws-g6e-4xlarge (L40S) once v1.11 ships; v1.10-release predates the flash-attn2 xfails and
+      # would fail on Ada hardware
+      group: aws-g4dn-2xlarge
     container:
       image: pytorch/pytorch:2.8.0-cuda12.8-cudnn9-devel
       options: --gpus all
