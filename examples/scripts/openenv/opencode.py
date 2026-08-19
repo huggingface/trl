@@ -417,8 +417,8 @@ class FreePortOpenCodeSessionFactory(OpenCodeSessionFactory):
 
     def _start_proxy(self, sandbox):
         port = _free_port()
-        trace_path = oc_harness._PROXY_TRACE_PATH
-        log_path = oc_harness._PROXY_LOG_PATH
+        trace_path = oc_harness.proxy_trace_path(self._config)
+        log_path = oc_harness.proxy_log_path(self._config)
         if not sandbox.exists("/home/user/proxy/interception.py"):
             self._exec_with_retry(
                 sandbox,

@@ -65,8 +65,7 @@ def main(script_args, training_args, model_args):
     from datasets import load_dataset
     from transformers import GenerationConfig
 
-    from trl import LogCompletionsCallback, get_peft_config, get_quantization_config
-    from trl.experimental.distillation import DistillationTrainer
+    from trl import DistillationTrainer, LogCompletionsCallback, get_peft_config, get_quantization_config
 
     ################
     # Model init kwargs
@@ -134,8 +133,7 @@ def main(script_args, training_args, model_args):
 
 
 def make_parser(subparsers: argparse._SubParsersAction | None = None, prog: str | None = None):
-    from trl import ModelConfig, ScriptArguments, TrlParser
-    from trl.experimental.distillation import DistillationConfig
+    from trl import DistillationConfig, ModelConfig, ScriptArguments, TrlParser
 
     dataclass_types = (ScriptArguments, DistillationConfig, ModelConfig)
     if subparsers is not None:

@@ -19,7 +19,6 @@ from trl.trainer.base_config import _BaseConfig
 
 @dataclass
 class A2POConfig(_BaseConfig):
-    # docstyle-ignore
     r"""
     Configuration class for the [`A2POTrainer`].
 
