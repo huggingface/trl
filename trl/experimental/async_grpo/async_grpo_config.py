@@ -376,6 +376,17 @@ class AsyncGRPOConfig(_BaseConfig):
     def __post_init__(self):
         super().__post_init__()
 
+        if self.parallelism_config is not None and (
+            self.parallelism_config.cp_enabled or self.parallelism_config.sp_enabled
+        ):
+            raise ValueError(
+                "AsyncGRPOTrainer does not support sequence-dim parallelism (`parallelism_config.cp_size > 1` "
+                "or `parallelism_config.sp_size > 1`) yet. GRPO builds model inputs after generation "
+                "inside the trainer, so Transformers' context-parallel / Ulysses sequence-parallel input "
+                "sharding cannot be applied to the raw generation batch. Set both `cp_size=1` and `sp_size=1`, "
+                "or disable `parallelism_config`."
+            )
+
         # Accelerator config: required for the async IterableDataset-backed dataloader to work correctly.
         # split_batches=True and dispatch_batches=True ensure that the main process drives the dataloader
         # and batches are broadcast to other processes rather than each process pulling independently.

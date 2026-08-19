@@ -906,9 +906,11 @@ class AsyncGRPOTrainer(_BaseTrainer):
             )
 
         # Infer max_inflight_tasks when not explicitly set. Generating more samples than the trainer can consume
-        # before they become stale is wasteful. The useful upper bound is max_staleness * samples_per_step.
+        # before they become stale is wasteful. The useful upper bound is max_staleness * samples_per_step, floored
+        # at samples_per_step so max_staleness=0 (a valid, strict discard policy) can't also zero out the rollout
+        # loop's own scheduling capacity and hang the trainer forever on an empty queue.
         if self.args.max_inflight_tasks < 0:
-            self.args.max_inflight_tasks = self.args.max_staleness * samples_per_step
+            self.args.max_inflight_tasks = max(self.args.max_staleness, 1) * samples_per_step
             logger.info(
                 f"max_inflight_tasks set to {self.args.max_inflight_tasks} "
                 f"(max_staleness={self.args.max_staleness} × samples_per_step={samples_per_step})"
