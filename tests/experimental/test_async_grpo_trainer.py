@@ -311,6 +311,7 @@ class TestRolloutStateCheckpoint(TrlTestCase):
             reward_funcs=[dummy_reward_func],
             processing_class=MagicMock(),
             rollout_buffer=ctx.Queue(),
+            metrics_queue=ctx.Queue(),
             model_version_value=ctx.Value("i", 0),
             heartbeat_value=ctx.Value("d", 0.0),
             failed_event=ctx.Event(),
