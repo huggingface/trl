@@ -214,6 +214,55 @@ accelerate launch --config_file context_parallel_2gpu.yaml train.py
 
 5. **Monitor memory usage** across all GPUs to ensure balanced workload
 
+#### Training at 1M tokens and beyond
+
+With the setup above plus a few levers, SFT scales to million-token sequences on a single 8×H100 node. Verified configurations (bf16, `per_device_train_batch_size=1`, `loss_type="chunked_nll"` — the default):
+
+| Model | Sequence length | Step time | Peak GPU memory |
+|---|---|---|---|
+| Qwen3-0.6B | 1M | 137 s | 27.9 GB |
+| Qwen3-0.6B | 2M | 538 s | 42.2 GB |
+| Qwen3-0.6B | 4M | 2135 s | 73.7 GB |
+| Qwen3-8B | 1M | 386 s | 67.4 GB |
+| Qwen3-30B-A3B (MoE) | 1M | ~490 s | 48.4 GB |
+| Qwen3-32B | 1M | 1402 s | 66.5 GB |
+
+The levers, roughly in the order you will need them as model size or sequence length grows:
+
+1. **Keep the default `loss_type="chunked_nll"`.** At 1M tokens, materializing `[seq, vocab]` logits costs tens of GB per GPU; the chunked loss never does.
+2. **Force the cuDNN SDPA backend** — torch ≥ 2.13's ring attention supports it, and it is ~1.7× faster than the default backend on H100. The context manager must cover forward *and* backward (checkpoint recompute must select the same backend):
+
+   ```python
+   from torch.nn.attention import SDPBackend, sdpa_kernel
+
+   class FastSFTTrainer(SFTTrainer):
+       def training_step(self, *args, **kwargs):
+           with sdpa_kernel([SDPBackend.CUDNN_ATTENTION]):
+               return super().training_step(*args, **kwargs)
+   ```
+3. **Offload checkpointed activations to host memory** (≥ ~1.5M tokens, or ≥ ~8B parameters): set `fsdp_activation_checkpointing_offload: true` in the accelerate FSDP config. Each checkpointed layer's input — the dominant surviving activation, `layers × seq/cp × hidden` bytes — moves to pinned host memory during the forward and returns on demand during the backward.
+4. **At the memory edge, switch the ring rotation to alltoall and merge attention outputs in bf16**:
+
+   ```python
+   from torch.distributed.tensor.experimental._context_parallel import _attention
+   from torch.distributed.tensor.experimental._context_parallel._attention import set_rotate_method
+
+   set_rotate_method("alltoall")            # ring buffers instead of full-sequence KV gather
+   _attention._cp_options.convert_to_f32 = False  # bf16 output merging
+   ```
+
+   Both are speed-neutral and save several GB (grad-norm deviation < 0.5%).
+5. **For ≥ 30B models, add parameter/optimizer CPU offload** (`fsdp_offload_params: true`). Model states (~12 bytes/param sharded) move to host; at 1M-token step times the gather traffic is negligible.
+6. **Context extension needs RoPE scaling.** A base model evaluated at positions far beyond its trained range starts at a high loss (10.6 vs 4.4 for Qwen3-8B at 1M with YaRN ×32). Configure it at load time, and note that in transformers v5 `rope_theta` lives inside `rope_parameters`, so the override must carry it:
+
+   ```python
+   model_init_kwargs={
+       "rope_parameters": {"rope_type": "yarn", "rope_theta": 1000000, "factor": 32, "original_max_position_embeddings": 32768},
+   }
+   ```
+
+Attention is quadratic, so step time grows ~4× for every 2× in sequence length (137 s → 538 s → 2135 s for 0.6B at 1M/2M/4M), while memory — with the levers above — grows roughly linearly.
+
 #### Benchmarking Ring Attention
 
 We benchmarked Ring Attention to highlight its potential improvements in training efficiency.  
