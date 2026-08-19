@@ -14,7 +14,7 @@
 
 import pytest
 from datasets import Dataset, DatasetDict, features, load_dataset
-from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer, TrainerState
 from transformers.utils import is_peft_available, is_vision_available
 
 from trl.experimental.online_dpo import OnlineDPOConfig, OnlineDPOTrainer
@@ -30,6 +30,15 @@ if is_vision_available():
     import numpy as np
     from PIL import Image
     from transformers import AutoModelForImageTextToText, AutoProcessor
+
+
+@pytest.mark.parametrize("epoch, expected_beta", [(None, 0.1), (0.25, 0.1), (1.0, 0.2), (2.0, 0.2)])
+def test_beta_schedule(epoch, expected_beta):
+    trainer = object.__new__(OnlineDPOTrainer)
+    trainer._beta = [0.1, 0.2]
+    trainer.state = TrainerState(epoch=epoch)
+
+    assert trainer.beta == expected_beta
 
 
 class TestOnlineDPOTrainer(TrlTestCase):

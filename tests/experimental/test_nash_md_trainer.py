@@ -15,7 +15,13 @@
 import pytest
 import torch
 from datasets import DatasetDict, load_dataset
-from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer, GenerationConfig
+from transformers import (
+    AutoModelForCausalLM,
+    AutoModelForSequenceClassification,
+    AutoTokenizer,
+    GenerationConfig,
+    TrainerState,
+)
 from transformers.utils import is_peft_available
 
 from trl.experimental.nash_md import NashMDConfig, NashMDTrainer
@@ -27,6 +33,15 @@ from ..testing_utils import TrlTestCase, require_peft
 
 if is_peft_available():
     from peft import LoraConfig, get_peft_model
+
+
+@pytest.mark.parametrize("epoch, expected_coef", [(None, 0.1), (0.25, 0.1), (1.0, 0.2), (2.0, 0.2)])
+def test_mixture_coef_schedule(epoch, expected_coef):
+    trainer = object.__new__(NashMDTrainer)
+    trainer._mixture_coef = [0.1, 0.2]
+    trainer.state = TrainerState(epoch=epoch)
+
+    assert trainer.mixture_coef == expected_coef
 
 
 class TestGeometricMixtureWrapper(TrlTestCase):

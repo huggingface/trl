@@ -562,7 +562,7 @@ class OnlineDPOTrainer(_BaseTrainer):
     @property
     def beta(self):
         if isinstance(self._beta, list):
-            epoch = self.state.epoch
+            epoch = int(self.state.epoch or 0)
             return self._beta[epoch] if epoch < len(self._beta) else self._beta[-1]
         else:
             return self._beta

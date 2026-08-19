@@ -180,7 +180,7 @@ class XPOTrainer(OnlineDPOTrainer):
     @property
     def alpha(self):
         if isinstance(self._alpha, list):
-            epoch = self.state.epoch
+            epoch = int(self.state.epoch or 0)
             return self._alpha[epoch] if epoch < len(self._alpha) else self._alpha[-1]
         else:
             return self._alpha
