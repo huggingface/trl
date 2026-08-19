@@ -14,6 +14,6 @@ repos:
         name: Check style with doc-builder
         language: python
         entry: doc-builder style trl tests docs/source --max_len 119
-        additional_dependencies: ["git+https://github.com/huggingface/doc-builder@6dd1bdab58a8564730f633d70e76bb1ef57ec627", ruff]  # See GH-5633
+        additional_dependencies: ["git+https://github.com/huggingface/doc-builder@af49b8dc3859c3d80c7220c8c0ba146431132e49"]
         pass_filenames: false
         types_or: [python, markdown, rst]
