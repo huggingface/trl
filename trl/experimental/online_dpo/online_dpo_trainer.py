@@ -772,9 +772,10 @@ class OnlineDPOTrainer(_BaseTrainer):
                 llm_model.load_weights([(name, param)])
 
     def _move_model_to_vllm(self):
-        if self.vllm_mode == "server":
+        if self.vllm_mode == "server" and self.accelerator.is_main_process:
             # Announce one weight update for the whole model: the server prepares and finalizes it once, rather than
-            # once per tensor pushed below.
+            # once per tensor pushed below. Only the main process holds a client; the other ranks only take part in
+            # the parameter gathers below.
             with self.vllm_client.weight_update():
                 self._move_model_to_vllm_inner()
         else:
