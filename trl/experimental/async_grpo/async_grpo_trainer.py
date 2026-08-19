@@ -1313,12 +1313,24 @@ class AsyncGRPOTrainer(_BaseTrainer):
     def _streaming_iter(self):
         # Iterate parameters one at a time. For FSDP2 (DTensor), full_tensor() all-gathers just this parameter across
         # FSDP ranks, then frees it once the generator advances — avoiding materializing the full model in memory.
+        #
+        # The gather must run on the default stream and complete before we yield: on rank 0 this generator is consumed
+        # from inside vLLM's packed transfer loop, i.e. under `torch.cuda.stream(<side stream>)`, so a lazy
+        # full_tensor() would enqueue the training-group collective behind pending transfer-group broadcasts on that
+        # side stream, while ranks 1+ enqueue the same collective on their default stream with nothing ahead of it.
+        # With more than 2 trainer ranks this inconsistent ordering across the two NCCL groups deadlocks (rank 0 waits
+        # on the transfer group, everyone else waits on rank 0's gather; the watchdog reports the training-group
+        # collective as enqueued but never started). Completing each gather on the default stream before the transfer
+        # sees the tensor keeps the two groups strictly ordered.
         device = self.accelerator.device
+        default_stream = torch.cuda.default_stream(device)
         for name, param in self.model.named_parameters():
             name = name.removeprefix("module.")  # DDP/FSDP1 wrapping
-            full = param.full_tensor() if isinstance(param, DTensor) else param.detach()
-            if full.device != device:
-                full = full.to(device)
+            with torch.cuda.stream(default_stream):
+                full = param.full_tensor() if isinstance(param, DTensor) else param.detach()
+                if full.device != device:
+                    full = full.to(device)
+            default_stream.synchronize()
             yield name, full
 
     def _sync_weight(self):
