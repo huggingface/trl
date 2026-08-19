@@ -17,6 +17,7 @@ import itertools
 import math
 import multiprocessing as mp
 import queue
+from collections import defaultdict
 
 import numpy as np
 import pytest
@@ -31,8 +32,10 @@ from trl.experimental.async_grpo import AsyncGRPOConfig, AsyncGRPOTrainer
 from trl.experimental.async_grpo.async_grpo_trainer import (
     DataCollatorForRollout,
     FixedCountBatcher,
+    RolloutWorkerProtocol,
     TokenBudgetBatcher,
     _balance_by_squared_length,
+    _reduce_metric,
 )
 from trl.experimental.async_grpo.async_rollout_worker import (
     DriftKind,
@@ -60,6 +63,7 @@ class _StubRolloutWorker:
         self, tokenizer, dataset, num_generations: int = 8, samples_per_weight_sync: int = 10, fork_k: int = 1
     ):
         self.rollout_buffer = queue.Queue()
+        self.metrics_queue = queue.Queue()  # drained by the trainer in `log()`; this stub measures nothing
         self._samples_per_weight_sync = samples_per_weight_sync
         self._model_version = 0
         self._fork_k = fork_k
@@ -252,6 +256,7 @@ class TestAsyncRolloutWorkerEnvironments(TrlTestCase):
             heartbeat_value=mp.Value("d", 0.0),
             failed_event=mp.Event(),
             exception_info_queue=mp.Queue(),
+            metrics_queue=mp.Queue(),
             environment_factory=environment_factory,
             num_generations=2,
             max_inflight_tasks=4,
@@ -381,7 +386,7 @@ class TestPackingAwareBatching(TrlTestCase):
 
     def test_token_budget_batcher_respects_budget_and_fills_every_row(self):
         source = (_rollout_sample(3) for _ in range(100))
-        batcher = TokenBudgetBatcher(source, num_processes=2, token_budget=8)
+        batcher = TokenBudgetBatcher(source, num_processes=2, token_budget=8, metrics=defaultdict(list))
 
         micro_batches = list(itertools.islice(iter(batcher), 5))
         assert len(micro_batches) == 5
@@ -392,8 +397,12 @@ class TestPackingAwareBatching(TrlTestCase):
 
     def test_token_budget_batcher_sizes_rows_dynamically(self):
         # Long samples pack few per row, short samples pack many — same budget, different counts.
-        long_batcher = TokenBudgetBatcher((_rollout_sample(5) for _ in range(100)), num_processes=2, token_budget=8)
-        short_batcher = TokenBudgetBatcher((_rollout_sample(2) for _ in range(100)), num_processes=2, token_budget=8)
+        long_batcher = TokenBudgetBatcher(
+            (_rollout_sample(5) for _ in range(100)), num_processes=2, token_budget=8, metrics=defaultdict(list)
+        )
+        short_batcher = TokenBudgetBatcher(
+            (_rollout_sample(2) for _ in range(100)), num_processes=2, token_budget=8, metrics=defaultdict(list)
+        )
 
         long_mb = next(iter(long_batcher))
         short_mb = next(iter(short_batcher))
@@ -405,7 +414,7 @@ class TestPackingAwareBatching(TrlTestCase):
         # A sample longer than the whole budget (12 > 8) fits in no row, so it is dropped, never emptying a row.
         PartialState()  # the drop path logs via accelerate's logger, which needs an initialized state
         source = (_rollout_sample(n) for n in ([12] + [3] * 60))
-        batcher = TokenBudgetBatcher(source, num_processes=2, token_budget=8)
+        batcher = TokenBudgetBatcher(source, num_processes=2, token_budget=8, metrics=defaultdict(list))
         for groups in itertools.islice(iter(batcher), 5):
             assert len(groups) == 2
             assert all(len(group) > 0 for group in groups)  # every row stays non-empty
@@ -438,7 +447,9 @@ class TestPackingAwareBatching(TrlTestCase):
         assert batch["completion_mask"].tolist() == [[0, 1, 1], [0, 1, 0]]
         assert batch["advantages"].tolist() == [[1.0, 1.0, 1.0], [-1.0, -1.0, 0.0]]  # per-token, 0-padded
         assert batch["global_n_tokens"].tolist() == [3.0, 3.0]  # a: 2 + b: 1 completion tokens
-        assert batch["metrics"]["reward"].tolist() == [[0.5], [0.25]]  # float32-exact values
+        assert batch["global_n_forward_tokens"].tolist() == [5.0, 5.0]  # every token forwarded, prompts included
+        # Per-sample rewards are aggregated here on rank 0 rather than broadcast with the batch and reduced back.
+        assert collator.metrics["reward"] == [0.375]  # mean over the whole micro-batch: (0.5 + 0.25) / 2
 
     def test_collator_packs_multiple_samples_per_row(self):
         # Two samples per row: position_ids reset at each sequence start and advantages expand per token.
@@ -456,11 +467,98 @@ class TestPackingAwareBatching(TrlTestCase):
         assert batch["completion_mask"].tolist() == [[0, 1, 1, 0, 1], [0, 1, 0, 1, 1]]
         assert batch["advantages"].tolist() == [[1.0, 1.0, 1.0, 2.0, 2.0], [-1.0, -1.0, -2.0, -2.0, -2.0]]
         assert batch["global_n_tokens"].tolist() == [6.0, 6.0]  # a:2 + c:1 + b:1 + d:2 completion tokens
-        assert batch["metrics"]["reward"].tolist() == [[0.5, 0.25], [0.75, 0.5]]  # one row per rank, per sample
+        assert batch["global_n_forward_tokens"].tolist() == [10.0, 10.0]  # 3 + 2 + 2 + 3
+        assert collator.metrics["reward"] == [0.5]  # (0.5 + 0.25 + 0.75 + 0.5) / 4
+        assert collator.metrics["batch/samples_per_row"] == [2.0]
+        assert collator.metrics["batch/pad_frac"] == [(0, 10)]  # rows pack equal -> no inter-rank padding
+
+    def test_collator_handles_a_ragged_metric_key_set(self):
+        # A micro-batch mixes samples that carry `tools/*` with samples that do not. Both orderings matter: a first
+        # sample without the keys must not drop them, one with them must not KeyError on the rest.
+        collator = DataCollatorForRollout(pad_token_id=0, num_processes=2)
+        tooled = _rollout_sample(2, reward=1.0)
+        tooled["metrics"] = {"reward": 1.0, "tools/call_frequency": 4.0}
+        plain = _rollout_sample(2, reward=0.0)
+
+        for groups in ([[plain], [tooled]], [[tooled], [plain]]):
+            collator.metrics.clear()
+            collator([groups])
+            assert collator.metrics["reward"] == [0.5]  # (1.0 + 0.0) / 2, over both samples
+            assert collator.metrics["tools/call_frequency"] == [4.0]  # only the sample that carries it
 
 
 def _finalize(turns, rollout_id="r0", fork_threshold=1024):
-    return _chain_to_sequences(turns, rollout_id, fork_threshold)
+    rows, _tally = _chain_to_sequences(turns, rollout_id, fork_threshold)
+    return rows
+
+
+class TestRolloutWorkerProtocol(TrlTestCase):
+    def test_stub_worker_exposes_every_protocol_attribute(self):
+        # A stub that falls behind the protocol breaks training, and only the GPU-gated `test_train` would notice.
+        stub = _StubRolloutWorker(None, [])
+        missing = [name for name in RolloutWorkerProtocol.__annotations__ if not hasattr(stub, name)]
+        assert not missing
+
+
+class TestMetricReduction(TrlTestCase):
+    """The value's shape and the key's suffix are the whole reduction API; nothing is registered or configured."""
+
+    def test_gauge_is_meaned(self):
+        assert _reduce_metric("perf/fwd_bwd_s", [1.0, 2.0, 6.0]) == 3.0
+
+    def test_counter_is_summed(self):
+        assert _reduce_metric("sample/dropped_stale_total", [1.0, 1.0, 1.0]) == 3.0
+
+    def test_extrema(self):
+        assert _reduce_metric("sample/forwarded_tokens_max", [3.0, 9.0, 5.0]) == 9.0
+        assert _reduce_metric("clip_ratio/low_min", [3.0, 9.0, 5.0]) == 3.0
+        # A `max`/`min` WORD, not a suffix, so the upstream spellings reduce correctly too.
+        assert _reduce_metric("completions/max_length", [3.0, 9.0, 5.0]) == 9.0
+        assert _reduce_metric("completions/min_length", [3.0, 9.0, 5.0]) == 3.0
+        # ... and a name that merely contains those letters is still a gauge.
+        assert _reduce_metric("perf/maximal_s", [2.0, 4.0]) == 3.0
+
+    def test_rate_is_sum_over_sum_not_mean_of_ratios(self):
+        # The two windows have rates 1 tok/s and 100 tok/s. Meaning the ratios would give 50.5; the honest rate is
+        # total tokens over total seconds. This is the defect that made `training_tok/s` unusable.
+        assert _reduce_metric("perf/forwarded_tok_s_e2e", [(100.0, 100.0), (100.0, 1.0)]) == pytest.approx(200 / 101)
+
+    def test_rate_with_zero_denominator_is_nan(self):
+        assert math.isnan(_reduce_metric("perf/forwarded_tok_s_e2e", [(0.0, 0.0)]))
+
+
+class TestWorkerMetricPush(TrlTestCase):
+    """The worker's payload has the same shape as the trainer's sink, so draining it is an append."""
+
+    def _loop(self):
+        loop = object.__new__(_AsyncRolloutLoop)
+        loop._metrics_queue = mp.Queue()
+        loop._counters = defaultdict(float)
+        loop._rates = defaultdict(lambda: [0.0, 0.0])
+        return loop
+
+    def test_counters_and_rates_ride_along_and_reset(self):
+        loop = self._loop()
+        loop._counters["tools/search_call_total"] += 2
+        loop._rates["tools/latency_s"][0] += 3.0
+        loop._rates["tools/latency_s"][1] += 2
+        loop._push_metrics({"rollout/score_s": 0.5})
+
+        payload = loop._metrics_queue.get(timeout=5)
+        assert payload == {
+            "rollout/score_s": 0.5,
+            "tools/search_call_total": 2.0,
+            "tools/latency_s": (3.0, 2.0),
+        }
+        # Counters carry deltas: whatever was pushed must not be pushed again.
+        loop._push_metrics({})
+        assert loop._metrics_queue.get(timeout=5) == {}
+
+    def test_push_never_blocks_when_the_trainer_stops_draining(self):
+        loop = self._loop()
+        loop._metrics_queue = mp.Queue(maxsize=1)
+        for _ in range(50):
+            loop._push_metrics({"rollout/score_s": 1.0})  # drops instead of blocking generation
 
 
 class TestReconciler(TrlTestCase):
@@ -506,7 +604,22 @@ class TestReconciler(TrlTestCase):
         # matched < last_response_start_idx -> FORK regardless of threshold (distinct from the length trigger).
         builder = _SampleBuilder(fork_threshold=1024)
         builder.append_turn(TurnRecord([1, 2, 3], [10, 11]), DriftKind.CLEAN)  # last_response_start_idx == 3
-        assert builder.classify_token_drift(TurnRecord([1, 9, 3, 10, 11], [30])) is DriftKind.FORK
+        # 5 held tokens, only the first matches -> 4 tokens of drift, reported alongside the kind.
+        assert builder.classify_token_drift(TurnRecord([1, 9, 3, 10, 11], [30])) == (DriftKind.FORK, 4)
+
+    def test_drift_tally_counts_transitions(self):
+        # The tally is what makes `fork_threshold_tokens` tunable: it reports the drift the threshold is compared
+        # against. It counts turn TRANSITIONS, so a single-turn rollout has none.
+        turn1 = TurnRecord([1, 2, 3], [10, 11, 12, 13])
+        clean = TurnRecord([1, 2, 3, 10, 11, 12, 13], [20])
+        forked = TurnRecord([1, 2, 3, 10, 99, 88, 77, 20], [30])
+
+        _rows, tally = _chain_to_sequences([turn1], "r0", 2)
+        assert tally == {"clean": 0, "realign": 0, "fork": 0, "transitions": 0, "drift_tokens": 0, "drift_max": 0}
+
+        _rows, tally = _chain_to_sequences([turn1, clean, forked], "r0", 2)
+        assert (tally["transitions"], tally["clean"], tally["fork"]) == (2, 1, 1)
+        assert tally["drift_max"] == 4  # the forking transition invalidated 4 held tokens
 
     def test_tail_wobble_realigns_to_context(self):
         # Last generated token re-renders (11 -> 12): a short wobble in the last answer -> REALIGN. Only the drifted
@@ -553,6 +666,11 @@ def _run(monkeypatch, *, prompt_ids, turns, assistants, fork_threshold=1024, max
     monkeypatch.setattr(worker, "parse_response", lambda tokenizer, ids, prefix=None: aq.pop(0))
 
     class _StubTokenizer:
+        # `completions/clipped_ratio` reads these to decide whether the last turn ended on EOS. The scripted turn ids
+        # below never end on 0, so every fixture rollout counts as clipped — irrelevant to what these tests assert.
+        eos_token_id = 0
+        pad_token_id = 0
+
         def apply_chat_template(self, messages, **kwargs):
             return pq.pop(0)
 
@@ -563,6 +681,11 @@ def _run(monkeypatch, *, prompt_ids, turns, assistants, fork_threshold=1024, max
     loop.chat_template_kwargs = {}
     loop.max_tool_calling_iterations = max_iters
     loop._fork_threshold_tokens = fork_threshold
+    # `_generate_one` pushes its rollout-structure metrics; collect them instead of sending them to a queue.
+    loop._pushed_metrics = []
+    loop._counters = defaultdict(float)
+    loop._rates = defaultdict(lambda: [0.0, 0.0])
+    loop._push_metrics = loop._pushed_metrics.append
 
     async def _generate_one_turn(prompt_ids):
         return tq.pop(0)
