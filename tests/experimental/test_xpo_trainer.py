@@ -12,7 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from types import SimpleNamespace
+from unittest.mock import patch
+
 import pytest
+import torch
 from datasets import DatasetDict, load_dataset
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
 from transformers.utils import is_peft_available
@@ -35,6 +39,22 @@ class TestXPOTrainer(TrlTestCase):
         self.reward_model = AutoModelForSequenceClassification.from_pretrained(self.model_id, num_labels=1)
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
         self.tokenizer.pad_token = self.tokenizer.eos_token
+
+    def test_missing_eos_penalty_ignores_prompt(self):
+        trainer = SimpleNamespace(
+            args=SimpleNamespace(missing_eos_penalty=1.0),
+            processing_class=SimpleNamespace(eos_token_id=2, pad_token_id=0),
+            reward_funcs=None,
+        )
+        data = {"input_ids": torch.tensor([[2, 3], [2, 2]])}
+
+        with patch(
+            "trl.experimental.xpo.xpo_trainer.get_reward", side_effect=lambda *args: (None, torch.zeros(2), None)
+        ):
+            model_scores, ref_scores = XPOTrainer._compute_rewards(trainer, data, data, context_length=1)
+
+        torch.testing.assert_close(model_scores, torch.tensor([-1.0, 0.0]))
+        torch.testing.assert_close(ref_scores, torch.tensor([-1.0, 0.0]))
 
     @pytest.mark.parametrize("config_name", ["standard_prompt_only", "conversational_prompt_only"])
     def test_xpo_trainer_training(self, config_name):
