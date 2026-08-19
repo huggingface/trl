@@ -124,6 +124,10 @@ class RLOOConfig(_BaseConfig):
             Model implementation to use for vLLM. Must be one of `"transformers"` or `"vllm"`. `"transformers"`: Use
             the `transformers` backend for model implementation. `"vllm"`: Use the `vllm` library for model
             implementation.
+        vllm_llm_kwargs (`str`, `dict[str, Any]`, *optional*):
+            Additional keyword arguments for the vLLM `LLM` constructor, used when `vllm_mode` is `"colocate"`. Useful
+            for engine arguments TRL does not expose a field for, such as `hf_overrides`. Keys that conflict with the
+            arguments TRL sets will override them.
         vllm_structured_outputs_regex (`str`, *optional*):
             Regex for vLLM structured outputs. If `None` (default), structured outputs is disabled.
 
@@ -243,6 +247,7 @@ class RLOOConfig(_BaseConfig):
     _VALID_DICT_FIELDS = _BaseConfig._VALID_DICT_FIELDS + [
         "model_init_kwargs",
         "transformers_continuous_batching_config",
+        "vllm_llm_kwargs",
     ]
 
     # Parameters whose default values are overridden from TrainingArguments
@@ -419,6 +424,14 @@ class RLOOConfig(_BaseConfig):
             "help": "Model implementation to use for vLLM. Must be one of `transformers` or `vllm`. `transformers`: "
             "Use the `transformers` backend for model implementation. `vllm`: Use the `vllm` library for "
             "model implementation."
+        },
+    )
+    vllm_llm_kwargs: dict[str, Any] | str | None = field(
+        default=None,
+        metadata={
+            "help": "Additional keyword arguments for the vLLM `LLM` constructor, used when `vllm_mode` is "
+            "`colocate`. Useful for engine arguments TRL does not expose a field for, such as `hf_overrides`. Keys "
+            "that conflict with the arguments TRL sets will override them."
         },
     )
     vllm_enable_sleep_mode: bool = field(

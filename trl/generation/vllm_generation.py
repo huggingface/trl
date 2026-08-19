@@ -180,6 +180,10 @@ class VLLMGeneration:
             - "terratorch" will use the TerraTorch model implementation.
         trust_remote_code (`bool`, *optional*, defaults to `False`):
             Trust remote code (e.g., from HuggingFace) when downloading the model and tokenizer.
+        llm_kwargs (`dict`, *optional*):
+            Additional keyword arguments to pass to the vLLM `LLM` constructor. This can include parameters like
+            `hf_overrides`, `enforce_eager`, etc. If it contains keys that conflict with the other parameters, they
+            will override them.
 
         > Parameters for generation:
 
@@ -243,6 +247,7 @@ class VLLMGeneration:
         enable_sleep_mode: bool = False,
         model_impl: str = "auto",
         trust_remote_code: bool = False,
+        llm_kwargs: dict | None = None,
         # Generation configuration
         repetition_penalty: float = 1.0,
         temperature: float = 1.0,
@@ -277,6 +282,12 @@ class VLLMGeneration:
         self.enable_sleep_mode = enable_sleep_mode
         self.model_impl = model_impl
         self.trust_remote_code = trust_remote_code
+        self.llm_kwargs = llm_kwargs or {}
+        # TRL reads these back to build the TP process group, slice generation outputs, and drive the
+        # sleep/wake cycle. Overriding only the engine side would silently desynchronize the two.
+        for key in ("tensor_parallel_size", "enable_sleep_mode"):
+            if key in self.llm_kwargs:
+                raise ValueError(f"`{key}` cannot be set in `vllm_llm_kwargs`; use `vllm_{key}` instead.")
 
         # Generation configuration
         self.repetition_penalty = repetition_penalty
@@ -348,7 +359,7 @@ class VLLMGeneration:
                         raise ValueError("vLLM does not support in-flight 8-bit quantization.")
 
             # Build LLM initialization kwargs
-            self.llm = LLM(
+            llm_kwargs = dict(
                 model=model.name_or_path,
                 tensor_parallel_size=self.tensor_parallel_size,
                 gpu_memory_utilization=self.gpu_memory_utilization,
@@ -366,6 +377,9 @@ class VLLMGeneration:
                 quantization=quantization,
                 trust_remote_code=self.trust_remote_code,
             )
+            # Any key set here overrides the corresponding default above
+            llm_kwargs.update(self.llm_kwargs)
+            self.llm = LLM(**llm_kwargs)
             if self.enable_sleep_mode:
                 self.llm.sleep(level=2)
             # Sleep level 2 discards the weights; track it so that generate() knows it must re-push them

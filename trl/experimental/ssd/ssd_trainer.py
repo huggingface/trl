@@ -249,6 +249,7 @@ class SSDTrainer(_BaseTrainer):
                 enable_sleep_mode=args.vllm_enable_sleep_mode,
                 model_impl=args.vllm_model_impl,
                 trust_remote_code=args.trust_remote_code,
+                llm_kwargs=args.vllm_llm_kwargs,
                 repetition_penalty=args.repetition_penalty,
                 temperature=self.temperature,
                 top_p=args.top_p,

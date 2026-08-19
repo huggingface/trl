@@ -471,6 +471,13 @@ class OnlineDPOTrainer(_BaseTrainer):
                     "enable_sleep_mode": self.args.vllm_enable_sleep_mode,
                     "quantization": vllm_quantization,
                 }
+                # TRL reads these back to build the TP process group, slice generation outputs, and drive
+                # the sleep/wake cycle. Overriding only the engine side would silently desynchronize the two.
+                for key in ("tensor_parallel_size", "enable_sleep_mode"):
+                    if key in (args.vllm_llm_kwargs or {}):
+                        raise ValueError(f"`{key}` cannot be set in `vllm_llm_kwargs`; use `vllm_{key}` instead.")
+                # Any key set here overrides the corresponding default above
+                vllm_kwargs.update(args.vllm_llm_kwargs or {})
 
                 # vLLM requires the environment variables to be set for distributed training.
                 os.environ["RANK"] = str(self.accelerator.process_index)

@@ -197,6 +197,10 @@ class SDPOConfig(_BaseConfig):
         vllm_model_impl (`str`, *optional*, defaults to `"vllm"`):
             Model implementation to use for vLLM. Must be one of `transformers` or `vllm`. `transformers`: Use the
             `transformers` backend for model implementation. `vllm`: Use the `vllm` library for model implementation.
+        vllm_llm_kwargs (`str`, `dict[str, Any]`, *optional*):
+            Additional keyword arguments for the vLLM `LLM` constructor, used when `vllm_mode` is `"colocate"`. Useful
+            for engine arguments TRL does not expose a field for, such as `hf_overrides`. Keys that conflict with the
+            arguments TRL sets will override them.
         vllm_enable_sleep_mode (`bool`, *optional*, defaults to `False`):
             Enable vLLM sleep mode to offload weights/cache during the optimizer step. Keeps GPU memory usage low, but
             waking the engine adds host–device transfer latency.
@@ -252,7 +256,7 @@ class SDPOConfig(_BaseConfig):
             practice for training stability.
     """
 
-    _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs"]
+    _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs", "vllm_llm_kwargs"]
 
     model_init_kwargs: dict[str, Any] | None = field(
         default=None,
@@ -390,6 +394,14 @@ class SDPOConfig(_BaseConfig):
         default="vllm",
         metadata={
             "help": "Model implementation to use for vLLM. Must be one of `transformers` or `vllm`. `transformers`: Use the `transformers` backend for model implementation. `vllm`: Use the `vllm` library for model implementation."
+        },
+    )
+    vllm_llm_kwargs: dict[str, Any] | str | None = field(
+        default=None,
+        metadata={
+            "help": "Additional keyword arguments for the vLLM `LLM` constructor, used when `vllm_mode` is "
+            "`colocate`. Useful for engine arguments TRL does not expose a field for, such as `hf_overrides`. Keys "
+            "that conflict with the arguments TRL sets will override them."
         },
     )
     vllm_enable_sleep_mode: bool = field(

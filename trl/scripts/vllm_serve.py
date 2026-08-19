@@ -217,6 +217,10 @@ class ScriptArguments:
         speculative_config (`str`, *optional*):
             JSON string for vLLM speculative decoding config, forwarded to `LLM(speculative_config=...)`. When unset,
             speculative decoding is disabled. Example: `'{"method": "qwen3_next_mtp", "num_speculative_tokens": 5}'`.
+        llm_kwargs (`str`, *optional*):
+            JSON string of additional keyword arguments for the vLLM `LLM` constructor, for engine arguments this
+            script does not expose a flag for. Keys that conflict with the arguments the script sets will override
+            them. Example: `'{"hf_overrides": {"architectures": ["Gemma4ForCausalLM"]}}'`.
     """
 
     model: str = field(
@@ -327,6 +331,14 @@ class ScriptArguments:
             'Example: \'{"method": "qwen3_next_mtp", "num_speculative_tokens": 5}\''
         },
     )
+    llm_kwargs: str | None = field(
+        default=None,
+        metadata={
+            "help": "JSON string of additional keyword arguments for the vLLM `LLM` constructor. Useful for engine "
+            "arguments this script does not expose a flag for. Keys that conflict with the arguments the script sets "
+            'will override them. Example: \'{"hf_overrides": {"architectures": ["Gemma4ForCausalLM"]}}\''
+        },
+    )
 
 
 def llm_worker(
@@ -340,7 +352,7 @@ def llm_worker(
     os.environ["VLLM_DP_SIZE"] = str(script_args.data_parallel_size)
     os.environ["VLLM_DP_MASTER_PORT"] = str(master_port)
 
-    llm = LLM(
+    llm_kwargs = dict(
         model=script_args.model,
         revision=script_args.revision,
         tensor_parallel_size=script_args.tensor_parallel_size,
@@ -361,6 +373,15 @@ def llm_worker(
         logprobs_mode="processed_logprobs",
         speculative_config=json.loads(script_args.speculative_config) if script_args.speculative_config else None,
     )
+    # Any key set here overrides the corresponding default above
+    if script_args.llm_kwargs:
+        overrides = json.loads(script_args.llm_kwargs)
+        # The weight-sync group size is derived from `tensor_parallel_size`, so overriding only the engine
+        # side would silently desynchronize the two.
+        if "tensor_parallel_size" in overrides:
+            raise ValueError("`tensor_parallel_size` cannot be set in `llm_kwargs`; use `--tensor_parallel_size`.")
+        llm_kwargs.update(overrides)
+    llm = LLM(**llm_kwargs)
 
     # Send ready signal to parent process
     connection.send({"status": "ready"})
