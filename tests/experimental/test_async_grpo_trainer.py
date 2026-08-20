@@ -22,12 +22,13 @@ import queue
 import subprocess
 from collections import defaultdict
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
 import torch
 from accelerate import PartialState
-from datasets import load_dataset
+from datasets import Dataset, load_dataset
 from transformers import AutoTokenizer
 from transformers.testing_utils import torch_device
 
@@ -42,6 +43,7 @@ from trl.experimental.async_grpo.async_grpo_trainer import (
     _reduce_metric,
 )
 from trl.experimental.async_grpo.async_rollout_worker import (
+    AsyncRolloutWorker,
     DriftKind,
     RolloutGroup,
     RolloutSample,
@@ -52,6 +54,7 @@ from trl.experimental.async_grpo.async_rollout_worker import (
     _common_prefix_len,
     _SampleBuilder,
 )
+from trl.trainer.base_trainer import _BaseTrainer
 
 from ..testing_utils import TrlTestCase, is_ampere_or_newer, require_torch_multi_accelerator
 
@@ -203,6 +206,63 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    def test_resume_from_checkpoint(self):
+        # Checks that ignore_data_skip is True and that resume doesn't crash. The stub worker is not an
+        # AsyncRolloutWorker, so the checkpoint-write and resume-read paths stay inert here — those are
+        # covered by TestRolloutStateCheckpoint.
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+
+        training_args = AsyncGRPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,
+            num_generations=3,
+            max_steps=2,
+            save_steps=1,
+            max_completion_length=8,
+            token_budget=256,
+            vllm_server_timeout=5.0,
+            report_to="none",
+        )
+
+        # First run: train for 2 steps, which saves a checkpoint at step 1.
+        trainer = AsyncGRPOTrainer(
+            model=model_id,
+            reward_funcs=dummy_reward_func,
+            args=training_args,
+            train_dataset=dataset,
+            rollout_worker=_StubRolloutWorker(tokenizer, dataset, num_generations=3),
+            weight_transfer=_StubWeightTransfer(),
+        )
+        assert trainer.args.ignore_data_skip is True
+        trainer.train()
+
+        # Second run: resume from the step-1 checkpoint.
+        checkpoint_dir = os.path.join(self.tmp_dir, "checkpoint-1")
+        assert os.path.isfile(os.path.join(checkpoint_dir, "trainer_state.json"))
+
+        training_args2 = AsyncGRPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,
+            num_generations=3,
+            max_steps=3,
+            max_completion_length=8,
+            token_budget=256,
+            vllm_server_timeout=5.0,
+            report_to="none",
+        )
+        trainer2 = AsyncGRPOTrainer(
+            model=model_id,
+            reward_funcs=dummy_reward_func,
+            args=training_args2,
+            train_dataset=dataset,
+            rollout_worker=_StubRolloutWorker(tokenizer, dataset, num_generations=3),
+            weight_transfer=_StubWeightTransfer(),
+        )
+        assert trainer2.args.ignore_data_skip is True
+        trainer2.train(resume_from_checkpoint=checkpoint_dir)
+
     def test_dataset_required_without_environment(self):
         # The data has to come from somewhere: an external `train_dataset`, or an environment that owns it. With
         # neither, construction fails fast.
@@ -281,6 +341,110 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         assert measured["steps"] >= 1, f"no training steps ran: {measured}"
         assert measured["train_loss_finite"], f"train loss not finite under FSDP2: {measured}"
         assert measured["params_changed"], f"parameters did not change under FSDP2: {measured}"
+
+
+class TestRolloutStateCheckpoint(TrlTestCase):
+    """Prompt-index checkpoint/resume logic — no GPU or vLLM required."""
+
+    def _make_rollout_loop(self, dataset, dataset_start_index=0, num_generations=2):
+        ctx = mp.get_context("spawn")
+        kwargs = dict(
+            model_name="test",
+            dataset=dataset,
+            reward_funcs=[dummy_reward_func],
+            processing_class=MagicMock(),
+            rollout_buffer=ctx.Queue(),
+            metrics_queue=ctx.Queue(),
+            model_version_value=ctx.Value("i", 0),
+            heartbeat_value=ctx.Value("d", 0.0),
+            failed_event=ctx.Event(),
+            exception_info_queue=ctx.Queue(),
+            num_generations=num_generations,
+            dataset_start_index=dataset_start_index,
+        )
+        with patch("trl.experimental.async_grpo.async_rollout_worker.add_response_schema", side_effect=lambda x: x):
+            return _AsyncRolloutLoop(**kwargs)
+
+    def _stub_trainer_for_save(self, trained_groups, dataset_start_index=10, groups_before_resume=0):
+        trainer = AsyncGRPOTrainer.__new__(AsyncGRPOTrainer)  # __new__ skips __init__ (requires GPU + model)
+        trainer.accelerator = MagicMock()
+        trainer.accelerator.is_main_process = True
+        trainer.rollout_worker = MagicMock(spec=AsyncRolloutWorker)
+        trainer.rollout_worker._loop_kwargs = {"dataset_start_index": dataset_start_index}
+        trainer._trained_groups = trained_groups
+        trainer._groups_before_resume = groups_before_resume
+        trainer.state = MagicMock()
+        trainer.state.global_step = 5
+        trainer._get_output_dir = lambda trial: self.tmp_dir
+        return trainer
+
+    def test_save_checkpoint_writes_rollout_state(self):
+        trainer = self._stub_trainer_for_save({0, 1, 2, 3, 4}, dataset_start_index=10, groups_before_resume=40)
+
+        with patch.object(_BaseTrainer, "_save_checkpoint"):
+            trainer._save_checkpoint(MagicMock(), None)
+
+        with open(os.path.join(self.tmp_dir, "checkpoint-5", "rollout_state.json")) as f:
+            data = json.load(f)
+        assert data["prompt_index"] == 15  # dataset_start_index(10) + first_untrained(5)
+
+    def test_save_checkpoint_writes_rollout_state_before_the_hub_push(self):
+        # `super()._save_checkpoint` is what uploads the checkpoint folder under `hub_strategy="checkpoint"`, so the
+        # file has to exist by the time it runs. Writing it from an `on_save` callback would not: `Trainer` fires
+        # `on_save` only after `_save_checkpoint` returns, leaving the Hub copy without it.
+        trainer = self._stub_trainer_for_save({0, 1})
+        written_before_super = []
+
+        def record(*_args, **_kwargs):
+            written_before_super.append(
+                os.path.isfile(os.path.join(self.tmp_dir, "checkpoint-5", "rollout_state.json"))
+            )
+
+        with patch.object(_BaseTrainer, "_save_checkpoint", side_effect=record):
+            trainer._save_checkpoint(MagicMock(), None)
+
+        assert written_before_super == [True]
+
+    def test_save_checkpoint_skips_holes_left_by_stale_drops(self):
+        # Group 2 was never trained (all of its rollouts were dropped as stale), so the cursor stops there: those
+        # prompts get re-generated on resume instead of being silently skipped.
+        trainer = self._stub_trainer_for_save({0, 1, 3, 4, 5}, dataset_start_index=0)
+
+        with patch.object(_BaseTrainer, "_save_checkpoint"):
+            trainer._save_checkpoint(MagicMock(), None)
+
+        with open(os.path.join(self.tmp_dir, "checkpoint-5", "rollout_state.json")) as f:
+            assert json.load(f)["prompt_index"] == 2
+
+    def test_rollout_loop_skips_to_start_index(self):
+        dataset = Dataset.from_dict({"prompt": [f"row_{i}" for i in range(10)]})
+        loop = self._make_rollout_loop(dataset, dataset_start_index=3)
+        it = loop._repeat_iterator()
+        _group_id, row = next(it)
+        assert row["prompt"] == "row_3"
+
+    def test_inner_training_loop_sets_dataset_start_index_from_file(self):
+        checkpoint_dir = os.path.join(self.tmp_dir, "checkpoint-10")
+        os.makedirs(checkpoint_dir)
+        with open(os.path.join(checkpoint_dir, "rollout_state.json"), "w") as f:
+            json.dump({"prompt_index": 77}, f)
+
+        # __new__ skips __init__ (requires GPU + model)
+        trainer = AsyncGRPOTrainer.__new__(AsyncGRPOTrainer)
+        trainer.rollout_worker = MagicMock(spec=AsyncRolloutWorker)
+        trainer.rollout_worker._loop_kwargs = {}
+        trainer.train_dataset = Dataset.from_dict({"prompt": list(range(100))})
+        trainer.accelerator = MagicMock()
+        trainer.accelerator.is_main_process = False  # skip finally-block teardown
+        trainer._groups_before_resume = 0
+
+        with patch.object(_BaseTrainer, "_inner_training_loop", return_value=None):
+            trainer._inner_training_loop(resume_from_checkpoint=checkpoint_dir)
+
+        assert trainer.rollout_worker._loop_kwargs["dataset_start_index"] == 77
+        # Epochs are counted in prompts trained, so a resumed run has to pick that count up too, or it would train
+        # `num_train_epochs` more passes on top of the ones already done.
+        assert trainer._groups_before_resume == 77
 
 
 class TestAsyncRolloutWorkerEnvironments(TrlTestCase):
