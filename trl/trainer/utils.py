@@ -1000,9 +1000,10 @@ def split_pixel_values_by_grid(batch: dict[str, torch.Tensor]) -> dict[str, torc
 
     For models with `image_grid_thw` (e.g. Qwen), the grid dimensions determine how many rows of `pixel_values` belong
     to each image. For models with `image_position_ids` instead (e.g. Gemma), `pixel_values` is indexed directly by
-    image count. For models with `spatial_shapes` (e.g. LFM2-VL), tile-indexed tensors are split using `num_tiles`.
-    Models with none of these store `pixel_values` either flat, one row per image (e.g. LLaVA), in which case it is
-    split by image count, or already padded to one row per sample (e.g. Idefics), in which case it is left as is.
+    image count. For models with `spatial_shapes` (e.g. LFM2-VL) or with `num_tiles` alone (e.g. InternVL),
+    tile-indexed tensors are split using `num_tiles`. Models with none of these store `pixel_values` either flat, one
+    row per image (e.g. LLaVA), in which case it is split by image count, or already padded to one row per sample (e.g.
+    Idefics), in which case it is left as is.
     """
     if "pixel_values" not in batch or "num_images" not in batch:
         return batch
@@ -1043,6 +1044,10 @@ def split_pixel_values_by_grid(batch: dict[str, torch.Tensor]) -> dict[str, torc
             "pixel_attention_mask": split_pixel_attention_mask,
             "spatial_shapes": split_spatial_shapes,
         }
+
+    if "num_tiles" in batch:
+        num_tiles = batch["num_tiles"]
+        return {**batch, "pixel_values": list(torch.split(pixel_values, num_tiles, dim=0))}
 
     # Models without extra metadata store pixel_values either flat, one row per image (e.g. LLaVA), or already
     # padded to one row per sample (e.g. Idefics, SmolVLM). Only the flat layout needs splitting.

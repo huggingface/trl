@@ -3903,6 +3903,7 @@ class TestGRPOTrainerVLM(TrlTestCase):
                     reason="Gemma4 models were introduced in transformers-5.5.0",
                 ),
             ),
+            "trl-internal-testing/tiny-InternVLForConditionalGeneration",
             "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
             "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
             "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",
@@ -4235,6 +4236,7 @@ class TestGRPOTrainerVLM(TrlTestCase):
     @pytest.mark.parametrize(
         "model_id",
         [
+            "trl-internal-testing/tiny-Idefics3ForConditionalGeneration",
             "trl-internal-testing/tiny-LlavaForConditionalGeneration",
             "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
             "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
