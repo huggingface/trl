@@ -27,6 +27,7 @@ from datasets import load_dataset
 from transformers import AutoTokenizer
 from transformers.testing_utils import torch_device
 
+import trl.experimental.async_grpo.async_grpo_trainer as trainer_module
 import trl.experimental.async_grpo.async_rollout_worker as worker
 from trl.experimental.async_grpo import AsyncGRPOConfig, AsyncGRPOTrainer
 from trl.experimental.async_grpo.async_grpo_trainer import (
@@ -139,6 +140,50 @@ class _StubWeightTransfer:
 
     def destroy(self):
         pass
+
+
+class TestAsyncGRPOTrainerConfigPlumbing(TrlTestCase):
+    def test_init_passes_generation_kwargs_to_rollout_worker(self, monkeypatch):
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
+        captured_kwargs = {}
+
+        class _CapturingRolloutWorker:
+            def __init__(self, **kwargs):
+                captured_kwargs.update(kwargs)
+                self.rollout_buffer = queue.Queue()
+                self.metrics_queue = queue.Queue()
+
+        original_from_pretrained = trainer_module.AutoModelForCausalLM.from_pretrained
+
+        class _EagerAutoModelForCausalLM:
+            @staticmethod
+            def from_pretrained(*args, **kwargs):
+                kwargs["attn_implementation"] = "eager"
+                return original_from_pretrained(*args, **kwargs)
+
+        monkeypatch.setattr(trainer_module, "AutoModelForCausalLM", _EagerAutoModelForCausalLM)
+        monkeypatch.setattr(trainer_module, "AsyncRolloutWorker", _CapturingRolloutWorker)
+        monkeypatch.setattr(trainer_module, "patch_chunked_lm_head", lambda *args, **kwargs: None)
+        args = AsyncGRPOConfig(
+            output_dir=self.tmp_dir,
+            generation_kwargs={"temperature": 0.2, "seed": 123},
+            use_cpu=True,
+            bf16=False,
+            gradient_checkpointing=False,
+            report_to="none",
+        )
+
+        AsyncGRPOTrainer(
+            model=model_id,
+            reward_funcs=dummy_reward_func,
+            args=args,
+            train_dataset=dataset,
+            processing_class=AutoTokenizer.from_pretrained(model_id),
+            weight_transfer=_StubWeightTransfer(),
+        )
+
+        assert captured_kwargs["generation_kwargs"] == {"temperature": 0.2, "seed": 123}
 
 
 @pytest.mark.skipif(
@@ -698,6 +743,47 @@ def _run(monkeypatch, *, prompt_ids, turns, assistants, fork_threshold=1024, max
 
 
 class TestRolloutLoop(TrlTestCase):
+    def test_generation_kwargs_override_named_sampling_parameters(self):
+        loop = object.__new__(_AsyncRolloutLoop)
+        loop.model_name = "Qwen/Qwen3-4B"
+        loop.max_tokens = 32
+        loop.temperature = 0.9
+        loop.top_p = 0.95
+        loop.top_k = 10
+        loop.min_p = None
+        loop.repetition_penalty = 1.1
+        loop.generation_kwargs = {"temperature": 0.2, "top_k": 50, "seed": 123}
+        loop.request_timeout = 17
+        captured = {}
+
+        async def fake_post(path, payload, timeout):
+            captured["path"] = path
+            captured["payload"] = payload
+            captured["timeout"] = timeout
+            return {"choices": [{"token_ids": [42], "logprobs": {"token_logprobs": [-0.5]}}]}
+
+        loop._post = fake_post
+
+        completion_ids, completion_logprobs = asyncio.run(loop._generate_one_turn([1, 2, 3]))
+
+        assert completion_ids == [42]
+        assert completion_logprobs == [-0.5]
+        assert captured["path"] == "/v1/completions"
+        assert captured["timeout"] == 17
+        assert captured["payload"] == {
+            "model": "Qwen/Qwen3-4B",
+            "prompt": [1, 2, 3],
+            "max_tokens": 32,
+            "temperature": 0.2,
+            "top_p": 0.95,
+            "top_k": 50,
+            "repetition_penalty": 1.1,
+            "n": 1,
+            "return_token_ids": True,
+            "logprobs": 0,
+            "seed": 123,
+        }
+
     def test_single_turn_no_tool_call(self, monkeypatch):
         completion, completion_ids, sequences, n_calls, n_failures, _ = _run(
             monkeypatch,
