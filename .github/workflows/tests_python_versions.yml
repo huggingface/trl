@@ -21,7 +21,7 @@ jobs:
         python-version: ['3.10', '3.11', '3.13', '3.14']  # 3.12 is already covered by the Tests workflow
       fail-fast: false
     runs-on:
-      group: aws-g4dn-2xlarge
+      group: aws-g6e-4xlarge
     container:
       image: pytorch/pytorch:2.8.0-cuda12.8-cudnn9-devel
       options: --gpus all
