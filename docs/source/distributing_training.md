@@ -183,7 +183,6 @@ training_args = SFTConfig(
     pad_to_multiple_of=4,           # ensures divisibility by cp_size * 2
     # to get the most out of CP
     max_length=16384,               # long sequence length
-    packing=True,                   # use packing to reduce padding
     use_liger_kernel=True,          # compatible with CP
     gradient_checkpointing=False,   # The activation_checkpointing in FSDP config and the gradient_checkpointing in training arg can't be set to True simultaneously
     per_device_train_batch_size=1,

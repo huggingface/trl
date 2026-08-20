@@ -327,6 +327,22 @@ class SFTConfig(_BaseConfig):
             )
             self.packing_strategy = "bfd_split"
 
+        # Context parallelism can only express full causal attention: the per-layer attention mask is dropped and
+        # replaced by `is_causal=True`. Packed sequences rely on a block-diagonal mask to keep documents from
+        # attending to each other, so a packed batch would silently train with documents attending across their
+        # boundaries.
+        if (
+            self.parallelism_config is not None
+            and self.parallelism_config.cp_enabled
+            and (self.packing or self.eval_packing)
+        ):
+            raise ValueError(
+                "Packing is not compatible with context parallelism (`parallelism_config.cp_size > 1`). Packing "
+                "relies on a block-diagonal attention mask to keep packed documents separate, and context "
+                "parallelism drops that mask, so documents would attend across their boundaries. Set "
+                "`packing=False` and `eval_packing=False`, or disable context parallelism."
+            )
+
         # When unset, default to "chunked_nll" unless `use_liger_kernel=True`, in which case default to "nll".
         if self.loss_type is None:
             self.loss_type = "nll" if self.use_liger_kernel else "chunked_nll"

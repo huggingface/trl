@@ -1362,19 +1362,6 @@ class SFTTrainer(_BaseTrainer):
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         )
 
-        # Context parallelism can only express full causal attention: the per-layer attention mask is
-        # dropped and replaced by `is_causal=True`. Packed sequences rely on a block-diagonal mask to
-        # keep documents from attending to each other, so under context parallelism a packed batch
-        # would silently train with documents attending across their boundaries.
-        parallelism_config = self.accelerator.parallelism_config
-        if parallelism_config is not None and parallelism_config.cp_enabled and args.packing:
-            raise ValueError(
-                "`packing=True` is not compatible with context parallelism (`cp_size > 1`). Packing relies on a "
-                "block-diagonal attention mask to keep packed documents separate, and context parallelism drops "
-                "that mask, so documents would attend across their boundaries. Set `packing=False`, or disable "
-                "context parallelism."
-            )
-
         # Initialize activation offloading context
         if self.args.activation_offloading:
             self.maybe_activation_offload_context = get_act_offloading_ctx_manager(model=self.model)
