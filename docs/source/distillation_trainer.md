@@ -196,11 +196,11 @@ Tested with:
 
 ## Example script
 
-Use [`examples/scripts/distillation.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/distillation.py) to launch distillation training from the command line. The script supports full training and LoRA via the standard `ModelConfig` flags.
+Use the [`trl distillation` CLI](clis) to launch distillation training from the command line. It supports full training and LoRA via the standard `ModelConfig` flags.
 
 ```bash
 # Full training:
-python examples/scripts/distillation.py \
+trl distillation \
     --model_name_or_path Qwen/Qwen2.5-0.5B-Instruct \
     --teacher_model_name_or_path Qwen/Qwen2.5-1.5B-Instruct \
     --dataset_name trl-lib/ultrafeedback-prompt \
@@ -213,7 +213,7 @@ python examples/scripts/distillation.py \
 
 ```bash
 # LoRA:
-python examples/scripts/distillation.py \
+trl distillation \
     --model_name_or_path Qwen/Qwen2.5-0.5B-Instruct \
     --teacher_model_name_or_path Qwen/Qwen2.5-1.5B-Instruct \
     --dataset_name trl-lib/ultrafeedback-prompt \
