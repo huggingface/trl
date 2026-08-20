@@ -204,9 +204,10 @@ accelerate launch --config_file context_parallel_2gpu.yaml train.py
    - For `cp_size=4`: use `pad_to_multiple_of=8` (since `cp_size * 2 = 8`)
    - The data collator automatically pads sequences to the required multiple, ensuring compatibility with CP
 
-2. **Use packing with padding** - The default BFD (Best Fit Decreasing) strategy works perfectly:
-   - Preserves sequence boundaries and maintains training quality
-   - Works seamlessly with both `padding_free=True` and standard padding modes
+2. **Do not use packing** - Context parallelism can only express full causal attention: the per-layer attention
+   mask is dropped and replaced by `is_causal=True`. Packed sequences rely on a block-diagonal mask to keep the
+   packed documents separate, so under context parallelism they would attend across document boundaries. TRL raises
+   an error for this combination.
 
 3. **Combine with other memory optimizations** like Liger kernels, bfloat16, and gradient checkpointing
 
