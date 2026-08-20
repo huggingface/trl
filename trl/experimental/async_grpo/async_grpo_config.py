@@ -143,6 +143,7 @@ class AsyncGRPOConfig(_BaseConfig):
     > - `bf16`: Defaults to `True` if `fp16` is not set, instead of `False`.
     > - `learning_rate`: Defaults to `1e-6` instead of `5e-5`.
     > - `lr_scheduler_type`: Defaults to `constant` instead of `linear` (see below).
+    > - `ignore_data_skip`: Defaults to `True` instead of `False`; the base Trainer's skip-and-replay loop does not apply to the async rollout queue.
 
     > [!NOTE]
     > Training duration and learning rate under message-mode reconciliation:
@@ -214,6 +215,13 @@ class AsyncGRPOConfig(_BaseConfig):
             "message-mode forks make the total step count unknown up front, so `max_steps` is only a safety ceiling "
             "and a decay horizon can't be calibrated. Set a decaying schedule (e.g. `cosine`) together with an "
             "explicit `max_steps` if you want LR decay."
+        },
+    )
+    ignore_data_skip: bool = field(
+        default=True,
+        metadata={
+            "help": "Always `True` for AsyncGRPO; the base Trainer's skip-and-replay loop does not apply to a live "
+            "rollout queue."
         },
     )
 
