@@ -4641,6 +4641,11 @@ class TestGRPOTrainerSlow(TrlTestCase):
         reason="transformers continuous batching switches attention to Flash Attention, which requires an Ampere or "
         "newer GPU, or XPU (see https://github.com/huggingface/transformers/issues/47926)",
     )
+    @pytest.mark.xfail(
+        reason="Flash Attention rejects a head_size that is not a multiple of 8, and the tiny models are "
+        "hidden_size=8 over 4 attention heads (head_size=2), so continuous-batching generation returns no "
+        "completions (https://github.com/huggingface/trl/issues/6834)",
+    )
     def test_train_with_transformers_continuous_batching(self, model_name):
         """Test that training works with transformers continuous batching (requires GPU)."""
         if not Version(transformers.__version__) >= Version("5.8.0"):
