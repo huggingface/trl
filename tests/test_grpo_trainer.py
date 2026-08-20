@@ -429,7 +429,7 @@ class TestGRPOTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @require_liger_kernel
-    @pytest.mark.parametrize("loss_type", ["bnpo", "dr_grpo", "dapo", "cispo", "sapo", "luspo", "vespo"])
+    @pytest.mark.parametrize("loss_type", ["grpo", "bnpo", "dr_grpo", "dapo", "cispo", "sapo", "luspo", "vespo"])
     def test_liger_loss_matches_non_liger_loss(self, loss_type):
         # The Liger and non-Liger paths must return the same loss for the same batch. `steps_per_generation` differs
         # from `gradient_accumulation_steps` so that the per-window rescale dapo/cispo/vespo apply is non-trivial.
