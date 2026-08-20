@@ -253,6 +253,7 @@ class TestUpdateWithReplayBuffer(TrlTestCase):
 
     def test_importance_sampling_ratio_roundtrip(self):
         # The vLLM IS ratio must be buffered per group and restored on replay, re-padded to the batch width
+        self.trainer.vllm_importance_sampling_mode = "token_truncate"
         self.trainer.replay_buffer.add(
             [0.9],
             [
@@ -283,6 +284,74 @@ class TestUpdateWithReplayBuffer(TrlTestCase):
         assert torch.allclose(output["importance_sampling_ratio"][2:], torch.full((2, 3), 0.7))
         # Non-replaced rows keep their own ratio, padded with the neutral value 1.0
         assert torch.allclose(output["importance_sampling_ratio"][:2], torch.ones(2, 3))
+
+    def test_token_level_is_ratio_widened_even_when_batch_width_is_one(self):
+        # Regression test: a token-level IS ratio is also (B, 1) when every completion in the batch is a single
+        # token (a degenerate batch, which is exactly when replay tends to trigger). Sequence-level handling must
+        # be decided by the configured mode, not the tensor width, so the ratio is widened with the completions.
+        self.trainer.vllm_importance_sampling_mode = "token_truncate"
+        self.trainer.replay_buffer.add(
+            [0.9],
+            [
+                {
+                    "prompt_ids": torch.tensor([[100, 101], [102, 103]]),
+                    "prompt_mask": torch.ones(2, 2, dtype=torch.long),
+                    "completion_ids": torch.tensor([[5, 6, 7], [8, 9, 10]]),
+                    "completion_mask": torch.ones(2, 3, dtype=torch.long),
+                    "advantages": torch.tensor([0.5, -0.5]),
+                    "importance_sampling_ratio": torch.full((2, 3), 0.7),
+                }
+            ],
+        )
+        # Degenerate batch: every completion is one token, so the token-level ratio is (4, 1)
+        output = {
+            "prompt_ids": torch.tensor([[1, 2], [3, 4], [5, 6], [7, 8]]),
+            "prompt_mask": torch.ones(4, 2, dtype=torch.long),
+            "completion_ids": torch.tensor([[9], [11], [13], [15]]),
+            "completion_mask": torch.ones(4, 1, dtype=torch.long),
+            "advantages": torch.zeros(4),
+            "importance_sampling_ratio": torch.full((4, 1), 0.9),
+        }
+        group_std_rewards = torch.zeros(4)
+
+        output = self.trainer.update_with_replay_buffer(output, group_std_rewards)
+
+        # Both zero-variance groups replaced with the buffered one; ratio widened alongside the completions
+        assert output["completion_ids"].shape == (4, 3)
+        assert output["importance_sampling_ratio"].shape == (4, 3)
+        assert torch.allclose(output["importance_sampling_ratio"], torch.full((4, 3), 0.7))
+
+    def test_sequence_level_is_ratio_stays_narrow(self):
+        # Sequence-level modes carry one ratio per sequence; it must stay (B, 1) while completions widen
+        self.trainer.vllm_importance_sampling_mode = "sequence_truncate"
+        self.trainer.replay_buffer.add(
+            [0.9],
+            [
+                {
+                    "prompt_ids": torch.tensor([[100, 101], [102, 103]]),
+                    "prompt_mask": torch.ones(2, 2, dtype=torch.long),
+                    "completion_ids": torch.tensor([[5, 6, 7], [8, 9, 10]]),
+                    "completion_mask": torch.ones(2, 3, dtype=torch.long),
+                    "advantages": torch.tensor([0.5, -0.5]),
+                    "importance_sampling_ratio": torch.full((2, 1), 0.7),
+                }
+            ],
+        )
+        output = {
+            "prompt_ids": torch.tensor([[1, 2], [3, 4], [5, 6], [7, 8]]),
+            "prompt_mask": torch.ones(4, 2, dtype=torch.long),
+            "completion_ids": torch.tensor([[9, 10], [11, 12], [13, 14], [15, 16]]),
+            "completion_mask": torch.ones(4, 2, dtype=torch.long),
+            "advantages": torch.zeros(4),
+            "importance_sampling_ratio": torch.full((4, 1), 0.9),
+        }
+        group_std_rewards = torch.zeros(4)
+
+        output = self.trainer.update_with_replay_buffer(output, group_std_rewards)
+
+        assert output["completion_ids"].shape == (4, 3)  # widened to the buffered length
+        assert output["importance_sampling_ratio"].shape == (4, 1)  # stays sequence-level
+        assert torch.allclose(output["importance_sampling_ratio"], torch.full((4, 1), 0.7))
 
     def test_multimodal_batches_pass_through(self):
         # The replay machinery cannot slice vision tensors; multimodal batches must pass through unchanged

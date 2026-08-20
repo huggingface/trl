@@ -775,9 +775,18 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
         for key in _COMPLETION_FIELD_PADDING:
             if key in output:
                 tensor = output[key][rows]
-                # Sequence-level vLLM IS modes produce a (B, 1) ratio; keep it as-is
-                item[key] = tensor.clone() if tensor.size(1) == 1 else tensor[:, :completion_len].clone()
+                # Sequence-level vLLM IS modes produce a (B, 1) ratio; keep it as-is. Decided by the configured
+                # mode, not the tensor width: a token-level ratio is also (B, 1) when every completion in the
+                # batch is a single token.
+                if key == "importance_sampling_ratio" and self._is_sequence_level_is_ratio():
+                    item[key] = tensor.clone()
+                else:
+                    item[key] = tensor[:, :completion_len].clone()
         return item
+
+    def _is_sequence_level_is_ratio(self) -> bool:
+        """Whether the vLLM importance-sampling ratio is sequence-level, i.e. always of shape (B, 1)."""
+        return self.vllm_importance_sampling_mode in ("sequence_mask", "sequence_truncate")
 
     def update_with_replay_buffer(
         self, output: dict[str, torch.Tensor], group_std_rewards: torch.Tensor
@@ -847,8 +856,8 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
             },
         }
         for key, (value, side, target_len) in widen_specs.items():
-            if output[key].size(1) == 1 and key == "importance_sampling_ratio":
-                continue  # sequence-level IS ratio stays (B, 1)
+            if key == "importance_sampling_ratio" and self._is_sequence_level_is_ratio():
+                continue  # sequence-level IS ratio stays (B, 1); token-level ratios are widened like the other fields
             output[key] = _widen(output[key], target_len, value, side)
             for item in sampled:
                 item[key] = _widen(item[key], target_len, value, side)
