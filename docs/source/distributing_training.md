@@ -218,19 +218,28 @@ accelerate launch --config_file context_parallel_2gpu.yaml train.py
 
 With the setup above plus a few levers, SFT scales to million-token sequences on a single 8×H100 node. Verified configurations (bf16, `per_device_train_batch_size=1`, `loss_type="chunked_nll"` — the default):
 
-| Model | Sequence length | Step time | Peak GPU memory |
+| Model | Sequence length | GPUs | Step time | Peak GPU memory |
+|---|---|---|---|---|
+| Qwen3-0.6B | 1M | 8 | 137 s | 27.9 GB |
+| Qwen3-0.6B | 2M | 8 | 538 s | 42.2 GB |
+| Qwen3-0.6B | 4M | 8 | 2135 s | 73.7 GB |
+| Qwen3-8B | 1M | 8 | 364 s | 56.2 GB |
+| Qwen3-30B-A3B (MoE) | 1M | 8 | 483 s | 46.0 GB |
+| Qwen3-32B | 1M | 8 | 1402 s | 66.5 GB |
+
+Context length scales with the number of nodes: sequence length and GPU count can be doubled together at
+roughly 2x step time, because each GPU keeps the same shard of the sequence.
+
+| Model | Sequence length | GPUs (`cp_size`) | Step time |
 |---|---|---|---|
-| Qwen3-0.6B | 1M | 137 s | 27.9 GB |
-| Qwen3-0.6B | 2M | 538 s | 42.2 GB |
-| Qwen3-0.6B | 4M | 2135 s | 73.7 GB |
-| Qwen3-8B | 1M | 386 s | 67.4 GB |
-| Qwen3-30B-A3B (MoE) | 1M | ~490 s | 48.4 GB |
-| Qwen3-32B | 1M | 1402 s | 66.5 GB |
+| Qwen3-8B | 1M | 8 (1 node) | 364 s |
+| Qwen3-8B | 2M | 16 (2 nodes) | 696 s |
+| Qwen3-8B | 4M | 32 (4 nodes) | 1346 s |
 
 The levers, roughly in the order you will need them as model size or sequence length grows:
 
 1. **Keep the default `loss_type="chunked_nll"`.** At 1M tokens, materializing `[seq, vocab]` logits costs tens of GB per GPU; the chunked loss never does.
-2. **Force the cuDNN SDPA backend** — torch ≥ 2.13's ring attention supports it, and it is ~1.7× faster than the default backend on H100. The context manager must cover forward *and* backward (checkpoint recompute must select the same backend):
+2. **Use the cuDNN SDPA backend** — it is ~1.7× faster than SDPA's default (FlashAttention) on H100, at identical accuracy. Recent Transformers prefers it automatically on Hopper and newer; on older versions, select it explicitly. The context manager must cover forward *and* backward, since activation-checkpoint recompute has to select the same backend:
 
    ```python
    from torch.nn.attention import SDPBackend, sdpa_kernel
