@@ -12,7 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from types import SimpleNamespace
+from unittest.mock import Mock
+
 import pytest
+import torch
 from datasets import Dataset, DatasetDict, features, load_dataset
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
 from transformers.utils import is_peft_available, is_vision_available
@@ -44,6 +48,22 @@ class TestOnlineDPOTrainer(TrlTestCase):
         self.reward_model = AutoModelForSequenceClassification.from_pretrained(self.reward_model_id, num_labels=1)
         self.reward_tokenizer = AutoTokenizer.from_pretrained(self.reward_model_id)
         self.reward_tokenizer.pad_token = self.reward_tokenizer.eos_token
+
+    def test_forward_passes_position_ids(self):
+        trainer = OnlineDPOTrainer.__new__(OnlineDPOTrainer)
+        trainer.max_length = 8
+        model = Mock(return_value=SimpleNamespace(logits=torch.zeros(2, 5, 8)))
+        prompt_ids = torch.tensor([[0, 0, 1], [2, 3, 4]])
+        prompt_mask = torch.tensor([[0, 0, 1], [1, 1, 1]])
+        completion_ids = torch.tensor([[5, 6], [5, 6]])
+        completion_mask = torch.ones_like(completion_ids)
+
+        trainer._forward(model, prompt_ids, prompt_mask, completion_ids, completion_mask)
+
+        attention_mask = torch.cat((prompt_mask, completion_mask), dim=1)
+        torch.testing.assert_close(
+            model.call_args.kwargs["position_ids"], attention_mask.cumsum(1) - attention_mask.long()
+        )
 
     def test_trust_remote_code(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")

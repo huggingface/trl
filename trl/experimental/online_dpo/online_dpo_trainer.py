@@ -1069,7 +1069,10 @@ class OnlineDPOTrainer(_BaseTrainer):
         prompt_completion_mask = torch.cat((prompt_mask, completion_mask), dim=1)
 
         # Prepare model kwargs with vision inputs if available
-        model_kwargs = {"attention_mask": prompt_completion_mask}
+        model_kwargs = {
+            "attention_mask": prompt_completion_mask,
+            "position_ids": prompt_completion_mask.cumsum(1) - prompt_completion_mask.long(),
+        }
         if vision_inputs is not None:
             if "pixel_values" in vision_inputs:
                 model_kwargs["pixel_values"] = vision_inputs["pixel_values"]

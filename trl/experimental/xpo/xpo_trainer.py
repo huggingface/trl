@@ -272,7 +272,8 @@ class XPOTrainer(OnlineDPOTrainer):
 
     def _compute_logprobs(self, model, model_data, ref_data, context_length):
         def compute_logprobs_for_data(m, data):
-            output = m(data["input_ids"], attention_mask=data["attention_mask"])
+            position_ids = data["attention_mask"].cumsum(1) - data["attention_mask"].long()
+            output = m(data["input_ids"], attention_mask=data["attention_mask"], position_ids=position_ids)
             logits = output.logits[:, context_length - 1 : -1]
             token_logprobs = selective_log_softmax(logits, data["input_ids"][:, context_length:])
             return token_logprobs

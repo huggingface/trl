@@ -12,6 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from types import SimpleNamespace
+from unittest.mock import Mock
+
 import pytest
 import torch
 from datasets import DatasetDict, load_dataset
@@ -85,6 +88,21 @@ class TestNashMDTrainer(TrlTestCase):
         self.reward_model = AutoModelForSequenceClassification.from_pretrained(self.model_id, num_labels=1)
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
         self.tokenizer.pad_token = self.tokenizer.eos_token
+
+    def test_compute_logprobs_passes_position_ids(self):
+        trainer = NashMDTrainer.__new__(NashMDTrainer)
+        trainer.ref_model = Mock(return_value=SimpleNamespace(logits=torch.zeros(2, 5, 8)))
+        model = Mock(return_value=SimpleNamespace(logits=torch.zeros(2, 5, 8)))
+        data = {
+            "input_ids": torch.tensor([[0, 0, 1, 5, 6], [2, 3, 4, 5, 6]]),
+            "attention_mask": torch.tensor([[0, 0, 1, 1, 1], [1, 1, 1, 1, 1]]),
+        }
+
+        trainer._compute_logprobs(model, data, context_length=3)
+
+        expected = data["attention_mask"].cumsum(1) - data["attention_mask"].long()
+        for call in model.call_args_list + trainer.ref_model.call_args_list:
+            torch.testing.assert_close(call.kwargs["position_ids"], expected)
 
     @pytest.mark.parametrize("config_name", ["standard_prompt_only", "conversational_prompt_only"])
     def test_nash_md_trainer_training(self, config_name):
