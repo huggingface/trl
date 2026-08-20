@@ -194,10 +194,8 @@ def _chunked_cross_entropy_loss(
     hidden = hidden[order]
     labels = labels[order]
 
-    # Process only the whole chunks covering the valid prefix: bounds XLA recompiles and drops fully-masked chunks on
-    # GPU. At least one chunk always runs, so a whole-masked micro-batch still produces a zero loss connected to every
-    # trainable parameter, which `.backward()` and DDP / FSDP gradient sync require.
-    n_padded = (n_valid_tensor / chunk_size).ceil().clamp(min=1).to(torch.int64) * chunk_size
+    # Process only the whole chunks covering the valid prefix: bounds XLA recompiles and drops fully-masked chunks on GPU.
+    n_padded = (n_valid_tensor / chunk_size).ceil().to(torch.int64) * chunk_size
 
     loss = hidden.new_zeros((), dtype=torch.float32)
 
@@ -219,12 +217,11 @@ def _chunked_cross_entropy_loss(
         entropy_sum = entropy_sum + chunk_entropy
 
     if num_items_in_batch is None:
-        num_items_in_batch = n_valid_tensor
-    # A whole-masked batch leaves a zero numerator; clamping keeps the reduction a finite zero rather than `0 / 0`.
-    if isinstance(num_items_in_batch, torch.Tensor):
-        loss = loss / num_items_in_batch.to(loss.device).clamp(min=1)
+        loss = loss / n_valid_tensor
     else:
-        loss = loss / max(num_items_in_batch, 1)
+        if isinstance(num_items_in_batch, torch.Tensor):
+            num_items_in_batch = num_items_in_batch.to(loss.device)
+        loss = loss / num_items_in_batch
     return loss, correct, entropy_sum, n_valid_tensor
 
 
