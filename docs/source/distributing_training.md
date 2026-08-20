@@ -225,7 +225,7 @@ With the setup above plus a few levers, SFT scales to million-token sequences on
 | Qwen3-0.6B | 4M | 8 | 2135 s | 73.7 GB |
 | Qwen3-8B | 1M | 8 | 364 s | 56.2 GB |
 | Qwen3-30B-A3B (MoE) | 1M | 8 | 483 s | 46.0 GB |
-| Qwen3-32B | 1M | 8 | 1402 s | 66.5 GB |
+| Qwen3-32B | 1M | 8 | 1295 s | 60.8 GB |
 
 Context length scales with the number of nodes: sequence length and GPU count can be doubled together at
 roughly 2x step time, because each GPU keeps the same shard of the sequence.
@@ -262,7 +262,15 @@ The levers, roughly in the order you will need them as model size or sequence le
 
    Both are speed-neutral and save several GB (grad-norm deviation < 0.5%).
 5. **For ≥ 30B models, add parameter/optimizer CPU offload** (`fsdp_offload_params: true`). Model states (~12 bytes/param sharded) move to host; at 1M-token step times the gather traffic is negligible.
-6. **Context extension needs RoPE scaling.** A base model evaluated at positions far beyond its trained range starts at a high loss (10.6 vs 4.4 for Qwen3-8B at 1M with YaRN ×32). Configure it at load time, and note that in transformers v5 `rope_theta` lives inside `rope_parameters`, so the override must carry it:
+6. **For the largest dense models, tile the MLP over the sequence.** Inside a checkpointed layer, the `[seq/cp, intermediate]` gate/up projections are the last large transient, and activation offload cannot reach them — they are created and consumed within a single recompute. Splitting the MLP forward into sequence tiles caps them at `[tile, intermediate]`; the backward recomputes the same tiled code, so the bound holds there too. This is what makes Qwen3-32B fit at 1M:
+
+   ```python
+   from transformers.models.qwen3.modeling_qwen3 import Qwen3MLP
+
+   forward, tile = Qwen3MLP.forward, 16384
+   Qwen3MLP.forward = lambda self, x: torch.cat([forward(self, c) for c in x.split(tile, dim=1)], dim=1)
+   ```
+7. **Context extension needs RoPE scaling.** A base model evaluated at positions far beyond its trained range starts at a high loss (10.6 vs 4.4 for Qwen3-8B at 1M with YaRN ×32). Configure it at load time, and note that in transformers v5 `rope_theta` lives inside `rope_parameters`, so the override must carry it:
 
    ```python
    model_init_kwargs={
