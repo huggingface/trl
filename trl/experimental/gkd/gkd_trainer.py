@@ -519,6 +519,7 @@ class GKDTrainer(SFTTrainer):
                     model,
                     self.accelerator,
                     generation_kwargs=self.generation_kwargs,  # Override model.generation_config with generation_kwargs to fix transformers#42762
+                    gradient_checkpointing_kwargs=self.args.gradient_checkpointing_kwargs,
                 ) as unwrapped_model
             ):
                 new_input_ids, new_attention_mask, new_labels = self.generate_on_policy_outputs(
@@ -533,6 +534,7 @@ class GKDTrainer(SFTTrainer):
                     self.teacher_model,
                     self.accelerator,
                     generation_kwargs=self.generation_kwargs,  # Override model.generation_config with generation_kwargs to fix transformers#42762
+                    gradient_checkpointing_kwargs=self.args.gradient_checkpointing_kwargs,
                 ) as unwrapped_model
             ):
                 new_input_ids, new_attention_mask, new_labels = self.generate_on_policy_outputs(

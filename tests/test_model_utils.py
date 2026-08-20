@@ -19,7 +19,7 @@ import pytest
 from transformers import AutoModelForCausalLM
 
 from trl.import_utils import is_deepspeed_available
-from trl.models.utils import disable_gradient_checkpointing, prepare_deepspeed
+from trl.models.utils import _unwrap_model_for_generation, disable_gradient_checkpointing, prepare_deepspeed
 
 
 @pytest.mark.skipif(not is_deepspeed_available(), reason="deepspeed is not installed")
@@ -73,3 +73,58 @@ class TestDisableGradientCheckpointing:
         with disable_gradient_checkpointing(model):
             assert model.is_gradient_checkpointing is False
         assert model.is_gradient_checkpointing is True
+
+    def test_unwrap_restores_kwargs(self):
+        checkpointing_kwargs = {"use_reentrant": True}
+        model = types.SimpleNamespace(is_gradient_checkpointing=True)
+        model.gradient_checkpointing_disable = lambda: setattr(model, "is_gradient_checkpointing", False)
+        restored_kwargs = []
+
+        def gradient_checkpointing_enable(kwargs):
+            restored_kwargs.append(kwargs)
+            model.is_gradient_checkpointing = True
+
+        model.gradient_checkpointing_enable = gradient_checkpointing_enable
+        accelerator = types.SimpleNamespace(
+            unwrap_model=lambda wrapped_model: wrapped_model,
+            state=types.SimpleNamespace(deepspeed_plugin=None),
+        )
+
+        with _unwrap_model_for_generation(
+            model,
+            accelerator,
+            gradient_checkpointing_kwargs=checkpointing_kwargs,
+        ):
+            assert model.is_gradient_checkpointing is False
+
+        assert model.is_gradient_checkpointing is True
+        assert restored_kwargs == [checkpointing_kwargs]
+
+    def test_unwrap_restores_kwargs_after_exception(self):
+        checkpointing_kwargs = {"use_reentrant": True}
+        model = types.SimpleNamespace(is_gradient_checkpointing=True)
+        model.gradient_checkpointing_disable = lambda: setattr(model, "is_gradient_checkpointing", False)
+        restored_kwargs = []
+
+        def gradient_checkpointing_enable(kwargs):
+            restored_kwargs.append(kwargs)
+            model.is_gradient_checkpointing = True
+
+        model.gradient_checkpointing_enable = gradient_checkpointing_enable
+        accelerator = types.SimpleNamespace(
+            unwrap_model=lambda wrapped_model: wrapped_model,
+            state=types.SimpleNamespace(deepspeed_plugin=None),
+        )
+
+        with (
+            pytest.raises(RuntimeError, match="generation failed"),
+            _unwrap_model_for_generation(
+                model,
+                accelerator,
+                gradient_checkpointing_kwargs=checkpointing_kwargs,
+            ),
+        ):
+            raise RuntimeError("generation failed")
+
+        assert model.is_gradient_checkpointing is True
+        assert restored_kwargs == [checkpointing_kwargs]
