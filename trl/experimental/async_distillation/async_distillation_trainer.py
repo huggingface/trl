@@ -13,7 +13,10 @@
 # limitations under the License.
 
 import contextvars
+import itertools
+import json
 import math
+import os
 import queue
 import textwrap
 import threading
@@ -32,6 +35,7 @@ from torch.distributed._tensor import DTensor
 from torch.utils.data import DataLoader
 from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenizerBase, TrainerCallback
 from transformers.data.data_collator import DataCollatorMixin
+from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR
 
 from ...models.utils import _ForwardRedirection
 from ...trainer.base_trainer import _BaseTrainer
@@ -530,7 +534,8 @@ class _EpochStopCallback(TrainerCallback):
 
     def on_step_end(self, _args, _state, control, **_kwargs):
         acc = self._trainer.accelerator
-        reached = torch.tensor(int(len(self._trainer._trained_prompts) >= self._target), device=acc.device)
+        trained = self._trainer._prompts_before_resume + len(self._trainer._trained_prompts)
+        reached = torch.tensor(int(trained >= self._target), device=acc.device)
         if int(acc.reduce(reached, reduction="sum").item()) >= 1:
             control.should_training_stop = True
 
@@ -1002,6 +1007,8 @@ class AsyncDistillationTrainer(_BaseTrainer):
         # prompts trained. Unlike AsyncGRPOTrainer there is no num_generations multiplier and no forking: each dataset
         # row yields exactly one training sample, not a group of them.
         self._trained_prompts: set[int] = set()
+        # Tracks restart to match `num_train_epochs`
+        self._prompts_before_resume = 0
         self._epoch_stop_prompts: int | None = None
         # This must happen after super().__init__() so that self.accelerator.num_processes is available. The training
         # dataloader is driven by the async rollout queue (an IterableDataset with no __len__), so max_steps must be
@@ -1041,6 +1048,15 @@ class AsyncDistillationTrainer(_BaseTrainer):
         # and FSDP keeps the student's sharded parameters materialized for the projection. Mirrors
         # `DistillationTrainer`'s identical need for its own chunked JSD path.
         self._forward_redirection = _ForwardRedirection()
+
+        # The base Trainer's data-skip replay loop doesn't apply to AsyncDistillation's live rollout queue;
+        # force it off regardless of what the user passed.
+        if not self.args.ignore_data_skip:
+            logger.warning(
+                "`ignore_data_skip` is forced to `True` for AsyncDistillation because the base Trainer's "
+                "skip-and-replay loop does not apply to a live rollout queue."
+            )
+        self.args.ignore_data_skip = True
 
         # The metric sink. Values are floats, or `(numerator, denominator)` pairs for rates
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
@@ -1531,7 +1547,42 @@ class AsyncDistillationTrainer(_BaseTrainer):
         self._metrics["train"]["perf/weight_sync_transfer_s"].append(t_transfer - t_barrier)
         logger.info(f"Weight sync: done. Total {weight_sync_s:.1f}s")
 
+    def _save_checkpoint(self, model, trial):
+        if self.accelerator.is_main_process and isinstance(self.rollout_worker, AsyncRolloutWorker):
+            checkpoint_folder = f"{PREFIX_CHECKPOINT_DIR}-{self.state.global_step}"
+            checkpoint_dir = os.path.join(self._get_output_dir(trial=trial), checkpoint_folder)
+            os.makedirs(checkpoint_dir, exist_ok=True)
+            trained = self._trained_prompts
+            first_untrained = next(p for p in itertools.count() if p not in trained)
+            prompt_index = self.rollout_worker._loop_kwargs["dataset_start_index"] + first_untrained
+            rollout_state = {"prompt_index": prompt_index}
+            with open(os.path.join(checkpoint_dir, "rollout_state.json"), "w") as f:
+                json.dump(rollout_state, f)
+        super()._save_checkpoint(model, trial)
+
     def _inner_training_loop(self, *args, **kwargs):
+        # When resuming, pass the saved prompt position to the worker before _TrainBeginCallback fires.
+        # Skipped for IterableDataset since len() isn't available on streaming datasets.
+        # Always reset first so a stale value from a prior train() call is never carried over.
+        if isinstance(self.rollout_worker, AsyncRolloutWorker):
+            self.rollout_worker._loop_kwargs["dataset_start_index"] = 0
+            self._prompts_before_resume = 0
+            resume_from_checkpoint = kwargs.get("resume_from_checkpoint")
+            if resume_from_checkpoint is not None:
+                rollout_state_file = os.path.join(resume_from_checkpoint, "rollout_state.json")
+                # IterableDataset is skipped deliberately: streaming datasets have no len() and can't be repositioned.
+                if not os.path.isfile(rollout_state_file):
+                    logger.warning(
+                        "rollout_state.json not found in the checkpoint; "
+                        "the rollout worker will restart from prompt 0."
+                    )
+                elif not isinstance(self.train_dataset, Dataset):
+                    logger.warning("Resuming with an IterableDataset; the rollout worker will restart from prompt 0.")
+                else:
+                    with open(rollout_state_file) as f:
+                        rollout_state = json.load(f)
+                    self.rollout_worker._loop_kwargs["dataset_start_index"] = rollout_state["prompt_index"]
+                    self._prompts_before_resume = rollout_state["prompt_index"]
         try:
             return super()._inner_training_loop(*args, **kwargs)
         finally:

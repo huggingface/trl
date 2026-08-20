@@ -166,10 +166,13 @@ class AsyncDistillationConfig(_BaseConfig):
         num_completions_to_print (`int`, *optional*):
             Number of completions to print with `rich`. If `None`, all completions are logged.
 
-    > [!NOTE] > These parameters have default values different from [`~transformers.TrainingArguments`]: > -
-    `logging_steps`: Defaults to `1` instead of `500`. > - `gradient_checkpointing`: Defaults to `True` instead of
-    `False`. > - `bf16`: Defaults to `True` if `fp16` is not set, instead of `False`. > - `learning_rate`: Defaults to
-    `1e-6` instead of `5e-5`.
+    > [!NOTE]
+    > These parameters have default values different from [`~transformers.TrainingArguments`]:
+    > - `logging_steps`: Defaults to `1` instead of `500`.
+    > - `gradient_checkpointing`: Defaults to `True` instead of `False`.
+    > - `bf16`: Defaults to `True` if `fp16` is not set, instead of `False`.
+    > - `learning_rate`: Defaults to `1e-6` instead of `5e-5`.
+    > - `ignore_data_skip`: Defaults to `True` instead of `False`; the base Trainer's skip-and-replay loop does not apply to the async rollout queue.
     """
 
     _VALID_DICT_FIELDS = _BaseConfig._VALID_DICT_FIELDS + ["model_init_kwargs", "teacher_server_urls"]
@@ -189,6 +192,13 @@ class AsyncDistillationConfig(_BaseConfig):
             "training-inference mismatch results the async trainers are measured against were obtained at. A `dtype` "
             "in `model_init_kwargs` takes precedence.",
             "choices": ["auto", "bfloat16", "float16", "float32"],
+        },
+    )
+    ignore_data_skip: bool = field(
+        default=True,
+        metadata={
+            "help": "Always `True` for AsyncDistillation; the base Trainer's skip-and-replay loop does not apply to a "
+            "live rollout queue."
         },
     )
     trust_remote_code: bool = field(

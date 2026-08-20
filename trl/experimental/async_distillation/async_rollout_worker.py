@@ -218,10 +218,15 @@ class _AsyncRolloutLoop:
         log_completions: bool = False,
         log_completions_steps: int = 100,
         num_completions_to_print: int | None = None,
+        dataset_start_index: int = 0,
     ):
         self.model_name = model_name
         self.dataset = dataset
-        self._dataset_iter = iter(dataset)
+        if dataset_start_index > 0:
+            start = dataset_start_index % len(dataset)
+            self._dataset_iter = iter(dataset.select(range(start, len(dataset))))
+        else:
+            self._dataset_iter = iter(dataset)
         self.tokenizer = processing_class
         self.rollout_buffer = rollout_buffer  # shared mp.Queue
         self._model_version_value = model_version_value  # shared mp.Value
@@ -658,6 +663,7 @@ class AsyncRolloutWorker:
         # Forwarded verbatim to _AsyncRolloutLoop in the child. queue_maxsize is also
         # forwarded, the child reads it for "rollout buffer full" log lines.
         loop_kwargs["queue_maxsize"] = queue_maxsize
+        loop_kwargs.setdefault("dataset_start_index", 0)
         self._loop_kwargs = loop_kwargs
         self._child_ready_timeout = child_ready_timeout
         self._process: mp.Process | None = None
