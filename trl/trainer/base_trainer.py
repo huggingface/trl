@@ -13,9 +13,11 @@
 # limitations under the License.
 
 import os
+from pathlib import Path
 
 import torch
 from accelerate.utils import is_peft_model
+from datasets import Dataset
 from huggingface_hub.utils import send_telemetry
 from transformers import CONFIG_MAPPING, Trainer, is_wandb_available
 
@@ -108,6 +110,17 @@ class _BaseTrainer(Trainer):
         trainer = (
             cls.__name__ if cls.__name__ in _TELEMETRY_TRAINERS and cls.__module__.startswith("trl.") else "other"
         )
+        # How the data was loaded, never what it is. Hub downloads cache under `<cache>/<namespace>___<name>/`, while
+        # file-based builders land in `<cache>/<builder>/default-<hash>/`. A Hub repo of raw json/csv files also goes
+        # through a file-based builder, hence "files" rather than "local".
+        if not isinstance(self.train_dataset, Dataset):
+            dataset_source = "other"  # IterableDataset, torch Dataset, or no training dataset
+        elif not self.train_dataset.cache_files:
+            dataset_source = "memory"  # e.g. `Dataset.from_dict`
+        elif any("___" in part for part in Path(self.train_dataset.cache_files[0]["filename"]).parts):
+            dataset_source = "hub"
+        else:
+            dataset_source = "files"
         model_type = self.model.config.model_type
         model_arch = model_type if model_type in CONFIG_MAPPING else "other"
         send_telemetry(
@@ -117,6 +130,7 @@ class _BaseTrainer(Trainer):
             user_agent={
                 "model_arch": model_arch,
                 "peft": str(is_peft_model(self.model)).lower(),
+                "dataset_source": dataset_source,
                 "distributed": distributed,
                 "world_size": world_size,
                 "device": device,
