@@ -1250,6 +1250,16 @@ class DistillationTrainer(_BaseTrainer):
             if self.processing_class.image_processor.use_thumbnail:
                 tiles_per_image = tiles_per_image + (tiles_per_image > 1).to(tiles_per_image.dtype)
             num_tiles = [group.sum().item() for group in torch.split(tiles_per_image, num_images)]
+        # Same for InternVL, whose pixel_values is tile-indexed ([total_tiles, channels, height, width]).
+        elif (
+            images is not None
+            and forward_kwargs["pixel_values"].ndim == 4
+            and forward_kwargs["pixel_values"].size(0) != sum(num_images)
+        ):
+            num_patches = self.processing_class.image_processor(
+                images=images, crop_to_patches=True, return_tensors="pt"
+            )["num_patches"]
+            num_tiles = [group.sum().item() for group in torch.split(num_patches, num_images)]
 
         # If token_type_ids are used, extend them with zeros for the completion part
         if "token_type_ids" in forward_kwargs:

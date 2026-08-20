@@ -710,6 +710,11 @@ class TestAsyncDistillationTrainer(TrlTestCase):
             weight_transfer=_StubWeightTransfer(),
         )
 
+    @pytest.mark.xfail(
+        reason="Flash Attention rejects a head_size that is not a multiple of 8, and the tiny models are "
+        "hidden_size=8 over 4 attention heads (head_size=2), so the forward pass raises "
+        "(https://github.com/huggingface/trl/issues/6837)",
+    )
     def test_train(self):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
@@ -744,6 +749,11 @@ class TestAsyncDistillationTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @pytest.mark.parametrize("beta", [0.25, 0.5, 0.75, 1.0])
+    @pytest.mark.xfail(
+        reason="Flash Attention rejects a head_size that is not a multiple of 8, and the tiny models are "
+        "hidden_size=8 over 4 attention heads (head_size=2), so the forward pass raises "
+        "(https://github.com/huggingface/trl/issues/6837)",
+    )
     def test_train_with_nonzero_beta(self, beta):
         # Adapted from ServerDistillationTrainer's own `test_reverse_kl_finite_grad_with_ragged_batch`: a real
         # training run through the narrow top-1 + actual-token support path (including the beta==1.0 special case),
