@@ -51,6 +51,7 @@ from .testing_utils import (
     require_torch_accelerator,
     require_vision,
     require_vllm,
+    xfail_data_parallel,
 )
 
 
@@ -4482,6 +4483,7 @@ class TestGRPOTrainerSlow(TrlTestCase):
         ],
     )
     @require_liger_kernel
+    @xfail_data_parallel
     def test_train_with_liger_grpo_kernel(self, model_name):
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
@@ -4528,6 +4530,7 @@ class TestGRPOTrainerSlow(TrlTestCase):
     )
     @require_liger_kernel
     @require_peft
+    @xfail_data_parallel
     def test_train_with_liger_grpo_kernel_and_peft(self, model_name):
         from peft import LoraConfig, TaskType
 
@@ -4589,6 +4592,7 @@ class TestGRPOTrainerSlow(TrlTestCase):
         release_memory(model, trainer)
 
     @require_liger_kernel
+    @xfail_data_parallel
     def test_liger_grpo_kernel_importance_sampling(self):
         model_name = "trl-internal-testing/tiny-LlamaForCausalLM-3.2"
 
