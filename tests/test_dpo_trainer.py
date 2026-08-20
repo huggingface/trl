@@ -1091,6 +1091,11 @@ class TestDPOTrainer(TrlTestCase):
         not is_ampere_or_newer() and torch_device != "xpu",
         reason="Flash Attention 2 requires Ampere or newer GPU, or XPU",
     )
+    @pytest.mark.xfail(
+        reason="kernels-community/flash-attn2 is currently unusable for training: no build variant for torch 2.13 "
+        "(https://github.com/huggingface/kernels-community/issues/1082), and the v3 stable-ABI build raises in the "
+        "backward pass for GQA models (https://github.com/huggingface/kernels-community/issues/1085)",
+    )
     def test_train_padding_free(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
 
