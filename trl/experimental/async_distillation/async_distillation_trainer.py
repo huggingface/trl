@@ -935,12 +935,11 @@ class AsyncDistillationTrainer(_BaseTrainer):
     ):
         if args is None:
             args = AsyncDistillationConfig(f"{model.split('/')[-1]}-AsyncDistillation")
-        self.args = args
 
         # Model
         model_name = model
-        model_init_kwargs = self.args.model_init_kwargs or {}
-        model_init_kwargs.setdefault("trust_remote_code", self.args.trust_remote_code)
+        model_init_kwargs = args.model_init_kwargs or {}
+        model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
         # FlashAttention is required: training runs in padding-free mode, where sequences are concatenated into a
         # single row and attention is derived from `position_ids` resets. SDPA/eager can't handle this. Unlike
         # AsyncGRPOTrainer, the student's own lm_head is NOT patched (via `patch_chunked_lm_head`) to a chunked
@@ -956,19 +955,19 @@ class AsyncDistillationTrainer(_BaseTrainer):
             **model_init_kwargs,
         )
 
-        if self.args.use_liger_kernel:
+        if args.use_liger_kernel:
             raise NotImplementedError("`use_liger_kernel` is not supported yet.")
 
         # Processing class
         if processing_class is None:
-            processing_class = AutoTokenizer.from_pretrained(model_name, trust_remote_code=self.args.trust_remote_code)
+            processing_class = AutoTokenizer.from_pretrained(model_name, trust_remote_code=args.trust_remote_code)
         if processing_class.pad_token is None:
             processing_class.pad_token = processing_class.eos_token
 
         # Initialize the Trainer
         super().__init__(
             model=model,
-            args=self.args,
+            args=args,
             train_dataset=train_dataset,
             processing_class=processing_class,
             callbacks=callbacks,
