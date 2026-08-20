@@ -239,7 +239,7 @@ roughly 2x step time, because each GPU keeps the same shard of the sequence.
 The levers, roughly in the order you will need them as model size or sequence length grows:
 
 1. **Keep the default `loss_type="chunked_nll"`.** At 1M tokens, materializing `[seq, vocab]` logits costs tens of GB per GPU; the chunked loss never does.
-2. **Use the cuDNN SDPA backend** — it is ~1.7× faster than SDPA's default (FlashAttention) on H100, at identical accuracy. Recent Transformers prefers it automatically on Hopper and newer; on older versions, select it explicitly. The context manager must cover forward *and* backward, since activation-checkpoint recompute has to select the same backend:
+2. **Use the cuDNN SDPA backend** — it is ~1.7× faster than SDPA's default (FlashAttention) on H100, at identical accuracy. Recent Transformers prefers it automatically on Hopper; elsewhere, select it explicitly. The context manager must cover forward *and* backward, since activation-checkpoint recompute has to select the same backend:
 
    ```python
    from torch.nn.attention import SDPBackend, sdpa_kernel
@@ -280,11 +280,12 @@ The levers, roughly in the order you will need them as model size or sequence le
 
 Context parallelism can only express full causal attention, which constrains what it can train:
 
-- **Full-attention models only.** Models with sliding-window or chunked attention layers (Gemma 2/3, Mistral,
-  Qwen3 with `use_sliding_window`) cannot be used: their per-layer mask has to be dropped, which would silently
-  turn those layers into full causal attention. Accelerate rejects such models.
-- **No packing**, for the same reason (see above), and **no left padding** — right padding is fine, since causal
-  attention already ignores trailing pad positions.
+- **Full-attention models only.** Models with sliding-window or chunked attention layers cannot be used: their
+  per-layer mask has to be dropped, which would silently turn those layers into full causal attention.
+  Accelerate rejects such models. This rules out much of the current crop — gpt-oss (every other layer),
+  Gemma 3 and Gemma 4 (five of every six), Muse-Glimmer (39 of 52), Mistral and Ministral (every layer).
+- **No packing**, for the same reason: packed documents are kept apart by a block-diagonal mask, which is
+  dropped too. TRL raises for this combination.
 
 Attention is quadratic, so step time grows ~4× for every 2× in sequence length (137 s → 538 s → 2135 s for 0.6B at 1M/2M/4M), while memory — with the levers above — grows roughly linearly.
 
