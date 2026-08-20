@@ -300,6 +300,88 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             )
 
 
+@pytest.mark.skipif(
+    not is_ampere_or_newer() and torch_device != "xpu",
+    reason="Flash Attention 2 requires Ampere or newer GPU, or XPU",
+)
+@pytest.mark.parametrize(
+    "model_id",
+    [
+        pytest.param("trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-Think", id="qwen35"),
+        pytest.param("trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6", id="qwen36-moe"),
+        pytest.param("trl-internal-testing/tiny-Qwen3VLForConditionalGeneration", id="qwen3_vl"),
+    ],
+)
+class TestAsyncGRPOTrainerVLM(TrlTestCase):
+    """Text-only training on vision-language checkpoints. The vision tower is loaded (so parameter names match the
+    vLLM server) but frozen, since the dataset carries no images."""
+
+    def _trainer(self, model_id, **config_kwargs):
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
+        training_args = AsyncGRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            token_budget=256,  # set explicitly; the stub worker has no real vLLM server to query for max_model_len
+            vllm_server_timeout=5.0,  # short timeout so test fails fast if queue runs dry
+            report_to="none",
+            **config_kwargs,
+        )
+        return AsyncGRPOTrainer(
+            model=model_id,
+            reward_funcs=dummy_reward_func,  # unused: the stub pre-computes rewards, but the trainer requires it
+            args=training_args,
+            train_dataset=dataset,
+            rollout_worker=_StubRolloutWorker(AutoTokenizer.from_pretrained(model_id), dataset, num_generations=3),
+            weight_transfer=_StubWeightTransfer(),
+        )
+
+    def test_vision_tower_is_frozen(self, model_id):
+        trainer = self._trainer(model_id)
+        assert trainer._is_vlm
+
+        # Everything outside the text tower is frozen; the text tower and the LM head stay trainable.
+        frozen = {n for n, p in trainer.model.named_parameters() if not p.requires_grad}
+        trainable = {n for n, p in trainer.model.named_parameters() if p.requires_grad}
+        assert frozen, "the vision tower should have been frozen"
+        assert all(not n.startswith("model.language_model.") and n != "lm_head.weight" for n in frozen)
+        assert all(n.startswith("model.language_model.") or n == "lm_head.weight" for n in trainable)
+
+        # Frozen parameters get no optimizer state: the optimizer only sees the text tower.
+        trainer.create_optimizer()
+        optimized = {p.data_ptr() for group in trainer.optimizer.param_groups for p in group["params"]}
+        assert optimized == {p.data_ptr() for n, p in trainer.model.named_parameters() if n in trainable}
+
+    def test_weight_sync_streams_the_text_tower_only(self, model_id):
+        # The whole point of loading the full VLM: parameter names must match the vLLM server, which serves the
+        # `*ForConditionalGeneration` architecture (`model.language_model.*`), not the text tower alone
+        # (`model.*`). Frozen vision weights never change, so they are not streamed at all.
+        trainer = self._trainer(model_id)
+        streamed = dict(trainer._streaming_iter())
+
+        assert streamed
+        assert streamed.keys() == {n for n, p in trainer.model.named_parameters() if p.requires_grad}
+        assert any(name.startswith("model.language_model.") for name in streamed)
+        assert not any(".visual." in name or ".vision_tower." in name for name in streamed)
+
+    def test_train(self, model_id):
+        trainer = self._trainer(model_id)
+        previous_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        for n, param in previous_params.items():
+            new_param = trainer.model.get_parameter(n)
+            if new_param.requires_grad:
+                assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+            else:
+                assert torch.equal(param, new_param), f"Frozen parameter {n} has changed."
+
+
 class TestRolloutStateCheckpoint(TrlTestCase):
     """Prompt-index checkpoint/resume logic — no GPU or vLLM required."""
 
