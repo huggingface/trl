@@ -256,15 +256,17 @@ def _patch_chunked_ce_lm_head(model: torch.nn.Module, chunk_size: int, is_vlm: b
         chunk_size (`int`):
             Number of valid tokens processed per CE chunk.
         is_vlm (`bool`):
-            Set to `True` for VLMs. Only used to read `logit_scale` / `final_logit_softcapping` /
-            `output_router_logits` from `model.config.text_config` instead of the top-level config.
+            Set to `True` for VLMs. Only used for the transformers < 5.0.0 fallbacks: VLMs set `base_model_prefix = ""`
+            there (so the backbone must be read off `model.model`), and they take the config-level MoE aux-loss
+            parameters rather than the model-level ones.
     """
-    # VLM scaling configs (`logit_scale`, `final_logit_softcapping`, MoE `output_router_logits`) live on `text_config`;
-    # text-only models keep them on the top-level config.
-    text_config = model.config.text_config if is_vlm else model.config
+    # On VLMs the logit post-processing lives on `text_config`, so read it through `get_text_config()`. The MoE
+    # `output_router_logits` flag lives there too, and is read off the same config below.
+    text_config = model.config.get_text_config()
     final_logit_softcapping = getattr(text_config, "final_logit_softcapping", None)
-    # Muse Glimmer applies the same pre-softcap multiplier as Cohere's `logit_scale`, under the name
-    # `output_multiplier`. A real `logit_scale` of 0.0 is kept as-is and applied faithfully.
+    # `logit_scale` is None on models that don't scale (e.g. MPT); read that as unscaled (1.0). A real 0.0 is kept
+    # as-is and applied faithfully. Muse Glimmer applies the same pre-softcap multiplier under the name
+    # `output_multiplier`.
     logit_scale = getattr(text_config, "logit_scale", None)
     if logit_scale is None:
         logit_scale = getattr(text_config, "output_multiplier", None)
