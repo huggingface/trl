@@ -33,6 +33,7 @@ import pandas as pd
 import torch
 import torch.nn.functional as F
 import transformers
+from accelerate import PartialState
 from accelerate.logging import get_logger
 from datasets import IterableDataset
 from huggingface_hub import ModelCard, ModelCardData
@@ -564,7 +565,7 @@ def print_prompt_completions_sample(
     prompts: list,
     completions: list,
     rewards: dict[str, list[float]],
-    advantages: list[float],
+    advantages: list[float] | None,
     step: int,
     num_samples: int = None,
     extra: dict[str, list] | None = None,
@@ -582,8 +583,9 @@ def print_prompt_completions_sample(
             List of completions corresponding to the prompts. Can be either strings or lists of messages.
         rewards (`dict[str, list[float]]`):
             Dictionary where keys are reward names and values are lists of rewards.
-        advantages (`list[float]`):
-            List of advantages corresponding to the prompts and completions.
+        advantages (`list[float]` or `None`):
+            List of advantages corresponding to the prompts and completions. If `None`, the advantage column is omitted
+            (e.g. for distillation, which has no advantages).
         step (`int`):
             Current training step number, used in the output title.
         num_samples (`int`, *optional*):
@@ -629,7 +631,8 @@ def print_prompt_completions_sample(
     table.add_column("Completion", style="bright_green")
     for reward_name in rewards.keys():
         table.add_column(reward_name, style="bold cyan", justify="right")
-    table.add_column("Advantage", style="bold magenta", justify="right")
+    if advantages is not None:
+        table.add_column("Advantage", style="bold magenta", justify="right")
     for extra_name in extra.keys():
         table.add_column(extra_name, style="bright_white")
 
@@ -673,19 +676,18 @@ def print_prompt_completions_sample(
         prompts = [prompts[i] for i in indices]
         completions = [completions[i] for i in indices]
         rewards = {key: [val[i] for i in indices] for key, val in rewards.items()}
-        advantages = [advantages[i] for i in indices]
+        if advantages is not None:
+            advantages = [advantages[i] for i in indices]
         extra = {key: [val[i] for i in indices] for key, val in extra.items()}
 
     for i in range(len(prompts)):
         reward_values = [f"{rewards[key][i]:.2f}" for key in rewards.keys()]  # 2 decimals
         extra_values = [format_entry(extra[key][i]) for key in extra.keys()]
-        table.add_row(
-            format_entry(prompts[i]),
-            format_entry(completions[i]),
-            *reward_values,
-            f"{advantages[i]:.2f}",
-            *extra_values,
-        )
+        row = [format_entry(prompts[i]), format_entry(completions[i]), *reward_values]
+        if advantages is not None:
+            row.append(f"{advantages[i]:.2f}")
+        row.extend(extra_values)
+        table.add_row(*row)
         table.add_section()  # Adds a separator between rows
 
     panel = Panel(table, expand=False, title=f"Step {step}", border_style="bold white")
@@ -999,6 +1001,8 @@ def split_pixel_values_by_grid(batch: dict[str, torch.Tensor]) -> dict[str, torc
     For models with `image_grid_thw` (e.g. Qwen), the grid dimensions determine how many rows of `pixel_values` belong
     to each image. For models with `image_position_ids` instead (e.g. Gemma), `pixel_values` is indexed directly by
     image count. For models with `spatial_shapes` (e.g. LFM2-VL), tile-indexed tensors are split using `num_tiles`.
+    Models with none of these store `pixel_values` either flat, one row per image (e.g. LLaVA), in which case it is
+    split by image count, or already padded to one row per sample (e.g. Idefics), in which case it is left as is.
     """
     if "pixel_values" not in batch or "num_images" not in batch:
         return batch
@@ -1040,6 +1044,14 @@ def split_pixel_values_by_grid(batch: dict[str, torch.Tensor]) -> dict[str, torc
             "spatial_shapes": split_spatial_shapes,
         }
 
+    # Models without extra metadata store pixel_values either flat, one row per image (e.g. LLaVA), or already
+    # padded to one row per sample (e.g. Idefics, SmolVLM). Only the flat layout needs splitting.
+    if pixel_values.size(0) != sum(num_images):
+        return batch
+
+    batch = {**batch, "pixel_values": list(torch.split(pixel_values, num_images, dim=0))}
+    if "image_sizes" in batch:
+        batch = {**batch, "image_sizes": list(torch.split(batch["image_sizes"], num_images, dim=0))}
     return batch
 
 
@@ -1072,6 +1084,11 @@ def unsplit_pixel_values_by_grid(batch: dict[str, torch.Tensor | list[torch.Tens
     if isinstance(spatial_shapes, list):
         merged = torch.cat(spatial_shapes, dim=0)
         batch = {**batch, "spatial_shapes": merged}
+
+    image_sizes = batch.get("image_sizes")
+    if isinstance(image_sizes, list):
+        merged = torch.cat(image_sizes, dim=0)
+        batch = {**batch, "image_sizes": merged}
 
     return batch
 
@@ -1151,7 +1168,10 @@ def create_model_from_path(
             "Invalid `dtype` passed to the config. Expected either 'auto' or a string representing "
             f"a valid `torch.dtype` (e.g., 'float32'), but got {dtype}."
         )
-    kwargs["device_map"] = kwargs.get("device_map", "auto")
+    # Respect CPU-only execution: device_map="auto" dispatches the model to the GPU even when the user requested
+    # use_cpu=True, which later splits models across devices (e.g. a teacher placed on CPU vs. a student on GPU).
+    if "device_map" not in kwargs:
+        kwargs["device_map"] = None if PartialState().device.type == "cpu" else "auto"
     if architecture is None:
         # Best effort to infer architecture from config, but we fall back to AutoModelForCausalLM if we can't find it
         config = AutoConfig.from_pretrained(model_id, trust_remote_code=kwargs.get("trust_remote_code", False))

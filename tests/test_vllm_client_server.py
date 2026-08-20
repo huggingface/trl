@@ -17,7 +17,6 @@ import subprocess
 from types import SimpleNamespace
 
 import pytest
-from packaging.version import Version
 from transformers import AutoModelForCausalLM, AutoProcessor, AutoTokenizer
 from transformers.testing_utils import torch_device
 
@@ -37,12 +36,7 @@ from .testing_utils import (
 
 
 if is_vllm_available():
-    import vllm
     from vllm import LLM, SamplingParams
-
-    _is_vllm_ge_014 = Version(vllm.__version__) >= Version("0.14.0")
-else:
-    _is_vllm_ge_014 = False
 
 
 class TestChunkList(TrlTestCase):
@@ -548,176 +542,6 @@ class TestVLLMClientServerTP(TrlTestCase):
         # Start the server process
         cls.server_process = subprocess.Popen(
             ["trl", "vllm-serve", "--model", cls.model_id, "--tensor_parallel_size", "2"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            env=env,
-        )
-
-        # Initialize the client
-        cls.client = VLLMClient(connection_timeout=240, host="localhost")
-        cls.client.init_communicator()
-
-    def test_generate(self):
-        prompts = ["Hello, AI!", "Tell me a joke"]
-        outputs = self.client.generate(prompts)
-        prompt_ids = outputs["prompt_ids"]
-        completion_ids = outputs["completion_ids"]
-
-        # Check that the outputs are lists
-        assert isinstance(prompt_ids, list)
-        assert isinstance(completion_ids, list)
-
-        # Check that the number of sequences are equal to the number of prompts
-        assert len(prompt_ids) == len(prompts)
-        assert len(completion_ids) == len(prompts)
-
-        # Check that the sequences are lists of integers
-        for seq in prompt_ids:
-            assert all(isinstance(tok, int) for tok in seq)
-        for seq in completion_ids:
-            assert all(isinstance(tok, int) for tok in seq)
-
-    def test_generate_with_logprobs_none(self):
-        outputs = self.client.generate(["Hello, AI!"], logprobs=None)
-
-        assert isinstance(outputs["prompt_ids"], list)
-        assert isinstance(outputs["completion_ids"], list)
-        assert outputs["logprobs"] is None
-        assert outputs["logprob_token_ids"] is None
-
-    def test_chat(self):
-        messages = [[{"role": "user", "content": "Hello, AI!"}], [{"role": "user", "content": "Tell me a joke"}]]
-        outputs = self.client.chat(messages)
-        prompt_ids = outputs["prompt_ids"]
-        completion_ids = outputs["completion_ids"]
-
-        # Check that the outputs are lists
-        assert isinstance(prompt_ids, list)
-        assert isinstance(completion_ids, list)
-
-        # Check that the number of sequences are equal to the number of messages
-        assert len(prompt_ids) == len(messages)
-        assert len(completion_ids) == len(messages)
-
-        # Check that the sequences are lists of integers
-        for seq in prompt_ids:
-            assert all(isinstance(tok, int) for tok in seq)
-        for seq in completion_ids:
-            assert all(isinstance(tok, int) for tok in seq)
-
-    def test_chat_with_logprobs_none(self):
-        outputs = self.client.chat([[{"role": "user", "content": "Hello, AI!"}]], logprobs=None)
-
-        assert isinstance(outputs["prompt_ids"], list)
-        assert isinstance(outputs["completion_ids"], list)
-        assert outputs["logprobs"] is None
-        assert outputs["logprob_token_ids"] is None
-
-    def test_chat_with_tools(self):
-        def multiply(a: int, b: int) -> int:
-            """
-            Multiplies two integers.
-
-            Args:
-                a: The first integer.
-                b: The second integer.
-
-            Returns:
-                The product of the two integers.
-            """
-            return a * b
-
-        messages = [[{"role": "user", "content": "What is 3 multiplied by 4?"}]]
-        outputs = self.client.chat(messages, tools=[multiply])
-
-        # Decode prompt and check that "Multiplies two integers." is in the prompt.
-        tokenizer = AutoTokenizer.from_pretrained(self.model_id)
-        decoded_prompt = tokenizer.decode(outputs["prompt_ids"][0])
-        assert "Multiplies two integers." in decoded_prompt
-
-    def test_generate_with_token_ids(self):
-        tokenizer = AutoTokenizer.from_pretrained(self.model_id)
-        prompts = ["Hello, AI!", "Tell me a joke"]
-        prompt_token_ids = tokenizer(prompts)["input_ids"]
-        outputs = self.client.generate(prompt_token_ids)
-        prompt_ids = outputs["prompt_ids"]
-        completion_ids = outputs["completion_ids"]
-
-        # Check that the outputs are lists
-        assert isinstance(prompt_ids, list)
-        assert isinstance(completion_ids, list)
-
-        # Check that the number of sequences are equal to the number of prompts
-        assert len(prompt_ids) == len(prompts)
-        assert len(completion_ids) == len(prompts)
-
-        # Check that prompt_ids match the input token IDs
-        assert prompt_ids == prompt_token_ids
-
-        # Check that the sequences are lists of integers
-        for seq in prompt_ids:
-            assert all(isinstance(tok, int) for tok in seq)
-        for seq in completion_ids:
-            assert all(isinstance(tok, int) for tok in seq)
-
-    def test_generate_with_params(self):
-        prompts = ["Hello, AI!", "Tell me a joke"]
-        completion_ids = self.client.generate(prompts, n=2, repetition_penalty=0.9, temperature=0.8, max_tokens=32)[
-            "completion_ids"
-        ]
-
-        # Check that the output is a list
-        assert isinstance(completion_ids, list)
-
-        # Check that the number of generated sequences is 2 times the number of prompts
-        assert len(completion_ids) == 2 * len(prompts)
-
-        # Check that the generated sequences are lists of integers
-        for seq in completion_ids:
-            assert all(isinstance(tok, int) for tok in seq)
-
-        # Check that the length of the generated sequences is less than or equal to 32
-        for seq in completion_ids:
-            assert len(seq) <= 32
-
-    def test_update_model_params(self):
-        model = AutoModelForCausalLM.from_pretrained(self.model_id, device_map=torch_device)
-        self.client.update_model_params(model)
-
-    def test_reset_prefix_cache(self):
-        # Test resetting the prefix cache
-        self.client.reset_prefix_cache()
-
-    @classmethod
-    def teardown_class(cls):
-        # Close the client
-        cls.client.close_communicator()
-
-        # vLLM x pytest (or Popen) seems not to handle process termination well. To avoid zombie processes, we need to
-        # kill the server process and its children explicitly.
-        kill_process(cls.server_process)
-
-
-@pytest.mark.slow
-@pytest.mark.skipif(
-    _is_vllm_ge_014,
-    reason="Skipping DP server test for vLLM>=0.14.0 (PR vllm#30739: DP for non-MoE/dense models no longer supported).",
-)
-@require_3_accelerators
-@require_vllm
-class TestVLLMClientServerDP(TrlTestCase):
-    model_id = "Qwen/Qwen2.5-1.5B"
-
-    @classmethod
-    def setup_class(cls):
-        # We want the server to run on accelerator 1 and 2, so we set VISIBLE_DEVICES to "1,2"
-        env = os.environ.copy()
-        VISIBLE_DEVICES = "ZE_AFFINITY_MASK" if torch_device == "xpu" else "CUDA_VISIBLE_DEVICES"
-        env[VISIBLE_DEVICES] = "1,2"  # Restrict to accelerator 1 and 2
-
-        # Start the server process
-        cls.server_process = subprocess.Popen(
-            ["trl", "vllm-serve", "--model", cls.model_id, "--data_parallel_size", "2"],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             env=env,
