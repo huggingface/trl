@@ -223,10 +223,7 @@ def _install_skill_to_dir(
 
     # Remove existing if force
     if target_skill.exists() and force:
-        if target_skill.is_symlink():
-            target_skill.unlink()
-        else:
-            shutil.rmtree(target_skill)
+        shutil.rmtree(target_skill)
 
     # Install
     try:
@@ -308,7 +305,7 @@ def _uninstall_skill_from_dir(skill_name: str, target_dir: Path) -> bool:
     if not target_skill.exists():
         raise FileNotFoundError(f"Skill '{skill_name}' not installed at {target_dir}")
 
-    # Remove symlink or directory
+    # Remove directory
     try:
         shutil.rmtree(target_skill)
     except PermissionError as e:

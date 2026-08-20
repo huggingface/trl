@@ -20,7 +20,6 @@ from ...trainer.base_config import _BaseConfig
 
 @dataclass
 class TPOConfig(_BaseConfig):
-    # docstyle-ignore
     r"""
     Configuration class for the [`experimental.tpo.TPOTrainer`].
 
@@ -40,8 +39,7 @@ class TPOConfig(_BaseConfig):
             argument of the [`experimental.tpo.TPOTrainer`] is provided as a string.
         trust_remote_code (`bool`, *optional*, defaults to `False`):
             Whether to allow loading models and tokenizers that ship custom Python code from the Hub. Forwarded to
-            [`~transformers.AutoModelForCausalLM.from_pretrained`] and
-            [`~transformers.AutoProcessor.from_pretrained`].
+            [`~transformers.AutoModelForCausalLM.from_pretrained`] and [`~transformers.AutoProcessor.from_pretrained`].
         disable_dropout (`bool`, *optional*, defaults to `True`):
             Whether to disable dropout in the model.
 
@@ -67,9 +65,8 @@ class TPOConfig(_BaseConfig):
                 - `"hinge"`: hinge loss on the normalized likelihood from the
                   [SLiC](https://huggingface.co/papers/2305.10425) paper.
                 - `"ipo"`: IPO loss from the [IPO](https://huggingface.co/papers/2310.12036) paper.
-                - `"tpo-l"`: length-normalized TPO variant from the
-                  [TPO](https://huggingface.co/papers/2405.16681) paper, which adds a target reward margin
-                  `tpo_l_gamma` to the Bradley-Terry objective.
+                - `"tpo-l"`: length-normalized TPO variant from the [TPO](https://huggingface.co/papers/2405.16681)
+                  paper, which adds a target reward margin `tpo_l_gamma` to the Bradley-Terry objective.
 
         beta (`float`, *optional*, defaults to `0.01`):
             Parameter controlling the temperature of the TPO loss. For the IPO loss (`loss_type="ipo"`), β is the

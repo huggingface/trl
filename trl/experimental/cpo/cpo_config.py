@@ -20,7 +20,6 @@ from ...trainer.base_config import _BaseConfig
 
 @dataclass
 class CPOConfig(_BaseConfig):
-    # docstyle-ignore
     r"""
     Configuration class for the [`experimental.cpo.CPOTrainer`].
 
