@@ -134,7 +134,7 @@ class SFTConfig(_BaseConfig):
     > - `learning_rate`: Defaults to `2e-5` instead of `5e-5`.
     """
 
-    _VALID_DICT_FIELDS = _BaseConfig._VALID_DICT_FIELDS + ["model_init_kwargs"]
+    _VALID_DICT_FIELDS = _BaseConfig._VALID_DICT_FIELDS + ["model_init_kwargs", "dataset_kwargs"]
 
     # Parameters whose default values are overridden from TrainingArguments
     learning_rate: float = field(
@@ -180,7 +180,7 @@ class SFTConfig(_BaseConfig):
         default="text",
         metadata={"help": "Name of the column that contains text data in the dataset."},
     )
-    dataset_kwargs: dict[str, Any] | None = field(
+    dataset_kwargs: dict[str, Any] | str | None = field(
         default=None,
         metadata={
             "help": "Dictionary of optional keyword arguments for the dataset preparation. The only supported key is "
