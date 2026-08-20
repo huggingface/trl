@@ -256,14 +256,21 @@ def _patch_chunked_ce_lm_head(model: torch.nn.Module, chunk_size: int, is_vlm: b
         chunk_size (`int`):
             Number of valid tokens processed per CE chunk.
         is_vlm (`bool`):
-            Set to `True` for VLMs. Only used to read `logit_scale` / `final_logit_softcapping` /
-            `output_router_logits` from `model.config.text_config` instead of the top-level config.
+            Set to `True` for VLMs. Only used for the transformers < 5.0.0 fallbacks: VLMs set `base_model_prefix = ""`
+            there (so the backbone must be read off `model.model`), and they take the config-level MoE aux-loss
+            parameters rather than the model-level ones.
     """
-    # VLM scaling configs (`logit_scale`, `final_logit_softcapping`, MoE `output_router_logits`) live on `text_config`;
-    # text-only models keep them on the top-level config.
-    text_config = model.config.text_config if is_vlm else model.config
+    # On VLMs the logit post-processing lives on `text_config`, so read it through `get_text_config()`. The MoE
+    # `output_router_logits` flag lives there too, and is read off the same config below.
+    text_config = model.config.get_text_config()
     final_logit_softcapping = getattr(text_config, "final_logit_softcapping", None)
-    logit_scale = getattr(text_config, "logit_scale", 1.0)
+    # `logit_scale` is None on models that don't scale (e.g. MPT); read that as unscaled (1.0). A real 0.0 is kept
+    # as-is and applied faithfully. Muse Glimmer applies the same pre-softcap multiplier under the name
+    # `output_multiplier`.
+    logit_scale = getattr(text_config, "logit_scale", None)
+    if logit_scale is None:
+        logit_scale = getattr(text_config, "output_multiplier", None)
+    logit_scale = 1.0 if logit_scale is None else logit_scale
     original_forward = model.forward
     lm_head = model.get_output_embeddings()
 
@@ -362,9 +369,12 @@ def _patch_chunked_ce_lm_head(model: torch.nn.Module, chunk_size: int, is_vlm: b
         return _ChunkedCELMHeadOutput(
             loss=loss,
             logits=None,
-            past_key_values=outputs.past_key_values,
             hidden_states=outputs.hidden_states,
-            attentions=outputs.attentions,
+            # `past_key_values` and `attentions` are not read from `outputs`:
+            # - some model types don't declare them
+            # - the backbone runs with `use_cache=False` and no attentions, so both are None anyway
+            past_key_values=None,
+            attentions=None,
             num_correct_tokens=num_correct_tokens,
             entropy_sum=entropy_sum,
             num_valid_tokens=num_valid_tokens,
@@ -826,8 +836,8 @@ class SFTTrainer(_BaseTrainer):
             Configuration for this trainer. If `None`, a default configuration is used.
         data_collator ([`~transformers.DataCollator`], *optional*):
             Function to use to form a batch from a list of elements of the processed `train_dataset` or `eval_dataset`.
-            Will default to [`~trainer.sft_trainer.DataCollatorForLanguageModeling`] if the model is a language model
-            and [`~trainer.sft_trainer.DataCollatorForVisionLanguageModeling`] if the model is a vision-language model.
+            Will default to [`~trainer.sft_trainer.DataCollatorForLanguageModeling`], or to
+            [`~trainer.sft_trainer.DataCollatorForVisionLanguageModeling`] if the dataset contains images.
         train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
             Dataset to use for training. This trainer supports both [language modeling](#language-modeling) type and
             [prompt-completion](#prompt-completion) type. The format of the samples can be either:
@@ -945,6 +955,10 @@ class SFTTrainer(_BaseTrainer):
                     "`dispatch_batches` in `SFTConfig` or set it to `False`."
                 )
             args.accelerator_config.dispatch_batches = False
+        elif not isinstance(train_dataset, Dataset):
+            raise TypeError(
+                f"`train_dataset` must be a `Dataset` or `IterableDataset`, got `{type(train_dataset).__name__}`."
+            )
 
         # Model
         if isinstance(model, str):
@@ -1012,24 +1026,32 @@ class SFTTrainer(_BaseTrainer):
         else:
             added_tokens = []
 
-        # Catch some wrong configurations related to VLMs
-        if self._is_vlm and args.packing:
+        # Vision dataset detection
+        dataset_sample = next(iter(train_dataset))
+        self._is_vision_dataset = "image" in dataset_sample or "images" in dataset_sample
+        if self._is_vision_dataset and not self._is_vlm:
             raise ValueError(
-                "Packing is not supported for vision-language models. Please set `packing=False` in the SFTConfig."
+                "The dataset appears to be vision-related (contains 'image' or 'images' keys), but the provided "
+                "model does not seem to be a vision-language model. Please check your model and dataset."
             )
-        if self._is_vlm and args.padding_free:
+
+        if self._is_vision_dataset and args.packing:
             raise ValueError(
-                "Padding-free training is yet not supported for vision-language models. Please set "
-                "`padding_free=False` in the `SFTConfig`."
+                "Packing is not supported for vision datasets. Please set `packing=False` in the SFTConfig."
             )
-        if self._is_vlm and args.assistant_only_loss:
+        if self._is_vision_dataset and args.padding_free:
             raise ValueError(
-                "Assistant-only loss is not yet supported for vision-language models. Please set "
+                "Padding-free training is yet not supported for vision datasets. Please set `padding_free=False` in "
+                "the `SFTConfig`."
+            )
+        if self._is_vision_dataset and args.assistant_only_loss:
+            raise ValueError(
+                "Assistant-only loss is not yet supported for vision datasets. Please set "
                 "`assistant_only_loss=False` in the `SFTConfig`."
             )
-        if self._is_vlm and args.max_length is not None and args.truncation_mode == "keep_end":
+        if self._is_vision_dataset and args.max_length is not None and args.truncation_mode == "keep_end":
             raise ValueError(
-                "truncation_mode='keep_end' is not supported for vision-language models. Image tokens reside "
+                "truncation_mode='keep_end' is not supported for vision datasets. Image tokens reside "
                 "inside the prompt portion of the sequence; depending on the example, keep_end may silently "
                 "drop them, causing pixel_values to be forwarded to the model with no corresponding visual "
                 "tokens in input_ids. Use truncation_mode='keep_start' (the default) or set max_length=None."
@@ -1170,18 +1192,10 @@ class SFTTrainer(_BaseTrainer):
 
         # Decide whether to use completion-only loss: if not specified, then it is set to True if the dataset format
         # is prompt-completion, and False if the dataset format is language modeling.
-        dataset_sample = next(iter(train_dataset))
         if args.completion_only_loss is None:
             self.completion_only_loss = "prompt" in dataset_sample and "completion" in dataset_sample
         else:
             self.completion_only_loss = args.completion_only_loss
-
-        self._is_vision_dataset = "image" in dataset_sample or "images" in dataset_sample
-        if self._is_vision_dataset and not self._is_vlm:
-            raise ValueError(
-                "The dataset appears to be vision-related (contains 'image' or 'images' keys), but the provided "
-                "model does not seem to be a vision-language model. Please check your model and dataset."
-            )
 
         if data_collator is None and not self._is_vision_dataset:
             # Get the pad token: if not provided, use the one from the processing class or the eos token

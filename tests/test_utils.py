@@ -658,6 +658,36 @@ class TestPrintPromptCompletionsSample(TrlTestCase):
         assert output == expected_output
 
     @patch("sys.stdout", new_callable=StringIO)
+    def test_no_advantages(self, mock_stdout):
+        # When `advantages` is None, the Advantage column is omitted (e.g. distillation, which has no advantages).
+        prompts = ["The sky is", "The sun is"]
+        completions = [" blue.", " in the sky."]
+        rewards = {"Correctness": [0.123, 0.456]}
+        step = 42
+
+        print_prompt_completions_sample(prompts, completions, rewards, None, step)
+
+        output = mock_stdout.getvalue()
+        assert "Prompt" in output
+        assert "Completion" in output
+        assert "Correctness" in output
+        assert "Advantage" not in output
+
+    @patch("sys.stdout", new_callable=StringIO)
+    def test_no_rewards_no_advantages(self, mock_stdout):
+        # Prompt/completion-only table: empty rewards and `advantages=None` (the distillation case).
+        prompts = ["The sky is", "The sun is"]
+        completions = [" blue.", " in the sky."]
+        step = 42
+
+        print_prompt_completions_sample(prompts, completions, {}, None, step)
+
+        output = mock_stdout.getvalue()
+        assert "Prompt" in output
+        assert "Completion" in output
+        assert "Advantage" not in output
+
+    @patch("sys.stdout", new_callable=StringIO)
     def test_extra_columns(self, mock_stdout):
         prompts = ["The sky is", "The sun is"]
         completions = [" blue.", " in the sky."]
@@ -1110,6 +1140,32 @@ class TestSplitPixelValuesByGrid(TrlTestCase):
         assert torch.equal(result["spatial_shapes"][0], batch["spatial_shapes"][:3])
         assert torch.equal(result["spatial_shapes"][1], batch["spatial_shapes"][3:])
 
+    def test_split_without_grid_metadata(self):
+        # LLaVA-style: no grid metadata at all, pixel_values and image_sizes are indexed by image
+        batch = {
+            "num_images": [1, 2],
+            "pixel_values": torch.arange(3 * 4).reshape(3, 4),
+            "image_sizes": torch.tensor([[8, 8], [4, 4], [2, 2]]),
+        }
+        result = split_pixel_values_by_grid(batch)
+        assert isinstance(result["pixel_values"], list)
+        assert len(result["pixel_values"]) == 2
+        assert torch.equal(result["pixel_values"][0], batch["pixel_values"][:1])
+        assert torch.equal(result["pixel_values"][1], batch["pixel_values"][1:])
+        assert isinstance(result["image_sizes"], list)
+        assert len(result["image_sizes"]) == 2
+        assert torch.equal(result["image_sizes"][0], batch["image_sizes"][:1])
+        assert torch.equal(result["image_sizes"][1], batch["image_sizes"][1:])
+
+    def test_no_split_when_padded_by_sample(self):
+        # Idefics-style: pixel_values is padded to (num_samples, max_num_images, ...), already sample-indexed
+        batch = {
+            "num_images": [1, 2],
+            "pixel_values": torch.arange(2 * 2 * 4).reshape(2, 2, 4),
+        }
+        result = split_pixel_values_by_grid(batch)
+        assert result == batch
+
 
 class TestUnsplitPixelValuesByGrid(TrlTestCase):
     def test_unsplit_correctly(self):
@@ -1150,6 +1206,14 @@ class TestUnsplitPixelValuesByGrid(TrlTestCase):
         torch.testing.assert_close(result["pixel_attention_mask"], torch.cat(pixel_attention_mask, dim=0))
         assert isinstance(result["spatial_shapes"], torch.Tensor)
         assert torch.equal(result["spatial_shapes"], torch.cat(spatial_shapes, dim=0))
+
+    def test_unsplit_image_sizes(self):
+        pixel_values = [torch.randn(1, 4), torch.randn(2, 4)]
+        image_sizes = [torch.tensor([[8, 8]]), torch.tensor([[4, 4], [2, 2]])]
+        batch = {"pixel_values": pixel_values, "image_sizes": image_sizes}
+        result = unsplit_pixel_values_by_grid(batch)
+        assert isinstance(result["image_sizes"], torch.Tensor)
+        assert torch.equal(result["image_sizes"], torch.cat(image_sizes, dim=0))
 
     def test_no_op_if_not_list(self):
         original = torch.randn(5, 3)
@@ -1282,6 +1346,14 @@ _CHUNKED_LM_HEAD_MODEL_IDS = [
     "trl-internal-testing/tiny-GemmaForCausalLM",
     "trl-internal-testing/tiny-Glm4MoeForCausalLM",
     "trl-internal-testing/tiny-GptOssForCausalLM",
+    "trl-internal-testing/tiny-Lfm2ForCausalLM",
+    pytest.param(
+        "trl-internal-testing/tiny-Lfm2ForCausalLM-2.5",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("5.0.0"),
+            reason="LFM2.5 tokenizer requires transformers>=5.0.0",
+        ),
+    ),
     "trl-internal-testing/tiny-LlamaForCausalLM-3.1",
     "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
     "trl-internal-testing/tiny-LlamaForCausalLM-3",
@@ -1392,7 +1464,7 @@ class TestPatchChunkedLMHead:
     @pytest.mark.parametrize("model_id", _CHUNKED_LM_HEAD_MODEL_IDS)
     @pytest.mark.parametrize("temperature", [1.0, 0.7])
     def test_forward(self, model_id, temperature):
-        model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch.bfloat16).to(torch_device)
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype=torch.bfloat16).to(torch_device)
         model.eval()
 
         B, S, chunk_size = 2, 8, 32
@@ -1420,7 +1492,13 @@ class TestPatchChunkedLMHead:
     @pytest.mark.parametrize("model_id", _CHUNKED_LM_HEAD_MODEL_IDS)
     @pytest.mark.parametrize("temperature", [1.0, 0.7])
     def test_backward(self, model_id, temperature):
-        model_ref = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch.bfloat16).to(torch_device)
+        # Run in float32, not bfloat16. For models that tie their embeddings, `lm_head.weight.grad` is the sum of the
+        # LM-head projection and the input-embedding lookup, so its absolute error is set by the larger of the two
+        # rather than by the element's own value. In bfloat16 that error (~1 ULP at the gradient's scale) swamps the
+        # assertion: every untied model lands on the same ~1.6e-2 bf16 quantum, and the tied ones range up to ~4e-1,
+        # which no useful tolerance can separate from a real bug. float32 drops the worst case to ~3e-5 and makes the
+        # test sensitive to the thing it is meant to check: that the chunked gradient matches the reference.
+        model_ref = AutoModelForCausalLM.from_pretrained(model_id, dtype=torch.float32).to(torch_device)
         model_chunked = copy.deepcopy(model_ref)
 
         B, S, chunk_size = 2, 8, 32
@@ -1442,7 +1520,7 @@ class TestPatchChunkedLMHead:
         out["log_probs"].sum().backward()
         chunked_grad = model_chunked.lm_head.weight.grad.clone()
 
-        torch.testing.assert_close(chunked_grad, ref_grad, atol=5e-2, rtol=5e-2)
+        torch.testing.assert_close(chunked_grad, ref_grad, atol=1e-3, rtol=1e-3)
 
 
 class TestComputeFlopsPerToken(TrlTestCase):

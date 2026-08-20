@@ -557,7 +557,7 @@ $$
 \right).
 $$
 
-To enable this feature, set the `use_bias_correction_kl` parameter to `True` in the [`GRPOConfig`], and `beta > 0`:
+This feature is enabled by default (`use_bias_correction_kl=True` in the [`GRPOConfig`]), so you only need to set `beta > 0`:
 
 ```python
 from trl import GRPOConfig
@@ -565,7 +565,6 @@ from trl import GRPOConfig
 training_args = GRPOConfig(
     ...,
     beta=0.001,  # the paper doesn't specify the value used, so we use the value from "DeepSeek-R1 incentivizes reasoning in LLMs through reinforcement learning"
-    use_bias_correction_kl=True,
 )
 ```
 
@@ -1311,6 +1310,27 @@ training_args = SFTConfig(
 )
 ```
 
+### Reparameterizing Uniform Diffusion Models: the Leave-One-Out Denoiser
+
+**📜 Paper**: https://huggingface.co/papers/2605.22765
+
+For uniform discrete diffusion models, the usual plug-in cross-entropy does not learn the plain denoiser \\( \mathbb{E}[X_0 \mid X_t] \\) but the leave-one-out (LOO) posterior, which predicts each token without using its own corrupted value. The paper derives exact conversions between the denoiser, the LOO posterior, and the score, so a network can be trained as either parameterization with the same cross-entropy. Given logits \\( f_\theta \\) whose softmax parameterizes the LOO posterior, the denoiser used in the loss is
+
+$$
+d_\theta(x_t, t)^\ell = \mathrm{softmax}\!\left( f_\theta(x_t, t)^\ell + \log\!\left(1 + \frac{K\,\alpha_t}{1 - \alpha_t}\, x_t^\ell\right) \right),
+$$
+
+i.e. an additive correction on the logit of the observed token, where \\( K \\) is the vocabulary size and \\( \alpha_t \\) the probability the uniform forward keeps the clean token. The paper reports that the LOO parameterization consistently improves generation. The block-diffusion SFT example [`examples/scripts/sft_diffusion_gemma.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/sft_diffusion_gemma.py) exposes both parameterizations via `--model_prediction_type` (`mean` for the plain denoiser, matching the released checkpoint, or `mean_loo` for the LOO posterior):
+
+```bash
+accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
+    examples/scripts/sft_diffusion_gemma.py \
+    --use_peft \
+    --gradient_checkpointing \
+    --model_prediction_type mean_loo \
+    --output_dir diffusiongemma-26B-A4B-it-gsm8k-lora
+```
+
 ## Parameter-Efficient Fine-Tuning (PEFT)
 
 For general details on using PEFT with TRL, please refer to the [PEFT Integration](peft_integration) guide.
@@ -1634,7 +1654,7 @@ Papers relating to training a student model with the help of a teacher model.
 
 **📜 Paper**: https://huggingface.co/papers/2306.13649
 
-Introduces Generalized Knowledge Distillation (GKD), which addresses distribution mismatch in KD for auto-regressive models by training the student on its own generated outputs with teacher feedback, instead of a fixed set of sequences. GKD supports flexible loss functions (e.g. beyond KL when the student cannot match the teacher) and integrates with RL fine-tuning (RLHF). The paper reports results on summarization, translation, arithmetic reasoning, and instruction-tuning. Used in TRL via [`experimental.gkd.GKDTrainer`], which exposes the paper's on/off-policy mixing (`lmbda`). [`experimental.distillation.DistillationTrainer`] implements the same generalized-JSD objective for the always-on-policy case. To reproduce the paper's setting, use this configuration:
+Introduces Generalized Knowledge Distillation (GKD), which addresses distribution mismatch in KD for auto-regressive models by training the student on its own generated outputs with teacher feedback, instead of a fixed set of sequences. GKD supports flexible loss functions (e.g. beyond KL when the student cannot match the teacher) and integrates with RL fine-tuning (RLHF). The paper reports results on summarization, translation, arithmetic reasoning, and instruction-tuning. Used in TRL via [`experimental.gkd.GKDTrainer`], which exposes the paper's on/off-policy mixing (`lmbda`). [`DistillationTrainer`] implements the same generalized-JSD objective for the always-on-policy case. To reproduce the paper's setting, use this configuration:
 
 ```python
 from trl.experimental.gkd import GKDConfig
@@ -1651,6 +1671,12 @@ training_args = GKDConfig(
     max_new_tokens=64,  # max output tokens (Table A.1 of the paper)
 )
 ```
+
+### MOPD: Multi-Teacher On-Policy Distillation for Capability Integration in LLM Post-Training
+
+**📜 Paper**: https://huggingface.co/papers/2606.30406
+
+Structures post-training as three stages: general SFT, independent per-domain RL training of one expert per domain (e.g. verifiable-answer RL for math, sandboxed agent RL for software engineering), and a final MOPD stage that fuses the frozen domain experts into a single unified student. In that final stage, the student generates a trajectory per prompt, each trajectory is dispatched to its corresponding domain teacher (never averaged or ensembled across teachers), and the student is updated by minimizing the per-token reverse KL against that one teacher's distribution along the trajectory. Used in TRL via [`experimental.async_distillation.AsyncDistillationTrainer`], which implements this third, fusion stage: passing more than one entry in `teacher_server_urls` enables MOPD, with each row's `teacher_id` column selecting which (already-trained) teacher scores it. Use `beta=1.0` to match the paper's reverse-KL objective.
 
 ### On the Position Bias of On-Policy Distillation
 
@@ -1700,13 +1726,12 @@ On-Policy Distillation has been shown to outperform SFT, GRPO and can be used to
 
 Additionally on-policy distillation is more compute efficient and is less prone to overfitting when trained with limited data.
 
-To train a model with on-policy distillation using TRL, you can use the following configuration, with the [`experimental.distillation.DistillationTrainer`] and [`experimental.distillation.DistillationConfig`]:
+To train a model with on-policy distillation using TRL, you can use the following configuration, with the [`DistillationTrainer`] and [`DistillationConfig`]:
 
 ```python
-from trl.experimental.distillation import DistillationConfig
+from trl import DistillationConfig
 
 training_args = DistillationConfig(
-    lmbda=1.0,  # student produces rollouts for all batches
     beta=1.0,  # to ensure reverse-kl as the loss function
     teacher_model_name_or_path="teacher-model",  # specify the teacher model
 )
