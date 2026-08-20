@@ -35,6 +35,15 @@ class AsyncDistillationConfig(_BaseConfig):
         model_init_kwargs (`dict[str, Any]` or `str`, *optional*):
             Keyword arguments for [`~transformers.AutoModelForCausalLM.from_pretrained`], used when instantiating the
             student model from a path.
+        dtype (`str`, *optional*, defaults to `"float32"`):
+            Data type to load the student model under, one of `"auto"`, `"bfloat16"`, `"float16"` or `"float32"`. It
+            defaults to `"float32"` because the training-inference mismatch the async trainers are measured against
+            ([Defeating the Training-Inference Mismatch via FP16](https://huggingface.co/papers/2510.26788), walked
+            through for them in [Defeating the trainer-generator precision mismatch in
+            TRL](https://huggingface.co/spaces/aminediroHF/trainer-generator-bf16-mismatch)) is sensitive to the
+            trainer's own precision. Closing that gap end to end also requires serving the student's vLLM server in the
+            same dtype (`vllm serve --dtype`); a mismatch is logged as a warning at train start. A `dtype` in
+            `model_init_kwargs` takes precedence. Teacher servers are unaffected: they are never updated.
         trust_remote_code (`bool`, *optional*, defaults to `False`):
             Whether to allow loading models and tokenizers that ship custom Python code from the Hub. Forwarded to
             [`~transformers.AutoModelForCausalLM.from_pretrained`] and [`~transformers.AutoTokenizer.from_pretrained`].
@@ -171,6 +180,15 @@ class AsyncDistillationConfig(_BaseConfig):
         metadata={
             "help": "Keyword arguments for `transformers.AutoModelForCausalLM.from_pretrained`, used when "
             "instantiating the student model from a path."
+        },
+    )
+    dtype: str = field(
+        default="float32",
+        metadata={
+            "help": "Dtype to load the student model under. Defaults to 'float32', the precision the "
+            "training-inference mismatch results the async trainers are measured against were obtained at. A `dtype` "
+            "in `model_init_kwargs` takes precedence.",
+            "choices": ["auto", "bfloat16", "float16", "float32"],
         },
     )
     trust_remote_code: bool = field(

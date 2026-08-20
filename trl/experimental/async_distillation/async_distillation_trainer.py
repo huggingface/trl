@@ -268,11 +268,12 @@ def _jsd_loss_chunk(
         if teacher_id_idx_chunk is not None:
             stats = []
             for idx in range(num_teachers):
+                # A teacher absent from this chunk selects nothing; an empty masked selection sums to a 0 scalar on
+                # the right device, so no `teacher_mask.any()` guard is needed.
                 teacher_mask = teacher_id_idx_chunk == idx
-                has_any = teacher_mask.any()
                 stats.append(teacher_mask.sum().float())
-                stats.append(per_token_jsd[teacher_mask].sum() if has_any else jsd.new_zeros(()))
-                stats.append(per_token_teacher_entropy[teacher_mask].sum() if has_any else jsd.new_zeros(()))
+                stats.append(per_token_jsd[teacher_mask].sum())
+                stats.append(per_token_teacher_entropy[teacher_mask].sum())
             chunk_per_teacher_stats = torch.stack(stats)
 
     return chunk_loss, chunk_jsd_sum, chunk_entropy_sum, chunk_teacher_entropy_sum, chunk_per_teacher_stats
@@ -493,8 +494,10 @@ class _OptimizerTimeCallback(TrainerCallback):
         self._trainer._step_optimizer_s += time.perf_counter() - self._t0
 
 
-class _InitialWeightSyncCallback(TrainerCallback):
-    """Idempotent: NCCL group setup + cold weight sync to vLLM on train begin."""
+class _TrainBeginCallback(TrainerCallback):
+    """Idempotent train-begin setup: NCCL group setup + cold weight sync to vLLM, then start the rollout worker.
+    The weight sync must complete before the worker starts, which the ordering here guarantees.
+    """
 
     def __init__(self, trainer: "AsyncDistillationTrainer"):
         self._trainer = trainer
@@ -507,19 +510,6 @@ class _InitialWeightSyncCallback(TrainerCallback):
         if self._trainer.accelerator.is_main_process and self._trainer.weight_transfer is not None:
             self._trainer.weight_transfer.init_weight_transfer()
         self._trainer._sync_weight()
-
-
-class _StartRolloutWorkerCallback(TrainerCallback):
-    """Idempotent: starts the rollout worker. Must be registered AFTER `_InitialWeightSyncCallback`."""
-
-    def __init__(self, trainer: "AsyncDistillationTrainer"):
-        self._trainer = trainer
-        self._fired = False
-
-    def on_train_begin(self, _args, _state, _control, **_kwargs):
-        if self._fired:
-            return
-        self._fired = True
         if self._trainer.accelerator.is_main_process and self._trainer.rollout_worker is not None:
             self._trainer.rollout_worker.start()
 
@@ -941,6 +931,7 @@ class AsyncDistillationTrainer(_BaseTrainer):
         model_name = model
         model_init_kwargs = self.args.model_init_kwargs or {}
         model_init_kwargs.setdefault("trust_remote_code", self.args.trust_remote_code)
+        model_init_kwargs.setdefault("dtype", self.args.dtype)
         # FlashAttention is required: training runs in padding-free mode, where sequences are concatenated into a
         # single row and attention is derived from `position_ids` resets. SDPA/eager can't handle this. Unlike
         # AsyncGRPOTrainer, the student's own lm_head is NOT patched (via `patch_chunked_lm_head`) to a chunked
@@ -951,7 +942,6 @@ class AsyncDistillationTrainer(_BaseTrainer):
         model = AutoModelForCausalLM.from_pretrained(
             model_name,
             device_map=None,
-            dtype=torch.float32,
             attn_implementation="kernels-community/flash-attn3",
             **model_init_kwargs,
         )
@@ -1099,10 +1089,9 @@ class AsyncDistillationTrainer(_BaseTrainer):
             self.vllm_client = None
             self.weight_transfer = None
 
-        # Add callbacks. Registration order matters: weight sync first, then worker start.
+        # Add callbacks. Cold weight sync + worker start on train begin, then periodic weight syncs.
         self.add_callback(_OptimizerTimeCallback(self))
-        self.add_callback(_InitialWeightSyncCallback(self))
-        self.add_callback(_StartRolloutWorkerCallback(self))
+        self.add_callback(_TrainBeginCallback(self))
         self.add_callback(StepIntervalCallback(self._sync_weight, self.args.weight_sync_steps))
         self.add_callback(StepIntervalCallback(self._log_step_metrics, 1))
 
