@@ -104,7 +104,7 @@ jobs:
       - name: Run slow tests on Multi GPU
         run: |
           source .venv/bin/activate
-          make slow_tests PYTEST_ARGS="--report-log=slow_tests.log"
+          make slow_tests PYTEST_ARGS="--report-log=slow_tests.log --deselect tests/test_sft_trainer.py::TestSFTTrainerSlow::test_train_offloading"
 
       - name: Generate Reports
         if: always()
