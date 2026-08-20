@@ -243,8 +243,10 @@ def _chunked_divergence_loss(
     h_t = h_t[order]
     valid = valid[order]
 
-    # Process only the whole chunks covering the valid prefix: bounds XLA recompiles and drops fully-masked chunks on GPU.
-    n_padded = (n_valid_tensor / chunk_size).ceil().to(torch.int64) * chunk_size
+    # Process only the whole chunks covering the valid prefix: bounds XLA recompiles and drops fully-masked chunks on
+    # GPU. At least one chunk always runs: under context parallelism a rank can hold only masked positions, and its
+    # zero loss still has to reach every trainable parameter for `.backward()` and gradient sync to work.
+    n_padded = (n_valid_tensor / chunk_size).ceil().clamp(min=1).to(torch.int64) * chunk_size
 
     loss = h_s.new_zeros((), dtype=torch.float32)
     for start in range(0, n_padded, chunk_size):
@@ -269,7 +271,8 @@ def _chunked_divergence_loss(
         entropy_sum = entropy_sum + chunk_entropy
 
     if num_items_in_batch is None:
-        loss = loss / n_valid_tensor
+        # Clamped for the same reason: a fully-masked rank reduces to a finite zero rather than `0 / 0`.
+        loss = loss / n_valid_tensor.clamp(min=1)
     else:
         if isinstance(num_items_in_batch, torch.Tensor):
             num_items_in_batch = num_items_in_batch.to(loss.device)
