@@ -80,6 +80,189 @@ CUDA_VISIBLE_DEVICES=1 accelerate launch train_async_grpo.py
 
 This trainer is intentionally kept minimal and is not meant to grow into a general-purpose solution. If you need a feature that is not supported, we recommend cloning the repository and adapting the trainer to your needs directly. New features will only be considered when there is significant community demand.
 
+## Logged metrics
+
+A rollout passes through several stages before it becomes a gradient. Let's first take a look at the different stages, from a prompt to our final batch composition:
+
+```
+Dataset row = PROMPT (message list + reward kwargs)
+ └─ GROUP                  (1 prompt, `num_generations` rollouts, 1 advantage baseline)
+     └─ ROLLOUT            (1 conversation, keyed by `rollout_id`)
+         ├─ TURN           (1 vLLM /v1/completions call + tool messages fed back)
+         │   └─ TurnRecord (prompt_ids, output_ids, output_log_probs)
+         └─ reconcile      (`_chain_to_sequences` classifies drift per turn: CLEAN/REALIGN/FORK)
+             └─ SEQUENCE   (≥1 per rollout; new one per fork; dropped if no trained token)
+                 └─ SAMPLE (Sequence + group advantage + reward + metrics)
+
+════════════ Trainer process boundary: `rollout_buffer` (mp.Queue) ════════════
+
+                 └─ SAMPLE (Pulled 1 at a time; dropped if staleness > `max_staleness`)
+                     └─ ROW            (Planner assigns it to one of `dp` rows, Σ Lᵢ²-balanced)
+                         └─ MICRO-BATCH (`dp` rows, one per rank)
+                             └─ PACKED ROW (1 concat sequence, `position_ids` reset per sample)
+                                 └─ FORWARD (`compute_loss`, bs=1, inter-rank padding stripped)
+                     └─ OPTIMIZER STEP (from `grad_accum` micro-batches)
+```
+
+Reading it top to bottom:
+
+- a **group** is one prompt generated `num_generations` times. The advantage baseline is computed inside it, which is why the group is also the unit that gets scored.
+- a **rollout** is one conversation. Every turn re-tokenizes the whole message list, so drift between turns has to be reconciled at the end.
+- reconciling can **fork** one rollout into several **sequences**, which is why a single conversation can produce more than one training sample.
+- a **sample** is a sequence plus its advantage, reward and metrics. This is what crosses the process boundary.
+- past the boundary the trainer plans samples into **rows** (one per DP rank), packs each row into one concatenated sequence, and accumulates `grad_accum` micro-batches into a single optimizer step.
+
+So we split our metrics based on which stage (or _entity_) they are about:
+
+| namespace      | entity it counts                                                                       |
+| -------------- | -------------------------------------------------------------------------------------- |
+| `rollout/`     | represents one _full_ conversation: its turns, its forks, how long it took to generate |
+| `completions/` | what the model (vLLM) generated for one prompt                                         |
+| `tools/`       | tool calls metrics                                                                     |
+| `sample/`      | represents _one_ training sample, as it arrives in the queue                           |
+| `batch/`       | one micro-batch or one optimizer step (built from one or multiple samples)             |
+| `perf/`        | measured seconds and FLOPs                                                             |
+
+Let's also define some terms to make token metrics unambiguous:
+
+- **generated** tokens are what the model produced (`completions/*`).
+- **forwarded** tokens are every token the _forward_ pass processes: the prompt, any tool results, and the generated tokens.
+- **trained** tokens are the subset the loss is taken over where `completion_mask == 1`. For example, a fork or a realign can demote already-generated tokens to context, so trained ≠ generated.
+
+### How the batch numbers compose
+
+A **row** is what **one** DP rank forwards in one micro-batch: several samples concatenated into a single sequence, with `position_ids` restarting at each sample boundary. The planner decides which samples land in which row (balancing Σ Lᵢ² so no rank straggles), and a data collator does the concatenating.
+
+In all our metrics **a "step" always means one FULL optimizer step**, never a micro-batch. `gradient_accumulation_steps` micro-batches make one step, and every metric named `_per_step` is per optimizer step, matching `global_step`, `logging_steps` and the rest of the [`Trainer`] vocabulary. Where a metric is per micro-batch it says so (`batch/microbatches_per_step`) or it is a per-row quantity (`batch/row_*`, `batch/samples_per_row`).
+
+One step therefore holds a fixed number of **row-slots**:
+
+```
+row-slots per step = gradient_accumulation_steps x world_size
+```
+
+which makes the batch metrics compose into a ladder you can check against each other:
+
+```
+sample                                     sample/forwarded_tokens_mean
+  └─ packed into a ROW                     batch/samples_per_row, batch/row_tokens_mean
+      └─ one row per DP rank               = one micro-batch
+          └─ gradient_accumulation_steps micro-batches = one STEP
+                                           batch/samples_per_step, batch/forwarded_tokens_per_step
+```
+
+So `batch/samples_per_step ≈ row-slots x batch/samples_per_row`, and likewise for tokens. The two sides agree only up to the variation between micro-batches inside the step — the per-step metrics are sums, the per-row ones are means — so expect a fraction of a percent, not an exact match.
+
+`batch/row_fill_frac` is the one to watch when samples are long: a 10k-token sample tiles a 32k budget badly (three fit, four never do, so the packer often gets two and the row runs ~77% full), while 1k-token samples tile it almost perfectly. That is quantization, not a bug, and `token_budget` is the lever — bearing in mind that attention is O(L²) per sequence, so a fuller row of long sequences does not cost linearly more memory.
+
+### The rollout queue
+
+The worker pushes scored samples into a queue and the trainer pulls from it. Four metrics describe that one queue, and they answer different questions:
+
+| metric                      | question                                                                                                |
+| --------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `sample/rollout_queue_size` | how many samples are waiting right now                                                                  |
+| `sample/time_in_queue_s`    | how long **a single sample** sat there before being trained on — the seconds half of its off-policyness |
+| `perf/rollout_wait_s`       | how long training sat blocked because the queue was **empty**                                           |
+| `rollout/backpressure_s`    | how long generation (the worker) sat blocked because the queue was **full**                             |
+
+The last two metrics (`perf/rollout_wait_s` and `rollout/backpressure_s`) are mirror images and are never both large! Reading them together with the queue size tells you which side is the bottleneck:
+
+- queue near empty, `perf/rollout_wait_s` high → **generation-bound**. The trainer is starving; look at `rollout/generated_tok_s`, `rollout/inflight` and `rollout/score_queue_size`.
+- queue near full, `rollout/backpressure_s` high → **trainer-bound**. Generation is throttled and its output is aging in the queue, so watch `sample/staleness_mean` climb.
+- both near zero → balanced !
+
+### Completions
+
+A **completion** is what vLLM generated for one prompt, counted across _every turn_ of the rollout.
+
+| metric                                             | meaning                                                                                               |
+| -------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `completions/mean_length`                          | generated tokens per rollout, averaged over all of its turns                                          |
+| `completions/min_length`, `completions/max_length` | shortest and longest rollout in the window                                                            |
+| `completions/clipped_ratio`                        | fraction of rollouts whose last turn did not end on EOS, i.e. was cut off by `max_completion_length`. |
+
+### Rollouts
+
+A **rollout** is **one full** conversation: a prompt generated to completion, including every tool round-trip it took to get there. `num_generations` rollouts share a prompt and form a group.
+
+| metric                                                             | meaning                                                                                                                                                                                                                                      |
+| ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `rollout/duration_s`                                               | wall time for one conversation, from dispatch to its last turn.                                                                                                                                                                              |
+| `rollout/generated_tok_s`                                          | generation throughput over the last interval (windowed), so a stall shows up                                                                                                                                                                 |
+| `rollout/inflight`                                                 | conversations in flight to vLLM.                                                                                                                                                                                                             |
+| `rollout/turns_mean`, `rollout/turns_max`                          | mean and max turns per conversation                                                                                                                                                                                                          |
+| `rollout/samples_per_rollout`                                      | training **samples** produced per conversation. 1.0 means no forking happens; (<1.0 means some conversations produced no trainable sample at all)                                                                                            |
+| `rollout/fork_frac`, `rollout/realign_frac`                        | how re-tokenization drift was classified at each turn boundary                                                                                                                                                                               |
+| `rollout/drift_tokens_mean`, `rollout/drift_tokens_max`            | how many held tokens a turn's re-tokenization invalidated. Compare against `fork_threshold_tokens`                                                                                                                                           |
+| `rollout/score_queue_size`                                         | completed groups waiting to be scored.                                                                                                                                                                                                       |
+| `rollout/score_s`, `rollout/score_wait_s`, `rollout/score_block_s` | scoring: time to score a group, group wait time to be scored, and how long generation was blocked because the scoring queue was full                                                                                                         |
+| `rollout/vllm_retry_total`                                         | retried vLLM requests. A degraded server otherwise looks like unexplained slowness. It sits here rather than in `completions/` because it counts requests to the server, not generated text: a retried request produced no completion at all |
+| `rollout/backpressure_s`                                           | how long generation was blocked because the rollout queue was full. See [the rollout queue](#the-rollout-queue)                                                                                                                              |
+
+### Tools
+
+Logged only when the model executes tools. `tools/<name>_*` repeats per tool name, the same way `rewards/<func>` repeats per reward function, because one failing tool is invisible in an average over all of them.
+
+| metric                                                  | meaning                                                                                                  |
+| ------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `tools/call_frequency`, `tools/failure_frequency`       | calls per rollout, and the fraction that failed                                                          |
+| `tools/latency_s`, `tools/<name>_latency_s`             | time spent executing the tool.                                                                           |
+| `tools/<name>_call_total`, `tools/<name>_failure_total` | per-tool call and failure counts                                                                         |
+| `tools/unknown_name_total`                              | the model asked for a tool that does not exist: tracks a policy error, unlike a tool that ran and raised |
+| `tools/parallel_calls_mean`                             | tool calls requested in a single assistant message                                                       |
+| `tools/loop_exhausted_frac`                             | conversations cut off at `max_tool_calling_iterations` while still asking for tools                      |
+
+### Samples arriving from the queue
+
+Each sample is one `RolloutSample`: a reconciled sequence plus the group advantage, the reward and its per-sample metrics, assembled by the worker in `_score_group` once every generation in a group has finished and been scored. The worker pushes them into `rollout_buffer`; everything below is measured on the trainer side, as it pulls them for training.
+
+| metric                                                        | meaning                                                                                                                                             |
+| ------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `sample/forwarded_tokens_mean`, `sample/forwarded_tokens_max` | tokens in one **sample**: prompt + tool context + generated. Packing is a row-level concern, see `batch/row_*`                                      |
+| `sample/trained_tokens_mean`                                  | of those, how many the loss is taken over                                                                                                           |
+| `sample/rollout_queue_size`                                   | scored samples waiting in the queue                                                                                                                 |
+| `sample/time_in_queue_s`                                      | how long this sample sat in that queue before being trained on. Not the same as `perf/rollout_wait_s` — see [the rollout queue](#the-rollout-queue) |
+| `sample/staleness_mean`, `sample/staleness_max`               | how many policy versions behind the data is. `ratio` and `kl` show the _effect_ of off-policyness on the loss; this shows the cause                 |
+| `sample/dropped_stale_total`                                  | samples discarded for exceeding `max_staleness`                                                                                                     |
+
+### Batches
+
+One micro-batch is `world_size` rows (remember packing flattens into 1 sequence), so one per DP rank, so that rank _i_ forwards row _i_. `gradient_accumulation_steps` of those make one optimizer step. A step then covers `gradient_accumulation_steps × world_size` rows in total. Every `_per_step` metric below is a sum over the whole step and across every rank; the `batch/row_*` ones are _means_ over the rows.
+
+| metric                                                                   | meaning                                                                                                                              |
+| ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `batch/forwarded_tokens_per_step`, `batch/trained_tokens_per_step`       | tokens in one optimizer step, forwarded and trained respectively                                                                     |
+| `batch/samples_per_step`, `batch/groups_per_step`                        | training samples, and distinct prompts, per optimizer step. They differ by the fork rate                                             |
+| `batch/microbatches_per_step`                                            | counted, not read off the config                                                                                                     |
+| `batch/masked_token_frac`                                                | forwarded tokens with `completion_mask == 0` — the share of the forward that earns no gradient                                       |
+| `batch/samples_per_row`, `batch/row_tokens_mean`, `batch/row_tokens_max` | how densely the planner packed each rank's row                                                                                       |
+| `batch/row_fill_frac`                                                    | row tokens against `token_budget`. Low means the budget is not being used                                                            |
+| `batch/row_imbalance`                                                    | `max Σ Lᵢ² / mean Σ Lᵢ²` across rows. Attention is O(L²), so this predicts which rank stalls the gradient all-reduce. 1.0 is perfect |
+| `batch/pad_frac`                                                         | inter-rank padding. Costs broadcast bytes only; it is stripped before the forward                                                    |
+| `batch/dropped_oversize_total`                                           | samples dropped for exceeding `token_budget`                                                                                         |
+
+### Performance
+
+Throughput and MFU are each reported **twice**, over the same optimizer step, differing only in what they divide by. The suffix names the denominator:
+
+- `_fwd_bwd` divides by `perf/fwd_bwd_s` — the compute alone. _How efficiently does the trainer run when it has data?_ If it is low, the trainer is the problem.
+- `_wall_clock` divides by `perf/step_s` — the whole step, including the time spent waiting for rollouts. _What fraction of the allocation actually became training?_ If this is far below the `_fwd_bwd` one, generation is probably the bottleneck.
+
+The gap between them is `perf/rollout_wait_s` plus the optimizer and weight-sync time. But it's useful to look at both: looking only at `_fwd_bwd` hides the GPU-hours spent generating rollouts, and quoting only `_wall_clock` could blame the trainer for the generator's latency.
+
+| metric                                                            | meaning                                                                                                                                               |
+| ----------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `perf/step_s`                                                     | wall time between optimizer steps: compute, optimizer, weight sync and queue waits included                                                           |
+| `perf/fwd_bwd_s`                                                  | forward + backward, summed over the step's micro-batches. This is the denominator of every `_fwd_bwd` metric below                                    |
+| `perf/fwd_s`                                                      | the forward part of it. `fwd_s / fwd_bwd_s` near 1/3 is the usual split; higher means the backward is cheap or recompute is being paid on the forward |
+| `perf/optimizer_s`                                                | `optimizer.step()`                                                                                                                                    |
+| `perf/rollout_wait_s`                                             | how long the trainer sat blocked because the queue was empty. See [the rollout queue](#the-rollout-queue)                                             |
+| `perf/weight_sync_s`                                              | a full sync, plus `_pause_s` (waiting for vLLM), `_barrier_s` (rank skew) and `_transfer_s` (the bytes)                                               |
+| `perf/forwarded_tok_s_fwd_bwd`, `perf/forwarded_tok_s_wall_clock` | forwarded tokens per second on each basis                                                                                                             |
+| `perf/trained_tok_s_wall_clock`                                   | the same, counting only tokens the loss saw                                                                                                           |
+| `perf/mfu_fwd_bwd`, `perf/mfu_wall_clock`                         | model FLOPs utilisation on each basis                                                                                                                 |
+
 ## AsyncGRPOConfig
 
 [[autodoc]] trl.experimental.async_grpo.AsyncGRPOConfig

@@ -15,12 +15,11 @@
 from dataclasses import dataclass, field
 from typing import Any
 
-from ...trainer.base_config import _BaseConfig
+from .base_config import _BaseConfig
 
 
 @dataclass
 class DistillationConfig(_BaseConfig):
-    # docstyle-ignore
     r"""
     Configuration class for the [`DistillationTrainer`].
 
@@ -31,20 +30,16 @@ class DistillationConfig(_BaseConfig):
     [argparse](https://docs.python.org/3/library/argparse#module-argparse) arguments that can be specified on the
     command line.
 
-    > [!NOTE]
-    > Some [`~transformers.TrainingArguments`] defaults are overridden: `learning_rate` defaults to `1e-6` (instead of
-    > `5e-5`) and `remove_unused_columns` defaults to `False` (instead of `True`).
-
     Parameters:
         > Parameters that control the model and the teacher model
 
         model_init_kwargs (`str` or `dict[str, Any]`, *optional*):
-            Keyword arguments for `AutoModelForCausalLM.from_pretrained`, used when the `model` argument of the
-            trainer is provided as a string.
+            Keyword arguments for `AutoModelForCausalLM.from_pretrained`, used when the `model` argument of the trainer
+            is provided as a string.
         trust_remote_code (`bool`, *optional*, defaults to `False`):
             Whether to allow loading models and tokenizers that ship custom Python code from the Hub. Forwarded to
-            [`~transformers.AutoModelForCausalLM.from_pretrained`] and
-            [`~transformers.AutoTokenizer.from_pretrained`], for both the student and teacher.
+            [`~transformers.AutoModelForCausalLM.from_pretrained`] and [`~transformers.AutoTokenizer.from_pretrained`],
+            for both the student and teacher.
         teacher_model_name_or_path (`str`, *optional*):
             Model name or path for the teacher model. Used when the teacher is loaded locally.
         teacher_model_revision (`str`, *optional*):
@@ -108,12 +103,12 @@ class DistillationConfig(_BaseConfig):
             Model implementation backend for vLLM. Use `"vllm"` or `"transformers"`.
         vllm_enable_sleep_mode (`bool`, *optional*, defaults to `False`):
             Enable vLLM sleep mode to offload student weights during the optimizer step.
-        vllm_structured_outputs_regex (`str` or `None`, *optional*):
+        vllm_structured_outputs_regex (`str`, *optional*):
             Regex pattern for vLLM structured outputs.
 
         > Parameters that control the vLLM server (only used when `vllm_mode` is `"server"`)
 
-        vllm_server_base_url (`str` or `None`, *optional*):
+        vllm_server_base_url (`str`, *optional*):
             Base URL for the student vLLM server. If provided, `vllm_server_host` and `vllm_server_port` are ignored.
         vllm_server_host (`str`, *optional*, defaults to `"0.0.0.0"`):
             Host of the student vLLM server.
@@ -128,7 +123,7 @@ class DistillationConfig(_BaseConfig):
 
         vllm_gpu_memory_utilization (`float`, *optional*, defaults to `0.3`):
             GPU memory utilization for the colocated student vLLM engine.
-        vllm_max_model_length (`int` or `None`, *optional*):
+        vllm_max_model_length (`int`, *optional*):
             Maximum model sequence length for the colocated vLLM engine.
         vllm_tensor_parallel_size (`int`, *optional*, defaults to `1`):
             Tensor parallel size for the colocated student vLLM engine.
@@ -144,14 +139,21 @@ class DistillationConfig(_BaseConfig):
         > Parameters that control the logging
 
         log_completions (`bool`, *optional*, defaults to `False`):
-            Whether to log a sample of (prompt, completion) pairs every `logging_steps` steps. If `rich` is
-            installed, it prints the sample. If `wandb` and/or `trackio` logging is enabled, it logs it to `wandb`
-            and/or `trackio`.
+            Whether to log a sample of (prompt, completion) pairs every `logging_steps` steps. If `rich` is installed,
+            it prints the sample. If `wandb` and/or `trackio` logging is enabled, it logs it to `wandb` and/or
+            `trackio`.
         num_completions_to_print (`int`, *optional*):
             Number of completions to print with `rich`. If `None`, all completions are logged.
         log_unique_prompts (`bool`, *optional*, defaults to `False`):
             Whether to log unique prompts. If `True`, only unique prompts are logged. If `False`, all prompts are
             logged.
+
+    > [!NOTE]
+    > These parameters have default values different from [`~transformers.TrainingArguments`]:
+    > - `logging_steps`: Defaults to `10` instead of `500`.
+    > - `gradient_checkpointing`: Defaults to `True` instead of `False`.
+    > - `bf16`: Defaults to `True` if `fp16` is not set, instead of `False`.
+    > - `learning_rate`: Defaults to `1e-6` instead of `5e-5`.
     """
 
     _VALID_DICT_FIELDS = _BaseConfig._VALID_DICT_FIELDS + ["model_init_kwargs", "teacher_model_init_kwargs"]
@@ -200,7 +202,7 @@ class DistillationConfig(_BaseConfig):
     # Parameters that control the data preprocessing
     # The default `remove_unused_columns` is overwritten from the parent class: distillation trains on the raw
     # `prompt` column and generates completions on-policy, so no columns are dropped.
-    remove_unused_columns: bool = field(
+    remove_unused_columns: bool | None = field(
         default=False,
         metadata={
             "help": "Whether to only keep the column 'prompt' in the dataset. The trainer consumes the raw prompt "
@@ -374,3 +376,14 @@ class DistillationConfig(_BaseConfig):
 
         if self.beta < 0.0 or self.beta > 1.0:
             raise ValueError(f"beta must be in [0.0, 1.0], got {self.beta}.")
+
+        if self.parallelism_config is not None and (
+            self.parallelism_config.cp_enabled or self.parallelism_config.sp_enabled
+        ):
+            raise ValueError(
+                "DistillationTrainer does not support sequence-dim parallelism (`parallelism_config.cp_size > 1` "
+                "or `parallelism_config.sp_size > 1`) yet. Distillation builds model inputs after generation "
+                "inside the trainer, so Transformers' context-parallel / Ulysses sequence-parallel input "
+                "sharding cannot be applied to the raw generation batch. Set both `cp_size=1` and `sp_size=1`, "
+                "or disable `parallelism_config`."
+            )
