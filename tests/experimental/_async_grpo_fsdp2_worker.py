@@ -146,6 +146,7 @@ def main() -> None:
         per_device_train_batch_size=3,
         num_generations=3,
         max_completion_length=8,
+        token_budget=256,  # set explicitly; the stub worker has no real vLLM server to query for max_model_len
         max_steps=2,
         vllm_server_timeout=5.0,
         report_to="none",
@@ -171,11 +172,14 @@ def main() -> None:
         t = t.full_tensor() if isinstance(t, torch.distributed.tensor.DTensor) else t
         return t.detach().cpu()
 
-    changed = False
-    for n, p in trainer.model.named_parameters():
-        if not torch.equal(_materialize(before[n]), _materialize(p)):
-            changed = True
-            break
+    # Compare every parameter on every rank before deciding: `_materialize` calls the collective
+    # `full_tensor()`, so breaking early would leave the ranks issuing different numbers of collectives and
+    # rank 0 would hang instead of reporting `params_changed: false`. A list comprehension is deliberate,
+    # since `any()` over a generator short-circuits the same way `break` does. Only rank 0's verdict is
+    # asserted: with `fsdp_cpu_ram_efficient_loading`, the pre-wrap snapshot on other ranks holds
+    # placeholders rather than the loaded weights.
+    diffs = [not torch.equal(_materialize(before[n]), _materialize(p)) for n, p in trainer.model.named_parameters()]
+    changed = any(diffs)
 
     last = trainer.state.log_history[-1] if trainer.state.log_history else {}
     train_loss = last.get("train_loss")
