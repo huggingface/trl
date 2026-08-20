@@ -1053,7 +1053,12 @@ class TestEpochStop(TrlTestCase):
         )
         worker = _StubRolloutWorker(AutoTokenizer.from_pretrained(model_id), dataset, num_generations=3, fork_k=fork_k)
         trainer = AsyncGRPOTrainer(
-            model=model_id, reward_funcs=dummy_reward_func, args=args, train_dataset=dataset, rollout_worker=worker
+            model=model_id,
+            reward_funcs=dummy_reward_func,
+            args=args,
+            train_dataset=dataset,
+            rollout_worker=worker,
+            weight_transfer=_StubWeightTransfer(),
         )
         trainer.train()
         return trainer, len(dataset)
