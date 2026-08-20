@@ -1308,10 +1308,11 @@ class AsyncDistillationTrainer(_BaseTrainer):
             if lm_head_bias is not None:
                 lm_head_bias = lm_head_bias.full_tensor()
         # NOTE(@aminediro): supporting Cohere2 models (mirrors `patch_chunked_lm_head`'s own handling).
-        # Read through `get_text_config()` like [`~trl.trainer.DistillationTrainer`] does: on VLMs the logit
-        # post-processing lives on `text_config`. Muse Glimmer applies the same pre-softcap multiplier under the name
-        # `output_multiplier`, and a real `logit_scale` of 0.0 is kept as-is and applied faithfully.
+        # On VLMs the logit post-processing lives on `text_config`, so read it through `get_text_config()`.
         config = unwrapped_model.config.get_text_config()
+        # `logit_scale` is None on models that don't scale (e.g. MPT); read that as unscaled (1.0). A real 0.0 is kept
+        # as-is and applied faithfully. Muse Glimmer applies the same pre-softcap multiplier under the name
+        # `output_multiplier`.
         logit_scale = getattr(config, "logit_scale", None)
         if logit_scale is None:
             logit_scale = getattr(config, "output_multiplier", None)
