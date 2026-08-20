@@ -1002,8 +1002,8 @@ def split_pixel_values_by_grid(batch: dict[str, torch.Tensor]) -> dict[str, torc
     to each image. For models with `image_position_ids` instead (e.g. Gemma), `pixel_values` is indexed directly by
     image count. For models with `spatial_shapes` (e.g. LFM2-VL) or with `num_tiles` alone (e.g. InternVL),
     tile-indexed tensors are split using `num_tiles`. Models with none of these store `pixel_values` either flat, one
-    row per image (e.g. LLaVA), in which case it is split by image count, or already padded to one row per sample
-    (e.g. Idefics), in which case it is left as is.
+    row per image (e.g. LLaVA), in which case it is split by image count, or already padded to one row per sample (e.g.
+    Idefics), in which case it is left as is.
     """
     if "pixel_values" not in batch or "num_images" not in batch:
         return batch
