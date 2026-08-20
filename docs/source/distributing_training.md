@@ -270,6 +270,14 @@ The levers, roughly in the order you will need them as model size or sequence le
    }
    ```
 
+Context parallelism can only express full causal attention, which constrains what it can train:
+
+- **Full-attention models only.** Models with sliding-window or chunked attention layers (Gemma 2/3, Mistral,
+  Qwen3 with `use_sliding_window`) cannot be used: their per-layer mask has to be dropped, which would silently
+  turn those layers into full causal attention. Accelerate rejects such models.
+- **No packing**, for the same reason (see above), and **no left padding** — right padding is fine, since causal
+  attention already ignores trailing pad positions.
+
 Attention is quadratic, so step time grows ~4× for every 2× in sequence length (137 s → 538 s → 2135 s for 0.6B at 1M/2M/4M), while memory — with the levers above — grows roughly linearly.
 
 #### Benchmarking Ring Attention
