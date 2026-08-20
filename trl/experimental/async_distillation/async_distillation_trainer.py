@@ -514,6 +514,27 @@ class _TrainBeginCallback(TrainerCallback):
             self._trainer.rollout_worker.start()
 
 
+class _EpochStopCallback(TrainerCallback):
+    """Stop after `num_train_epochs` full passes over the prompt dataset.
+
+    An epoch is counted in distinct prompts actually trained (accumulated in the collator, which runs on the main
+    process just before the model forward). Where [`~trl.experimental.async_grpo.async_grpo_trainer`] counts
+    prompt-groups, one prompt here yields exactly one training sample, so a prompt and a group are the same thing. Only
+    the main process collates (`dispatch_batches=True`), so the stop decision is reduced across ranks to keep
+    data-parallel workers in lockstep.
+    """
+
+    def __init__(self, trainer: "AsyncDistillationTrainer", target_prompts: int):
+        self._trainer = trainer
+        self._target = target_prompts
+
+    def on_step_end(self, _args, _state, control, **_kwargs):
+        acc = self._trainer.accelerator
+        reached = torch.tensor(int(len(self._trainer._trained_prompts) >= self._target), device=acc.device)
+        if int(acc.reduce(reached, reduction="sum").item()) >= 1:
+            control.should_training_stop = True
+
+
 def log_rollout_traces(samples: list[RolloutSample], step: int, report_to: list[str], max_traces: int = 16) -> None:
     """Log rollout samples to trackio as inspectable traces (prompt + completion + teacher/student metrics per sample).
 
@@ -661,6 +682,7 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
                 "teacher_topk_ids": sample.teacher_topk_ids,
                 "teacher_topk_logprobs": sample.teacher_topk_logprobs,
                 "teacher_id": sample.teacher_id,
+                "prompt_id": sample.prompt_id,  # counted by the collator, never sent to the model
                 "metrics": sample.metrics,  # per-sample scalars a custom worker stamped; aggregated by the collator
             }
 
@@ -698,6 +720,9 @@ class DataCollatorForRollout(DataCollatorMixin):
             Maps each configured `teacher_server_urls` key to a stable integer index, packed per-position (like every
             other per-token field) as `teacher_id_idx` so `compute_loss` can break `jsd`/`entropy`/ `teacher_entropy`
             down per teacher (MOPD). `None` when there's only one teacher (no breakdown needed).
+        prompts_trained (`set[int]`, *optional*):
+            The trainer's set of distinct prompt ids trained so far, shared by reference and updated with this
+            micro-batch's prompts; read by [`_EpochStopCallback`] to decide when an epoch target is met.
         metrics (`dict[str, list]`, *optional*):
             The trainer's metric sink, appended to with this micro-batch's sample and packing metrics.
         token_budget (`int`, *optional*, defaults to `0`):
@@ -709,7 +734,9 @@ class DataCollatorForRollout(DataCollatorMixin):
     num_processes: int = 1
     teacher_id_to_idx: dict[str, int] | None = None
     return_tensors: str = "pt"
-    # The trainer's metric sink, shared by reference.
+    # Distinct prompts trained so far, shared by reference with the trainer.
+    prompts_trained: set[int] = field(default_factory=set)
+    # The trainer's metric sink, shared by reference (like `prompts_trained`).
     metrics: dict[str, list] = field(default_factory=lambda: defaultdict(list))
     # Per-row token cap of the planner,
     token_budget: int = 0
@@ -763,6 +790,7 @@ class DataCollatorForRollout(DataCollatorMixin):
         teacher_topk_logprobs = pad(teacher_topk_logprobs, padding_value=float("-inf"))
 
         all_examples = [example for group in groups for example in group]
+        self.prompts_trained.update(example["prompt_id"] for example in all_examples)
 
         # Total valid completion tokens across the micro-batch. Repeated per rank so that DataLoaderDispatcher
         # (dispatch_batches=True) slices correctly on dim=0.
@@ -970,25 +998,32 @@ class AsyncDistillationTrainer(_BaseTrainer):
         # self.model_accepts_loss_kwargs to False to enable scaling.
         self.model_accepts_loss_kwargs = False
 
-        # Infer max_steps from dataset size when not explicitly set. This must happen after super().__init__() so
-        # that self.accelerator.num_processes is available for the correct calculation. The training dataloader is
-        # driven by the async rollout queue (an IterableDataset with no __len__), so max_steps must be set explicitly
-        # for transformers.Trainer's step-counting to work, unlike AsyncGRPOTrainer, there is no num_generations
-        # multiplier here: each dataset row yields exactly one training sample, not a group of them.
+        # Epoch handling: stop after num_train_epochs full passes over the PROMPT dataset, counted as distinct
+        # prompts trained. Unlike AsyncGRPOTrainer there is no num_generations multiplier and no forking: each dataset
+        # row yields exactly one training sample, not a group of them.
+        self._trained_prompts: set[int] = set()
+        self._epoch_stop_prompts: int | None = None
+        # This must happen after super().__init__() so that self.accelerator.num_processes is available. The training
+        # dataloader is driven by the async rollout queue (an IterableDataset with no __len__), so max_steps must be
+        # set explicitly for transformers.Trainer's step-counting to work.
         samples_per_step = (
             self.args.per_device_train_batch_size
             * self.args.gradient_accumulation_steps
             * self.accelerator.num_processes
         )
-        # Known limitation, shared verbatim with AsyncGRPOTrainer: this assumes `samples_per_step` samples per step,
-        # which only holds under `FixedCountBatcher`. Under `TokenBudgetBatcher` (the default once `token_budget` is
-        # set, see below), the number of samples per micro-batch is dynamic — driven by sequence lengths, not
-        # `per_device_train_batch_size` — so an inferred `max_steps`/`num_train_epochs` no longer corresponds exactly
-        # to the requested number of dataset passes. Fixing this requires touching AsyncGRPOTrainer's identical
-        # derivation too, out of scope for this PR.
         if self.args.max_steps <= 0 and train_dataset is not None and hasattr(train_dataset, "__len__"):
+            self._epoch_stop_prompts = math.ceil(self.args.num_train_epochs * len(train_dataset))
+            # max_steps is a safety ceiling, left uninflated unlike AsyncGRPOTrainer's: `lr_scheduler_type` defaults
+            # to `linear` here, so its value also sets the decay horizon. Under `TokenBudgetBatcher` (the default once
+            # `token_budget` is set, see below) a step consumes more samples than assumed here, so the run reaches the
+            # prompt count first; sequences near the whole budget consume fewer and stop short of it.
             samples_per_epoch = len(train_dataset)
             self.args.max_steps = math.ceil(self.args.num_train_epochs * samples_per_epoch / samples_per_step)
+            logger.info(
+                f"Epoch-driven stop: {self._epoch_stop_prompts} prompts "
+                f"({self.args.num_train_epochs} epochs x {len(train_dataset)} prompts); "
+                f"max_steps={self.args.max_steps} is a safety ceiling."
+            )
 
         # Infer max_inflight_tasks when not explicitly set. Generating more samples than the trainer can consume
         # before they become stale is wasteful. The useful upper bound is max_staleness * samples_per_step, floored
@@ -1094,6 +1129,8 @@ class AsyncDistillationTrainer(_BaseTrainer):
         self.add_callback(_TrainBeginCallback(self))
         self.add_callback(StepIntervalCallback(self._sync_weight, self.args.weight_sync_steps))
         self.add_callback(StepIntervalCallback(self._log_step_metrics, 1))
+        if self._epoch_stop_prompts is not None:
+            self.add_callback(_EpochStopCallback(self, self._epoch_stop_prompts))
 
     def get_train_dataloader(self) -> DataLoader:
         num_processes = self.accelerator.num_processes
@@ -1134,6 +1171,7 @@ class AsyncDistillationTrainer(_BaseTrainer):
                     self.args.teacher_top_k,
                     num_processes,
                     self._teacher_id_to_idx if len(self._teacher_ids) > 1 else None,
+                    prompts_trained=self._trained_prompts,
                     metrics=self._metrics["train"],
                     # `or 0` because only rank 0 fills an unset budget from the vLLM server above; the other ranks
                     # construct the collator (and never use it) while `token_budget` is still `None`.

@@ -67,6 +67,7 @@ class RolloutSample:
     model_version: int
     metrics: dict[str, float]
     teacher_id: str  # which teacher_server_urls entry scored this sample (see _resolve_teacher_server_url)
+    prompt_id: int  # index of the dataset row this came from, counted across epochs; drives the epoch-driven stop
     enqueued_at: float | None = None
 
 
@@ -324,9 +325,9 @@ class _AsyncRolloutLoop:
             while True:
                 self._heartbeat_value.value = time.time()
                 while free_slots and not stop_event.is_set():
-                    row = next(work_iter)
+                    prompt_id, row = next(work_iter)
                     slot = free_slots.pop()
-                    task = asyncio.create_task(self._generate_and_score_one(row))
+                    task = asyncio.create_task(self._generate_and_score_one(prompt_id, row))
                     inflight_tasks[task] = slot
 
                 if not inflight_tasks:
@@ -465,14 +466,17 @@ class _AsyncRolloutLoop:
             }
         )
 
-    def _repeat_iterator(self) -> Iterator[dict[str, Any]]:
+    def _repeat_iterator(self) -> Iterator[tuple[int, dict[str, Any]]]:
+        prompt_id = 0
         while True:
             try:
                 row = next(self._dataset_iter)
             except StopIteration:
                 self._dataset_iter = iter(self.dataset)
                 row = next(self._dataset_iter)
-            yield row
+            # One sample per row, so this is `AsyncGRPOTrainer`'s `group_id` with `num_generations` fixed at 1.
+            yield prompt_id, row
+            prompt_id += 1
 
     def _resolve_teacher_server_url(self, row: dict[str, Any]) -> tuple[str, str]:
         """Pick which teacher server scores `row` (MOPD: multi-teacher on-policy distillation).
@@ -494,7 +498,7 @@ class _AsyncRolloutLoop:
             )
         return teacher_id, self.teacher_server_urls[teacher_id]
 
-    async def _generate_and_score_one(self, row: dict[str, Any]) -> RolloutSample:
+    async def _generate_and_score_one(self, prompt_id: int, row: dict[str, Any]) -> RolloutSample:
         model_version = self.model_version
         t_dispatch = time.monotonic()
         prompt = row["prompt"]
@@ -532,6 +536,7 @@ class _AsyncRolloutLoop:
             teacher_topk_logprobs=full_teacher_logprobs,
             model_version=model_version,
             teacher_id=teacher_id,
+            prompt_id=prompt_id,
             metrics={},
         )
 

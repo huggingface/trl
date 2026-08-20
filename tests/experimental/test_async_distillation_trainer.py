@@ -110,6 +110,7 @@ class _StubRolloutWorker:
                 teacher_topk_logprobs=[[] for _ in prompt_ids] + teacher_topk_logprobs,
                 model_version=self._model_version,
                 teacher_id="default",
+                prompt_id=idx,  # `itertools.cycle` keeps counting across epochs, like the real `_repeat_iterator`
                 metrics={},
             )
 
@@ -151,7 +152,7 @@ class _StubWeightTransfer:
         pass
 
 
-def _rollout_sample(length: int, top_k: int = TEACHER_TOP_K, teacher_id: str = "default") -> dict:
+def _rollout_sample(length: int, top_k: int = TEACHER_TOP_K, teacher_id: str = "default", prompt_id: int = 0) -> dict:
     # First token is a prompt token (completion_mask 0, empty teacher candidates); the rest are completion tokens.
     teacher_topk_ids = [[]] + [list(range(top_k))] * (length - 1)
     teacher_topk_logprobs = [[]] + [[-float(i) - 0.1 for i in range(top_k)]] * (length - 1)
@@ -161,6 +162,7 @@ def _rollout_sample(length: int, top_k: int = TEACHER_TOP_K, teacher_id: str = "
         "teacher_topk_ids": teacher_topk_ids,
         "teacher_topk_logprobs": teacher_topk_logprobs,
         "teacher_id": teacher_id,
+        "prompt_id": prompt_id,
         "metrics": {},
     }
 
@@ -217,8 +219,8 @@ class TestPackingAwareBatching:
 
     def test_collator_pads_unequal_rows(self):
         collator = DataCollatorForRollout(pad_token_id=0, teacher_top_k=TEACHER_TOP_K, num_processes=2)
-        a = _rollout_sample(3)  # input_ids [0, 1, 2]
-        b = _rollout_sample(2)  # input_ids [0, 1]
+        a = _rollout_sample(3, prompt_id=7)  # input_ids [0, 1, 2]
+        b = _rollout_sample(2, prompt_id=8)  # input_ids [0, 1]
 
         batch = collator([[[a], [b]]])
 
@@ -238,6 +240,9 @@ class TestPackingAwareBatching:
         assert collator.metrics["batch/row_imbalance"] == [9 / 6.5]  # Σ Lᵢ² of 9 and 4, against their mean
         assert collator.metrics["batch/pad_frac"] == [(1, 6)]  # the one slot row b was padded with
         assert "batch/row_fill_frac" not in collator.metrics  # no budget passed, so nothing to fill
+
+        # The prompts behind this micro-batch, accumulated for `_EpochStopCallback` to count epochs with.
+        assert collator.prompts_trained == {7, 8}
 
     def test_collator_packs_teacher_id_per_token_for_mopd(self):
         # Packing concatenates samples from different teachers into one row, so compute_loss can only attribute a
@@ -427,7 +432,7 @@ class TestMultiTeacherRouting:
             {"prompt": [{"role": "user", "content": "hi"}], **({} if tid is None else {"teacher_id": tid})}
             for tid in teacher_ids
         ]
-        samples = [asyncio.run(loop._generate_and_score_one(row)) for row in rows]
+        samples = [asyncio.run(loop._generate_and_score_one(i, row)) for i, row in enumerate(rows)]
         return samples, requests
 
     @pytest.mark.parametrize("teacher_id", ["whatever", None])
@@ -777,3 +782,53 @@ class TestAsyncDistillationTrainer(TrlTestCase):
         for record in log_history:
             assert math.isfinite(record["grad_norm"]), f"grad_norm={record['grad_norm']} leaked -inf into backward"
             assert math.isfinite(record["loss"])
+
+
+@pytest.mark.skipif(
+    not is_ampere_or_newer() and torch_device != "xpu",
+    reason="Flash Attention 2 requires Ampere or newer GPU, or XPU",
+)
+class TestEpochStop(TrlTestCase):
+    """`num_train_epochs` stops after N full passes over the PROMPTS, counted as distinct prompt ids.
+
+    `max_steps` is derived assuming a fixed number of samples per step, which `TokenBudgetBatcher` (the default) does
+    not honour: it packs however many samples fit the budget, so the requested epochs are reached well before the step
+    ceiling. Without the callback the run would keep going to `max_steps` and train more epochs than asked for, so the
+    run is driven end-to-end through the real trainer (stub worker + real forward/backward) under that batcher.
+    """
+
+    def test_epoch_stop_ends_training_before_max_steps(self):
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        num_train_epochs = 2
+        args = AsyncDistillationConfig(
+            output_dir=self.tmp_dir,
+            num_train_epochs=num_train_epochs,  # epoch-driven: no explicit max_steps
+            per_device_train_batch_size=3,
+            teacher_top_k=TEACHER_TOP_K,
+            max_completion_length=8,
+            # Packs several of these short samples per row, so a step consumes more prompts than `max_steps` assumed.
+            token_budget=256,
+            vllm_server_timeout=5.0,
+            report_to="none",
+        )
+        trainer = AsyncDistillationTrainer(
+            model=model_id,
+            args=args,
+            train_dataset=dataset,
+            # Packing consumes prompts faster than the default stub refills, so hand it a deeper buffer.
+            rollout_worker=_StubRolloutWorker(
+                tokenizer, dataset, vocab_size=len(tokenizer), samples_per_weight_sync=24
+            ),
+            weight_transfer=_StubWeightTransfer(),
+        )
+        trainer.train()
+
+        # The requested passes over the prompts, plus at most the final step's overshoot. (HF's own state.epoch is
+        # meaningless here: it's global_step/max_steps over an infinite IterableDataset, so epochs are judged by
+        # distinct prompts trained, which is what the callback targets.)
+        num_prompts = len(dataset)
+        assert num_train_epochs * num_prompts <= len(trainer._trained_prompts) < (num_train_epochs + 1) * num_prompts
+        # The callback ended it, not the step ceiling — the point of counting prompts rather than steps.
+        assert trainer.state.global_step < trainer.args.max_steps
