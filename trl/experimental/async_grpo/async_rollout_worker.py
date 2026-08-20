@@ -325,10 +325,15 @@ class _AsyncRolloutLoop:
         log_completions: bool = False,
         num_completions_to_print: int | None = None,
         fork_threshold_tokens: int = 1024,
+        dataset_start_index: int = 0,
     ):
         self.model_name = model_name
         self.dataset = dataset
-        self._dataset_iter = iter(dataset)
+        if dataset_start_index > 0:
+            start = dataset_start_index % len(dataset)
+            self._dataset_iter = iter(dataset.select(range(start, len(dataset))))
+        else:
+            self._dataset_iter = iter(dataset)
         self.reward_funcs = reward_funcs
         self.reward_func_names = [get_callable_name(f) for f in reward_funcs]
         # `add_response_schema` sets the response template (transformers >= 5.13) or legacy schema for known chat
@@ -1123,6 +1128,7 @@ class AsyncRolloutWorker:
         # Forwarded verbatim to _AsyncRolloutLoop in the child. queue_maxsize is also
         # forwarded — the child reads it for "rollout buffer full" log lines.
         loop_kwargs["queue_maxsize"] = queue_maxsize
+        loop_kwargs.setdefault("dataset_start_index", 0)
         self._loop_kwargs = loop_kwargs
         self._child_ready_timeout = child_ready_timeout
         self._process: mp.Process | None = None
