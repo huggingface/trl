@@ -133,10 +133,8 @@ def _chunked_cross_entropy_loss(
     whole chunk so masked positions land in a skippable tail. Each chunk's `[chunk_size, vocab_size]` logits are kept
     alive only during its own forward/backward via gradient checkpointing, so peak logits memory is `chunk_size *
     vocab_size` instead of `batch_size * seq_len * vocab_size`. Quantizing the chunk count to a multiple of
-    `chunk_size` bounds recompilation to at most `total / chunk_size` distinct traced shapes, rather than one per
-    valid-token count, while still dropping fully-masked chunks on GPU. The trip count is still read on the host, so
-    each call costs one device-to-host synchronization (one graph execution under XLA); skipping the masked chunks is
-    worth far more than that sync costs.
+    `chunk_size` bounds recompilation to `total / chunk_size` traced shapes. The trip count is read on the host, so
+    each call costs one device-to-host synchronization (one graph execution under XLA).
 
     At least one of `labels` or `shift_labels` must be provided. `labels` triggers the internal `labels[..., 1:]` /
     `hidden_states[..., :-1, :]` shift; `shift_labels` skips it, assuming the caller already aligned labels with hidden
@@ -197,9 +195,8 @@ def _chunked_cross_entropy_loss(
     labels = labels[order]
 
     # Process only the whole chunks covering the valid prefix: bounds XLA recompiles and drops fully-masked chunks on
-    # GPU. At least one chunk always runs, so a whole-masked micro-batch (e.g. completion-only loss + truncation) still
-    # produces a zero loss connected to the autograd graph through every trainable parameter, and `.backward()` succeeds
-    # without DDP / FSDP gradient sync hanging on a missing param.
+    # GPU. At least one chunk always runs, so a whole-masked micro-batch still produces a zero loss connected to every
+    # trainable parameter, which `.backward()` and DDP / FSDP gradient sync require.
     n_padded = (n_valid_tensor / chunk_size).ceil().clamp(min=1).to(torch.int64) * chunk_size
 
     loss = hidden.new_zeros((), dtype=torch.float32)
