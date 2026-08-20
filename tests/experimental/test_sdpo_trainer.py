@@ -18,7 +18,7 @@ import logging
 import pytest
 import torch
 from datasets import Dataset, DatasetDict, load_dataset
-from transformers import TrainerCallback
+from transformers import HfArgumentParser, TrainerCallback
 
 from trl.experimental.sdpo import SDPOConfig, SDPOTrainer
 
@@ -409,8 +409,6 @@ class TestSDPOTrainer(TrlTestCase):
         assert "}}" not in capture_callback.captured_teacher_input_text
 
     def test_scale_rewards_accepts_string_via_cli(self):
-        from transformers import HfArgumentParser
-
         parser = HfArgumentParser((SDPOConfig,))
         (args,) = parser.parse_args_into_dataclasses(["--output_dir", self.tmp_dir, "--scale_rewards", "batch"])
         assert args.scale_rewards == "batch"
