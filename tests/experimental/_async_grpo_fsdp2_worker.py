@@ -61,6 +61,7 @@ class _StubRolloutWorker:
 
     def __init__(self, tokenizer, dataset, num_generations: int = 3, samples_per_weight_sync: int = 10):
         self.rollout_buffer = queue.Queue()
+        self.metrics_queue = queue.Queue()  # drained by the trainer in `log()`; this stub measures nothing
         self._samples_per_weight_sync = samples_per_weight_sync
         self._model_version = 0
         self._sample_iter = self._make_sample_iter(tokenizer, dataset, num_generations)
