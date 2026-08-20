@@ -846,13 +846,13 @@ class AsyncGRPOTrainer(_BaseTrainer):
                     "`environment` column to route each example to its environment. Provide a dataset, or pass a "
                     "single environment factory."
                 )
-            if self.args.max_steps <= 0:
+            if args.max_steps <= 0:
                 raise ValueError(
                     "When training without a `train_dataset` (the environment owns the data and returns the prompt "
                     "from `reset()`), `max_steps` must be set to a positive value to define the training length. Set "
                     "it via `AsyncGRPOConfig(max_steps=...)`."
                 )
-            num_placeholder_rows = self.args.per_device_train_batch_size * self.args.gradient_accumulation_steps
+            num_placeholder_rows = args.per_device_train_batch_size * args.gradient_accumulation_steps
             train_dataset = Dataset.from_dict({"prompt": [[{"role": "user", "content": ""}]] * num_placeholder_rows})
 
         # Initialize the Trainer
