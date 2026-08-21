@@ -51,6 +51,7 @@ from .testing_utils import (
     require_torch_accelerator,
     require_vision,
     require_vllm,
+    xfail_data_parallel,
 )
 
 
@@ -1801,6 +1802,68 @@ class TestGRPOTrainer(TrlTestCase):
                 assert (vllm_is_ratio == 0.5).all(), (
                     "vllm_is_ratio values should match the injected importance_sampling_ratio"
                 )
+
+        release_memory(trainer.model, trainer)
+
+    @require_liger_kernel
+    def test_compute_liger_loss_dapo_normalizer(self):
+        """DAPO/CISPO/VESPO must rescale the Liger loss by ``gradient_accumulation_steps / steps_per_generation`` so
+        the accumulated loss lands on the per-window token-mean, matching the non-Liger ``_compute_loss`` path.
+
+        Regression test for the per-window rescale (huggingface/trl#5619). The ``num_items_in_batch`` forwarding is
+        covered by ``test_compute_liger_loss_passes_vllm_is_ratio``.
+        """
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            loss_type="dapo",
+            steps_per_generation=4,  # differs from gradient_accumulation_steps so the rescale is non-trivial
+            gradient_accumulation_steps=2,
+            learning_rate=0.1,
+            per_device_train_batch_size=3,
+            num_generations=3,
+            max_completion_length=8,
+            use_liger_kernel=True,
+            report_to="none",
+            logging_strategy="no",
+        )
+
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        raw_losses = []
+        original_forward = trainer.liger_loss.forward
+
+        def forward_capture(*args, **kwargs):
+            out = original_forward(*args, **kwargs)
+            raw_losses.append(out[0].detach().clone())
+            return out
+
+        final_losses = []
+        original_cll = trainer.compute_liger_loss
+
+        def cll_capture(*args, **kwargs):
+            out = original_cll(*args, **kwargs)
+            final_losses.append(out.detach().clone())
+            return out
+
+        with (
+            patch.object(trainer.liger_loss, "forward", side_effect=forward_capture),
+            patch.object(trainer, "compute_liger_loss", side_effect=cll_capture),
+        ):
+            trainer.train()
+
+        # `num_items_in_batch` spans `steps_per_generation` micro-steps, so the per-window rescale
+        # the trainer applies is `gradient_accumulation_steps / steps_per_generation` (i.e. it divides
+        # the Liger output by `spg/gas`).
+        expected_rescale = training_args.steps_per_generation / training_args.gradient_accumulation_steps
+        for raw_loss, final_loss in zip(raw_losses, final_losses, strict=True):
+            torch.testing.assert_close(final_loss, raw_loss * expected_rescale)
 
         release_memory(trainer.model, trainer)
 
@@ -3840,6 +3903,7 @@ class TestGRPOTrainerVLM(TrlTestCase):
                     reason="Gemma4 models were introduced in transformers-5.5.0",
                 ),
             ),
+            "trl-internal-testing/tiny-InternVLForConditionalGeneration",
             "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
             "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
             "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",
@@ -4172,6 +4236,9 @@ class TestGRPOTrainerVLM(TrlTestCase):
     @pytest.mark.parametrize(
         "model_id",
         [
+            "trl-internal-testing/tiny-Idefics3ForConditionalGeneration",
+            "trl-internal-testing/tiny-LlavaForConditionalGeneration",
+            "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
             "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
         ],
     )
@@ -4206,7 +4273,16 @@ class TestGRPOTrainerVLM(TrlTestCase):
 
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+            # LLaVA & LLaVA-Next: vision_feature_layer=-2 leaves the last encoder layer (layers.1) and
+            # post_layernorm (pooler-only path) without gradient by design. Assert they stay frozen — if they
+            # ever start training, the feature-selection plumbing has likely regressed.
+            if model_id in (
+                "trl-internal-testing/tiny-LlavaForConditionalGeneration",
+                "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
+            ) and ("encoder.layers.1" in n or "post_layernorm" in n):
+                assert torch.equal(param, new_param), f"Param {n} expected frozen by LLaVA design, but changed"
+            else:
+                assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_train_vlm_log_multimodal_false(self):
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
@@ -4420,6 +4496,7 @@ class TestGRPOTrainerSlow(TrlTestCase):
         ],
     )
     @require_liger_kernel
+    @xfail_data_parallel
     def test_train_with_liger_grpo_kernel(self, model_name):
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
@@ -4466,6 +4543,7 @@ class TestGRPOTrainerSlow(TrlTestCase):
     )
     @require_liger_kernel
     @require_peft
+    @xfail_data_parallel
     def test_train_with_liger_grpo_kernel_and_peft(self, model_name):
         from peft import LoraConfig, TaskType
 
@@ -4527,6 +4605,7 @@ class TestGRPOTrainerSlow(TrlTestCase):
         release_memory(model, trainer)
 
     @require_liger_kernel
+    @xfail_data_parallel
     def test_liger_grpo_kernel_importance_sampling(self):
         model_name = "trl-internal-testing/tiny-LlamaForCausalLM-3.2"
 
@@ -4579,6 +4658,11 @@ class TestGRPOTrainerSlow(TrlTestCase):
         reason="transformers continuous batching switches attention to Flash Attention, which requires an Ampere or "
         "newer GPU, or XPU (see https://github.com/huggingface/transformers/issues/47926)",
     )
+    @pytest.mark.xfail(
+        reason="Flash Attention rejects a head_size that is not a multiple of 8, and the tiny models are "
+        "hidden_size=8 over 4 attention heads (head_size=2), so continuous-batching generation returns no "
+        "completions (https://github.com/huggingface/trl/issues/6834)",
+    )
     def test_train_with_transformers_continuous_batching(self, model_name):
         """Test that training works with transformers continuous batching (requires GPU)."""
         if not Version(transformers.__version__) >= Version("5.8.0"):
@@ -4625,6 +4709,11 @@ class TestGRPOTrainerSlow(TrlTestCase):
     @pytest.mark.skipif(
         not is_ampere_or_newer() and torch_device != "xpu",
         reason="Flash Attention 2 requires Ampere or newer GPU, or XPU",
+    )
+    @pytest.mark.xfail(
+        reason="kernels-community/flash-attn2 is currently unusable for training: no build variant for torch 2.13 "
+        "(https://github.com/huggingface/kernels-community/issues/1082), and the v3 stable-ABI build raises in the "
+        "backward pass for GQA models (https://github.com/huggingface/kernels-community/issues/1085)",
     )
     @require_kernels
     @require_bitsandbytes

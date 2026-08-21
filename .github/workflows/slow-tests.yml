@@ -15,7 +15,7 @@ env:
 jobs:
   run_all_tests_single_gpu:
     runs-on:
-      group: aws-g4dn-2xlarge
+      group: aws-g6e-4xlarge
     env:
       CUDA_VISIBLE_DEVICES: "0"
       TEST_TYPE: "single_gpu"
@@ -68,7 +68,7 @@ jobs:
 
   run_all_tests_multi_gpu:
     runs-on:
-      group: aws-g4dn-2xlarge
+      group: aws-g5-12xlarge-cache
     env:
       CUDA_VISIBLE_DEVICES: "0,1"
       TEST_TYPE: "multi_gpu"
