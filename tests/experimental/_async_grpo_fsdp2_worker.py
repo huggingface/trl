@@ -41,7 +41,9 @@ from trl.experimental.async_grpo import AsyncGRPOConfig, AsyncGRPOTrainer
 from trl.experimental.async_grpo.async_rollout_worker import RolloutSample
 
 
-MODEL_ID = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+# The trainer loads the model with Flash Attention, which requires a `head_size` multiple of 8. Hence the `small-*`
+# model (`head_size=32`) below, rather than the usual `tiny-*` one (`head_size=2`).
+MODEL_ID = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
 RESULT_PREFIX = "ASYNC_GRPO_FSDP2_RESULT"
 
 

@@ -314,11 +314,6 @@ class TestAsyncGRPOTrainer(TrlTestCase):
 
     @pytest.mark.slow
     @require_torch_multi_accelerator
-    @pytest.mark.xfail(
-        reason="Flash Attention rejects a head_size that is not a multiple of 8, and the tiny models are "
-        "hidden_size=8 over 4 attention heads (head_size=2), so the forward pass raises "
-        "(https://github.com/huggingface/trl/issues/6837)",
-    )
     def test_train_fsdp2(self):
         # Functional smoke: AsyncGRPOTrainer trains under a 2-process FSDP2 group, confirming the optimizer
         # updates the FSDP2-sharded parameters. Uses an in-process stub rollout worker (no vLLM server /
