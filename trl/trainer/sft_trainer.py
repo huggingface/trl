@@ -100,7 +100,10 @@ class _ChunkedCELMHeadOutput(CausalLMOutputWithPast):
 
 def _chunk(h, w, b, lbl, logit_scale, final_logit_softcapping):
     with maybe_gather_lm_head_ctx(w, b):
-        logits = h.float() @ w.float().t()
+        # Project in the model dtype and upcast only for the softmax, like `"nll"` and
+        # `transformers`' own `ForCausalLMLoss` do. Upcasting `h` and `w` first would force a
+        # non-tensor-core fp32 GEMM and materialize an fp32 copy of the whole `lm_head` weight.
+        logits = (h @ w.t()).float()
         if b is not None:
             logits = logits + b.float()
     if logit_scale != 1.0:
