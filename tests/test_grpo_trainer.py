@@ -4646,22 +4646,21 @@ class TestGRPOTrainerSlow(TrlTestCase):
 
         release_memory(model, trainer)
 
+    # Flash Attention requires a `head_size` multiple of 8, hence the `small-*` models (`head_size` 32 and 128)
+    # rather than the `tiny-*` ones (`head_size=2`) used before. This drops the coverage of
+    # `trl-internal-testing/tiny-LlamaForCausalLM-3.2` and `trl-internal-testing/tiny-MistralForCausalLM-0.2`;
+    # restoring it needs `small-LlamaForCausalLM-3.2` and `small-MistralForCausalLM-0.2`, which don't exist yet.
     @pytest.mark.parametrize(
         "model_name",
         [
-            "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
-            "trl-internal-testing/tiny-MistralForCausalLM-0.2",
+            "trl-internal-testing/small-Qwen2ForCausalLM-2.5",
+            "trl-internal-testing/small-Qwen3ForCausalLM",
         ],
     )
     @pytest.mark.skipif(
         not is_ampere_or_newer() and torch_device != "xpu",
         reason="transformers continuous batching switches attention to Flash Attention, which requires an Ampere or "
         "newer GPU, or XPU (see https://github.com/huggingface/transformers/issues/47926)",
-    )
-    @pytest.mark.xfail(
-        reason="Flash Attention rejects a head_size that is not a multiple of 8, and the tiny models are "
-        "hidden_size=8 over 4 attention heads (head_size=2), so continuous-batching generation returns no "
-        "completions (https://github.com/huggingface/trl/issues/6834)",
     )
     def test_train_with_transformers_continuous_batching(self, model_name):
         """Test that training works with transformers continuous batching (requires GPU)."""
