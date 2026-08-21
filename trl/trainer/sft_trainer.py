@@ -123,10 +123,10 @@ def _chunk(h, w, b, lbl, logit_scale, final_logit_softcapping):
 def _cut_cross_entropy_loss(hidden, w, labels, shift_labels, num_items_in_batch, final_logit_softcapping):
     """Next-token cross-entropy that never materialises the logits, via `cut_cross_entropy`.
 
-    `linear_cross_entropy` fuses the `lm_head` projection into the cross-entropy kernel, so peak memory
-    does not scale with `vocab_size` at all. It returns only the loss: unlike [`_chunked_cross_entropy_loss`]
-    there are no logits to read `mean_token_accuracy` or `entropy` off, so those metrics are unavailable —
-    the same trade `use_liger_kernel=True` already makes.
+    `linear_cross_entropy` fuses the `lm_head` projection into the cross-entropy kernel, so peak memory does not scale
+    with `vocab_size` at all. It returns only the loss: unlike [`_chunked_cross_entropy_loss`] there are no logits to
+    read `mean_token_accuracy` or `entropy` off, so those metrics are unavailable — the same trade
+    `use_liger_kernel=True` already makes.
 
     Returns:
         `tuple` of the loss and the number of non-ignored target tokens.
@@ -289,9 +289,9 @@ def _patch_chunked_ce_lm_head(
         chunk_size (`int`):
             Number of valid tokens processed per CE chunk.
         use_cce (`bool`):
-            Fuse the `lm_head` projection into the cross-entropy with `cut_cross_entropy` instead of chunking it.
-            Peak memory then no longer scales with `vocab_size`, at the cost of `num_correct_tokens` and
-            `entropy_sum`, which need logits and are left as `None`.
+            Fuse the `lm_head` projection into the cross-entropy with `cut_cross_entropy` instead of chunking it. Peak
+            memory then no longer scales with `vocab_size`, at the cost of `num_correct_tokens` and `entropy_sum`,
+            which need logits and are left as `None`.
         is_vlm (`bool`):
             Set to `True` for VLMs. Only used for the transformers < 5.0.0 fallbacks: VLMs set `base_model_prefix = ""`
             there (so the backbone must be read off `model.model`), and they take the config-level MoE aux-loss
