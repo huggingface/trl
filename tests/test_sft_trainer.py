@@ -49,6 +49,7 @@ from .testing_utils import (
     ignore_warnings,
     is_ampere_or_newer,
     require_bitsandbytes,
+    require_cut_cross_entropy,
     require_kernels,
     require_liger_kernel,
     require_peft,
@@ -433,6 +434,40 @@ class TestSFTTrainer(TrlTestCase):
         trainer.train()
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @require_torch_accelerator
+    @require_cut_cross_entropy
+    def test_train_cce_loss(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling")
+
+        # CCE's backward kernel is half-precision only, so the model has to be loaded in bf16 -- `bf16=True`
+        # alone would not do it, since under autocast the norm feeding the `lm_head` still emits fp32.
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            loss_type="cce",
+            model_init_kwargs={"dtype": "bfloat16"},
+            learning_rate=0.1,  # use higher lr because bf16 updates at the default lr round to zero
+            report_to="none",
+        )
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset["train"],
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+        # `cce` fuses the projection into the CE kernel, so there are no logits to read these off.
+        assert "mean_token_accuracy" not in trainer.state.log_history[-1]
+        assert "entropy" not in trainer.state.log_history[-1]
 
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
