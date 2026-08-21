@@ -320,13 +320,20 @@ class TestAsyncGRPOTrainer(TrlTestCase):
 
     @pytest.mark.slow
     @require_torch_multi_accelerator
+    @pytest.mark.xfail(
+        reason="Flash Attention rejects a head_size that is not a multiple of 8, and the tiny models are "
+        "hidden_size=8 over 4 attention heads (head_size=2), so the forward pass raises "
+        "(https://github.com/huggingface/trl/issues/6837)",
+    )
     def test_train_fsdp2(self):
         # Functional smoke: AsyncGRPOTrainer trains under a 2-process FSDP2 group, confirming the optimizer
         # updates the FSDP2-sharded parameters. Uses an in-process stub rollout worker (no vLLM server /
         # NCCL weight transfer), so the only distributed surface is the FSDP2 parameter lifecycle.
         #
-        # `@pytest.mark.slow` so it runs in the multi-GPU `slow_tests` lane; the experimental lane is
-        # single-GPU, where `@require_torch_multi_accelerator` would otherwise skip it permanently.
+        # `@pytest.mark.slow` marks the cost, but no lane collects this test today: `slow_tests` is
+        # `pytest -m "slow" tests/`, and `norecursedirs` excludes `tests/experimental` from that recursive
+        # collection. `test_experimental` passes an explicit path so it does collect the test, but its runner
+        # is single-GPU, where `@require_torch_multi_accelerator` skips it.
         #
         # Pin the repo root onto PYTHONPATH for the child: `accelerate launch` re-execs each rank via
         # torch.distributed.elastic, which sets sys.path[0] to the launched script's directory
