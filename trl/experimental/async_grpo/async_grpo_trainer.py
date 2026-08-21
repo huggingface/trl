@@ -1214,6 +1214,19 @@ class AsyncGRPOTrainer(_BaseTrainer):
         self._step_seq_len_weighted += mean_seq_len * n_forward_tokens
         self._step_samples += n_forward_tokens / mean_seq_len
         self._step_forward_s += self._last_forward_time_s
+
+        # `transformers` replaces a non-finite loss with the average of the previously logged losses before logging it
+        # (`logging_nan_inf_filter`, enabled by default), but the backward pass and the optimizer step still run on the
+        # non-finite value. The reported curve therefore stays plausible while the weights are being corrupted, so
+        # report the condition here. Gather first: a NaN on a single rank would otherwise stay invisible.
+        nonfinite = self.accelerator.gather((~torch.isfinite(loss.detach())).float())
+        self._metrics["train"]["frac_nonfinite_loss"].append(nonfinite.mean().item())
+        if nonfinite.any():
+            logger.warning_once(
+                "The loss is not finite (NaN or Inf) for at least one step. The backward pass and the optimizer step "
+                "still run on it, while the logged loss is replaced by the average of the previously logged losses. "
+                "Track `frac_nonfinite_loss` in the logs to see how many steps are affected."
+            )
         return loss
 
     def training_step(self, model, inputs, num_items_in_batch):

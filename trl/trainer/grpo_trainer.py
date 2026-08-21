@@ -3027,8 +3027,24 @@ class GRPOTrainer(_BaseTrainer):
         if self.use_liger_kernel:
             # Compute the loss using the liger grpo loss
             unwrapped_model = self.accelerator.unwrap_model(model)
-            return self._forward_redirection(model, unwrapped_model, self.compute_liger_loss, unwrapped_model, inputs)
-        return self._compute_loss(model, inputs)
+            loss = self._forward_redirection(model, unwrapped_model, self.compute_liger_loss, unwrapped_model, inputs)
+        else:
+            loss = self._compute_loss(model, inputs)
+
+        # `transformers` replaces a non-finite loss with the average of the previously logged losses before logging it
+        # (`logging_nan_inf_filter`, enabled by default), but the backward pass and the optimizer step still run on the
+        # non-finite value. The reported curve therefore stays plausible while the weights are being corrupted, so
+        # report the condition here. Gather first: a NaN on a single rank would otherwise stay invisible.
+        mode = "train" if self.model.training else "eval"
+        nonfinite = self.accelerator.gather((~torch.isfinite(loss.detach())).float())
+        self._metrics[mode]["frac_nonfinite_loss"].append(nonfinite.mean().item())
+        if nonfinite.any():
+            logger.warning_once(
+                "The loss is not finite (NaN or Inf) for at least one step. The backward pass and the optimizer step "
+                "still run on it, while the logged loss is replaced by the average of the previously logged losses. "
+                "Track `frac_nonfinite_loss` in the logs to see how many steps are affected."
+            )
+        return loss
 
     @staticmethod
     def get_off_policy_mask(

@@ -1799,6 +1799,44 @@ class TestRLOOTrainer(TrlTestCase):
         assert len(trainer.reward_processing_classes) == 1
         assert trainer.reward_processing_classes[0] == single_processing_class
 
+    def test_nonfinite_loss_is_visible_in_log_history(self):
+        """A non-finite loss must reach `log_history`, which `logging_nan_inf_filter` otherwise hides."""
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        class NonFiniteLossRLOOTrainer(RLOOTrainer):
+            # Poison the last step only, so the first step doubles as the finite control. Multiplying keeps the
+            # autograd graph, so `backward` runs on the non-finite value exactly as it would for a real NaN. A
+            # poisoned step corrupts the weights, so a later step's generation would fail on a non-finite
+            # distribution rather than on the behavior under test.
+            def _compute_loss(self, model, inputs):
+                loss = super()._compute_loss(model, inputs)
+                return loss * float("nan") if self.state.global_step == 1 else loss
+
+        training_args = RLOOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            max_steps=2,
+            logging_steps=1,  # log every step, so both steps land in `log_history`
+            report_to="none",
+        )
+        trainer = NonFiniteLossRLOOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        trainer.train()
+
+        healthy_step, poisoned_step = trainer.state.log_history[0], trainer.state.log_history[1]
+        assert healthy_step["frac_nonfinite_loss"] == 0.0
+        assert poisoned_step["frac_nonfinite_loss"] == 1.0
+        # `transformers` substitutes the average of the previously logged losses for the non-finite one, so the loss
+        # it reports for the poisoned step is still finite. That substitution is why the metric above is needed.
+        assert torch.isfinite(torch.tensor(poisoned_step["loss"]))
+
 
 @require_vision
 class TestRLOOTrainerVLM(TrlTestCase):
