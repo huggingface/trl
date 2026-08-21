@@ -146,7 +146,10 @@ def main() -> None:
         per_device_train_batch_size=3,
         num_generations=3,
         max_completion_length=8,
-        token_budget=256,  # set explicitly; the stub worker has no real vLLM server to query for max_model_len
+        # 0 selects the count-based FixedCountBatcher and, being non-None, still skips the vLLM
+        # max_model_len lookup. A positive budget starves here: the stub's samples are short enough
+        # that 2 rank-rows never fill, so TokenBudgetBatcher would never emit a micro-batch.
+        token_budget=0,
         max_steps=2,
         vllm_server_timeout=5.0,
         report_to="none",
@@ -156,7 +159,9 @@ def main() -> None:
         reward_funcs=dummy_reward_func,
         args=args,
         train_dataset=dataset,
-        rollout_worker=_StubRolloutWorker(tokenizer, dataset, num_generations=3),
+        # 24 = 4 x microbatch_size (per_device_train_batch_size 3 x 2 ranks); max_steps=2 needs 2,
+        # so the initial fill covers the whole run without relying on a weight-sync refill.
+        rollout_worker=_StubRolloutWorker(tokenizer, dataset, num_generations=3, samples_per_weight_sync=24),
         weight_transfer=_NoOpWeightTransfer(),
     )
 

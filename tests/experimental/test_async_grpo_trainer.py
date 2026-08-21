@@ -334,13 +334,22 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         # would shadow the working tree and the test would exercise the wrong code.
         env = os.environ.copy()
         env["PYTHONPATH"] = os.pathsep.join([str(ROOT), env.get("PYTHONPATH", "")]).rstrip(os.pathsep)
-        result = subprocess.run(
-            ["accelerate", "launch", "--config_file", str(_FSDP2_CONFIG), str(_FSDP2_WORKER)],
-            env=env,
-            cwd=ROOT,
-            capture_output=True,
-            text=True,
-        )
+        # Bound the child: the trainer's rollout consumer blocks indefinitely on an empty queue (it only
+        # calls `check_health`, which this stub implements as a no-op), so a starved run would hang the
+        # pytest process rather than fail it. The timeout turns that into a readable failure.
+        try:
+            result = subprocess.run(
+                ["accelerate", "launch", "--config_file", str(_FSDP2_CONFIG), str(_FSDP2_WORKER)],
+                env=env,
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                timeout=900,
+            )
+        except subprocess.TimeoutExpired as exc:
+            stdout = exc.stdout.decode() if isinstance(exc.stdout, bytes) else (exc.stdout or "")
+            stderr = exc.stderr.decode() if isinstance(exc.stderr, bytes) else (exc.stderr or "")
+            pytest.fail(f"FSDP2 worker timed out after {exc.timeout}s:\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}")
         assert result.returncode == 0, f"FSDP2 worker failed:\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
 
         result_lines = [ln for ln in result.stdout.splitlines() if ln.startswith(_FSDP2_RESULT_PREFIX)]
