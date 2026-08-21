@@ -153,8 +153,8 @@ def _cut_cross_entropy_loss(
     at all. `return_metrics=True` also gets the accuracy and entropy out of the same fused pass: the kernel already
     holds each logit tile while accumulating the log-sum-exp, so no logits have to be materialised to compute them.
 
-    Both are sums over non-ignored positions, matching [`_chunked_cross_entropy_loss`], so the caller can gather
-    across ranks before dividing.
+    Both are sums over non-ignored positions, matching [`_chunked_cross_entropy_loss`], so the caller can gather across
+    ranks before dividing.
 
     Returns:
         `tuple` of the loss, the number of correct tokens, the entropy sum, and the number of non-ignored target
