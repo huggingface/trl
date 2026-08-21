@@ -108,6 +108,12 @@ class SFTConfig(_BaseConfig):
 
             - `"nll"`: standard negative log-likelihood.
             - `"dft"`: Dynamic Fine-Tuning, as described in [this paper](https://huggingface.co/papers/2508.05629).
+            - `"cce"`: same math as `"nll"`, but the `lm_head` projection is fused into the cross-entropy kernel by
+              [cut-cross-entropy](https://github.com/apple/ml-cross-entropy), so peak memory does not scale with
+              `vocab_size`. Requires `cut_cross_entropy` to be installed, and the model to be loaded in half
+              precision (the kernel's backward is bfloat16/float16 only; `bf16=True` alone is not enough, since
+              under autocast the norm feeding the `lm_head` still emits float32). `mean_token_accuracy` and
+              `entropy` are not logged, since there are no logits to compute them from.
             - `"chunked_nll"`: same math as `"nll"`, but the `lm_head` projection is computed on non-ignored tokens
               only (positions with `labels == -100` are dropped before the matmul) and the cross-entropy is processed
               in chunks of tokens to reduce peak activation memory. Not compatible with `use_liger_kernel`.
