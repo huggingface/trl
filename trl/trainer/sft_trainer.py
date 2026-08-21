@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import contextlib
+import functools
 import inspect
 import json
 import os
@@ -120,35 +121,69 @@ def _chunk(h, w, b, lbl, logit_scale, final_logit_softcapping):
     return chunk_loss, chunk_correct, chunk_entropy
 
 
-def _cut_cross_entropy_loss(hidden, w, labels, shift_labels, num_items_in_batch, final_logit_softcapping):
-    """Next-token cross-entropy that never materialises the logits, via `cut_cross_entropy`.
+# Pinned so a new upload cannot silently change the loss under a running job.
+_FUSED_LINEAR_CE_KERNEL = "qgallouedec/fused-linear-ce"  # TODO: move to `trl-lib` once the kernel is transferred
+_FUSED_LINEAR_CE_VERSION = 1
 
-    `linear_cross_entropy` fuses the `lm_head` projection into the cross-entropy kernel, so peak memory does not scale
-    with `vocab_size` at all. It returns only the loss: unlike [`_chunked_cross_entropy_loss`] there are no logits to
-    read `mean_token_accuracy` or `entropy` off, so those metrics are unavailable — the same trade
-    `use_liger_kernel=True` already makes.
+
+@functools.lru_cache(maxsize=1)
+def _fused_linear_cross_entropy():
+    from kernels import get_kernel
+
+    # `trust_remote_code=True` is required while the kernel lives outside an organisation with
+    # `trustedKernelPublisher` enabled on the Hub. Drop it once the repository moves to one.
+    return get_kernel(
+        _FUSED_LINEAR_CE_KERNEL, version=_FUSED_LINEAR_CE_VERSION, trust_remote_code=True
+    ).fused_linear_cross_entropy
+
+
+def _cut_cross_entropy_loss(
+    hidden_states: torch.Tensor,
+    lm_head_weight: torch.Tensor,
+    labels: torch.Tensor | None = None,
+    shift_labels: torch.Tensor | None = None,
+    num_items_in_batch: torch.Tensor | int | None = None,
+    logit_scale: float = 1.0,
+    final_logit_softcapping: float | None = None,
+    lm_head_bias: torch.Tensor | None = None,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Next-token cross-entropy that never materialises the logits.
+
+    The kernel fuses the `lm_head` projection into the cross-entropy, so peak memory does not scale with `vocab_size`
+    at all. `return_metrics=True` also gets the accuracy and entropy out of the same fused pass: the kernel already
+    holds each logit tile while accumulating the log-sum-exp, so no logits have to be materialised to compute them.
+
+    Both are sums over non-ignored positions, matching [`_chunked_cross_entropy_loss`], so the caller can gather
+    across ranks before dividing.
 
     Returns:
-        `tuple` of the loss and the number of non-ignored target tokens.
+        `tuple` of the loss, the number of correct tokens, the entropy sum, and the number of non-ignored target
+        tokens.
     """
-    from cut_cross_entropy import linear_cross_entropy
+    fused_linear_cross_entropy = _fused_linear_cross_entropy()
 
     targets = shift_labels if shift_labels is not None else torch.roll(labels, shifts=-1, dims=-1)
     if shift_labels is None:
         targets[..., -1] = -100
-    hidden = hidden.reshape(-1, hidden.shape[-1])
+    hidden_states = hidden_states.reshape(-1, hidden_states.shape[-1])
     targets = targets.reshape(-1)
     n_valid = (targets != -100).sum()
-    loss = linear_cross_entropy(
-        hidden,
-        w,
+    loss, metrics = fused_linear_cross_entropy(
+        hidden_states,
+        lm_head_weight,
         targets,
+        bias=lm_head_bias,
         ignore_index=-100,
+        logit_scale=logit_scale,
         softcap=final_logit_softcapping,
         reduction="sum",
+        return_metrics=True,
     )
+    correct = metrics["num_correct_tokens"]
+    entropy_sum = metrics["entropy_sum"]
     # `num_items_in_batch` is the global count, matching HF's gradient-accumulation-correct reduction.
-    return loss / (num_items_in_batch if num_items_in_batch is not None else n_valid.clamp(min=1)), n_valid
+    loss = loss / (num_items_in_batch if num_items_in_batch is not None else n_valid.clamp(min=1))
+    return loss, correct, entropy_sum, n_valid
 
 
 def _chunked_cross_entropy_loss(
@@ -289,9 +324,8 @@ def _patch_chunked_ce_lm_head(
         chunk_size (`int`):
             Number of valid tokens processed per CE chunk.
         use_cce (`bool`):
-            Fuse the `lm_head` projection into the cross-entropy with `cut_cross_entropy` instead of chunking it. Peak
-            memory then no longer scales with `vocab_size`, at the cost of `num_correct_tokens` and `entropy_sum`,
-            which need logits and are left as `None`.
+            Fuse the `lm_head` projection into the cross-entropy with a hub kernel instead of chunking it. Peak memory
+            then no longer scales with `vocab_size`.
         is_vlm (`bool`):
             Set to `True` for VLMs. Only used for the transformers < 5.0.0 fallbacks: VLMs set `base_model_prefix = ""`
             there (so the backbone must be read off `model.model`), and they take the config-level MoE aux-loss
@@ -365,37 +399,16 @@ def _patch_chunked_ce_lm_head(
             if lm_head_bias is not None:
                 lm_head_bias = lm_head_bias.full_tensor()
         if use_cce:
-            if logit_scale != 1.0:
-                # `linear_cross_entropy` has no equivalent of `logit_scale`, and silently dropping it would
-                # train on a different loss than the model defines.
-                raise ValueError(
-                    f"`loss_type='cce'` does not support models with a logit scale (got {logit_scale}). "
-                    "Use `loss_type='chunked_nll'` for this model."
-                )
-            if lm_head_bias is not None:
-                # Same reason: `linear_cross_entropy` fuses the projection itself and takes no bias term.
-                raise ValueError(
-                    "`loss_type='cce'` does not support models whose `lm_head` has a bias. "
-                    "Use `loss_type='chunked_nll'` for this model."
-                )
-            if hidden_states.dtype not in (torch.bfloat16, torch.float16):
-                # The CCE backward kernel is half-precision only. Note that `bf16=True` alone does not satisfy this:
-                # under autocast the norm feeding the `lm_head` still emits fp32. The model itself has to be loaded
-                # in half precision, e.g. `model_init_kwargs={"dtype": "bfloat16"}`.
-                raise ValueError(
-                    f"`loss_type='cce'` requires bfloat16 or float16 hidden states, got {hidden_states.dtype}. "
-                    "Load the model in half precision (e.g. `model_init_kwargs={'dtype': 'bfloat16'}`), or use "
-                    "`loss_type='chunked_nll'`."
-                )
-            loss, num_valid_tokens = _cut_cross_entropy_loss(
+            loss, num_correct_tokens, entropy_sum, num_valid_tokens = _cut_cross_entropy_loss(
                 hidden_states,
                 lm_head_weight,
-                labels,
-                shift_labels,
-                num_items_in_batch,
-                final_logit_softcapping,
+                labels=labels,
+                shift_labels=shift_labels,
+                num_items_in_batch=num_items_in_batch,
+                logit_scale=logit_scale,
+                final_logit_softcapping=final_logit_softcapping,
+                lm_head_bias=lm_head_bias,
             )
-            num_correct_tokens = entropy_sum = None
         else:
             loss, num_correct_tokens, entropy_sum, num_valid_tokens = _chunked_cross_entropy_loss(
                 hidden_states,
@@ -1882,7 +1895,7 @@ class SFTTrainer(_BaseTrainer):
             raise
 
         # Compute entropy
-        if self.args.loss_type == "chunked_nll":
+        if self.args.loss_type in ("chunked_nll", "cce"):
             # Use `num_valid_tokens` from the patched forward rather than recomputing from `labels`. Prompt-learning
             # PEFT (PromptTuning, P-Tuning) prepends `-100`-padded virtual tokens before delegating into the patched
             # forward, so the valid-token count over the padded labels can differ from the un-padded `labels[..., 1:]`
@@ -1891,7 +1904,7 @@ class SFTTrainer(_BaseTrainer):
             entropy_sum = self.accelerator.gather_for_metrics(outputs.entropy_sum).sum()
             entropy = (entropy_sum / num_valid).item() if num_valid > 0 else 0.0
             self._metrics[mode]["entropy"].append(entropy)
-        elif not self.args.use_liger_kernel and self.args.loss_type != "cce":  # neither returns logits
+        elif not self.args.use_liger_kernel:  # liger doesn't return logits
             with torch.no_grad():
                 if "shift_labels" in inputs:
                     # When using CP or SP, labels are pre-shifted.
@@ -1941,9 +1954,7 @@ class SFTTrainer(_BaseTrainer):
             self._total_train_tokens += num_tokens_in_batch
         self._metrics[mode]["num_tokens"] = [self._total_train_tokens]
 
-        if self.args.loss_type == "chunked_nll":
-            # `"cce"` deliberately has no branch here: fusing the projection into the CE kernel means there are no
-            # logits to take an argmax over, so `mean_token_accuracy` is simply not logged.
+        if self.args.loss_type in ("chunked_nll", "cce"):
             correct = self.accelerator.gather_for_metrics(outputs.num_correct_tokens).sum()
             accuracy = (correct / num_valid).item() if num_valid > 0 else 0.0
             self._metrics[mode]["mean_token_accuracy"].append(accuracy)
