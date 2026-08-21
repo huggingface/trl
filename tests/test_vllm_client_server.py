@@ -17,9 +17,11 @@ import subprocess
 from types import SimpleNamespace
 
 import pytest
+import torch
 from transformers import AutoModelForCausalLM, AutoProcessor, AutoTokenizer
 from transformers.testing_utils import torch_device
 
+from trl.generation import vllm_generation
 from trl.generation.vllm_client import VLLMClient
 from trl.generation.vllm_generation import extract_logprobs
 from trl.import_utils import is_vllm_available
@@ -116,6 +118,67 @@ class TestExtractLogprobs(TrlTestCase):
 
         assert all_logprobs is None
         assert all_token_ids is None
+
+
+class TestVLLMGenerationLLMKwargs(TrlTestCase):
+    """`vllm_llm_kwargs` must reach the vLLM `LLM()` constructor, not just be stored on the config."""
+
+    def _build(self, monkeypatch, llm_kwargs):
+        """Run `VLLMGeneration.__init__` in colocate mode with `LLM` replaced by a recorder.
+
+        vLLM is not a test dependency, so the availability check and the `LLM` symbol are both patched. Everything else
+        runs for real, which is the point: the assertion is on what the production code passes to the constructor.
+        """
+        captured = {}
+
+        class RecordingLLM:
+            def __init__(self, **kwargs):
+                captured.update(kwargs)
+
+        monkeypatch.setattr(vllm_generation, "is_vllm_available", lambda: True)
+        monkeypatch.setattr(vllm_generation, "LLM", RecordingLLM, raising=False)
+
+        accelerator = SimpleNamespace(
+            device=torch.device("cpu"),
+            num_processes=1,
+            process_index=0,
+            local_process_index=0,
+            is_main_process=True,
+            wait_for_everyone=lambda: None,
+            # `DistributedBackend` reads these to decide whether ZeRO-3 or FSDP is active; neither is, here.
+            state=SimpleNamespace(deepspeed_plugin=None, fsdp_plugin=None),
+        )
+        model = SimpleNamespace(
+            name_or_path="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", named_modules=lambda: []
+        )
+
+        vllm_generation.VLLMGeneration(
+            model=model,
+            accelerator=accelerator,
+            processing_class=SimpleNamespace(pad_token_id=0),
+            mode="colocate",
+            gpu_memory_utilization=0.3,
+            llm_kwargs=llm_kwargs,
+        )
+        return captured
+
+    def test_llm_kwargs_reach_the_llm_constructor(self, monkeypatch):
+        captured = self._build(monkeypatch, {"hf_overrides": {"architectures": ["Qwen2ForCausalLM"]}})
+
+        assert captured["hf_overrides"] == {"architectures": ["Qwen2ForCausalLM"]}
+
+    def test_llm_kwargs_override_the_defaults_trl_sets(self, monkeypatch):
+        captured = self._build(monkeypatch, {"gpu_memory_utilization": 0.55})
+
+        # 0.3 is passed explicitly above, so a surviving 0.55 shows the user value wins over TRL's own default.
+        assert captured["gpu_memory_utilization"] == 0.55
+
+    @pytest.mark.parametrize("key", ["tensor_parallel_size", "enable_sleep_mode"])
+    def test_reserved_keys_are_rejected(self, monkeypatch, key):
+        # TRL reads these back to build the TP process group and drive the sleep/wake cycle, so overriding only the
+        # engine side would silently desynchronize the two.
+        with pytest.raises(ValueError, match=f"`{key}` cannot be set in `vllm_llm_kwargs`"):
+            self._build(monkeypatch, {key: 2})
 
 
 @pytest.mark.slow
