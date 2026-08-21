@@ -216,7 +216,7 @@ accelerate launch --config_file context_parallel_2gpu.yaml train.py
 
 #### Training at 1M tokens and beyond
 
-With the setup above plus a few levers, SFT scales to million-token sequences on a single 8×H100 node. Verified configurations (bf16, `per_device_train_batch_size=1`, `loss_type="chunked_nll"` — the default):
+With the setup above plus a few levers, SFT scales to million-token sequences on a single 8×H100 node. Verified configurations:
 
 | Model | Sequence length | GPUs | Step time | Peak GPU memory |
 |---|---|---|---|---|
@@ -227,8 +227,7 @@ With the setup above plus a few levers, SFT scales to million-token sequences on
 | Qwen3-30B-A3B (MoE) | 1M | 8 | 483 s | 46.0 GB |
 | Qwen3-32B | 1M | 8 | 1295 s | 60.8 GB |
 
-Context length scales with the number of nodes: sequence length and GPU count can be doubled together at
-roughly 2x step time, because each GPU keeps the same shard of the sequence.
+Context length scales with the number of nodes: sequence length and GPU count can be doubled together at roughly 2x step time (because each GPU keeps the same shard of the sequence).
 
 | Model | Sequence length | GPUs (`cp_size`) | Step time |
 |---|---|---|---|
@@ -239,18 +238,8 @@ roughly 2x step time, because each GPU keeps the same shard of the sequence.
 The levers, roughly in the order you will need them as model size or sequence length grows:
 
 1. **Keep the default `loss_type="chunked_nll"`.** At 1M tokens, materializing `[seq, vocab]` logits costs tens of GB per GPU; the chunked loss never does.
-2. **Use the cuDNN SDPA backend** — it is ~1.7× faster than SDPA's default (FlashAttention) on H100, at identical accuracy. Recent Transformers prefers it automatically on Hopper; elsewhere, select it explicitly. The context manager must cover forward *and* backward, since activation-checkpoint recompute has to select the same backend:
-
-   ```python
-   from torch.nn.attention import SDPBackend, sdpa_kernel
-
-   class FastSFTTrainer(SFTTrainer):
-       def training_step(self, *args, **kwargs):
-           with sdpa_kernel([SDPBackend.CUDNN_ATTENTION]):
-               return super().training_step(*args, **kwargs)
-   ```
-3. **Offload checkpointed activations to host memory** (≥ ~1.5M tokens, or ≥ ~8B parameters): set `fsdp_activation_checkpointing_offload: true` in the accelerate FSDP config. Each checkpointed layer's input — the dominant surviving activation, `layers × seq/cp × hidden` bytes — moves to pinned host memory during the forward and returns on demand during the backward.
-4. **At the memory edge, switch the ring rotation to alltoall and merge attention outputs in bf16**:
+2. **Offload checkpointed activations to host memory** (≥ ~1.5M tokens, or ≥ ~8B parameters): set `fsdp_activation_checkpointing_offload: true` in the accelerate FSDP config. Each checkpointed layer's input — the dominant surviving activation, `layers × seq/cp × hidden` bytes — moves to pinned host memory during the forward and returns on demand during the backward.
+3. **At the memory edge, switch the ring rotation to alltoall and merge attention outputs in bf16**:
 
    ```python
    from torch.distributed.tensor.experimental._context_parallel import _attention
@@ -261,8 +250,8 @@ The levers, roughly in the order you will need them as model size or sequence le
    ```
 
    Both are speed-neutral and save several GB (grad-norm deviation < 0.5%).
-5. **For ≥ 30B models, add parameter/optimizer CPU offload** (`fsdp_offload_params: true`). Model states (~12 bytes/param sharded) move to host; at 1M-token step times the gather traffic is negligible.
-6. **For the largest dense models, tile the MLP over the sequence.** Inside a checkpointed layer, the `[seq/cp, intermediate]` gate/up projections are the last large transient, and activation offload cannot reach them — they are created and consumed within a single recompute. Splitting the MLP forward into sequence tiles caps them at `[tile, intermediate]`; the backward recomputes the same tiled code, so the bound holds there too. This is what makes Qwen3-32B fit at 1M:
+4. **For ≥ 30B models, add parameter/optimizer CPU offload** (`fsdp_offload_params: true`). Model states (~12 bytes/param sharded) move to host; at 1M-token step times the gather traffic is negligible.
+5. **For the largest dense models, tile the MLP over the sequence.** Inside a checkpointed layer, the `[seq/cp, intermediate]` gate/up projections are the last large transient, and activation offload cannot reach them — they are created and consumed within a single recompute. Splitting the MLP forward into sequence tiles caps them at `[tile, intermediate]`; the backward recomputes the same tiled code, so the bound holds there too. This is what makes Qwen3-32B fit at 1M:
 
    ```python
    from transformers.models.qwen3.modeling_qwen3 import Qwen3MLP
@@ -270,7 +259,7 @@ The levers, roughly in the order you will need them as model size or sequence le
    forward, tile = Qwen3MLP.forward, 16384
    Qwen3MLP.forward = lambda self, x: torch.cat([forward(self, c) for c in x.split(tile, dim=1)], dim=1)
    ```
-7. **Context extension needs RoPE scaling.** A base model evaluated at positions far beyond its trained range starts at a high loss (10.6 vs 4.4 for Qwen3-8B at 1M with YaRN ×32). Configure it at load time, and note that in transformers v5 `rope_theta` lives inside `rope_parameters`, so the override must carry it:
+6. **Context extension needs RoPE scaling.** A base model evaluated at positions far beyond its trained range starts at a high loss (10.6 vs 4.4 for Qwen3-8B at 1M with YaRN ×32). Configure it at load time, and note that in transformers v5 `rope_theta` lives inside `rope_parameters`, so the override must carry it:
 
    ```python
    model_init_kwargs={
