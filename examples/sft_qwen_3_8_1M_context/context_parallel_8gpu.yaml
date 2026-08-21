@@ -1,31 +1,13 @@
-# Context Parallelism with FSDP for 8 GPUs
-compute_environment: LOCAL_MACHINE
-debug: false
+# Context parallelism with FSDP2, 8 GPUs. Only non-default settings are listed.
 distributed_type: FSDP
-downcast_bf16: 'no'
-enable_cpu_affinity: false
-fsdp_config:
-  fsdp_activation_checkpointing: true  # Enable activation checkpointing for memory efficiency
-  fsdp_activation_checkpointing_offload: true  # Move each checkpointed layer's input to host memory
-  fsdp_auto_wrap_policy: TRANSFORMER_BASED_WRAP
-  fsdp_cpu_ram_efficient_loading: true
-  fsdp_offload_params: false
-  fsdp_reshard_after_forward: true
-  fsdp_state_dict_type: FULL_STATE_DICT
-  fsdp_version: 2
-machine_rank: 0
-main_training_function: main
 mixed_precision: bf16
-num_machines: 1
-num_processes: 8  # Number of GPUs
-rdzv_backend: static
-same_network: true
-tpu_env: []
-tpu_use_cluster: false
-tpu_use_sudo: false
-use_cpu: false
+num_processes: 8  # one 8-GPU node
+fsdp_config:
+  fsdp_version: 2
+  fsdp_auto_wrap_policy: TRANSFORMER_BASED_WRAP
+  fsdp_activation_checkpointing: true
+  fsdp_activation_checkpointing_offload: true  # moves each checkpointed layer's input to host memory
+  fsdp_cpu_ram_efficient_loading: true
+  fsdp_state_dict_type: FULL_STATE_DICT  # a single consolidated checkpoint instead of sharded
 parallelism_config:
-  parallelism_config_dp_replicate_size: 1
-  parallelism_config_dp_shard_size: 1
-  parallelism_config_tp_size: 1
-  parallelism_config_cp_size: 8  # Context parallel size
+  parallelism_config_cp_size: 8  # the whole node forms one context-parallel group
