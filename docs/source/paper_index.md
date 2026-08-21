@@ -1654,7 +1654,7 @@ Papers relating to training a student model with the help of a teacher model.
 
 **📜 Paper**: https://huggingface.co/papers/2306.13649
 
-Introduces Generalized Knowledge Distillation (GKD), which addresses distribution mismatch in KD for auto-regressive models by training the student on its own generated outputs with teacher feedback, instead of a fixed set of sequences. GKD supports flexible loss functions (e.g. beyond KL when the student cannot match the teacher) and integrates with RL fine-tuning (RLHF). The paper reports results on summarization, translation, arithmetic reasoning, and instruction-tuning. Used in TRL via [`experimental.gkd.GKDTrainer`], which exposes the paper's on/off-policy mixing (`lmbda`). [`experimental.distillation.DistillationTrainer`] implements the same generalized-JSD objective for the always-on-policy case. To reproduce the paper's setting, use this configuration:
+Introduces Generalized Knowledge Distillation (GKD), which addresses distribution mismatch in KD for auto-regressive models by training the student on its own generated outputs with teacher feedback, instead of a fixed set of sequences. GKD supports flexible loss functions (e.g. beyond KL when the student cannot match the teacher) and integrates with RL fine-tuning (RLHF). The paper reports results on summarization, translation, arithmetic reasoning, and instruction-tuning. Used in TRL via [`experimental.gkd.GKDTrainer`], which exposes the paper's on/off-policy mixing (`lmbda`). [`DistillationTrainer`] implements the same generalized-JSD objective for the always-on-policy case. To reproduce the paper's setting, use this configuration:
 
 ```python
 from trl.experimental.gkd import GKDConfig
@@ -1671,6 +1671,12 @@ training_args = GKDConfig(
     max_new_tokens=64,  # max output tokens (Table A.1 of the paper)
 )
 ```
+
+### MOPD: Multi-Teacher On-Policy Distillation for Capability Integration in LLM Post-Training
+
+**📜 Paper**: https://huggingface.co/papers/2606.30406
+
+Structures post-training as three stages: general SFT, independent per-domain RL training of one expert per domain (e.g. verifiable-answer RL for math, sandboxed agent RL for software engineering), and a final MOPD stage that fuses the frozen domain experts into a single unified student. In that final stage, the student generates a trajectory per prompt, each trajectory is dispatched to its corresponding domain teacher (never averaged or ensembled across teachers), and the student is updated by minimizing the per-token reverse KL against that one teacher's distribution along the trajectory. Used in TRL via [`experimental.async_distillation.AsyncDistillationTrainer`], which implements this third, fusion stage: passing more than one entry in `teacher_server_urls` enables MOPD, with each row's `teacher_id` column selecting which (already-trained) teacher scores it. Use `beta=1.0` to match the paper's reverse-KL objective.
 
 ### On the Position Bias of On-Policy Distillation
 
@@ -1720,13 +1726,12 @@ On-Policy Distillation has been shown to outperform SFT, GRPO and can be used to
 
 Additionally on-policy distillation is more compute efficient and is less prone to overfitting when trained with limited data.
 
-To train a model with on-policy distillation using TRL, you can use the following configuration, with the [`experimental.distillation.DistillationTrainer`] and [`experimental.distillation.DistillationConfig`]:
+To train a model with on-policy distillation using TRL, you can use the following configuration, with the [`DistillationTrainer`] and [`DistillationConfig`]:
 
 ```python
-from trl.experimental.distillation import DistillationConfig
+from trl import DistillationConfig
 
 training_args = DistillationConfig(
-    lmbda=1.0,  # student produces rollouts for all batches
     beta=1.0,  # to ensure reverse-kl as the loss function
     teacher_model_name_or_path="teacher-model",  # specify the teacher model
 )

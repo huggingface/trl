@@ -57,7 +57,7 @@ kernels = [  # transformers renamed the "hub-kernels" extra to "kernels" in 5.1.
     "transformers[hub-kernels]",  # transformers < 5.1.0
 ]
 liger = [
-    "liger-kernel>=0.8.0,!=0.8.1"  # upstream PR https://github.com/linkedin/Liger-Kernel/pull/1316
+    "liger-kernel>=0.8.2"
 ]
 peft = [
     "peft>=0.8.0"
@@ -75,12 +75,14 @@ scikit = [
 test = [
     "pytest-cov",
     "pytest-datadir>=1.7.0",  # lazy datadirs
+    "pytest-reportlog",  # test report consumed by scripts/log_reports.py
     "pytest-rerunfailures==15.1",
     "pytest-xdist",
-    "pytest"
+    "pytest",
+    "tabulate"  # test report rendering in scripts/log_reports.py
 ]
 vllm = [
-    "vllm>=0.17.0,<=0.26.0",
+    "vllm>=0.18.0,<=0.27.1",
     "fastapi",
     "pydantic",
     "aiohttp>=3.13.3",
@@ -111,7 +113,7 @@ dev = [
     "transformers[kernels]",  # transformers >= 5.1.0
     "transformers[hub-kernels]",  # transformers < 5.1.0
     # liger
-    "liger-kernel>=0.8.0,!=0.8.1",  # upstream PR https://github.com/linkedin/Liger-Kernel/pull/1316
+    "liger-kernel>=0.8.2",
     # openreward (requires Python 3.11+)
     "openreward>=0.1.109; python_version >= '3.11'",
     # peft
@@ -125,9 +127,11 @@ dev = [
     # test
     "pytest-cov",
     "pytest-datadir>=1.7.0",  # lazy datadirs
+    "pytest-reportlog",  # test report consumed by scripts/log_reports.py
     "pytest-rerunfailures==15.1",
     "pytest-xdist",
     "pytest",
+    "tabulate",  # test report rendering in scripts/log_reports.py
     # vllm: not included in dev by default due to CUDA error; see GH-4228
     # vlm
     "Pillow",
@@ -207,14 +211,6 @@ filterwarnings = [
     # Remove once: no supported torch version emits it
     "ignore:The argument 'device' of Tensor.pin_memory:DeprecationWarning",
     "ignore:The argument 'device' of Tensor.is_pinned:DeprecationWarning",
-
-    # Liger SAPO loss torch.compile anomaly-mode warning (upstream, not actionable in TRL)
-    # Liger's SAPO branch assigns per-token loss with boolean-mask indexing, which graph-breaks under
-    # torch.compile and is traced by AOTAutograd under anomaly mode
-    # Tracking issue: https://github.com/huggingface/trl/issues/6435
-    # Upstream fix released in liger-kernel 0.8.1: https://github.com/linkedin/Liger-Kernel/pull/1274
-    # Remove once: liger-kernel >= 0.8.2 is required (0.8.1 has the fix but is excluded, see GH-6517)
-    "ignore:Error detected in IndexPutBackward0:UserWarning",
 
     # bitsandbytes calls the deprecated torch._check_is_size in its CUDA quant ops (upstream, not actionable in TRL)
     # Triggered indirectly by loading bitsandbytes-quantized models in the PEFT + quantization tests

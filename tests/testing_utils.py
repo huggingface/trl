@@ -78,6 +78,13 @@ require_3_accelerators = pytest.mark.skipif(
     not (getattr(torch, torch_device, torch.cuda).device_count() >= 3),
     reason=f"test requires at least 3 {torch_device}s",
 )
+# `Trainer` wraps the model in `nn.DataParallel` whenever more than one accelerator is visible and no distributed
+# launcher is used. TRL trainers don't support it: they rewire `forward` on a single module instance, which
+# `DataParallel` breaks by replicating the module and scattering the inputs across devices.
+xfail_data_parallel = pytest.mark.xfail(
+    is_torch_available() and backend_device_count(torch_device) > 1,
+    reason="TRL trainers do not support nn.DataParallel (https://github.com/huggingface/trl/issues/6836)",
+)
 
 
 def is_bitsandbytes_multi_backend_available() -> bool:
