@@ -120,6 +120,37 @@ def _chunk(h, w, b, lbl, logit_scale, final_logit_softcapping):
     return chunk_loss, chunk_correct, chunk_entropy
 
 
+def _cut_cross_entropy_loss(hidden, w, labels, shift_labels, num_items_in_batch, final_logit_softcapping):
+    """Next-token cross-entropy that never materialises the logits, via `cut_cross_entropy`.
+
+    `linear_cross_entropy` fuses the `lm_head` projection into the cross-entropy kernel, so peak memory
+    does not scale with `vocab_size` at all. It returns only the loss: unlike [`_chunked_cross_entropy_loss`]
+    there are no logits to read `mean_token_accuracy` or `entropy` off, so those metrics are unavailable —
+    the same trade `use_liger_kernel=True` already makes.
+
+    Returns:
+        `tuple` of the loss and the number of non-ignored target tokens.
+    """
+    from cut_cross_entropy import linear_cross_entropy
+
+    targets = shift_labels if shift_labels is not None else torch.roll(labels, shifts=-1, dims=-1)
+    if shift_labels is None:
+        targets[..., -1] = -100
+    hidden = hidden.reshape(-1, hidden.shape[-1])
+    targets = targets.reshape(-1)
+    n_valid = (targets != -100).sum()
+    loss = linear_cross_entropy(
+        hidden,
+        w,
+        targets,
+        ignore_index=-100,
+        softcap=final_logit_softcapping,
+        reduction="sum",
+    )
+    # `num_items_in_batch` is the global count, matching HF's gradient-accumulation-correct reduction.
+    return loss / (num_items_in_batch if num_items_in_batch is not None else n_valid.clamp(min=1)), n_valid
+
+
 def _chunked_cross_entropy_loss(
     hidden_states: torch.Tensor,
     lm_head_weight: torch.Tensor,
@@ -234,7 +265,9 @@ def _chunked_cross_entropy_loss(
     return loss, correct, entropy_sum, n_valid_tensor
 
 
-def _patch_chunked_ce_lm_head(model: torch.nn.Module, chunk_size: int, is_vlm: bool = False) -> None:
+def _patch_chunked_ce_lm_head(
+    model: torch.nn.Module, chunk_size: int, is_vlm: bool = False, use_cce: bool = False
+) -> None:
     """
     Patch `model.forward` to compute the LM loss via [`_chunked_cross_entropy_loss`].
 
@@ -255,6 +288,10 @@ def _patch_chunked_ce_lm_head(model: torch.nn.Module, chunk_size: int, is_vlm: b
             `PeftModel.forward` before delegating into the patched forward.
         chunk_size (`int`):
             Number of valid tokens processed per CE chunk.
+        use_cce (`bool`):
+            Fuse the `lm_head` projection into the cross-entropy with `cut_cross_entropy` instead of chunking it.
+            Peak memory then no longer scales with `vocab_size`, at the cost of `num_correct_tokens` and
+            `entropy_sum`, which need logits and are left as `None`.
         is_vlm (`bool`):
             Set to `True` for VLMs. Only used for the transformers < 5.0.0 fallbacks: VLMs set `base_model_prefix = ""`
             there (so the backbone must be read off `model.model`), and they take the config-level MoE aux-loss
@@ -327,17 +364,50 @@ def _patch_chunked_ce_lm_head(model: torch.nn.Module, chunk_size: int, is_vlm: b
             lm_head_weight = lm_head_weight.full_tensor()
             if lm_head_bias is not None:
                 lm_head_bias = lm_head_bias.full_tensor()
-        loss, num_correct_tokens, entropy_sum, num_valid_tokens = _chunked_cross_entropy_loss(
-            hidden_states,
-            lm_head_weight,
-            chunk_size,
-            labels=labels,
-            shift_labels=shift_labels,
-            num_items_in_batch=num_items_in_batch,
-            logit_scale=logit_scale,
-            final_logit_softcapping=final_logit_softcapping,
-            lm_head_bias=lm_head_bias,
-        )
+        if use_cce:
+            if logit_scale != 1.0:
+                # `linear_cross_entropy` has no equivalent of `logit_scale`, and silently dropping it would
+                # train on a different loss than the model defines.
+                raise ValueError(
+                    f"`loss_type='cce'` does not support models with a logit scale (got {logit_scale}). "
+                    "Use `loss_type='chunked_nll'` for this model."
+                )
+            if lm_head_bias is not None:
+                # Same reason: `linear_cross_entropy` fuses the projection itself and takes no bias term.
+                raise ValueError(
+                    "`loss_type='cce'` does not support models whose `lm_head` has a bias. "
+                    "Use `loss_type='chunked_nll'` for this model."
+                )
+            if hidden_states.dtype not in (torch.bfloat16, torch.float16):
+                # The CCE backward kernel is half-precision only. Note that `bf16=True` alone does not satisfy this:
+                # under autocast the norm feeding the `lm_head` still emits fp32. The model itself has to be loaded
+                # in half precision, e.g. `model_init_kwargs={"dtype": "bfloat16"}`.
+                raise ValueError(
+                    f"`loss_type='cce'` requires bfloat16 or float16 hidden states, got {hidden_states.dtype}. "
+                    "Load the model in half precision (e.g. `model_init_kwargs={'dtype': 'bfloat16'}`), or use "
+                    "`loss_type='chunked_nll'`."
+                )
+            loss, num_valid_tokens = _cut_cross_entropy_loss(
+                hidden_states,
+                lm_head_weight,
+                labels,
+                shift_labels,
+                num_items_in_batch,
+                final_logit_softcapping,
+            )
+            num_correct_tokens = entropy_sum = None
+        else:
+            loss, num_correct_tokens, entropy_sum, num_valid_tokens = _chunked_cross_entropy_loss(
+                hidden_states,
+                lm_head_weight,
+                chunk_size,
+                labels=labels,
+                shift_labels=shift_labels,
+                num_items_in_batch=num_items_in_batch,
+                logit_scale=logit_scale,
+                final_logit_softcapping=final_logit_softcapping,
+                lm_head_bias=lm_head_bias,
+            )
 
         aux_loss = None
         if output_router_logits:
@@ -1321,9 +1391,10 @@ class SFTTrainer(_BaseTrainer):
                         "passing a `compute_loss_func` is not allowed."
                     )
                 compute_loss_func = dft_loss
-            elif args.loss_type == "chunked_nll":
-                # Same math as `"nll"` but the `lm_head` matmul is skipped on ignored tokens and the CE is computed in
-                # chunks of tokens. Implemented by patching the model's forward before `super().__init__` so accelerate
+            elif args.loss_type in ("chunked_nll", "cce"):
+                # `"chunked_nll"`: same math as `"nll"` but the `lm_head` matmul is skipped on ignored tokens and the
+                # CE is computed in chunks of tokens. `"cce"`: the projection is fused into the CE kernel instead, so
+                # the logits never exist. Implemented by patching the model's forward before `super().__init__` so accelerate
                 # wraps the patched forward.
                 # For PEFT, patch the inner causal LM rather than the `PeftModel` wrapper. LoRA / IA³ /
                 # `modules_to_save` adapters live in the module tree, so they're hit even when we bypass
@@ -1342,14 +1413,19 @@ class SFTTrainer(_BaseTrainer):
                             "`lm_head` from `target_modules`, or switch to `loss_type='nll'`. If this is a real use "
                             "case for you, please open an issue at https://github.com/huggingface/trl/issues."
                         )
-                _patch_chunked_ce_lm_head(target, chunk_size=_CHUNKED_LM_HEAD_CHUNK_SIZE, is_vlm=self._is_vlm)
+                _patch_chunked_ce_lm_head(
+                    target,
+                    chunk_size=_CHUNKED_LM_HEAD_CHUNK_SIZE,
+                    is_vlm=self._is_vlm,
+                    use_cce=args.loss_type == "cce",
+                )
             else:
                 raise ValueError(
-                    f"Invalid `loss_type` {args.loss_type} passed. Supported values are 'nll', 'dft', and "
-                    "'chunked_nll'."
+                    f"Invalid `loss_type` {args.loss_type} passed. Supported values are 'nll', 'dft', "
+                    "'chunked_nll', and 'cce'."
                 )
-        elif args.loss_type == "chunked_nll":
-            raise ValueError("`loss_type='chunked_nll'` is not compatible with `use_liger_kernel=True`.")
+        elif args.loss_type in ("chunked_nll", "cce"):
+            raise ValueError(f"`loss_type='{args.loss_type}'` is not compatible with `use_liger_kernel=True`.")
 
         # Transformers explicitly set use_reentrant=True in the past to silence a PyTorch warning, but the default was
         # never updated once PyTorch switched to recommending use_reentrant=False. Until that change lands upstream
@@ -1815,7 +1891,7 @@ class SFTTrainer(_BaseTrainer):
             entropy_sum = self.accelerator.gather_for_metrics(outputs.entropy_sum).sum()
             entropy = (entropy_sum / num_valid).item() if num_valid > 0 else 0.0
             self._metrics[mode]["entropy"].append(entropy)
-        elif not self.args.use_liger_kernel:  # liger doesn't return logits
+        elif not self.args.use_liger_kernel and self.args.loss_type != "cce":  # neither returns logits
             with torch.no_grad():
                 if "shift_labels" in inputs:
                     # When using CP or SP, labels are pre-shifted.
@@ -1866,6 +1942,8 @@ class SFTTrainer(_BaseTrainer):
         self._metrics[mode]["num_tokens"] = [self._total_train_tokens]
 
         if self.args.loss_type == "chunked_nll":
+            # `"cce"` deliberately has no branch here: fusing the projection into the CE kernel means there are no
+            # logits to take an argmax over, so `mean_token_accuracy` is simply not logged.
             correct = self.accelerator.gather_for_metrics(outputs.num_correct_tokens).sum()
             accuracy = (correct / num_valid).item() if num_valid > 0 else 0.0
             self._metrics[mode]["mean_token_accuracy"].append(accuracy)
