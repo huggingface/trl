@@ -20,6 +20,7 @@ from typing import Any
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from accelerate.logging import get_logger
 from datasets import Dataset
 from transformers import (
     AutoModelForCausalLM,
@@ -49,6 +50,9 @@ if is_liger_kernel_available():
 
 if is_peft_available():
     from peft import PeftConfig
+
+
+logger = get_logger(__name__)
 
 
 class GKDTrainer(SFTTrainer):
@@ -212,6 +216,18 @@ class GKDTrainer(SFTTrainer):
         self.beta = args.beta
         self.temperature = args.temperature
         self.seq_kd = args.seq_kd
+
+        # With `lmbda=1.0` training is fully on-policy and `seq_kd` is never reached, and with `temperature=1.0` the
+        # sampling temperature matches the one `DistillationTrainer` also applies to the divergence. In that setting,
+        # `DistillationTrainer` covers this run and additionally supports vLLM generation and a chunked loss that
+        # never materializes the full logits.
+        if self.lmbda == 1.0 and self.temperature == 1.0:
+            logger.warning(
+                "This GKD configuration (`lmbda=1.0`, `temperature=1.0`) is fully covered by `DistillationTrainer`, "
+                "which is maintained in the main codebase and supports vLLM generation and a memory-efficient "
+                "chunked loss. Consider migrating: replace `GKDConfig`/`GKDTrainer` with "
+                "`DistillationConfig`/`DistillationTrainer` and `max_new_tokens` with `max_completion_length`."
+            )
 
         generation_kwargs = {
             "max_new_tokens": args.max_new_tokens,
