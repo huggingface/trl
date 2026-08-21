@@ -854,7 +854,7 @@ class PPOTrainer(_BaseTrainer):
                                 )
                                 prob_dist = torch.nn.functional.softmax(logits, dim=-1)
                                 entropy = torch.logsumexp(logits, dim=-1) - torch.sum(prob_dist * logits, dim=-1)
-                                approxkl = 0.5 * (logprobs_diff**2).mean()
+                                approxkl = 0.5 * masked_mean(logprobs_diff**2, ~padding_mask[micro_batch_inds])
                                 approxkl_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = approxkl
                                 pg_clipfrac_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = (
                                     pg_clipfrac
@@ -864,8 +864,12 @@ class PPOTrainer(_BaseTrainer):
                                 vf_clipfrac_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = (
                                     vf_clipfrac
                                 )
-                                entropy_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = entropy.mean()
-                                ratio_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = ratio.mean()
+                                entropy_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = masked_mean(
+                                    entropy, ~padding_mask[micro_batch_inds]
+                                )
+                                ratio_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = masked_mean(
+                                    ratio, ~padding_mask[micro_batch_inds]
+                                )
                         gradient_accumulation_idx += 1
                     minibatch_idx += 1
                     # del everything and empty cache

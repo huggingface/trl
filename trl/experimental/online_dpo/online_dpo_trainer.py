@@ -1249,7 +1249,9 @@ class OnlineDPOTrainer(_BaseTrainer):
         self.stats["logps/chosen"].append(self.accelerator.gather_for_metrics(chosen_logprobs_sum).mean().item())
         self.stats["logps/rejected"].append(self.accelerator.gather_for_metrics(rejected_logprobs_sum).mean().item())
 
-        kl = logprobs - ref_logprobs
+        # Exclude padding positions, as the loss path above does: `logprobs` and `ref_logprobs` span the padded
+        # completion width, so summing them raw adds post-EOS garbage to every objective below.
+        kl = (logprobs - ref_logprobs) * ~padding_mask
         mean_kl = kl.sum(1).mean()
         self.stats["objective/kl"].append(self.accelerator.gather_for_metrics(mean_kl).mean().item())
         non_score_reward = (-self.beta * kl).sum(1)
@@ -1262,7 +1264,7 @@ class OnlineDPOTrainer(_BaseTrainer):
             rlhf_reward = rewards + non_score_reward
             self.stats["objective/rlhf_reward"].append(self.accelerator.gather_for_metrics(rlhf_reward).mean().item())
 
-        mean_entropy = -logprobs.sum(1).mean()
+        mean_entropy = -(logprobs * ~padding_mask).sum(1).mean()
         self.stats["objective/entropy"].append(self.accelerator.gather_for_metrics(mean_entropy).mean().item())
         chosen_rewards = self.beta * (chosen_logprobs_sum - chosen_ref_logprobs_sum)
         gathered_chosen_rewards = self.accelerator.gather_for_metrics(chosen_rewards)

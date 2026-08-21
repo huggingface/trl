@@ -3272,6 +3272,11 @@ class GRPOTrainer(_BaseTrainer):
         else:
             raise ValueError(f"Unknown loss type: {self.loss_type}")
 
+        # Log for every run, not only the ones with an entropy bonus enabled. `policy_loss` is captured after the
+        # KL term is folded in above, so with `beta != 0` it carries that too; it excludes only the entropy bonus
+        # and the MoE auxiliary loss, both added below.
+        self._metrics[mode]["policy_loss"].append(self.accelerator.gather(policy_loss).nanmean().item())
+
         # Entropy bonus: add entropy regularization to encourage exploration. _entropy_bonus_enabled is set
         # whenever a non-zero static coef is set OR adaptive mode is enabled (adaptive stays enabled even when
         # entropy_coef has been decremented to entropy_coef_min so it can recover once entropy drops again).
@@ -3298,8 +3303,6 @@ class GRPOTrainer(_BaseTrainer):
                 apply_coef = self.entropy_coef
 
             loss = loss - apply_coef * entropy_loss
-
-            self._metrics[mode]["policy_loss"].append(self.accelerator.gather(policy_loss).nanmean().item())
 
             # Adaptive update. Gated on train mode so evaluation cannot mutate the entropy controller state.
             if self.use_adaptive_entropy and mode == "train":
