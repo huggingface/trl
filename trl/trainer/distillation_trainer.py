@@ -113,8 +113,7 @@ def _chunk(h_s, w_s, b_s, s_scale, s_softcap, h_t, w_t, b_t, t_scale, t_softcap,
     # `logit_scale` (Cohere) / `final_logit_softcapping` (Gemma) are applied per model to match its full forward.
     with maybe_gather_lm_head_ctx(w_s, b_s):
         # Project in the model dtype and upcast only afterwards, as `"nll"` and `transformers`'
-        # `ForCausalLMLoss` do. Upcasting `h_s` and `w_s` first forces a non-tensor-core fp32 GEMM
-        # and materialises an fp32 copy of the whole `lm_head` weight, per chunk.
+        # `ForCausalLMLoss` do.
         student_logits = (h_s @ w_s.t()).float()
         if b_s is not None:
             student_logits = student_logits + b_s.float()
