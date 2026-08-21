@@ -267,6 +267,38 @@ The levers, roughly in the order you will need them as model size or sequence le
    }
    ```
 
+If you have spare memory rather than a shortage of it, one lever runs the other way. Gradient checkpointing discards every intermediate in a layer and recomputes the whole forward during the backward pass. At long context that is the wrong trade: the recompute is dominated by attention, which costs `seq^2`, while the tensor you would keep to avoid recomputing it — the attention output — costs only `seq`. Keeping that one tensor is a selective checkpointing policy:
+
+```python
+from torch.utils.checkpoint import CheckpointPolicy, create_selective_checkpoint_contexts
+
+
+def keep_attention(ctx, op, *args, **kwargs):
+    if "scaled_dot_product" in str(op):
+        return CheckpointPolicy.MUST_SAVE
+    return CheckpointPolicy.PREFER_RECOMPUTE
+
+
+training_args = SFTConfig(
+    gradient_checkpointing=True,
+    gradient_checkpointing_kwargs={
+        "use_reentrant": False,
+        "context_fn": lambda: create_selective_checkpoint_contexts(keep_attention),
+    },
+)
+```
+
+The gain grows with the sequence, because the term it removes is the quadratic one. Measured on Qwen3-0.6B across four H100s:
+
+| Sequence length | Recompute everything | Keep the attention output | Speedup | Peak GPU memory |
+|---|---|---|---|---|
+| 64K | 3.7 s | 4.0 s | 0.93x | 8.6 → 10.5 GB |
+| 128K | 6.8 s | 6.0 s | 1.13x | 10.9 → 14.6 GB |
+| 256K | 21.4 s | 17.4 s | 1.23x | 15.7 → 23.1 GB |
+| 512K | 76.8 s | 61.1 s | 1.26x | 25.5 → 40.2 GB |
+
+Below roughly 128K it is a small loss, so reach for it only at long context, and only once the levers above have left memory to spend.
+
 Context parallelism can only express full causal attention, which constrains what it can train:
 
 - **Full-attention models only.** Models with sliding-window or chunked attention layers cannot be used: their
