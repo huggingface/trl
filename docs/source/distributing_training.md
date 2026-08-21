@@ -297,7 +297,9 @@ The gain grows with the sequence, because the term it removes is the quadratic o
 | 256K | 21.4 s | 17.4 s | 1.23x | 15.7 → 23.1 GB |
 | 512K | 76.8 s | 61.1 s | 1.26x | 25.5 → 40.2 GB |
 
-Below roughly 128K it is a small loss, so reach for it only at long context, and only once the levers above have left memory to spend.
+At a million tokens across eight H100s the same model goes from 143.3 s to 112.4 s per step, for 24.3 → 39.0 GB.
+
+Below roughly 128K it is a small loss, so reach for it only at long context, and only once the levers above have left memory to spend. The gain is proportional to how much of the model is quadratic: a mostly sliding-window model such as Gemma 3 gains only a few percent and is not worth the memory.
 
 Context parallelism can only express full causal attention, which constrains what it can train:
 
