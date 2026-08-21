@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import itertools
 import json
+import os
 import queue
 
 import numpy as np
@@ -143,7 +144,9 @@ def main() -> None:
     # Same minimal, memory-frugal config as the existing single-process test_train, with 2 steps so we
     # exercise the optimizer loop more than once under FSDP2.
     args = AsyncGRPOConfig(
-        output_dir="async_grpo_fsdp2_out",
+        # The launcher runs this worker with `cwd` at the repo root, so a relative `output_dir` would drop trainer
+        # artifacts into the working tree. The test owns a temporary directory and passes it in.
+        output_dir=os.environ["ASYNC_GRPO_FSDP2_OUTPUT_DIR"],
         learning_rate=0.1,
         per_device_train_batch_size=3,
         num_generations=3,

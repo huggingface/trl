@@ -330,6 +330,8 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         # would shadow the working tree and the test would exercise the wrong code.
         env = os.environ.copy()
         env["PYTHONPATH"] = os.pathsep.join([str(ROOT), env.get("PYTHONPATH", "")]).rstrip(os.pathsep)
+        # `cwd` below is the repo root, so hand the worker somewhere else to write trainer artifacts.
+        env["ASYNC_GRPO_FSDP2_OUTPUT_DIR"] = str(self.tmp_dir)
         # Bound the child: the trainer's rollout consumer blocks indefinitely on an empty queue (it only
         # calls `check_health`, which this stub implements as a no-op), so a starved run would hang the
         # pytest process rather than fail it. The timeout turns that into a readable failure.
