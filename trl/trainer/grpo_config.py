@@ -417,6 +417,8 @@ class GRPOConfig(_BaseConfig):
     _VALID_DICT_FIELDS = _BaseConfig._VALID_DICT_FIELDS + [
         "model_init_kwargs",
         "transformers_continuous_batching_config",
+        "generation_kwargs",
+        "chat_template_kwargs",
         "vllm_llm_kwargs",
     ]
 
@@ -550,7 +552,7 @@ class GRPOConfig(_BaseConfig):
             "must be a value between 0.0 and 1.0. Typical values are in the 0.01-0.2 range."
         },
     )
-    generation_kwargs: dict | None = field(
+    generation_kwargs: dict | str | None = field(
         default=None,
         metadata={
             "help": "Additional keyword arguments to pass to `GenerationConfig` (if using transformers) or "
@@ -559,7 +561,7 @@ class GRPOConfig(_BaseConfig):
             "conflict with the other generation parameters (like `min_p`, `top_p`, etc.), they will override them."
         },
     )
-    chat_template_kwargs: dict | None = field(
+    chat_template_kwargs: dict | str | None = field(
         default=None,
         metadata={
             "help": "Additional keyword arguments to pass to the `apply_chat_template` function when generating "
@@ -1030,7 +1032,7 @@ class GRPOConfig(_BaseConfig):
             "transformers>=5.8.0."
         },
     )
-    transformers_continuous_batching_config: dict | None = field(
+    transformers_continuous_batching_config: dict | str | None = field(
         default=None,
         metadata={"help": "Keyword arguments for `transformers.generation.ContinuousBatchingConfig`."},
     )

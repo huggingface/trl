@@ -33,7 +33,7 @@ from transformers import (
     BitsAndBytesConfig,
     TrainingArguments,
 )
-from transformers.testing_utils import backend_empty_cache, torch_device
+from transformers.testing_utils import backend_device_count, backend_empty_cache, torch_device
 from transformers.utils import is_peft_available
 
 from trl import SFTConfig, SFTTrainer
@@ -55,6 +55,7 @@ from .testing_utils import (
     require_torch_accelerator,
     require_torch_multi_accelerator,
     require_vision,
+    xfail_data_parallel,
 )
 
 
@@ -1071,6 +1072,11 @@ class TestSFTTrainer(TrlTestCase):
     @pytest.mark.skipif(
         not is_ampere_or_newer() and torch_device != "xpu",
         reason="Flash Attention 2 requires Ampere or newer GPU, or XPU",
+    )
+    @pytest.mark.xfail(
+        reason="kernels-community/flash-attn2 is currently unusable for training: no build variant for torch 2.13 "
+        "(https://github.com/huggingface/kernels-community/issues/1082), and the v3 stable-ABI build raises in the "
+        "backward pass for GQA models (https://github.com/huggingface/kernels-community/issues/1085)",
     )
     def test_train_padding_free(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
@@ -2278,7 +2284,7 @@ class TestSFTTrainerSlow(TrlTestCase):
         backend_empty_cache(torch_device)
         gc.collect()
 
-    @pytest.mark.parametrize("packing", [True, False])
+    @pytest.mark.parametrize("packing", [True, pytest.param(False, marks=xfail_data_parallel)])
     @pytest.mark.parametrize(
         "model_name",
         [
@@ -2321,7 +2327,7 @@ class TestSFTTrainerSlow(TrlTestCase):
     @pytest.mark.parametrize(
         "gradient_checkpointing_kwargs", [None, {"use_reentrant": False}, {"use_reentrant": True}]
     )
-    @pytest.mark.parametrize("packing", [True, False])
+    @pytest.mark.parametrize("packing", [True, pytest.param(False, marks=xfail_data_parallel)])
     @pytest.mark.parametrize(
         "model_name",
         [
@@ -2465,7 +2471,7 @@ class TestSFTTrainerSlow(TrlTestCase):
 
         release_memory(model, trainer)
 
-    @pytest.mark.parametrize("packing", [True, False])
+    @pytest.mark.parametrize("packing", [True, pytest.param(False, marks=xfail_data_parallel)])
     @pytest.mark.parametrize(
         "model_name",
         [
@@ -2525,6 +2531,11 @@ class TestSFTTrainerSlow(TrlTestCase):
         ],
     )
     @require_torch_accelerator
+    @pytest.mark.skipif(
+        backend_device_count(torch_device) > 1,
+        reason="segfaults in accelerate's get_max_memory when more than one accelerator is visible, taking the whole "
+        "pytest process down; cause not yet diagnosed (https://github.com/huggingface/trl/issues/6836)",
+    )
     def test_train_offloading(self, model_name, packing):
         """Test that activation offloading works with SFTTrainer."""
         training_args = SFTConfig(
