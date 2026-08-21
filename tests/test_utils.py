@@ -1562,6 +1562,14 @@ class TestComputeFlopsPerToken(TrlTestCase):
         expected_delta = 3 * moe_layers * (2 - 1) * per_expert_per_layer
         assert f_hi - f_lo == expected_delta
 
+    def test_config_without_head_dim(self):
+        # `head_dim` is optional on configs: Qwen2 doesn't declare it. Falling back to `hidden_size //
+        # num_attention_heads` must give the same result as setting it explicitly.
+        cfg = AutoConfig.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
+        derived = compute_flops_per_token(cfg, 16384)
+        cfg.head_dim = cfg.hidden_size // cfg.num_attention_heads
+        assert compute_flops_per_token(cfg, 16384) == derived
+
 
 class TestComputeMfu(TrlTestCase):
     def test_perfect_utilization(self):
@@ -1603,3 +1611,11 @@ class TestAdjustedMfu(TrlTestCase):
         f_med = adjusted_mfu(100.0, cfg, 16384)
         f_long = adjusted_mfu(100.0, cfg, 65536)
         assert f_short > f_med > f_long
+
+    def test_config_without_head_dim(self):
+        # `head_dim` is optional on configs: Qwen2 doesn't declare it. Falling back to `hidden_size //
+        # num_attention_heads` must give the same result as setting it explicitly.
+        cfg = AutoConfig.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
+        derived = adjusted_mfu(100.0, cfg, 16384)
+        cfg.head_dim = cfg.hidden_size // cfg.num_attention_heads
+        assert adjusted_mfu(100.0, cfg, 16384) == pytest.approx(derived)
