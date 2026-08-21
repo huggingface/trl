@@ -28,8 +28,8 @@ one holds 131,072 tokens and attention is computed as a ring.
 Example:
 
 accelerate launch \
-    --config_file examples/accelerate_configs/context_parallel_8gpu.yaml \
-    examples/sft_long_context/sft_long_context.py \
+    --config_file examples/sft_qwen_3_8_1M_context/context_parallel_8gpu.yaml \
+    examples/sft_qwen_3_8_1M_context/sft_qwen_3_8_1M_context.py \
     --model_name_or_path Qwen/Qwen3-8B \
     --dataset_name emozilla/pg19 \
     --max_length 1048576 \
