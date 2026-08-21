@@ -173,7 +173,8 @@ from trl.experimental.gpg import GPGConfig, GPGTrainer
 training_args = GPGConfig(
     beta=0.0,  # no KL constraint and no reference model
     scale_rewards="none",  # mean-centered advantage, no std scaling
-    bias_correction=True,  # rescale the loss by the non-degenerate group fraction
+    loss_type="grpo",  # per-completion normalizer, which the correction cancels exactly
+    bias_correction=True,  # rescale by the fraction of completions with a non-zero advantage
 )
 ```
 

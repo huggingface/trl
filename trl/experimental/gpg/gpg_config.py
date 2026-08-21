@@ -35,12 +35,17 @@ class GPGConfig(GRPOConfig):
         scale_rewards (`str`, *optional*, defaults to `"none"`):
             Whether to scale the advantage by the standard deviation of the rewards. GPG uses the mean-centered
             advantage without standard-deviation scaling, so this defaults to `"none"`.
+        loss_type (`str`, *optional*, defaults to `"grpo"`):
+            Loss normalizer. The correction counts completions, so it is exact only when the loss is normalized per
+            completion. GRPO's own default, `"dapo"`, divides by a completion-token count instead, and a
+            completion-count factor cancels a token-count denominator only when every group emits the same number of
+            tokens.
         bias_correction (`bool`, *optional*, defaults to `True`):
-            Whether to rescale the loss by the fraction of groups whose rewards are not all identical. Groups in which
-            every completion receives the same reward have a zero advantage and contribute nothing to the gradient,
-            yet they still count toward the loss denominator, which shrinks the update by the fraction of such groups.
-            GPG divides the loss by that fraction to compensate. Set to `False` to recover the uncorrected GRPO
-            gradient magnitude.
+            Whether to rescale the loss by the fraction of completions whose advantage is non-zero. A completion in a
+            group whose rewards are all identical, or one that no reward function could score, has a zero advantage
+            and contributes nothing to the gradient, yet it still counts toward the loss denominator and so shrinks
+            the update. GPG divides the loss by that fraction to compensate. Set to `False` to recover the uncorrected
+            GRPO gradient magnitude.
     """
 
     beta: float = field(
@@ -57,12 +62,20 @@ class GPGConfig(GRPOConfig):
             "mean-centered advantage without standard-deviation scaling, so this defaults to 'none'."
         },
     )
+    loss_type: str = field(
+        default="grpo",
+        metadata={
+            "help": "Loss normalizer. The correction counts completions, so it is exact only under a "
+            "per-completion normalizer. GRPO's own default, 'dapo', divides by a completion-token count, which a "
+            "completion-count factor cancels only when every group emits the same number of tokens."
+        },
+    )
     bias_correction: bool = field(
         default=True,
         metadata={
-            "help": "Whether to rescale the loss by the fraction of groups whose rewards are not all identical. "
-            "Groups where every completion gets the same reward have a zero advantage and contribute nothing to the "
-            "gradient, yet still count toward the loss denominator. GPG divides the loss by that fraction to "
-            "compensate."
+            "help": "Whether to rescale the loss by the fraction of completions whose advantage is non-zero. A "
+            "completion in a group with identical rewards, or one no reward function could score, contributes "
+            "nothing to the gradient yet still counts toward the loss denominator. GPG divides the loss by that "
+            "fraction to compensate."
         },
     )
