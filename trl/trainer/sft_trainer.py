@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import accelerate
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -1372,11 +1373,12 @@ class SFTTrainer(_BaseTrainer):
         )
 
         # Sequence parallelism (Ulysses/ALST) shards batches along the sequence dimension and requires
-        # `position_ids` in every batch to preserve each token's global position.
-        parallelism_config = self.accelerator.parallelism_config
+        # `position_ids` in every batch to preserve each token's global position. Sequence parallelism was added in
+        # accelerate 1.12.0.
         if (
-            parallelism_config is not None
-            and parallelism_config.sp_enabled
+            Version(accelerate.__version__) >= Version("1.12.0")
+            and self.accelerator.parallelism_config is not None
+            and self.accelerator.parallelism_config.sp_enabled
             and isinstance(self.data_collator, DataCollatorForLanguageModeling)
         ):
             self.data_collator.return_position_ids = True
