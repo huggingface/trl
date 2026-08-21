@@ -57,10 +57,6 @@ def _is_package_available(pkg_name: str, return_version: bool = False) -> tuple[
         return package_exists
 
 
-def is_cut_cross_entropy_available() -> bool:
-    return _is_package_available("cut_cross_entropy")
-
-
 def is_deepspeed_available() -> bool:
     return _is_package_available("deepspeed")
 
