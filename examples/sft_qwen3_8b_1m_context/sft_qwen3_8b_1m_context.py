@@ -24,7 +24,7 @@
 Fine-tune Qwen3-8B on 1,048,576-token sequences, one 8xH100 node.
 
 Context parallelism splits each sequence across the 8 GPUs, so every GPU holds 131,072 tokens and
-attention is computed as a ring. One book-length sequence per step, 364 s/step, 56.2 GB per GPU.
+attention is computed as a ring. One book-length sequence per step, 614 s/step, about 67 GB per GPU.
 
 The accelerate config sets `fsdp_activation_checkpointing_offload`, which is what keeps an 8B model
 inside 80 GB at this length. That option is not released yet, so until
