@@ -21,6 +21,7 @@ from contextlib import contextmanager
 from packaging.version import Version
 
 
+KERNELS_MIN_VERSION = "0.14.0"  # first release whose `get_kernel` accepts `trust_remote_code`
 LIGER_KERNEL_MIN_VERSION = "0.8.2"
 PACKAGE_DISTRIBUTION_MAPPING = importlib.metadata.packages_distributions()
 
@@ -71,6 +72,11 @@ def is_jmespath_available() -> bool:
 
 def is_joblib_available() -> bool:
     return _is_package_available("joblib")
+
+
+def is_kernels_available(min_version: str = KERNELS_MIN_VERSION) -> bool:
+    _kernels_available, _kernels_version = _is_package_available("kernels", return_version=True)
+    return _kernels_available and Version(_kernels_version) >= Version(min_version)
 
 
 def is_liger_kernel_available(min_version: str = LIGER_KERNEL_MIN_VERSION) -> bool:
