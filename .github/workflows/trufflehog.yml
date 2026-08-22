@@ -1,7 +1,18 @@
 on:
+  # scan the pushed commits, not the whole history: on `pull_request` and on a push to main the action
+  # derives a base commit, while a bare `push` has none on a new branch and walks every commit ever
+  # made. if a base is ever set explicitly, pass a sha: a ref name does not resolve in the scanner clone.
+  pull_request:
   push:
+    branches:
+      - main
+  schedule:
+    - cron: '0 3 * * 1'  # weekly full-history sweep, so history stays in scope
 
 name: Secret Leaks
+
+permissions:
+  contents: read
 
 jobs:
   trufflehog:
@@ -11,6 +22,8 @@ jobs:
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       with:
         fetch-depth: 0
+        # the scan step mounts this directory, `.git/config` included, into a third-party container
+        persist-credentials: false
     - name: Secret Scanning
       uses: trufflesecurity/trufflehog@6f3c981e7b77f235fd2702dd74af25fc4b72bf11  # v3.96.0
       with:
@@ -20,4 +33,5 @@ jobs:
         # exclude buggy detectors that cause false positives and are not relevant to our codebase.
         # lob matches `(live|test)_[a-zA-Z0-9_]{35}`, which any pytest name of exactly 35 characters after
         # `test_` satisfies (e.g. `test_reward_func_wrong_number_of_rewards`).
-        extra_args: --results=verified,unknown --exclude-detectors=postgres,lob
+        # without --fail-on-scan-errors, a scan that errors out and covers nothing passes as a scan that found nothing.
+        extra_args: --results=verified,unknown --exclude-detectors=postgres,lob --fail-on-scan-errors

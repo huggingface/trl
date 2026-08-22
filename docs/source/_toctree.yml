@@ -99,6 +99,8 @@
     title: Experimental Overview
   - local: a2po_trainer # Sorted alphabetically
     title: A2PO
+  - local: async_distillation_trainer
+    title: Async Distillation
   - local: async_grpo_trainer
     title: Asynchronous GRPO
   - local: bema_for_reference_model

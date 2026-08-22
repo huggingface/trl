@@ -32,7 +32,7 @@ jobs:
   tests:
     name: Tests (experimental)
     runs-on:
-      group: aws-g4dn-2xlarge
+      group: aws-g6e-4xlarge
     container:
       image: pytorch/pytorch:2.8.0-cuda12.8-cudnn9-devel
       options: --gpus all
