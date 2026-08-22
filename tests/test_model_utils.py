@@ -80,7 +80,7 @@ class TestDisableGradientCheckpointing:
         model.gradient_checkpointing_disable = lambda: setattr(model, "is_gradient_checkpointing", False)
         restored_kwargs = []
 
-        def gradient_checkpointing_enable(kwargs):
+        def gradient_checkpointing_enable(**kwargs):
             restored_kwargs.append(kwargs)
             model.is_gradient_checkpointing = True
 
@@ -98,7 +98,7 @@ class TestDisableGradientCheckpointing:
             assert model.is_gradient_checkpointing is False
 
         assert model.is_gradient_checkpointing is True
-        assert restored_kwargs == [checkpointing_kwargs]
+        assert restored_kwargs == [{"gradient_checkpointing_kwargs": checkpointing_kwargs}]
 
     def test_unwrap_restores_kwargs_after_exception(self):
         checkpointing_kwargs = {"use_reentrant": True}
@@ -106,7 +106,7 @@ class TestDisableGradientCheckpointing:
         model.gradient_checkpointing_disable = lambda: setattr(model, "is_gradient_checkpointing", False)
         restored_kwargs = []
 
-        def gradient_checkpointing_enable(kwargs):
+        def gradient_checkpointing_enable(**kwargs):
             restored_kwargs.append(kwargs)
             model.is_gradient_checkpointing = True
 
@@ -127,4 +127,4 @@ class TestDisableGradientCheckpointing:
             raise RuntimeError("generation failed")
 
         assert model.is_gradient_checkpointing is True
-        assert restored_kwargs == [checkpointing_kwargs]
+        assert restored_kwargs == [{"gradient_checkpointing_kwargs": checkpointing_kwargs}]

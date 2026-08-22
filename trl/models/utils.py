@@ -401,7 +401,7 @@ def disable_gradient_checkpointing(model: PreTrainedModel, gradient_checkpointin
         yield
     finally:
         if was_enabled:
-            model.gradient_checkpointing_enable(gradient_checkpointing_kwargs)
+            model.gradient_checkpointing_enable(gradient_checkpointing_kwargs=gradient_checkpointing_kwargs)
 
 
 def create_reference_model(
