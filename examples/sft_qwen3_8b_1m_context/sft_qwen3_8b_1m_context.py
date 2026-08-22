@@ -24,7 +24,7 @@
 Fine-tune Qwen3-8B on 1,048,576-token sequences, one 8xH100 node.
 
 Context parallelism splits each sequence across the 8 GPUs, so every GPU holds 131,072 tokens and
-attention is computed as a ring. One book-length sequence per step, 614 s/step, about 67 GB per GPU.
+attention is computed as a ring. One book-length sequence per step, 606 s/step, 56.2 GB per GPU.
 
 The accelerate config sets `fsdp_activation_checkpointing_offload`, which is what keeps an 8B model
 inside 80 GB at this length. That option is not released yet, so until
@@ -79,6 +79,9 @@ def main():
         per_device_train_batch_size=1,
         # One book-length sequence is one step, so the default of 500 would log nothing at all.
         logging_steps=1,
+        # `save_model` below writes the final model; an intermediate checkpoint of an 8B model with its
+        # optimizer state is another 123 GB on disk.
+        save_strategy="no",
         # The sequence has to divide `cp_size * 2`, which the collator handles by padding.
         pad_to_multiple_of=16,
         # Activation checkpointing is already enabled in the accelerate config; setting both raises.
