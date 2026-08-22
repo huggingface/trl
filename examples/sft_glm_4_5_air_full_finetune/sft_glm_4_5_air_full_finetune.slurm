@@ -1,6 +1,5 @@
 #!/bin/bash
-# Multi-node launcher; submit from this directory:
-#   sbatch sft_moe_expert_parallel.slurm --model zai-org/GLM-5.2 --ep 32 --fsdp 2 --lora 16
+# Submit from this directory: sbatch sft_glm_4_5_air_full_finetune.slurm
 #SBATCH --nodes=8
 #SBATCH --gres=gpu:8
 #SBATCH --ntasks-per-node=1
@@ -18,4 +17,4 @@ srun torchrun \
     --node_rank "$SLURM_NODEID" \
     --rdzv_backend c10d \
     --rdzv_endpoint "$MASTER_IP:29700" \
-    "$SLURM_SUBMIT_DIR/sft_moe_expert_parallel.py" "$@"
+    "$SLURM_SUBMIT_DIR/sft_glm_4_5_air_full_finetune.py"

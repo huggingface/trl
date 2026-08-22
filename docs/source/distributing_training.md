@@ -388,7 +388,7 @@ model = AutoModelForCausalLM.from_pretrained(
 trainer = SFTTrainer(model=model, args=training_args, train_dataset=dataset)
 ```
 
-Verified configurations (H100 nodes, sequence length 2048, bf16, per-device batch 1, the default `loss_type="chunked_nll"`, gradient checkpointing), from the runnable example in [`examples/sft_moe_expert_parallel/`](https://github.com/huggingface/trl/tree/main/examples/sft_moe_expert_parallel):
+Verified configurations (H100 nodes, sequence length 2048, bf16, per-device batch 1, the default `loss_type="chunked_nll"`, gradient checkpointing). The two 8-node rows are runnable examples: [`examples/sft_glm_5_2_expert_parallel/`](https://github.com/huggingface/trl/tree/main/examples/sft_glm_5_2_expert_parallel) (753B, LoRA) and [`examples/sft_glm_4_5_air_full_finetune/`](https://github.com/huggingface/trl/tree/main/examples/sft_glm_4_5_air_full_finetune) (110B, full fine-tuning):
 
 | Model | Training | GPUs | Config | Step time | Peak GPU memory |
 |---|---|---|---|---|---|
