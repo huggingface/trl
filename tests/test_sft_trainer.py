@@ -2833,8 +2833,8 @@ class TestChunkedCrossEntropyLoss:
     def test_cce_all_ignored_returns_zero(self):
         """Same contract as the chunked path when every label is ignored, for the fused CCE path.
 
-        Every trainable parameter must still receive a gradient — otherwise DDP / FSDP synchronization hangs or
-        errors at the all-reduce step.
+        Every trainable parameter must still receive a gradient — otherwise DDP / FSDP synchronization hangs or errors
+        at the all-reduce step.
         """
         from trl.trainer.sft_trainer import _cut_cross_entropy_loss
 
