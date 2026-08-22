@@ -2823,6 +2823,7 @@ class TestChunkedCrossEntropyLoss:
         assert bias.grad is not None and bias.grad.abs().sum().item() == 0.0
 
     @require_torch_accelerator
+    @require_kernels
     def test_cce_all_ignored_returns_zero(self):
         """Same contract as the chunked path when every label is ignored, for the fused CCE path.
 
