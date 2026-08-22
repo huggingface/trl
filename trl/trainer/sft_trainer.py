@@ -169,21 +169,41 @@ def _cut_cross_entropy_loss(
     hidden_states = hidden_states.reshape(-1, hidden_states.shape[-1])
     targets = targets.reshape(-1)
     n_valid = (targets != -100).sum()
-    loss, metrics = fused_linear_cross_entropy(
-        hidden_states,
-        lm_head_weight,
-        targets,
-        bias=lm_head_bias,
-        ignore_index=-100,
-        logit_scale=logit_scale,
-        softcap=final_logit_softcapping,
-        reduction="sum",
-        return_metrics=True,
-    )
+
+    correct = hidden_states.new_zeros((), dtype=torch.float32)
+    entropy_sum = hidden_states.new_zeros((), dtype=torch.float32)
+    if n_valid == 0:
+        # Whole micro-batch masked (e.g. completion-only loss + truncation). Keep the loss connected
+        # to the autograd graph through every trainable parameter so `.backward()` succeeds and DDP /
+        # FSDP gradient sync doesn't hang on a missing param.
+        with maybe_gather_lm_head_ctx(lm_head_weight, lm_head_bias):
+            loss = (hidden_states.float().sum() + lm_head_weight.float().sum()) * 0.0
+            if lm_head_bias is not None:
+                loss = loss + lm_head_bias.float().sum() * 0.0
+        return loss, correct, entropy_sum, n_valid
+
+    with maybe_gather_lm_head_ctx(lm_head_weight, lm_head_bias):
+        loss, metrics = fused_linear_cross_entropy(
+            hidden_states,
+            lm_head_weight,
+            targets,
+            bias=lm_head_bias,
+            ignore_index=-100,
+            logit_scale=logit_scale,
+            softcap=final_logit_softcapping,
+            reduction="sum",
+            return_metrics=True,
+        )
     correct = metrics["num_correct_tokens"]
     entropy_sum = metrics["entropy_sum"]
+
     # `num_items_in_batch` is the global count, matching HF's gradient-accumulation-correct reduction.
-    loss = loss / (num_items_in_batch if num_items_in_batch is not None else n_valid.clamp(min=1))
+    if num_items_in_batch is None:
+        loss = loss / n_valid
+    else:
+        if isinstance(num_items_in_batch, torch.Tensor):
+            num_items_in_batch = num_items_in_batch.to(loss.device)
+        loss = loss / num_items_in_batch
     return loss, correct, entropy_sum, n_valid
 
 
