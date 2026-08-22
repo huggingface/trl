@@ -50,13 +50,13 @@ from .testing_utils import (
     is_ampere_or_newer,
     require_bitsandbytes,
     require_kernels,
-    require_kernels_trust_remote_code,
     require_liger_kernel,
     require_peft,
     require_torch_accelerator,
     require_torch_multi_accelerator,
     require_vision,
     xfail_data_parallel,
+    xfail_old_kernels,
 )
 
 
@@ -441,7 +441,8 @@ class TestSFTTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @require_torch_accelerator
-    @require_kernels_trust_remote_code
+    @require_kernels
+    @xfail_old_kernels
     def test_train_cce_loss(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling")
 
@@ -2824,7 +2825,8 @@ class TestChunkedCrossEntropyLoss:
         assert bias.grad is not None and bias.grad.abs().sum().item() == 0.0
 
     @require_torch_accelerator
-    @require_kernels_trust_remote_code
+    @require_kernels
+    @xfail_old_kernels
     def test_cce_all_ignored_returns_zero(self):
         """Same contract as the chunked path when every label is ignored, for the fused CCE path.
 

@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import functools
-import importlib.metadata
 import signal
 import warnings
 from collections.abc import Callable
@@ -21,11 +20,12 @@ from collections.abc import Callable
 import psutil
 import pytest
 import torch
-from packaging.version import Version
 from transformers import is_bitsandbytes_available, is_comet_available, is_sklearn_available, is_wandb_available
 from transformers.testing_utils import backend_device_count, torch_device
 from transformers.utils import (
-    is_kernels_available,
+    is_kernels_available as is_kernels_installed,
+)
+from transformers.utils import (
     is_peft_available,
     is_rich_available,
     is_torch_available,
@@ -36,9 +36,11 @@ from transformers.utils import (
 
 from trl.chat_template_utils import _SUPPORTS_RESPONSE_TEMPLATE
 from trl.import_utils import (
+    KERNELS_MIN_VERSION,
     is_harbor_available,
     is_jmespath_available,
     is_joblib_available,
+    is_kernels_available,
     is_liger_kernel_available,
     is_math_verify_available,
     is_mergekit_available,
@@ -50,12 +52,14 @@ from trl.import_utils import (
 require_bitsandbytes = pytest.mark.skipif(not is_bitsandbytes_available(), reason="test requires bitsandbytes")
 require_comet = pytest.mark.skipif(not is_comet_available(), reason="test requires comet_ml")
 require_harbor = pytest.mark.skipif(not is_harbor_available(), reason="test requires harbor")
-require_kernels = pytest.mark.skipif(not is_kernels_available(), reason="test requires kernels")
-# `loss_type="cce"` calls `get_kernel(trust_remote_code=...)`, which older `kernels` do not accept. The
-# minimum-versions CI job resolves to 0.9.0, so gate on the version and not just on the import.
-require_kernels_trust_remote_code = pytest.mark.skipif(
-    not is_kernels_available() or Version(importlib.metadata.version("kernels")) < Version("0.14.0"),
-    reason="test requires kernels>=0.14.0",
+require_kernels = pytest.mark.skipif(not is_kernels_installed(), reason="test requires kernels")
+# `loss_type="cce"` needs `get_kernel(trust_remote_code=...)`. Rather than skip on an older `kernels`,
+# assert that it fails, and fail loudly the day it stops failing (when the pin or the flag goes away).
+xfail_old_kernels = pytest.mark.xfail(
+    not is_kernels_available(),
+    strict=True,
+    raises=ImportError,
+    reason=f"requires kernels>={KERNELS_MIN_VERSION}",
 )
 require_liger_kernel = pytest.mark.skipif(not is_liger_kernel_available(), reason="test requires liger-kernel")
 require_math_latex = pytest.mark.skipif(not is_math_verify_available(), reason="test requires math_verify")

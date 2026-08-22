@@ -67,6 +67,7 @@ from ..data_utils import (
     pack_dataset,
     prepare_multimodal_messages,
 )
+from ..import_utils import KERNELS_MIN_VERSION, is_kernels_available
 from ..models import get_act_offloading_ctx_manager
 from .base_trainer import _BaseTrainer
 from .sft_config import SFTConfig
@@ -131,6 +132,11 @@ _FUSED_LINEAR_CE_REVISION = "00e29bdf4e142fafa8f558be414c7a9f344d61d0"  # head o
 def _fused_linear_cross_entropy():
     from kernels import get_kernel
 
+    if not is_kernels_available():
+        raise ImportError(
+            f'`loss_type="cce"` requires kernels>={KERNELS_MIN_VERSION}, whose `get_kernel` accepts '
+            "`trust_remote_code`. Install it with `pip install -U kernels`."
+        )
     # `trust_remote_code=True` is required until `trustedKernelPublisher` is enabled for `trl-lib` on
     # the Hub. Drop it once it is.
     return get_kernel(
