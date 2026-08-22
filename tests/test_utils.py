@@ -1632,8 +1632,13 @@ class TestWarnIfFp32WithMixedPrecision(TrlTestCase):
             (True, False, {}, True),  # bf16 on, no dtype set → silent fp32 + autocast → warn
             (False, True, {}, True),  # fp16 on, no dtype set → warn
             (True, False, None, True),  # model_init_kwargs is None counts as "no dtype set"
-            (True, False, {"dtype": "bfloat16"}, False),  # explicit dtype → user chose, stay silent
-            (True, False, {"dtype": "auto"}, False),  # "auto" is still an explicit choice
+            # Every TRL script forwards `ModelConfig.dtype`, whose default is "float32", so this is what
+            # the command-line runs the warning exists for actually look like. Keying on the key's
+            # absence made this case silent, which is the only case that had to warn.
+            (True, False, {"dtype": "float32"}, True),
+            (True, False, {"dtype": torch.float32}, True),  # the same choice spelled as a torch dtype
+            (True, False, {"dtype": "bfloat16"}, False),  # already low precision, nothing to warn about
+            (True, False, {"dtype": "auto"}, False),  # "auto" defers to the checkpoint, not to float32
             (False, False, {}, False),  # no mixed precision → nothing to warn about
             # A quantized load stores the weights in the quantized format, not in `dtype`, and takes its compute
             # precision from the quantization config, so neither the diagnosis nor the suggested fix would apply.
