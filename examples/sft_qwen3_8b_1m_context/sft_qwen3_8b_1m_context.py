@@ -27,13 +27,12 @@ Context parallelism splits each sequence across the 8 GPUs, so every GPU holds 1
 attention is computed as a ring. One book-length sequence per step, 364 s/step, 56.2 GB per GPU.
 
 accelerate launch \
-    --config_file examples/sft_qwen_3_8_1M_context/context_parallel_8gpu.yaml \
-    examples/sft_qwen_3_8_1M_context/sft_qwen_3_8_1M_context.py
+    --config_file examples/sft_qwen3_8b_1m_context/context_parallel_8gpu.yaml \
+    examples/sft_qwen3_8b_1m_context/sft_qwen3_8b_1m_context.py
 
 Swapping the model: context parallelism expresses only full causal attention, so models with
 sliding-window or linear attention layers are refused. That rules out gpt-oss, Gemma 3/4, Mistral, and
-Qwen3.5 and later. Qwen3 and Qwen3-MoE are full attention. Measured on the same node: Qwen3-0.6B 137 s,
-Qwen3-30B-A3B 483 s, Qwen3-32B 1295 s (the last one also needs the MLP tiled over the sequence).
+Qwen3.5 and later. Qwen3 and Qwen3-MoE are full attention. Qwen3-0.6B takes 137 s/step on the same node.
 """
 
 import torch
