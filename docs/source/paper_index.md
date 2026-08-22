@@ -1245,6 +1245,31 @@ trainer = SFTTrainer(
 )
 ```
 
+### Cut Your Losses in Large-Vocabulary Language Models
+
+**📜 Paper**: https://huggingface.co/papers/2411.09009
+
+Cut Cross-Entropy (CCE) computes the next-token cross-entropy without ever materializing the logits. A standard loss
+builds a `[num_tokens, vocab_size]` tensor, which for a large vocabulary dominates the memory of a training step. CCE
+instead fuses the `lm_head` projection into the loss, computing each logit tile in on-chip memory and keeping only the
+running log-sum-exp, so peak memory no longer scales with `vocab_size`.
+
+$$
+\mathcal{L}(\theta) = - \sum_t \left[ \textcolor{red}{x_t^\top W_{y_t}} - \log \sum_{v} \exp\left(\textcolor{red}{x_t^\top W_v}\right) \right]
+$$
+
+where the terms in red are recomputed tile by tile rather than stored. To use CCE with SFT, use the `loss_type="cce"`
+argument:
+
+```python
+from trl import SFTConfig
+
+training_args = SFTConfig(
+    loss_type="cce",
+    ...
+)
+```
+
 ### On the Generalization of SFT: A Reinforcement Learning Perspective with Reward Rectification
 
 **📜 Paper**: https://huggingface.co/papers/2508.05629
