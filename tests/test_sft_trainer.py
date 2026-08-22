@@ -2829,6 +2829,32 @@ class TestChunkedCrossEntropyLoss:
         assert weight.grad is not None and weight.grad.abs().sum().item() == 0.0
         assert bias.grad is not None and bias.grad.abs().sum().item() == 0.0
 
+    @require_torch_accelerator
+    def test_cce_all_ignored_returns_zero(self):
+        """Same contract as the chunked path when every label is ignored, for the fused CCE path.
+
+        Every trainable parameter must still receive a gradient — otherwise DDP / FSDP synchronization hangs or
+        errors at the all-reduce step.
+        """
+        from trl.trainer.sft_trainer import _cut_cross_entropy_loss
+
+        hidden, weight, labels = self._inputs(requires_grad=True)
+        hidden = hidden.to(torch_device).to(torch.bfloat16).detach().requires_grad_(True)
+        weight = weight.to(torch_device).to(torch.bfloat16).detach().requires_grad_(True)
+        bias = torch.zeros(self.V, dtype=torch.bfloat16, device=torch_device, requires_grad=True)
+        labels = labels.to(torch_device)
+        labels[:] = -100
+        loss, correct, ent_sum, n_valid = _cut_cross_entropy_loss(hidden, weight, labels, lm_head_bias=bias)
+        assert loss.item() == 0.0
+        assert correct.item() == 0.0
+        assert ent_sum.item() == 0.0
+        assert n_valid.item() == 0
+        assert not torch.isnan(loss)
+        loss.backward()
+        assert hidden.grad is not None and hidden.grad.abs().sum().item() == 0.0
+        assert weight.grad is not None and weight.grad.abs().sum().item() == 0.0
+        assert bias.grad is not None and bias.grad.abs().sum().item() == 0.0
+
     def test_shift_labels_matches_labels(self):
         """`shift_labels` path (CP/SP) must match the default `labels` path after external shifting."""
         hidden, weight, labels = self._inputs(ignore_positions=slice(0, 3))
