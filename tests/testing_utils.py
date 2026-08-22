@@ -22,9 +22,7 @@ import pytest
 import torch
 from transformers import is_bitsandbytes_available, is_comet_available, is_sklearn_available, is_wandb_available
 from transformers.testing_utils import backend_device_count, torch_device
-from transformers.utils import (
-    is_kernels_available as is_kernels_installed,
-)
+from transformers.utils import is_kernels_available as is_kernels_installed
 from transformers.utils import (
     is_peft_available,
     is_rich_available,
