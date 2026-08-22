@@ -288,7 +288,7 @@ training_args = SFTConfig(
 )
 ```
 
-The gain grows with the sequence, because the term it removes is the quadratic one. Measured on Qwen3-0.6B across four H100s:
+The gain grows with the sequence, because the term it removes is the quadratic one. Measured on Qwen3-0.6B across four H100s (sequence parallelism, `sp_size=4`):
 
 | Sequence length | Recompute everything | Keep the attention output | Speedup | Peak GPU memory |
 |---|---|---|---|---|
@@ -297,7 +297,7 @@ The gain grows with the sequence, because the term it removes is the quadratic o
 | 256K | 21.4 s | 17.4 s | 1.23x | 15.7 → 23.1 GB |
 | 512K | 76.8 s | 61.1 s | 1.26x | 25.5 → 40.2 GB |
 
-At a million tokens across eight H100s the same model goes from 143.3 s to 112.4 s per step, for 24.3 → 39.0 GB.
+At a million tokens across eight H100s with `cp_size=8`, the same model goes from 136.6 s to 109.0 s per step, for 27.9 → 42.6 GB, and model FLOPs utilization from 35.4% to 44.3%. The effect does not depend on which scheme splits the sequence: the same run under Ulysses goes 143.3 s to 112.4 s.
 
 Below roughly 128K it is a small loss, so reach for it only at long context, and only once the levers above have left memory to spend. The gain is proportional to how much of the model is quadratic: a mostly sliding-window model such as Gemma 3 gains only a few percent and is not worth the memory.
 
