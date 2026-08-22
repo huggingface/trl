@@ -716,9 +716,9 @@ class TestPPOTrainer(TrlTestCase):
     def test_statistics_are_not_diluted_by_unwritten_slots(self):
         """The statistics buffers used to be sized by `gradient_accumulation_steps`, while the micro-batch loop
         writes `local_mini_batch_size // per_device_train_batch_size` slots per minibatch and resets its index each
-        minibatch. The unwritten slots stayed at zero and the `.mean()` below averaged them in, scaling every
-        reported statistic by `1 / num_mini_batches`. `ratio` pins that dilution, because it is exactly 1 while the
-        policy has not moved yet: with two minibatches it was reported as 0.5."""
+        minibatch. The unwritten slots stayed at zero and the `.mean()` below averaged them in, scaling every reported
+        statistic by `1 / num_mini_batches`. `ratio` pins that dilution, because it is exactly 1 while the policy has
+        not moved yet: with two minibatches it was reported as 0.5."""
         training_args = PPOConfig(
             output_dir=self.tmp_dir,
             per_device_train_batch_size=1,

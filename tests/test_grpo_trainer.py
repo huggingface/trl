@@ -433,9 +433,9 @@ class TestGRPOTrainer(TrlTestCase):
     @pytest.mark.parametrize("loss_type", ["bnpo", "dapo"])
     def test_liger_logs_policy_loss(self, loss_type):
         """`compute_loss` sends Liger runs to `compute_liger_loss` and returns, so they never reach the
-        `policy_loss` append in `_compute_loss`. Both loss types are covered because the two paths capture the
-        metric at different points: DAPO divides the normalizer in while building the loss, the others capture
-        before the accumulation rescale."""
+        `policy_loss` append in `_compute_loss`. Both loss types are covered because the two paths capture the metric
+        at different points: DAPO divides the normalizer in while building the loss, the others capture before the
+        accumulation rescale."""
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         training_args = GRPOConfig(
