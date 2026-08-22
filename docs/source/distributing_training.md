@@ -224,8 +224,6 @@ With the setup above plus a few levers, SFT scales to million-token sequences on
 | Qwen3-0.6B | 2M | 8 | 538 s | 42.2 GB |
 | Qwen3-0.6B | 4M | 8 | 2135 s | 73.7 GB |
 | Qwen3-8B | 1M | 8 | 364 s | 56.2 GB |
-| Qwen3-30B-A3B (MoE) | 1M | 8 | 483 s | 46.0 GB |
-| Qwen3-32B | 1M | 8 | 1295 s | 60.8 GB |
 
 Context length scales with the number of nodes: sequence length and GPU count can be doubled together at roughly 2x step time (because each GPU keeps the same shard of the sequence).
 
@@ -239,68 +237,13 @@ The levers, roughly in the order you will need them as model size or sequence le
 
 1. **Keep the default `loss_type="chunked_nll"`.** At 1M tokens, materializing `[seq, vocab]` logits costs tens of GB per GPU; the chunked loss never does.
 2. **Offload checkpointed activations to host memory** (≥ ~1.5M tokens, or ≥ ~8B parameters): set `fsdp_activation_checkpointing_offload: true` in the accelerate FSDP config. Each checkpointed layer's input — the dominant surviving activation, `layers × seq/cp × hidden` bytes — moves to pinned host memory during the forward and returns on demand during the backward.
-3. **At the memory edge, switch the ring rotation to alltoall and merge attention outputs in bf16**:
-
-   ```python
-   from torch.distributed.tensor.experimental._context_parallel import _attention
-   from torch.distributed.tensor.experimental._context_parallel._attention import set_rotate_method
-
-   set_rotate_method("alltoall")            # ring buffers instead of full-sequence KV gather
-   _attention._cp_options.convert_to_f32 = False  # bf16 output merging
-   ```
-
-   Both are speed-neutral and save several GB (grad-norm deviation < 0.5%).
-4. **For ≥ 30B models, add parameter/optimizer CPU offload** (`fsdp_offload_params: true`). Model states (~12 bytes/param sharded) move to host; at 1M-token step times the gather traffic is negligible.
-5. **For the largest dense models, tile the MLP over the sequence.** Inside a checkpointed layer, the `[seq/cp, intermediate]` gate/up projections are the last large transient, and activation offload cannot reach them — they are created and consumed within a single recompute. Splitting the MLP forward into sequence tiles caps them at `[tile, intermediate]`; the backward recomputes the same tiled code, so the bound holds there too. This is what makes Qwen3-32B fit at 1M:
-
-   ```python
-   import torch
-   from transformers.models.qwen3.modeling_qwen3 import Qwen3MLP
-
-   forward, tile = Qwen3MLP.forward, 16384
-   Qwen3MLP.forward = lambda self, x: torch.cat([forward(self, c) for c in x.split(tile, dim=1)], dim=1)
-   ```
-6. **Context extension needs RoPE scaling.** A base model evaluated at positions far beyond its trained range starts at a high loss (10.6 vs 4.4 for Qwen3-8B at 1M with YaRN ×32). Configure it at load time, and note that in transformers v5 `rope_theta` lives inside `rope_parameters`, so the override must carry it:
+3. **Context extension needs RoPE scaling.** A base model evaluated at positions far beyond its trained range starts at a high loss (10.6 vs 4.4 for Qwen3-8B at 1M with YaRN ×32). Configure it at load time, and note that in transformers v5 `rope_theta` lives inside `rope_parameters`, so the override must carry it:
 
    ```python
    model_init_kwargs={
        "rope_parameters": {"rope_type": "yarn", "rope_theta": 1000000, "factor": 32, "original_max_position_embeddings": 32768},
    }
    ```
-
-If you have spare memory rather than a shortage of it, one lever runs the other way. Gradient checkpointing discards every intermediate in a layer and recomputes the whole forward during the backward pass. At long context that is the wrong trade: the recompute is dominated by attention, which costs `seq^2`, while the tensor you would keep to avoid recomputing it — the attention output — costs only `seq`. Keeping that one tensor is a selective checkpointing policy:
-
-```python
-from torch.utils.checkpoint import CheckpointPolicy, create_selective_checkpoint_contexts
-
-
-def keep_attention(ctx, op, *args, **kwargs):
-    if "scaled_dot_product" in str(op):
-        return CheckpointPolicy.MUST_SAVE
-    return CheckpointPolicy.PREFER_RECOMPUTE
-
-
-training_args = SFTConfig(
-    gradient_checkpointing=True,
-    gradient_checkpointing_kwargs={
-        "use_reentrant": False,
-        "context_fn": lambda: create_selective_checkpoint_contexts(keep_attention),
-    },
-)
-```
-
-The gain grows with the sequence, because the term it removes is the quadratic one. Measured on Qwen3-0.6B across four H100s (sequence parallelism, `sp_size=4`):
-
-| Sequence length | Recompute everything | Keep the attention output | Speedup | Peak GPU memory |
-|---|---|---|---|---|
-| 64K | 3.7 s | 4.0 s | 0.93x | 8.6 → 10.5 GB |
-| 128K | 6.8 s | 6.0 s | 1.13x | 10.9 → 14.6 GB |
-| 256K | 21.4 s | 17.4 s | 1.23x | 15.7 → 23.1 GB |
-| 512K | 76.8 s | 61.1 s | 1.26x | 25.5 → 40.2 GB |
-
-At a million tokens across eight H100s with `cp_size=8`, the same model goes from 136.6 s to 109.0 s per step, for 27.9 → 42.6 GB, and model FLOPs utilization from 35.4% to 44.3%. The effect does not depend on which scheme splits the sequence: the same run under Ulysses goes 143.3 s to 112.4 s.
-
-Below roughly 128K it is a small loss, so reach for it only at long context, and only once the levers above have left memory to spend. The gain is proportional to how much of the model is quadratic: a mostly sliding-window model such as Gemma 3 gains only a few percent and is not worth the memory.
 
 Context parallelism can only express full causal attention, which constrains what it can train:
 
