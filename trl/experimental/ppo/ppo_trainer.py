@@ -628,7 +628,13 @@ class PPOTrainer(_BaseTrainer):
 
         accelerator.print("===training policy===")
         start_time = time.time()
-        stats_shape = (args.num_ppo_epochs, args.num_mini_batches, args.gradient_accumulation_steps)
+        # The micro-batch loop below runs `range(0, local_mini_batch_size, per_device_train_batch_size)` and resets
+        # `gradient_accumulation_idx` for every minibatch, so it writes that many slots per minibatch, not
+        # `gradient_accumulation_steps` of them. Sizing the axis by the latter left the unwritten slots at zero and
+        # every statistic below is reduced with `.mean()`, which then averaged those zeros in: each metric came out
+        # scaled by exactly 1 / num_mini_batches, and was only correct at the default `num_mini_batches=1`.
+        micro_batches_per_mini_batch = math.ceil(args.local_mini_batch_size / args.per_device_train_batch_size)
+        stats_shape = (args.num_ppo_epochs, args.num_mini_batches, micro_batches_per_mini_batch)
         approxkl_stats = torch.zeros(stats_shape, device=device)
         pg_clipfrac_stats = torch.zeros(stats_shape, device=device)
         pg_loss_stats = torch.zeros(stats_shape, device=device)

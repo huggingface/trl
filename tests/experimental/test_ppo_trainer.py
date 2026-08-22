@@ -713,6 +713,37 @@ class TestPPOTrainer(TrlTestCase):
 
         self.raw_dataset = raw_dataset.map(tokenize, fn_kwargs={"tokenizer": self.tokenizer}, remove_columns="prompt")
 
+    def test_statistics_are_not_diluted_by_unwritten_slots(self):
+        """The statistics buffers used to be sized by `gradient_accumulation_steps`, while the micro-batch loop
+        writes `local_mini_batch_size // per_device_train_batch_size` slots per minibatch and resets its index each
+        minibatch. The unwritten slots stayed at zero and the `.mean()` below averaged them in, scaling every
+        reported statistic by `1 / num_mini_batches`. `ratio` pins that dilution, because it is exactly 1 while the
+        policy has not moved yet: with two minibatches it was reported as 0.5."""
+        training_args = PPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=1,
+            gradient_accumulation_steps=2,
+            num_mini_batches=2,
+            num_ppo_epochs=1,
+            report_to="none",
+        )
+        trainer = PPOTrainer(
+            args=training_args,
+            processing_class=self.tokenizer,
+            model=self.model,
+            ref_model=self.ref_model,
+            reward_model=self.reward_model,
+            value_model=self.value_model,
+            train_dataset=self.raw_dataset["train"],
+            eval_dataset=self.raw_dataset["test"],
+        )
+        trainer.train()
+
+        ratios = [log["val/ratio"] for log in trainer.state.log_history if "val/ratio" in log]
+        assert ratios, "no `val/ratio` was logged, so the assertion below would pass vacuously"
+        for ratio in ratios:
+            assert ratio == pytest.approx(1.0, abs=1e-4)
+
     def test_basic_training(self):
         """Test basic PPO training configuration and verify model updates."""
         # Capture initial weights

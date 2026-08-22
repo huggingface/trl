@@ -429,6 +429,38 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @require_liger_kernel
+    @pytest.mark.parametrize("loss_type", ["bnpo", "dapo"])
+    def test_liger_logs_policy_loss(self, loss_type):
+        """`compute_loss` sends Liger runs to `compute_liger_loss` and returns, so they never reach the
+        `policy_loss` append in `_compute_loss`. Both loss types are covered because the two paths capture the
+        metric at different points: DAPO divides the normalizer in while building the loss, the others capture
+        before the accumulation rescale."""
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=32,  # reduce the completion length to reduce memory usage
+            gradient_accumulation_steps=2,  # exercise the accumulation rescale the metric has to match
+            loss_type=loss_type,
+            use_liger_kernel=True,
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        trainer.train()
+
+        logged = [log["policy_loss"] for log in trainer.state.log_history if "policy_loss" in log]
+        assert logged, "the Liger path logged no `policy_loss`"
+        assert all(value == value for value in logged), "`policy_loss` is NaN"
+
     def test_train_with_eval(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
 
