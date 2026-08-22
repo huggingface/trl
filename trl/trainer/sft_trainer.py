@@ -121,9 +121,10 @@ def _chunk(h, w, b, lbl, logit_scale, final_logit_softcapping):
     return chunk_loss, chunk_correct, chunk_entropy
 
 
-# Pinned so a new upload cannot silently change the loss under a running job.
+# Pinned to a commit, not a version: `version=N` resolves to the `vN` *branch*, which moves on every
+# push, so it would not stop a new upload from silently changing the loss under a running job.
 _FUSED_LINEAR_CE_KERNEL = "trl-lib/fused-linear-ce"
-_FUSED_LINEAR_CE_VERSION = 1
+_FUSED_LINEAR_CE_REVISION = "00e29bdf4e142fafa8f558be414c7a9f344d61d0"  # head of the `v1` branch
 
 
 @functools.lru_cache(maxsize=1)
@@ -133,7 +134,7 @@ def _fused_linear_cross_entropy():
     # `trust_remote_code=True` is required until `trustedKernelPublisher` is enabled for `trl-lib` on
     # the Hub. Drop it once it is.
     return get_kernel(
-        _FUSED_LINEAR_CE_KERNEL, version=_FUSED_LINEAR_CE_VERSION, trust_remote_code=True
+        _FUSED_LINEAR_CE_KERNEL, revision=_FUSED_LINEAR_CE_REVISION, trust_remote_code=True
     ).fused_linear_cross_entropy
 
 
