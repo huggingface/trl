@@ -399,6 +399,8 @@ Verified configurations (H100 nodes, sequence length 2048, bf16, per-device batc
 
 These are real training runs, not just "it fits": GLM-5.2 goes from loss 3.3 to 2.3 in 50 steps on tulu-3 chat data, GLM-4.5-Air full fine-tuning from 3.35 to 2.13 in 20.
 
+Read the step times together with the batch they process: the expert-parallel group works on a *shared* batch (only the `fsdp` dimension is data-parallel), so a step in the `ep=32 × fsdp=2` rows is 2 sequences — about 4,096 tokens — not 64. Step time tells you the update cadence; multiply by the `fsdp` size, not the GPU count, to get throughput.
+
 What to expect operationally at this scale:
 
 1. **Loading is the slow part, and it is filesystem-bound.** A cold multi-node load reads the checkpoint at well under 1 GiB/s per node (every node reads the full checkpoint, and the loader's access pattern defeats readahead) — 13 to 31 minutes for the models above. The same load from a warm page cache runs at over 10 GiB/s. If your nodes have the RAM, prefetching the shards with large sequential reads before `from_pretrained` (each local rank reading an interleaved subset) recovers most of that gap.
