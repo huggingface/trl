@@ -55,7 +55,9 @@ deepspeed = [
 kernels = [  # transformers renamed the "hub-kernels" extra to "kernels" in 5.1.0
     "transformers[kernels]",  # transformers >= 5.1.0
     "transformers[hub-kernels]",  # transformers < 5.1.0
-    "kernels>=0.14.0",  # `get_kernel(trust_remote_code=...)`, needed by loss_type="cce"
+    # `get_kernel(trust_remote_code=...)`, needed by loss_type="cce". Not in `dev`: the minimum-versions
+    # CI job pins an old transformers, whose `hub-kernels` extra caps `kernels` well below this.
+    "kernels>=0.14.0",
 ]
 liger = [
     "liger-kernel>=0.8.2"
@@ -110,7 +112,6 @@ dev = [
     # kernels: transformers renamed the "hub-kernels" extra to "kernels" in 5.1.0
     "transformers[kernels]",  # transformers >= 5.1.0
     "transformers[hub-kernels]",  # transformers < 5.1.0
-    "kernels>=0.14.0",  # `get_kernel(trust_remote_code=...)`, needed by loss_type="cce"
     # liger
     "liger-kernel>=0.8.2",
     # openreward (requires Python 3.11+)
