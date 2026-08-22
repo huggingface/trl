@@ -122,7 +122,7 @@ def _chunk(h, w, b, lbl, logit_scale, final_logit_softcapping):
 
 
 # Pinned so a new upload cannot silently change the loss under a running job.
-_FUSED_LINEAR_CE_KERNEL = "qgallouedec/fused-linear-ce"  # TODO: move to `trl-lib` once the kernel is transferred
+_FUSED_LINEAR_CE_KERNEL = "trl-lib/fused-linear-ce"
 _FUSED_LINEAR_CE_VERSION = 1
 
 
@@ -130,8 +130,8 @@ _FUSED_LINEAR_CE_VERSION = 1
 def _fused_linear_cross_entropy():
     from kernels import get_kernel
 
-    # `trust_remote_code=True` is required while the kernel lives outside an organisation with
-    # `trustedKernelPublisher` enabled on the Hub. Drop it once the repository moves to one.
+    # `trust_remote_code=True` is required until `trustedKernelPublisher` is enabled for `trl-lib` on
+    # the Hub. Drop it once it is.
     return get_kernel(
         _FUSED_LINEAR_CE_KERNEL, version=_FUSED_LINEAR_CE_VERSION, trust_remote_code=True
     ).fused_linear_cross_entropy
