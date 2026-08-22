@@ -372,6 +372,39 @@ This command automatically:
 - [DeepSpeed Sequence Parallelism Documentation](https://www.deepspeed.ai/tutorials/ds-sequence/)
 - [Snowflake Engineering Blog: Arctic Long Sequence Training (ALST)](https://www.snowflake.com/en/engineering-blog/arctic-long-sequence-training-multi-million-token-ai/)
 
+## Training MoE Models at the 100B–753B Scale
+
+Mixture-of-experts models put most of their parameters in the expert weights, and expert parallelism shards exactly those: `DistributedConfig(tp_size=E, fsdp_size=D, enable_expert_parallel=True)` at `from_pretrained` time places the experts across `E` GPUs and shards everything else — dense trunk, and optimizer state for both — across `D`. The model loads directly onto this 2-D mesh, so no rank ever materializes it whole, and [`SFTTrainer`] trains it like any other model:
+
+```python
+from transformers import AutoModelForCausalLM
+from transformers.distributed import DistributedConfig
+
+model = AutoModelForCausalLM.from_pretrained(
+    "zai-org/GLM-5.2",
+    dtype=torch.bfloat16,
+    distributed_config=DistributedConfig(tp_size=32, fsdp_size=2, enable_expert_parallel=True),
+)
+trainer = SFTTrainer(model=model, args=training_args, train_dataset=dataset)
+```
+
+Verified configurations (H100 nodes, sequence length 2048, bf16, per-device batch 1, the default `loss_type="chunked_nll"`, gradient checkpointing), from the runnable example in [`examples/sft_moe_expert_parallel/`](https://github.com/huggingface/trl/tree/main/examples/sft_moe_expert_parallel):
+
+| Model | Training | GPUs | Config | Step time | Peak GPU memory |
+|---|---|---|---|---|---|
+| Qwen3-30B-A3B | full FT | 8 (1 node) | `ep=8` | 0.9 s | 34 GB |
+| GLM-4.5-Air (110B) | full FT | 64 (8 nodes) | `ep=32 × fsdp=2` | 3.7 s | 41 GB |
+| GLM-4.6 (357B) | LoRA | 16 (2 nodes) | `ep=16` | 4.4 s | 73 GB |
+| GLM-5.2 (753B) | LoRA | 64 (8 nodes) | `ep=32 × fsdp=2` | 3.1 s | 56 GB |
+
+These are real training runs, not just "it fits": GLM-5.2 goes from loss 3.3 to 2.3 in 50 steps on tulu-3 chat data, GLM-4.5-Air full fine-tuning from 3.35 to 2.13 in 20.
+
+What to expect operationally at this scale:
+
+1. **Loading is the slow part, and it is filesystem-bound.** A cold multi-node load reads the checkpoint at well under 1 GiB/s per node (every node reads the full checkpoint, and the loader's access pattern defeats readahead) — 13 to 31 minutes for the models above. The same load from a warm page cache runs at over 10 GiB/s. If your nodes have the RAM, prefetching the shards with large sequential reads before `from_pretrained` (each local rank reading an interleaved subset) recovers most of that gap.
+2. **Full-model saving gathers to one rank.** `trainer.save_model()` writes a standard HF checkpoint, at roughly 0.2–0.4 GiB/s (19 minutes for the 206 GiB Air checkpoint). LoRA adapter saves are seconds regardless of model size.
+3. **Memory scales the way the mesh says it should.** Expert parameters, gradients, and optimizer state divide by `ep × fsdp`; full fine-tuning of the 110B model peaks at 41 GB per GPU across 64 GPUs.
+
 ## Multi-Node Training
 
 When a single machine doesn't have enough GPUs, TRL can scale training across multiple machines (nodes) using [🤗 Accelerate](https://huggingface.co/docs/accelerate/basic_tutorials/launch#multi-node-training).
