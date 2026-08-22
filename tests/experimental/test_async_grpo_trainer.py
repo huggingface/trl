@@ -57,6 +57,10 @@ from trl.trainer.base_trainer import _BaseTrainer
 from ..testing_utils import TrlTestCase, is_ampere_or_newer
 
 
+# The trainer loads the model with Flash Attention, which requires a `head_size` multiple of 8. Hence the `small-*`
+# model (`head_size=32`) below, rather than the usual `tiny-*` one (`head_size=2`).
+
+
 def dummy_reward_func(completions, **kwargs):
     return [float(hash(c[0]["content"]) % 100) / 100.0 for c in completions]
 
@@ -153,7 +157,7 @@ class _StubWeightTransfer:
 class TestAsyncGRPOTrainer(TrlTestCase):
     def test_init_minimal(self):
         # Test that AsyncGRPOTrainer can be instantiated with only model, reward_model and train_dataset
-        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
         AsyncGRPOTrainer(
             model=model_id,
@@ -163,13 +167,8 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             weight_transfer=_StubWeightTransfer(),
         )
 
-    @pytest.mark.xfail(
-        reason="Flash Attention rejects a head_size that is not a multiple of 8, and the tiny models are "
-        "hidden_size=8 over 4 attention heads (head_size=2), so the forward pass raises "
-        "(https://github.com/huggingface/trl/issues/6837)",
-    )
     def test_train(self):
-        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
 
         training_args = AsyncGRPOConfig(
@@ -202,16 +201,11 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    @pytest.mark.xfail(
-        reason="Flash Attention rejects a head_size that is not a multiple of 8, and the tiny models are "
-        "hidden_size=8 over 4 attention heads (head_size=2), so the forward pass raises "
-        "(https://github.com/huggingface/trl/issues/6837)",
-    )
     def test_resume_from_checkpoint(self):
         # Checks that ignore_data_skip is True and that resume doesn't crash. The stub worker is not an
         # AsyncRolloutWorker, so the checkpoint-write and resume-read paths stay inert here — those are
         # covered by TestRolloutStateCheckpoint.
-        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
         tokenizer = AutoTokenizer.from_pretrained(model_id)
 
@@ -270,7 +264,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         training_args = AsyncGRPOConfig(output_dir=self.tmp_dir, max_steps=5, report_to="none")
         with pytest.raises(ValueError, match="`train_dataset` is required"):
             AsyncGRPOTrainer(
-                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                model="trl-internal-testing/small-Qwen2ForCausalLM-2.5",
                 reward_funcs=dummy_reward_func,
                 args=training_args,
             )
@@ -285,7 +279,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         args = AsyncGRPOConfig(output_dir=self.tmp_dir, report_to="none")  # max_steps unset
         with pytest.raises(ValueError, match="max_steps"):
             AsyncGRPOTrainer(
-                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                model="trl-internal-testing/small-Qwen2ForCausalLM-2.5",
                 reward_funcs=dummy_reward_func,
                 args=args,
                 environment_factory=DummyEnvironment,
@@ -303,7 +297,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         args = AsyncGRPOConfig(output_dir=self.tmp_dir, max_steps=1, report_to="none")
         with pytest.raises(ValueError, match="requires a `train_dataset`"):
             AsyncGRPOTrainer(
-                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                model="trl-internal-testing/small-Qwen2ForCausalLM-2.5",
                 reward_funcs=dummy_reward_func,
                 args=args,
                 environment_factory={"a": EnvA, "b": EnvB},
@@ -1049,7 +1043,7 @@ class TestEpochStop(TrlTestCase):
     """
 
     def _train(self, fork_k, num_train_epochs=2):
-        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
         args = AsyncGRPOConfig(
             output_dir=self.tmp_dir,
@@ -1063,16 +1057,16 @@ class TestEpochStop(TrlTestCase):
         )
         worker = _StubRolloutWorker(AutoTokenizer.from_pretrained(model_id), dataset, num_generations=3, fork_k=fork_k)
         trainer = AsyncGRPOTrainer(
-            model=model_id, reward_funcs=dummy_reward_func, args=args, train_dataset=dataset, rollout_worker=worker
+            model=model_id,
+            reward_funcs=dummy_reward_func,
+            args=args,
+            train_dataset=dataset,
+            rollout_worker=worker,
+            weight_transfer=_StubWeightTransfer(),
         )
         trainer.train()
         return trainer, len(dataset)
 
-    @pytest.mark.xfail(
-        reason="Flash Attention rejects a head_size that is not a multiple of 8, and the tiny models are "
-        "hidden_size=8 over 4 attention heads (head_size=2), so the forward pass raises "
-        "(https://github.com/huggingface/trl/issues/6837)",
-    )
     def test_epoch_stop_is_fork_independent(self):
         no_fork, num_prompts = self._train(fork_k=1)
         forked, _ = self._train(fork_k=3)
