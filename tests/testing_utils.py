@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import functools
+import importlib.metadata
 import signal
 import warnings
 from collections.abc import Callable
@@ -20,6 +21,7 @@ from collections.abc import Callable
 import psutil
 import pytest
 import torch
+from packaging.version import Version
 from transformers import is_bitsandbytes_available, is_comet_available, is_sklearn_available, is_wandb_available
 from transformers.testing_utils import backend_device_count, torch_device
 from transformers.utils import (
@@ -49,6 +51,12 @@ require_bitsandbytes = pytest.mark.skipif(not is_bitsandbytes_available(), reaso
 require_comet = pytest.mark.skipif(not is_comet_available(), reason="test requires comet_ml")
 require_harbor = pytest.mark.skipif(not is_harbor_available(), reason="test requires harbor")
 require_kernels = pytest.mark.skipif(not is_kernels_available(), reason="test requires kernels")
+# `loss_type="cce"` calls `get_kernel(trust_remote_code=...)`, which older `kernels` do not accept. The
+# minimum-versions CI job resolves to 0.9.0, so gate on the version and not just on the import.
+require_kernels_trust_remote_code = pytest.mark.skipif(
+    not is_kernels_available() or Version(importlib.metadata.version("kernels")) < Version("0.14.0"),
+    reason="test requires kernels>=0.14.0",
+)
 require_liger_kernel = pytest.mark.skipif(not is_liger_kernel_available(), reason="test requires liger-kernel")
 require_math_latex = pytest.mark.skipif(not is_math_verify_available(), reason="test requires math_verify")
 require_mergekit = pytest.mark.skipif(not is_mergekit_available(), reason="test requires mergekit")
