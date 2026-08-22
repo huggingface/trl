@@ -26,6 +26,12 @@ Fine-tune Qwen3-8B on 1,048,576-token sequences, one 8xH100 node.
 Context parallelism splits each sequence across the 8 GPUs, so every GPU holds 131,072 tokens and
 attention is computed as a ring. One book-length sequence per step, 364 s/step, 56.2 GB per GPU.
 
+The accelerate config sets `fsdp_activation_checkpointing_offload`, which is what keeps an 8B model
+inside 80 GB at this length. That option is not released yet, so until
+https://github.com/huggingface/accelerate/pull/4175 lands, install accelerate from its branch:
+
+pip install git+https://github.com/huggingface/accelerate.git@fsdp2-activation-offload
+
 accelerate launch \
     --config_file examples/sft_qwen3_8b_1m_context/context_parallel_8gpu.yaml \
     examples/sft_qwen3_8b_1m_context/sft_qwen3_8b_1m_context.py
@@ -71,6 +77,8 @@ def main():
         output_dir="Qwen3-8B-1M",
         max_length=SEQ_LEN,
         per_device_train_batch_size=1,
+        # One book-length sequence is one step, so the default of 500 would log nothing at all.
+        logging_steps=1,
         # The sequence has to divide `cp_size * 2`, which the collator handles by padding.
         pad_to_multiple_of=16,
         # Activation checkpointing is already enabled in the accelerate config; setting both raises.

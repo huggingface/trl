@@ -236,7 +236,7 @@ Context length scales with the number of nodes: sequence length and GPU count ca
 The levers, roughly in the order you will need them as model size or sequence length grows:
 
 1. **Keep the default `loss_type="chunked_nll"`.** At 1M tokens, materializing `[seq, vocab]` logits costs tens of GB per GPU; the chunked loss never does.
-2. **Offload checkpointed activations to host memory** (≥ ~1.5M tokens, or ≥ ~8B parameters): set `fsdp_activation_checkpointing_offload: true` in the accelerate FSDP config. Each checkpointed layer's input — the dominant surviving activation, `layers × seq/cp × hidden` bytes — moves to pinned host memory during the forward and returns on demand during the backward.
+2. **Offload checkpointed activations to host memory** (≥ ~1.5M tokens, or ≥ ~8B parameters): set `fsdp_activation_checkpointing_offload: true` in the accelerate FSDP config. This option ships with [accelerate#4175](https://github.com/huggingface/accelerate/pull/4175); until that lands, install accelerate from its branch. Each checkpointed layer's input — the dominant surviving activation, `layers × seq/cp × hidden` bytes — moves to pinned host memory during the forward and returns on demand during the backward.
 3. **Context extension needs RoPE scaling.** A base model evaluated at positions far beyond its trained range starts at a high loss (10.6 vs 4.4 for Qwen3-8B at 1M with YaRN ×32). Configure it at load time, and note that in transformers v5 `rope_theta` lives inside `rope_parameters`, so the override must carry it:
 
    ```python
