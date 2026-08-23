@@ -7,6 +7,10 @@
 #SBATCH --mem=0
 #SBATCH --time=04:00:00
 
+# Warm the page cache before the sharded load (4-6x on cold multi-node loads; needs
+# node RAM >= checkpoint size)
+export HF_SHARD_PREFETCH=4
+
 MASTER=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -1)
 # ahostsv4 avoids link-local IPv6 addresses, which torchrun cannot rendezvous on
 MASTER_IP=$(getent ahostsv4 "$MASTER" | awk 'NR==1{print $1}')
