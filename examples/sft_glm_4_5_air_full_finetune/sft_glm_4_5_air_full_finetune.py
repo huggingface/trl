@@ -21,6 +21,10 @@ mesh, which is what makes full fine-tuning of a 110B model peak at 41 GB per GPU
 3.7 s/step at sequence length 2048, loss 3.35 -> 2.13 in 20 steps on tulu-3 chat data; the final
 `save_model` gathers and writes the full 206 GiB checkpoint in standard HF format (~19 minutes).
 
+This config reproduces the measured run above as-is. For the throughput levers on top of it
+(packing, gradient accumulation, batch sizing), see "Making it fast" in
+docs/source/distributing_training.md.
+
 Launch from this directory:
 
 sbatch sft_glm_4_5_air_full_finetune.slurm

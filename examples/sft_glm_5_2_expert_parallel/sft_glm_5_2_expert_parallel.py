@@ -20,6 +20,10 @@ LoRA fine-tune GLM-5.2 (753B) on 64 H100s across 8 nodes.
 materializes it whole. Measured: 3.1 s/step at sequence length 2048, 56 GB peak per GPU, loss
 3.3 -> 2.3 in 50 steps on tulu-3 chat data; the adapter saves in seconds.
 
+This config reproduces the measured run above as-is. For the throughput levers on top of it
+(packing, gradient accumulation, batch sizing), see "Making it fast" in
+docs/source/distributing_training.md.
+
 Launch from this directory:
 
 sbatch sft_glm_5_2_expert_parallel.slurm

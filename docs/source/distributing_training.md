@@ -417,7 +417,7 @@ Every lever below is measured (Qwen3-30B-A3B and GLM-4.5-Air, 8–16×H100); tog
 - **Raise `per_device_train_batch_size` to your memory budget** — sequence length doesn't matter once packed (per-token cost is flat); batch does.
 - **`dataset_num_proc=16`** — tokenization otherwise silently costs many single-threaded minutes at scale.
 - **Measure with ≥30 steps** — short runs understate steady-state throughput by 10–25%.
-- Loading: `HF_SHARD_PREFETCH=4` plus a raised IO-worker count (see above). Saving: sharded DCP with `dcp.async_save` blocks training seconds, not minutes; consolidate to HF format offline.
+- Loading: `HF_SHARD_PREFETCH=4` (see above). Saving: sharded DCP with `dcp.async_save` blocks training seconds, not minutes; consolidate to HF format offline.
 
 Scaling across nodes costs ~15% per-GPU throughput at 2 nodes (85% scaling efficiency, GLM-4.5-Air, ep=16). MFU rises with active-parameter count: ~5% at 3.35B-active, ~9.5% at 13.5B-active on this stack.
 
