@@ -1134,6 +1134,34 @@ class GRPOConfig(_BaseConfig):
             )
             self.vllm_importance_sampling_clip_max = self.vllm_importance_sampling_cap
 
+        if self.use_vllm and self.vllm_importance_sampling_correction:
+            # vLLM is asked for `processed_logprobs`, which are renormalized over the support that survives
+            # top_p/top_k/min_p, while the trainer takes a full-vocab log-softmax. Their difference therefore carries
+            # log(S), where S is the surviving mass, on top of the train/inference mismatch the correction exists to
+            # measure. Measured on one H100: `sampling/sampling_logp_difference/mean` reads |log(top_p)| exactly, i.e.
+            # 0.105 at top_p=0.9 and 0.223 at top_p=0.8 against 0.001 at top_p=1.0.
+            truncating = [
+                name
+                for name, active in (
+                    ("top_p", self.top_p < 1.0),
+                    ("top_k", self.top_k > 0),
+                    ("min_p", self.min_p is not None and self.min_p > 0.0),
+                )
+                if active
+            ]
+            if truncating:
+                warnings.warn(
+                    f"{' and '.join(truncating)} truncates sampling, which biases "
+                    "`sampling/sampling_logp_difference` and the importance-sampling ratio derived from it: vLLM "
+                    "renormalizes its logprobs over the surviving tokens while the trainer normalizes over the full "
+                    "vocabulary, so their difference includes the log of the surviving probability mass. Set "
+                    "`vllm_importance_sampling_correction=False`, or keep the sampling defaults (`top_p=1.0`, "
+                    "`top_k=0`, `min_p=None`), until the correction accounts for truncation. See "
+                    "https://github.com/huggingface/trl/issues/6789.",
+                    UserWarning,
+                    stacklevel=3,
+                )
+
         if (
             self.vllm_importance_sampling_clip_min is not None
             and self.vllm_importance_sampling_clip_max is not None

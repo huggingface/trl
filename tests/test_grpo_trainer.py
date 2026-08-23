@@ -2688,6 +2688,54 @@ class TestGRPOTrainer(TrlTestCase):
         expected_warning = "weights each sequence by its completion length"
         assert (expected_warning in caplog.text) == (loss_type != "grpo")
 
+    @pytest.mark.parametrize(
+        ("top_p", "top_k", "min_p", "should_warn"),
+        [
+            (1.0, 0, None, False),  # defaults: nothing is truncated, the two distributions agree
+            (0.9, 0, None, True),
+            (1.0, 50, None, True),
+            (1.0, 0, 0.05, True),
+            (0.9, 50, 0.05, True),
+        ],
+    )
+    def test_warning_raised_truncated_sampling_with_importance_sampling_correction(
+        self, top_p, top_k, min_p, should_warn
+    ):
+        """Truncated sampling biases the vLLM importance-sampling ratio.
+
+        vLLM returns logprobs renormalized over the surviving support while the trainer takes a full-vocab log-softmax,
+        so their difference carries `log S`, the log of the mass that survives truncation, on top of the
+        train/inference mismatch the correction is meant to measure. Warn instead of correcting silently.
+        """
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            GRPOConfig(
+                output_dir=self.tmp_dir,
+                use_vllm=True,
+                vllm_importance_sampling_correction=True,
+                top_p=top_p,
+                top_k=top_k,
+                min_p=min_p,
+                report_to="none",
+            )
+
+        messages = [str(w.message) for w in caught]
+        assert any("biases `sampling/sampling_logp_difference`" in m for m in messages) == should_warn
+
+    def test_no_truncation_warning_without_importance_sampling_correction(self):
+        """The bias only exists when the correction consumes vLLM's logprobs, so truncation alone must stay silent."""
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            GRPOConfig(
+                output_dir=self.tmp_dir,
+                use_vllm=True,
+                vllm_importance_sampling_correction=False,
+                top_p=0.9,
+                report_to="none",
+            )
+
+        assert not any("biases `sampling/sampling_logp_difference`" in str(w.message) for w in caught)
+
     def test_train_num_generations_larger_than_batch_size(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
