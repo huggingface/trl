@@ -15,12 +15,11 @@
 from dataclasses import dataclass, field
 from typing import Any
 
-from ...trainer.base_config import _BaseConfig
+from .base_config import _BaseConfig
 
 
 @dataclass
 class DistillationConfig(_BaseConfig):
-    # docstyle-ignore
     r"""
     Configuration class for the [`DistillationTrainer`].
 
@@ -35,12 +34,12 @@ class DistillationConfig(_BaseConfig):
         > Parameters that control the model and the teacher model
 
         model_init_kwargs (`str` or `dict[str, Any]`, *optional*):
-            Keyword arguments for `AutoModelForCausalLM.from_pretrained`, used when the `model` argument of the
-            trainer is provided as a string.
+            Keyword arguments for `AutoModelForCausalLM.from_pretrained`, used when the `model` argument of the trainer
+            is provided as a string.
         trust_remote_code (`bool`, *optional*, defaults to `False`):
             Whether to allow loading models and tokenizers that ship custom Python code from the Hub. Forwarded to
-            [`~transformers.AutoModelForCausalLM.from_pretrained`] and
-            [`~transformers.AutoTokenizer.from_pretrained`], for both the student and teacher.
+            [`~transformers.AutoModelForCausalLM.from_pretrained`] and [`~transformers.AutoTokenizer.from_pretrained`],
+            for both the student and teacher.
         teacher_model_name_or_path (`str`, *optional*):
             Model name or path for the teacher model. Used when the teacher is loaded locally.
         teacher_model_revision (`str`, *optional*):
@@ -140,9 +139,9 @@ class DistillationConfig(_BaseConfig):
         > Parameters that control the logging
 
         log_completions (`bool`, *optional*, defaults to `False`):
-            Whether to log a sample of (prompt, completion) pairs every `logging_steps` steps. If `rich` is
-            installed, it prints the sample. If `wandb` and/or `trackio` logging is enabled, it logs it to `wandb`
-            and/or `trackio`.
+            Whether to log a sample of (prompt, completion) pairs every `logging_steps` steps. If `rich` is installed,
+            it prints the sample. If `wandb` and/or `trackio` logging is enabled, it logs it to `wandb` and/or
+            `trackio`.
         num_completions_to_print (`int`, *optional*):
             Number of completions to print with `rich`. If `None`, all completions are logged.
         log_unique_prompts (`bool`, *optional*, defaults to `False`):
@@ -157,7 +156,12 @@ class DistillationConfig(_BaseConfig):
     > - `learning_rate`: Defaults to `1e-6` instead of `5e-5`.
     """
 
-    _VALID_DICT_FIELDS = _BaseConfig._VALID_DICT_FIELDS + ["model_init_kwargs", "teacher_model_init_kwargs"]
+    _VALID_DICT_FIELDS = _BaseConfig._VALID_DICT_FIELDS + [
+        "model_init_kwargs",
+        "teacher_model_init_kwargs",
+        "generation_kwargs",
+        "chat_template_kwargs",
+    ]
 
     # Parameters whose default values are overridden from TrainingArguments
     learning_rate: float = field(
@@ -254,7 +258,7 @@ class DistillationConfig(_BaseConfig):
             "must be a value between 0.0 and 1.0. Typical values are in the 0.01-0.2 range."
         },
     )
-    generation_kwargs: dict | None = field(
+    generation_kwargs: dict | str | None = field(
         default=None,
         metadata={
             "help": "Additional keyword arguments to pass to `GenerationConfig` (if using transformers) or "
@@ -263,7 +267,7 @@ class DistillationConfig(_BaseConfig):
             "conflict with the other generation parameters (like `min_p`, `top_p`, etc.), they will override them."
         },
     )
-    chat_template_kwargs: dict | None = field(
+    chat_template_kwargs: dict | str | None = field(
         default=None,
         metadata={
             "help": "Additional keyword arguments to pass to the `apply_chat_template` function when generating "

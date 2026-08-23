@@ -25,13 +25,14 @@ from typing import Any, Optional
 import numpy as np
 import torch
 import torch.nn.functional as F
+import transformers
 from accelerate.logging import get_logger
 from accelerate.utils import gather_object, is_peft_model, set_seed
 from datasets import Dataset, IterableDataset
 from packaging.version import Version
 from torch.utils.data import DataLoader, Sampler
 from transformers import (
-    AutoTokenizer,
+    AutoProcessor,
     BitsAndBytesConfig,
     GenerationConfig,
     PreTrainedModel,
@@ -43,15 +44,16 @@ from transformers import (
 )
 from transformers.utils import is_liger_kernel_available, is_peft_available, is_rich_available
 
-from ...data_utils import is_conversational
-from ...distributed import DistributedBackend
-from ...extras.profiling import profiling_context, profiling_decorator
-from ...generation.vllm_generation import VLLMGeneration
-from ...import_utils import is_vllm_available
-from ...models import prepare_deepspeed
-from ...models.utils import _ForwardRedirection, unwrap_model_for_generation
-from ...trainer.base_trainer import _BaseTrainer
-from ...trainer.utils import (
+from ..data_utils import apply_chat_template, is_conversational, prepare_multimodal_messages
+from ..distributed import DistributedBackend
+from ..extras.profiling import profiling_context, profiling_decorator
+from ..generation.vllm_generation import VLLMGeneration
+from ..import_utils import is_vllm_available
+from ..models import prepare_deepspeed
+from ..models.utils import _ForwardRedirection, unwrap_model_for_generation
+from .base_trainer import _BaseTrainer
+from .distillation_config import DistillationConfig
+from .utils import (
     RepeatSampler,
     create_model_from_path,
     disable_dropout_in_model,
@@ -62,9 +64,10 @@ from ...trainer.utils import (
     print_prompt_completions_sample,
     repeat_iterable_dataset,
     shuffle_sequence_dict,
+    split_pixel_values_by_grid,
     split_tensor_dict,
+    unsplit_pixel_values_by_grid,
 )
-from .distillation_config import DistillationConfig
 
 
 if is_liger_kernel_available():
@@ -293,7 +296,7 @@ class DistillationTrainer(_BaseTrainer):
     Example:
 
     ```python
-    >>> from trl.experimental.distillation import DistillationTrainer
+    >>> from trl import DistillationTrainer
     >>> from datasets import load_dataset
 
     >>> dataset = load_dataset("trl-lib/tldr", split="train")
@@ -341,9 +344,10 @@ class DistillationTrainer(_BaseTrainer):
         eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`], [`~datasets.DatasetDict`], [`~datasets.IterableDatasetDict`] or `dict[str, Dataset | IterableDataset]`):
             Dataset to use for evaluation. It must meet the same requirements as `train_dataset`.
         processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.ProcessorMixin`], *optional*):
-            Processing class used to process the data. If `None`, it is loaded from the model's name with
-            [`~transformers.AutoTokenizer.from_pretrained`]. A padding token, `tokenizer.pad_token`, must be set; if
-            the processing class has not set one, `tokenizer.eos_token` is used as the default.
+            Processing class used to process the data. The padding side must be set to "left". If `None`, the
+            processing class is loaded from the model's name with [`~transformers.AutoProcessor.from_pretrained`]. A
+            padding token, `tokenizer.pad_token`, must be set. If the processing class has not set a padding token,
+            `tokenizer.eos_token` will be used as the default.
         callbacks (list of [`~transformers.TrainerCallback`], *optional*):
             List of callbacks to customize the training loop. Will add those to the list of default callbacks detailed
             in [here](https://huggingface.co/docs/transformers/main_classes/callback).
@@ -437,17 +441,27 @@ class DistillationTrainer(_BaseTrainer):
             else inspect.signature(model.get_base_model().forward).parameters.keys()
         )
 
-        # Processing class (tokenizer)
-        if processing_class is None and model_name_or_path is not None:
-            processing_class = AutoTokenizer.from_pretrained(
-                model_name_or_path, trust_remote_code=args.trust_remote_code
+        # Processing class
+        if processing_class is None:
+            processing_class = AutoProcessor.from_pretrained(
+                model_name_or_path,
+                truncation_side="left",
+                padding_side="left",
+                trust_remote_code=args.trust_remote_code,
             )
-        if processing_class is not None:
-            if processing_class.pad_token is None:
-                processing_class.pad_token = processing_class.eos_token
-        self._tokenizer = (
-            processing_class.tokenizer if isinstance(processing_class, ProcessorMixin) else processing_class
-        )
+
+        # Handle pad token for processors or tokenizers
+        if isinstance(processing_class, ProcessorMixin):
+            self._tokenizer = processing_class.tokenizer
+            self._is_vlm = True
+        elif isinstance(processing_class, PreTrainedTokenizerBase):
+            self._tokenizer = processing_class
+            self._is_vlm = False
+        else:
+            raise TypeError("The `processing_class` must be either a `PreTrainedTokenizerBase` or a `ProcessorMixin`")
+
+        if self._tokenizer.pad_token is None:
+            self._tokenizer.pad_token = self._tokenizer.eos_token
 
         # PEFT
         if peft_config is not None:
@@ -663,8 +677,14 @@ class DistillationTrainer(_BaseTrainer):
             # `logit_scale` or Gemma `final_logit_softcapping`. Refuse rather than silently optimize a different
             # objective than the model's real forward.
             if self.use_liger_kernel:
-                for name, config in [("student", self.model.config), ("teacher", teacher_model.config)]:
-                    scaled = getattr(config, "logit_scale", 1.0) not in (None, 1.0)
+                for name, model in [("student", self.model), ("teacher", teacher_model)]:
+                    # On VLMs the logit post-processing lives on `text_config`, so read it through
+                    # `get_text_config()`. Muse Glimmer names its pre-softcap multiplier `output_multiplier`.
+                    config = model.config.get_text_config()
+                    logit_scale = getattr(config, "logit_scale", None)
+                    if logit_scale is None:
+                        logit_scale = getattr(config, "output_multiplier", None)
+                    scaled = logit_scale not in (None, 1.0)
                     softcapped = getattr(config, "final_logit_softcapping", None) is not None
                     if scaled or softcapped:
                         raise ValueError(
@@ -917,27 +937,52 @@ class DistillationTrainer(_BaseTrainer):
                 self.args.dataloader_num_workers = num_workers
 
     def _tokenize_prompts(self, prompts: list):
-        """Tokenize prompts and extract multimodal fields for generation.
-
-        Conversational prompts (a list of chat messages) are rendered with the chat template and a trailing generation
-        prompt; standard prompts (plain strings) are tokenized directly. The per-example tools/environments path and
-        the image extraction are added with VLM support later (issue #6449).
-        """
+        """Tokenize prompts and extract images/multimodal fields for generation."""
         if is_conversational({"prompt": prompts[0]}):
+            # Normalize string content to content blocks for VLM processors that don't handle plain strings.
+            if self._is_vlm:
+                prompts = [prepare_multimodal_messages(prompt) for prompt in prompts]
+
+            # Extract images from messages for VLM support
+            images = []
+            has_images = False
+            for prompt in prompts:
+                prompt_images = []
+                for message in prompt:
+                    if isinstance(message["content"], list):
+                        for part in message["content"]:
+                            if part["type"] == "image":
+                                prompt_images.append(part["image"])
+                                has_images = True
+                images.append(prompt_images if prompt_images else None)
+            images = images if has_images else None
+
+            # Workaround for a bug in transformers 5.3.0 where some processors (e.g. Qwen2.5-VL) crash on
+            # batched unpadded input (transformers#44514).
+            # Fixed in transformers 5.4.0 (transformers#44563).
+            needs_padding_workaround = Version("5.3.0") <= Version(transformers.__version__) < Version("5.4.0")
             tokenized = self.processing_class.apply_chat_template(
                 conversation=prompts,
                 add_generation_prompt=True,
                 tokenize=True,
                 return_dict=True,
+                **({"padding": True} if needs_padding_workaround else {}),
                 **self.chat_template_kwargs,
             )
-            prompt_ids = tokenized["input_ids"]
+            if needs_padding_workaround:
+                # Unpad input_ids: remove padding tokens using attention_mask to get per-sequence lists
+                prompt_ids = [
+                    [tok for tok, m in zip(ids, mask, strict=True) if m]
+                    for ids, mask in zip(tokenized["input_ids"], tokenized["attention_mask"], strict=True)
+                ]
+            else:
+                prompt_ids = tokenized["input_ids"]
             # For VLMs, the processor returns extra multimodal fields (pixel_values, image_grid_thw, etc.)
             multimodal_fields = {k: v for k, v in tokenized.items() if k not in ("input_ids", "attention_mask")}
         else:
             prompt_ids = self.processing_class(text=prompts)["input_ids"]
+            images = None
             multimodal_fields = {}
-        images = None  # extracted from the messages once VLM support lands
         return prompt_ids, images, multimodal_fields
 
     def _generate_single_turn(self, prompt_ids, images, multimodal_fields):
@@ -1022,6 +1067,12 @@ class DistillationTrainer(_BaseTrainer):
         completion_lengths = torch.tensor([len(ids) for ids in completion_ids], device=device)
         agg_prompt_lengths = self.accelerator.gather(prompt_lengths)
         agg_completion_lengths = self.accelerator.gather(completion_lengths)
+        # Fail clearly if the generation backend returned no completions (avoids a cryptic min() error below).
+        if agg_completion_lengths.numel() == 0:
+            raise RuntimeError(
+                "No completions were generated. This usually means the generation backend failed to return any "
+                "results; see the generation logs above for the underlying error."
+            )
         total_prompt_tokens = agg_prompt_lengths.sum()
 
         # Log the metrics
@@ -1060,6 +1111,8 @@ class DistillationTrainer(_BaseTrainer):
         pixel_attention_mask=None,
         spatial_shapes=None,
         image_sizes=None,
+        token_type_ids=None,
+        mm_token_type_ids=None,
         image_position_ids=None,
     ):
         if is_peft_model(unwrapped_model):
@@ -1083,6 +1136,10 @@ class DistillationTrainer(_BaseTrainer):
         # For LLaVa-Next
         if image_sizes is not None:
             model_inputs["image_sizes"] = image_sizes
+        if token_type_ids is not None:
+            model_inputs["token_type_ids"] = token_type_ids
+        if mm_token_type_ids is not None:
+            model_inputs["mm_token_type_ids"] = mm_token_type_ids
         if image_position_ids is not None:
             model_inputs["image_position_ids"] = image_position_ids
 
@@ -1096,7 +1153,12 @@ class DistillationTrainer(_BaseTrainer):
         # `base_model` gives the backbone model (skipping `lm_head`) — text decoder for LMs, multimodal wrapper for
         # VLMs (so vision-token injection runs before the text decoder). `get_decoder()` won't do: on VLMs it
         # returns just the text stack and feeds image-placeholder IDs through it.
-        backbone = unwrapped_model.base_model
+        # Pre-5.0 transformers VLMs set `base_model_prefix = ""` so `base_model is self` (re-runs `lm_head`).
+        # Fall back to `.model` there.
+        if self._is_vlm and Version(transformers.__version__) < Version("5.0.0"):
+            backbone = unwrapped_model.model
+        else:
+            backbone = unwrapped_model.base_model
         last_hidden_state = backbone(**model_inputs).last_hidden_state
         # Exclude the last value: it corresponds to the next token pred
         last_hidden_state = last_hidden_state[:, :-1, :]  # (B, L-1, H)
@@ -1109,6 +1171,32 @@ class DistillationTrainer(_BaseTrainer):
         device = self.accelerator.device
 
         prompts = [x["prompt"] for x in inputs]
+
+        if "images" in inputs[0]:
+            images = [example.get("images") for example in inputs]
+        elif "image" in inputs[0]:
+            images = [[example.get("image")] if example.get("image") is not None else None for example in inputs]
+        else:
+            images = None
+        # Transformers requires at least one image in the batch, otherwise it throws an error
+        if images is not None and all(img_list == [] for img_list in images):
+            images = None
+
+        # If the prompts are conversational and the inputs contain images, we need to convert the prompts from
+        # [{"role": "user", "content": "What color is the sky?"}] to
+        # [{"role": "user", "content": [{"type": "image", "image": <Image>}, {"type": "text", "text": "What color is the sky?"}]}]
+        if images is not None:
+            if not is_conversational(inputs[0]):
+                raise ValueError(
+                    "Multimodal training requires conversational prompts. It looks like the dataset contains "
+                    "non-conversational inputs, likely because a chat template was applied before passing the dataset "
+                    "to the trainer. Please provide the raw conversational prompts and let the trainer apply the chat "
+                    "template internally."
+                )
+            prompts = [
+                prepare_multimodal_messages(prompt, images=image_list)
+                for prompt, image_list in zip(prompts, images, strict=True)
+            ]
 
         prompt_ids_list, completion_ids_list = self._generate(prompts)
 
@@ -1138,6 +1226,69 @@ class DistillationTrainer(_BaseTrainer):
 
         num_items_in_batch = self.accelerator.gather(completion_mask.sum()).sum()
 
+        num_images = [len(img_list) if img_list else 0 for img_list in images] if images is not None else None
+
+        # Get forward_kwargs for models with multimodal inputs.
+        if images is not None:
+            prompts_text = [
+                apply_chat_template({"prompt": prompt}, self.processing_class, **self.chat_template_kwargs)["prompt"]
+                for prompt in prompts
+            ]
+            prompt_inputs = self.processing_class(images=images, text=prompts_text, padding=True, return_tensors="pt")
+            prompt_inputs = super()._prepare_inputs(prompt_inputs)
+            forward_kwargs = {k: v for k, v in prompt_inputs.items() if k not in ["input_ids", "attention_mask"]}
+        else:
+            forward_kwargs = {}
+
+        # Recover LFM2-VL tile counts; the full processor drops row/column metadata.
+        num_tiles = None
+        if images is not None and "spatial_shapes" in forward_kwargs:
+            image_info = self.processing_class.image_processor(
+                images=images, return_tensors="pt", return_row_col_info=True
+            )
+            tiles_per_image = image_info["image_rows"] * image_info["image_cols"]
+            if self.processing_class.image_processor.use_thumbnail:
+                tiles_per_image = tiles_per_image + (tiles_per_image > 1).to(tiles_per_image.dtype)
+            num_tiles = [group.sum().item() for group in torch.split(tiles_per_image, num_images)]
+        # Same for InternVL, whose pixel_values is tile-indexed ([total_tiles, channels, height, width]).
+        elif (
+            images is not None
+            and forward_kwargs["pixel_values"].ndim == 4
+            and forward_kwargs["pixel_values"].size(0) != sum(num_images)
+        ):
+            num_patches = self.processing_class.image_processor(
+                images=images, crop_to_patches=True, return_tensors="pt"
+            )["num_patches"]
+            num_tiles = [group.sum().item() for group in torch.split(num_patches, num_images)]
+
+        # If token_type_ids are used, extend them with zeros for the completion part
+        if "token_type_ids" in forward_kwargs:
+            token_type_ids = forward_kwargs["token_type_ids"]
+            if self.pad_to_multiple_of is not None:
+                # Needed only with pad_to_multiple_of: otherwise prompt_ids and token_type_ids must have equal len
+                padding_size = prompt_ids.size(1) - token_type_ids.size(1)
+                if padding_size > 0:
+                    token_type_ids = torch.cat(
+                        [token_type_ids.new_zeros((token_type_ids.size(0), padding_size)), token_type_ids], dim=1
+                    )
+            forward_kwargs["token_type_ids"] = torch.cat(
+                [token_type_ids, token_type_ids.new_zeros(completion_ids.shape)], dim=1
+            )
+        # If mm_token_type_ids are used, extend them with zeros for the completion part
+        if "mm_token_type_ids" in forward_kwargs:
+            mm_token_type_ids = forward_kwargs["mm_token_type_ids"]
+            if self.pad_to_multiple_of is not None:
+                # Needed only with pad_to_multiple_of: otherwise prompt_ids and mm_token_type_ids must have equal len
+                padding_size = prompt_ids.size(1) - mm_token_type_ids.size(1)
+                if padding_size > 0:
+                    mm_token_type_ids = torch.cat(
+                        [mm_token_type_ids.new_zeros((mm_token_type_ids.size(0), padding_size)), mm_token_type_ids],
+                        dim=1,
+                    )
+            forward_kwargs["mm_token_type_ids"] = torch.cat(
+                [mm_token_type_ids, mm_token_type_ids.new_zeros(completion_ids.shape)], dim=1
+            )
+
         # Log the prompt and completion texts
         if self.log_completions:
             prompts_text = self.processing_class.batch_decode(prompt_ids, skip_special_tokens=True)
@@ -1152,6 +1303,26 @@ class DistillationTrainer(_BaseTrainer):
             "completion_mask": completion_mask,
             "num_items_in_batch": num_items_in_batch,
         }
+        if "pixel_values" in forward_kwargs:
+            output["pixel_values"] = forward_kwargs["pixel_values"]
+        if "image_grid_thw" in forward_kwargs:
+            output["image_grid_thw"] = forward_kwargs["image_grid_thw"]
+        if "pixel_attention_mask" in forward_kwargs:
+            output["pixel_attention_mask"] = forward_kwargs["pixel_attention_mask"]
+        if "spatial_shapes" in forward_kwargs:
+            output["spatial_shapes"] = forward_kwargs["spatial_shapes"]
+        if "image_sizes" in forward_kwargs:
+            output["image_sizes"] = forward_kwargs["image_sizes"]
+        if "token_type_ids" in forward_kwargs:
+            output["token_type_ids"] = forward_kwargs["token_type_ids"]
+        if "mm_token_type_ids" in forward_kwargs:
+            output["mm_token_type_ids"] = forward_kwargs["mm_token_type_ids"]
+        if "image_position_ids" in forward_kwargs:
+            output["image_position_ids"] = forward_kwargs["image_position_ids"]
+        if images is not None:
+            output["num_images"] = num_images
+            if num_tiles is not None:
+                output["num_tiles"] = num_tiles
         return output
 
     @profiling_decorator
@@ -1175,9 +1346,10 @@ class DistillationTrainer(_BaseTrainer):
             if self._step % generate_every == 0 or self._buffered_inputs is None:
                 # self._buffered_inputs=None can occur when resuming from a checkpoint
                 generation_batch = self._generate_and_score_completions(generation_batch)
+                generation_batch = split_pixel_values_by_grid(generation_batch)
                 generation_batch = shuffle_sequence_dict(generation_batch)
                 generation_batches = split_tensor_dict(generation_batch, self.args.gradient_accumulation_steps)
-                self._buffered_inputs = generation_batches
+                self._buffered_inputs = [unsplit_pixel_values_by_grid(batch) for batch in generation_batches]
             inputs = self._buffered_inputs[self._step % self.args.gradient_accumulation_steps]
         else:
             # In evaluation, there is neither batch grouping for generation, nor multiple iterations, hence
@@ -1223,8 +1395,21 @@ class DistillationTrainer(_BaseTrainer):
         completion_mask = inputs["completion_mask"]
         logits_to_keep = inputs["completion_ids"].size(1)  # only the completion tokens are trained on
 
+        # Multimodal (VLM) fields, extracted during generation and split to this micro-batch by `_prepare_inputs`.
+        multimodal_keys = (
+            "pixel_values",
+            "image_grid_thw",
+            "pixel_attention_mask",
+            "spatial_shapes",
+            "image_sizes",
+            "token_type_ids",
+            "mm_token_type_ids",
+            "image_position_ids",
+        )
+        multimodal_inputs = {k: inputs[k] for k in multimodal_keys if k in inputs}
+
         student_hidden_states = self._get_last_hidden_state(
-            unwrapped_student, input_ids, attention_mask, logits_to_keep
+            unwrapped_student, input_ids, attention_mask, logits_to_keep, **multimodal_inputs
         )
 
         # Route the teacher backbone through its own wrapper via `_forward_redirection` too, so FSDP/DeepSpeed
@@ -1240,6 +1425,7 @@ class DistillationTrainer(_BaseTrainer):
                 input_ids,
                 attention_mask,
                 logits_to_keep,
+                **multimodal_inputs,
             )
 
         student_lm_head = unwrapped_student.get_output_embeddings()
@@ -1286,11 +1472,18 @@ class DistillationTrainer(_BaseTrainer):
             # The fused kernel produces no entropy; `compute_loss` logs none for the Liger path.
             return loss, None, None
 
-        student_config, teacher_config = unwrapped_student.config, unwrapped_teacher.config
+        # On VLMs the logit post-processing lives on `text_config`, so read it through `get_text_config()`.
+        student_config = unwrapped_student.config.get_text_config()
+        teacher_config = unwrapped_teacher.config.get_text_config()
         # `logit_scale` is None on models that don't scale (e.g. MPT); read that as unscaled (1.0). A real 0.0 is kept
-        # as-is: the Liger guard rejects it, and the chunked path applies it faithfully.
-        student_logit_scale = getattr(student_config, "logit_scale", 1.0)
-        teacher_logit_scale = getattr(teacher_config, "logit_scale", 1.0)
+        # as-is: the Liger guard rejects it, and the chunked path applies it faithfully. Muse Glimmer applies the same
+        # pre-softcap multiplier under the name `output_multiplier`.
+        student_logit_scale = getattr(student_config, "logit_scale", None)
+        if student_logit_scale is None:
+            student_logit_scale = getattr(student_config, "output_multiplier", None)
+        teacher_logit_scale = getattr(teacher_config, "logit_scale", None)
+        if teacher_logit_scale is None:
+            teacher_logit_scale = getattr(teacher_config, "output_multiplier", None)
         student_logit_scale = 1.0 if student_logit_scale is None else student_logit_scale
         teacher_logit_scale = 1.0 if teacher_logit_scale is None else teacher_logit_scale
         loss, entropy_sum, n_valid = _chunked_divergence_loss(

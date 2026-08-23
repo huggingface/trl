@@ -19,7 +19,6 @@ from ...trainer.base_config import _BaseConfig
 
 @dataclass
 class PRMConfig(_BaseConfig):
-    # docstyle-ignore
     r"""
     Configuration class for the [`experimental.prm.PRMTrainer`].
 

@@ -1471,43 +1471,50 @@ class GRPOTrainer(_BaseTrainer):
         all_entropies = []
         all_aux_losses = []
         for start in range(0, input_ids.size(0), batch_size):
-            input_ids_batch = input_ids[start : start + batch_size]
-            attention_mask_batch = attention_mask[start : start + batch_size]
+            end = min(start + batch_size, input_ids.size(0))  # the last chunk can be smaller than batch_size
+            input_ids_batch = input_ids[start:end]
+            attention_mask_batch = attention_mask[start:end]
 
             # Build model inputs
             model_inputs = {"input_ids": input_ids_batch, "attention_mask": attention_mask_batch}
+            if num_images is not None:
+                cum_imgs = torch.tensor([0] + num_images).cumsum(0)
+                img_start, img_end = cum_imgs[start], cum_imgs[end]
             if image_grid_thw is not None and pixel_values is not None:
                 rows_per_image = image_grid_thw.prod(dim=-1)
                 rows_per_sample = torch.split(rows_per_image, num_images)
                 rows_per_sample = torch.stack([s.sum() for s in rows_per_sample])
                 cum_rows = torch.cat([torch.tensor([0], device=rows_per_sample.device), rows_per_sample.cumsum(0)])
-                row_start, row_end = cum_rows[start].item(), cum_rows[start + batch_size].item()
+                row_start, row_end = cum_rows[start].item(), cum_rows[end].item()
                 model_inputs["pixel_values"] = pixel_values[row_start:row_end]
-                cum_imgs = torch.tensor([0] + num_images).cumsum(0)
-                img_start, img_end = cum_imgs[start], cum_imgs[start + batch_size]
                 model_inputs["image_grid_thw"] = image_grid_thw[img_start:img_end]
             elif image_position_ids is not None and pixel_values is not None:
-                cum_imgs = torch.tensor([0] + num_images).cumsum(0)
-                img_start, img_end = cum_imgs[start], cum_imgs[start + batch_size]
                 model_inputs["pixel_values"] = pixel_values[img_start:img_end]
                 model_inputs["image_position_ids"] = image_position_ids[img_start:img_end]
             elif spatial_shapes is not None and pixel_values is not None:
                 # LFM2-VL tensors are tile-indexed.
                 cum_tiles = torch.tensor([0] + num_tiles).cumsum(0)
-                tile_start, tile_end = cum_tiles[start], cum_tiles[start + batch_size]
+                tile_start, tile_end = cum_tiles[start], cum_tiles[end]
                 model_inputs["pixel_values"] = pixel_values[tile_start:tile_end]
                 model_inputs["pixel_attention_mask"] = pixel_attention_mask[tile_start:tile_end]
                 model_inputs["spatial_shapes"] = spatial_shapes[tile_start:tile_end]
+            elif num_tiles is not None and pixel_values is not None:
+                # InternVL tensors are tile-indexed.
+                cum_tiles = torch.tensor([0] + num_tiles).cumsum(0)
+                tile_start, tile_end = cum_tiles[start], cum_tiles[end]
+                model_inputs["pixel_values"] = pixel_values[tile_start:tile_end]
+            elif pixel_values is not None and pixel_values.size(0) == sum(num_images):
+                model_inputs["pixel_values"] = pixel_values[img_start:img_end]
             elif pixel_values is not None:
-                model_inputs["pixel_values"] = pixel_values[start : start + batch_size]
+                model_inputs["pixel_values"] = pixel_values[start:end]
             if pixel_attention_mask is not None and spatial_shapes is None:
-                model_inputs["pixel_attention_mask"] = pixel_attention_mask[start : start + batch_size]
+                model_inputs["pixel_attention_mask"] = pixel_attention_mask[start:end]
             if image_sizes is not None:
-                model_inputs["image_sizes"] = image_sizes[start : start + batch_size]
+                model_inputs["image_sizes"] = image_sizes[img_start:img_end]
             if token_type_ids is not None:
-                model_inputs["token_type_ids"] = token_type_ids[start : start + batch_size]
+                model_inputs["token_type_ids"] = token_type_ids[start:end]
             if mm_token_type_ids is not None:
-                model_inputs["mm_token_type_ids"] = mm_token_type_ids[start : start + batch_size]
+                model_inputs["mm_token_type_ids"] = mm_token_type_ids[start:end]
 
             # Only add logits_to_keep if the model supports it
             if "logits_to_keep" in self.model_kwarg_keys:
@@ -2294,6 +2301,12 @@ class GRPOTrainer(_BaseTrainer):
             completion_lengths = torch.tensor([len(ids) for ids in completion_ids], device=device)
         agg_prompt_lengths = self.accelerator.gather(prompt_lengths)
         agg_completion_lengths = self.accelerator.gather(completion_lengths)
+        # Fail clearly if the generation backend returned no completions (avoids a cryptic min() error below).
+        if agg_completion_lengths.numel() == 0:
+            raise RuntimeError(
+                "No completions were generated. This usually means the generation backend failed to return any "
+                "results; see the generation logs above for the underlying error."
+            )
         total_prompt_tokens = agg_prompt_lengths.sum()
 
         # Log the metrics
@@ -2469,7 +2482,13 @@ class GRPOTrainer(_BaseTrainer):
             completion_mask, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
         ).to(device=device)
         if sampling_per_token_logps_list is not None:
-            sampling_per_token_logps = [torch.tensor(logps) for logps in sampling_per_token_logps_list]
+            # vLLM replaces a NaN token logprob with `None` (see `extract_logprobs`); map it back to NaN so the
+            # tensor builds (`torch.tensor([..., None, ...])` raises "Could not infer dtype of NoneType"). The NaN
+            # positions are neutralized in the importance-sampling ratio below so they contribute no correction.
+            sampling_per_token_logps = [
+                torch.tensor([float("nan") if x is None else x for x in logps])
+                for logps in sampling_per_token_logps_list
+            ]
             sampling_per_token_logps = pad(
                 sampling_per_token_logps,
                 padding_value=0.0,
@@ -2544,6 +2563,16 @@ class GRPOTrainer(_BaseTrainer):
             if self.processing_class.image_processor.use_thumbnail:
                 tiles_per_image = tiles_per_image + (tiles_per_image > 1).to(tiles_per_image.dtype)
             num_tiles = [group.sum().item() for group in torch.split(tiles_per_image, num_images)]
+        # Same for InternVL, whose pixel_values is tile-indexed ([total_tiles, channels, height, width]).
+        elif (
+            images is not None
+            and forward_kwargs["pixel_values"].ndim == 4
+            and forward_kwargs["pixel_values"].size(0) != sum(num_images)
+        ):
+            num_patches = self.processing_class.image_processor(
+                images=images, crop_to_patches=True, return_tensors="pt"
+            )["num_patches"]
+            num_tiles = [group.sum().item() for group in torch.split(num_patches, num_images)]
 
         # If token_type_ids are used, extend them with zeros for the completion part
         if "token_type_ids" in forward_kwargs:
@@ -2652,6 +2681,9 @@ class GRPOTrainer(_BaseTrainer):
             if self.use_vllm and self.vllm_importance_sampling_correction:
                 mask = completion_mask if tool_mask is None else completion_mask * tool_mask
                 per_token_logps_diff = (old_per_token_logps - sampling_per_token_logps) * mask
+                # Tokens whose sampling logprob was NaN (unavailable from vLLM) get a zero difference, so their
+                # importance ratio is exactly 1 (no correction) rather than propagating NaN through the loss.
+                per_token_logps_diff = torch.nan_to_num(per_token_logps_diff, nan=0.0)
 
                 sequence_level_is = self.vllm_importance_sampling_mode in ["sequence_mask", "sequence_truncate"]
                 if sequence_level_is:
@@ -2852,7 +2884,9 @@ class GRPOTrainer(_BaseTrainer):
         if self.use_vllm and self.vllm_importance_sampling_correction:
             delta = torch.abs(old_per_token_logps - sampling_per_token_logps)
             mask = completion_mask.bool() if tool_mask is None else (completion_mask * tool_mask).bool()
-            delta = delta[mask]
+            # Tokens vLLM could not score carry NaN, so exclude them rather than let them turn the reported
+            # divergence into NaN. Counting them as zero instead would understate the divergence.
+            delta = delta[mask & ~torch.isnan(delta)]
             mean_delta = torch.mean(delta) if delta.numel() > 0 else torch.tensor(0.0, device=device)
             max_delta = torch.max(delta) if delta.numel() > 0 else torch.tensor(0.0, device=device)
             self._metrics[mode]["sampling/sampling_logp_difference/mean"].append(
@@ -2966,6 +3000,7 @@ class GRPOTrainer(_BaseTrainer):
                 old_per_token_logps=inputs.get("old_per_token_logps"),
                 ref_per_token_logps=inputs.get("ref_per_token_logps"),
                 vllm_is_ratio=inputs.get("importance_sampling_ratio"),
+                num_items_in_batch=inputs.get("num_items_in_batch"),
             )
         # Extract metrics from the liger_grpo_loss output
         # KL divergence is the first metric when beta is non-zero
@@ -2976,7 +3011,16 @@ class GRPOTrainer(_BaseTrainer):
         if self.beta != 0.0:
             self._metrics[mode]["kl"].append(self.accelerator.gather(mean_kl).mean().item())
         self._metrics[mode]["clip_ratio"].append(self.accelerator.gather(clip_ratio).mean().item())
-        normalizer = self.current_gradient_accumulation_steps if mode == "train" else 1.0  # no accum in eval
+        # DAPO/CISPO/VESPO normalize by num_items_in_batch / num_processes (applied internally by
+        # the Liger loss), then need a `current_gradient_accumulation_steps / steps_per_generation`
+        # rescale to land on the per-window token-mean — matching the non-Liger path
+        # (see `_compute_loss`).
+        if self.loss_type in ["cispo", "dapo", "vespo"]:
+            normalizer = (
+                self.current_gradient_accumulation_steps / self.args.steps_per_generation if mode == "train" else 1.0
+            )
+        else:
+            normalizer = self.current_gradient_accumulation_steps if mode == "train" else 1.0  # no accum in eval
         return loss / normalizer
 
     @profiling_decorator
@@ -3003,6 +3047,10 @@ class GRPOTrainer(_BaseTrainer):
         """
         # forward KL div: log(pi_old) - log(pi_theta)
         kl_div = sampling_per_token_logps - per_token_logps.detach()
+        # Tokens vLLM could not score carry NaN and provide no KL evidence. Left in, the sequence mean is NaN,
+        # `avg_seq_kl <= off_policy_threshold` is then False, and a negative-advantage sequence would be dropped
+        # on the strength of a single unscorable token.
+        kl_div = torch.nan_to_num(kl_div, nan=0.0)
         # Sequence-level Mean KL (ignoring prompt+padding)
         seq_kl_sum = (kl_div * mask).sum(dim=1, keepdim=True)
         avg_seq_kl = seq_kl_sum / mask.sum(dim=1, keepdim=True).clamp(min=1.0)
