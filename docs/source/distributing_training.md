@@ -407,6 +407,20 @@ What to expect operationally at this scale:
 2. **Full-model saving gathers to one rank.** `trainer.save_model()` writes a standard HF checkpoint, at roughly 0.2–0.4 GiB/s (19 minutes for the 206 GiB Air checkpoint). LoRA adapter saves are seconds regardless of model size.
 3. **Memory scales the way the mesh says it should.** Expert parameters, gradients, and optimizer state divide by `ep × fsdp`; full fine-tuning of the 110B model peaks at 41 GB per GPU across 64 GPUs.
 
+### Making it fast
+
+Every lever below is measured (Qwen3-30B-A3B and GLM-4.5-Air, 8–16×H100); together they sustain ~48× the naive-defaults throughput at 30B, with healthy convergence:
+
+- **`packing=True`** — chat samples are short and padding dominates otherwise: ~4.5× effective tokens/s.
+- **`gradient_accumulation_steps=4`** — amortizes per-optimizer-step communication: +33%.
+- **Keep `gradient_checkpointing=True`** — disabling it is *slower* per token here and halves the usable batch.
+- **Raise `per_device_train_batch_size` to your memory budget** — sequence length doesn't matter once packed (per-token cost is flat); batch does.
+- **`dataset_num_proc=16`** — tokenization otherwise silently costs many single-threaded minutes at scale.
+- **Measure with ≥30 steps** — short runs understate steady-state throughput by 10–25%.
+- Loading: `HF_SHARD_PREFETCH=4` plus a raised IO-worker count (see above). Saving: sharded DCP with `dcp.async_save` blocks training seconds, not minutes; consolidate to HF format offline.
+
+Scaling across nodes costs ~15% per-GPU throughput at 2 nodes (85% scaling efficiency, GLM-4.5-Air, ep=16). MFU rises with active-parameter count: ~5% at 3.35B-active, ~9.5% at 13.5B-active on this stack.
+
 ## Multi-Node Training
 
 When a single machine doesn't have enough GPUs, TRL can scale training across multiple machines (nodes) using [🤗 Accelerate](https://huggingface.co/docs/accelerate/basic_tutorials/launch#multi-node-training).
