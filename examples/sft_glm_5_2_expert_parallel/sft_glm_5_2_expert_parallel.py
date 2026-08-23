@@ -47,6 +47,8 @@ training_args = SFTConfig(
     max_length=2048,
     gradient_checkpointing=True,
     logging_steps=1,
+    # Mid-training checkpoints are for resuming, and resume is not yet supported for models
+    # sharded at load time; the final weights are saved explicitly below.
     save_strategy="no",
     bf16=True,
 )
