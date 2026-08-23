@@ -963,6 +963,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
                         "shapes": weight_shapes,
                         "packed": True,
                     },
+                    weight_update_timeout=self.args.request_timeout,
                 )
 
             if rollout_worker is not None:

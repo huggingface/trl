@@ -36,6 +36,7 @@ class WeightTransferClient:
         vllm_client: VLLMClient,
         weight_update_info: dict,
         init_weight_transfer_timeout: int = 1800,
+        weight_update_timeout: float = 600,
     ):
         if not is_vllm_available(min_version="0.22.0"):
             raise ImportError(
@@ -43,6 +44,7 @@ class WeightTransferClient:
             )
         self.vllm = vllm_client
         self.init_weight_transfer_timeout = init_weight_transfer_timeout
+        self.weight_update_timeout = weight_update_timeout
         self._weight_update_info = weight_update_info
         self.model_update_group = None
 
@@ -91,13 +93,22 @@ class WeightTransferClient:
         self.vllm.start_weight_update()
         # /update_weights drives the workers' blocking NCCL recv, so it runs on a thread
         # concurrently with the trainer-side broadcast.
-        t_update = threading.Thread(target=self.vllm.update_weights, args=(self._weight_update_info,))
+        t_update = threading.Thread(
+            target=self.vllm.update_weights,
+            args=(self._weight_update_info,),
+            kwargs={"timeout": self.weight_update_timeout},
+        )
         t_update.start()
         NCCLWeightTransferEngine.trainer_send_weights(
             iterator=iterator,
             trainer_args=NCCLTrainerSendWeightsArgs(group=self.model_update_group, packed=True),
         )
-        t_update.join()
+        t_update.join(timeout=self.weight_update_timeout)
+        if t_update.is_alive():
+            raise TimeoutError(
+                f"Timed out after {self.weight_update_timeout:.0f}s waiting for vLLM weight synchronization. "
+                "Check the trainer/server NCCL configuration and GPU allocation."
+            )
         self.vllm.finish_weight_update()
         logger.debug(f"[weight_sync] send_weights took {time.time() - t0:.1f}s")
 
