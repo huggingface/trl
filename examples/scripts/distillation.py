@@ -23,31 +23,15 @@
 
 # docstyle-ignore
 """
-# Full training (off-policy only, lmbda=0):
+# Full training:
 ```
 python examples/scripts/distillation.py \
     --model_name_or_path Qwen/Qwen2.5-0.5B-Instruct \
     --teacher_model_name_or_path Qwen/Qwen2.5-1.5B-Instruct \
-    --dataset_name trl-lib/chatbot_arena_completions \
+    --dataset_name trl-lib/ultrafeedback-prompt \
     --learning_rate 2e-5 \
     --per_device_train_batch_size 4 \
     --gradient_accumulation_steps 8 \
-    --lmbda 0.0 \
-    --output_dir distilled-model \
-    --num_train_epochs 1
-```
-
-# Mixed on/off-policy (lmbda=0.5):
-```
-python examples/scripts/distillation.py \
-    --model_name_or_path Qwen/Qwen2.5-0.5B-Instruct \
-    --teacher_model_name_or_path Qwen/Qwen2.5-1.5B-Instruct \
-    --dataset_name trl-lib/chatbot_arena_completions \
-    --learning_rate 2e-5 \
-    --per_device_train_batch_size 4 \
-    --gradient_accumulation_steps 8 \
-    --lmbda 0.5 \
-    --beta 0.5 \
     --output_dir distilled-model \
     --num_train_epochs 1
 ```
@@ -57,11 +41,10 @@ python examples/scripts/distillation.py \
 python examples/scripts/distillation.py \
     --model_name_or_path Qwen/Qwen2.5-0.5B-Instruct \
     --teacher_model_name_or_path Qwen/Qwen2.5-1.5B-Instruct \
-    --dataset_name trl-lib/chatbot_arena_completions \
+    --dataset_name trl-lib/ultrafeedback-prompt \
     --learning_rate 2e-4 \
     --per_device_train_batch_size 4 \
     --gradient_accumulation_steps 8 \
-    --lmbda 0.0 \
     --output_dir distilled-model \
     --num_train_epochs 1 \
     --use_peft \
@@ -82,8 +65,7 @@ def main(script_args, training_args, model_args):
     from datasets import load_dataset
     from transformers import GenerationConfig
 
-    from trl import LogCompletionsCallback, get_peft_config, get_quantization_config
-    from trl.experimental.distillation import DistillationTrainer
+    from trl import DistillationTrainer, LogCompletionsCallback, get_peft_config, get_quantization_config
 
     ################
     # Model init kwargs
@@ -151,8 +133,7 @@ def main(script_args, training_args, model_args):
 
 
 def make_parser(subparsers: argparse._SubParsersAction | None = None, prog: str | None = None):
-    from trl import ModelConfig, ScriptArguments, TrlParser
-    from trl.experimental.distillation import DistillationConfig
+    from trl import DistillationConfig, ModelConfig, ScriptArguments, TrlParser
 
     dataclass_types = (ScriptArguments, DistillationConfig, ModelConfig)
     if subparsers is not None:

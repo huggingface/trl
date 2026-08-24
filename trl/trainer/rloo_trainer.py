@@ -177,6 +177,10 @@ class RLOOTrainer(_BaseTrainer):
             - [Standard](dataset_formats#standard): Each sample contains plain text.
             - [Conversational](dataset_formats#conversational): Each sample contains structured messages (e.g., role
               and content).
+
+            When `train_dataset` is an [`~datasets.IterableDataset`] (e.g. a streaming dataset), `max_steps` must be
+            set in the training arguments, since its length cannot be inferred and the total number of training steps
+            is required to bound the training loop and configure the learning rate scheduler.
         eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`], [`~datasets.DatasetDict`], [`~datasets.IterableDatasetDict`] or `dict[str, Dataset | IterableDataset]`):
             Dataset to use for evaluation. It must meet the same requirements as `train_dataset`.
         processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.ProcessorMixin`], *optional*):
@@ -357,18 +361,24 @@ class RLOOTrainer(_BaseTrainer):
 
         elif is_peft_model(model):
             # If the model is a PEFT model with a pretrained adapter, we need to create a "ref" adapter that is a copy
-            # of the "default" adapter, so that we can use it as the reference model during the training. PEFT only
-            # supports one adapter per model when the LoRA config uses `target_parameters` (see peft#3340), so in that
-            # case we skip the "ref" adapter and compute the reference log probs with adapters disabled, i.e. with the
-            # base model.
+            # of the "default" adapter, so that we can use it as the reference model during the training. Before PEFT
+            # 0.20.0, only one adapter per model was supported when the LoRA config uses `target_parameters` (see
+            # peft#3340, fixed in peft#3350), so in that case we skip the "ref" adapter and compute the reference log
+            # probs with adapters disabled, i.e. with the base model. The fix only allows adapters targeting the same
+            # parameters, which holds here since the "ref" adapter reuses the "default" config.
             default_config = model.peft_config["default"]
-            if isinstance(default_config, LoraConfig) and default_config.target_parameters:
+            if (
+                isinstance(default_config, LoraConfig)
+                and default_config.target_parameters
+                and Version(peft.__version__) < Version("0.20.0")
+            ):
                 logger.warning(
-                    "PEFT can't add a frozen reference adapter alongside one that uses `target_parameters` "
+                    "PEFT<0.20.0 can't add a frozen reference adapter alongside one that uses `target_parameters` "
                     "(peft#3340), so the reference log probs are computed from the base model (adapters disabled). "
-                    "If you wrapped the model only to apply LoRA, pass a `peft_config` to the trainer instead; if you "
-                    "wrapped it deliberately (pretrained adapter or custom init), note that the base model matches "
-                    "your adapter only when it's freshly zero-initialized. If it is, this warning is safe to ignore."
+                    "Upgrade to `peft>=0.20.0` to train against a copy of your adapter instead. If you wrapped the "
+                    "model only to apply LoRA, pass a `peft_config` to the trainer instead; if you wrapped it "
+                    "deliberately (pretrained adapter or custom init), note that the base model matches your adapter "
+                    "only when it's freshly zero-initialized. If it is, this warning is safe to ignore."
                 )
             else:
                 model.add_adapter("ref", default_config)
@@ -519,6 +529,10 @@ class RLOOTrainer(_BaseTrainer):
 
         if train_dataset is None:
             raise ValueError("`train_dataset` is required")
+        elif not isinstance(train_dataset, (Dataset, IterableDataset)):
+            raise TypeError(
+                f"`train_dataset` must be a `Dataset` or `IterableDataset`, got `{type(train_dataset).__name__}`."
+            )
 
         # Iterable datasets can't be indexed, so the RepeatSampler can't be attached to them. Instead, the sampler's
         # ordering is reproduced by streaming (see `get_train_dataloader`/`get_eval_dataloader` and
@@ -901,43 +915,50 @@ class RLOOTrainer(_BaseTrainer):
         all_entropies = []
         all_aux_losses = []
         for start in range(0, input_ids.size(0), batch_size):
-            input_ids_batch = input_ids[start : start + batch_size]
-            attention_mask_batch = attention_mask[start : start + batch_size]
+            end = min(start + batch_size, input_ids.size(0))  # the last chunk can be smaller than batch_size
+            input_ids_batch = input_ids[start:end]
+            attention_mask_batch = attention_mask[start:end]
 
             # Build model inputs
             model_inputs = {"input_ids": input_ids_batch, "attention_mask": attention_mask_batch}
+            if num_images is not None:
+                cum_imgs = torch.tensor([0] + num_images).cumsum(0)
+                img_start, img_end = cum_imgs[start], cum_imgs[end]
             if image_grid_thw is not None and pixel_values is not None:
                 rows_per_image = image_grid_thw.prod(dim=-1)
                 rows_per_sample = torch.split(rows_per_image, num_images)
                 rows_per_sample = torch.stack([s.sum() for s in rows_per_sample])
                 cum_rows = torch.cat([torch.tensor([0], device=rows_per_sample.device), rows_per_sample.cumsum(0)])
-                row_start, row_end = cum_rows[start].item(), cum_rows[start + batch_size].item()
+                row_start, row_end = cum_rows[start].item(), cum_rows[end].item()
                 model_inputs["pixel_values"] = pixel_values[row_start:row_end]
-                cum_imgs = torch.tensor([0] + num_images).cumsum(0)
-                img_start, img_end = cum_imgs[start], cum_imgs[start + batch_size]
                 model_inputs["image_grid_thw"] = image_grid_thw[img_start:img_end]
             elif image_position_ids is not None and pixel_values is not None:
-                cum_imgs = torch.tensor([0] + num_images).cumsum(0)
-                img_start, img_end = cum_imgs[start], cum_imgs[start + batch_size]
                 model_inputs["pixel_values"] = pixel_values[img_start:img_end]
                 model_inputs["image_position_ids"] = image_position_ids[img_start:img_end]
             elif spatial_shapes is not None and pixel_values is not None:
                 # LFM2-VL tensors are tile-indexed.
                 cum_tiles = torch.tensor([0] + num_tiles).cumsum(0)
-                tile_start, tile_end = cum_tiles[start], cum_tiles[start + batch_size]
+                tile_start, tile_end = cum_tiles[start], cum_tiles[end]
                 model_inputs["pixel_values"] = pixel_values[tile_start:tile_end]
                 model_inputs["pixel_attention_mask"] = pixel_attention_mask[tile_start:tile_end]
                 model_inputs["spatial_shapes"] = spatial_shapes[tile_start:tile_end]
+            elif num_tiles is not None and pixel_values is not None:
+                # InternVL tensors are tile-indexed.
+                cum_tiles = torch.tensor([0] + num_tiles).cumsum(0)
+                tile_start, tile_end = cum_tiles[start], cum_tiles[end]
+                model_inputs["pixel_values"] = pixel_values[tile_start:tile_end]
+            elif pixel_values is not None and pixel_values.size(0) == sum(num_images):
+                model_inputs["pixel_values"] = pixel_values[img_start:img_end]
             elif pixel_values is not None:
-                model_inputs["pixel_values"] = pixel_values[start : start + batch_size]
+                model_inputs["pixel_values"] = pixel_values[start:end]
             if pixel_attention_mask is not None and spatial_shapes is None:
-                model_inputs["pixel_attention_mask"] = pixel_attention_mask[start : start + batch_size]
+                model_inputs["pixel_attention_mask"] = pixel_attention_mask[start:end]
             if image_sizes is not None:
-                model_inputs["image_sizes"] = image_sizes[start : start + batch_size]
+                model_inputs["image_sizes"] = image_sizes[img_start:img_end]
             if token_type_ids is not None:
-                model_inputs["token_type_ids"] = token_type_ids[start : start + batch_size]
+                model_inputs["token_type_ids"] = token_type_ids[start:end]
             if mm_token_type_ids is not None:
-                model_inputs["mm_token_type_ids"] = mm_token_type_ids[start : start + batch_size]
+                model_inputs["mm_token_type_ids"] = mm_token_type_ids[start:end]
 
             # Only add logits_to_keep if the model supports it
             if "logits_to_keep" in self.model_kwarg_keys:
@@ -959,7 +980,7 @@ class RLOOTrainer(_BaseTrainer):
             logits = logits[:, -logits_to_keep:, :]  # (B, logits_to_keep, H)
             # Divide logits by sampling temperature.
             # See https://huggingface.co/blog/the_n_implementation_details_of_rlhf_with_ppo#policy-training-implementation-details
-            logits.div_(self.temperature)
+            logits = logits / self.temperature
             completion_ids = input_ids_batch[:, -logits_to_keep:]
             logps = selective_log_softmax(logits, completion_ids)  # compute logprobs
             all_logps.append(logps)
@@ -1070,7 +1091,7 @@ class RLOOTrainer(_BaseTrainer):
         ):
             if isinstance(reward_func, nn.Module):  # Module (no PretrainedModel) for compat with compiled models
                 with profiling_context(self, reward_func_name):
-                    if is_conversational(inputs[0]):
+                    if is_conversational({"prompt": prompts[0]}):
                         messages = [{"messages": p + c} for p, c in zip(prompts, completions, strict=True)]
                         texts = [
                             apply_chat_template(x, reward_processing_class, **self.chat_template_kwargs)["text"]
@@ -1094,6 +1115,12 @@ class RLOOTrainer(_BaseTrainer):
                     )
                     # Convert None values to NaN
                     output_reward_func = [reward if reward is not None else torch.nan for reward in output_reward_func]
+                    if len(output_reward_func) != len(prompts):
+                        raise ValueError(
+                            f"The reward function '{reward_func_name}' returned {len(output_reward_func)} rewards, but "
+                            f"{len(prompts)} were expected (one per prompt-completion pair). Make sure the reward "
+                            f"function returns exactly one reward per completion."
+                        )
                     rewards_per_func[:, i] = torch.tensor(output_reward_func, dtype=torch.float32, device=device)
 
         # Execute async custom functions in parallel using asyncio.gather
@@ -1105,6 +1132,12 @@ class RLOOTrainer(_BaseTrainer):
                         prompts=prompts, completions=completions, completion_ids=completion_ids_list, **reward_kwargs
                     )
                     output = [r if r is not None else torch.nan for r in output]
+                    if len(output) != len(prompts):
+                        raise ValueError(
+                            f"The reward function '{func_name}' returned {len(output)} rewards, but {len(prompts)} "
+                            f"were expected (one per prompt-completion pair). Make sure the reward function returns "
+                            f"exactly one reward per completion."
+                        )
                     return index, output
 
             async def _run_async_funcs():
@@ -1293,12 +1326,17 @@ class RLOOTrainer(_BaseTrainer):
         completion_lengths = torch.tensor([len(ids) for ids in completion_ids], device=device)
         agg_prompt_lengths = self.accelerator.gather(prompt_lengths)
         agg_completion_lengths = self.accelerator.gather(completion_lengths)
+        # Fail clearly if the generation backend returned no completions (avoids a cryptic min() error below).
+        if agg_completion_lengths.numel() == 0:
+            raise RuntimeError(
+                "No completions were generated. This usually means the generation backend failed to return any "
+                "results; see the generation logs above for the underlying error."
+            )
         total_prompt_tokens = agg_prompt_lengths.sum()
-        total_completion_tokens = agg_completion_lengths.sum()  # = num_items_in_batch, required for the DAPO loss
 
         # Log the metrics
         if mode == "train":
-            self.state.num_input_tokens_seen += (total_prompt_tokens + total_completion_tokens).item()
+            self.state.num_input_tokens_seen += (total_prompt_tokens + agg_completion_lengths.sum()).item()
         self._metrics[mode]["num_tokens"] = [self.state.num_input_tokens_seen]
 
         # Log completion lengths, mean, min, max
@@ -1418,6 +1456,16 @@ class RLOOTrainer(_BaseTrainer):
             if self.processing_class.image_processor.use_thumbnail:
                 tiles_per_image = tiles_per_image + (tiles_per_image > 1).to(tiles_per_image.dtype)
             num_tiles = [group.sum().item() for group in torch.split(tiles_per_image, num_images)]
+        # Same for InternVL, whose pixel_values is tile-indexed ([total_tiles, channels, height, width]).
+        elif (
+            images is not None
+            and forward_kwargs["pixel_values"].ndim == 4
+            and forward_kwargs["pixel_values"].size(0) != sum(num_images)
+        ):
+            num_patches = self.processing_class.image_processor(
+                images=images, crop_to_patches=True, return_tensors="pt"
+            )["num_patches"]
+            num_tiles = [group.sum().item() for group in torch.split(num_patches, num_images)]
 
         # If token_type_ids are used, extend them with zeros for the completion part
         if "token_type_ids" in forward_kwargs:
@@ -1569,8 +1617,10 @@ class RLOOTrainer(_BaseTrainer):
 
         # Calculate and log the mean KL divergence between current and reference model
         if self.beta != 0.0:
-            mean_kl = (per_token_kl * completion_mask).sum() / completion_mask.sum().clamp(min=1.0)
-            self._metrics[mode]["kl"].append(self.accelerator.gather(mean_kl).nanmean().item())
+            kl_stats = self.accelerator.reduce(
+                torch.stack([(per_token_kl * completion_mask).sum(), completion_mask.sum().float()]), reduction="sum"
+            )
+            self._metrics[mode]["kl"].append((kl_stats[0] / kl_stats[1].clamp(min=1.0)).item())
 
         # Calculate mean reward per function, but only for samples where the function was applied (non-NaN values)
         for i, reward_func_name in enumerate(self.reward_func_names):
@@ -1697,20 +1747,22 @@ class RLOOTrainer(_BaseTrainer):
             self._metrics[mode]["aux_loss"].append(self.accelerator.gather_for_metrics(aux_loss).mean().item())
 
         # Entropy
-        mean_entropy = (entropies * completion_mask).sum() / completion_mask.sum().clamp(min=1.0)
-        self._metrics[mode]["entropy"].append(self.accelerator.gather(mean_entropy).nanmean().item())
+        entropy_stats = self.accelerator.reduce(
+            torch.stack([(entropies * completion_mask).sum(), completion_mask.sum().float()]), reduction="sum"
+        )
+        self._metrics[mode]["entropy"].append((entropy_stats[0] / entropy_stats[1].clamp(min=1.0)).item())
 
         # Compute the clipped probability ratios
         is_low_clipped = (coef_1 < 1 - self.epsilon_low) & (advantages < 0)
         is_high_clipped = (coef_1 > 1 + self.epsilon_high) & (advantages > 0)
         is_region_clipped = is_low_clipped | is_high_clipped
-        gathered_low_clip = self.accelerator.gather(is_low_clipped.float().mean())
+        gathered_low_clip = self.accelerator.gather(is_low_clipped.float())
         self._metrics[mode]["clip_ratio/low_mean"].append(gathered_low_clip.nanmean().item())
         self._metrics[mode]["clip_ratio/low_min"].append(nanmin(gathered_low_clip).item())
-        gathered_high_clip = self.accelerator.gather(is_high_clipped.float().mean())
+        gathered_high_clip = self.accelerator.gather(is_high_clipped.float())
         self._metrics[mode]["clip_ratio/high_mean"].append(gathered_high_clip.nanmean().item())
         self._metrics[mode]["clip_ratio/high_max"].append(nanmax(gathered_high_clip).item())
-        gathered_clip_ratio = self.accelerator.gather(is_region_clipped.float().mean())
+        gathered_clip_ratio = self.accelerator.gather(is_region_clipped.float())
         self._metrics[mode]["clip_ratio/region_mean"].append(gathered_clip_ratio.nanmean().item())
         return loss
 

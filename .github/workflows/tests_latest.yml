@@ -16,6 +16,8 @@ jobs:
   tests:
     name: Tests latest TRL release with dev dependencies
     runs-on:
+      # TODO: move to aws-g6e-4xlarge (L40S) once v1.11 ships; v1.10-release predates the flash-attn2 xfails and
+      # would fail on Ada hardware
       group: aws-g4dn-2xlarge
     container:
       image: pytorch/pytorch:2.8.0-cuda12.8-cudnn9-devel
@@ -25,11 +27,11 @@ jobs:
         shell: bash
     steps:
       - name: Git checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
-        with: { ref: v1.8-release }
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with: { ref: v1.10-release }
 
       - name: Set up Python 3.12
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
           python-version: '3.12'
 
@@ -38,7 +40,7 @@ jobs:
           apt-get update && apt-get install -y make git curl
 
       - name: Install uv
-        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # v8.2.0
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
 
       - name: Create Python virtual environment
         run: |
