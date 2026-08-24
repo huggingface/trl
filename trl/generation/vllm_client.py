@@ -464,9 +464,10 @@ class VLLMClient:
         time.sleep(0.1)
 
         # Set up the communication group for weight broadcasting
+        communicator_host = self.host.strip("[]")
         if is_torch_xpu_available():
             store = torch.distributed.TCPStore(
-                host_name=self.host, port=self.group_port, world_size=world_size, is_master=(self.rank == 0)
+                host_name=communicator_host, port=self.group_port, world_size=world_size, is_master=(self.rank == 0)
             )
             prefixed_store = c10d.PrefixStore("client2server", store)
             xccl_options = c10d.ProcessGroupXCCL.Options()
@@ -479,7 +480,7 @@ class VLLMClient:
             self.communicator = pg
         else:
             pg = StatelessProcessGroup.create(
-                host=self.host, port=self.group_port, rank=self.rank, world_size=world_size
+                host=communicator_host, port=self.group_port, rank=self.rank, world_size=world_size
             )
             self.communicator = PyNcclCommunicator(pg, device=device)
 
