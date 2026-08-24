@@ -1565,7 +1565,9 @@ def compute_flops_per_token(config: PretrainedConfig, seq_len: int) -> int:
     V = config.vocab_size
     n_heads = config.num_attention_heads
     n_kv_heads = config.num_key_value_heads
-    head_dim = config.head_dim
+    # `head_dim` is optional on configs: Llama and Mistral declare it, Qwen2 doesn't. Derive it when missing, like
+    # transformers' own modeling code does.
+    head_dim = getattr(config, "head_dim", None) or h // n_heads
 
     # Attention: Q/K/V/O projections + attention score (Q·Kᵀ and attn·V).
     qkv_flops = 2 * h * (n_heads * head_dim + 2 * n_kv_heads * head_dim)
@@ -1651,5 +1653,6 @@ def adjusted_mfu(mfu: float, config: PretrainedConfig, seq_len: int) -> float:
     """
     flops_full = compute_flops_per_token(config, seq_len)
     # Half of the attention-score FLOPs (Q·Kᵀ and attn·V), per layer, ×3 for fwd+bwd.
-    half_attn_score = config.num_hidden_layers * 3 * 2 * config.num_attention_heads * config.head_dim * seq_len
+    head_dim = getattr(config, "head_dim", None) or config.hidden_size // config.num_attention_heads
+    half_attn_score = config.num_hidden_layers * 3 * 2 * config.num_attention_heads * head_dim * seq_len
     return mfu * (flops_full - half_attn_score) / flops_full
