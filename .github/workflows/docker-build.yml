@@ -54,7 +54,7 @@ jobs:
 
       - name: Post to Slack
         if: always()
-        uses: huggingface/hf-workflows/.github/actions/post-slack@50acccfe9afb8927b9b74ed7e750f2b0d3991b62  # main
+        uses: ./.github/actions/post-slack
         with:
           slack_channel: ${{ secrets.CI_DOCKER_CHANNEL }}
           title: 🤗 Results of the TRL Dev Docker Image build
@@ -88,7 +88,7 @@ jobs:
 
       - name: Post to Slack
         if: always()
-        uses: huggingface/hf-workflows/.github/actions/post-slack@50acccfe9afb8927b9b74ed7e750f2b0d3991b62  # main
+        uses: ./.github/actions/post-slack
         with:
           slack_channel: ${{ secrets.CI_DOCKER_CHANNEL }}
           title: 🤗 Results of the TRL Dev Docker Image build
