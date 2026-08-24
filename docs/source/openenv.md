@@ -5,7 +5,7 @@
 This guide covers **how to integrate OpenEnv with TRL**. For more on OpenEnv itself, see the [OpenEnv docs](https://huggingface.co/docs/openenv).
 
 > [!NOTE]
-> You can explore ready-to-use example [scripts](example_overview#openenv-scripts) and [notebooks](example_overview#openenv-notebooks) in the Examples Overview.
+> You can explore ready-to-use examples in the [Examples Index](example_overview#index).
 
 ## When to use environments
 
@@ -132,7 +132,7 @@ Below is the reward curve from training:
 <iframe src="https://trl-lib-trackio.hf.space?project=openenv&metrics=train/rewards/reward_from_env/mean&runs=qgallouedec-1761202871&sidebar=hidden&navbar=hidden" style="width:100%; max-width:800px; height:500px; border:0;"></iframe>
 
 > [!NOTE]
-> You can explore more ready-to-use example [scripts](example_overview#openenv-scripts) and [notebooks](example_overview#openenv-notebooks) in the Examples Overview.
+> You can explore more ready-to-use examples in the [Examples Index](example_overview#index).
 
 ## How `environment_factory` works
 
