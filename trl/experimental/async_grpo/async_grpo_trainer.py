@@ -1206,7 +1206,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
             seq_ids = (position_ids[0] == 0).cumsum(0)[1:] - 1  # (T-1,) completion index per (shifted) token
             n_completions = (position_ids == 0).sum()  # number of packed completions in this rank's row
             num_seq = int(n_completions)
-            comp_mask = completion_mask[0].float()  # (T-1,) valid completion-token mask
+            comp_mask = shifted_completion_mask[0].float()  # (T-1,) valid completion-token mask
 
             def seg_sum(vals):  # per-completion segment sum over the packed row
                 return torch.zeros(num_seq, device=comp_mask.device).index_add_(0, seq_ids, vals)
