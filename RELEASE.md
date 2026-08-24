@@ -23,13 +23,6 @@ git checkout -b release-v{major}.{minor}
 
 ### 3. Change the version in the following files
 
-- `.github/workflows/tests_latest.yml`:
-
-  ```diff
-  - with: { ref: v{major}.{minor-1}-release }
-  + with: { ref: v{major}.{minor}-release }
-  ```
-
 - `CITATION.cff`
 
   ```diff
@@ -47,7 +40,7 @@ git checkout -b release-v{major}.{minor}
 ### 4. Commit and push these changes
 
 ```shell
-git add .github/workflows/tests_latest.yml CITATION.cff VERSION
+git add CITATION.cff VERSION
 git commit -m 'Release: {major}.{minor}'
 git push origin release-v{major}.{minor}
 ```
