@@ -1793,7 +1793,7 @@ class SFTTrainer(_BaseTrainer):
             # forward, so the valid-token count over the padded labels can differ from the un-padded `labels[..., 1:]`
             # count by up to one per sequence; using the patched output keeps numerator and denominator aligned.
             self._metric_sums[mode]["entropy_sum"] += outputs.entropy_sum.detach()
-            self._metric_sums[mode]["total_tokens"] += outputs.num_valid_tokens.detach()
+            self._metric_sums[mode]["entropy_count"] += outputs.num_valid_tokens.detach()
         elif not self.args.use_liger_kernel:  # liger doesn't return logits
             with torch.no_grad():
                 if "shift_labels" in inputs:
@@ -1820,8 +1820,9 @@ class SFTTrainer(_BaseTrainer):
                 correct_predictions = (predictions == shift_labels) & mask
                 correct_tokens = correct_predictions.sum()
             self._metric_sums[mode]["entropy_sum"] += entropy_sum
-            self._metric_sums[mode]["total_tokens"] += total_tokens
-            self._metric_sums[mode]["correct_tokens"] += correct_tokens
+            self._metric_sums[mode]["entropy_count"] += total_tokens
+            self._metric_sums[mode]["mean_token_accuracy_sum"] += correct_tokens
+            self._metric_sums[mode]["mean_token_accuracy_count"] += total_tokens
 
         if mode == "train":
             # When using padding-free, the attention_mask is not present in the inputs, instead we have cu_seq_lens_q,
@@ -1835,11 +1836,12 @@ class SFTTrainer(_BaseTrainer):
             self._metric_sums[mode]["num_tokens_in_batch"] += num_tokens_in_batch
 
         if self.args.loss_type == "chunked_nll":
-            self._metric_sums[mode]["correct_tokens"] += outputs.num_correct_tokens.detach()
+            self._metric_sums[mode]["mean_token_accuracy_sum"] += outputs.num_correct_tokens.detach()
+            self._metric_sums[mode]["mean_token_accuracy_count"] += outputs.num_valid_tokens.detach()
         elif self.args.use_liger_kernel:
             if hasattr(outputs, "token_accuracy") and outputs.token_accuracy is not None:
-                self._metric_sums[mode]["token_accuracy_sum"] += outputs.token_accuracy.detach()
-                self._metric_sums[mode]["token_accuracy_count"] += torch.ones_like(outputs.token_accuracy)
+                self._metric_sums[mode]["mean_token_accuracy_sum"] += outputs.token_accuracy.detach()
+                self._metric_sums[mode]["mean_token_accuracy_count"] += torch.ones_like(outputs.token_accuracy)
             else:
                 warnings.warn(
                     "liger-kernel did not return token_accuracy when requested. The mean_token_accuracy metric will "
@@ -1865,23 +1867,22 @@ class SFTTrainer(_BaseTrainer):
 
     def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
         mode = "train" if self.model.training else "eval"
-        sums = self._metric_sums[mode]
 
-        # Metrics are accumulated in `compute_loss` as per-rank running sums. Reduce them across ranks here, in a
-        # single collective per logging window. Token-level metrics (entropy, accuracy) are token-weighted over the
-        # window: a ratio of global sums, not a mean of per-step ratios.
+        # Metrics are accumulated in `compute_loss` as per-rank running sums. Aggregate them across ranks here, in
+        # a single collective per logging window, then compute each `<name>` metric as `<name>_sum / <name>_count`,
+        # i.e. weighted by whatever the count counts (tokens, batches). Keys are sorted so that every rank stacks
+        # them in the same order.
         metrics = {}
+        sums = self._metric_sums[mode]
         if sums:
-            values = torch.stack([value.double() for value in sums.values()])
-            totals = dict(zip(sums.keys(), self.accelerator.reduce(values, reduction="sum").tolist(), strict=True))
-            if "entropy_sum" in totals:
-                total_tokens = totals["total_tokens"]
-                metrics["entropy"] = totals["entropy_sum"] / total_tokens if total_tokens > 0 else 0.0
-                metrics["mean_token_accuracy"] = totals["correct_tokens"] / total_tokens if total_tokens > 0 else 0.0
-            if "token_accuracy_sum" in totals:
-                metrics["mean_token_accuracy"] = totals["token_accuracy_sum"] / totals["token_accuracy_count"]
-            if "aux_loss_sum" in totals:
-                metrics["aux_loss"] = totals["aux_loss_sum"] / totals["aux_loss_count"]
+            keys = sorted(sums)
+            values = torch.stack([sums[key].double() for key in keys])
+            totals = dict(zip(keys, self.accelerator.reduce(values, reduction="sum").tolist(), strict=True))
+            for key in keys:
+                if key.endswith("_sum"):
+                    name = key.removesuffix("_sum")
+                    count = totals[name + "_count"]
+                    metrics[name] = totals[key] / count if count > 0 else 0.0
             # `num_tokens` advances only when a train-mode log folds in the pending sums, so an eval log between two
             # train logs can lag by up to one logging window.
             if mode == "train" and "num_tokens_in_batch" in totals:

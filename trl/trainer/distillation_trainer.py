@@ -1383,7 +1383,7 @@ class DistillationTrainer(_BaseTrainer):
         if entropy_sum is not None:
             mode = "train" if self.model.training else "eval"
             self._metric_sums[mode]["entropy_sum"] += entropy_sum.detach()
-            self._metric_sums[mode]["total_tokens"] += num_valid_tokens.detach()
+            self._metric_sums[mode]["entropy_count"] += num_valid_tokens.detach()
 
         return (loss, None) if return_outputs else loss
 
@@ -1540,15 +1540,20 @@ class DistillationTrainer(_BaseTrainer):
             valid = [v for v in val if not math.isnan(v)]
             metrics[key] = sum(valid) / len(valid) if valid else None
 
+        # Metrics are accumulated in `compute_loss` as per-rank running sums. Aggregate them across ranks here, in
+        # a single collective per logging window, then compute each `<name>` metric as `<name>_sum / <name>_count`,
+        # i.e. weighted by whatever the count counts (tokens, batches). Keys are sorted so that every rank stacks
+        # them in the same order.
         sums = self._metric_sums[mode]
-        # Entropy is accumulated in `compute_loss` as per-rank running sums. Reduce it across ranks here, in a
-        # single collective per logging window. The logged value is token-weighted over the window: a ratio of
-        # global sums, not a mean of per-step ratios. Mirrors `SFTTrainer.log`.
         if sums:
-            values = torch.stack([value.double() for value in sums.values()])
-            totals = dict(zip(sums.keys(), self.accelerator.reduce(values, reduction="sum").tolist(), strict=True))
-            total_tokens = totals["total_tokens"]
-            metrics["entropy"] = totals["entropy_sum"] / total_tokens if total_tokens > 0 else 0.0
+            keys = sorted(sums)
+            values = torch.stack([sums[key].double() for key in keys])
+            totals = dict(zip(keys, self.accelerator.reduce(values, reduction="sum").tolist(), strict=True))
+            for key in keys:
+                if key.endswith("_sum"):
+                    name = key.removesuffix("_sum")
+                    count = totals[name + "_count"]
+                    metrics[name] = totals[key] / count if count > 0 else 0.0
 
         # This method can be called both in training and evaluation. When called in evaluation, the keys in `logs`
         # start with "eval_". We need to add the prefix "eval_" to the keys in `metrics` to match the format.
