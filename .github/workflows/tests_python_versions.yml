@@ -1,8 +1,8 @@
-name: Tests latest TRL release with dev dependencies
+name: Tests with all supported Python versions
 
 on:
   schedule:
-    - cron: '0 0 * * *'  # Runs daily at midnight UTC
+    - cron: '0 1 * * *'  # Runs daily at 1am UTC
 
   workflow_dispatch:
 
@@ -10,15 +10,18 @@ env:
   TQDM_DISABLE: 1
   CI_SLACK_CHANNEL: ${{ secrets.CI_PUSH_MAIN_CHANNEL }}
   HF_TOKEN: ${{ secrets.HF_TOKEN }}
-  TRL_EXPERIMENTAL_SILENCE: 1
+  PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"
+  PYTORCH_ALLOC_CONF: "expandable_segments:True"
 
 jobs:
   tests:
-    name: Tests latest TRL release with dev dependencies
+    name: Tests with Python ${{ matrix.python-version }}
+    strategy:
+      matrix:
+        python-version: ['3.10', '3.11', '3.13', '3.14']  # 3.12 is already covered by the Tests workflow
+      fail-fast: false
     runs-on:
-      # TODO: move to aws-g6e-4xlarge (L40S) once v1.11 ships; v1.10-release predates the flash-attn2 xfails and
-      # would fail on Ada hardware
-      group: aws-g4dn-2xlarge
+      group: aws-g6e-4xlarge
     container:
       image: pytorch/pytorch:2.8.0-cuda12.8-cudnn9-devel
       options: --gpus all
@@ -28,12 +31,11 @@ jobs:
     steps:
       - name: Git checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-        with: { ref: v1.10-release }
 
-      - name: Set up Python 3.12
+      - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
-          python-version: '3.12'
+          python-version: ${{ matrix.python-version }}
 
       - name: Install Make and Git
         run: |
@@ -50,11 +52,7 @@ jobs:
       - name: Install dependencies
         run: |
           source .venv/bin/activate
-          uv pip install -U \
-            ".[dev]" \
-            "accelerate @ git+https://github.com/huggingface/accelerate.git" \
-            "datasets @ git+https://github.com/huggingface/datasets.git" \
-            "transformers @ git+https://github.com/huggingface/transformers.git"
+          uv pip install ".[dev]"
 
       - name: Test with pytest
         run: |
@@ -62,9 +60,10 @@ jobs:
           make test
 
       - name: Post to Slack
+        if: always()
         uses: huggingface/hf-workflows/.github/actions/post-slack@main
         with:
           slack_channel: ${{ env.CI_SLACK_CHANNEL }}
-          title: Results of latest TRL with Python 3.12 and dev dependencies
+          title: Results with Python ${{ matrix.python-version }}
           status: ${{ job.status }}
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
