@@ -50,12 +50,12 @@ from transformers import (
 )
 from transformers.utils import is_peft_available, is_rich_available
 
-from ..data_utils import apply_chat_template, is_conversational, prepare_multimodal_messages
+from ..data_utils import apply_chat_template, get_dataset_column_names, is_conversational, prepare_multimodal_messages
 from ..distributed import DistributedBackend
 from ..extras.profiling import profiling_context, profiling_decorator
 from ..generation.vllm_generation import VLLMGeneration
 from ..models import prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
-from ..models.utils import disable_gradient_checkpointing
+from ..models.utils import disable_gradient_checkpointing, freeze_non_language_model_parameters
 from .base_trainer import _BaseTrainer
 from .callbacks import SyncRefModelCallback
 from .rloo_config import RLOOConfig
@@ -311,8 +311,10 @@ class RLOOTrainer(_BaseTrainer):
         # Handle pad token for processors or tokenizers
         if isinstance(processing_class, ProcessorMixin):
             self._tokenizer = processing_class.tokenizer
+            self._is_vlm = True
         elif isinstance(processing_class, PreTrainedTokenizerBase):
             self._tokenizer = processing_class
+            self._is_vlm = False
         else:
             raise TypeError("The `processing_class` must be either a `PreTrainedTokenizerBase` or a `ProcessorMixin`")
 
@@ -586,6 +588,11 @@ class RLOOTrainer(_BaseTrainer):
         if args.gradient_checkpointing and Version(transformers.__version__) < Version("5.0.0"):
             args.gradient_checkpointing_kwargs = args.gradient_checkpointing_kwargs or {}
             args.gradient_checkpointing_kwargs.setdefault("use_reentrant", False)
+
+        dataset_columns = get_dataset_column_names(train_dataset)
+        has_vision_data = not {"image", "images"}.isdisjoint(dataset_columns)
+        if self._is_vlm and not has_vision_data:
+            freeze_non_language_model_parameters(model)
 
         super().__init__(
             model=model,

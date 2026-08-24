@@ -23,6 +23,7 @@ import accelerate
 import torch.nn as nn
 import transformers
 from accelerate import Accelerator
+from accelerate.utils import is_peft_model
 from packaging.version import Version
 from torch.distributed.fsdp import FSDPModule
 from torch.distributed.fsdp.fully_sharded_data_parallel import FullyShardedDataParallel as FSDP
@@ -397,6 +398,44 @@ def disable_gradient_checkpointing(model: PreTrainedModel, gradient_checkpointin
     finally:
         if was_enabled:
             model.gradient_checkpointing_enable(gradient_checkpointing_kwargs)
+
+
+def freeze_non_language_model_parameters(model: nn.Module) -> None:
+    """Freeze a multimodal model outside its language model and output embeddings.
+
+    Existing trainability is preserved within the language path, so this also works after PEFT adapters have been
+    injected.
+
+    Args:
+        model (`nn.Module`):
+            Multimodal model whose non-language parameters should be frozen.
+    """
+    is_peft = is_peft_model(model)
+    base_model = model.get_base_model() if is_peft else model
+    text_config = base_model.config.get_text_config()
+    text_model = next(
+        (
+            module
+            for module in base_model.modules()
+            if isinstance(module, PreTrainedModel) and module is not base_model and module.config is text_config
+        ),
+        None,
+    )
+    if text_model is None:
+        return
+
+    trainable_parameters = {id(parameter) for parameter in model.parameters() if parameter.requires_grad}
+    model.requires_grad_(False)
+
+    language_modules = [text_model]
+    if (output_embeddings := base_model.get_output_embeddings()) is not None:
+        language_modules.append(output_embeddings)
+    if is_peft and any(config.is_prompt_learning for config in model.peft_config.values()):
+        language_modules.append(model.prompt_encoder)
+    for module in language_modules:
+        for parameter in module.parameters():
+            if id(parameter) in trainable_parameters:
+                parameter.requires_grad_(True)
 
 
 def create_reference_model(

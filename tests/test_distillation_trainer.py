@@ -28,6 +28,7 @@ from trl.trainer.distillation_trainer import _chunked_divergence_loss
 
 from .testing_utils import (
     TrlTestCase,
+    get_vision_parameter_names,
     require_liger_kernel,
     require_peft,
     require_torch_accelerator,
@@ -1198,6 +1199,28 @@ class TestDistillationTrainer(TrlTestCase):
 
 @require_vision
 class TestDistillationTrainerVLM(TrlTestCase):
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            "trl-internal-testing/tiny-LlavaForConditionalGeneration",
+        ],
+    )
+    def test_text_only_dataset_freezes_non_language_parameters(self, model_id):
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        trainer = DistillationTrainer(
+            model=model_id,
+            teacher_model=model_id,
+            args=DistillationConfig(output_dir=self.tmp_dir, report_to="none"),
+            train_dataset=dataset,
+        )
+
+        vision_parameter_names = get_vision_parameter_names(trainer.model)
+        frozen_parameter_names = {n for n, param in trainer.model.named_parameters() if not param.requires_grad}
+        assert vision_parameter_names
+        assert vision_parameter_names <= frozen_parameter_names
+        assert any(parameter.requires_grad for parameter in trainer.model.parameters())
+
     @pytest.mark.parametrize(
         "model_id",
         [

@@ -49,7 +49,7 @@ from transformers.utils import is_peft_available
 from ..data_utils import _tokenize, apply_chat_template, extract_prompt, is_conversational, prepare_multimodal_messages
 from ..import_utils import is_liger_kernel_available
 from ..models import get_act_offloading_ctx_manager, prepare_deepspeed, prepare_fsdp
-from ..models.utils import _ForwardRedirection, disable_gradient_checkpointing
+from ..models.utils import _ForwardRedirection, disable_gradient_checkpointing, freeze_non_language_model_parameters
 from .base_trainer import _BaseTrainer
 from .callbacks import SyncRefModelCallback
 from .dpo_config import DPOConfig
@@ -884,6 +884,9 @@ class DPOTrainer(_BaseTrainer):
         if args.gradient_checkpointing and Version(transformers.__version__) < Version("5.0.0"):
             args.gradient_checkpointing_kwargs = args.gradient_checkpointing_kwargs or {}
             args.gradient_checkpointing_kwargs.setdefault("use_reentrant", False)
+
+        if self._is_vlm and not self._is_vision_dataset:
+            freeze_non_language_model_parameters(model)
 
         super().__init__(
             model=model,
