@@ -197,16 +197,16 @@ trainer.train()
 
 For cross-family distillation, set `use_uld_loss=True` and `teacher_tokenizer_name_or_path` to the teacher model name.
 
-Use [`trl/experimental/gold/gold_vlm.py`](https://github.com/huggingface/trl/blob/main/trl/experimental/gold/gold_vlm.py) to launch GOLD VLM training from the command line:
+Use [`examples/gold_qwen3_vl/gold_vlm.py`](https://github.com/huggingface/trl/blob/main/examples/gold_qwen3_vl/gold_vlm.py) to launch GOLD VLM training from the command line:
 
 ```bash
 # Same-family distillation (JSD loss, vLLM enabled)
-accelerate launch trl/experimental/gold/gold_vlm.py \
+accelerate launch examples/gold_qwen3_vl/gold_vlm.py \
     --student_model_name Qwen/Qwen3-VL-2B-Instruct \
     --teacher_model_name Qwen/Qwen3-VL-8B-Instruct
 
 # Cross-family distillation (ULD loss, local generation)
-accelerate launch trl/experimental/gold/gold_vlm.py \
+accelerate launch examples/gold_qwen3_vl/gold_vlm.py \
     --student_model_name LiquidAI/LFM2.5-VL-1.6B \
     --teacher_model_name Qwen/Qwen3-VL-8B-Instruct \
     --use_uld_loss \

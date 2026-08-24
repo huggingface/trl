@@ -25,13 +25,13 @@
 # Same-family distillation (Qwen3-VL-8B → Qwen3-VL-2B)
 # Uses JSD loss. Same architecture and tokenizer, so standard distillation works directly.
 # vLLM enabled for faster on-policy generation.
-accelerate launch trl/experimental/gold/gold_vlm.py \
+accelerate launch examples/gold_qwen3_vl/gold_vlm.py \
     --student_model_name Qwen/Qwen3-VL-2B-Instruct \
     --teacher_model_name Qwen/Qwen3-VL-8B-Instruct
 
 # Cross-family distillation (Qwen3-VL-8B → LFM2.5-VL-1.6B)
 # Uses ULD loss for different tokenizers/processors. vLLM is disabled because this path uses local VLM generation.
-accelerate launch trl/experimental/gold/gold_vlm.py \
+accelerate launch examples/gold_qwen3_vl/gold_vlm.py \
     --student_model_name LiquidAI/LFM2.5-VL-1.6B \
     --teacher_model_name Qwen/Qwen3-VL-8B-Instruct \
     --use_uld_loss \
