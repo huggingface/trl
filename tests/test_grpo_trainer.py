@@ -1632,15 +1632,21 @@ class TestGRPOTrainer(TrlTestCase):
 
         trainer._generate = generate_with_one_unscorable_token
 
-        # Snapshot the divergence metric as soon as it is produced. Reading `_metrics` after training is useless,
-        # because the dict is cleared on every log.
+        # Snapshot the divergence metric as soon as it is produced. Reading the accumulators after training is
+        # useless, because they are cleared on every log.
         original_score = trainer._generate_and_score_completions
         recorded_metrics = []
 
         def record_metrics(inputs):
             outputs = original_score(inputs)
-            for key in ["sampling/sampling_logp_difference/mean", "sampling/sampling_logp_difference/max"]:
-                recorded_metrics.extend((key, value) for value in trainer._metrics["train"][key])
+            sums = trainer._metric_sums["train"]
+            mean = (
+                sums["sampling/sampling_logp_difference/mean_sum"]
+                / sums["sampling/sampling_logp_difference/mean_count"]
+            )
+            recorded_metrics.append(("sampling/sampling_logp_difference/mean", mean.item()))
+            max_delta = trainer._metric_maxs["train"]["sampling/sampling_logp_difference/max"]
+            recorded_metrics.append(("sampling/sampling_logp_difference/max", max_delta.item()))
             return outputs
 
         trainer._generate_and_score_completions = record_metrics
