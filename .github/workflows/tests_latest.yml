@@ -62,9 +62,8 @@ jobs:
           make test
 
       # This job checks out the release branch, which predates the local Slack action, so check
-      # the action out from the branch running the workflow. Keep the condition of this step in
-      # sync with the one of the step below: if this step is skipped, the action cannot be
-      # resolved and the notification is lost, which is precisely the case it exists for.
+      # the action out from the branch running the workflow. Keep this step on `always()`: it must
+      # never be skipped while the Slack step below runs, or the action cannot be resolved.
       - name: Check out the Slack action
         if: always()
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
