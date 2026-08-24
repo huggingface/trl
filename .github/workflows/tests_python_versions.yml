@@ -61,7 +61,7 @@ jobs:
 
       - name: Post to Slack
         if: always()
-        uses: huggingface/hf-workflows/.github/actions/post-slack@main
+        uses: huggingface/hf-workflows/.github/actions/post-slack@50acccfe9afb8927b9b74ed7e750f2b0d3991b62  # main
         with:
           slack_channel: ${{ env.CI_SLACK_CHANNEL }}
           title: Results with Python ${{ matrix.python-version }}
