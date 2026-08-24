@@ -520,8 +520,7 @@ class DistillationTrainer(_BaseTrainer):
             if any(inspect.iscoroutinefunction(tool) for tool in tools):
                 raise ValueError("Async tools are not yet supported by `DistillationTrainer`. Pass synchronous tools.")
         self.tools = tools or []
-        # Per-rollout tool dict. Without environments the tools are constant across examples, so build it once here
-        # rather than per-batch as GRPO does.
+        # Tools are constant across examples, so the tool dict is built once here.
         self._tool_dict = {tool.__name__: tool for tool in self.tools}
 
         # `add_response_schema` sets the response template (transformers >= 5.13) or legacy schema for known chat
@@ -852,6 +851,7 @@ class DistillationTrainer(_BaseTrainer):
 
         # vLLM for student generation
         self.use_vllm = args.use_vllm
+        self.vllm_mode = args.vllm_mode
         if self.use_vllm:
             if not is_vllm_available():
                 raise ImportError(
@@ -1429,25 +1429,25 @@ class DistillationTrainer(_BaseTrainer):
         prompt_ids, images, multimodal_fields = self._tokenize_prompts(prompts)
         completion_ids = self._generate_single_turn(prompt_ids, images, multimodal_fields)
 
-        # Decode completions. It's important to use `parse_response` when possible, because it handles tool calls.
-        if is_conversational({"prompt": prompts[0]}):
-            if Version(transformers.__version__) >= Version("5.0.0") and (  # parse_response added in v5
-                getattr(self._tokenizer, "response_template", None) is not None  # new-style
-                or getattr(self._tokenizer, "response_schema", None) is not None  # old-style
-            ):
-                completions = [
-                    [parse_response(self._tokenizer, ids, prefix=prompt_ids[i])]
-                    for i, ids in enumerate(completion_ids)
-                ]
-            else:
-                contents = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
-                completions = [[{"role": "assistant", "content": content}] for content in contents]
-        else:
-            completions = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
-
         # Extract tool calls from the completions and (possibly) execute them
         tool_images = []
         if self.tools:
+            # Decode completions. It's important to use `parse_response` when possible, because it handles tool calls.
+            if is_conversational({"prompt": prompts[0]}):
+                if Version(transformers.__version__) >= Version("5.0.0") and (  # parse_response added in v5
+                    getattr(self._tokenizer, "response_template", None) is not None  # new-style
+                    or getattr(self._tokenizer, "response_schema", None) is not None  # old-style
+                ):
+                    completions = [
+                        [parse_response(self._tokenizer, ids, prefix=prompt_ids[i])]
+                        for i, ids in enumerate(completion_ids)
+                    ]
+                else:
+                    contents = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
+                    completions = [[{"role": "assistant", "content": content}] for content in contents]
+            else:
+                completions = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
+
             (
                 tool_mask,
                 completions,
