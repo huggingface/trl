@@ -49,7 +49,7 @@ from ..distributed import DistributedBackend
 from ..extras.profiling import profiling_context, profiling_decorator
 from ..generation.vllm_generation import VLLMGeneration
 from ..import_utils import is_vllm_available
-from ..models import prepare_deepspeed
+from ..models import prepare_deepspeed, prepare_fsdp
 from ..models.utils import _ForwardRedirection, unwrap_model_for_generation
 from .base_trainer import _BaseTrainer
 from .distillation_config import DistillationConfig
@@ -696,6 +696,8 @@ class DistillationTrainer(_BaseTrainer):
                         )
             if self.is_deepspeed_enabled:
                 self.teacher_model = prepare_deepspeed(teacher_model, self.accelerator)
+            elif self.is_fsdp_enabled:
+                self.teacher_model = prepare_fsdp(teacher_model, self.accelerator)
             else:
                 self.teacher_model = self.accelerator.prepare_model(teacher_model, evaluation_mode=True)
         else:
