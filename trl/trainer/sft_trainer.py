@@ -100,9 +100,11 @@ class _ChunkedCELMHeadOutput(CausalLMOutputWithPast):
 
 def _chunk(h, w, b, lbl, logit_scale, final_logit_softcapping):
     with maybe_gather_lm_head_ctx(w, b):
-        # Project in the model dtype and upcast only for the softmax, like `"nll"` and
-        # `transformers`' own `ForCausalLMLoss` do.
-        logits = (h @ w.t()).float()
+        # Project in the compute dtype and upcast only for the softmax, like `"nll"` and
+        # `transformers`' own `ForCausalLMLoss` do. `w` can be an fp32 master weight while `h` is
+        # bf16 (FSDP2 mixed precision reads the sharded weight directly, bypassing the cast its
+        # forward hooks apply), so cast it to the dtype `lm_head`'s own forward would compute in.
+        logits = (h @ w.to(h.dtype).t()).float()
         if b is not None:
             logits = logits + b.float()
     if logit_scale != 1.0:
