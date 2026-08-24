@@ -20,6 +20,28 @@
 # ]
 # ///
 
+# docstyle-ignore
+"""
+Run (single node of 8 GPUs):
+accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml \
+    examples/ppo_tldr/ppo_tldr.py \
+    --dataset_name trl-lib/tldr \
+    --dataset_test_split validation \
+    --output_dir models/minimal/ppo_tldr \
+    --learning_rate 3e-6 \
+    --per_device_train_batch_size 16 \
+    --gradient_accumulation_steps 4 \
+    --total_episodes 1000000 \
+    --model_name_or_path EleutherAI/pythia-1b-deduped \
+    --sft_model_path cleanrl/EleutherAI_pythia-1b-deduped__sft__tldr \
+    --reward_model_path cleanrl/EleutherAI_pythia-1b-deduped__reward__tldr \
+    --local_rollout_forward_batch_size 16 \
+    --missing_eos_penalty 1.0 \
+    --stop_token eos \
+    --eval_strategy steps \
+    --eval_steps 100
+"""
+
 import shutil
 
 import torch

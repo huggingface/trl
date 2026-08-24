@@ -194,7 +194,7 @@ Tested with:
 > [!TIP]
 > Compatibility with all VLMs is not guaranteed. If you believe a model should be supported, feel free to open an issue on GitHub — or better yet, submit a pull request with the required changes.
 
-## Example script
+## Command line interface
 
 Use the [`trl distillation` CLI](clis) to launch distillation training from the command line. It supports full training and LoRA via the standard `ModelConfig` flags.
 

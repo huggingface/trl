@@ -172,7 +172,7 @@ run_uv_job(
 </hfoption>
 </hfoptions>
 
-TRL example scripts are fully uv-compatible, so you can run a complete training workflow directly on Jobs. You can customize training with standard script arguments plus hardware and secrets:
+TRL training scripts are fully uv-compatible, so you can run a complete training workflow directly on Jobs. You can customize training with standard script arguments plus hardware and secrets:
 
 <hfoptions id="script_type">
 <hfoption id="bash">
@@ -209,7 +209,7 @@ run_uv_job(
 </hfoption>
 </hfoptions>
 
-See the full list of examples in the [Examples Index](example_overview#index).
+Every `.py` example in the [Examples Index](example_overview#index) declares its dependencies in a `# /// script` header, so it can be submitted to Jobs the same way (notebook-only examples cannot).
 
 ### Docker Images
 

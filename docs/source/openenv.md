@@ -5,7 +5,7 @@
 This guide covers **how to integrate OpenEnv with TRL**. For more on OpenEnv itself, see the [OpenEnv docs](https://huggingface.co/docs/openenv).
 
 > [!NOTE]
-> You can explore ready-to-use examples in the [Examples Index](example_overview#index).
+> Ready-to-use OpenEnv examples: [`grpo_echo`](https://github.com/huggingface/trl/tree/main/examples/grpo_echo) (minimal), [`grpo_catch`](https://github.com/huggingface/trl/tree/main/examples/grpo_catch), [`grpo_wordle`](https://github.com/huggingface/trl/tree/main/examples/grpo_wordle), [`grpo_sudoku`](https://github.com/huggingface/trl/tree/main/examples/grpo_sudoku), [`grpo_multi_env`](https://github.com/huggingface/trl/tree/main/examples/grpo_multi_env), [`grpo_browsergym`](https://github.com/huggingface/trl/tree/main/examples/grpo_browsergym), [`grpo_carla`](https://github.com/huggingface/trl/tree/main/examples/grpo_carla), and [`async_grpo_opencode`](https://github.com/huggingface/trl/tree/main/examples/async_grpo_opencode).
 
 ## When to use environments
 
@@ -132,7 +132,7 @@ Below is the reward curve from training:
 <iframe src="https://trl-lib-trackio.hf.space?project=openenv&metrics=train/rewards/reward_from_env/mean&runs=qgallouedec-1761202871&sidebar=hidden&navbar=hidden" style="width:100%; max-width:800px; height:500px; border:0;"></iframe>
 
 > [!NOTE]
-> You can explore more ready-to-use examples in the [Examples Index](example_overview#index).
+> You can explore more ready-to-use OpenEnv examples in the note at the top of this page.
 
 ## How `environment_factory` works
 

@@ -18,6 +18,11 @@
 # ]
 # ///
 
+"""
+Run:
+python examples/grpo_2048/grpo_2048.py
+"""
+
 import random
 
 from datasets import Dataset
