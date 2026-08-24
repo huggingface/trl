@@ -242,4 +242,22 @@ filterwarnings = [
     # Upstream issue: https://github.com/bitsandbytes-foundation/bitsandbytes/issues/2027
     # Remove once: no supported bitsandbytes version emits it
     "ignore:inner dimension \\(\\d+\\) is not aligned for fast kernel:UserWarning",
+
+    # transformers passes the `num_patches` torch tensor to np.cumsum in the InternVL processor, so numpy falls back to
+    # the legacy Tensor.__array_wrap__ path, whose signature predates NumPy 2.0 (upstream, not actionable in TRL)
+    # Triggered by the InternVL cases of the GRPO, RLOO and Distillation VLM tests
+    # Tracking issue: https://github.com/huggingface/trl/issues/6848
+    # Upstream issue: https://github.com/huggingface/transformers/issues/48177
+    # Upstream issue (torch, for the outdated signature): https://github.com/pytorch/pytorch/issues/180657
+    # Remove once: no supported transformers version passes a tensor to np.cumsum there
+    "ignore:__array_wrap__ must accept context and return_scalar arguments:DeprecationWarning",
+
+    # torch inductor advises enabling TF32 on every compile when the float32 matmul precision is left at its default
+    # (upstream, not actionable in TRL: the precision is a process-wide numerics setting only the user should change)
+    # Triggered by the DPO and KTO Liger tests, the only ones that compile, since the GPU CI moved from T4 to L40S:
+    # the advisory is guarded on compute capability >= (8, 0), unreachable on T4
+    # Tracking issue: https://github.com/huggingface/trl/issues/6849
+    # Upstream issue: https://github.com/pytorch/pytorch/issues/175484
+    # Remove once: no supported torch version emits it
+    "ignore:TensorFloat32 tensor cores for float32 matrix multiplication available but not enabled:UserWarning",
 ]
