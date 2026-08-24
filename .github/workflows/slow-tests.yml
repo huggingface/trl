@@ -64,7 +64,7 @@ jobs:
 
       - name: Post to Slack
         if: always()
-        uses: huggingface/hf-workflows/.github/actions/post-slack@main
+        uses: huggingface/hf-workflows/.github/actions/post-slack@a88e7fa2eaee28de5a4d6142381b1fb792349b67  # main
         with:
           slack_channel: ${{ env.CI_SLACK_CHANNEL }}
           title: Results of the slow tests on a single GPU
@@ -122,7 +122,7 @@ jobs:
 
       - name: Post to Slack
         if: always()
-        uses: huggingface/hf-workflows/.github/actions/post-slack@main
+        uses: huggingface/hf-workflows/.github/actions/post-slack@a88e7fa2eaee28de5a4d6142381b1fb792349b67  # main
         with:
           slack_channel: ${{ env.CI_SLACK_CHANNEL }}
           title: Results of the slow tests on multiple GPUs
