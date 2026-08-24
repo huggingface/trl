@@ -14,7 +14,10 @@
 
 
 import contextvars
+import itertools
+import json
 import math
+import os
 import queue
 import textwrap
 import threading
@@ -32,6 +35,7 @@ from torch.distributed._tensor import DTensor
 from torch.utils.data import DataLoader
 from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenizerBase, TrainerCallback
 from transformers.data.data_collator import DataCollatorMixin
+from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR
 
 from ...trainer.base_trainer import _BaseTrainer
 from ...trainer.utils import (
@@ -234,7 +238,8 @@ class _EpochStopCallback(TrainerCallback):
 
     def on_step_end(self, _args, _state, control, **_kwargs):
         acc = self._trainer.accelerator
-        reached = torch.tensor(int(len(self._trainer._trained_groups) >= self._target), device=acc.device)
+        trained = self._trainer._groups_before_resume + len(self._trainer._trained_groups)
+        reached = torch.tensor(int(trained >= self._target), device=acc.device)
         if int(acc.reduce(reached, reduction="sum").item()) >= 1:
             control.should_training_stop = True
 
@@ -846,13 +851,13 @@ class AsyncGRPOTrainer(_BaseTrainer):
                     "`environment` column to route each example to its environment. Provide a dataset, or pass a "
                     "single environment factory."
                 )
-            if self.args.max_steps <= 0:
+            if args.max_steps <= 0:
                 raise ValueError(
                     "When training without a `train_dataset` (the environment owns the data and returns the prompt "
                     "from `reset()`), `max_steps` must be set to a positive value to define the training length. Set "
                     "it via `AsyncGRPOConfig(max_steps=...)`."
                 )
-            num_placeholder_rows = self.args.per_device_train_batch_size * self.args.gradient_accumulation_steps
+            num_placeholder_rows = args.per_device_train_batch_size * args.gradient_accumulation_steps
             train_dataset = Dataset.from_dict({"prompt": [[{"role": "user", "content": ""}]] * num_placeholder_rows})
 
         # Initialize the Trainer
@@ -873,6 +878,8 @@ class AsyncGRPOTrainer(_BaseTrainer):
         # Epoch handling: stop after num_train_epochs full passes over the PROMPT dataset, counted as distinct
         # prompt-groups trained (fork-independent).
         self._trained_groups: set[int] = set()
+        # Tracks restart to match `num_train_epochs`
+        self._groups_before_resume = 0
         self._epoch_stop_groups: int | None = None
         samples_per_step = (
             self.args.per_device_train_batch_size
@@ -904,6 +911,15 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 f"max_inflight_tasks set to {self.args.max_inflight_tasks} "
                 f"(max_staleness={self.args.max_staleness} × samples_per_step={samples_per_step})"
             )
+
+        # The base Trainer's data-skip replay loop doesn't apply to AsyncGRPO's live rollout queue;
+        # force it off regardless of what the user passed.
+        if not self.args.ignore_data_skip:
+            logger.warning(
+                "`ignore_data_skip` is forced to `True` for AsyncGRPO because the base Trainer's skip-and-replay "
+                "loop does not apply to a live rollout queue."
+            )
+        self.args.ignore_data_skip = True
 
         # The metric sink. Values are floats, or `(numerator, denominator)` pairs for rates
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
@@ -1335,7 +1351,42 @@ class AsyncGRPOTrainer(_BaseTrainer):
         self._metrics["train"]["perf/weight_sync_transfer_s"].append(t_transfer - t_barrier)
         logger.info(f"Weight sync: done. Total {weight_sync_s:.1f}s")
 
+    def _save_checkpoint(self, model, trial):
+        if self.accelerator.is_main_process and isinstance(self.rollout_worker, AsyncRolloutWorker):
+            checkpoint_folder = f"{PREFIX_CHECKPOINT_DIR}-{self.state.global_step}"
+            checkpoint_dir = os.path.join(self._get_output_dir(trial=trial), checkpoint_folder)
+            os.makedirs(checkpoint_dir, exist_ok=True)
+            trained = self._trained_groups
+            first_untrained = next(g for g in itertools.count() if g not in trained)
+            prompt_index = self.rollout_worker._loop_kwargs["dataset_start_index"] + first_untrained
+            rollout_state = {"prompt_index": prompt_index}
+            with open(os.path.join(checkpoint_dir, "rollout_state.json"), "w") as f:
+                json.dump(rollout_state, f)
+        super()._save_checkpoint(model, trial)
+
     def _inner_training_loop(self, *args, **kwargs):
+        # When resuming, pass the saved prompt position to the worker before _StartRolloutWorkerCallback fires.
+        # Skipped for IterableDataset since len() isn't available on streaming datasets.
+        # Always reset first so a stale value from a prior train() call is never carried over.
+        if isinstance(self.rollout_worker, AsyncRolloutWorker):
+            self.rollout_worker._loop_kwargs["dataset_start_index"] = 0
+            self._groups_before_resume = 0
+            resume_from_checkpoint = kwargs.get("resume_from_checkpoint")
+            if resume_from_checkpoint is not None:
+                rollout_state_file = os.path.join(resume_from_checkpoint, "rollout_state.json")
+                # IterableDataset is skipped deliberately: streaming datasets have no len() and can't be repositioned.
+                if not os.path.isfile(rollout_state_file):
+                    logger.warning(
+                        "rollout_state.json not found in the checkpoint; "
+                        "the rollout worker will restart from prompt 0."
+                    )
+                elif not isinstance(self.train_dataset, Dataset):
+                    logger.warning("Resuming with an IterableDataset; the rollout worker will restart from prompt 0.")
+                else:
+                    with open(rollout_state_file) as f:
+                        rollout_state = json.load(f)
+                    self.rollout_worker._loop_kwargs["dataset_start_index"] = rollout_state["prompt_index"]
+                    self._groups_before_resume = rollout_state["prompt_index"]
         try:
             return super()._inner_training_loop(*args, **kwargs)
         finally:
