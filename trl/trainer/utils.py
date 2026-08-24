@@ -1564,8 +1564,11 @@ def compute_flops_per_token(config: PretrainedConfig, seq_len: int) -> int:
     L = config.num_hidden_layers
     V = config.vocab_size
     n_heads = config.num_attention_heads
-    # `num_key_value_heads` is optional on configs: GPT-NeoX uses standard multi-head attention and omits it.
-    n_kv_heads = getattr(config, "num_key_value_heads", n_heads)
+    try:
+        n_kv_heads = config.num_key_value_heads
+    except AttributeError:
+        # GPT-NeoX uses standard multi-head attention and omits `num_key_value_heads`.
+        n_kv_heads = n_heads
     # `head_dim` is optional on configs: Llama and Mistral declare it, Qwen2 doesn't. Derive it when missing, like
     # transformers' own modeling code does.
     head_dim = getattr(config, "head_dim", None) or h // n_heads
