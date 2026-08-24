@@ -112,7 +112,7 @@ While training and evaluating, we record the following metrics. Here is an examp
 
 ## Benchmark experiments
 
-To validate the online DPO implementation works, we ran experiments with the Pythia 1B, 2.8B, and 6.9B models on a single node of 8 x H100s. Here are the commands we used to run the experiments, with the online DPO example script as it existed at the time ([`examples/scripts/online_dpo.py`](https://github.com/huggingface/trl/blob/v1.10.0/examples/scripts/online_dpo.py), since removed). We take the SFT / RM models directly from [The N+ Implementation Details of RLHF with PPO: A Case Study on TL;DR Summarization](https://huggingface.co/papers/2403.17031).
+To validate the online DPO implementation works, we ran experiments with the Pythia 1B, 2.8B, and 6.9B models on a single node of 8 x H100s. Here are the commands we used to run the experiments, with the online DPO example script as it existed at the time ([`examples/scripts/online_dpo.py`](https://github.com/huggingface/trl/blob/v1.10.0/examples/scripts/online_dpo.py), since removed) — to reproduce them, run from a v1.10.0 checkout (`git checkout v1.10.0`). We take the SFT / RM models directly from [The N+ Implementation Details of RLHF with PPO: A Case Study on TL;DR Summarization](https://huggingface.co/papers/2403.17031).
 
 ```shell
 # 1B Online DPO experiment

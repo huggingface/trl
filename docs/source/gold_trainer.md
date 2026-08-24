@@ -159,6 +159,23 @@ P_merged("cool") = 0.1 × 0.9 = 0.09
 
 The merged distribution is unnormalized (sums to 0.81), but this is intentional and correct for ULD loss computation, which uses sorting and L1 distance.
 
+## Example script
+
+Use [`examples/gold_chatbot_arena/gold_chatbot_arena.py`](https://github.com/huggingface/trl/blob/main/examples/gold_chatbot_arena/gold_chatbot_arena.py) to launch GOLD training from the command line. The script supports full training and LoRA via the standard `ModelConfig` flags.
+
+```bash
+python examples/gold_chatbot_arena/gold_chatbot_arena.py \
+    --model_name_or_path meta-llama/Llama-3.2-1B-Instruct \
+    --teacher_model_name_or_path Qwen/Qwen2-1.5B-Instruct \
+    --dataset_name trl-lib/chatbot_arena_completions \
+    --learning_rate 2e-5 \
+    --per_device_train_batch_size 4 \
+    --gradient_accumulation_steps 8 \
+    --output_dir gold-model \
+    --num_train_epochs 1 \
+    --push_to_hub
+```
+
 ## Training Vision Language Models
 
 [`GOLDTrainer`] supports VLM-to-VLM distillation. Both student and teacher must be vision-language models. To train a VLM, provide a dataset with either an `image` column (single image per sample) or an `images` column (list of images per sample). For more information on the expected dataset structure, see the [Dataset Format — Vision datasets](dataset_formats#vision-datasets) section.
