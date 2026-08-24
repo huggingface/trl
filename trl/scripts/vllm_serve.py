@@ -46,8 +46,11 @@ class WeightSyncWorkerExtension:
     # The following attributes are initialized when `init_communicator` method is called.
     communicator = None  # Communicator for weight updates
     client_rank = None  # Source rank for broadcasting updated weights
+    weight_sync_backend = "xccl"  # Weight-sync backend, forwarded by the client (XPU only)
 
-    def init_communicator(self, host: str, port: int, world_size: int, client_device_uuid: str) -> None:
+    def init_communicator(
+        self, host: str, port: int, world_size: int, client_device_uuid: str, weight_sync_backend: str = "xccl"
+    ) -> None:
         """
         Initializes the weight update communicator using a stateless process group.
 
@@ -64,7 +67,11 @@ class WeightSyncWorkerExtension:
             client_device_uuid (`str`):
                 UUID of the device of client main process. Used to assert that devices are different from vllm workers
                 devices.
+            weight_sync_backend (`str`, *optional*, defaults to `"xccl"`):
+                Weight-sync backend chosen by the client (XPU only). Forwarded from the client so both sides build the
+                same process group; a mismatch would hang. Use `"gloo"` to route the sync through a host-staged group.
         """
+        self.weight_sync_backend = weight_sync_backend
         import torch
         import torch.distributed.distributed_c10d as c10d
         from transformers import is_torch_xpu_available
@@ -97,7 +104,7 @@ class WeightSyncWorkerExtension:
         if is_torch_xpu_available():
             store = torch.distributed.TCPStore(host_name=host, port=port, world_size=world_size, is_master=(rank == 0))
             prefixed_store = c10d.PrefixStore("client2server", store)
-            if os.environ.get("TRL_XPU_WEIGHT_SYNC_BACKEND", "xccl") == "gloo":
+            if self.weight_sync_backend == "gloo":
                 # On some XPU stacks (e.g. multi-card Intel Arc), the cross-device XCCL weight-sync
                 # collective never completes. Setting TRL_XPU_WEIGHT_SYNC_BACKEND=gloo routes the sync
                 # through a host-staged GLOO group instead (weights go via CPU, see update_named_param).
@@ -143,7 +150,7 @@ class WeightSyncWorkerExtension:
         weight = torch.empty(shape, dtype=dtype, device=self.device)
 
         if is_torch_xpu_available():
-            if os.environ.get("TRL_XPU_WEIGHT_SYNC_BACKEND", "xccl") == "gloo":
+            if self.weight_sync_backend == "gloo":
                 # GLOO is host-only: receive the weight on CPU, then move it to the XPU device.
                 import torch.distributed.distributed_c10d as c10d
 
@@ -1137,6 +1144,7 @@ def main(script_args: ScriptArguments):
         port: int
         world_size: int
         client_device_uuid: str
+        weight_sync_backend: str = "xccl"
 
     @app.post("/init_communicator/")
     async def init_communicator(request: InitCommunicatorRequest):
@@ -1150,15 +1158,18 @@ def main(script_args: ScriptArguments):
                 - `world_size` (`int`): Total number of participating processes in the group.
                 - `client_device_uuid` (`str`): UUID of the device of client main process. Used to assert that devices
                   are different from vLLM workers devices.
+                - `weight_sync_backend` (`str`): Weight-sync backend chosen by the client (XPU only), forwarded so both
+                  sides build the same process group.
         """
         world_size = script_args.tensor_parallel_size * script_args.data_parallel_size + 1
 
-        # The function init_communicator is called this way: init_communicator(host, port, world_size)
+        # The function init_communicator is called this way:
+        # init_communicator(host, port, world_size, client_device_uuid, weight_sync_backend)
         # So with collective_rpc we need to call it this way:
-        # llm.collective_rpc(method="init_communicator", args=(host, port, world_size))
+        # llm.collective_rpc(method="init_communicator", args=(host, port, world_size, ...))
         kwargs = {
             "method": "init_communicator",
-            "args": (request.host, request.port, world_size, request.client_device_uuid),
+            "args": (request.host, request.port, world_size, request.client_device_uuid, request.weight_sync_backend),
         }
         for connection in connections:
             connection.send({"type": "fire_and_forget", "method": "collective_rpc", "kwargs": kwargs})

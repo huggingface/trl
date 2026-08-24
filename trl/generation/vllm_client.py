@@ -445,6 +445,10 @@ class VLLMClient:
         else:
             client_device_uuid = str(torch.cuda.get_device_properties(device).uuid)
 
+        # The client is the single source of truth for the weight-sync backend: read it once here and
+        # forward it to the server so both sides build the same process group (a mismatch would hang).
+        self.weight_sync_backend = os.environ.get("TRL_XPU_WEIGHT_SYNC_BACKEND", "xccl")
+
         # Set the weight update group's host to "0.0.0.0" so that
         # clients from different IPs can send updated weights
         response = self.session.post(
@@ -454,6 +458,7 @@ class VLLMClient:
                 "port": self.group_port,
                 "world_size": world_size,
                 "client_device_uuid": client_device_uuid,
+                "weight_sync_backend": self.weight_sync_backend,
             },
         )
         if response.status_code != 200:
@@ -470,7 +475,7 @@ class VLLMClient:
                 host_name=self.host, port=self.group_port, world_size=world_size, is_master=(self.rank == 0)
             )
             prefixed_store = c10d.PrefixStore("client2server", store)
-            if os.environ.get("TRL_XPU_WEIGHT_SYNC_BACKEND", "xccl") == "gloo":
+            if self.weight_sync_backend == "gloo":
                 # On some XPU stacks (e.g. multi-card Intel Arc), the cross-device XCCL weight-sync
                 # collective never completes. Setting TRL_XPU_WEIGHT_SYNC_BACKEND=gloo routes the sync
                 # through a host-staged GLOO group instead (weights go via CPU, see update_named_param).
@@ -510,7 +515,7 @@ class VLLMClient:
             raise Exception(f"Request failed: {response.status_code}, {response.text}")
 
         if is_torch_xpu_available():
-            if os.environ.get("TRL_XPU_WEIGHT_SYNC_BACKEND", "xccl") == "gloo":
+            if self.weight_sync_backend == "gloo":
                 # GLOO is host-only: send the weights from CPU (see init_communicator).
                 weights_cpu = weights.detach().to("cpu").contiguous()
                 broadcast_options = c10d.BroadcastOptions()
