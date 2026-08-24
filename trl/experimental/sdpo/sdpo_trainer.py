@@ -258,6 +258,13 @@ class SuccessfulRolloutTeacherContextBuilder:
             if has_solution:
                 num_with_solution += 1
 
+        if num_with_feedback_available > 0 and not self.trainer.args.include_environment_feedback:
+            logger.warning_once(
+                "SDPO received environment feedback (`privileged_context`) in the batch, but "
+                "`include_environment_feedback=False`, so it is being ignored (no reprompting from feedback). "
+                "Set `include_environment_feedback=True` to use it."
+            )
+
         local_teacher_messages = []
         local_self_distillation_mask = self_distillation_mask[process_slice]
         for global_idx in range(process_start, process_start + num_local):
