@@ -135,6 +135,10 @@ class DistillationConfig(_BaseConfig):
             forward KL divergence. When `1.0`, the loss is the reverse KL divergence. When `0.5`, it is the standard
             JSD. Unlike GRPO's `beta` (a KL-penalty coefficient against a reference model), here it selects the
             divergence itself; there is no reference-model KL penalty.
+        max_tool_calling_iterations (`int`, *optional*):
+            Maximum number of tool-calling turns when training an agent. If `None`, there is no limit and generation
+            stops when the model generates a response turn with no tool calls or when the total response length reaches
+            `max_model_length`.
 
         > Parameters that control the logging
 
@@ -352,6 +356,14 @@ class DistillationConfig(_BaseConfig):
             "help": "Interpolation coefficient for the Generalized JSD loss. 0.0 = forward KL, 0.5 = JSD, 1.0 = reverse "
             "KL. Unlike GRPO's `beta` (a KL-penalty coefficient against a reference model), here it selects the "
             "divergence itself; there is no reference-model KL penalty."
+        },
+    )
+    max_tool_calling_iterations: int | None = field(
+        default=None,
+        metadata={
+            "help": "Maximum number of tool-calling turns when training an agent. If `None`, there is no limit and "
+            "generation stops when the model generates a response turn with no tool calls or when the total "
+            "response length reaches `max_model_length`."
         },
     )
 
