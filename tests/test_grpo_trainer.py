@@ -51,6 +51,7 @@ from .testing_utils import (
     require_torch_accelerator,
     require_vision,
     require_vllm,
+    xfail_data_parallel,
 )
 
 
@@ -1563,6 +1564,135 @@ class TestGRPOTrainer(TrlTestCase):
 
         torch.testing.assert_close(off_policy_mask_keep, expected_mask_keep)
 
+    @pytest.mark.parametrize(
+        "vllm_importance_sampling_mode", ["token_truncate", "token_mask", "sequence_truncate", "sequence_mask"]
+    )
+    def test_sampling_logps_none_yields_neutral_importance_ratio(self, vllm_importance_sampling_mode):
+        # Regression test for #6166: when vLLM cannot score a token it returns a NaN logprob, which
+        # `extract_logprobs` replaces with `None`. That `None` reaches `torch.tensor(logps)` in
+        # `_generate_and_score_completions` and raises "Could not infer dtype of NoneType". The fix builds the
+        # tensor with those positions as NaN, then zeroes them out of the importance-sampling difference so the
+        # ratio is exactly 1 (no correction) for that token while every other token is untouched.
+        #
+        # This drives the real trainer instead of re-deriving the arithmetic, so removing either half of the fix
+        # fails the test. vLLM itself is not needed: the weight sync lives inside `_generate`, so replacing that
+        # method bypasses vLLM while still exercising both fix sites. All four importance-sampling modes are
+        # covered, because the sequence-level ones sum the per-token difference and a NaN there would poison the
+        # whole sequence and evade the clipping guard as well (comparisons against NaN are False).
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,
+            num_generations=3,
+            max_completion_length=8,
+            max_steps=1,
+            report_to="none",
+            # Exercise the off-policy mask as well, which is the third consumer of the sampling logprobs. The
+            # threshold is large enough that every sequence is under it, so with the fix in place nothing is
+            # dropped; a NaN sequence KL would compare false and drop the negative-advantage ones instead.
+            off_policy_mask_threshold=1e9,
+        )
+
+        def varied_reward(completions, **kwargs):
+            # Distinct rewards guarantee a non-degenerate group, so some advantages are negative. Without that,
+            # every sequence would be kept on `advantages >= 0` alone and the off-policy mask would prove nothing.
+            return [float(i) for i in range(len(completions))]
+
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs=varied_reward,
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        # Enable the correction after construction so that no vLLM server is required.
+        trainer.use_vllm = True
+        trainer.vllm_importance_sampling_correction = True
+        trainer.vllm_importance_sampling_mode = vllm_importance_sampling_mode
+
+        # Wrap the real `_generate` and inject an unscorable token into its own output, so the shapes come from the
+        # trainer rather than being fixed here.
+        original_generate = trainer._generate
+
+        def generate_with_one_unscorable_token(prompts):
+            # Generation itself must take the ordinary path, so drop the flag for the duration of the call and
+            # restore it afterwards for the loss, which is where the correction is applied.
+            trainer.use_vllm = False
+            try:
+                outputs = list(original_generate(prompts))
+            finally:
+                trainer.use_vllm = True
+            completion_ids = outputs[1]
+            outputs[4] = [[-0.5] * len(ids) for ids in completion_ids]
+            for logps in outputs[4]:
+                if logps:
+                    logps[0] = None  # vLLM returned no logprob for this token
+            return tuple(outputs)
+
+        trainer._generate = generate_with_one_unscorable_token
+
+        # Snapshot the divergence metric as soon as it is produced. Reading `_metrics` after training is useless,
+        # because the dict is cleared on every log.
+        original_score = trainer._generate_and_score_completions
+        recorded_metrics = []
+
+        def record_metrics(inputs):
+            outputs = original_score(inputs)
+            for key in ["sampling/sampling_logp_difference/mean", "sampling/sampling_logp_difference/max"]:
+                recorded_metrics.extend((key, value) for value in trainer._metrics["train"][key])
+            return outputs
+
+        trainer._generate_and_score_completions = record_metrics
+
+        # Capture the off-policy mask, the third consumer of the sampling logprobs.
+        original_off_policy_mask = trainer.get_off_policy_mask
+        off_policy_masks = []
+
+        def record_off_policy_mask(*args, **kwargs):
+            off_policy_mask = original_off_policy_mask(*args, **kwargs)
+            off_policy_masks.append(off_policy_mask)
+            return off_policy_mask
+
+        trainer.get_off_policy_mask = record_off_policy_mask
+
+        # Assert on every loss the trainer actually returns. The aggregate reported in `log_history` is not a
+        # reliable witness here, since it can stay finite while an individual step's loss carries NaN.
+        original_compute_loss = trainer._compute_loss
+        losses = []
+
+        def record_loss(model, inputs):
+            loss = original_compute_loss(model, inputs)
+            losses.append(loss)
+            return loss
+
+        trainer._compute_loss = record_loss
+
+        trainer.train()
+
+        assert losses, "the training step never computed a loss, so nothing was verified"
+        for loss in losses:
+            assert torch.isfinite(loss).all(), (
+                f"NaN or inf reached the loss in {vllm_importance_sampling_mode} mode: an unscorable token must "
+                f"contribute a neutral importance ratio instead of poisoning the update"
+            )
+
+        # The raw sampling logprobs feed another consumer: the logged divergence. It must stay a real number
+        # rather than NaN.
+        assert recorded_metrics, "the divergence metric was never recorded, so nothing was verified"
+        for key, value in recorded_metrics:
+            assert torch.isfinite(torch.tensor(value)), f"{key} became NaN because of an unscorable token"
+
+        # And a third: the off-policy mask. The threshold above is far larger than any real sequence KL, so every
+        # sequence must be kept. A NaN sequence KL compares false against it, which would silently drop exactly the
+        # negative-advantage sequences.
+        assert off_policy_masks, "the off-policy mask was never computed, so nothing was verified"
+        for off_policy_mask in off_policy_masks:
+            assert off_policy_mask.all(), (
+                "an unscorable token caused sequences to be dropped by the off-policy mask, even though the "
+                "threshold is high enough to keep every sequence"
+            )
+
     def test_train_with_off_policy_mask(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
@@ -1672,6 +1802,68 @@ class TestGRPOTrainer(TrlTestCase):
                 assert (vllm_is_ratio == 0.5).all(), (
                     "vllm_is_ratio values should match the injected importance_sampling_ratio"
                 )
+
+        release_memory(trainer.model, trainer)
+
+    @require_liger_kernel
+    def test_compute_liger_loss_dapo_normalizer(self):
+        """DAPO/CISPO/VESPO must rescale the Liger loss by ``gradient_accumulation_steps / steps_per_generation`` so
+        the accumulated loss lands on the per-window token-mean, matching the non-Liger ``_compute_loss`` path.
+
+        Regression test for the per-window rescale (huggingface/trl#5619). The ``num_items_in_batch`` forwarding is
+        covered by ``test_compute_liger_loss_passes_vllm_is_ratio``.
+        """
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            loss_type="dapo",
+            steps_per_generation=4,  # differs from gradient_accumulation_steps so the rescale is non-trivial
+            gradient_accumulation_steps=2,
+            learning_rate=0.1,
+            per_device_train_batch_size=3,
+            num_generations=3,
+            max_completion_length=8,
+            use_liger_kernel=True,
+            report_to="none",
+            logging_strategy="no",
+        )
+
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        raw_losses = []
+        original_forward = trainer.liger_loss.forward
+
+        def forward_capture(*args, **kwargs):
+            out = original_forward(*args, **kwargs)
+            raw_losses.append(out[0].detach().clone())
+            return out
+
+        final_losses = []
+        original_cll = trainer.compute_liger_loss
+
+        def cll_capture(*args, **kwargs):
+            out = original_cll(*args, **kwargs)
+            final_losses.append(out.detach().clone())
+            return out
+
+        with (
+            patch.object(trainer.liger_loss, "forward", side_effect=forward_capture),
+            patch.object(trainer, "compute_liger_loss", side_effect=cll_capture),
+        ):
+            trainer.train()
+
+        # `num_items_in_batch` spans `steps_per_generation` micro-steps, so the per-window rescale
+        # the trainer applies is `gradient_accumulation_steps / steps_per_generation` (i.e. it divides
+        # the Liger output by `spg/gas`).
+        expected_rescale = training_args.steps_per_generation / training_args.gradient_accumulation_steps
+        for raw_loss, final_loss in zip(raw_losses, final_losses, strict=True):
+            torch.testing.assert_close(final_loss, raw_loss * expected_rescale)
 
         release_memory(trainer.model, trainer)
 
@@ -3711,6 +3903,7 @@ class TestGRPOTrainerVLM(TrlTestCase):
                     reason="Gemma4 models were introduced in transformers-5.5.0",
                 ),
             ),
+            "trl-internal-testing/tiny-InternVLForConditionalGeneration",
             "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
             "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
             "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",
@@ -4043,6 +4236,9 @@ class TestGRPOTrainerVLM(TrlTestCase):
     @pytest.mark.parametrize(
         "model_id",
         [
+            "trl-internal-testing/tiny-Idefics3ForConditionalGeneration",
+            "trl-internal-testing/tiny-LlavaForConditionalGeneration",
+            "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
             "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
         ],
     )
@@ -4077,7 +4273,16 @@ class TestGRPOTrainerVLM(TrlTestCase):
 
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+            # LLaVA & LLaVA-Next: vision_feature_layer=-2 leaves the last encoder layer (layers.1) and
+            # post_layernorm (pooler-only path) without gradient by design. Assert they stay frozen — if they
+            # ever start training, the feature-selection plumbing has likely regressed.
+            if model_id in (
+                "trl-internal-testing/tiny-LlavaForConditionalGeneration",
+                "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
+            ) and ("encoder.layers.1" in n or "post_layernorm" in n):
+                assert torch.equal(param, new_param), f"Param {n} expected frozen by LLaVA design, but changed"
+            else:
+                assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_train_vlm_log_multimodal_false(self):
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
@@ -4125,7 +4330,7 @@ class TestGRPOTrainerVLM(TrlTestCase):
             img = PILImage.new("RGB", (64, 64), color="red")
             return [{"type": "image", "image": img}, {"type": "text", "text": "Here is the screenshot"}]
 
-        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
@@ -4138,7 +4343,8 @@ class TestGRPOTrainerVLM(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            # Reward must vary across completions, otherwise GRPO advantages are all zero and no parameters update
+            reward_funcs=lambda completions, **kwargs: [float(len(str(c))) for c in completions],
             args=training_args,
             train_dataset=dataset,
             tools=[screenshot_tool],
@@ -4160,6 +4366,10 @@ class TestGRPOTrainerVLM(TrlTestCase):
                 )
                 # fmt: on
             else:  # second call: 1 tool call succeeded
+                assert "image_grid_thw" in kwargs, "image_grid_thw must be passed to generate"
+                assert kwargs["image_grid_thw"].shape[0] == 2, (
+                    f"Expected 2 images (1 original + 1 tool-returned), got {kwargs['image_grid_thw'].shape[0]}"
+                )
                 completion_ids = torch.tensor(
                     [
                         # 'Done!<|im_end|>'
@@ -4178,6 +4388,88 @@ class TestGRPOTrainerVLM(TrlTestCase):
         assert trainer.state.log_history[-1]["tools/failure_frequency"] == pytest.approx(0.0)
 
         # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @pytest.mark.xfail(
+        condition=Version(transformers.__version__) < Version("5.2.0"),
+        reason="Qwen3.5 models were introduced in transformers-5.2.0",
+        strict=True,
+    )
+    @require_response_parsing
+    def test_train_with_tools_text_response_multimodal_prompt(self):
+        # Test that tools returning text (non-multimodal response) work correctly with a VLM prompt having images.
+        def screenshot_tool() -> str:
+            """Simple text-returning tool."""
+            return "The image shows a red square."
+
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,
+            per_device_train_batch_size=2,
+            num_generations=2,
+            max_completion_length=512,
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
+            # Reward must vary across completions, otherwise GRPO advantages are all zero and no parameters update
+            reward_funcs=lambda completions, **kwargs: [float(len(str(c))) for c in completions],
+            args=training_args,
+            train_dataset=dataset,
+            tools=[screenshot_tool],
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        def fake_generate(input_ids, **kwargs):
+            if input_ids.shape[0] == 2:  # first call
+                completion_ids = torch.tensor(
+                    [
+                        [248058, 198, 27, 1628, 13744, 30091, 22076, 29, 198, 510, 1628, 29, 198, 248059, 248046],
+                        [
+                            40,
+                            1459,
+                            914,
+                            1366,
+                            866,
+                            5224,
+                            248046,
+                            248044,
+                            248044,
+                            248044,
+                            248044,
+                            248044,
+                            248044,
+                            248044,
+                            248044,
+                        ],
+                    ],
+                    device=input_ids.device,
+                )
+            else:  # second call after text tool response: original image grid thw should still be present
+                assert "image_grid_thw" in kwargs, "image_grid_thw must be passed to generate"
+                assert kwargs["image_grid_thw"].shape[0] == 1, (
+                    f"Expected 1 original image, got {kwargs['image_grid_thw'].shape[0]}"
+                )
+                completion_ids = torch.tensor(
+                    [
+                        [16936, 0, 248046],
+                    ],
+                    device=input_ids.device,
+                )
+            return torch.cat([input_ids, completion_ids], dim=-1)
+
+        with patch.object(trainer.model, "generate", side_effect=fake_generate):
+            trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+        assert trainer.state.log_history[-1]["tools/call_frequency"] == pytest.approx(1 / 2)
+        assert trainer.state.log_history[-1]["tools/failure_frequency"] == pytest.approx(0.0)
+
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
@@ -4204,6 +4496,7 @@ class TestGRPOTrainerSlow(TrlTestCase):
         ],
     )
     @require_liger_kernel
+    @xfail_data_parallel
     def test_train_with_liger_grpo_kernel(self, model_name):
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
@@ -4250,6 +4543,7 @@ class TestGRPOTrainerSlow(TrlTestCase):
     )
     @require_liger_kernel
     @require_peft
+    @xfail_data_parallel
     def test_train_with_liger_grpo_kernel_and_peft(self, model_name):
         from peft import LoraConfig, TaskType
 
@@ -4311,6 +4605,7 @@ class TestGRPOTrainerSlow(TrlTestCase):
         release_memory(model, trainer)
 
     @require_liger_kernel
+    @xfail_data_parallel
     def test_liger_grpo_kernel_importance_sampling(self):
         model_name = "trl-internal-testing/tiny-LlamaForCausalLM-3.2"
 
@@ -4351,12 +4646,21 @@ class TestGRPOTrainerSlow(TrlTestCase):
 
         release_memory(model, trainer)
 
+    # Flash Attention requires a `head_size` multiple of 8, hence the `small-*` models (`head_size` 32 and 128)
+    # rather than the `tiny-*` ones (`head_size=2`) used before. This drops the coverage of
+    # `trl-internal-testing/tiny-LlamaForCausalLM-3.2` and `trl-internal-testing/tiny-MistralForCausalLM-0.2`;
+    # restoring it needs `small-LlamaForCausalLM-3.2` and `small-MistralForCausalLM-0.2`, which don't exist yet.
     @pytest.mark.parametrize(
         "model_name",
         [
-            "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
-            "trl-internal-testing/tiny-MistralForCausalLM-0.2",
+            "trl-internal-testing/small-Qwen2ForCausalLM-2.5",
+            "trl-internal-testing/small-Qwen3ForCausalLM",
         ],
+    )
+    @pytest.mark.skipif(
+        not is_ampere_or_newer() and torch_device != "xpu",
+        reason="transformers continuous batching switches attention to Flash Attention, which requires an Ampere or "
+        "newer GPU, or XPU (see https://github.com/huggingface/transformers/issues/47926)",
     )
     def test_train_with_transformers_continuous_batching(self, model_name):
         """Test that training works with transformers continuous batching (requires GPU)."""
@@ -4404,6 +4708,11 @@ class TestGRPOTrainerSlow(TrlTestCase):
     @pytest.mark.skipif(
         not is_ampere_or_newer() and torch_device != "xpu",
         reason="Flash Attention 2 requires Ampere or newer GPU, or XPU",
+    )
+    @pytest.mark.xfail(
+        reason="kernels-community/flash-attn2 is currently unusable for training: no build variant for torch 2.13 "
+        "(https://github.com/huggingface/kernels-community/issues/1082), and the v3 stable-ABI build raises in the "
+        "backward pass for GQA models (https://github.com/huggingface/kernels-community/issues/1085)",
     )
     @require_kernels
     @require_bitsandbytes

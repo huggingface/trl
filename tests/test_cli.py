@@ -22,7 +22,7 @@ import yaml
 from .testing_utils import TrlTestCase
 
 
-@pytest.mark.parametrize("command", ["dpo", "grpo", "kto", "reward", "rloo", "sft"])
+@pytest.mark.parametrize("command", ["distillation", "dpo", "grpo", "kto", "reward", "rloo", "sft"])
 def test_help_no_type_error(command):
     # Regression test for https://github.com/huggingface/trl/issues/5099:
     # TrainingArguments help strings with unescaped "%" caused TypeError in argparse.
@@ -35,6 +35,13 @@ def test_help_no_type_error(command):
 
 
 class TestCLI(TrlTestCase):
+    def test_distillation(self):
+        from trl.cli import main
+
+        command = f"trl distillation --output_dir {self.tmp_dir} --model_name_or_path trl-internal-testing/tiny-Qwen2ForCausalLM-2.5 --teacher_model_name_or_path trl-internal-testing/tiny-Qwen2ForCausalLM-2.5 --dataset_name trl-internal-testing/zen --dataset_config standard_prompt_only --max_completion_length 32 --report_to none"
+        with patch("sys.argv", command.split(" ")):
+            main()
+
     def test_dpo(self):
         from trl.cli import main
 
