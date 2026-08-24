@@ -42,10 +42,11 @@ jobs:
           path: ~/.cache/pre-commit
           key: pre-commit-3|${{ env.pythonLocation }}|${{ hashFiles('.pre-commit-config.yaml') }}
 
+      - name: Install pre-commit
+        run: python -m pip install pre-commit
+
       - name: Run pre-commit
-        run: |
-          python -m pip install pre-commit
-          pre-commit run --all-files --show-diff-on-failure --color=always
+        run: pre-commit run --all-files --show-diff-on-failure --color=always
 
   tests:
     name: Tests with latest dependencies
