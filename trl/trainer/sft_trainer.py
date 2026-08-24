@@ -189,11 +189,14 @@ def _cut_cross_entropy_loss(
         return loss, correct, entropy_sum, n_valid
 
     with maybe_gather_lm_head_ctx(lm_head_weight, lm_head_bias):
+        # Like the chunked projection, the weight can be an fp32 master weight while the hidden states are bf16
+        # (FSDP2 mixed precision reads the sharded weight directly, bypassing the cast its forward hooks apply),
+        # so cast it to the dtype `lm_head`'s own forward would compute in.
         loss, metrics = fused_linear_cross_entropy(
             hidden_states,
-            lm_head_weight,
+            lm_head_weight.to(hidden_states.dtype),
             targets,
-            bias=lm_head_bias,
+            bias=lm_head_bias.to(hidden_states.dtype) if lm_head_bias is not None else None,
             ignore_index=-100,
             logit_scale=logit_scale,
             softcap=final_logit_softcapping,
