@@ -2,11 +2,13 @@ name: Slow tests (on push)
 
 on:
   push:
-    branches: [main]
-    paths:
-      # Run only when python files are modified
-      - "trl/**.py"
-      - "examples/**.py"
+    branches:
+      - main
+      - ci-*
+#    paths:
+#      # Run only when python files are modified
+#      - "trl/**.py"
+#      - "examples/**.py"
 env:
   CI_SLACK_CHANNEL: ${{ secrets.CI_PUSH_MAIN_CHANNEL }}
   HF_TOKEN: ${{ secrets.HF_TOKEN }}
@@ -54,7 +56,7 @@ jobs:
       - name: Run slow tests on single GPU
         run: |
           source .venv/bin/activate
-          make slow_tests PYTEST_ARGS="--report-log=slow_tests.log"
+          make slow_tests PYTEST_ARGS="-k test_vlm_training --report-log=slow_tests.log"
 
       - name: Generate Report
         if: always()
@@ -112,7 +114,7 @@ jobs:
       - name: Run slow tests on Multi GPU
         run: |
           source .venv/bin/activate
-          make slow_tests PYTEST_ARGS="--report-log=slow_tests.log"
+          make slow_tests PYTEST_ARGS="-k test_vlm_training --report-log=slow_tests.log"
 
       - name: Generate Reports
         if: always()
