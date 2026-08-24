@@ -21,43 +21,46 @@
 
 
 """
-GRPO training with OpenEnv's CARLA environment for VLMs (Vision Language Models).
+Simple script to run GRPO training with OpenEnv's CARLA environment. The environment simulates an emergency
+driving scenario where pedestrians are ahead and the model must learn to observe the scene and take the
+correct action (e.g., swerve to an empty lane) to minimize casualties.
 
-VLM adaptation of `grpo_carla.py`: each tool call returns a camera image alongside the text
-scene description, so the model sees the driving scene after each action.
-
-Setup:
+Setup (Option A - Install from HF Space, recommended):
 
 ```sh
 uv pip install git+https://huggingface.co/spaces/sergiopaniego/carla_env
 ```
 
-Usage (requires at least 2 CARLA Spaces, each supports only 1 concurrent connection):
+Setup (Option B - Clone OpenEnv repo, for development):
 
 ```sh
-python examples/grpo_carla/carla_vlm.py \
-    --model Qwen/Qwen3.5-0.8B \
-    --env-urls https://server1.hf.space https://server2.hf.space
+git clone https://github.com/huggingface/OpenEnv.git
+cd OpenEnv/envs/carla_env
+uv pip install -e .
+```
+
+Usage:
+
+```sh
+python examples/grpo_carla/grpo_carla.py
+python examples/grpo_carla/grpo_carla.py --model Qwen/Qwen3-1.7B --env-urls https://server1.hf.space https://server2.hf.space
 ```
 """
 
 import argparse
-import base64
-from io import BytesIO
 
 from carla_env import CarlaAction, CarlaEnv
 from datasets import Dataset
-from PIL import Image
 
 from trl import GRPOConfig, GRPOTrainer
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Run GRPO VLM training with CARLA environment.")
+    parser = argparse.ArgumentParser(description="Run GRPO training with CARLA environment.")
     parser.add_argument(
         "--model",
         type=str,
-        default="Qwen/Qwen3.5-0.8B",
+        default="Qwen/Qwen3-0.6B",
         help="Model to use for training.",
     )
     parser.add_argument(
@@ -68,40 +71,16 @@ def parse_args():
         help="URLs for the CARLA environment servers (one per environment instance).",
     )
     parser.add_argument(
-        "--image-size",
-        type=int,
-        default=256,
-        help="Resize camera images to this size. 0 to disable.",
-    )
-    parser.add_argument(
-        "--max-completion-length",
-        type=int,
-        default=1024,
-        help="Maximum number of tokens in the generated completion.",
-    )
-    parser.add_argument(
-        "--gradient-accumulation-steps",
-        type=int,
-        default=16,
-        help="Number of steps to accumulate gradients over before updating.",
-    )
-    parser.add_argument(
-        "--max-steps",
-        type=int,
-        default=50,
-        help="Number of training steps to run.",
-    )
-    parser.add_argument(
         "--trackio-space-id",
         type=str,
-        default="carla-grpo-trolley-vlm",
+        default="carla-grpo-trolley",
         help="Trackio space identifier.",
     )
     parser.add_argument(
         "--hub-model-id",
         type=str,
         default=None,
-        help="Hub model ID to push the trained model to.",
+        help="Hub model ID to push the trained model to (e.g., sergiopaniego/Qwen3-0.6B-carla-trolley-escape).",
     )
     parser.add_argument(
         "--run-name",
@@ -115,11 +94,8 @@ def parse_args():
 PROMPT = """You control an autonomous vehicle in an emergency. There are pedestrians ahead and you must \
 decide what to do immediately.
 
-You will see a camera image from the vehicle after each action. Use the visual information
-along with the scene description to decide your next action.
-
 You have the following tools available:
-- `observe`: Advance time and get a new observation of the scene with a camera image.
+- `observe`: Advance time and get a new observation of the scene.
 - `emergency_stop`: Apply maximum braking to stop the vehicle.
 - `lane_change(direction)`: Change lane to the left or right. Direction must be "left" or "right".
 
@@ -131,7 +107,6 @@ SIM_TICKS = 10  # Number of simulation steps to advance after each action
 
 class CarlaGRPOEnv:
     _env_url_iter = None
-    _image_size = 256
 
     def __init__(self):
         url = next(CarlaGRPOEnv._env_url_iter)
@@ -140,7 +115,8 @@ class CarlaGRPOEnv:
     @staticmethod
     def _describe(obs) -> str:
         """Build a text description from the observation fields."""
-        parts = [f"Speed: {obs.speed_kmh:.1f} km/h."]
+        parts = []
+        parts.append(f"Speed: {obs.speed_kmh:.1f} km/h.")
         if obs.nearby_actors:
             for actor in obs.nearby_actors:
                 parts.append(f"- {actor.get('type', 'actor')} at {actor.get('distance', '?')}m")
@@ -150,31 +126,13 @@ class CarlaGRPOEnv:
             parts.append(f"COLLISION detected with {obs.collided_with or 'unknown'}!")
         return "\n".join(parts)
 
-    @staticmethod
-    def _decode_image(camera_image_b64, target_size):
-        """Decode base64 JPEG image and optionally resize."""
-        img = Image.open(BytesIO(base64.b64decode(camera_image_b64)))
-        if target_size > 0:
-            img.thumbnail((target_size, target_size), Image.LANCZOS)
-        return img
-
-    def _format_multimodal(self, obs) -> list:
-        """Format observation as multimodal content blocks (camera image + text)."""
-        content = []
-        if obs.camera_image is not None:
-            content.append({"type": "image", "image": self._decode_image(obs.camera_image, CarlaGRPOEnv._image_size)})
-        content.append({"type": "text", "text": self._describe(obs)})
-        return content
-
-    def _advance_and_capture(self, ticks: int = SIM_TICKS):
-        """Advance the simulation, then capture an image of the current state."""
+    def _advance(self, ticks: int = SIM_TICKS):
+        """Advance the simulation by calling observe repeatedly, return the last result."""
         result = None
         for _ in range(ticks):
             result = self.client.step(CarlaAction(action_type="observe"))
             if result.done:
                 break
-        capture_result = self.client.step(CarlaAction(action_type="capture_image"))
-        result.observation.camera_image = capture_result.observation.camera_image
         return result
 
     def reset(self, **kwargs) -> str | None:
@@ -182,30 +140,30 @@ class CarlaGRPOEnv:
         self.reward = 0.0
         return self._describe(result.observation)
 
-    def observe(self) -> list:
+    def observe(self) -> str:
         """
-        Get the current scene with a camera image and description.
+        Get the current scene description without taking any action.
 
         Returns:
-            The camera image and scene description with vehicle state and nearby actors.
+            The scene description with vehicle state and nearby actors.
         """
-        result = self._advance_and_capture()
+        result = self._advance()
         self.reward = result.observation.rubric_reward or 0.0
-        return self._format_multimodal(result.observation)
+        return self._describe(result.observation)
 
-    def emergency_stop(self) -> list:
+    def emergency_stop(self) -> str:
         """
         Apply maximum braking to stop the vehicle.
 
         Returns:
-            The camera image and scene description after braking.
+            The scene description after braking.
         """
         self.client.step(CarlaAction(action_type="emergency_stop"))
-        result = self._advance_and_capture()
+        result = self._advance()
         self.reward = result.observation.rubric_reward or 0.0
-        return self._format_multimodal(result.observation)
+        return self._describe(result.observation)
 
-    def lane_change(self, direction: str) -> list:
+    def lane_change(self, direction: str) -> str:
         """
         Change lane to avoid obstacles.
 
@@ -213,12 +171,12 @@ class CarlaGRPOEnv:
             direction: Direction to change lane, either "left" or "right".
 
         Returns:
-            The camera image and scene description after changing lane.
+            The scene description after changing lane.
         """
         self.client.step(CarlaAction(action_type="lane_change", lane_direction=direction))
-        result = self._advance_and_capture()
+        result = self._advance()
         self.reward = result.observation.rubric_reward or 0.0
-        return self._format_multimodal(result.observation)
+        return self._describe(result.observation)
 
 
 def reward_func(environments, **kwargs):
@@ -228,7 +186,6 @@ def reward_func(environments, **kwargs):
 def main():
     args = parse_args()
     CarlaGRPOEnv._env_url_iter = iter(args.env_urls)
-    CarlaGRPOEnv._image_size = args.image_size
 
     dataset = Dataset.from_dict({"prompt": [[{"role": "user", "content": PROMPT}] for _ in range(1000)]})
 
@@ -241,12 +198,12 @@ def main():
             log_completions=True,
             logging_steps=2,
             num_completions_to_print=1,
-            max_completion_length=args.max_completion_length,
+            max_completion_length=1024,
             per_device_train_batch_size=len(args.env_urls),
             steps_per_generation=1,
             num_generations=len(args.env_urls),
-            gradient_accumulation_steps=args.gradient_accumulation_steps,
-            max_steps=args.max_steps,
+            gradient_accumulation_steps=16,
+            max_steps=50,
             push_to_hub=args.hub_model_id is not None,
             hub_model_id=args.hub_model_id,
             run_name=args.run_name,

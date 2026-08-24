@@ -16,7 +16,7 @@ References:
 To just run a PPO script to make sure the trainer can run, you can run the following command to train a PPO model with a dummy reward model.
 
 ```bash
-python examples/ppo_sentiment/ppo.py \
+python examples/ppo_sentiment/ppo_sentiment.py \
     --dataset_name trl-internal-testing/descriptiveness-sentiment-trl-style \
     --dataset_train_split descriptiveness \
     --learning_rate 3e-6 \

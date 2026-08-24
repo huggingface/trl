@@ -64,10 +64,10 @@ The paper identifies the following key hyperparameters:
 
 ## Example script                                                                                                            
  
-Use [`examples/ssd_codegen/ssd.py`](https://github.com/huggingface/trl/blob/main/examples/ssd_codegen/ssd.py) to launch SSD training from the command line. The script supports any causal LM from the Hub, custom local datasets via `--dataset_path`, and PEFT/LoRA via the standard `ModelConfig` flags.
+Use [`examples/ssd_codegen/ssd_codegen.py`](https://github.com/huggingface/trl/blob/main/examples/ssd_codegen/ssd_codegen.py) to launch SSD training from the command line. The script supports any causal LM from the Hub, custom local datasets via `--dataset_path`, and PEFT/LoRA via the standard `ModelConfig` flags.
 
 ```bash
-python examples/ssd_codegen/ssd.py \
+python examples/ssd_codegen/ssd_codegen.py \
     --model_name_or_path Qwen/Qwen3-4B-Instruct-2507 \
     --dataset_name microsoft/rStar-Coder \
     --dataset_config seed_sft \

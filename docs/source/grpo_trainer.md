@@ -997,12 +997,12 @@ Tested with:
 
 ### Quick Start
 
-Use [grpo\_vlm.py](https://github.com/huggingface/trl/blob/main/examples/grpo_visual_math/grpo_vlm.py) to fine-tune a VLM. Example command for training on [`lmms-lab/multimodal-open-r1-8k-verified`](https://huggingface.co/datasets/lmms-lab/multimodal-open-r1-8k-verified):
+Use [grpo\_vlm.py](https://github.com/huggingface/trl/blob/main/examples/grpo_visual_math/grpo_visual_math.py) to fine-tune a VLM. Example command for training on [`lmms-lab/multimodal-open-r1-8k-verified`](https://huggingface.co/datasets/lmms-lab/multimodal-open-r1-8k-verified):
 
 ```bash
 accelerate launch \
   --config_file=examples/accelerate_configs/deepspeed_zero3.yaml \
-  examples/grpo_visual_math/grpo_vlm.py \
+  examples/grpo_visual_math/grpo_visual_math.py \
   --model_name_or_path Qwen/Qwen2.5-VL-3B-Instruct \
   --output_dir grpo-Qwen2.5-VL-3B-Instruct \
   --learning_rate 1e-5 \
