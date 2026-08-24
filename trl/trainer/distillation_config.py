@@ -135,6 +135,10 @@ class DistillationConfig(_BaseConfig):
             forward KL divergence. When `1.0`, the loss is the reverse KL divergence. When `0.5`, it is the standard
             JSD. Unlike GRPO's `beta` (a KL-penalty coefficient against a reference model), here it selects the
             divergence itself; there is no reference-model KL penalty.
+        max_tool_calling_iterations (`int`, *optional*):
+            Maximum number of tool-calling turns when training an agent. If `None`, there is no limit and generation
+            stops when the model generates a response turn with no tool calls or when the total response length reaches
+            `max_model_length`.
 
         > Parameters that control the logging
 
@@ -156,7 +160,12 @@ class DistillationConfig(_BaseConfig):
     > - `learning_rate`: Defaults to `1e-6` instead of `5e-5`.
     """
 
-    _VALID_DICT_FIELDS = _BaseConfig._VALID_DICT_FIELDS + ["model_init_kwargs", "teacher_model_init_kwargs"]
+    _VALID_DICT_FIELDS = _BaseConfig._VALID_DICT_FIELDS + [
+        "model_init_kwargs",
+        "teacher_model_init_kwargs",
+        "generation_kwargs",
+        "chat_template_kwargs",
+    ]
 
     # Parameters whose default values are overridden from TrainingArguments
     learning_rate: float = field(
@@ -253,7 +262,7 @@ class DistillationConfig(_BaseConfig):
             "must be a value between 0.0 and 1.0. Typical values are in the 0.01-0.2 range."
         },
     )
-    generation_kwargs: dict | None = field(
+    generation_kwargs: dict | str | None = field(
         default=None,
         metadata={
             "help": "Additional keyword arguments to pass to `GenerationConfig` (if using transformers) or "
@@ -262,7 +271,7 @@ class DistillationConfig(_BaseConfig):
             "conflict with the other generation parameters (like `min_p`, `top_p`, etc.), they will override them."
         },
     )
-    chat_template_kwargs: dict | None = field(
+    chat_template_kwargs: dict | str | None = field(
         default=None,
         metadata={
             "help": "Additional keyword arguments to pass to the `apply_chat_template` function when generating "
@@ -347,6 +356,14 @@ class DistillationConfig(_BaseConfig):
             "help": "Interpolation coefficient for the Generalized JSD loss. 0.0 = forward KL, 0.5 = JSD, 1.0 = reverse "
             "KL. Unlike GRPO's `beta` (a KL-penalty coefficient against a reference model), here it selects the "
             "divergence itself; there is no reference-model KL penalty."
+        },
+    )
+    max_tool_calling_iterations: int | None = field(
+        default=None,
+        metadata={
+            "help": "Maximum number of tool-calling turns when training an agent. If `None`, there is no limit and "
+            "generation stops when the model generates a response turn with no tool calls or when the total "
+            "response length reaches `max_model_length`."
         },
     )
 

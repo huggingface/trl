@@ -1,0 +1,69 @@
+name: Tests with all supported Python versions
+
+on:
+  schedule:
+    - cron: '0 1 * * *'  # Runs daily at 1am UTC
+
+  workflow_dispatch:
+
+env:
+  TQDM_DISABLE: 1
+  CI_SLACK_CHANNEL: ${{ secrets.CI_PUSH_MAIN_CHANNEL }}
+  HF_TOKEN: ${{ secrets.HF_TOKEN }}
+  PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"
+  PYTORCH_ALLOC_CONF: "expandable_segments:True"
+
+jobs:
+  tests:
+    name: Tests with Python ${{ matrix.python-version }}
+    strategy:
+      matrix:
+        python-version: ['3.10', '3.11', '3.13', '3.14']  # 3.12 is already covered by the Tests workflow
+      fail-fast: false
+    runs-on:
+      group: aws-g6e-4xlarge
+    container:
+      image: pytorch/pytorch:2.8.0-cuda12.8-cudnn9-devel
+      options: --gpus all
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Git checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install Make and Git
+        run: |
+          apt-get update && apt-get install -y make git curl
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
+
+      - name: Create Python virtual environment
+        run: |
+          uv venv
+          uv pip install --upgrade setuptools wheel
+
+      - name: Install dependencies
+        run: |
+          source .venv/bin/activate
+          uv pip install ".[dev]"
+
+      - name: Test with pytest
+        run: |
+          source .venv/bin/activate
+          make test
+
+      - name: Post to Slack
+        if: always()
+        uses: huggingface/hf-workflows/.github/actions/post-slack@50acccfe9afb8927b9b74ed7e750f2b0d3991b62  # main
+        with:
+          slack_channel: ${{ env.CI_SLACK_CHANNEL }}
+          title: Results with Python ${{ matrix.python-version }}
+          status: ${{ job.status }}
+          slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}

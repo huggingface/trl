@@ -161,10 +161,10 @@ The merged distribution is unnormalized (sums to 0.81), but this is intentional 
 
 ## Example script
 
-Use [`examples/scripts/gold.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/gold.py) to launch GOLD training from the command line. The script supports full training and LoRA via the standard `ModelConfig` flags.
+Use [`examples/gold_chatbot_arena/gold_chatbot_arena.py`](https://github.com/huggingface/trl/blob/main/examples/gold_chatbot_arena/gold_chatbot_arena.py) to launch GOLD training from the command line. The script supports full training and LoRA via the standard `ModelConfig` flags.
 
 ```bash
-python examples/scripts/gold.py \
+python examples/gold_chatbot_arena/gold_chatbot_arena.py \
     --model_name_or_path meta-llama/Llama-3.2-1B-Instruct \
     --teacher_model_name_or_path Qwen/Qwen2-1.5B-Instruct \
     --dataset_name trl-lib/chatbot_arena_completions \
@@ -214,16 +214,16 @@ trainer.train()
 
 For cross-family distillation, set `use_uld_loss=True` and `teacher_tokenizer_name_or_path` to the teacher model name.
 
-Use [`trl/experimental/gold/gold_vlm.py`](https://github.com/huggingface/trl/blob/main/trl/experimental/gold/gold_vlm.py) to launch GOLD VLM training from the command line:
+Use [`examples/gold_qwen3_vl/gold_qwen3_vl.py`](https://github.com/huggingface/trl/blob/main/examples/gold_qwen3_vl/gold_qwen3_vl.py) to launch GOLD VLM training from the command line:
 
 ```bash
 # Same-family distillation (JSD loss, vLLM enabled)
-accelerate launch trl/experimental/gold/gold_vlm.py \
+accelerate launch examples/gold_qwen3_vl/gold_qwen3_vl.py \
     --student_model_name Qwen/Qwen3-VL-2B-Instruct \
     --teacher_model_name Qwen/Qwen3-VL-8B-Instruct
 
 # Cross-family distillation (ULD loss, local generation)
-accelerate launch trl/experimental/gold/gold_vlm.py \
+accelerate launch examples/gold_qwen3_vl/gold_qwen3_vl.py \
     --student_model_name LiquidAI/LFM2.5-VL-1.6B \
     --teacher_model_name Qwen/Qwen3-VL-8B-Instruct \
     --use_uld_loss \
