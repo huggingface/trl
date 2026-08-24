@@ -20,8 +20,7 @@ from contextlib import contextmanager
 class DistributedBackend:
     """Abstracts distributed backend specifics (DeepSpeed ZeRO, FSDP) behind a uniform API.
 
-    Detects the active backend once at construction from ``accelerator.state``, then provides context managers that are
-    no-ops on backends where the operation is not needed.
+    Detects the active backend once at construction from ``accelerator.state``, then provides context managers that are no-ops on backends where the operation is not needed.
 
     Args:
         accelerator ([`~accelerate.Accelerator`]):
