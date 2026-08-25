@@ -930,6 +930,14 @@ class TestGRPOTrainer(TrlTestCase):
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @require_peft
+    @pytest.mark.xfail(
+        is_peft_available() and Version(peft.__version__).is_devrelease,
+        reason=(
+            "peft's LoRA parametrization for `target_parameters` returns bf16 under autocast, which "
+            "`register_parametrization` rejects (see #6914)."
+        ),
+        strict=True,
+    )
     def test_train_moe_peft_model(self):
         # Regression test for https://github.com/huggingface/trl/issues/5222. Before PEFT 0.20.0, only one adapter per
         # model was supported when the LoRA config uses `target_parameters` (see peft#3340, fixed in peft#3350), so no
