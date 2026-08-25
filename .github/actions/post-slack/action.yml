@@ -1,0 +1,72 @@
+name: Send message to slack
+
+description: 'Send results to slack'
+author: 'Hugging Face'
+inputs:
+  slack_channel:
+    required: true
+    type: string
+  title:
+    required: true
+    type: string
+  status:
+    required: true
+    type: string
+  slack_token:
+    required: true
+    type: string
+
+runs:
+  using: "composite"
+  steps:
+    - name: Create content to post
+      id: create-message
+      run: |
+        if [ "${{ inputs.status }}" == "success" ]; then
+          echo STATUS_MESSAGE='🟢 Tests are passing!' >> $GITHUB_ENV
+        else
+          echo STATUS_MESSAGE='🔴 Tests failed! Please check the GitHub action link below' >> $GITHUB_ENV
+        fi
+      shell: bash
+
+    - name: Post Canceled results Slack channel
+      id: post-slack
+      uses: slackapi/slack-github-action@dcb1066f776dd043e64d0e8ba94ca15cc7e1875d  # v4.0.0
+      with:
+        method: chat.postMessage
+        token: ${{ inputs.slack_token }}
+        # Fail the step when the Slack API call fails, as v1 did by default
+        errors: true
+        # For posting a rich message using Block Kit. The channel is a Slack
+        # channel id, channel name, or user id to post message to.
+        # See also: https://api.slack.com/methods/chat.postMessage#channels
+        payload: |
+          {
+            "channel": "${{ inputs.slack_channel }}",
+            "text": "${{ inputs.title }}",
+            "blocks": [
+              {
+                "type": "header",
+                "text": {
+                    "type": "plain_text",
+                    "text": "${{ inputs.title }}"
+                }
+              },
+              {
+                "type": "section",
+                "text": {
+                  "type": "mrkdwn",
+                  "text": "${{ env.STATUS_MESSAGE }}"
+                }
+              },
+              {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": "*Click here for more details about the action ran*"},
+                "accessory": {
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": "Check Action results"},
+                    "url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+                }
+              }
+            ]
+          }
