@@ -25,7 +25,7 @@ jobs:
         # the scan step mounts this directory, `.git/config` included, into a third-party container
         persist-credentials: false
     - name: Secret Scanning
-      uses: trufflesecurity/trufflehog@6f3c981e7b77f235fd2702dd74af25fc4b72bf11  # v3.96.0
+      uses: trufflesecurity/trufflehog@bcfcf73aaf4759d4dadc2783177c245a02792318  # v3.97.0
       with:
         # the action runs the scanner as a container and defaults to the mutable `:latest` tag, so the SHA above
         # pins only the wrapper. pin the image by digest too, and bump it together with the action SHA.
