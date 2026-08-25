@@ -226,7 +226,9 @@ class GKDTrainer(SFTTrainer):
                 "This GKD configuration (`lmbda=1.0`, `temperature=1.0`) is fully covered by `DistillationTrainer`, "
                 "which is maintained in the main codebase and supports vLLM generation and a memory-efficient "
                 "chunked loss. Consider migrating: replace `GKDConfig`/`GKDTrainer` with "
-                "`DistillationConfig`/`DistillationTrainer` and `max_new_tokens` with `max_completion_length`."
+                "`DistillationConfig`/`DistillationTrainer`, `max_new_tokens` with `max_completion_length`, and set "
+                f"`beta={self.beta}` explicitly (`beta` means the same in both, but defaults to 0.5 here and 1.0 "
+                "there)."
             )
 
         generation_kwargs = {
