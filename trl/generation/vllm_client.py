@@ -48,6 +48,19 @@ if is_vllm_available():
 logger = logging.getLogger(__name__)
 
 
+def _normalize_communicator_host(host: str) -> str:
+    """Return the bare host literal required by TCPStore/NCCL communicators."""
+    if host.startswith("[") and host.endswith("]"):
+        return host[1:-1]
+    return host
+
+
+def _format_http_host(host: str) -> str:
+    """Bracket an IPv6 literal when embedding it in an HTTP URL."""
+    host = _normalize_communicator_host(host)
+    return f"[{host}]" if ":" in host else host
+
+
 def pil_to_base64(image):
     buffer = BytesIO()
     image.save(buffer, format="PNG")
@@ -155,13 +168,13 @@ class VLLMClient:
         if base_url is not None:
             # Parse the base_url to extract host and port
             parsed_url = urlparse(base_url)
-            self.host = socket.gethostbyname(parsed_url.hostname)
+            self.host = _normalize_communicator_host(parsed_url.hostname)
             scheme = parsed_url.scheme or "http"
             self.base_url = f"{scheme}://{parsed_url.netloc}{parsed_url.path}"
         else:
-            self.host = host
+            self.host = _normalize_communicator_host(host)
             self.server_port = server_port
-            self.base_url = f"http://{self.host}:{self.server_port}"
+            self.base_url = f"http://{_format_http_host(self.host)}:{self.server_port}"
         self.group_port = group_port
         self.check_server(connection_timeout)  # check server and fail after timeout
 
@@ -193,7 +206,7 @@ class VLLMClient:
             else:
                 if response.status_code == 200:
                     if "X-Forwarded-For" in response.headers:
-                        self.host = response.headers["X-Forwarded-For"]
+                        self.host = _normalize_communicator_host(response.headers["X-Forwarded-For"])
                     logger.info("Server is up!")
                     return None
 
