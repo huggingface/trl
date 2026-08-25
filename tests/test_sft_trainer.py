@@ -756,7 +756,7 @@ class TestSFTTrainer(TrlTestCase):
     @pytest.mark.xfail(
         is_peft_available() and Version(peft.__version__).is_devrelease,
         reason=(
-            "peft's LoRA parametrization for `target_parameters` returns bf16 under autocast, which "
+            "peft's LoRA parametrization for MoE expert parameters returns bf16 under autocast, which "
             "`register_parametrization` rejects (see #6914)."
         ),
         strict=True,
