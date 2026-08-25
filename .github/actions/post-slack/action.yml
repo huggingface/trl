@@ -31,14 +31,18 @@ runs:
 
     - name: Post Canceled results Slack channel
       id: post-slack
-      uses: slackapi/slack-github-action@6c661ce58804a1a20f6dc5fbee7f0381b469e001  # v1.25.0
+      uses: slackapi/slack-github-action@dcb1066f776dd043e64d0e8ba94ca15cc7e1875d  # v4.0.0
       with:
-        # Slack channel id, channel name, or user id to post message.
+        method: chat.postMessage
+        token: ${{ inputs.slack_token }}
+        # Fail the step when the Slack API call fails, as v1 did by default
+        errors: true
+        # For posting a rich message using Block Kit. The channel is a Slack
+        # channel id, channel name, or user id to post message to.
         # See also: https://api.slack.com/methods/chat.postMessage#channels
-        channel-id: ${{ inputs.slack_channel }}
-        # For posting a rich message using Block Kit
         payload: |
           {
+            "channel": "${{ inputs.slack_channel }}",
             "text": "${{ inputs.title }}",
             "blocks": [
               {
@@ -66,5 +70,3 @@ runs:
               }
             ]
           }
-      env:
-        SLACK_BOT_TOKEN: ${{ inputs.slack_token }}
