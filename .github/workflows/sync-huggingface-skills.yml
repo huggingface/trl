@@ -51,15 +51,15 @@ jobs:
 
       - name: Copy generated files
         run: |
-          mkdir -p skills-repo/skills/trl
-          cp trl/.agents/skills/trl/SKILL.md skills-repo/skills/trl/
+          mkdir -p skills-repo/skills/trl-training
+          cp skills/trl-training/SKILL.md skills-repo/skills/trl-training/
 
       - name: Check for TRL skill changes
         id: check_changes
         working-directory: skills-repo
         # git status --porcelain prints nothing if there is no change
         run: |
-          if [ -z "$(git status --porcelain -- skills/trl/)" ]; then
+          if [ -z "$(git status --porcelain -- skills/trl-training/)" ]; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
             echo "No trl skill changes; skipping PR"
           else
@@ -84,7 +84,7 @@ jobs:
           body: |
             Auto-generated from [trl@${{ github.sha }}](https://github.com/huggingface/trl/commit/${{ github.sha }})
 
-            Triggered by changes to `trl/.agents/skills/trl`
+            Triggered by changes to `skills/trl-training`
 
             ---
             This PR was created automatically by the [sync-huggingface-skills](https://github.com/huggingface/trl/blob/main/.github/workflows/sync-huggingface-skills.yml) workflow.
