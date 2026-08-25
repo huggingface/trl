@@ -23,7 +23,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from io import BytesIO
 from itertools import chain
-from multiprocessing import Pipe, Process
+from multiprocessing import get_context
 from multiprocessing.connection import Connection
 
 
@@ -450,11 +450,14 @@ def main(script_args: ScriptArguments):
 
     # Spawn dp workers, and setup pipes for communication
     master_port = get_open_port()
+    multiprocessing_context = get_context("spawn")
     connections = []
     processes = []
     for data_parallel_rank in range(script_args.data_parallel_size):
-        parent_connection, child_connection = Pipe()
-        process = Process(target=llm_worker, args=(script_args, data_parallel_rank, master_port, child_connection))
+        parent_connection, child_connection = multiprocessing_context.Pipe()
+        process = multiprocessing_context.Process(
+            target=llm_worker, args=(script_args, data_parallel_rank, master_port, child_connection)
+        )
         process.start()
         connections.append(parent_connection)
         processes.append(process)
