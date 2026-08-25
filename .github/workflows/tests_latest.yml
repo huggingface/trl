@@ -61,9 +61,19 @@ jobs:
           source .venv/bin/activate
           make test
 
+      # This job checks out the release branch, which predates the local Slack action, so check
+      # the action out from the branch running the workflow. Keep this step on `always()`: it must
+      # never be skipped while the Slack step below runs, or the action cannot be resolved.
+      - name: Check out the Slack action
+        if: always()
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          path: slack-action
+          sparse-checkout: .github/actions
+
       - name: Post to Slack
         if: always()
-        uses: huggingface/hf-workflows/.github/actions/post-slack@50acccfe9afb8927b9b74ed7e750f2b0d3991b62  # main
+        uses: ./slack-action/.github/actions/post-slack
         with:
           slack_channel: ${{ env.CI_SLACK_CHANNEL }}
           title: Results of latest TRL with Python 3.12 and dev dependencies
