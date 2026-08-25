@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import pytest
 import torch
 from transformers import AutoModelForCausalLM
 
@@ -69,7 +70,7 @@ class RemoteStyleTrainingClient:
         )
 
 
-class TestLocalTrainingClient(TrlTestCase):
+class TestTrainingClient(TrlTestCase):
     def setup_method(self):
         torch.manual_seed(0)
         self.model = AutoModelForCausalLM.from_pretrained(MODEL_ID, dtype=torch.float32, attn_implementation="sdpa")
@@ -95,26 +96,28 @@ class TestLocalTrainingClient(TrlTestCase):
         per_token_loss = -torch.min(coef_1 * self.advantages, coef_2 * self.advantages)
         return (per_token_loss * self.mask).sum()
 
-    def _model_forward(self):
-        outputs = self.model(
+    def _model_outputs(self):
+        return self.model(
             input_ids=self.input_ids,
             position_ids=self.position_ids,
             labels=self.input_ids,
             completion_mask=self.completion_mask,
             use_cache=False,
         )
-        return outputs["log_probs"]
 
     def _grads(self):
         return {n: p.grad.detach().clone() for n, p in self.model.named_parameters() if p.grad is not None}
 
-    def _inline_grads(self):
+    def _client(self, client_type):
+        return LocalTrainingClient() if client_type == "local" else RemoteStyleTrainingClient(self.model)
+
+    def _inline_grads(self, loss_scale):
         """Gradients from computing the loss on the live graph, i.e. the behavior before the client existed."""
         self.model.zero_grad(set_to_none=True)
-        self.loss_fn(self._model_forward()).backward()
+        (self.loss_fn(self._model_outputs()["log_probs"]) * loss_scale).backward()
         return self._grads()
 
-    def _client_grads(self, client):
+    def _client_grads(self, client, loss_scale):
         self.model.zero_grad(set_to_none=True)
         outputs = client.forward_backward(
             self.model,
@@ -123,21 +126,14 @@ class TestLocalTrainingClient(TrlTestCase):
             completion_mask=self.completion_mask,
             loss_fn=self.loss_fn,
         )
-        outputs.loss.backward()
+        (outputs.loss * loss_scale).backward()
         return self._grads()
 
-    def test_gradients_match_inline_loss(self):
-        expected = self._inline_grads()
-        actual = self._client_grads(LocalTrainingClient())
-
-        assert set(actual) == set(expected)
-        for name in expected:
-            torch.testing.assert_close(actual[name], expected[name], rtol=0, atol=0)
-
-    def test_remote_style_client_matches_inline_loss(self):
-        """The off-process path: loss evaluated locally, gradient shipped, surrogate applied on a replayed forward."""
-        expected = self._inline_grads()
-        actual = self._client_grads(RemoteStyleTrainingClient(self.model))
+    @pytest.mark.parametrize("client_type", ["local", "remote"])
+    @pytest.mark.parametrize("loss_scale", [1.0, pytest.param(0.25, id="accumulation-scaled")])
+    def test_gradients_match_inline_loss(self, client_type, loss_scale):
+        expected = self._inline_grads(loss_scale)
+        actual = self._client_grads(self._client(client_type), loss_scale)
 
         assert set(actual) == set(expected)
         for name in expected:
@@ -158,13 +154,17 @@ class TestLocalTrainingClient(TrlTestCase):
         assert not outputs.entropy.requires_grad
         assert outputs.aux_loss is None
 
-    def test_reported_log_probs_match_the_model(self):
-        outputs = LocalTrainingClient().forward_backward(
+    @pytest.mark.parametrize("client_type", ["local", "remote"])
+    def test_reported_outputs_match_the_model(self, client_type):
+        outputs = self._client(client_type).forward_backward(
             self.model,
             input_ids=self.input_ids,
             position_ids=self.position_ids,
             completion_mask=self.completion_mask,
             loss_fn=self.loss_fn,
         )
-        torch.testing.assert_close(outputs.log_probs, self._model_forward().detach(), rtol=0, atol=0)
-        torch.testing.assert_close(outputs.loss.detach(), self.loss_fn(self._model_forward()).detach(), rtol=0, atol=0)
+        expected = self._model_outputs()
+
+        torch.testing.assert_close(outputs.log_probs, expected["log_probs"].detach(), rtol=0, atol=0)
+        torch.testing.assert_close(outputs.entropy, expected["entropy"].detach(), rtol=0, atol=0)
+        torch.testing.assert_close(outputs.loss.detach(), self.loss_fn(expected["log_probs"]).detach(), rtol=0, atol=0)
