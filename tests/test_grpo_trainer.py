@@ -4732,15 +4732,21 @@ class TestGRPOTrainerSlow(TrlTestCase):
         - Gradient checkpointing and bfloat16
         """
 
+        from PIL import Image as PILImage
+
         # Create processor once outside the data generator
         processor = AutoProcessor.from_pretrained(model_name, use_fast=True, padding_side="left")
         prompt = [{"role": "user", "content": "What is in the image?"}]
 
+        # Build the images as PIL images: an array column is stored as nested lists, and casting it to Image reads it
+        # back as int64, which makes datasets warn about downcasting to uint8
         dataset = Dataset.from_list(
             [
                 {
                     "prompt": prompt,
-                    "image": np.random.uniform(low=0.0, high=255.0, size=(64, 64, 3)).astype(np.uint8),
+                    "image": PILImage.fromarray(
+                        np.random.uniform(low=0.0, high=255.0, size=(64, 64, 3)).astype(np.uint8)
+                    ),
                 }
                 for _ in range(4)
             ],
