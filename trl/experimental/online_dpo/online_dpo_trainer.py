@@ -51,6 +51,7 @@ from transformers.utils import is_peft_available, is_sagemaker_mp_enabled
 from ...data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
 from ...extras.profiling import profiling_context
 from ...generation.vllm_client import VLLMClient
+from ...generation.vllm_generation import _dense_param_data
 from ...import_utils import is_vllm_available
 from ...models.utils import prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
 from ...trainer.base_trainer import _BaseTrainer
@@ -448,13 +449,13 @@ class OnlineDPOTrainer(_BaseTrainer):
                 # after the first optimizer step and remain in GPU memory throughout training. So we must reserve enough
                 # space for them.
                 # Configure vLLM parameters
-                vllm_quantization = None
+                # The engine is built dense on purpose. The base may be 4-bit, but every weight pushed at sync
+                # time is dequantized to the model dtype (see `_dense_param_data`), and building the engine with
+                # `quantization="bitsandbytes"` would allocate packed `[out_features, in_features // 2]` weights
+                # that reject that dense push. See https://github.com/huggingface/trl/issues/4973.
                 if is_bitsandbytes_available():
                     for _, module in model.named_modules():
-                        if isinstance(module, bnb.nn.Linear4bit):
-                            vllm_quantization = "bitsandbytes"
-                            break
-                        elif isinstance(module, bnb.nn.Linear8bitLt):
+                        if isinstance(module, bnb.nn.Linear8bitLt):
                             raise ValueError("vLLM does not support in-flight 8-bit quantization.")
                 vllm_kwargs = {
                     "model": model.name_or_path,
@@ -469,7 +470,6 @@ class OnlineDPOTrainer(_BaseTrainer):
                     # Latest vLLM v1 memory profiler is misled by the high default value (i.e., 32768)
                     "max_num_batched_tokens": 4096,
                     "enable_sleep_mode": self.args.vllm_enable_sleep_mode,
-                    "quantization": vllm_quantization,
                 }
 
                 # vLLM requires the environment variables to be set for distributed training.
@@ -806,10 +806,10 @@ class OnlineDPOTrainer(_BaseTrainer):
                         name = self._fix_param_name_to_vllm(name, extra_prefixes=["modules_to_save.default."])
 
                         if self.vllm_mode == "server" and self.accelerator.is_main_process:
-                            self.vllm_client.update_named_param(name, param.data)
+                            self.vllm_client.update_named_param(name, _dense_param_data(param))
                         elif self.vllm_mode == "colocate":
                             llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
-                            llm_model.load_weights([(name, param.data)])
+                            llm_model.load_weights([(name, _dense_param_data(param))])
                 # Unmerge adapters while parameters are still gathered
                 self.model.unmerge_adapter()
                 # Parameters will automatically be repartitioned when exiting the context
@@ -827,10 +827,10 @@ class OnlineDPOTrainer(_BaseTrainer):
                     name = self._fix_param_name_to_vllm(name)
                     with gather_if_zero3([param]):
                         if self.vllm_mode == "server" and self.accelerator.is_main_process:
-                            self.vllm_client.update_named_param(name, param.data)
+                            self.vllm_client.update_named_param(name, _dense_param_data(param))
                         elif self.vllm_mode == "colocate":
                             llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
-                            llm_model.load_weights([(name, param.data)])
+                            llm_model.load_weights([(name, _dense_param_data(param))])
 
         # Reset cache on vLLM
         if self.vllm_mode == "server" and self.accelerator.is_main_process:
@@ -860,10 +860,10 @@ class OnlineDPOTrainer(_BaseTrainer):
                     visited.add(full_name)
 
                     if self.vllm_mode == "server" and self.accelerator.is_main_process:
-                        self.vllm_client.update_named_param(full_name, param.data)
+                        self.vllm_client.update_named_param(full_name, _dense_param_data(param))
                     elif self.vllm_mode == "colocate":
                         llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
-                        llm_model.load_weights([(full_name, param.data)])
+                        llm_model.load_weights([(full_name, _dense_param_data(param))])
 
     def _fix_param_name_to_vllm(self, name, extra_prefixes: list[str] | None = None):
         """Clean parameter names for vLLM compatibility"""

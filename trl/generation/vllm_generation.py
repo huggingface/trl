@@ -108,6 +108,28 @@ if is_bitsandbytes_available():
     import bitsandbytes as bnb
 
 
+def _dense_param_data(param: nn.Parameter) -> torch.Tensor:
+    """
+    Return a parameter's data as a dense tensor, dequantizing bitsandbytes 4-bit weights.
+
+    vLLM's weight loader expects a dense `[out_features, in_features]` tensor in the model dtype. A bitsandbytes 4-bit
+    base instead stores a flat packed `uint8` buffer whose scales live in `quant_state`, and reading `.data` drops that
+    `quant_state`. Pushing it unchanged therefore both mismatches the shape vLLM allocated and loses the scales
+    entirely. See https://github.com/huggingface/trl/issues/4973.
+
+    Args:
+        param (`torch.nn.Parameter`):
+            Parameter to read. Must be the parameter object rather than its `.data`, since `.data` has already
+            discarded the quantization state.
+
+    Returns:
+        `torch.Tensor`: the dense weight, dequantized when the parameter is 4-bit.
+    """
+    if is_bitsandbytes_available() and isinstance(param, bnb.nn.Params4bit):
+        return bnb.functional.dequantize_4bit(param.data, param.quant_state)
+    return param.data
+
+
 class VLLMGeneration:
     """Handles vLLM-based generation for trainers.
 
@@ -338,13 +360,13 @@ class VLLMGeneration:
             # Ensure distributed rendezvous variables are set without colliding across concurrent runs
             ensure_master_addr_port()
 
-            quantization = None
+            # The engine is built dense on purpose. The base may be 4-bit, but every weight pushed at sync time
+            # is dequantized to the model dtype (see `_dense_param_data`), and building the engine with
+            # `quantization="bitsandbytes"` would allocate packed `[out_features, in_features // 2]` weights that
+            # reject that dense push. See https://github.com/huggingface/trl/issues/4973.
             if is_bitsandbytes_available():
                 for _, module in model.named_modules():
-                    if isinstance(module, bnb.nn.Linear4bit):
-                        quantization = "bitsandbytes"
-                        break
-                    elif isinstance(module, bnb.nn.Linear8bitLt):
+                    if isinstance(module, bnb.nn.Linear8bitLt):
                         raise ValueError("vLLM does not support in-flight 8-bit quantization.")
 
             # Build LLM initialization kwargs
@@ -363,7 +385,6 @@ class VLLMGeneration:
                 max_num_batched_tokens=4096,
                 # Important so temperature scaling/logit tweaking affects the TIS log probs
                 logprobs_mode="processed_logprobs",
-                quantization=quantization,
                 trust_remote_code=self.trust_remote_code,
             )
             if self.enable_sleep_mode:
@@ -414,7 +435,7 @@ class VLLMGeneration:
                         continue  # skip FSDP subtrees already traversed
                     visited.add(full_name)
 
-                    self._push_param_to_vllm(full_name, param.data)
+                    self._push_param_to_vllm(full_name, _dense_param_data(param))
 
     def _sync_fsdp2_params_to_vllm(self, module: nn.Module):
         """FSDP2-specific parameter synchronization."""
@@ -483,7 +504,7 @@ class VLLMGeneration:
                             continue
                         name = self._fix_param_name_to_vllm(name, extra_prefixes=["modules_to_save.default."])
 
-                        self._push_param_to_vllm(name, param.data)
+                        self._push_param_to_vllm(name, _dense_param_data(param))
                 # Unmerge adapters while parameters are still gathered
                 model.unmerge_adapter()
                 # Parameters will automatically be repartitioned when exiting the context
@@ -495,7 +516,7 @@ class VLLMGeneration:
                 for name, param in model.named_parameters():
                     name = self._fix_param_name_to_vllm(name)
                     with self._dist.gather_params([param]):
-                        self._push_param_to_vllm(name, param.data)
+                        self._push_param_to_vllm(name, _dense_param_data(param))
 
         # Reset cache on vLLM
         if self.mode == "server" and accelerator.is_main_process:
