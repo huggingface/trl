@@ -16,7 +16,6 @@ import atexit
 import base64
 import copy
 import logging
-import socket
 import time
 from io import BytesIO
 from urllib.parse import urlparse
@@ -206,7 +205,9 @@ class VLLMClient:
             else:
                 if response.status_code == 200:
                     if "X-Forwarded-For" in response.headers:
-                        self.host = _normalize_communicator_host(response.headers["X-Forwarded-For"])
+                        self.host = _normalize_communicator_host(
+                            response.headers["X-Forwarded-For"]
+                        )
                     logger.info("Server is up!")
                     return None
 
