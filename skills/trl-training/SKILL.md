@@ -1,5 +1,5 @@
 ---
-name: trl
+name: trl-training
 description: Post-train LLMs with TRL (Transformers Reinforcement Learning) — SFT, DPO, GRPO, KTO, and reward-model training. Use when writing or debugging training code with the TRL Python API or the trl CLI.
 license: Apache-2.0
 metadata:
