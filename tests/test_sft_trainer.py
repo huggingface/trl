@@ -753,14 +753,6 @@ class TestSFTTrainer(TrlTestCase):
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @require_peft
-    @pytest.mark.xfail(
-        is_peft_available() and Version(peft.__version__).is_devrelease,
-        reason=(
-            "peft's LoRA parametrization for MoE expert parameters returns bf16 under autocast, which "
-            "`register_parametrization` rejects (see #6914)."
-        ),
-        strict=True,
-    )
     def test_train_moe_with_peft_config(self):
         model_id = "trl-internal-testing/tiny-GptOssForCausalLM"
         model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
