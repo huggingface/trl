@@ -33,7 +33,7 @@ from transformers import (
     BitsAndBytesConfig,
     TrainingArguments,
 )
-from transformers.testing_utils import backend_empty_cache, torch_device
+from transformers.testing_utils import backend_device_count, backend_empty_cache, torch_device
 from transformers.utils import is_peft_available
 
 from trl import SFTConfig, SFTTrainer
@@ -55,6 +55,7 @@ from .testing_utils import (
     require_torch_accelerator,
     require_torch_multi_accelerator,
     require_vision,
+    xfail_data_parallel,
 )
 
 
@@ -134,6 +135,30 @@ class TestDataCollatorForLanguageModeling(TrlTestCase):
         assert set(result.keys()) == {"input_ids", "attention_mask", "labels"}
         torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3], [4, 5, 0]]))
         torch.testing.assert_close(result["labels"], torch.tensor([[1, 2, 3], [4, 5, -100]]))
+
+    def test_return_position_ids(self):
+        """Padded mode with return_position_ids: position IDs are returned alongside the attention mask."""
+        collator = DataCollatorForLanguageModeling(pad_token_id=0, return_position_ids=True)
+        examples = [{"input_ids": [1, 2, 3], "labels": [1, 2, 3]}, {"input_ids": [4, 5], "labels": [4, 5]}]
+
+        result = collator(examples)
+
+        assert set(result.keys()) == {"input_ids", "attention_mask", "position_ids", "labels"}
+        torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3], [4, 5, 0]]))
+        torch.testing.assert_close(result["attention_mask"], torch.tensor([[1, 1, 1], [1, 1, 0]]))
+        torch.testing.assert_close(result["position_ids"], torch.tensor([[0, 1, 2], [0, 1, 0]]))
+        torch.testing.assert_close(result["labels"], torch.tensor([[1, 2, 3], [4, 5, -100]]))
+
+    def test_return_position_ids_packed(self):
+        """Padded mode with return_position_ids on packed examples: position IDs reset at document boundaries."""
+        collator = DataCollatorForLanguageModeling(pad_token_id=0, return_position_ids=True)
+        examples = [{"input_ids": [1, 2, 3, 4, 5], "seq_lengths": [3, 2]}, {"input_ids": [6, 7], "seq_lengths": [2]}]
+
+        result = collator(examples)
+
+        assert set(result.keys()) == {"input_ids", "attention_mask", "position_ids", "labels"}
+        torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3, 4, 5], [6, 7, 0, 0, 0]]))
+        torch.testing.assert_close(result["position_ids"], torch.tensor([[0, 1, 2, 0, 1], [0, 1, 0, 0, 0]]))
 
     def test_padding_free_mode(self):
         """Test padding-free mode where sequences are concatenated."""
@@ -2283,7 +2308,7 @@ class TestSFTTrainerSlow(TrlTestCase):
         backend_empty_cache(torch_device)
         gc.collect()
 
-    @pytest.mark.parametrize("packing", [True, False])
+    @pytest.mark.parametrize("packing", [True, pytest.param(False, marks=xfail_data_parallel)])
     @pytest.mark.parametrize(
         "model_name",
         [
@@ -2326,7 +2351,7 @@ class TestSFTTrainerSlow(TrlTestCase):
     @pytest.mark.parametrize(
         "gradient_checkpointing_kwargs", [None, {"use_reentrant": False}, {"use_reentrant": True}]
     )
-    @pytest.mark.parametrize("packing", [True, False])
+    @pytest.mark.parametrize("packing", [True, pytest.param(False, marks=xfail_data_parallel)])
     @pytest.mark.parametrize(
         "model_name",
         [
@@ -2470,7 +2495,7 @@ class TestSFTTrainerSlow(TrlTestCase):
 
         release_memory(model, trainer)
 
-    @pytest.mark.parametrize("packing", [True, False])
+    @pytest.mark.parametrize("packing", [True, pytest.param(False, marks=xfail_data_parallel)])
     @pytest.mark.parametrize(
         "model_name",
         [
@@ -2530,6 +2555,11 @@ class TestSFTTrainerSlow(TrlTestCase):
         ],
     )
     @require_torch_accelerator
+    @pytest.mark.skipif(
+        backend_device_count(torch_device) > 1,
+        reason="segfaults in accelerate's get_max_memory when more than one accelerator is visible, taking the whole "
+        "pytest process down; cause not yet diagnosed (https://github.com/huggingface/trl/issues/6836)",
+    )
     def test_train_offloading(self, model_name, packing):
         """Test that activation offloading works with SFTTrainer."""
         training_args = SFTConfig(

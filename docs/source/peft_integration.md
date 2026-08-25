@@ -4,7 +4,7 @@ TRL supports [PEFT](https://github.com/huggingface/peft) (Parameter-Efficient Fi
 
 This guide covers how to use PEFT with different TRL trainers, including LoRA, QLoRA, and prompt tuning techniques.
 
-For a complete working example, see the [SFT with LoRA/QLoRA notebook](https://github.com/huggingface/trl/blob/main/examples/notebooks/sft_trl_lora_qlora.ipynb).
+For a complete working example, see the [SFT with LoRA/QLoRA notebook](https://github.com/huggingface/trl/blob/main/examples/sft_qlora/sft_qlora.ipynb).
 
 ## Installation
 
@@ -358,7 +358,7 @@ pip install peft bitsandbytes
 The multi-adapter approach requires three stages:
 
 1. **Supervised Fine-Tuning (SFT)**: Train a base model on your target domain (e.g., IMDB dataset) using `SFTTrainer`
-2. **Reward Model Training**: Train a reward model adapter using PEFT and `RewardTrainer` (see [reward modeling example](https://github.com/huggingface/trl/tree/main/examples/scripts/reward_modeling.py))
+2. **Reward Model Training**: Train a reward model adapter using PEFT and `RewardTrainer` (see [`trl/scripts/reward.py`](https://github.com/huggingface/trl/blob/main/trl/scripts/reward.py))
 3. **PPO Training**: Fine-tune new adapters using PPO with the reward adapter
 
 > [!IMPORTANT]
@@ -801,7 +801,7 @@ model = AutoModelForCausalLM.from_pretrained(
 
 ### TRL Examples and Notebooks
 
-- **[SFT with LoRA/QLoRA Notebook](https://github.com/huggingface/trl/blob/main/examples/notebooks/sft_trl_lora_qlora.ipynb)** - Complete working example showing both LoRA and QLoRA implementations
+- **[SFT with LoRA/QLoRA Notebook](https://github.com/huggingface/trl/blob/main/examples/sft_qlora/sft_qlora.ipynb)** - Complete working example showing both LoRA and QLoRA implementations
 - **[TRL Examples Directory](https://github.com/huggingface/trl/tree/main/examples)** - Collection of training scripts demonstrating PEFT with different trainers
 - **[TRL Cookbook Recipes](https://github.com/huggingface/cookbook/tree/main/notebooks/transformers)** - Step-by-step guides for common PEFT training scenarios
 
