@@ -130,13 +130,13 @@ _FUSED_LINEAR_CE_REVISION = "00e29bdf4e142fafa8f558be414c7a9f344d61d0"  # head o
 
 @functools.lru_cache(maxsize=1)
 def _fused_linear_cross_entropy():
-    from kernels import get_kernel
-
     if not is_kernels_available():
         raise ImportError(
             f'`loss_type="cce"` requires kernels>={KERNELS_MIN_VERSION}, whose `get_kernel` accepts '
             "`trust_remote_code`. Install it with `pip install -U kernels`."
         )
+    from kernels import get_kernel
+
     # `trust_remote_code=True` is required until `trustedKernelPublisher` is enabled for `trl-lib` on
     # the Hub. Drop it once it is.
     return get_kernel(
