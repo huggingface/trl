@@ -16,6 +16,7 @@
 # dependencies = [
 #     "trl",
 #     "trackio",
+#     "transformers>=5.0",  # the `rope_parameters` override below is a v5 schema; v4 ignores it silently
 # ]
 # ///
 

@@ -254,6 +254,7 @@ The levers, roughly in the order you will need them as model size or sequence le
 5. **For the largest dense models, tile the MLP over the sequence.** Inside a checkpointed layer, the `[seq/cp, intermediate]` gate/up projections are the last large transient, and activation offload cannot reach them — they are created and consumed within a single recompute. Splitting the MLP forward into sequence tiles caps them at `[tile, intermediate]`; the backward recomputes the same tiled code, so the bound holds there too. This is what makes Qwen3-32B fit at 1M:
 
    ```python
+   import torch
    from transformers.models.qwen3.modeling_qwen3 import Qwen3MLP
 
    forward, tile = Qwen3MLP.forward, 16384
