@@ -14,6 +14,7 @@
 
 import os
 import subprocess
+from unittest.mock import patch
 from types import SimpleNamespace
 
 import pytest
@@ -45,8 +46,13 @@ if is_vllm_available():
 
 class TestVLLMClientAddressing(TrlTestCase):
     def test_communicator_host_strips_ipv6_brackets(self):
-        assert _normalize_communicator_host("[2001:db8::1]") == "2001:db8::1"
-        assert _normalize_communicator_host("2001:db8::1") == "2001:db8::1"
+        assert _resolve_communicator_host("[2001:db8::1]") == "2001:db8::1"
+        assert _resolve_communicator_host("2001:db8::1") == "2001:db8::1"
+
+    @patch("trl.generation.vllm_client.socket.gethostbyname", return_value="127.0.0.1")
+    def test_communicator_host_resolves_hostname(self, gethostbyname):
+        assert _resolve_communicator_host("localhost") == "127.0.0.1"
+        gethostbyname.assert_called_once_with("localhost")
 
     def test_http_host_brackets_only_ipv6_literals(self):
         assert _format_http_host("[2001:db8::1]") == "[2001:db8::1]"
