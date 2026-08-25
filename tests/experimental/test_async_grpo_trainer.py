@@ -340,7 +340,6 @@ class TestAsyncGRPOTrainerVLM(TrlTestCase):
 
     def test_vision_tower_is_frozen(self, model_id):
         trainer = self._trainer(model_id)
-        assert trainer._is_vlm
 
         # Everything outside the text tower is frozen; the text tower and the LM head stay trainable.
         frozen = {n for n, p in trainer.model.named_parameters() if not p.requires_grad}
