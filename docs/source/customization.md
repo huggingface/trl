@@ -111,3 +111,55 @@ training_args = DPOConfig(
     gradient_accumulation_steps=8,
 )
 ```
+
+## Change the training objective
+
+The loss of a trainer is defined in its `compute_loss` method. To train with a different objective, subclass the trainer and override it. Data preparation, generation, logging, and checkpointing are inherited, so the subclass holds only what actually changes.
+
+```python
+from trl import DPOTrainer
+
+
+class MyDPOTrainer(DPOTrainer):
+    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+        ...
+```
+
+TRL relies on this pattern internally. [`experimental.gkd.GKDTrainer`] subclasses [`SFTTrainer`] and overrides `compute_loss` to replace the cross-entropy with a generalized Jensen-Shannon divergence against a teacher model. [`experimental.gold.GOLDTrainer`] extends [`SFTTrainer`] and [`experimental.gmpo.GMPOTrainer`] extends [`GRPOTrainer`] the same way.
+
+### Add parameters to the config
+
+Subclass the config to declare the parameters your loss needs:
+
+```python
+from dataclasses import dataclass, field
+
+from trl import DPOConfig
+
+
+@dataclass
+class MyDPOConfig(DPOConfig):
+    my_coef: float = field(default=0.1, metadata={"help": "Coefficient of the custom term."})
+```
+
+[`experimental.gkd.GKDConfig`] extends [`SFTConfig`] and [`experimental.gmpo.GMPOConfig`] extends [`GRPOConfig`] in the same way.
+
+### Change the batch format
+
+When the loss needs inputs that the default collator doesn't produce, replace the collator as well, and override `_prepare_dataset` to pass the dataset through when it is already in the expected format:
+
+```python
+class MyDPOTrainer(DPOTrainer):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.data_collator = my_collator
+
+    def _prepare_dataset(self, dataset, *args, **kwargs):
+        return dataset
+```
+
+### Complete example
+
+The block-diffusion SFT example [`examples/sft_diffusion_gemma/sft_diffusion_gemma.py`](https://github.com/huggingface/trl/blob/main/examples/sft_diffusion_gemma/sft_diffusion_gemma.py) combines the three: `DiffusionGemmaSFTConfig` extends [`SFTConfig`] with the canvas and corruption parameters, and `DiffusionGemmaSFTTrainer` extends [`SFTTrainer`] and replaces the autoregressive cross-entropy with a block-diffusion denoising objective. Neither requires a change to the library.
+
+[Antidoom](https://github.com/Liquid4All/antidoom), an open-source tool from [Liquid AI](https://huggingface.co/LiquidAI), extends [`DPOTrainer`] with Final Token Preference Optimization ([Antislop](https://huggingface.co/papers/2510.15061)), a preference loss over a single token position that reduces repetition loops in reasoning models.
