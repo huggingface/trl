@@ -4,29 +4,42 @@ description: 'Send results to slack'
 author: 'Hugging Face'
 inputs:
   slack_channel:
-    description: 'Slack channel id, channel name, or user id to post the message to'
     required: true
+    type: string
   title:
-    description: 'Title of the message'
     required: true
+    type: string
   status:
-    description: 'Status of the job, as reported by `job.status`'
     required: true
+    type: string
   slack_token:
-    description: 'Slack bot token'
     required: true
+    type: string
 
 runs:
   using: "composite"
   steps:
-    - name: Post results to Slack
+    - name: Create content to post
+      id: create-message
+      run: |
+        if [ "${{ inputs.status }}" == "success" ]; then
+          echo STATUS_MESSAGE='🟢 Tests are passing!' >> $GITHUB_ENV
+        else
+          echo STATUS_MESSAGE='🔴 Tests failed! Please check the GitHub action link below' >> $GITHUB_ENV
+        fi
+      shell: bash
+
+    - name: Post Canceled results Slack channel
+      id: post-slack
       uses: slackapi/slack-github-action@dcb1066f776dd043e64d0e8ba94ca15cc7e1875d  # v4.0.0
       with:
         method: chat.postMessage
         token: ${{ inputs.slack_token }}
         # Fail the step when the Slack API call fails, as v1 did by default
         errors: true
-        # For posting a rich message using Block Kit
+        # For posting a rich message using Block Kit. The channel is a Slack
+        # channel id, channel name, or user id to post message to.
+        # See also: https://api.slack.com/methods/chat.postMessage#channels
         payload: |
           {
             "channel": "${{ inputs.slack_channel }}",
@@ -43,7 +56,7 @@ runs:
                 "type": "section",
                 "text": {
                   "type": "mrkdwn",
-                  "text": "${{ inputs.status == 'success' && '🟢 Tests are passing!' || '🔴 Tests failed! Please check the GitHub action link below' }}"
+                  "text": "${{ env.STATUS_MESSAGE }}"
                 }
               },
               {
