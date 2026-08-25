@@ -23,7 +23,7 @@ from transformers.testing_utils import torch_device
 from trl.generation.vllm_client import (
     VLLMClient,
     _format_http_host,
-    _normalize_communicator_host,
+    _resolve_communicator_host,
 )
 from trl.generation.vllm_generation import extract_logprobs
 from trl.import_utils import is_vllm_available
