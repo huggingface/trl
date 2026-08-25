@@ -66,7 +66,6 @@ jobs:
         if: always()
         uses: ./.github/actions/post-slack
         with:
-          slack_channel: ${{ env.CI_SLACK_CHANNEL }}
           title: Results of the slow tests on a single GPU
           status: ${{ job.status }}
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
@@ -124,7 +123,6 @@ jobs:
         if: always()
         uses: ./.github/actions/post-slack
         with:
-          slack_channel: ${{ env.CI_SLACK_CHANNEL }}
           title: Results of the slow tests on multiple GPUs
           status: ${{ job.status }}
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}

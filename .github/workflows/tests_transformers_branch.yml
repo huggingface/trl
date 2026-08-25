@@ -65,7 +65,6 @@ jobs:
         if: github.ref == 'refs/heads/main' && always()
         uses: ./.github/actions/post-slack
         with:
-          slack_channel: ${{ env.CI_SLACK_CHANNEL }}
           title: Results with Transformers ${{ inputs.transformers_ref }}
           status: ${{ job.status }}
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
@@ -121,7 +120,6 @@ jobs:
         if: github.ref == 'refs/heads/main' && always()
         uses: ./.github/actions/post-slack
         with:
-          slack_channel: ${{ env.CI_SLACK_CHANNEL }}
           title: Results of distributed smoke tests with Transformers ${{ inputs.transformers_ref }}
           status: ${{ job.status }}
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}

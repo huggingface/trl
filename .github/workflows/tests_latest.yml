@@ -75,7 +75,6 @@ jobs:
         if: always()
         uses: ./slack-action/.github/actions/post-slack
         with:
-          slack_channel: ${{ env.CI_SLACK_CHANNEL }}
           title: Results of latest TRL with Python 3.12 and dev dependencies
           status: ${{ job.status }}
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}

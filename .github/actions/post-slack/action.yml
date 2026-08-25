@@ -3,9 +3,6 @@ name: Send message to slack
 description: 'Send results to slack'
 author: 'Hugging Face'
 inputs:
-  slack_channel:
-    required: true
-    type: string
   title:
     required: true
     type: string
@@ -37,12 +34,13 @@ runs:
         token: ${{ inputs.slack_token }}
         # Fail the step when the Slack API call fails, as v1 did by default
         errors: true
-        # For posting a rich message using Block Kit. The channel is a Slack
-        # channel id, channel name, or user id to post message to.
+        # For posting a rich message using Block Kit. The channel is read from the
+        # CI_SLACK_CHANNEL environment variable, which every workflow using this action
+        # declares. It is a Slack channel id, channel name, or user id to post message to.
         # See also: https://api.slack.com/methods/chat.postMessage#channels
         payload: |
           {
-            "channel": "${{ inputs.slack_channel }}",
+            "channel": "${{ env.CI_SLACK_CHANNEL }}",
             "text": "${{ inputs.title }}",
             "blocks": [
               {
