@@ -43,15 +43,16 @@ runs:
         # For posting a rich message using Block Kit. The channel is a Slack
         # channel id, channel name, or user id to post message to.
         # See also: https://api.slack.com/methods/chat.postMessage#channels
-        # The block lives inside an attachment so the message gets a coloured
-        # bar matching the job status. Slack has no Block Kit equivalent for it.
+        # No top-level `text`: Slack only hides it from the message body when the
+        # blocks are top-level too, and here they sit in an attachment to get the
+        # coloured bar. The attachment `fallback` carries the notification summary.
         payload: |
           {
             "channel": "${{ inputs.slack_channel }}",
-            "text": "${{ env.STATUS_EMOJI }} ${{ inputs.title }}: ${{ env.STATUS_TEXT }}",
             "attachments": [
               {
                 "color": "${{ env.STATUS_COLOR }}",
+                "fallback": "${{ env.STATUS_EMOJI }} ${{ inputs.title }}: ${{ env.STATUS_TEXT }}",
                 "blocks": [
                   {
                     "type": "section",
