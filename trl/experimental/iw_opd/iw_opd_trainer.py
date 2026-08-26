@@ -493,7 +493,6 @@ class IWOPDTrainer(_BaseTrainer):
                 beta=args.beta,
                 ignore_index=-100,
                 temperature=args.temperature,
-                compiled=False,
                 weight_hard_loss=0.0,
                 weight_soft_loss=1.0,
             )

@@ -1228,7 +1228,6 @@ class TestDistillationTrainer(TrlTestCase):
                 beta=trainer.beta,
                 ignore_index=-100,
                 temperature=trainer.temperature,
-                compiled=False,
                 weight_hard_loss=0.0,
                 weight_soft_loss=1.0,
             )
