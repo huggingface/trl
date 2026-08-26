@@ -76,5 +76,5 @@ jobs:
         uses: ./slack-action/.github/actions/post-slack
         with:
           slack_channel: ${{ env.CI_SLACK_CHANNEL }}
-          title: Results of latest TRL with Python 3.12 and dev dependencies
+          title: Tests latest TRL release with dev dependencies
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
