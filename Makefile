@@ -1,4 +1,4 @@
-.PHONY: test precommit common_tests slow_tests tests_gpu test_experimental codex claude clean-ai
+.PHONY: test precommit common_tests slow_tests tests_gpu test_experimental invariant_tests codex claude clean-ai
 
 check_dirs := examples tests trl
 
@@ -16,6 +16,9 @@ slow_tests:
 
 test_experimental:
 	pytest -n auto -s -v tests/experimental
+
+invariant_tests:
+	pytest -m "invariant" -v --tb=short tests/invariant $(PYTEST_ARGS)
 
 codex:
 	mkdir -p .agents
