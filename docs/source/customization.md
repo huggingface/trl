@@ -114,7 +114,7 @@ training_args = DPOConfig(
 
 ## Change the training objective
 
-The loss of a trainer is defined in its `compute_loss` method. To train with a different objective, subclass the trainer and override it. Data preparation, generation, logging, and checkpointing are inherited, so the subclass holds only what actually changes.
+Subclassing a trainer is the simplest way to customize training. The loss is defined in the `compute_loss` method, so to train with a different objective, subclass the trainer and override it. Data preparation, generation, logging, and checkpointing are inherited, so the subclass holds only what actually changes.
 
 ```python
 import torch
@@ -142,8 +142,6 @@ class MyDPOTrainer(DPOTrainer):
         return torch.relu(1 - self.beta * delta).mean()
 ```
 
-TRL relies on this pattern internally. [`experimental.gkd.GKDTrainer`] subclasses [`SFTTrainer`] and overrides `compute_loss` to replace the cross-entropy with a generalized Jensen-Shannon divergence against a teacher model. [`experimental.gold.GOLDTrainer`] extends [`SFTTrainer`] and [`experimental.gmpo.GMPOTrainer`] extends [`GRPOTrainer`] the same way.
-
 ### Add parameters to the config
 
 Subclass the config to declare the parameters your loss needs:
@@ -159,20 +157,17 @@ class MyDPOConfig(DPOConfig):
     my_coef: float = field(default=0.1, metadata={"help": "Coefficient of the custom term."})
 ```
 
-[`experimental.gkd.GKDConfig`] extends [`SFTConfig`] and [`experimental.gmpo.GMPOConfig`] extends [`GRPOConfig`] in the same way.
-
 ### Change the batch format
 
-When the loss needs inputs that the default collator doesn't produce, replace the collator as well, and override `_prepare_dataset` to pass the dataset through when it is already in the expected format:
+When the loss needs inputs that the default collator doesn't produce, pass your own collator, and override `_prepare_dataset` to leave the dataset untouched when it is already in the expected format:
 
 ```python
 class MyDPOTrainer(DPOTrainer):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.data_collator = my_collator
-
     def _prepare_dataset(self, dataset, *args, **kwargs):
         return dataset
+
+
+trainer = MyDPOTrainer(..., data_collator=my_collator)
 ```
 
 ### Complete example
