@@ -14,13 +14,18 @@
 
 import os
 import subprocess
+from unittest.mock import patch
 from types import SimpleNamespace
 
 import pytest
 from transformers import AutoModelForCausalLM, AutoProcessor, AutoTokenizer
 from transformers.testing_utils import torch_device
 
-from trl.generation.vllm_client import VLLMClient
+from trl.generation.vllm_client import (
+    VLLMClient,
+    _format_http_host,
+    _resolve_communicator_host,
+)
 from trl.generation.vllm_generation import extract_logprobs
 from trl.import_utils import is_vllm_available
 from trl.scripts.vllm_serve import chunk_list
@@ -38,6 +43,22 @@ from .testing_utils import (
 if is_vllm_available():
     from vllm import LLM, SamplingParams
 
+
+class TestVLLMClientAddressing(TrlTestCase):
+    def test_communicator_host_strips_ipv6_brackets(self):
+        assert _resolve_communicator_host("[2001:db8::1]") == "2001:db8::1"
+        assert _resolve_communicator_host("2001:db8::1") == "2001:db8::1"
+
+    @patch("trl.generation.vllm_client.socket.gethostbyname", return_value="127.0.0.1")
+    def test_communicator_host_resolves_hostname(self, gethostbyname):
+        assert _resolve_communicator_host("localhost") == "127.0.0.1"
+        gethostbyname.assert_called_once_with("localhost")
+
+    def test_http_host_brackets_only_ipv6_literals(self):
+        assert _format_http_host("[2001:db8::1]") == "[2001:db8::1]"
+        assert _format_http_host("2001:db8::1") == "[2001:db8::1]"
+        assert _format_http_host("127.0.0.1") == "127.0.0.1"
+        assert _format_http_host("localhost") == "localhost"
 
 class TestChunkList(TrlTestCase):
     def test_even_split(self):
