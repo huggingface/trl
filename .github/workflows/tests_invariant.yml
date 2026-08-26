@@ -1,6 +1,9 @@
 name: Training invariant tests
 
 on:
+  push:
+    branches: [invariant-ci]  # TEMPORARY: drop before merging
+
   schedule:
     - cron: '0 2 * * *'  # Runs daily at 2am UTC
 
