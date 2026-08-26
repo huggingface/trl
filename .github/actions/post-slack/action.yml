@@ -30,11 +30,6 @@ runs:
                      echo "STATUS_COLOR=#d5382a" >> $GITHUB_ENV
                      echo "STATUS_TEXT=failed" >> $GITHUB_ENV ;;
         esac
-        # Read the SHA from the checkout, not from the event: workflows that test another
-        # ref (tests_latest checks out the release branch) would otherwise link a main commit.
-        SHA=$(git rev-parse HEAD)
-        echo "SHA=$SHA" >> $GITHUB_ENV
-        echo "SHORT_SHA=${SHA:0:7}" >> $GITHUB_ENV
       shell: bash
 
     - name: Post results to Slack channel
@@ -62,7 +57,7 @@ runs:
                     "type": "section",
                     "text": {
                       "type": "mrkdwn",
-                      "text": "${{ env.STATUS_EMOJI }} *${{ inputs.title }}* · <${{ github.server_url }}/${{ github.repository }}/commit/${{ env.SHA }}|`${{ env.SHORT_SHA }}`>"
+                      "text": "${{ env.STATUS_EMOJI }} *${{ inputs.title }}*"
                     },
                     "accessory": {
                       "type": "button",
