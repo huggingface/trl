@@ -82,12 +82,9 @@ test = [
     "tabulate"  # test report rendering in scripts/log_reports.py
 ]
 vllm = [
-    "vllm>=0.18.0,<=0.27.1",
-    "fastapi",
-    "pydantic",
+    "vllm>=0.19.0,<=0.27.1",
     "aiohttp>=3.13.3",
     "requests",
-    "uvicorn"
 ]
 vlm = [
     "Pillow",
@@ -169,7 +166,6 @@ extend-select = ["E", "F", "I", "W", "UP", "B", "T", "C"]
 "examples/**.py" = ["T201"]
 "scripts/**.py" = ["T201"]
 "trl/cli/**.py" = ["T201"]
-"trl/skills/cli.py" = ["T201"]
 # Ignore import violations in all `__init__.py` files.
 "__init__.py" = ["F401"]
 
