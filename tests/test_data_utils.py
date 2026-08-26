@@ -270,6 +270,30 @@ class TestPrepareMultimodalMessages:
 
 @require_vision
 class TestPrepareMultimodalMessagesVLLM:
+    def test_tool_call_message_without_content(self):
+        messages = prepare_multimodal_messages(
+            [
+                {"role": "user", "content": "What is the weather in New York?"},
+                {
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "type": "tool",
+                            "function": {"name": "get_current_weather", "arguments": {"location": "New York"}},
+                        }
+                    ],
+                },
+            ]
+        )
+        original = copy.deepcopy(messages)
+
+        result = prepare_multimodal_messages_vllm(messages)
+
+        assert result == original
+        assert result is not messages
+        assert result[1] is not messages[1]
+        assert messages == original
+
     def test_single_image_conversion(self):
         messages = [
             {

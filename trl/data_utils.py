@@ -132,7 +132,8 @@ def prepare_multimodal_messages_vllm(messages: list[dict[str, Any]]) -> list[dic
 
     Args:
         messages (`list[dict[str, Any]]`):
-            Messages with `"role"` and `"content"`. Content is expected to be a list of structured blocks.
+            Messages with `"role"` and `"content"` (or `"tool_calls"`). Content is expected to be a list of structured
+            blocks when present.
 
     Returns:
         `list[dict[str, Any]]`:
@@ -149,8 +150,9 @@ def prepare_multimodal_messages_vllm(messages: list[dict[str, Any]]) -> list[dic
     """
     messages = copy.deepcopy(messages)  # avoid modifying the original messages
     for message in messages:
-        if isinstance(message["content"], list):
-            for part in message["content"]:
+        content = message.get("content")
+        if isinstance(content, list):
+            for part in content:
                 if part["type"] == "image":
                     part["type"] = "image_pil"  # vLLM expects 'image_pil' key for images
                     part["image_pil"] = part.pop("image")
