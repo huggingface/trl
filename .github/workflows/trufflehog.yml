@@ -30,6 +30,5 @@ jobs:
         # the action runs the scanner as a container and defaults to the mutable `:latest` tag, so the SHA above
         # pins only the wrapper. pin the image by digest too, and bump it together with the action SHA.
         version: 3.97.0@sha256:ff4c95e9df7d645daf2140e3ca1039031c63106268d5fbb25feb43ceca1bcc33
-        # exclude buggy detectors that cause false positives and are not relevant to our codebase.
         # without --fail-on-scan-errors, a scan that errors out and covers nothing passes as a scan that found nothing.
         extra_args: --results=verified,unknown --fail-on-scan-errors
