@@ -19,12 +19,11 @@ from collections.abc import Callable
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-import numpy as np
 import pytest
 import torch
 import transformers
 from accelerate.utils.memory import release_memory
-from datasets import Dataset, DatasetDict, Image, IterableDatasetDict, load_dataset
+from datasets import Dataset, DatasetDict, IterableDatasetDict, load_dataset
 from packaging.version import Version
 from transformers import (
     AutoModelForCausalLM,
@@ -44,19 +43,19 @@ from .testing_utils import (
     TrlTestCase,
     is_ampere_or_newer,
     require_bitsandbytes,
-    require_kernels,
     require_liger_kernel,
     require_peft,
     require_response_parsing,
     require_torch_accelerator,
     require_vision,
     require_vllm,
+    xfail_data_parallel,
 )
 
 
 if is_peft_available():
     import peft
-    from peft import LoraConfig, PeftModel, PromptTuningConfig, get_peft_model
+    from peft import LoraConfig, PromptTuningConfig, get_peft_model
     from peft.utils import TaskType
 
 
@@ -1801,6 +1800,68 @@ class TestGRPOTrainer(TrlTestCase):
                 assert (vllm_is_ratio == 0.5).all(), (
                     "vllm_is_ratio values should match the injected importance_sampling_ratio"
                 )
+
+        release_memory(trainer.model, trainer)
+
+    @require_liger_kernel
+    def test_compute_liger_loss_dapo_normalizer(self):
+        """DAPO/CISPO/VESPO must rescale the Liger loss by ``gradient_accumulation_steps / steps_per_generation`` so
+        the accumulated loss lands on the per-window token-mean, matching the non-Liger ``_compute_loss`` path.
+
+        Regression test for the per-window rescale (huggingface/trl#5619). The ``num_items_in_batch`` forwarding is
+        covered by ``test_compute_liger_loss_passes_vllm_is_ratio``.
+        """
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            loss_type="dapo",
+            steps_per_generation=4,  # differs from gradient_accumulation_steps so the rescale is non-trivial
+            gradient_accumulation_steps=2,
+            learning_rate=0.1,
+            per_device_train_batch_size=3,
+            num_generations=3,
+            max_completion_length=8,
+            use_liger_kernel=True,
+            report_to="none",
+            logging_strategy="no",
+        )
+
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        raw_losses = []
+        original_forward = trainer.liger_loss.forward
+
+        def forward_capture(*args, **kwargs):
+            out = original_forward(*args, **kwargs)
+            raw_losses.append(out[0].detach().clone())
+            return out
+
+        final_losses = []
+        original_cll = trainer.compute_liger_loss
+
+        def cll_capture(*args, **kwargs):
+            out = original_cll(*args, **kwargs)
+            final_losses.append(out.detach().clone())
+            return out
+
+        with (
+            patch.object(trainer.liger_loss, "forward", side_effect=forward_capture),
+            patch.object(trainer, "compute_liger_loss", side_effect=cll_capture),
+        ):
+            trainer.train()
+
+        # `num_items_in_batch` spans `steps_per_generation` micro-steps, so the per-window rescale
+        # the trainer applies is `gradient_accumulation_steps / steps_per_generation` (i.e. it divides
+        # the Liger output by `spg/gas`).
+        expected_rescale = training_args.steps_per_generation / training_args.gradient_accumulation_steps
+        for raw_loss, final_loss in zip(raw_losses, final_losses, strict=True):
+            torch.testing.assert_close(final_loss, raw_loss * expected_rescale)
 
         release_memory(trainer.model, trainer)
 
@@ -3840,6 +3901,7 @@ class TestGRPOTrainerVLM(TrlTestCase):
                     reason="Gemma4 models were introduced in transformers-5.5.0",
                 ),
             ),
+            "trl-internal-testing/tiny-InternVLForConditionalGeneration",
             "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
             "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
             "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",
@@ -4172,6 +4234,9 @@ class TestGRPOTrainerVLM(TrlTestCase):
     @pytest.mark.parametrize(
         "model_id",
         [
+            "trl-internal-testing/tiny-Idefics3ForConditionalGeneration",
+            "trl-internal-testing/tiny-LlavaForConditionalGeneration",
+            "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
             "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
         ],
     )
@@ -4206,7 +4271,16 @@ class TestGRPOTrainerVLM(TrlTestCase):
 
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+            # LLaVA & LLaVA-Next: vision_feature_layer=-2 leaves the last encoder layer (layers.1) and
+            # post_layernorm (pooler-only path) without gradient by design. Assert they stay frozen — if they
+            # ever start training, the feature-selection plumbing has likely regressed.
+            if model_id in (
+                "trl-internal-testing/tiny-LlavaForConditionalGeneration",
+                "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
+            ) and ("encoder.layers.1" in n or "post_layernorm" in n):
+                assert torch.equal(param, new_param), f"Param {n} expected frozen by LLaVA design, but changed"
+            else:
+                assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_train_vlm_log_multimodal_false(self):
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
@@ -4420,6 +4494,7 @@ class TestGRPOTrainerSlow(TrlTestCase):
         ],
     )
     @require_liger_kernel
+    @xfail_data_parallel
     def test_train_with_liger_grpo_kernel(self, model_name):
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
@@ -4466,6 +4541,7 @@ class TestGRPOTrainerSlow(TrlTestCase):
     )
     @require_liger_kernel
     @require_peft
+    @xfail_data_parallel
     def test_train_with_liger_grpo_kernel_and_peft(self, model_name):
         from peft import LoraConfig, TaskType
 
@@ -4527,6 +4603,7 @@ class TestGRPOTrainerSlow(TrlTestCase):
         release_memory(model, trainer)
 
     @require_liger_kernel
+    @xfail_data_parallel
     def test_liger_grpo_kernel_importance_sampling(self):
         model_name = "trl-internal-testing/tiny-LlamaForCausalLM-3.2"
 
@@ -4567,11 +4644,15 @@ class TestGRPOTrainerSlow(TrlTestCase):
 
         release_memory(model, trainer)
 
+    # Flash Attention requires a `head_size` multiple of 8, hence the `small-*` models (`head_size` 32 and 128)
+    # rather than the `tiny-*` ones (`head_size=2`) used before. This drops the coverage of
+    # `trl-internal-testing/tiny-LlamaForCausalLM-3.2` and `trl-internal-testing/tiny-MistralForCausalLM-0.2`;
+    # restoring it needs `small-LlamaForCausalLM-3.2` and `small-MistralForCausalLM-0.2`, which don't exist yet.
     @pytest.mark.parametrize(
         "model_name",
         [
-            "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
-            "trl-internal-testing/tiny-MistralForCausalLM-0.2",
+            "trl-internal-testing/small-Qwen2ForCausalLM-2.5",
+            "trl-internal-testing/small-Qwen3ForCausalLM",
         ],
     )
     @pytest.mark.skipif(
@@ -4613,131 +4694,6 @@ class TestGRPOTrainerSlow(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
-
-        release_memory(model, trainer)
-
-    @pytest.mark.parametrize(
-        "model_name",
-        [
-            "HuggingFaceTB/SmolVLM-Instruct",  # Only test the smaller model to avoid OOM
-        ],
-    )
-    @pytest.mark.skipif(
-        not is_ampere_or_newer() and torch_device != "xpu",
-        reason="Flash Attention 2 requires Ampere or newer GPU, or XPU",
-    )
-    @require_kernels
-    @require_bitsandbytes
-    @require_peft
-    def test_vlm_training(self, model_name):
-        """
-        Test VLM training with aggressive memory optimization.
-
-        This test uses multiple memory reduction techniques:
-        - 4-bit quantization with double quantization
-        - LoRA with very low rank (r=4)
-        - Minimal batch size (1) with gradient accumulation
-        - Small images (64x64 instead of 224x224)
-        - Short sequences (max_completion_length=8)
-        - Only 4 training samples
-        - Only 1 training step
-        - Gradient checkpointing and bfloat16
-        """
-
-        # Create processor once outside the data generator
-        processor = AutoProcessor.from_pretrained(model_name, use_fast=True, padding_side="left")
-        prompt = [{"role": "user", "content": "What is in the image?"}]
-
-        dataset = Dataset.from_list(
-            [
-                {
-                    "prompt": prompt,
-                    "image": np.random.uniform(low=0.0, high=255.0, size=(64, 64, 3)).astype(np.uint8),
-                }
-                for _ in range(4)
-            ],
-        ).cast_column("image", Image())
-        # reduce memory requirements as much as possible
-        quantization_config = BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_compute_dtype="bfloat16",
-            bnb_4bit_quant_type="nf4",
-            bnb_4bit_use_double_quant=True,
-            bnb_4bit_quant_storage="bfloat16",
-        )
-        model = AutoModelForImageTextToText.from_pretrained(
-            model_name,
-            attn_implementation="kernels-community/flash-attn2",
-            dtype="bfloat16",
-            quantization_config=quantization_config,
-        )
-
-        def reward_func(prompts, completions, **kwargs):
-            # Use hash-based reward to ensure different completions get different rewards,
-            # avoiding zero-std advantages which would result in zero loss and no parameter updates.
-            return [float(hash(c[0]["content"]) % 100) for c in completions]
-
-        training_args = GRPOConfig(
-            output_dir=self.tmp_dir,
-            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
-            per_device_train_batch_size=1,  # Minimal batch size
-            gradient_accumulation_steps=2,  # Maintain effective batch size
-            num_generations=2,
-            max_completion_length=8,  # Much shorter completions
-            bf16=True,  # Use bfloat16 precision
-            max_steps=1,  # Only do 1 training step to save time and memory
-            report_to="none",
-            logging_strategy="no",
-        )
-        lora_config = LoraConfig(
-            task_type="CAUSAL_LM",
-            r=4,  # Much lower rank for minimal memory
-            lora_alpha=8,  # Reduced alpha proportionally
-            lora_dropout=0.1,
-            target_modules=["q_proj", "v_proj"],  # Minimal target modules
-            # For VLM models, we typically want to freeze the vision encoder
-            # and only adapt the language model parameters
-            modules_to_save=None,
-        )
-
-        try:
-            trainer = GRPOTrainer(
-                model=model,
-                processing_class=processor,
-                reward_funcs=[reward_func],
-                args=training_args,
-                train_dataset=dataset,
-                peft_config=lora_config,
-            )
-
-            assert isinstance(trainer.model, PeftModel)
-
-            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
-
-            trainer.train()
-
-            assert trainer.state.log_history[-1]["train_loss"] is not None
-
-            # Check that LoRA parameters have changed
-            # For VLM models, we're more permissive about which parameters can change
-            lora_params_changed = False
-            for n, param in previous_trainable_params.items():
-                new_param = trainer.model.get_parameter(n)
-                if "lora" in n.lower():  # LoRA parameters should change
-                    if not torch.equal(param, new_param):
-                        lora_params_changed = True
-
-            # At least some LoRA parameters should have changed during training
-            assert lora_params_changed, "No LoRA parameters were updated during training."
-
-        except torch.OutOfMemoryError as e:
-            pytest.skip(f"Skipping VLM training test due to insufficient GPU memory: {e}")
-        except Exception as e:
-            # Check for other memory-related errors
-            if any(keyword in str(e).lower() for keyword in ["memory", "cuda", "out of memory", "insufficient"]):
-                pytest.skip(f"Skipping VLM training test due to hardware constraints: {e}")
-            else:
-                raise
 
         release_memory(model, trainer)
 

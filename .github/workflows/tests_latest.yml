@@ -16,6 +16,8 @@ jobs:
   tests:
     name: Tests latest TRL release with dev dependencies
     runs-on:
+      # TODO: move to aws-g6e-4xlarge (L40S) once v1.11 ships; v1.10-release predates the flash-attn2 xfails and
+      # would fail on Ada hardware
       group: aws-g4dn-2xlarge
     container:
       image: pytorch/pytorch:2.8.0-cuda12.8-cudnn9-devel
@@ -38,7 +40,7 @@ jobs:
           apt-get update && apt-get install -y make git curl
 
       - name: Install uv
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
 
       - name: Create Python virtual environment
         run: |
@@ -59,8 +61,19 @@ jobs:
           source .venv/bin/activate
           make test
 
+      # This job checks out the release branch, which predates the local Slack action, so check
+      # the action out from the branch running the workflow. Keep this step on `always()`: it must
+      # never be skipped while the Slack step below runs, or the action cannot be resolved.
+      - name: Check out the Slack action
+        if: always()
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          path: slack-action
+          sparse-checkout: .github/actions
+
       - name: Post to Slack
-        uses: huggingface/hf-workflows/.github/actions/post-slack@main
+        if: always()
+        uses: ./slack-action/.github/actions/post-slack
         with:
           slack_channel: ${{ env.CI_SLACK_CHANNEL }}
           title: Results of latest TRL with Python 3.12 and dev dependencies
