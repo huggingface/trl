@@ -362,6 +362,12 @@ class GRPOConfig(_BaseConfig):
             exactly 1. The unbiased reverse-KL property holds for `importance_sampling_level="token"`; with
             `"sequence"` a sequence-level weight is broadcast onto the per-token KL.
 
+        > Parameters that control memory optimization
+
+        activation_offloading (`bool`, *optional*, defaults to `False`):
+            Whether to offload activations to the CPU during the forward pass to reduce peak GPU memory usage. This
+            trades memory for compute: activations are moved to CPU and fetched back during the backward pass.
+
         > Parameters that control the logging
 
         log_completions (`bool`, *optional*, defaults to `False`):
@@ -972,6 +978,10 @@ class GRPOConfig(_BaseConfig):
             "exactly 1. The unbiased reverse-KL property holds for `importance_sampling_level='token'`; with "
             "'sequence' a sequence-level weight is broadcast onto the per-token KL."
         },
+    )
+    activation_offloading: bool = field(
+        default=False,
+        metadata={"help": "Whether to offload the activations to the CPU."},
     )
 
     # Parameters that control the logging

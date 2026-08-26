@@ -14,8 +14,11 @@
 
 from unittest.mock import patch
 
+import gc
+
 import pytest
 import torch
+from accelerate.utils.memory import release_memory
 import transformers
 from datasets import DatasetDict, IterableDatasetDict, load_dataset
 from packaging.version import Version
@@ -29,7 +32,7 @@ from transformers.utils import is_peft_available
 
 from trl import RLOOConfig, RLOOTrainer
 
-from .testing_utils import TrlTestCase, require_peft, require_vision, require_vllm
+from .testing_utils import TrlTestCase, require_peft, require_torch_accelerator, require_vision, require_vllm
 
 
 if is_peft_available():
@@ -2128,3 +2131,63 @@ class TestRLOOTrainerVLM(TrlTestCase):
         )
         trainer.train()
         assert len(trainer._logs["images"]) == 0
+
+@pytest.mark.slow
+@require_torch_accelerator
+class TestRLOOTrainerSlow(TrlTestCase):
+    def setup_method(self):
+        self.train_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        self.eval_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="test")
+        self.max_length = 128
+
+    def teardown_method(self):
+        gc.collect()
+        from transformers.testing_utils import backend_empty_cache, torch_device
+
+        backend_empty_cache(torch_device)
+        gc.collect()
+
+    @pytest.mark.parametrize(
+        "model_name",
+        [
+            "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
+            "trl-internal-testing/tiny-MistralForCausalLM-0.2",
+        ],
+    )
+    def test_train_with_activation_offloading(self, model_name):
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+
+        training_args = RLOOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            num_generations=2,
+            activation_offloading=True,
+            max_completion_length=self.max_length,
+            max_steps=2,
+            report_to="none",
+            logging_strategy="no",
+        )
+
+        model = AutoModelForCausalLM.from_pretrained(model_name, dtype="float32")
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        tokenizer.pad_token = tokenizer.eos_token if tokenizer.pad_token is None else tokenizer.pad_token
+
+        trainer = RLOOTrainer(
+            model=model,
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=self.train_dataset,
+            eval_dataset=self.eval_dataset,
+            processing_class=tokenizer,
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+        for n, param in previous_trainable_params.items():
+            new_param = model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+        release_memory(model, trainer)
