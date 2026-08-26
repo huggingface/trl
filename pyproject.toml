@@ -83,7 +83,7 @@ test = [
 ]
 vllm = [
     "vllm>=0.18.0,<=0.27.1",
-    "fastapi",
+    "fastapi>=0.133",  # match vllm>=0.26 requirement; unconstrained fastapi breaks vllm-serve with starlette 1.x
     "pydantic",
     "aiohttp>=3.13.3",
     "requests",
