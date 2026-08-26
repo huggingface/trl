@@ -454,9 +454,20 @@ class OnlineDPOTrainer(_BaseTrainer):
                 # `quantization="bitsandbytes"` would allocate packed `[out_features, in_features // 2]` weights
                 # that reject that dense push. See https://github.com/huggingface/trl/issues/4973.
                 if is_bitsandbytes_available():
+                    fsdp_plugin = getattr(self.accelerator.state, "fsdp_plugin", None)
+                    fsdp_version = getattr(fsdp_plugin, "fsdp_version", 1) if fsdp_plugin else 1
                     for _, module in model.named_modules():
                         if isinstance(module, bnb.nn.Linear8bitLt):
                             raise ValueError("vLLM does not support in-flight 8-bit quantization.")
+                        # FSDP2 syncs weights from `state_dict()`, which returns plain tensors: the bitsandbytes
+                        # `quant_state` holding the scales is gone before `_dense_param_data` can read it, so the
+                        # base cannot be dequantized for the push. Fail here rather than send packed storage to a
+                        # dense engine.
+                        if isinstance(module, bnb.nn.Linear4bit) and fsdp_version == 2:
+                            raise ValueError(
+                                "vLLM weight sync does not support a 4-bit quantized base under FSDP2. Train "
+                                "with DeepSpeed or on a single device, or load the base in full precision."
+                            )
                 vllm_kwargs = {
                     "model": model.name_or_path,
                     "tensor_parallel_size": self.vllm_tensor_parallel_size,

@@ -368,6 +368,14 @@ class VLLMGeneration:
                 for _, module in model.named_modules():
                     if isinstance(module, bnb.nn.Linear8bitLt):
                         raise ValueError("vLLM does not support in-flight 8-bit quantization.")
+                    # FSDP2 syncs weights from `state_dict()`, which returns plain tensors: the bitsandbytes
+                    # `quant_state` holding the scales is gone before `_dense_param_data` can read it, so the base
+                    # cannot be dequantized for the push. Fail here rather than send packed storage to a dense engine.
+                    if isinstance(module, bnb.nn.Linear4bit) and self._dist.fsdp_version == 2:
+                        raise ValueError(
+                            "vLLM weight sync does not support a 4-bit quantized base under FSDP2. Train with "
+                            "DeepSpeed or on a single device, or load the base in full precision."
+                        )
 
             # Build LLM initialization kwargs
             self.llm = LLM(
