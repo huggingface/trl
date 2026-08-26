@@ -494,7 +494,7 @@ def unpair_preference_dataset(
     {'prompt': 'The sky is', 'completion': ' blue.', 'label': True}
     ```
     """
-    if isinstance(dataset, DatasetDict):
+    if isinstance(dataset, (DatasetDict, IterableDatasetDict)):
         column_names = next(iter(dataset.values())).column_names
     elif isinstance(dataset, Dataset):
         column_names = dataset.column_names

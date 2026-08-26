@@ -18,7 +18,7 @@ from time import strftime
 
 import pytest
 import transformers
-from datasets import Dataset, DatasetDict
+from datasets import Dataset, DatasetDict, IterableDatasetDict
 from packaging.version import Version
 from transformers import AutoProcessor, AutoTokenizer, is_vision_available
 
@@ -1089,6 +1089,15 @@ class TestUnpairPreferenceDataset(TrlTestCase):
         assert unpaired_dataset_dict["abc"].to_dict() == self.unpaired_dataset.to_dict(), (
             "The paired dataset should be converted to unpaired."
         )
+
+    def test_unpair_preference_iterable_dataset_dict(self):
+        # Test that a paired iterable dataset dict is correctly converted to unpaired
+        paired_dataset_dict = IterableDatasetDict({"abc": self.paired_dataset.to_iterable_dataset()})
+        unpaired_dataset_dict = unpair_preference_dataset(paired_dataset_dict)
+        assert list(unpaired_dataset_dict["abc"]) == [
+            dict(zip(self.unpaired_dataset.column_names, vals, strict=False))
+            for vals in zip(*self.unpaired_dataset.to_dict().values(), strict=False)
+        ]
 
     def test_maybe_unpair_preference_dataset(self):
         # Test that a paired dataset is correctly converted to unpaired with maybe_unpair_preference_dataset
