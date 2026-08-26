@@ -9,7 +9,7 @@ Any PR that implements a method, algorithm, or training approach from a research
 
 ## Entry format
 
-The file is organized as one `##` section per method family (usually one per trainer), each holding `###` subsections, one per paper, **sorted by publish date within the section**.
+The file is organized as one `##` section per method family (usually one per trainer), each holding `###` subsections, one per paper.
 
 Each entry contains:
 
@@ -32,5 +32,5 @@ Each entry contains:
 
 ## Placement
 
-- If the paper belongs to an existing method family, add it under that `##` section, in publish-date order.
+- If the paper belongs to an existing method family, add it under that `##` section.
 - If it introduces a new trainer or family, add a new `##` section with a one-line pointer to the trainer, e.g. `Papers relating to the [`GRPOTrainer`].`

@@ -421,10 +421,8 @@ By following this classification, you ensure that warnings, information, and exc
 
 ## Coding with AI agents
 
-This repository keeps AI-agent configuration in `.ai/` and exposes local agent files via symlinks.
+This repository keeps AI-agent configuration in `.ai/` and skills in `.agents/skills/`.
 
-Skills can be exposed to agents by running `make codex` or `make claude`
+`AGENTS.md`, `CLAUDE.md`, and `.cursor/BUGBOT.md` all point to `.ai/AGENTS.md`. Cursor reads `AGENTS.md` and Bugbot reads `.cursor/BUGBOT.md`.
 
-`AGENTS.md`, `CLAUDE.md`, and `.cursor/BUGBOT.md` all point to `.ai/AGENTS.md`.
-
-Cursor reads `AGENTS.md` and Bugbot reads `.cursor/BUGBOT.md`. Cursor reads skills from Claude or Codex paths, so setting up the repository for Claude or Codex will work for Cursor.
+Codex, Cursor and Gemini CLI read `.agents/skills/` directly. Claude Code reads `.claude/skills/`, so run `make claude` to symlink it to `.agents/skills/` (and `make clean-ai` to remove it).
