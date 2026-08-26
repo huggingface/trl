@@ -825,6 +825,9 @@ class TestGRPOTrainer(TrlTestCase):
             peft_config=LoraConfig(),
         )
 
+        # Check that the trainer applied the quantization config when loading the model
+        assert trainer.model.base_model.model.is_loaded_in_4bit
+
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
         trainer.train()
