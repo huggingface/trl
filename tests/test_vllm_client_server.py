@@ -20,10 +20,9 @@ import pytest
 from transformers import AutoModelForCausalLM, AutoProcessor, AutoTokenizer
 from transformers.testing_utils import torch_device
 
-from trl.generation.vllm_client import VLLMClient
+from trl.generation.vllm_client import VLLMClient, parse_logprobs
 from trl.generation.vllm_generation import extract_logprobs
 from trl.import_utils import is_vllm_available
-from trl.scripts.vllm_serve import chunk_list
 
 from .testing_utils import (
     TrlTestCase,
@@ -39,30 +38,40 @@ if is_vllm_available():
     from vllm import LLM, SamplingParams
 
 
-class TestChunkList(TrlTestCase):
-    def test_even_split(self):
-        assert chunk_list([1, 2, 3, 4, 5, 6], 2) == [[1, 2, 3], [4, 5, 6]]
+class TestParseLogprobs(TrlTestCase):
+    def test_completion_logprobs_sorted_by_probability(self):
+        logprobs = {
+            "tokens": ["token_id:11", "token_id:5"],
+            "token_logprobs": [-0.2, -1.1],
+            "top_logprobs": [{"token_id:11": -0.2, "token_id:99": -0.1}, {"token_id:5": -1.1}],
+        }
 
-    def test_uneven_split(self):
-        assert chunk_list([1, 2, 3, 4, 5, 6], 4) == [[1, 2], [3, 4], [5], [6]]
+        all_logprobs, all_token_ids = parse_logprobs([logprobs])
 
-    def test_more_chunks_than_elements(self):
-        assert chunk_list([1, 2, 3, 4, 5, 6], 8) == [[1], [2], [3], [4], [5], [6], [], []]
+        assert all_token_ids == [[[99, 11], [5]]]
+        assert all_logprobs == [[[-0.1, -0.2], [-1.1]]]
 
-    def test_n_equals_len(self):
-        assert chunk_list([1, 2, 3], 3) == [[1], [2], [3]]
+    def test_chat_logprobs(self):
+        logprobs = {
+            "content": [
+                {
+                    "token": "token_id:7",
+                    "logprob": -0.5,
+                    "top_logprobs": [
+                        {"token": "token_id:7", "logprob": -0.5},
+                        {"token": "token_id:3", "logprob": -0.4},
+                    ],
+                }
+            ]
+        }
 
-    def test_n_is_1(self):
-        assert chunk_list([1, 2, 3], 1) == [[1, 2, 3]]
+        all_logprobs, all_token_ids = parse_logprobs([logprobs])
 
-    def test_single_element_list(self):
-        assert chunk_list([42], 2) == [[42], []]
+        assert all_token_ids == [[[3, 7]]]
+        assert all_logprobs == [[[-0.4, -0.5]]]
 
-    def test_any_dtype(self):
-        assert chunk_list([1, "two", 3.0, {"four": 4}, ["f", "i", "v", "e"]], 2) == [
-            [1, "two", 3.0],
-            [{"four": 4}, ["f", "i", "v", "e"]],
-        ]
+    def test_returns_none_when_logprobs_missing(self):
+        assert parse_logprobs([None]) == (None, None)
 
 
 class TestExtractLogprobs(TrlTestCase):
@@ -781,10 +790,62 @@ class TestVLLMClientServerVLM(TrlTestCase):
         # Initialize the client (no communicator needed for generation-only tests)
         cls.client = VLLMClient(connection_timeout=240, host="localhost")
 
-    def test_generate_with_token_ids_and_image(self):
+    def test_generate_from_token_ids_and_images(self):
+        """Images alongside token IDs: process the images, then generate from the trainer's own tokenization."""
         from PIL import Image
 
         processor = AutoProcessor.from_pretrained(self.model_id)
+        image = Image.new("RGB", (64, 64), color="blue")
+        messages = [
+            [
+                {
+                    "role": "user",
+                    "content": [{"type": "image", "image": image}, {"type": "text", "text": "What colour is it?"}],
+                }
+            ]
+        ]
+        prompt_ids = processor.apply_chat_template(
+            conversation=messages, add_generation_prompt=True, tokenize=True, return_dict=True
+        )["input_ids"][0]
+        prompt_ids = prompt_ids.tolist() if hasattr(prompt_ids, "tolist") else list(prompt_ids)
+
+        features = self.client.image_features([[image]])
+        outputs = self.client.generate(prompts=[prompt_ids], features=features, n=2, max_tokens=16)
+
+        assert len(outputs["completion_ids"]) == 2
+        assert outputs["prompt_ids"] == [prompt_ids]
+        assert all(isinstance(tok, int) for tok in outputs["completion_ids"][0])
+
+        # Continuing from a longer sequence reuses the same features, as the tool calling loop does
+        continued = [prompt_ids + outputs["completion_ids"][0] + [151644, 872, 198]]
+        outputs = self.client.generate(prompts=continued, features=features, n=2, max_tokens=16)
+
+        assert len(outputs["completion_ids"]) == 2
+
+    def test_generate_from_token_ids_without_images(self):
+        """`None` entries let a batch mix multimodal and text-only prompts."""
+        from PIL import Image
+
+        processor = AutoProcessor.from_pretrained(self.model_id)
+        image = Image.new("RGB", (64, 64), color="red")
+        messages = [
+            [{"role": "user", "content": [{"type": "image", "image": image}, {"type": "text", "text": "Colour?"}]}]
+        ]
+        image_prompt_ids = processor.apply_chat_template(
+            conversation=messages, add_generation_prompt=True, tokenize=True, return_dict=True
+        )["input_ids"][0]
+        image_prompt_ids = image_prompt_ids.tolist() if hasattr(image_prompt_ids, "tolist") else list(image_prompt_ids)
+        text_ids = processor.tokenizer("The capital of France is", add_special_tokens=False).input_ids
+
+        features = self.client.image_features([[image], None])
+        outputs = self.client.generate(prompts=[image_prompt_ids, text_ids], features=features, max_tokens=8)
+
+        assert features[1] is None
+        assert len(outputs["completion_ids"]) == 2
+
+    def test_chat_with_images(self):
+        from PIL import Image
+
         image1 = Image.new("RGB", (64, 64), color="red")
         image2 = Image.new("RGB", (64, 64), color="blue")
         image3 = Image.new("RGB", (64, 64), color="green")
@@ -809,10 +870,7 @@ class TestVLLMClientServerVLM(TrlTestCase):
                 }
             ],
         ]
-        prompt_token_ids = processor.apply_chat_template(
-            conversation=messages, tokenize=True, add_generation_prompt=True
-        )
-        outputs = self.client.generate(prompt_token_ids, images=[[image1, image2], [image3]], max_tokens=64)
+        outputs = self.client.chat(messages, max_tokens=64)
         prompt_ids = outputs["prompt_ids"]
         completion_ids = outputs["completion_ids"]
 
@@ -821,11 +879,10 @@ class TestVLLMClientServerVLM(TrlTestCase):
         assert all(isinstance(tok, int) for tok in prompt_ids[0])
         assert all(isinstance(tok, int) for tok in completion_ids[0])
 
-    def test_generate_with_token_ids_mixed_images(self):
+    def test_chat_with_mixed_images(self):
         """Test a batch where one prompt has an image and the other does not."""
         from PIL import Image
 
-        processor = AutoProcessor.from_pretrained(self.model_id)
         image = Image.new("RGB", (64, 64), color="red")
         messages = [
             [
@@ -841,10 +898,7 @@ class TestVLLMClientServerVLM(TrlTestCase):
                 }
             ],
         ]
-        prompt_token_ids = processor.apply_chat_template(
-            conversation=messages, tokenize=True, add_generation_prompt=True
-        )
-        outputs = self.client.generate(prompt_token_ids, images=[[image], None], max_tokens=64)
+        outputs = self.client.chat(messages, max_tokens=64)
         prompt_ids = outputs["prompt_ids"]
         completion_ids = outputs["completion_ids"]
 

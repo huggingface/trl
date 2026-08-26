@@ -127,7 +127,10 @@ In this mode, vLLM runs in a separate process (and using separate GPUs) and comm
 1. **Start the vLLM server**:
 
    ```bash
-   trl vllm-serve --model <model_name>
+   VLLM_SERVER_DEV_MODE=1 vllm serve <model_name> \
+       --weight-transfer-config '{"backend": "nccl"}' \
+       --logprobs-mode processed_logprobs \
+       --max-logprobs -1
    ```
 
 2. **Enable server mode in your training script**:
