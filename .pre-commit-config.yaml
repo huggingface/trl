@@ -9,7 +9,7 @@ repos:
         types_or: [ python, pyi ]
 
   - repo: https://github.com/huggingface/doc-builder
-    rev: 9ffae9426d3ba3431d1fc0690c242507da77c569  # TODO: repin to the merge commit of huggingface/doc-builder#818
+    rev: 0ab9ea03baf111ed8dd83e88233430b663127368
     hooks:
       - id: doc-builder-style
         args: [--max_len, "119"]
