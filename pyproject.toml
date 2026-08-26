@@ -82,12 +82,9 @@ test = [
     "tabulate"  # test report rendering in scripts/log_reports.py
 ]
 vllm = [
-    "vllm>=0.18.0,<=0.27.1",
-    "fastapi",
-    "pydantic",
+    "vllm>=0.19.0,<=0.27.1",
     "aiohttp>=3.13.3",
     "requests",
-    "uvicorn"
 ]
 vlm = [
     "Pillow",
