@@ -9,9 +9,6 @@ inputs:
   title:
     required: true
     type: string
-  status:
-    required: true
-    type: string
   slack_token:
     required: true
     type: string
@@ -22,7 +19,7 @@ runs:
     - name: Create content to post
       id: create-message
       run: |
-        if [ "${{ inputs.status }}" == "success" ]; then
+        if [ "${{ job.status }}" == "success" ]; then
           echo STATUS_MESSAGE='🟢 Tests are passing!' >> $GITHUB_ENV
         else
           echo STATUS_MESSAGE='🔴 Tests failed! Please check the GitHub action link below' >> $GITHUB_ENV
