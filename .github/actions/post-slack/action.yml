@@ -21,13 +21,10 @@ runs:
       run: |
         case "${{ job.status }}" in
           success)   echo "STATUS_EMOJI=✅" >> $GITHUB_ENV
-                     echo "STATUS_COLOR=#2eb886" >> $GITHUB_ENV
                      echo "STATUS_TEXT=passing" >> $GITHUB_ENV ;;
           cancelled) echo "STATUS_EMOJI=⚪" >> $GITHUB_ENV
-                     echo "STATUS_COLOR=#8d8d8d" >> $GITHUB_ENV
                      echo "STATUS_TEXT=cancelled" >> $GITHUB_ENV ;;
           *)         echo "STATUS_EMOJI=❌" >> $GITHUB_ENV
-                     echo "STATUS_COLOR=#d5382a" >> $GITHUB_ENV
                      echo "STATUS_TEXT=failed" >> $GITHUB_ENV ;;
         esac
       shell: bash
@@ -43,29 +40,24 @@ runs:
         # For posting a rich message using Block Kit. The channel is a Slack
         # channel id, channel name, or user id to post message to.
         # See also: https://api.slack.com/methods/chat.postMessage#channels
-        # The block lives inside an attachment so the message gets a coloured
-        # bar matching the job status. Slack has no Block Kit equivalent for it.
+        # `text` is the notification fallback: Slack hides it from the message body
+        # as long as `blocks` is set, and mobile notifications use it exclusively.
         payload: |
           {
             "channel": "${{ inputs.slack_channel }}",
             "text": "${{ env.STATUS_EMOJI }} ${{ inputs.title }}: ${{ env.STATUS_TEXT }}",
-            "attachments": [
+            "blocks": [
               {
-                "color": "${{ env.STATUS_COLOR }}",
-                "blocks": [
-                  {
-                    "type": "section",
-                    "text": {
-                      "type": "mrkdwn",
-                      "text": "${{ env.STATUS_EMOJI }} *${{ inputs.title }}*"
-                    },
-                    "accessory": {
-                      "type": "button",
-                      "text": {"type": "plain_text", "text": "View run", "emoji": true},
-                      "url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-                    }
-                  }
-                ]
+                "type": "section",
+                "text": {
+                  "type": "mrkdwn",
+                  "text": "${{ env.STATUS_EMOJI }} *${{ inputs.title }}*"
+                },
+                "accessory": {
+                  "type": "button",
+                  "text": {"type": "plain_text", "text": "View run", "emoji": true},
+                  "url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+                }
               }
             ]
           }
