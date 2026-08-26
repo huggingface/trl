@@ -96,7 +96,6 @@ jobs:
         with:
           slack_channel: ${{ env.CI_SLACK_CHANNEL }}
           title: Results with latest dependencies
-          status: ${{ job.status }}
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
 
   tests_dev:
@@ -152,7 +151,6 @@ jobs:
         with:
           slack_channel: ${{ env.CI_SLACK_CHANNEL }}
           title: Results with dev dependencies
-          status: ${{ job.status }}
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
 
   tests_wo_optional_deps:
@@ -203,7 +201,6 @@ jobs:
         with:
           slack_channel: ${{ env.CI_SLACK_CHANNEL }}
           title: Results without optional dependencies
-          status: ${{ job.status }}
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
 
   tests_min_versions:
@@ -258,7 +255,6 @@ jobs:
         with:
           slack_channel: ${{ env.CI_SLACK_CHANNEL }}
           title: Results with minimum versions
-          status: ${{ job.status }}
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
 
   distributed_smoke:
@@ -311,5 +307,4 @@ jobs:
         with:
           slack_channel: ${{ env.CI_SLACK_CHANNEL }}
           title: Results of distributed smoke tests
-          status: ${{ job.status }}
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}

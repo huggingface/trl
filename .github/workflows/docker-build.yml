@@ -46,8 +46,6 @@ jobs:
 
       - name: Build and Push
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a  # v7.3.0
-        env:
-          VERSION: ${{ env.VERSION }}
         with:
           context: docker/trl
           push: true
@@ -60,6 +58,5 @@ jobs:
         uses: ./.github/actions/post-slack
         with:
           slack_channel: ${{ env.CI_SLACK_CHANNEL }}
-          title: 🤗 Results of the TRL Dev Docker Image build
-          status: ${{ job.status }}
+          title: 🤗 Results of the TRL Docker Image build
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
