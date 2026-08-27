@@ -15,7 +15,7 @@
 import atexit
 from collections import defaultdict, deque
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 import torch
@@ -39,6 +39,7 @@ from .zero_sync_grpo_config import ZeroSyncGRPOConfig
 # Functions with this signature can be used as reward functions
 RewardFunc = Callable[[list, list], list[float]]
 
+
 @dataclass(frozen=True)
 class TurnRecord:
     """One generation call: the whole prompt this turn, the tokens the model produced, their logprobs."""
@@ -48,73 +49,30 @@ class TurnRecord:
     output_log_probs: list[float]
 
 
-def _common_prefix_len(a: list[int], b: list[int], chunk: int = 4096) -> int:
-    """How many tokens at the start are identical in `a` and `b`."""
-    limit = min(len(a), len(b))
-    matched = 0
-    while matched < limit:
-        end = min(matched + chunk, limit)
-        if a[matched:end] != b[matched:end]:
-            break
-        matched = end
-    while matched < limit and a[matched] == b[matched]:
-        matched += 1
-    return matched
+def _chain_to_sequences(turns: list[TurnRecord]) -> tuple[list[dict[str, Any]], int]:
+    """Reconcile one conversation's turns (in order) into training rows; fork when the tokens drift.
 
-
-class _SampleBuilder:
-    """Accumulates one training row from consecutive turns of a conversation."""
-
-    def __init__(self):
-        self.tokens: list[int] = []
-        self.loss_mask: list[int] = []
-        self.logprobs: list[float] = []
-        self.last_response_start = 0
-
-    def append_turn(self, turn: TurnRecord, matched: int) -> None:
-        # Overwrite everything past the matched prefix with the re-tokenized prompt, as context. When the
-        # re-tokenization was a clean append this overwrites nothing and just appends the new tail.
-        tail = turn.prompt_ids[matched:]
-        self.tokens[matched:] = tail
-        self.loss_mask[matched:] = [0] * len(tail)
-        self.logprobs[matched:] = [0.0] * len(tail)
-        self.last_response_start = len(self.tokens)
-        self.tokens.extend(turn.output_ids)
-        self.loss_mask.extend([1] * len(turn.output_ids))
-        self.logprobs.extend(turn.output_log_probs)
-
-
-def _chain_to_sequences(turns: list[TurnRecord], fork_threshold: int) -> tuple[list[dict[str, Any]], int]:
-    """Reconcile one conversation's turns (in order) into training rows; fork when re-tokenization drifts.
-
-    Every turn renders the full conversation through the chat template, so a template that rewrites history (dropped
-    reasoning, summarized turns) re-tokenizes previously generated tokens differently. A drift confined to the last
-    answer and smaller than `fork_threshold` is overwritten as context (a re-tokenization wobble); a larger drift
-    forks a new row so the trained tokens keep their training signal instead of being silently masked. Returns the
-    rows and the number of forks.
+    Every turn renders the full conversation through the chat template, so a template that rewrites
+    history (dropped reasoning, summarized turns) re-tokenizes previously generated tokens differently.
+    A turn continues the current row only if its prompt still starts with every token held so far; a
+    single changed token forks a new row, so trained tokens are never silently rewritten as context.
+    Returns the rows and the number of forks.
     """
-    builders: list[_SampleBuilder] = []
+    rows: list[dict[str, Any]] = []
     forks = 0
     for turn in turns:
-        matched = 0
-        if builders:
-            builder = builders[-1]
-            matched = _common_prefix_len(builder.tokens, turn.prompt_ids)
-            drift = len(builder.tokens) - matched
-            drift_in_last_response = matched >= builder.last_response_start
-            if drift > 0 and not (drift_in_last_response and drift < fork_threshold):
-                forks += 1
-                builders.append(_SampleBuilder())
-                matched = 0
+        if rows and turn.prompt_ids[: len(rows[-1]["input_ids"])] == rows[-1]["input_ids"]:
+            row = rows[-1]
+            context = turn.prompt_ids[len(row["input_ids"]) :]
         else:
-            builders.append(_SampleBuilder())
-        builders[-1].append_turn(turn, matched)
-    rows = [
-        {"input_ids": b.tokens, "completion_mask": b.loss_mask, "logprobs": b.logprobs}
-        for b in builders
-        if any(b.loss_mask)
-    ]
-    return rows, forks
+            forks += bool(rows)
+            row = {"input_ids": [], "completion_mask": [], "logprobs": []}
+            rows.append(row)
+            context = turn.prompt_ids
+        row["input_ids"].extend(context + turn.output_ids)
+        row["completion_mask"].extend([0] * len(context) + [1] * len(turn.output_ids))
+        row["logprobs"].extend([0.0] * len(context) + turn.output_log_probs)
+    return [row for row in rows if any(row["completion_mask"])], forks
 
 
 class ZeroSyncGRPOTrainer(_BaseTrainer):
@@ -251,7 +209,6 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         self.epsilon = args.epsilon
         self.generation_ahead = args.generation_ahead
         self.max_tool_calling_iterations = args.max_tool_calling_iterations
-        self.fork_threshold_tokens = args.fork_threshold_tokens
 
         # Tools
         self.tools = tools
@@ -384,9 +341,7 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         # rollout (it produced a final answer). Scoring happens the moment the rollout finishes, so reward
         # computation overlaps generation.
         turn_ids = list(result.generated_tokens)
-        rollout["turns"].append(
-            TurnRecord(rollout["prompt_ids"], turn_ids, list(result.logprobs[: len(turn_ids)]))
-        )
+        rollout["turns"].append(TurnRecord(rollout["prompt_ids"], turn_ids, list(result.logprobs[: len(turn_ids)])))
         if self.tools:
             assistant_message = parse_response(self._tokenizer, turn_ids, prefix=rollout["prompt_ids"])
         else:
@@ -453,7 +408,7 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
 
         # Reconcile the turn chain into training rows: one row for a conversation the template only appended to,
         # several when a rewrite forked it.
-        sequences, forks = _chain_to_sequences(rollout["turns"], self.fork_threshold_tokens)
+        sequences, forks = _chain_to_sequences(rollout["turns"])
         return {
             "sequences": sequences,
             "num_completion_tokens": len(completion_ids),
