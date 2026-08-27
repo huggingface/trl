@@ -61,10 +61,6 @@ def is_deepspeed_available() -> bool:
     return _is_package_available("deepspeed")
 
 
-def is_fastapi_available() -> bool:
-    return _is_package_available("fastapi")
-
-
 def is_harbor_available() -> bool:
     return _is_package_available("harbor")
 
@@ -94,10 +90,6 @@ def is_openreward_available() -> bool:
     return _is_package_available("openreward")
 
 
-def is_pydantic_available() -> bool:
-    return _is_package_available("pydantic")
-
-
 def is_requests_available() -> bool:
     return _is_package_available("requests")
 
@@ -106,29 +98,21 @@ def is_unsloth_available() -> bool:
     return _is_package_available("unsloth")
 
 
-def is_uvicorn_available() -> bool:
-    return _is_package_available("uvicorn")
-
-
 def is_vllm_available(min_version: str | None = None) -> bool:
     _vllm_available, _vllm_version = _is_package_available("vllm", return_version=True)
     if _vllm_available:
         # Use base_version to drop any local segment (e.g. the "+cu129" in "0.24.0+cu129"), which PEP 440 orders
         # above the plain release and would otherwise fail the upper-bound check.
         _vllm_base_version = Version(Version(_vllm_version).base_version)
-        if not (Version("0.18.0") <= _vllm_base_version <= Version("0.27.1")):
+        if not (Version("0.19.0") <= _vllm_base_version <= Version("0.27.1")):
             warnings.warn(
-                f"TRL currently supports vLLM versions from 0.18.0 to 0.27.1. You have version {_vllm_version} "
+                f"TRL currently supports vLLM versions from 0.19.0 to 0.27.1. You have version {_vllm_version} "
                 "installed. We recommend installing a supported version to avoid compatibility issues.",
                 stacklevel=2,
             )
         if min_version is not None and Version(_vllm_version) < Version(min_version):
             return False
     return _vllm_available
-
-
-def is_vllm_ascend_available() -> bool:
-    return _is_package_available("vllm_ascend")
 
 
 def is_weave_available() -> bool:
