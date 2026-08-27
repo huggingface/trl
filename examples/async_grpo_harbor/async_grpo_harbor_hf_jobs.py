@@ -61,13 +61,21 @@ Requirements:
 Run:
 
 ```sh
+# Runs as written. Every argument has a working default; the bucket is optional (without it the job
+# still trains, it just loses its checkpoints when the container goes away).
 hf jobs uv run \
     --flavor h200x2 \
     --image huggingface/trl \
     --secrets HF_TOKEN --secrets E2B_API_KEY \
+    https://raw.githubusercontent.com/huggingface/trl/main/examples/async_grpo_harbor/async_grpo_harbor_hf_jobs.py
+
+# ...and with a bucket, so checkpoints and the model cache survive the job:
+hf jobs uv run \
+    --flavor h200x2 --image huggingface/trl \
+    --secrets HF_TOKEN --secrets E2B_API_KEY \
     --volume type=bucket,source=<user>/<bucket>,mount_path=/data \
     examples/async_grpo_harbor/async_grpo_harbor_hf_jobs.py \
-    -- --split <hf-dataset> --model Qwen/Qwen3.5-2B --max-steps 20
+    -- --max-steps 20 --save-steps 10
 ```
 
 Or from Python, which is easier to script and gives you the job id back:
@@ -77,7 +85,7 @@ from huggingface_hub import Volume, run_uv_job
 
 job = run_uv_job(
     "examples/async_grpo_harbor/async_grpo_harbor_hf_jobs.py",
-    script_args=["--split", "<hf-dataset>", "--model", "Qwen/Qwen3.5-2B", "--max-steps", "20"],
+    script_args=["--max-steps", "20", "--save-steps", "10"],
     flavor="h200x2",
     image="huggingface/trl",
     secrets={"HF_TOKEN": "...", "E2B_API_KEY": "..."},
@@ -310,7 +318,11 @@ def task_indices(spec: str) -> list[int] | None:
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--split", required=True, help="the Harbor task dataset on the Hub")
+    p.add_argument(
+        "--split",
+        default="AdithyaSK/data_agent_rl_environment_train",
+        help="any Harbor task dataset on the Hub; the default is a public data-analysis suite",
+    )
     p.add_argument("--model", default="Qwen/Qwen3.5-2B")
     p.add_argument("--harness", default="mini-swe-agent")
     p.add_argument("--sandbox", default="e2b")
