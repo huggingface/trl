@@ -241,7 +241,10 @@ In this mode, vLLM runs in a separate process (and using separate GPUs) and comm
 1. **Start the vLLM server**:
 
    ```bash
-   trl vllm-serve --model <model_name>
+   VLLM_SERVER_DEV_MODE=1 vllm serve <model_name> \
+       --weight-transfer-config '{"backend": "nccl"}' \
+       --logprobs-mode processed_logprobs \
+       --max-logprobs -1
    ```
 
 2. **Enable server mode in your training script**:
@@ -333,7 +336,7 @@ training_args = GRPOConfig(
 > [!TIP]
 > TRL defaults `max_memory_percent` to `0.5` (instead of transformers' `0.9`) to leave enough VRAM for the training backward pass. Tune it down to `0.3`–`0.4` for large generation batches (N≥32) or if you see out-of-memory errors.
 
-For a full training example, see [`examples/scripts/grpo_continuous_batching.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/grpo_continuous_batching.py).
+For a full training example, see [`examples/grpo_continuous_batching/grpo_continuous_batching.py`](https://github.com/huggingface/trl/blob/main/examples/grpo_continuous_batching/grpo_continuous_batching.py).
 
 ### GRPO at scale: train a 70B+ Model on multiple nodes
 
@@ -369,7 +372,10 @@ srun --nodes=4 --ntasks=4 --nodelist="${NODELIST[@]:0:4}" accelerate launch \
      --server_ip $VLLM_NODE &
 
 # Run vLLM server on the 5th node (Group 2)
-srun --nodes=1 --ntasks=1 --nodelist="${NODELIST[4]}" trl vllm-serve --model Qwen/Qwen2.5-72B --tensor_parallel_size 8 &
+srun --nodes=1 --ntasks=1 --nodelist="${NODELIST[4]}" env VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen2.5-72B --tensor-parallel-size 8 \
+    --weight-transfer-config '{"backend": "nccl"}' \
+    --logprobs-mode processed_logprobs \
+    --max-logprobs -1 &
 
 wait
 ```
@@ -726,6 +732,8 @@ For more details, see the [Passing tools guide](https://huggingface.co/docs/tran
 > [!TIP]
 > The GRPO tool call loop requires the chat template to be *prefix-preserving* (appending a tool message must not change how earlier messages are rendered). For known model families (e.g. Qwen3, DeepSeek-V3), TRL automatically swaps in a patched training template when tools are enabled. See [Chat Templates](chat_templates#training-templates) for the full list.
 
+Use `max_tool_calling_iterations` in the [`GRPOConfig`] to cap the number of tool-calling turns. By default there is no limit, and generation stops when the model produces a response turn with no tool calls.
+
 Example:
 
 ```python
@@ -997,12 +1005,12 @@ Tested with:
 
 ### Quick Start
 
-Use [grpo\_vlm.py](https://github.com/huggingface/trl/blob/main/examples/scripts/grpo_vlm.py) to fine-tune a VLM. Example command for training on [`lmms-lab/multimodal-open-r1-8k-verified`](https://huggingface.co/datasets/lmms-lab/multimodal-open-r1-8k-verified):
+Use [grpo\_vlm.py](https://github.com/huggingface/trl/blob/main/examples/grpo_visual_math/grpo_visual_math.py) to fine-tune a VLM. Example command for training on [`lmms-lab/multimodal-open-r1-8k-verified`](https://huggingface.co/datasets/lmms-lab/multimodal-open-r1-8k-verified):
 
 ```bash
 accelerate launch \
   --config_file=examples/accelerate_configs/deepspeed_zero3.yaml \
-  examples/scripts/grpo_vlm.py \
+  examples/grpo_visual_math/grpo_visual_math.py \
   --model_name_or_path Qwen/Qwen2.5-VL-3B-Instruct \
   --output_dir grpo-Qwen2.5-VL-3B-Instruct \
   --learning_rate 1e-5 \

@@ -92,10 +92,10 @@ SDPO-specific hook:
 
 ## Example script
 
-Use [`examples/scripts/sdpo.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/sdpo.py) to launch SDPO training from the command line. The script supports verifiable math rewards, environment feedback via `--feedback_column`, and PEFT/LoRA via the standard `ModelConfig` flags.
+Use [`examples/sdpo_math/sdpo_math.py`](https://github.com/huggingface/trl/blob/main/examples/sdpo_math/sdpo_math.py) to launch SDPO training from the command line. The script supports verifiable math rewards, environment feedback via `--feedback_column`, and PEFT/LoRA via the standard `ModelConfig` flags.
 
 ```bash
-python examples/scripts/sdpo.py \
+python examples/sdpo_math/sdpo_math.py \
     --model_name_or_path Qwen/Qwen2.5-Math-1.5B-Instruct \
     --dataset_name openai/gsm8k \
     --dataset_config main \
