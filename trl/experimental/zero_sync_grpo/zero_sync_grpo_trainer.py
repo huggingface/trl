@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import atexit
+import time
 from collections import defaultdict, deque
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -493,8 +494,13 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             self._submit_group(example)
         num_samples = len(generation_batch) * self.num_generations
 
+        # Time spent waiting for the engine. Near zero means generation is fully hidden behind the training step; a
+        # large value means the engine is the bottleneck, so raise `generation_ahead` (more requests in flight) or
+        # give it a bigger KV pool.
+        wait_start = time.perf_counter()
         while len(self._ready) < num_samples:
             self._drain(timeout=1.0)
+        self._metrics[mode]["generation_wait_s"].append(time.perf_counter() - wait_start)
         samples = [self._ready.popleft() for _ in range(num_samples)]
 
         # Metrics of the rollouts this step trains on. They are per process: groups are formed and scored locally,
