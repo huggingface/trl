@@ -246,15 +246,6 @@ def _chunked_divergence_loss(
     n_valid_tensor = valid.sum()
 
     entropy_sum = h_s.new_zeros((), dtype=torch.float32)
-    if n_valid_tensor == 0:
-        # Whole micro-batch masked. Keep the loss connected to the autograd graph through every trainable parameter so
-        # `.backward()` succeeds and DDP / FSDP gradient sync doesn't hang on a missing param. Only the student carries
-        # gradients (the teacher is frozen).
-        with maybe_gather_lm_head_ctx(student_lm_head_weight, student_lm_head_bias):
-            loss = (h_s.float().sum() + student_lm_head_weight.float().sum()) * 0.0
-            if student_lm_head_bias is not None:
-                loss = loss + student_lm_head_bias.float().sum() * 0.0
-        return loss, entropy_sum, n_valid_tensor
 
     # Pack valid positions to the front so masked ones form whole trailing chunks. `argsort` on the boolean mask is a
     # static-shape op (unlike `h_s[valid]`, whose output shape is data-dependent and poisons XLA compilation).
@@ -263,8 +254,10 @@ def _chunked_divergence_loss(
     h_t = h_t[order]
     valid = valid[order]
 
-    # Process only the whole chunks covering the valid prefix: bounds XLA recompiles and drops fully-masked chunks on GPU.
-    n_padded = (n_valid_tensor / chunk_size).ceil().to(torch.int64) * chunk_size
+    # Process only the whole chunks covering the valid prefix: bounds XLA recompiles and drops fully-masked chunks on
+    # GPU. At least one chunk always runs: under context parallelism a rank can hold only masked positions, and its
+    # zero loss still has to reach every trainable parameter for `.backward()` and gradient sync to work.
+    n_padded = (n_valid_tensor / chunk_size).ceil().clamp(min=1).to(torch.int64) * chunk_size
 
     loss = h_s.new_zeros((), dtype=torch.float32)
     for start in range(0, n_padded, chunk_size):
@@ -289,7 +282,8 @@ def _chunked_divergence_loss(
         entropy_sum = entropy_sum + chunk_entropy
 
     if num_items_in_batch is None:
-        loss = loss / n_valid_tensor
+        # Clamped for the same reason: a fully-masked rank reduces to a finite zero rather than `0 / 0`.
+        loss = loss / n_valid_tensor.clamp(min=1)
     else:
         if isinstance(num_items_in_batch, torch.Tensor):
             num_items_in_batch = num_items_in_batch.to(loss.device)
