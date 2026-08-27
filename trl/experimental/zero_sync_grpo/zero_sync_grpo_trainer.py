@@ -30,7 +30,7 @@ from transformers import (
 )
 from transformers.generation import ContinuousBatchingConfig
 
-from ...chat_template_utils import parse_response
+from ...chat_template_utils import add_response_schema, parse_response, supports_tool_calling
 from ...trainer.base_trainer import _BaseTrainer
 from ...trainer.utils import create_model_from_path, nanstd, pad
 from .zero_sync_grpo_config import ZeroSyncGRPOConfig
@@ -210,9 +210,19 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         self.generation_ahead = args.generation_ahead
         self.max_tool_calling_iterations = args.max_tool_calling_iterations
 
-        # Tools
+        # Tools. `add_response_schema` teaches the tokenizer how to parse tool calls back out of a
+        # generation, unless the chat template already carries a response template.
         self.tools = tools
         self.tool_dict = {tool.__name__: tool for tool in tools} if tools else {}
+        if tools:
+            if not supports_tool_calling(processing_class):
+                raise ValueError(
+                    "The provided chat template does not support tool calling. The template must be able to render a "
+                    "full tool-calling conversation (user -> assistant with tool_calls -> tool)."
+                )
+            if getattr(self._tokenizer, "response_template", None) is None:
+                processing_class = add_response_schema(processing_class)
+                self._tokenizer = getattr(processing_class, "tokenizer", processing_class)
 
         if args.per_device_train_batch_size % self.num_generations != 0:
             raise ValueError(
