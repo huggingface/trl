@@ -2689,23 +2689,25 @@ class TestGRPOTrainer(TrlTestCase):
         assert (expected_warning in caplog.text) == (loss_type != "grpo")
 
     @pytest.mark.parametrize(
-        ("top_p", "top_k", "min_p", "should_warn"),
+        ("top_p", "top_k", "min_p", "repetition_penalty", "should_warn"),
         [
-            (1.0, 0, None, False),  # defaults: nothing is truncated, the two distributions agree
-            (0.9, 0, None, True),
-            (1.0, 50, None, True),
-            (1.0, 0, 0.05, True),
-            (0.9, 50, 0.05, True),
+            (1.0, 0, None, 1.0, False),  # defaults: nothing reshapes the logits, the two distributions agree
+            (0.9, 0, None, 1.0, True),
+            (1.0, 50, None, 1.0, True),
+            (1.0, 0, 0.05, 1.0, True),
+            (0.9, 50, 0.05, 1.0, True),
+            (1.0, 0, None, 1.2, True),  # penalties reach the returned logprobs too, so they bias the ratio
         ],
     )
     def test_warning_raised_truncated_sampling_with_importance_sampling_correction(
-        self, top_p, top_k, min_p, should_warn
+        self, top_p, top_k, min_p, repetition_penalty, should_warn
     ):
-        """Truncated sampling biases the vLLM importance-sampling ratio.
+        """Reshaped sampling biases the vLLM importance-sampling ratio.
 
         vLLM returns logprobs renormalized over the surviving support while the trainer takes a full-vocab log-softmax,
         so their difference carries `log S`, the log of the mass that survives truncation, on top of the
-        train/inference mismatch the correction is meant to measure. Warn instead of correcting silently.
+        train/inference mismatch the correction is meant to measure. `repetition_penalty` reaches the same returned
+        logprobs because penalties are applied before the sampler computes them. Warn instead of correcting silently.
         """
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
@@ -2716,6 +2718,7 @@ class TestGRPOTrainer(TrlTestCase):
                 top_p=top_p,
                 top_k=top_k,
                 min_p=min_p,
+                repetition_penalty=repetition_penalty,
                 report_to="none",
             )
 
