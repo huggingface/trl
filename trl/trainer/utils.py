@@ -1309,6 +1309,10 @@ class _ChunkedLogProbFunction(torch.autograd.Function):
         final_logit_softcapping: float | None = None,
         logit_scale: float = 1.0,
     ) -> tuple[torch.Tensor, torch.Tensor]:
+        # entropy is often computed for logging only (no grad required); without this, autograd would
+        # materialize its incoming gradient as zeros and backward would waste compute on a no-op term
+        ctx.set_materialize_grads(False)
+
         device = last_hidden.device
         N, _ = last_hidden.shape
         vocab, _ = weight.shape
@@ -1369,7 +1373,10 @@ class _ChunkedLogProbFunction(torch.autograd.Function):
         return logprobs, entropy
 
     @staticmethod
-    def backward(ctx, grad_logprobs: torch.Tensor, grad_entropy: torch.Tensor):  # type: ignore
+    def backward(ctx, grad_logprobs: torch.Tensor | None, grad_entropy: torch.Tensor | None):  # type: ignore
+        if grad_logprobs is None and grad_entropy is None:
+            return None, None, None, None, None, None, None
+
         hidden, weight, labels, log_z, entropy = ctx.saved_tensors
         temperature: float = ctx.temperature
         chunk_size: int = ctx.chunk_size
@@ -1388,8 +1395,8 @@ class _ChunkedLogProbFunction(torch.autograd.Function):
         mm_buf = torch.empty((N, chunk_size), device=hidden.device, dtype=hidden.dtype)
         logits_buf = torch.empty((N, chunk_size), device=hidden.device, dtype=torch.float32)
 
-        g = grad_logprobs.to(torch.float32)  # [N]
-        g_entropy = grad_entropy.to(torch.float32)  # [N]
+        g = grad_logprobs.to(torch.float32) if grad_logprobs is not None else None  # [N]
+        g_entropy = grad_entropy.to(torch.float32) if grad_entropy is not None else None  # [N]
         row_idx = torch.arange(N, device=hidden.device)
 
         for start in range(0, vocab, chunk_size):
@@ -1410,16 +1417,20 @@ class _ChunkedLogProbFunction(torch.autograd.Function):
             log_p_chunk = logits_chunk - log_z.unsqueeze(-1)  # [N, C]
             probs = torch.exp(log_p_chunk)  # [N, C]
 
-            # dL/d(logits) = g * (1_[label] - p)
-            grad_logits = (-g).unsqueeze(-1) * probs  # [N, C]
+            grad_logits = torch.zeros_like(probs)
 
-            in_chunk_cond = (labels >= start) & (labels < end)
-            local_idx = torch.clamp(labels - start, 0, end - start - 1)
-            # If label in chunk add g to grad else it stays the same
-            grad_logits[row_idx, local_idx] += g * in_chunk_cond
+            if g is not None:
+                # dL/d(logits) = g * (1_[label] - p)
+                grad_logits -= g.unsqueeze(-1) * probs
 
-            # d(entropy)/d(logits_j) = -p_j * (log_p_j + entropy), entropy = -sum_k p_k * log_p_k
-            grad_logits += (-g_entropy).unsqueeze(-1) * probs * (log_p_chunk + entropy.unsqueeze(-1))
+                in_chunk_cond = (labels >= start) & (labels < end)
+                local_idx = torch.clamp(labels - start, 0, end - start - 1)
+                # If label in chunk add g to grad else it stays the same
+                grad_logits[row_idx, local_idx] += g * in_chunk_cond
+
+            if g_entropy is not None:
+                # d(entropy)/d(logits_j) = -p_j * (log_p_j + entropy), entropy = -sum_k p_k * log_p_k
+                grad_logits += (-g_entropy).unsqueeze(-1) * probs * (log_p_chunk + entropy.unsqueeze(-1))
 
             grad_logits = grad_logits * inv_t
             if final_logit_softcapping is not None:
