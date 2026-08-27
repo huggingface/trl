@@ -463,7 +463,7 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         }
 
     def _finalize_group(self, group: dict[str, Any]) -> None:
-        mode = "train" if self.model.training else "eval"
+        mode = self._mode
         rewards_per_func = torch.stack([scored["rewards_per_func"] for scored in group["scored"]])
 
         # A completion for which every reward function returned None is unscorable. nansum would collapse it to 0,
@@ -503,7 +503,9 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
 
     def _prepare_inputs(self, generation_batch: list[dict[str, Any]]) -> dict[str, torch.Tensor | Any]:
         device = self.accelerator.device
-        mode = "train" if self.model.training else "eval"
+        # Scoring happens inside `_drain`, possibly before the Trainer flips the model to training mode for the step,
+        # so the mode is captured here and read by `_finalize_group`.
+        mode = self._mode = "train" if self.model.training else "eval"
 
         if self._manager is None:
             self._init_manager()
