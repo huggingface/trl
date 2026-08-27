@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import warnings
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -60,13 +61,17 @@ class AsyncGRPOConfig(_BaseConfig):
             Temperature for sampling. The higher the temperature, the more random the completions.
         top_p (`float`, *optional*, defaults to `1.0`):
             Float that controls the cumulative probability of the top tokens to consider. Must be in (0, 1]. Set to 1.0
-            to consider all tokens.
+            to consider all tokens. Moving it off 1.0 biases the importance ratio: the server TRL prescribes runs with
+            `--logprobs-mode processed_logprobs`, so the logprobs kept as `old_log_probs` are renormalized over the
+            surviving tokens while the trainer takes a full-vocab log-softmax, and the ratio then reads the surviving
+            mass rather than 1.0 for an unchanged policy.
         top_k (`int`, *optional*, defaults to `0`):
             Number of highest probability vocabulary tokens to keep for top-k-filtering. If `0`, top-k-filtering is
-            disabled and all tokens are considered.
+            disabled and all tokens are considered. Biases the importance ratio the same way `top_p` does.
         min_p (`float`, *optional*):
             Minimum token probability, which will be scaled by the probability of the most likely token. It must be a
-            value between 0.0 and 1.0. Typical values are in the 0.01-0.2 range.
+            value between 0.0 and 1.0. Typical values are in the 0.01-0.2 range. Biases the importance ratio the same
+            way `top_p` does.
         repetition_penalty (`float`, *optional*, defaults to `1.0`):
             Float that penalizes new tokens based on whether they appear in the prompt and the generated text so far.
             Values > 1.0 encourage the model to use new tokens, while values < 1.0 encourage the model to repeat
@@ -383,6 +388,36 @@ class AsyncGRPOConfig(_BaseConfig):
 
     def __post_init__(self):
         super().__post_init__()
+
+        # The rollout worker keeps vLLM's per-token logprobs as `old_log_probs`, and the trainer uses them directly as
+        # the denominator of `coef_1 = exp(log_probs - old_log_probs)`. TRL prescribes serving with
+        # `--logprobs-mode processed_logprobs` (see `trl.scripts.vllm_serve.build_command`), so those logprobs come
+        # from the reshaped logits while the trainer takes a full-vocab log-softmax. For an unchanged policy the ratio
+        # then reads the surviving mass S instead of 1.0, which also shifts it against the `epsilon_low`/`epsilon_high`
+        # clip range. Unlike GRPO there is no importance-sampling correction to turn off, so the only lever is the
+        # sampling parameters themselves. `temperature` is excluded: the trainer scales its own logits by it, so it
+        # cancels.
+        reshaping = [
+            name
+            for name, active in (
+                ("top_p", self.top_p < 1.0),
+                ("top_k", self.top_k > 0),
+                ("min_p", self.min_p is not None and self.min_p > 0.0),
+                ("repetition_penalty", self.repetition_penalty != 1.0),
+            )
+            if active
+        ]
+        if reshaping:
+            warnings.warn(
+                f"{' and '.join(reshaping)} reshapes the sampled distribution, which biases the importance ratio "
+                "`exp(log_probs - old_log_probs)`: on a server started with `--logprobs-mode processed_logprobs`, as "
+                "TRL prescribes, vLLM computes the logprobs kept as `old_log_probs` from the reshaped logits while "
+                "the trainer normalizes over the full vocabulary. The ratio then departs from 1.0 for an unchanged "
+                "policy, by an amount that grows as the kept mass shrinks, and can cross the clip range. Keep the "
+                "sampling defaults (`top_p=1.0`, `top_k=0`, `min_p=None`, `repetition_penalty=1.0`) to avoid it.",
+                UserWarning,
+                stacklevel=3,
+            )
 
         if self.parallelism_config is not None and (
             self.parallelism_config.cp_enabled or self.parallelism_config.sp_enabled

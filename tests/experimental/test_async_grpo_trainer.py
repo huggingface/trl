@@ -19,6 +19,7 @@ import math
 import multiprocessing as mp
 import os
 import queue
+import warnings
 from collections import defaultdict
 from unittest.mock import MagicMock, patch
 
@@ -148,6 +149,48 @@ class _StubWeightTransfer:
 
     def destroy(self):
         pass
+
+
+class TestAsyncGRPOConfig(TrlTestCase):
+    # Config-level checks only: building an `AsyncGRPOConfig` touches no accelerator, so these stay outside the
+    # Flash-Attention skip that gates `TestAsyncGRPOTrainer` and run in the CPU lanes as well.
+
+    @pytest.mark.parametrize(
+        ("top_p", "top_k", "min_p", "repetition_penalty", "should_warn"),
+        [
+            (1.0, 0, None, 1.0, False),  # defaults: nothing reshapes the logits, the ratio is unbiased
+            (0.9, 0, None, 1.0, True),
+            (1.0, 50, None, 1.0, True),
+            (1.0, 0, 0.05, 1.0, True),
+            (1.0, 0, None, 1.2, True),
+            (0.9, 50, 0.05, 1.2, True),
+        ],
+    )
+    def test_warning_raised_reshaped_sampling_biases_the_ratio(
+        self, top_p, top_k, min_p, repetition_penalty, should_warn
+    ):
+        """Reshaped sampling biases the AsyncGRPO importance ratio.
+
+        The rollout worker reads vLLM's per-token logprobs and the trainer uses them directly as `old_log_probs`, the
+        denominator of `coef_1 = exp(log_probs - old_log_probs)`. On a server started the way TRL prescribes, with
+        `--logprobs-mode processed_logprobs`, those logprobs come from the reshaped logits while the trainer takes a
+        full-vocab log-softmax, so the ratio carries that reshaping instead of reading 1.0 at the start of a step.
+        Unlike GRPO there is no `vllm_importance_sampling_correction` to switch off, so warn.
+        """
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            AsyncGRPOConfig(
+                output_dir=self.tmp_dir,
+                max_steps=5,
+                top_p=top_p,
+                top_k=top_k,
+                min_p=min_p,
+                repetition_penalty=repetition_penalty,
+                report_to="none",
+            )
+
+        messages = [str(w.message) for w in caught]
+        assert any("biases the importance ratio" in m for m in messages) == should_warn
 
 
 @pytest.mark.skipif(
