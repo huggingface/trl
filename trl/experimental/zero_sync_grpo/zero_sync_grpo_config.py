@@ -34,6 +34,12 @@ class ZeroSyncGRPOConfig(_BaseConfig):
             Keyword arguments for [`~transformers.AutoModelForCausalLM.from_pretrained`], used when the `model`
             argument of the [`ZeroSyncGRPOTrainer`] is provided as a string.
 
+        > Parameters that control the data preprocessing
+
+        remove_unused_columns (`bool`, *optional*, defaults to `False`):
+            Whether to only keep the column `"prompt"` in the dataset. If you use a custom reward function that
+            requires any column other than `"prompts"` and `"completions"`, you should keep this to `False`.
+
         > Parameters that control generation
 
         num_generations (`int`, *optional*, defaults to `8`):
@@ -105,6 +111,15 @@ class ZeroSyncGRPOConfig(_BaseConfig):
         metadata={
             "help": "Keyword arguments for `transformers.AutoModelForCausalLM.from_pretrained`, used when the `model` "
             "argument of the `ZeroSyncGRPOTrainer` is provided as a string."
+        },
+    )
+
+    # Parameters that control the data preprocessing
+    remove_unused_columns: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to only keep the column 'prompt' in the dataset. If you use a custom reward function "
+            "that requires any column other than 'prompts' and 'completions', you should keep this to `False`."
         },
     )
 

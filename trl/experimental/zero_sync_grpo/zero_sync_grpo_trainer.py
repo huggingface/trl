@@ -20,17 +20,17 @@ from typing import Any
 import torch
 from datasets import Dataset, IterableDataset
 from transformers import (
-    AutoModelForCausalLM,
-    AutoTokenizer,
+    AutoProcessor,
     GenerationConfig,
     PreTrainedModel,
     PreTrainedTokenizerBase,
+    ProcessorMixin,
     TrainerCallback,
 )
 from transformers.generation import ContinuousBatchingConfig
 
 from ...trainer.base_trainer import _BaseTrainer
-from ...trainer.utils import nanstd, pad
+from ...trainer.utils import create_model_from_path, nanstd, pad
 from .zero_sync_grpo_config import ZeroSyncGRPOConfig
 
 
@@ -100,9 +100,10 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             passed to the reward functions.
         eval_dataset ([`~datasets.Dataset`], *optional*):
             Dataset to use for evaluation. It must meet the same requirements as `train_dataset`.
-        processing_class ([`~transformers.PreTrainedTokenizerBase`], *optional*):
+        processing_class ([`~transformers.PreTrainedTokenizerBase`] or [`~transformers.ProcessorMixin`], *optional*):
             Processing class used to process the data. If `None`, the processing class is loaded from the model's
-            name with [`~transformers.AutoTokenizer.from_pretrained`].
+            name with [`~transformers.AutoProcessor.from_pretrained`]. For vision-language models the processor's
+            tokenizer is used; only text-only data is supported.
         callbacks (list of [`~transformers.TrainerCallback`], *optional*):
             List of callbacks to customize the training loop.
         optimizers (`tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`, *optional*, defaults to `(None,
@@ -120,7 +121,7 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         args: ZeroSyncGRPOConfig | None = None,
         train_dataset: Dataset | IterableDataset | None = None,
         eval_dataset: Dataset | None = None,
-        processing_class: PreTrainedTokenizerBase | None = None,
+        processing_class: PreTrainedTokenizerBase | ProcessorMixin | None = None,
         callbacks: list[TrainerCallback] | None = None,
         optimizers: tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None] = (None, None),
     ):
@@ -130,10 +131,13 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             model_name = model_name.split("/")[-1]
             args = ZeroSyncGRPOConfig(f"{model_name}-ZeroSyncGRPO")
 
-        # Model
+        # Model. The architecture (causal LM or vision-language model) is inferred from the checkpoint; VLMs are
+        # supported with text-only data.
         if isinstance(model, str):
             model_init_kwargs = args.model_init_kwargs or {}
-            model = AutoModelForCausalLM.from_pretrained(model, **model_init_kwargs)
+            # The same weights both generate and train, so default to the checkpoint dtype rather than fp32
+            model_init_kwargs.setdefault("dtype", "auto")
+            model = create_model_from_path(model, **model_init_kwargs)
         else:
             if args.model_init_kwargs is not None:
                 raise ValueError(
@@ -141,11 +145,15 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
                     "instantiated. This argument can only be used when the `model` argument is a string."
                 )
 
-        # Processing class
+        # Processing class. For VLMs this is a processor whose tokenizer handles the text-only conversations.
         if processing_class is None:
-            processing_class = AutoTokenizer.from_pretrained(model.config._name_or_path)
-        if processing_class.pad_token is None:
-            processing_class.pad_token = processing_class.eos_token
+            processing_class = AutoProcessor.from_pretrained(model.config._name_or_path)
+        if isinstance(processing_class, ProcessorMixin):
+            self._tokenizer = processing_class.tokenizer
+        else:
+            self._tokenizer = processing_class
+        if self._tokenizer.pad_token is None:
+            self._tokenizer.pad_token = self._tokenizer.eos_token
 
         # Reward functions
         if not isinstance(reward_funcs, list):
@@ -228,7 +236,7 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             temperature=self.temperature,
             top_p=self.top_p,
             top_k=self.top_k,
-            eos_token_id=self.processing_class.eos_token_id,
+            eos_token_id=self._tokenizer.eos_token_id,
         )
         cb_kwargs = dict(self.args.continuous_batching_config or {})
         cb_kwargs["return_logprobs"] = True  # the engine's logprobs are the behavior-policy logprobs
@@ -248,15 +256,15 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         prompt_ids = self.processing_class.apply_chat_template(
             example["prompt"], add_generation_prompt=True, **self.chat_template_kwargs
         )["input_ids"]
-        group = {"example": example, "prompt_ids": prompt_ids, "results": {}, "size": self.num_generations}
+        group = {"example": example, "prompt_ids": prompt_ids, "scored": [], "size": self.num_generations}
         for _ in range(self.num_generations):
             request_id = self._manager.add_request(prompt_ids, max_new_tokens=self.max_completion_length)
             self._inflight[request_id] = group
 
     def _drain(self, timeout: float) -> None:
-        # Collect every completion the engine has finished, and score each group whose last completion just landed. A
-        # dead background thread never raises from `get_result` (it returns None forever, transformers#48334), so
-        # poll `fatal_error` to fail fast instead of spinning.
+        # Collect and score every completion the engine has finished; a group's advantages are computed once its last
+        # completion lands. A dead background thread never raises from `get_result` (it returns None forever,
+        # transformers#48334), so poll `fatal_error` to fail fast instead of spinning.
         while True:
             result = self._manager.get_result(timeout=timeout)
             if result is None:
@@ -265,31 +273,35 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
                     raise RuntimeError("The continuous batching background thread died.") from fatal_error
                 return
             group = self._inflight.pop(result.request_id)
-            group["results"][result.request_id] = result
-            if len(group["results"]) == group["size"]:
-                self._score_group(group)
+            group["scored"].append(self._score_completion(group, result))
+            if len(group["scored"]) == group["size"]:
+                self._finalize_group(group)
 
-    def _score_group(self, group: dict[str, Any]) -> None:
-        mode = "train" if self.model.training else "eval"
+    def _score_completion(self, group: dict[str, Any], result) -> dict[str, Any]:
+        # Score one completion the moment it finishes, so reward computation overlaps generation. The reward
+        # functions receive one-element lists, with the same signature as everywhere else in TRL.
         example = group["example"]
-        results = list(group["results"].values())
-        completion_ids_list = [list(result.generated_tokens) for result in results]
-        logprobs_list = [list(result.logprobs[: len(result.generated_tokens)]) for result in results]
-        completions_text = self.processing_class.batch_decode(completion_ids_list, skip_special_tokens=True)
-        completions = [[{"role": "assistant", "content": content}] for content in completions_text]
-        prompts = [example["prompt"]] * len(completions)
+        completion_ids = list(result.generated_tokens)
+        completion_text = self._tokenizer.decode(completion_ids, skip_special_tokens=True)
+        completions = [[{"role": "assistant", "content": completion_text}]]
+        reward_kwargs = {key: [example[key]] for key in example if key not in ["prompt"]}
 
-        rewards_per_func = torch.zeros(len(completions), len(self.reward_funcs))
-        reward_kwargs = {
-            key: [example[key]] * len(completions) for key in example if key not in ["prompt"]
-        }
+        rewards_per_func = torch.zeros(len(self.reward_funcs))
         for i, reward_func in enumerate(self.reward_funcs):
             output_reward_func = reward_func(
-                prompts=prompts, completions=completions, completion_ids=completion_ids_list, **reward_kwargs
+                prompts=[example["prompt"]], completions=completions, completion_ids=[completion_ids], **reward_kwargs
             )
             # Convert None values to NaN
-            output_reward_func = [reward if reward is not None else torch.nan for reward in output_reward_func]
-            rewards_per_func[:, i] = torch.tensor(output_reward_func, dtype=torch.float32)
+            rewards_per_func[i] = torch.nan if output_reward_func[0] is None else output_reward_func[0]
+        return {
+            "completion_ids": completion_ids,
+            "logprobs": list(result.logprobs[: len(completion_ids)]),
+            "rewards_per_func": rewards_per_func,
+        }
+
+    def _finalize_group(self, group: dict[str, Any]) -> None:
+        mode = "train" if self.model.training else "eval"
+        rewards_per_func = torch.stack([scored["rewards_per_func"] for scored in group["scored"]])
 
         # A completion for which every reward function returned None is unscorable. nansum would collapse it to 0,
         # which both biases the group baseline and hands the completion a spurious advantage. Mark these rows NaN so
@@ -310,15 +322,15 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             )
         self._metrics[mode]["reward"].append(torch.nanmean(rewards).item())
         self._metrics[mode]["reward_std"].append(nanstd(rewards).item())
-        completion_lengths = [len(ids) for ids in completion_ids_list]
+        completion_lengths = [len(scored["completion_ids"]) for scored in group["scored"]]
         self._metrics[mode]["completions/mean_length"].append(sum(completion_lengths) / len(completion_lengths))
 
-        for completion_ids, logprobs, advantage in zip(completion_ids_list, logprobs_list, advantages, strict=True):
+        for scored, advantage in zip(group["scored"], advantages, strict=True):
             self._ready.append(
                 {
                     "prompt_ids": group["prompt_ids"],
-                    "completion_ids": completion_ids,
-                    "logprobs": logprobs,
+                    "completion_ids": scored["completion_ids"],
+                    "logprobs": scored["logprobs"],
                     "advantage": advantage,
                 }
             )
@@ -371,7 +383,7 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             for s in samples
         ]
         attention_mask = [torch.ones(len(ids), dtype=torch.long) for ids in input_ids]
-        pad_token_id = self.processing_class.pad_token_id
+        pad_token_id = self._tokenizer.pad_token_id
         return {
             "input_ids": pad(input_ids, padding_value=pad_token_id, padding_side="right").to(device),
             "attention_mask": pad(attention_mask, padding_value=0, padding_side="right").to(device),
