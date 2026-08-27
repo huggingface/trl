@@ -15,6 +15,7 @@
 # /// script
 # dependencies = [
 #     "trl",
+#     "vllm",
 #     "trackio",
 #     "datasets",
 #     "huggingface_hub>=1.22",
@@ -304,6 +305,55 @@ def start_vllm(args: argparse.Namespace, logs: pathlib.Path) -> tuple[str, subpr
     return url, proc
 
 
+def warm_sandbox_template(args: argparse.Namespace, vllm_url: str, logs: pathlib.Path) -> None:
+    """Build the sandbox image once, serially, before any group runs concurrently.
+
+    This is not an optimisation. Harbor decides whether to build from `alias_exists()`, which flips true
+    when a build STARTS rather than when it finishes, so N generations racing their first visit to a task
+    all see "exists" and then fail against a half-built image with `404: tag 'default' does not exist`.
+    With `num_generations` rollouts launched together on a cold template that is the common case, not an
+    edge one, and the failures look like the harness misbehaving rather than a build race.
+
+    One rollout first makes the build serial; every later rollout finds a finished image. The cost is
+    paid once per distinct environment and, because the provider keys images by content hash, not at all
+    on subsequent jobs.
+    """
+    cmd = [
+        "openenv",
+        "harbor",
+        "rollout",
+        "--llm-url",
+        vllm_url,
+        "--model",
+        args.model,
+        "--dataset",
+        args.split,
+        "--harness",
+        args.harness,
+        "--sandbox",
+        args.sandbox,
+        "--task-index",
+        "0",
+        "-n",
+        "1",
+    ]
+    log = logs / "warm-template.log"
+    print("[jobs] warming the sandbox template (one serial rollout) ...", flush=True)
+    started = time.monotonic()
+    with open(log, "w") as handle:
+        proc = subprocess.run(cmd, stdout=handle, stderr=subprocess.STDOUT, check=False)
+    took = time.monotonic() - started
+    if proc.returncode != 0:
+        # Deliberately not fatal. The warm rollout can fail for reasons that say nothing about training
+        # (an ungradeable task 0, a flaky verifier), and the build it triggered still happened. Training
+        # is the thing under test, so report and continue rather than refusing to start.
+        tail = log.read_text(errors="replace")[-800:]
+        print(f"[jobs] WARNING warm rollout exited {proc.returncode} after {took:.0f}s; continuing", flush=True)
+        print(f"[jobs] WARNING tail of {log}:\n{tail}", flush=True)
+    else:
+        print(f"[jobs] template warm after {took:.0f}s", flush=True)
+
+
 # --------------------------------------------------------------------------------------------------
 # args
 # --------------------------------------------------------------------------------------------------
@@ -362,6 +412,11 @@ def parse_args() -> argparse.Namespace:
     # was served, or every prompt is re-rendered under a different template than it was generated with.
     p.add_argument("--enable-thinking", action="store_true", default=False)
     p.add_argument("--data-root", default=str(DATA_ROOT), help="the mounted bucket")
+    p.add_argument(
+        "--skip-warm",
+        action="store_true",
+        help="skip the serial template build; only safe when the image is already built",
+    )
     return p.parse_args()
 
 
@@ -392,11 +447,34 @@ def main() -> None:
     for tool in ("openenv", "vllm"):
         if shutil.which(tool) is None:
             raise RuntimeError(f"`{tool}` is not on PATH; the PEP 723 dependencies did not install")
+
+    # Two GPUs, checked before anything expensive: the engine and the trainer each take one, and they
+    # must be on the same host because AsyncGRPO syncs weights over NCCL. On a one-GPU flavor the
+    # trainer would otherwise be pointed at a device that does not exist and fail deep inside CUDA.
+    n_gpu = len(
+        [
+            line
+            for line in subprocess.run(
+                ["nvidia-smi", "--query-gpu=index", "--format=csv,noheader"],
+                capture_output=True,
+                text=True,
+                check=False,
+            ).stdout.splitlines()
+            if line.strip()
+        ]
+    )
+    if n_gpu < 2:
+        raise RuntimeError(
+            f"this needs 2 GPUs (engine on {args.vllm_device}, trainer on {args.train_device}) but sees "
+            f"{n_gpu}. Use a multi-GPU flavor, e.g. --flavor h200x2."
+        )
     if not (os.environ.get("E2B_API_KEY") or args.sandbox != "e2b"):
         raise RuntimeError("sandbox is e2b but E2B_API_KEY is unset; pass it as a job secret")
 
     public_proxy = start_openenv_server(args, logs)
     vllm_url, _ = start_vllm(args, logs)
+    if not args.skip_warm:
+        warm_sandbox_template(args, vllm_url, logs)
 
     # Imported only now: the heavy imports cost a minute, and there is no point paying it before the
     # servers are known good.
@@ -409,8 +487,11 @@ def main() -> None:
 
     os.environ["CUDA_VISIBLE_DEVICES"] = args.train_device
 
-    job_id = os.environ.get("HF_JOB_ID", "local")
-    run_name = args.run_name or f"{args.model.split('/')[-1]}-{args.harness}-{args.max_steps}steps-{job_id}"
+    # Trackio keys a run by name inside a project, so a colliding name folds two runs into one history
+    # -- worst exactly when relaunching after a failure. Prefer the job id, but never fall back to a
+    # constant: the variable's name is not guaranteed, so a timestamp keeps runs distinct regardless.
+    stamp = os.environ.get("HF_JOB_ID") or os.environ.get("JOB_ID") or time.strftime("%m%d-%H%M%S")
+    run_name = args.run_name or f"{args.model.split('/')[-1]}-{args.harness}-{args.max_steps}steps-{stamp}"
     output_dir = str(data_root / "runs" / run_name)
 
     factory = HarborSessionFactory(
