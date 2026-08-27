@@ -42,13 +42,23 @@ Qwen3.5 and later. Qwen3 and Qwen3-MoE are full attention. Qwen3-0.6B takes 137 
 """
 
 import torch
+import transformers
 from datasets import Dataset, load_dataset
+from packaging.version import Version
 
 from trl import SFTConfig, SFTTrainer
 
 
 MODEL = "Qwen/Qwen3-8B"
 SEQ_LEN = 1_048_576
+
+# `accelerate launch` does not read the dependency header above, so the `transformers>=5.0` it declares is
+# not enforced at run time. On v4 the `rope_parameters` override below is dropped without an error and the
+# run trains at 1M with no YaRN, so check it here rather than let a 606 s/step job start off wrong.
+if Version(transformers.__version__) < Version("5.0.0"):
+    raise RuntimeError(
+        f"This example needs transformers>=5.0 for the `rope_parameters` schema, got {transformers.__version__}."
+    )
 
 
 def build_dataset(rows=4, chars_per_row=6_000_000):
