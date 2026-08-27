@@ -130,7 +130,7 @@ def _dense_param_data(param: nn.Parameter) -> torch.Tensor:
     return param.data
 
 
-def _check_quantization_supported(model: nn.Module, fsdp_version: int) -> None:
+def _check_quantization_supported(model: nn.Module, fsdp_version: int | None) -> None:
     """
     Raise when the model's quantization cannot survive the dense weight push into vLLM.
 
@@ -142,10 +142,11 @@ def _check_quantization_supported(model: nn.Module, fsdp_version: int) -> None:
     Args:
         model (`torch.nn.Module`):
             Model whose modules are inspected for bitsandbytes layers.
-        fsdp_version (`int`):
-            FSDP major version in use, `0` when FSDP is not enabled. Only version 2 is refused with a 4-bit base,
-            because it reads weights from `state_dict()`, which returns plain tensors whose `quant_state` is already
-            gone by the time `_dense_param_data` runs. FSDP1 reads through `summon_full_params` and keeps it.
+        fsdp_version (`int`, *optional*):
+            FSDP major version in use, `None` when FSDP is not enabled, which is what `DistributedBackend` reports.
+            Only version 2 is refused with a 4-bit base, because it reads weights from `state_dict()`, which returns
+            plain tensors whose `quant_state` is already gone by the time `_dense_param_data` runs. FSDP1 reads through
+            `summon_full_params` and keeps it.
 
     Raises:
         `ValueError`: if the model holds 8-bit layers, or 4-bit layers while `fsdp_version` is 2.

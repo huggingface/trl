@@ -158,6 +158,11 @@ class TestQuantizedWeightSync(TrlTestCase):
             (lambda: bnb.nn.Linear4bit(8, 8), 0, None),  # no FSDP at all
             (lambda: nn.Linear(8, 8), 2, None),  # dense base under FSDP2
             (lambda: nn.Linear(8, 8), 0, None),  # dense base, no FSDP
+            # `DistributedBackend.fsdp_version` is `None`, not `0`, when FSDP is off, so these are the values the
+            # guard actually receives in production. The `0` cases above only cover the documented sentinel.
+            (lambda: bnb.nn.Linear8bitLt(8, 8), None, "8-bit quantization"),
+            (lambda: bnb.nn.Linear4bit(8, 8), None, None),
+            (lambda: nn.Linear(8, 8), None, None),
         ],
     )
     def test_check_quantization_supported(self, module_factory, fsdp_version, expected_message):
