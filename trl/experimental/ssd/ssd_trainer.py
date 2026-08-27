@@ -460,6 +460,12 @@ class SSDTrainer(_BaseTrainer):
         mode = "train" if self.model.training else "eval"
         completion_lengths = completion_mask.sum(dim=1).float()
         agg_lengths = self.accelerator.gather(completion_lengths)
+        # Fail clearly if the generation backend returned no completions (avoids a cryptic min() error below).
+        if agg_lengths.numel() == 0:
+            raise RuntimeError(
+                "No completions were generated. This usually means the generation backend failed to return any "
+                "results; see the generation logs above for the underlying error."
+            )
         self._metrics[mode]["completions/mean_length"].append(agg_lengths.mean().item())
         self._metrics[mode]["completions/min_length"].append(agg_lengths.min().item())
         self._metrics[mode]["completions/max_length"].append(agg_lengths.max().item())

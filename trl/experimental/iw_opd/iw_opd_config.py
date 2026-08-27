@@ -21,7 +21,6 @@ from ...trainer.base_config import _BaseConfig
 
 @dataclass
 class IWOPDConfig(_BaseConfig):
-    # docstyle-ignore
     r"""
     Configuration class for the [`IWOPDTrainer`].
 
@@ -36,12 +35,12 @@ class IWOPDConfig(_BaseConfig):
         > Parameters that control the model
 
         model_init_kwargs (`dict[str, Any]`, *optional*):
-            Keyword arguments for `AutoModelForCausalLM.from_pretrained`, used when the `model` argument of the
-            trainer is provided as a string.
+            Keyword arguments for `AutoModelForCausalLM.from_pretrained`, used when the `model` argument of the trainer
+            is provided as a string.
         trust_remote_code (`bool`, *optional*, defaults to `False`):
             Whether to allow loading models and tokenizers that ship custom Python code from the Hub. Forwarded to
-            [`~transformers.AutoModelForCausalLM.from_pretrained`] and
-            [`~transformers.AutoTokenizer.from_pretrained`], for both the student and teacher.
+            [`~transformers.AutoModelForCausalLM.from_pretrained`] and [`~transformers.AutoTokenizer.from_pretrained`],
+            for both the student and teacher.
         max_length (`int` or `None`, *optional*, defaults to `1024`):
             Maximum total sequence length (prompt + completion) for tokenization and truncation.
 
@@ -66,9 +65,9 @@ class IWOPDConfig(_BaseConfig):
             Stabilizer used when normalizing IW-OPD prefix weights.
         reverse_kl_top_1_mode (`str`, *optional*, defaults to `"sampled"`):
             Selection rule for the reverse-KL top-1 token when `beta > 0` and `loss_top_k == 1`. `"sampled"` uses the
-            actual completion token in the batch. `"argmax"` uses the student's highest-probability token. This
-            setting does not affect the forward-KL support, which always uses the teacher's top-1 token. Ignored when
-            `beta == 0` or `loss_top_k != 1`.
+            actual completion token in the batch. `"argmax"` uses the student's highest-probability token. This setting
+            does not affect the forward-KL support, which always uses the teacher's top-1 token. Ignored when `beta ==
+            0` or `loss_top_k != 1`.
         max_completion_length (`int`, *optional*, defaults to `512`):
             Maximum number of tokens to generate per completion during on-policy generation.
         max_prompt_length (`int` or `None`, *optional*):
@@ -90,11 +89,12 @@ class IWOPDConfig(_BaseConfig):
             Whether to use an external vLLM teacher server instead of a local teacher model.
         teacher_model_server_url (`str` or `None`, *optional*):
             Base URL of a vLLM server hosting the teacher model (e.g., `"http://localhost:8000"`). When set, teacher
-            logprobs are fetched from the server instead of running a local forward pass when `use_teacher_server=True`.
+            logprobs are fetched from the server instead of running a local forward pass when
+            `use_teacher_server=True`.
         loss_top_k (`int`, *optional*, defaults to `1`):
             Number of top tokens to use when computing the JSD/KL loss. Both student and teacher distributions are
-            restricted to these K tokens and re-normalized before computing divergence. If 0, the full vocabulary
-            is used. For local teachers, the general support rule is teacher top-k for forward KL, student top-k for
+            restricted to these K tokens and re-normalized before computing divergence. If 0, the full vocabulary is
+            used. For local teachers, the general support rule is teacher top-k for forward KL, student top-k for
             reverse KL, and the union for mixed JSD. When `beta > 0` and `loss_top_k == 1`, the forward support still
             uses the teacher's top-1 token, while the reverse top-1 token is controlled by `reverse_kl_top_1_mode`.
             When `use_teacher_server=True`, the pure forward path (`beta=0`) requires this to be positive and uses the
