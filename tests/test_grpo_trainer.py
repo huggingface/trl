@@ -19,12 +19,11 @@ from collections.abc import Callable
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-import numpy as np
 import pytest
 import torch
 import transformers
 from accelerate.utils.memory import release_memory
-from datasets import Dataset, DatasetDict, Image, IterableDatasetDict, load_dataset
+from datasets import Dataset, DatasetDict, IterableDatasetDict, load_dataset
 from packaging.version import Version
 from transformers import (
     AutoModelForCausalLM,
@@ -44,7 +43,6 @@ from .testing_utils import (
     TrlTestCase,
     is_ampere_or_newer,
     require_bitsandbytes,
-    require_kernels,
     require_liger_kernel,
     require_peft,
     require_response_parsing,
@@ -57,7 +55,7 @@ from .testing_utils import (
 
 if is_peft_available():
     import peft
-    from peft import LoraConfig, PeftModel, PromptTuningConfig, get_peft_model
+    from peft import LoraConfig, PromptTuningConfig, get_peft_model
     from peft.utils import TaskType
 
 
@@ -795,6 +793,52 @@ class TestGRPOTrainer(TrlTestCase):
             if n in base_param_names:  # We expect the base model params to be the same
                 torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed.")
             elif "base_layer" not in n:  # We expect the peft params to be different (except for the base layer)
+                assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @require_peft
+    @require_bitsandbytes
+    def test_train_peft_and_quantization(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            report_to="none",
+        )
+        quantization_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_use_double_quant=True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_compute_dtype=torch.bfloat16,
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",  # identifier, so that the trainer quantizes it
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+            quantization_config=quantization_config,
+            peft_config=LoraConfig(),
+        )
+
+        # Check that the trainer applied the quantization config when loading the model
+        assert trainer.model.base_model.model.is_loaded_in_4bit
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the peft params have changed, and that they are cast to bfloat16, as recommended by the QLoRA
+        # paper. The base model params are not checked: bitsandbytes casts the biases of a Linear4bit in-place during
+        # the forward pass, so some of them change in a way that is unrelated to training.
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            if "lora" in n:  # We expect the peft params to be different
+                assert param.dtype == torch.bfloat16, f"Parameter {n} is not in bfloat16."
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @require_peft
@@ -4098,6 +4142,63 @@ class TestGRPOTrainerVLM(TrlTestCase):
             "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
         ],
     )
+    @require_peft
+    @require_bitsandbytes
+    def test_train_vlm_peft_and_quantization(self, model_id):
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
+
+        def reward_func(completions, **kwargs):
+            """Reward function that rewards longer completions."""
+            return [float(len(completion[0]["content"])) for completion in completions]
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=2,  # VLM training is memory intensive, reduce batch size to avoid OOM
+            num_generations=2,  # VLM training is memory intensive, reduce num_generations to avoid OOM
+            # note: num_generations=2 is only suitable for CI testing; production training should use more generations
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            report_to="none",
+        )
+        quantization_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_use_double_quant=True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_compute_dtype=torch.bfloat16,
+        )
+        trainer = GRPOTrainer(
+            model=model_id,  # pass the model as an identifier, so that the trainer applies the quantization config
+            reward_funcs=reward_func,
+            args=training_args,
+            train_dataset=dataset,
+            quantization_config=quantization_config,
+            peft_config=LoraConfig(target_modules=["q_proj", "v_proj"]),
+        )
+
+        # Check that the trainer applied the quantization config when loading the model
+        assert trainer.model.base_model.model.is_loaded_in_4bit
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the peft params have changed, and that they are cast to bfloat16, as recommended by the QLoRA
+        # paper. The base model params are not checked: bitsandbytes casts the biases of a Linear4bit in-place during
+        # the forward pass, so some of them change in a way that is unrelated to training.
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            if "lora" in n:  # We expect the peft params to be different
+                assert param.dtype == torch.bfloat16, f"Parameter {n} is not in bfloat16."
+                assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+        ],
+    )
     def test_train_vlm_and_importance_sampling(self, model_id):
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
@@ -4696,136 +4797,6 @@ class TestGRPOTrainerSlow(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
-
-        release_memory(model, trainer)
-
-    @pytest.mark.parametrize(
-        "model_name",
-        [
-            "HuggingFaceTB/SmolVLM-Instruct",  # Only test the smaller model to avoid OOM
-        ],
-    )
-    @pytest.mark.skipif(
-        not is_ampere_or_newer() and torch_device != "xpu",
-        reason="Flash Attention 2 requires Ampere or newer GPU, or XPU",
-    )
-    @pytest.mark.xfail(
-        reason="kernels-community/flash-attn2 is currently unusable for training: no build variant for torch 2.13 "
-        "(https://github.com/huggingface/kernels-community/issues/1082), and the v3 stable-ABI build raises in the "
-        "backward pass for GQA models (https://github.com/huggingface/kernels-community/issues/1085)",
-    )
-    @require_kernels
-    @require_bitsandbytes
-    @require_peft
-    def test_vlm_training(self, model_name):
-        """
-        Test VLM training with aggressive memory optimization.
-
-        This test uses multiple memory reduction techniques:
-        - 4-bit quantization with double quantization
-        - LoRA with very low rank (r=4)
-        - Minimal batch size (1) with gradient accumulation
-        - Small images (64x64 instead of 224x224)
-        - Short sequences (max_completion_length=8)
-        - Only 4 training samples
-        - Only 1 training step
-        - Gradient checkpointing and bfloat16
-        """
-
-        # Create processor once outside the data generator
-        processor = AutoProcessor.from_pretrained(model_name, use_fast=True, padding_side="left")
-        prompt = [{"role": "user", "content": "What is in the image?"}]
-
-        dataset = Dataset.from_list(
-            [
-                {
-                    "prompt": prompt,
-                    "image": np.random.uniform(low=0.0, high=255.0, size=(64, 64, 3)).astype(np.uint8),
-                }
-                for _ in range(4)
-            ],
-        ).cast_column("image", Image())
-        # reduce memory requirements as much as possible
-        quantization_config = BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_compute_dtype="bfloat16",
-            bnb_4bit_quant_type="nf4",
-            bnb_4bit_use_double_quant=True,
-            bnb_4bit_quant_storage="bfloat16",
-        )
-        model = AutoModelForImageTextToText.from_pretrained(
-            model_name,
-            attn_implementation="kernels-community/flash-attn2",
-            dtype="bfloat16",
-            quantization_config=quantization_config,
-        )
-
-        def reward_func(prompts, completions, **kwargs):
-            # Use hash-based reward to ensure different completions get different rewards,
-            # avoiding zero-std advantages which would result in zero loss and no parameter updates.
-            return [float(hash(c[0]["content"]) % 100) for c in completions]
-
-        training_args = GRPOConfig(
-            output_dir=self.tmp_dir,
-            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
-            per_device_train_batch_size=1,  # Minimal batch size
-            gradient_accumulation_steps=2,  # Maintain effective batch size
-            num_generations=2,
-            max_completion_length=8,  # Much shorter completions
-            bf16=True,  # Use bfloat16 precision
-            max_steps=1,  # Only do 1 training step to save time and memory
-            report_to="none",
-            logging_strategy="no",
-        )
-        lora_config = LoraConfig(
-            task_type="CAUSAL_LM",
-            r=4,  # Much lower rank for minimal memory
-            lora_alpha=8,  # Reduced alpha proportionally
-            lora_dropout=0.1,
-            target_modules=["q_proj", "v_proj"],  # Minimal target modules
-            # For VLM models, we typically want to freeze the vision encoder
-            # and only adapt the language model parameters
-            modules_to_save=None,
-        )
-
-        try:
-            trainer = GRPOTrainer(
-                model=model,
-                processing_class=processor,
-                reward_funcs=[reward_func],
-                args=training_args,
-                train_dataset=dataset,
-                peft_config=lora_config,
-            )
-
-            assert isinstance(trainer.model, PeftModel)
-
-            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
-
-            trainer.train()
-
-            assert trainer.state.log_history[-1]["train_loss"] is not None
-
-            # Check that LoRA parameters have changed
-            # For VLM models, we're more permissive about which parameters can change
-            lora_params_changed = False
-            for n, param in previous_trainable_params.items():
-                new_param = trainer.model.get_parameter(n)
-                if "lora" in n.lower():  # LoRA parameters should change
-                    if not torch.equal(param, new_param):
-                        lora_params_changed = True
-
-            # At least some LoRA parameters should have changed during training
-            assert lora_params_changed, "No LoRA parameters were updated during training."
-
-        except torch.OutOfMemoryError as e:
-            pytest.skip(f"Skipping VLM training test due to insufficient GPU memory: {e}")
-        except Exception as e:
-            # Check for other memory-related errors
-            if any(keyword in str(e).lower() for keyword in ["memory", "cuda", "out of memory", "insufficient"]):
-                pytest.skip(f"Skipping VLM training test due to hardware constraints: {e}")
-            else:
-                raise
 
         release_memory(model, trainer)
 
