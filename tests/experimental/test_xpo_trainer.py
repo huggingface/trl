@@ -94,6 +94,58 @@ class TestXPOTrainer(TrlTestCase):
         else:
             assert trainer.eval_dataset is eval_dataset
 
+    def test_evaluate(self):
+        # `Trainer.prediction_step` never reaches `compute_loss` for this trainer: it gates on
+        # `has_labels or loss_without_labels`, and an evaluation batch carries only prompts, so evaluation used to
+        # fall through to calling the model without `input_ids`. See https://github.com/huggingface/trl/issues/2228.
+        training_args = XPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            per_device_eval_batch_size=2,
+            max_steps=1,
+            report_to="none",
+        )
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        trainer = XPOTrainer(
+            model=self.model,
+            ref_model=self.ref_model,
+            reward_funcs=self.reward_model,
+            args=training_args,
+            train_dataset=dataset,
+            eval_dataset=dataset,
+            processing_class=self.tokenizer,
+        )
+
+        assert "eval_loss" in trainer.evaluate()
+
+    def test_evaluate_does_not_pollute_training_stats(self):
+        # `self.stats` is averaged and cleared by the training logger, so appending evaluation values to it would
+        # shift the training metrics.
+        training_args = XPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            per_device_eval_batch_size=2,
+            max_steps=1,
+            report_to="none",
+        )
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        trainer = XPOTrainer(
+            model=self.model,
+            ref_model=self.ref_model,
+            reward_funcs=self.reward_model,
+            args=training_args,
+            train_dataset=dataset,
+            eval_dataset=dataset,
+            processing_class=self.tokenizer,
+        )
+        lengths = {key: len(value) for key, value in trainer.stats.items()}
+
+        trainer.evaluate()
+
+        assert {key: len(value) for key, value in trainer.stats.items()} == lengths
+
     @require_peft
     def test_train_with_peft(self):
         lora_config = LoraConfig(r=16, lora_alpha=32, lora_dropout=0.05, bias="none", task_type="CAUSAL_LM")

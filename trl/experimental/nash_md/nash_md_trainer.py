@@ -442,11 +442,9 @@ class NashMDTrainer(OnlineDPOTrainer):
         self.stats["beta"].append(self.beta)
         self.stats["mixture_coef"].append(self.mixture_coef)
 
-    def training_step(
-        self, model: nn.Module, inputs: dict[str, torch.Tensor | Any], num_items_in_batch: int | None = None
+    def _compute_loss(
+        self, model: nn.Module, inputs: dict[str, torch.Tensor | Any], log_stats: bool = True
     ) -> torch.Tensor:
-        model.train()
-
         # Apply chat template and tokenize the input
         batch_size = len(next(iter(inputs.values())))
         prompts = inputs["prompt"]
@@ -483,18 +481,28 @@ class NashMDTrainer(OnlineDPOTrainer):
         loss, score, kl_div = self._compute_losses(model_logprobs_model_data, ref_logprobs_model_data, probability)
 
         # Log everything
-        self._log_statistics(
-            model_data,
-            mixture_data,
-            model_logprobs_model_data.detach(),
-            ref_logprobs_model_data,
-            probability,
-            score.detach(),
-            kl_div.detach(),
-            context_length,
-            model_scores,
-            mixture_scores,
-        )
+        if log_stats:
+            self._log_statistics(
+                model_data,
+                mixture_data,
+                model_logprobs_model_data.detach(),
+                ref_logprobs_model_data,
+                probability,
+                score.detach(),
+                kl_div.detach(),
+                context_length,
+                model_scores,
+                mixture_scores,
+            )
+
+        return loss
+
+    def training_step(
+        self, model: nn.Module, inputs: dict[str, torch.Tensor | Any], num_items_in_batch: int | None = None
+    ) -> torch.Tensor:
+        model.train()
+
+        loss = self._compute_loss(model, inputs)
 
         if (
             self.args.torch_empty_cache_steps is not None
@@ -513,3 +521,20 @@ class NashMDTrainer(OnlineDPOTrainer):
         self.accelerator.backward(loss, **kwargs)
 
         return loss.detach() / self.args.gradient_accumulation_steps
+
+    def prediction_step(
+        self,
+        model: nn.Module,
+        inputs: dict[str, torch.Tensor | Any],
+        prediction_loss_only: bool,
+        ignore_keys: list[str] | None = None,
+    ) -> tuple[torch.Tensor | None, torch.Tensor | None, torch.Tensor | None]:
+        # `Trainer.prediction_step` never reaches `compute_loss` for this trainer: it gates on
+        # `has_labels or loss_without_labels`, and an evaluation batch carries only prompts, so both are False
+        # and the default path calls the model without `input_ids`. Compute the loss the way training does
+        # instead, with statistics off: `self.stats` is averaged and cleared by the training logger, so
+        # appending evaluation values to it would shift the training metrics. See
+        # https://github.com/huggingface/trl/issues/2228.
+        with torch.no_grad():
+            loss = self._compute_loss(model, inputs, log_stats=False)
+        return loss.detach(), None, None
