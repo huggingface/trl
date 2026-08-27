@@ -71,6 +71,27 @@ Because the weights change while a rollout is being generated, a long completion
 
 What remains is that the KV cache of a rollout's prefix was computed with older weights, while the training forward recomputes it with current ones. Measured on Qwen3-0.6B at `learning_rate=1e-5`, the resulting logprob gap peaks at about 0.16 nats on a rollout's first tokens (an importance ratio of 1.17, inside the default clip range) and falls to the kernel-numerics floor by token 50. It grows with the learning rate, the completion length, and `generation_ahead`.
 
+## Scaling
+
+Every process holds a full copy of the weights and runs its own generation engine, so scaling is
+data parallel: `accelerate launch --num_processes N`. Tensor parallelism is not supported. The
+engine decodes in a background thread, and under tensor parallelism its collectives desynchronize
+from the ones the training step issues, which hangs the run. Giving each a separate process group
+is necessary but not sufficient; supporting this needs continuous batching to treat a concurrent
+trainer as a first-class case.
+
+Since generation runs behind the training step rather than in series with it, the throughput lever
+is the batch, not the engine. Measured on one H100 with Qwen3-0.6B, GSM8K, 512-token completions:
+
+| samples per step | steps/s | completion tokens/s |
+|---|---|---|
+| 16 | 0.95 | 2,800 |
+| 32 | 0.71 | 4,400 |
+| 64 | 0.53 | 6,000 |
+
+`generation_wait_s` stayed around a microsecond in all three, so the engine was never the
+bottleneck; raising `generation_ahead` does not help, raising the batch does.
+
 ## Debugging
 
 The generation engine runs in a background thread that is not a daemon, so a crash in the
