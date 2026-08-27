@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import atexit
 from collections import defaultdict, deque
 from collections.abc import Callable
 from typing import Any
@@ -189,9 +190,11 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             )
 
         # Zero-sync generation state: the continuous batching manager is created lazily on the first generation (the
-        # model must be on its final device first), and the depth-1 pipeline holds the previously submitted batch.
+        # model must be on its final device first). The pipeline holds the submitted batches; results arrive
+        # interleaved across in-flight batches and are parked in `_results` until their batch is trained on.
         self._manager = None
         self._pipeline = deque()
+        self._results = {}
 
         # Metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
@@ -248,6 +251,9 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         )
         self._manager.warmup()
         self._manager.start()
+        # The background thread is not a daemon: without an explicit stop the process never exits, including after an
+        # exception in the training loop.
+        atexit.register(self._manager.stop, block=False)
 
     def _submit(self, inputs: list[dict[str, Any]]) -> dict[str, Any]:
         # Tokenize the batch's prompts (re-tokenizing the whole conversation through the chat template) and submit one
@@ -269,22 +275,21 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         return {"inputs": inputs, "prompts": prompts, "prompt_ids": prompt_ids, "request_ids": request_ids}
 
     def _collect(self, batch: dict[str, Any]) -> tuple[list[list[int]], list[list[float]]]:
-        # Wait for every request of the batch; the manager keeps decoding the other in-flight batches meanwhile. A
-        # dead background thread never raises from `get_result` (it returns None forever, transformers#48334), so
-        # poll `fatal_error` to fail fast instead of spinning.
-        results = {}
-        while len(results) < len(batch["request_ids"]):
+        # Wait for every request of the batch; the manager keeps decoding the other in-flight batches meanwhile, and
+        # their results arrive interleaved, so completed requests are parked in `_results` until their batch is
+        # consumed. A dead background thread never raises from `get_result` (it returns None forever,
+        # transformers#48334), so poll `fatal_error` to fail fast instead of spinning.
+        while any(rid not in self._results for rid in batch["request_ids"]):
             result = self._manager.get_result(timeout=1.0)
             if result is None:
                 fatal_error = self._manager.background_thread_status.fatal_error
                 if fatal_error is not None:
                     raise RuntimeError("The continuous batching background thread died.") from fatal_error
                 continue
-            results[result.request_id] = result
-        completion_ids = [list(results[rid].generated_tokens) for rid in batch["request_ids"]]
-        logprobs = [
-            list(results[rid].logprobs[: len(results[rid].generated_tokens)]) for rid in batch["request_ids"]
-        ]
+            self._results[result.request_id] = result
+        results = [self._results.pop(rid) for rid in batch["request_ids"]]
+        completion_ids = [list(result.generated_tokens) for result in results]
+        logprobs = [list(result.logprobs[: len(result.generated_tokens)]) for result in results]
         return completion_ids, logprobs
 
     def _prepare_inputs(self, generation_batch: list[dict[str, Any]]) -> dict[str, torch.Tensor | Any]:
