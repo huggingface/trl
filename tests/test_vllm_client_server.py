@@ -17,17 +17,20 @@ import subprocess
 from types import SimpleNamespace
 
 import pytest
-from transformers import AutoModelForCausalLM, AutoProcessor, AutoTokenizer
+import torch
+from torch import nn
+from transformers import AutoModelForCausalLM, AutoProcessor, AutoTokenizer, is_bitsandbytes_available
 from transformers.testing_utils import torch_device
 
 from trl.generation.vllm_client import VLLMClient, parse_logprobs
-from trl.generation.vllm_generation import extract_logprobs
+from trl.generation.vllm_generation import _check_quantization_supported, _dense_param_data, extract_logprobs
 from trl.import_utils import is_vllm_available
 
 from .testing_utils import (
     TrlTestCase,
     kill_process,
     require_3_accelerators,
+    require_bitsandbytes,
     require_torch_multi_accelerator,
     require_vision,
     require_vllm,
@@ -36,6 +39,9 @@ from .testing_utils import (
 
 if is_vllm_available():
     from vllm import LLM, SamplingParams
+
+if is_bitsandbytes_available():
+    import bitsandbytes as bnb
 
 
 class TestParseLogprobs(TrlTestCase):
@@ -125,6 +131,42 @@ class TestExtractLogprobs(TrlTestCase):
 
         assert all_logprobs is None
         assert all_token_ids is None
+
+
+@require_bitsandbytes
+class TestQuantizedWeightSync(TrlTestCase):
+    # Pure checks on the two helpers that guard a quantized base, so they run without an accelerator or a vLLM engine.
+
+    def test_dense_param_data_passes_through_an_unquantized_parameter(self):
+        # The helper only intercepts 4-bit parameters; anything else must reach vLLM byte for byte.
+        param = nn.Parameter(torch.randn(4, 8))
+        out = _dense_param_data(param)
+        assert out.data_ptr() == param.data.data_ptr()
+        assert out.shape == (4, 8)
+
+    @pytest.mark.parametrize(
+        ("module_factory", "fsdp_version", "expected_message"),
+        [
+            # A 4-bit base under FSDP2 cannot be dequantized: FSDP2 reads weights from `state_dict()`, which returns
+            # plain tensors, so the `quant_state` holding the scales is already gone. Refuse it at build time.
+            (lambda: bnb.nn.Linear4bit(8, 8), 2, "4-bit quantized base under FSDP2"),
+            # vLLM has never supported in-flight 8-bit, independent of the sharding strategy.
+            (lambda: bnb.nn.Linear8bitLt(8, 8), 0, "8-bit quantization"),
+            (lambda: bnb.nn.Linear8bitLt(8, 8), 2, "8-bit quantization"),
+            # Negative controls: every other combination reaches the dequantizing push and must be accepted.
+            (lambda: bnb.nn.Linear4bit(8, 8), 1, None),  # FSDP1 gathers through `summon_full_params`
+            (lambda: bnb.nn.Linear4bit(8, 8), 0, None),  # no FSDP at all
+            (lambda: nn.Linear(8, 8), 2, None),  # dense base under FSDP2
+            (lambda: nn.Linear(8, 8), 0, None),  # dense base, no FSDP
+        ],
+    )
+    def test_check_quantization_supported(self, module_factory, fsdp_version, expected_message):
+        model = nn.Sequential(module_factory())
+        if expected_message is None:
+            _check_quantization_supported(model, fsdp_version)  # must not raise
+        else:
+            with pytest.raises(ValueError, match=expected_message):
+                _check_quantization_supported(model, fsdp_version)
 
 
 @pytest.mark.slow
