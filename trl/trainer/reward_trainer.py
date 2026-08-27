@@ -602,10 +602,10 @@ class RewardTrainer(_BaseTrainer):
         else:
             self.maybe_activation_offload_context = contextlib.nullcontext()
 
-        # Per-mode running sums/extrema of on-device metric accumulators. `compute_loss` only adds local tensors
-        # here (no collective, no host sync); `log()` aggregates them across ranks in one collective per kind and
-        # resets them.
-        self._metric_sums = {"train": defaultdict(int), "eval": defaultdict(int)}
+        # `_metric_stats` entries are running `(total, count)` pairs and `_metric_mins`/`_metric_maxs` are running
+        # extrema, all on-device: `compute_loss` only adds local tensors here (no collective, no host sync), and
+        # `log()` aggregates them across ranks in one collective per kind.
+        self._metric_stats = {"train": defaultdict(int), "eval": defaultdict(int)}
         self._metric_mins = {"train": {}, "eval": {}}
         self._metric_maxs = {"train": {}, "eval": {}}
         self._total_train_tokens = 0
@@ -767,26 +767,28 @@ class RewardTrainer(_BaseTrainer):
             loss += self.args.center_rewards_coefficient * torch.mean((rewards_chosen + rewards_rejected) ** 2)
 
         if mode == "train":
-            self._metric_sums[mode]["num_tokens_in_batch"] += inputs["attention_mask"].sum()
+            num_tokens_in_batch = inputs["attention_mask"].sum()
+            self._metric_stats[mode]["num_tokens"] += torch.stack(
+                [num_tokens_in_batch, torch.ones_like(num_tokens_in_batch)]
+            )
 
         # Compute min, mean, max, accuracy and margin
         with torch.no_grad():
-            sums = self._metric_sums[mode]
+            stats = self._metric_stats[mode]
             mins, maxs = self._metric_mins[mode], self._metric_maxs[mode]
             rewards = outputs.logits.detach()
             num_pairs = torch.tensor(float(rewards_chosen.numel()), device=rewards.device)
-            sums["mean_reward_sum"] += rewards.sum()
-            sums["mean_reward_count"] += torch.tensor(float(rewards.numel()), device=rewards.device)
+            stats["mean_reward"] += torch.stack(
+                [rewards.sum(), torch.tensor(float(rewards.numel()), device=rewards.device)]
+            )
             min_reward = rewards.min()
-            mins["min_reward"] = torch.minimum(mins.setdefault("min_reward", min_reward), min_reward)
+            mins["min_reward"] = torch.minimum(mins.get("min_reward", min_reward), min_reward)
             max_reward = rewards.max()
-            maxs["max_reward"] = torch.maximum(maxs.setdefault("max_reward", max_reward), max_reward)
+            maxs["max_reward"] = torch.maximum(maxs.get("max_reward", max_reward), max_reward)
 
-            sums["accuracy_sum"] += (rewards_chosen > rewards_rejected).float().sum()
-            sums["accuracy_count"] += num_pairs
+            stats["accuracy"] += torch.stack([(rewards_chosen > rewards_rejected).float().sum(), num_pairs])
 
-            sums["margin_sum"] += (rewards_chosen - rewards_rejected).sum()
-            sums["margin_count"] += num_pairs
+            stats["margin"] += torch.stack([(rewards_chosen - rewards_rejected).sum(), num_pairs])
 
         return (loss, outputs) if return_outputs else loss
 
@@ -798,25 +800,19 @@ class RewardTrainer(_BaseTrainer):
     def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
         mode = "train" if self.model.training else "eval"
 
-        # Metrics are accumulated in `compute_loss` as per-rank running sums. Aggregate them across ranks here, in
-        # a single collective per logging window, then compute each `<name>` metric as `<name>_sum / <name>_count`,
-        # i.e. weighted by whatever the count counts (tokens, batches). Keys are sorted so that every rank stacks
-        # them in the same order.
+        # Sum every `(total, count)` pair across ranks in a single collective, then divide. Keys are sorted so that
+        # all ranks stack them in the same order.
         metrics = {}
-        sums = self._metric_sums[mode]
-        if sums:
-            keys = sorted(sums)
-            values = torch.stack([sums[key].double() for key in keys])
+        stats = self._metric_stats[mode]
+        if stats:
+            keys = sorted(stats)
+            values = torch.stack([stats[key].double() for key in keys])
             totals = dict(zip(keys, self.accelerator.reduce(values, reduction="sum").tolist(), strict=True))
-            for key in keys:
-                if key.endswith("_sum"):
-                    name = key.removesuffix("_sum")
-                    count = totals[name + "_count"]
-                    metrics[name] = totals[key] / count if count > 0 else 0.0
-            # `num_tokens` advances only when a train-mode log folds in the pending sums, so an eval log between two
-            # train logs can lag by up to one logging window.
-            if mode == "train" and "num_tokens_in_batch" in totals:
-                self._total_train_tokens += int(totals["num_tokens_in_batch"])
+            metrics = {key: total / count if count > 0 else 0.0 for key, (total, count) in totals.items()}
+            # `num_tokens` is a running total, so it takes the pair's total instead of the ratio. It only advances
+            # on a train-mode log, so an eval log in between can lag by up to one logging window.
+            if mode == "train" and "num_tokens" in totals:
+                self._total_train_tokens += int(totals["num_tokens"][0])
             metrics["num_tokens"] = self._total_train_tokens
         # Running extrema take the min/max across ranks, one collective each (min(x) is computed as -max(-x)). A
         # rank with no data contributed +/-inf sentinels; a window with no data at all logs None.
@@ -835,7 +831,7 @@ class RewardTrainer(_BaseTrainer):
 
         logs.update(metrics)
         super().log(logs, start_time)
-        self._metric_sums[mode].clear()
+        self._metric_stats[mode].clear()
         self._metric_mins[mode].clear()
         self._metric_maxs[mode].clear()
 

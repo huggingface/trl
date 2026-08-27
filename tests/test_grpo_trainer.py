@@ -1637,12 +1637,8 @@ class TestGRPOTrainer(TrlTestCase):
 
         def record_metrics(inputs):
             outputs = original_score(inputs)
-            sums = trainer._metric_sums["train"]
-            mean = (
-                sums["sampling/sampling_logp_difference/mean_sum"]
-                / sums["sampling/sampling_logp_difference/mean_count"]
-            )
-            recorded_metrics.append(("sampling/sampling_logp_difference/mean", mean.item()))
+            total, count = trainer._metric_stats["train"]["sampling/sampling_logp_difference/mean"]
+            recorded_metrics.append(("sampling/sampling_logp_difference/mean", (total / count).item()))
             max_delta = trainer._metric_maxs["train"]["sampling/sampling_logp_difference/max"]
             recorded_metrics.append(("sampling/sampling_logp_difference/max", max_delta.item()))
             return outputs

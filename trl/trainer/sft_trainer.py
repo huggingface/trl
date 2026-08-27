@@ -1414,10 +1414,10 @@ class SFTTrainer(_BaseTrainer):
             text_config.output_router_logits = self.aux_loss_enabled
             text_config.router_aux_loss_coef = self.args.router_aux_loss_coef
 
-        # Initialize the metrics
-        # Per-mode running sums of on-device metric accumulators. `compute_loss` only adds local tensors here (no
-        # collective, no host sync); `log()` reduces them across ranks in a single collective and resets them.
-        self._metric_sums = {"train": defaultdict(int), "eval": defaultdict(int)}
+        # Initialize the metrics. Each entry is a running `(total, count)` pair of on-device tensors, summed in
+        # `compute_loss` with no collective and no host sync. `log()` reduces the pairs across ranks in a single
+        # collective and divides, so every metric is weighted by whatever its count counts (tokens, batches).
+        self._metric_stats = {"train": defaultdict(int), "eval": defaultdict(int)}
         self._total_train_tokens = 0
 
         # Add tags to the model
@@ -1806,8 +1806,8 @@ class SFTTrainer(_BaseTrainer):
             # PEFT (PromptTuning, P-Tuning) prepends `-100`-padded virtual tokens before delegating into the patched
             # forward, so the valid-token count over the padded labels can differ from the un-padded `labels[..., 1:]`
             # count by up to one per sequence; using the patched output keeps numerator and denominator aligned.
-            self._metric_sums[mode]["entropy_sum"] += outputs.entropy_sum.detach()
-            self._metric_sums[mode]["entropy_count"] += outputs.num_valid_tokens.detach()
+            num_valid = outputs.num_valid_tokens.detach().float()
+            self._metric_stats[mode]["entropy"] += torch.stack([outputs.entropy_sum.detach(), num_valid])
         elif not self.args.use_liger_kernel:  # liger doesn't return logits
             with torch.no_grad():
                 if "shift_labels" in inputs:
@@ -1833,10 +1833,10 @@ class SFTTrainer(_BaseTrainer):
                 total_tokens = mask.sum()
                 correct_predictions = (predictions == shift_labels) & mask
                 correct_tokens = correct_predictions.sum()
-            self._metric_sums[mode]["entropy_sum"] += entropy_sum
-            self._metric_sums[mode]["entropy_count"] += total_tokens
-            self._metric_sums[mode]["mean_token_accuracy_sum"] += correct_tokens
-            self._metric_sums[mode]["mean_token_accuracy_count"] += total_tokens
+            self._metric_stats[mode]["entropy"] += torch.stack([entropy_sum, total_tokens.float()])
+            self._metric_stats[mode]["mean_token_accuracy"] += torch.stack(
+                [correct_tokens.float(), total_tokens.float()]
+            )
 
         if mode == "train":
             # When using padding-free, the attention_mask is not present in the inputs, instead we have cu_seq_lens_q,
@@ -1844,18 +1844,27 @@ class SFTTrainer(_BaseTrainer):
             if "attention_mask" in inputs:
                 num_tokens_in_batch = inputs["attention_mask"].sum()
             elif "position_ids" in inputs:
-                num_tokens_in_batch = torch.tensor(inputs["position_ids"].size(1), device=inputs["position_ids"].device)
+                num_tokens_in_batch = torch.tensor(
+                    inputs["position_ids"].size(1), device=inputs["position_ids"].device
+                )
             else:
                 raise ValueError("Expected 'attention_mask' or 'position_ids' in inputs.")
-            self._metric_sums[mode]["num_tokens_in_batch"] += num_tokens_in_batch
+            # `num_tokens` is a running total rather than a window average, so `log()` uses the pair's total and
+            # ignores its count.
+            self._metric_stats[mode]["num_tokens"] += torch.stack(
+                [num_tokens_in_batch, torch.ones_like(num_tokens_in_batch)]
+            )
 
         if self.args.loss_type == "chunked_nll":
-            self._metric_sums[mode]["mean_token_accuracy_sum"] += outputs.num_correct_tokens.detach()
-            self._metric_sums[mode]["mean_token_accuracy_count"] += outputs.num_valid_tokens.detach()
+            self._metric_stats[mode]["mean_token_accuracy"] += torch.stack(
+                [outputs.num_correct_tokens.detach(), num_valid]
+            )
         elif self.args.use_liger_kernel:
             if hasattr(outputs, "token_accuracy") and outputs.token_accuracy is not None:
-                self._metric_sums[mode]["mean_token_accuracy_sum"] += outputs.token_accuracy.detach()
-                self._metric_sums[mode]["mean_token_accuracy_count"] += torch.ones_like(outputs.token_accuracy)
+                token_accuracy = outputs.token_accuracy.detach()
+                self._metric_stats[mode]["mean_token_accuracy"] += torch.stack(
+                    [token_accuracy, torch.ones_like(token_accuracy)]
+                )
             else:
                 warnings.warn(
                     "liger-kernel did not return token_accuracy when requested. The mean_token_accuracy metric will "
@@ -1864,8 +1873,8 @@ class SFTTrainer(_BaseTrainer):
                 )
         # Log auxiliary loss if enabled (applies to both Liger and non-Liger)
         if self.aux_loss_enabled:
-            self._metric_sums[mode]["aux_loss_sum"] += outputs.aux_loss.detach()
-            self._metric_sums[mode]["aux_loss_count"] += torch.ones_like(outputs.aux_loss)
+            aux_loss = outputs.aux_loss.detach()
+            self._metric_stats[mode]["aux_loss"] += torch.stack([aux_loss, torch.ones_like(aux_loss)])
 
         return (loss, outputs) if return_outputs else loss
 
@@ -1882,25 +1891,19 @@ class SFTTrainer(_BaseTrainer):
     def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
         mode = "train" if self.model.training else "eval"
 
-        # Metrics are accumulated in `compute_loss` as per-rank running sums. Aggregate them across ranks here, in
-        # a single collective per logging window, then compute each `<name>` metric as `<name>_sum / <name>_count`,
-        # i.e. weighted by whatever the count counts (tokens, batches). Keys are sorted so that every rank stacks
-        # them in the same order.
+        # Sum every `(total, count)` pair across ranks in a single collective, then divide. Keys are sorted so that
+        # all ranks stack them in the same order.
         metrics = {}
-        sums = self._metric_sums[mode]
-        if sums:
-            keys = sorted(sums)
-            values = torch.stack([sums[key].double() for key in keys])
+        stats = self._metric_stats[mode]
+        if stats:
+            keys = sorted(stats)
+            values = torch.stack([stats[key].double() for key in keys])
             totals = dict(zip(keys, self.accelerator.reduce(values, reduction="sum").tolist(), strict=True))
-            for key in keys:
-                if key.endswith("_sum"):
-                    name = key.removesuffix("_sum")
-                    count = totals[name + "_count"]
-                    metrics[name] = totals[key] / count if count > 0 else 0.0
-            # `num_tokens` advances only when a train-mode log folds in the pending sums, so an eval log between two
-            # train logs can lag by up to one logging window.
-            if mode == "train" and "num_tokens_in_batch" in totals:
-                self._total_train_tokens += int(totals["num_tokens_in_batch"])
+            metrics = {key: total / count if count > 0 else 0.0 for key, (total, count) in totals.items()}
+            # `num_tokens` is a running total, so it takes the pair's total instead of the ratio. It only advances
+            # on a train-mode log, so an eval log in between can lag by up to one logging window.
+            if mode == "train" and "num_tokens" in totals:
+                self._total_train_tokens += int(totals["num_tokens"][0])
             metrics["num_tokens"] = self._total_train_tokens
 
         # This method can be called both in training and evaluation. When called in evaluation, the keys in `logs`
@@ -1910,7 +1913,7 @@ class SFTTrainer(_BaseTrainer):
 
         logs.update(metrics)
         super().log(logs, start_time)
-        self._metric_sums[mode].clear()
+        self._metric_stats[mode].clear()
 
     # Ensure the model card is saved along with the checkpoint
     def _save_checkpoint(self, model, trial):

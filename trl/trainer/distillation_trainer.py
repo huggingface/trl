@@ -826,9 +826,10 @@ class DistillationTrainer(_BaseTrainer):
 
         # Metrics & Logging
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
-        # Per-mode running sums of on-device metric accumulators. `compute_loss` only adds local tensors here (no
-        # collective, no host sync); `log()` reduces them across ranks in a single collective and resets them.
-        self._metric_sums = {"train": defaultdict(int), "eval": defaultdict(int)}
+        # Each entry is a running `(total, count)` pair of on-device tensors, summed in `compute_loss` with no
+        # collective and no host sync. `log()` reduces the pairs across ranks in a single collective and divides,
+        # so every metric is weighted by whatever its count counts (tokens, batches).
+        self._metric_stats = {"train": defaultdict(int), "eval": defaultdict(int)}
         self._total_train_tokens = 0
         self._current_train_step_time = 0.0
         self.log_completions = args.log_completions
@@ -1860,8 +1861,9 @@ class DistillationTrainer(_BaseTrainer):
         # forward. The Liger path produces no entropy, so it logs none. Mirrors `SFTTrainer.compute_loss`.
         if entropy_sum is not None:
             mode = "train" if self.model.training else "eval"
-            self._metric_sums[mode]["entropy_sum"] += entropy_sum.detach()
-            self._metric_sums[mode]["entropy_count"] += num_valid_tokens.detach()
+            self._metric_stats[mode]["entropy"] += torch.stack(
+                [entropy_sum.detach(), num_valid_tokens.detach().float()]
+            )
 
         return (loss, None) if return_outputs else loss
 
@@ -2020,20 +2022,14 @@ class DistillationTrainer(_BaseTrainer):
             valid = [v for v in val if not math.isnan(v)]
             metrics[key] = sum(valid) / len(valid) if valid else None
 
-        # Metrics are accumulated in `compute_loss` as per-rank running sums. Aggregate them across ranks here, in
-        # a single collective per logging window, then compute each `<name>` metric as `<name>_sum / <name>_count`,
-        # i.e. weighted by whatever the count counts (tokens, batches). Keys are sorted so that every rank stacks
-        # them in the same order.
-        sums = self._metric_sums[mode]
-        if sums:
-            keys = sorted(sums)
-            values = torch.stack([sums[key].double() for key in keys])
+        # Sum every `(total, count)` pair across ranks in a single collective, then divide. Keys are sorted so that
+        # all ranks stack them in the same order.
+        stats = self._metric_stats[mode]
+        if stats:
+            keys = sorted(stats)
+            values = torch.stack([stats[key].double() for key in keys])
             totals = dict(zip(keys, self.accelerator.reduce(values, reduction="sum").tolist(), strict=True))
-            for key in keys:
-                if key.endswith("_sum"):
-                    name = key.removesuffix("_sum")
-                    count = totals[name + "_count"]
-                    metrics[name] = totals[key] / count if count > 0 else 0.0
+            metrics.update({key: total / count if count > 0 else 0.0 for key, (total, count) in totals.items()})
 
         # This method can be called both in training and evaluation. When called in evaluation, the keys in `logs`
         # start with "eval_". We need to add the prefix "eval_" to the keys in `metrics` to match the format.
@@ -2043,7 +2039,7 @@ class DistillationTrainer(_BaseTrainer):
         logs.update(metrics)
         super().log(logs, start_time)
         self._metrics[mode].clear()
-        self._metric_sums[mode].clear()
+        self._metric_stats[mode].clear()
 
         if self.accelerator.is_main_process and self.log_completions:
             if is_rich_available():

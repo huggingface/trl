@@ -624,10 +624,11 @@ class RLOOTrainer(_BaseTrainer):
 
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
-        # Per-mode running sums/extrema of on-device metric accumulators. They only receive local tensors (no
-        # collective, no host sync); `log()` aggregates them across ranks in one collective per kind and resets
-        # them. `_metrics` above keeps plain floats for values that are already identical on every rank.
-        self._metric_sums = {"train": defaultdict(int), "eval": defaultdict(int)}
+        # `_metric_stats` entries are running `(total, count)` pairs and `_metric_mins`/`_metric_maxs` are running
+        # extrema, all on-device: they only receive local tensors (no collective, no host sync), and `log()`
+        # aggregates them across ranks in one collective per kind. `_metrics` above keeps plain floats for values
+        # that are already identical on every rank.
+        self._metric_stats = {"train": defaultdict(int), "eval": defaultdict(int)}
         self._metric_mins = {"train": {}, "eval": {}}
         self._metric_maxs = {"train": {}, "eval": {}}
         self._total_train_tokens = 0
@@ -1621,8 +1622,9 @@ class RLOOTrainer(_BaseTrainer):
 
         # Calculate and log the mean KL divergence between current and reference model
         if self.beta != 0.0:
-            self._metric_sums[mode]["kl_sum"] += (per_token_kl * completion_mask).sum().detach()
-            self._metric_sums[mode]["kl_count"] += completion_mask.sum().float()
+            self._metric_stats[mode]["kl"] += torch.stack(
+                [(per_token_kl * completion_mask).sum().detach(), completion_mask.sum().float()]
+            )
 
         # Calculate mean reward per function, but only for samples where the function was applied (non-NaN values)
         for i, reward_func_name in enumerate(self.reward_func_names):
@@ -1656,8 +1658,8 @@ class RLOOTrainer(_BaseTrainer):
         for name in self._pending_metrics:
             values = self._pending_metrics[name]
             local_mean = sum(values) / len(values)
-            self._metric_sums[mode][f"{name}_sum"] += torch.tensor(local_mean, device=device)
-            self._metric_sums[mode][f"{name}_count"] += torch.ones((), device=device)
+            local_mean = torch.tensor(local_mean, device=device)
+            self._metric_stats[mode][name] += torch.stack([local_mean, torch.ones_like(local_mean)])
         self._pending_metrics.clear()
 
         if images is not None and self.log_multimodal:
@@ -1746,30 +1748,30 @@ class RLOOTrainer(_BaseTrainer):
         # RLOO returns an unscaled loss (the HF Trainer divides by gradient accumulation), so add the aux term unscaled
         if self.aux_loss_enabled:
             loss = loss + self.router_aux_loss_coef * aux_loss
-            self._metric_sums[mode]["aux_loss_sum"] += aux_loss.detach()
-            self._metric_sums[mode]["aux_loss_count"] += torch.ones_like(aux_loss)
+            detached_aux_loss = aux_loss.detach()
+            self._metric_stats[mode]["aux_loss"] += torch.stack(
+                [detached_aux_loss, torch.ones_like(detached_aux_loss)]
+            )
 
         # Entropy
-        self._metric_sums[mode]["entropy_sum"] += (entropies * completion_mask).sum().detach()
-        self._metric_sums[mode]["entropy_count"] += completion_mask.sum().float()
+        self._metric_stats[mode]["entropy"] += torch.stack(
+            [(entropies * completion_mask).sum().detach(), completion_mask.sum().float()]
+        )
 
         # Compute the clipped probability ratios
-        sums = self._metric_sums[mode]
+        stats = self._metric_stats[mode]
         mins, maxs = self._metric_mins[mode], self._metric_maxs[mode]
         is_low_clipped = (coef_1 < 1 - self.epsilon_low) & (advantages < 0)
         is_high_clipped = (coef_1 > 1 + self.epsilon_high) & (advantages > 0)
         is_region_clipped = is_low_clipped | is_high_clipped
         clip_count = torch.tensor(float(is_low_clipped.numel()), device=is_low_clipped.device)
-        sums["clip_ratio/low_mean_sum"] += is_low_clipped.float().sum()
-        sums["clip_ratio/low_mean_count"] += clip_count
+        stats["clip_ratio/low_mean"] += torch.stack([is_low_clipped.float().sum(), clip_count])
         low_min = is_low_clipped.float().min()
-        mins["clip_ratio/low_min"] = torch.minimum(mins.setdefault("clip_ratio/low_min", low_min), low_min)
-        sums["clip_ratio/high_mean_sum"] += is_high_clipped.float().sum()
-        sums["clip_ratio/high_mean_count"] += clip_count
+        mins["clip_ratio/low_min"] = torch.minimum(mins.get("clip_ratio/low_min", low_min), low_min)
+        stats["clip_ratio/high_mean"] += torch.stack([is_high_clipped.float().sum(), clip_count])
         high_max = is_high_clipped.float().max()
-        maxs["clip_ratio/high_max"] = torch.maximum(maxs.setdefault("clip_ratio/high_max", high_max), high_max)
-        sums["clip_ratio/region_mean_sum"] += is_region_clipped.float().sum()
-        sums["clip_ratio/region_mean_count"] += clip_count
+        maxs["clip_ratio/high_max"] = torch.maximum(maxs.get("clip_ratio/high_max", high_max), high_max)
+        stats["clip_ratio/region_mean"] += torch.stack([is_region_clipped.float().sum(), clip_count])
         return loss
 
     # During eval, Trainer calls prediction_step. If no labels are present in the inputs, it only runs forward and
@@ -1794,23 +1796,16 @@ class RLOOTrainer(_BaseTrainer):
             valid = [v for v in val if not math.isnan(v)]
             metrics[key] = sum(valid) / len(valid) if valid else None
 
-        # Metrics accumulated as per-rank running sums are aggregated across ranks here, in a single collective per
-        # logging window: each `<name>` metric is computed as `<name>_sum / <name>_count`, i.e. weighted by
-        # whatever the count counts (tokens, sequences, batches). Keys are sorted so that every rank stacks them in
-        # the same order.
-        sums = self._metric_sums[mode]
-        if sums:
-            keys = sorted(sums)
-            values = torch.stack([sums[key].double() for key in keys])
+        # Sum every `(total, count)` pair across ranks in a single collective, then divide. Keys are sorted so that
+        # all ranks stack them in the same order.
+        stats = self._metric_stats[mode]
+        if stats:
+            keys = sorted(stats)
+            values = torch.stack([stats[key].double() for key in keys])
             totals = dict(zip(keys, self.accelerator.reduce(values, reduction="sum").tolist(), strict=True))
-            for key in keys:
-                if key.endswith("_sum"):
-                    name = key.removesuffix("_sum")
-                    count = totals[name + "_count"]
-                    metrics[name] = totals[key] / count if count > 0 else 0.0
+            metrics.update({key: total / count if count > 0 else 0.0 for key, (total, count) in totals.items()})
         # Running extrema take the min/max across ranks, one collective each (min(x) is computed as -max(-x)). A
-        # rank with no data contributed +/-inf sentinels; a window with no data at all logs None, like the
-        # NaN-filtered metrics above.
+        # rank with no data contributed +/-inf sentinels; a window with no data at all logs None.
         for extrema, sign in ((self._metric_mins[mode], -1.0), (self._metric_maxs[mode], 1.0)):
             if extrema:
                 keys = sorted(extrema)
@@ -1827,7 +1822,7 @@ class RLOOTrainer(_BaseTrainer):
         logs.update(metrics)
         super().log(logs, start_time)
         self._metrics[mode].clear()
-        self._metric_sums[mode].clear()
+        self._metric_stats[mode].clear()
         self._metric_mins[mode].clear()
         self._metric_maxs[mode].clear()
 
