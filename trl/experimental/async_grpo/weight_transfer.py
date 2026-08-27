@@ -14,6 +14,7 @@
 
 import threading
 import time
+from collections import Counter
 
 from accelerate.logging import get_logger
 
@@ -47,6 +48,16 @@ class WeightTransferClient:
 
     def init_weight_transfer(self) -> None:
         self.vllm.wait_for_server_ready()
+        # Trainer and server precisions should agree: the precision gap between the two biases the importance ratio
+        # https://huggingface.co/papers/2510.26788
+        # https://huggingface.co/spaces/aminediroHF/trainer-generator-bf16-mismatch
+        train_dtype = Counter(self._weight_update_info["dtype_names"]).most_common(1)[0][0]
+        vllm_dtype = self.vllm.get_dtype().removeprefix("torch.")
+        if vllm_dtype != train_dtype:
+            logger.warning(
+                f"The vLLM server serves in {vllm_dtype} but the weights sent to it are {train_dtype}. Set `dtype` in "
+                f"`AsyncGRPOConfig` to '{vllm_dtype}', or start the server with `--dtype {train_dtype}`."
+            )
         inference_world_size = self.vllm.get_world_size()
         world_size = inference_world_size + 1
         master_address = get_ip()

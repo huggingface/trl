@@ -9,3 +9,16 @@ updates:
     groups:
       actions:
         patterns: ["*"]
+
+  # Actions pinned inside our local composite actions. The "/" directory above
+  # does not cover them: it only scans .github/workflows and the root action.yml.
+  - package-ecosystem: "github-actions"
+    directories:
+      - "/.github/actions/*"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+    groups:
+      local-actions:
+        patterns: ["*"]
