@@ -45,6 +45,7 @@ from transformers import (
     is_trackio_available,
     is_wandb_available,
 )
+from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
 from transformers.utils import is_peft_available, is_rich_available
 
 from ..chat_template_utils import (
@@ -259,6 +260,11 @@ def _chunked_divergence_loss(
     # GPU. At least one chunk always runs: under context parallelism a rank can hold only masked positions, and its
     # zero loss still has to reach every trainable parameter for `.backward()` and gradient sync to work.
     n_padded = (n_valid_tensor / chunk_size).ceil().clamp(min=1).to(torch.int64) * chunk_size
+    if is_deepspeed_zero3_enabled() and torch.distributed.is_initialized():
+        torch.distributed.all_reduce(
+            n_padded,
+            op=torch.distributed.ReduceOp.MAX,
+        )
 
     loss = h_s.new_zeros((), dtype=torch.float32)
     for start in range(0, n_padded, chunk_size):
