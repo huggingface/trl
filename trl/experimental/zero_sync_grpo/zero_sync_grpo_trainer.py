@@ -32,7 +32,7 @@ from transformers.generation import ContinuousBatchingConfig
 
 from ...chat_template_utils import add_response_schema, parse_response, supports_tool_calling
 from ...trainer.base_trainer import _BaseTrainer
-from ...trainer.utils import create_model_from_path, nanstd, pad
+from ...trainer.utils import create_model_from_path, nanstd, pad, patch_chunked_lm_head
 from .zero_sync_grpo_config import ZeroSyncGRPOConfig
 
 
@@ -231,6 +231,10 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
                 "`per_device_train_batch_size` scored samples while the dataloader feeds "
                 "`per_device_train_batch_size / num_generations` prompts."
             )
+
+        # Compute per-token logprobs without ever materializing the [batch, seq, vocab] logits: the lm_head runs in
+        # chunks with an online logsumexp. Long completions make this the difference between training and an OOM.
+        patch_chunked_lm_head(model, chunk_size=8192, temperature=self.temperature)
 
         def data_collator(features):
             # No data collation is needed in GRPO
@@ -510,17 +514,18 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         }
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
-        input_ids = inputs["input_ids"]
-        attention_mask = inputs["attention_mask"]
         completion_mask = inputs["completion_mask"]
         advantages = inputs["advantages"]
 
-        # Per-token logprobs of the sampled tokens under the current policy. The first position has no prediction
-        # target, so logits are shifted by one.
-        logits = model(input_ids=input_ids, attention_mask=attention_mask).logits
-        logits = logits[:, :-1, :] / self.temperature
-        targets = input_ids[:, 1:]
-        per_token_logps = torch.gather(logits.log_softmax(dim=-1), dim=2, index=targets.unsqueeze(-1)).squeeze(-1)
+        # Per-token logprobs of the sampled tokens under the current policy, computed by the chunked lm_head, so
+        # only completion positions are scored and the full-vocab logits never materialize.
+        outputs = model(
+            input_ids=inputs["input_ids"],
+            attention_mask=inputs["attention_mask"],
+            labels=inputs["input_ids"],
+            completion_mask=completion_mask,
+        )
+        per_token_logps = outputs["log_probs"]
         mask = completion_mask[:, 1:].to(per_token_logps.dtype)
 
         # Clipped surrogate loss. The old policy is the generation engine itself: its logprobs are exact for the
@@ -536,6 +541,9 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         is_clipped = ((ratio < 1 - self.epsilon) | (ratio > 1 + self.epsilon)) & (mask > 0)
         self._metrics[mode]["clip_ratio"].append(
             self.accelerator.gather(is_clipped.sum() / mask.sum().clamp(min=1.0)).mean().item()
+        )
+        self._metrics[mode]["entropy"].append(
+            self.accelerator.gather((outputs["entropy"] * mask).sum() / mask.sum().clamp(min=1.0)).mean().item()
         )
         return loss
 
