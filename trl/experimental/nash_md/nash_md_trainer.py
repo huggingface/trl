@@ -37,7 +37,7 @@ from ...data_utils import maybe_apply_chat_template
 from ...models.utils import unwrap_model_for_generation
 from ...trainer.utils import selective_log_softmax
 from ..online_dpo import OnlineDPOTrainer
-from ..utils import empty_cache, get_reward, truncate_right
+from ..utils import empty_cache, get_reward_from_policy_tokens, truncate_right
 from .nash_md_config import NashMDConfig
 
 
@@ -139,6 +139,14 @@ class NashMDTrainer(OnlineDPOTrainer):
             Processing class used to process the data. If provided, will be used to automatically process the inputs
             for the model, and it will be saved along the model to make it easier to rerun an interrupted training or
             reuse the fine-tuned model.
+        reward_processing_classes ([`~transformers.PreTrainedTokenizerBase`] or `list[PreTrainedTokenizerBase]`, *optional*):
+            Processing classes corresponding to the reward functions specified in `reward_funcs`. Can be either:
+
+            - A single processing class: Used when `reward_funcs` contains only one reward function.
+            - A list of processing classes: Must match the order and length of the reward functions in `reward_funcs`.
+
+            If set to `None`, the tokenizer for each model-based reward function is automatically loaded using
+            [`~transformers.AutoTokenizer.from_pretrained`].
         peft_config ([`~peft.PeftConfig`], *optional*):
             The peft config to use for training.
         compute_metrics (`Callable[[EvalPrediction], dict]`, *optional*):
@@ -183,6 +191,7 @@ class NashMDTrainer(OnlineDPOTrainer):
         | FeatureExtractionMixin
         | ProcessorMixin
         | None = None,
+        reward_processing_classes: PreTrainedTokenizerBase | list[PreTrainedTokenizerBase] | None = None,
         peft_config: "PeftConfig | None" = None,
         compute_metrics: Callable[[EvalPrediction], dict] | None = None,
         callbacks: list[TrainerCallback] | None = None,
@@ -198,7 +207,7 @@ class NashMDTrainer(OnlineDPOTrainer):
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
             processing_class=processing_class,
-            reward_processing_classes=processing_class,
+            reward_processing_classes=reward_processing_classes,
             peft_config=peft_config,
             compute_metrics=compute_metrics,
             callbacks=callbacks,
@@ -322,12 +331,23 @@ class NashMDTrainer(OnlineDPOTrainer):
         return model_data, mixture_data
 
     def _compute_rewards(self, model_data, mixture_data, context_length):
+        reward_processing_class = self.reward_processing_classes[0]
         with torch.no_grad():
-            _, model_scores, _ = get_reward(
-                self.reward_funcs, model_data["input_ids"], self.processing_class.pad_token_id, context_length
+            model_scores = get_reward_from_policy_tokens(
+                self.reward_funcs,
+                model_data["input_ids"],
+                context_length,
+                model_data["raw"],
+                self.processing_class,
+                reward_processing_class,
             )
-            _, mixture_scores, _ = get_reward(
-                self.reward_funcs, mixture_data["input_ids"], self.processing_class.pad_token_id, context_length
+            mixture_scores = get_reward_from_policy_tokens(
+                self.reward_funcs,
+                mixture_data["input_ids"],
+                context_length,
+                mixture_data["raw"],
+                self.processing_class,
+                reward_processing_class,
             )
 
         # Apply EOS penalty if needed

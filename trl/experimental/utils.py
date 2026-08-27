@@ -743,6 +743,24 @@ def first_true_indices(bools: torch.Tensor, dtype=torch.long) -> torch.Tensor:
     return torch.min(zero_or_index, dim=-1).values
 
 
+def _compute_reward_logits(
+    model: torch.nn.Module, input_ids: torch.Tensor, attention_mask: torch.Tensor
+) -> torch.Tensor:
+    attention_mask = attention_mask.bool()
+    position_ids = attention_mask.cumsum(1) - attention_mask.long()  # exclusive cumsum
+    lm_backbone = getattr(model, model.base_model_prefix)
+    masked_input_ids = torch.masked_fill(input_ids, ~attention_mask, 0)
+    output = lm_backbone(
+        input_ids=masked_input_ids,
+        attention_mask=attention_mask,
+        position_ids=position_ids,
+        return_dict=True,
+        output_hidden_states=True,
+        use_cache=False,  # otherwise mistral-based RM would error out
+    )
+    return model.score(output.hidden_states[-1])
+
+
 def get_reward(
     model: torch.nn.Module, query_responses: torch.Tensor, pad_token_id: int, context_length: int
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -769,18 +787,7 @@ def get_reward(
                 The lengths of the sequences in the query responses.
     """
     attention_mask = query_responses != pad_token_id
-    position_ids = attention_mask.cumsum(1) - attention_mask.long()  # exclusive cumsum
-    lm_backbone = getattr(model, model.base_model_prefix)
-    input_ids = torch.masked_fill(query_responses, ~attention_mask, 0)
-    output = lm_backbone(
-        input_ids=input_ids,
-        attention_mask=attention_mask,
-        position_ids=position_ids,
-        return_dict=True,
-        output_hidden_states=True,
-        use_cache=False,  # otherwise mistral-based RM would error out
-    )
-    reward_logits = model.score(output.hidden_states[-1])
+    reward_logits = _compute_reward_logits(model, query_responses, attention_mask)
     sequence_lengths = first_true_indices(query_responses[:, context_length:] == pad_token_id) - 1 + context_length
     # https://github.com/huggingface/transformers/blob/dc68a39c8111217683bf49a4912d0c9018bab33d/src/transformers/models/gpt2/modeling_gpt2.py#L1454
     return (
@@ -791,6 +798,65 @@ def get_reward(
         ].squeeze(-1),
         sequence_lengths,
     )
+
+
+def get_reward_from_policy_tokens(
+    model: torch.nn.Module,
+    query_responses: torch.Tensor,
+    context_length: int,
+    prompts: list,
+    policy_processing_class: PreTrainedTokenizerBase,
+    reward_processing_class: PreTrainedTokenizerBase,
+) -> torch.Tensor:
+    """
+    Score policy-token sequences with a reward model that may use a different tokenizer.
+
+    Completions are decoded with `policy_processing_class` and re-tokenized with `reward_processing_class`, matching
+    [`experimental.online_dpo.OnlineDPOTrainer`]. Scoring uses the tokenizer `attention_mask` and the last non-padding
+    token. This is required for chat templates: `pad_token_id` is often `eos_token_id` and appears at turn boundaries,
+    so [`get_reward`]'s "first pad id" rule would score the prompt.
+
+    Args:
+        model (`torch.nn.Module`):
+            The reward model used to compute the scores.
+        query_responses (`torch.Tensor`):
+            Policy-token sequences of shape `(batch_size, sequence_length)` containing the prompt followed by the
+            completion.
+        context_length (`int`):
+            Number of prompt tokens in `query_responses`.
+        prompts (`list`):
+            Raw prompts corresponding to each row, either strings or conversational message lists.
+        policy_processing_class ([`~transformers.PreTrainedTokenizerBase`]):
+            Tokenizer that produced `query_responses`.
+        reward_processing_class ([`~transformers.PreTrainedTokenizerBase`]):
+            Tokenizer of the reward model.
+
+    Returns:
+        `torch.Tensor`:
+            Reward scores of shape `(batch_size,)`.
+    """
+    # Tokenization matches `OnlineDPOTrainer._calculate_rewards_from_functions` (`skip_special_tokens=True`,
+    # `add_special_tokens=False`). That drops BOS on the already-working same-tokenizer path. Scoring differs: Online
+    # DPO reads SequenceClassification `logits[:, 0]`; we keep the XPO/Nash-MD `model.score` last-token head.
+    completions = policy_processing_class.batch_decode(query_responses[:, context_length:], skip_special_tokens=True)
+    if is_conversational({"prompt": prompts[0]}):
+        completion_messages = [[{"role": "assistant", "content": completion}] for completion in completions]
+        examples = [
+            {"messages": prompt + completion} for prompt, completion in zip(prompts, completion_messages, strict=True)
+        ]
+        texts = [apply_chat_template(example, reward_processing_class)["text"] for example in examples]
+    else:
+        texts = [prompt + completion for prompt, completion in zip(prompts, completions, strict=True)]
+
+    reward_inputs = reward_processing_class(
+        text=texts, return_tensors="pt", padding=True, padding_side="right", add_special_tokens=False
+    )
+    device = query_responses.device
+    reward_ids = reward_inputs["input_ids"].to(device=device)
+    attention_mask = reward_inputs["attention_mask"].to(device=device)
+    reward_logits = _compute_reward_logits(model, reward_ids, attention_mask)
+    sequence_lengths = attention_mask.sum(dim=1).clamp(min=1) - 1
+    return reward_logits[torch.arange(reward_logits.size(0), device=device), sequence_lengths].squeeze(-1)
 
 
 def prepare_model_for_kbit_training(model, use_gradient_checkpointing=True, gradient_checkpointing_kwargs=None):
