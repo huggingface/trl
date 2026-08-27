@@ -32,9 +32,7 @@ one through a *real* coding agent — `mini-swe-agent` — running in an E2B san
       -> AsyncGRPO trains on them and syncs new weights back into that same vLLM
 
 The agent owns its own loop. TRL never calls `step()`; it stands up an endpoint, lets the agent drive, and
-reads back what happened. That is what makes any installed harness trainable without reimplementing it —
-and it is the difference between this example and `examples/grpo_harbor`, which runs Harbor tasks against
-harnesses written inside TRL, with TRL owning the loop.
+reads back what happened. That is what makes any installed harness trainable without reimplementing it.
 
 Everything Harbor-specific lives in `harbor_env.harness` (OpenEnv). Nothing is added to TRL, so the file
 below is the whole integration, and every training-facing object is module-level (picklable) so the
@@ -53,14 +51,9 @@ vLLM. The server is pointed at that engine per rollout, so changing engines need
 the tier is decided by probing the endpoint: token ids plus processed logprobs mean `train`; anything
 less means `eval`, and the session yields no trainable turns rather than rows of zeros.
 
-THE REWARD, and an honest caveat. `harbor_reward` below is `correctness + 0.3 * tool_efficiency`, with
-efficiency gated on correctness — ungated, the cheapest way to look efficient is to do nothing. On this
-path `HarnessRolloutOutcome` carries a single verifier scalar rather than the component dict, so a
-`submission` term (partial credit for producing a well-formed answer at all) is not available. That makes
-the reward all-or-nothing, and on a suite the model solves ~16% of the time it means most groups score
-identically, the advantage is zero, and those steps teach nothing. If your suite emits component rewards,
-pass `--reward-key` and shape them; if it does not, prefer tasks your model solves *sometimes* (see
-`--task-indices`).
+THE REWARD. `harbor_reward` below is `correctness + 0.3 * tool_efficiency`, with efficiency gated on
+correctness — ungated, the cheapest way to look efficient is to do nothing. Suites that emit a reward
+dict rather than a single scalar can name a component with `--reward-key` and shape it from there.
 
 Requirements:
   - A running OpenEnv Harbor server, which owns the dataset and the sandbox templates:
