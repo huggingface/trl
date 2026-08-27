@@ -1,0 +1,72 @@
+name: Send message to slack
+
+description: 'Send results to slack'
+author: 'Hugging Face'
+inputs:
+  slack_channel:
+    required: true
+    type: string
+  title:
+    required: true
+    type: string
+  slack_token:
+    required: true
+    type: string
+
+runs:
+  using: "composite"
+  steps:
+    - name: Create content to post
+      id: create-message
+      run: |
+        case "${{ job.status }}" in
+          success)   echo "STATUS_EMOJI=✅" >> $GITHUB_ENV
+                     echo "STATUS_COLOR=#2eb886" >> $GITHUB_ENV
+                     echo "STATUS_TEXT=passing" >> $GITHUB_ENV ;;
+          cancelled) echo "STATUS_EMOJI=⚪" >> $GITHUB_ENV
+                     echo "STATUS_COLOR=#8d8d8d" >> $GITHUB_ENV
+                     echo "STATUS_TEXT=cancelled" >> $GITHUB_ENV ;;
+          *)         echo "STATUS_EMOJI=❌" >> $GITHUB_ENV
+                     echo "STATUS_COLOR=#d5382a" >> $GITHUB_ENV
+                     echo "STATUS_TEXT=failed" >> $GITHUB_ENV ;;
+        esac
+      shell: bash
+
+    - name: Post results to Slack channel
+      id: post-slack
+      uses: slackapi/slack-github-action@dcb1066f776dd043e64d0e8ba94ca15cc7e1875d  # v4.0.0
+      with:
+        method: chat.postMessage
+        token: ${{ inputs.slack_token }}
+        # Fail the step when the Slack API call fails, as v1 did by default
+        errors: true
+        # For posting a rich message using Block Kit. The channel is a Slack
+        # channel id, channel name, or user id to post message to.
+        # See also: https://api.slack.com/methods/chat.postMessage#channels
+        # No top-level `text`: Slack only hides it from the message body when the
+        # blocks are top-level too, and here they sit in an attachment to get the
+        # coloured bar. The attachment `fallback` carries the notification summary.
+        payload: |
+          {
+            "channel": "${{ inputs.slack_channel }}",
+            "attachments": [
+              {
+                "color": "${{ env.STATUS_COLOR }}",
+                "fallback": "${{ env.STATUS_EMOJI }} ${{ inputs.title }}: ${{ env.STATUS_TEXT }}",
+                "blocks": [
+                  {
+                    "type": "section",
+                    "text": {
+                      "type": "mrkdwn",
+                      "text": "${{ env.STATUS_EMOJI }} *${{ inputs.title }}*"
+                    },
+                    "accessory": {
+                      "type": "button",
+                      "text": {"type": "plain_text", "text": "View run", "emoji": true},
+                      "url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+                    }
+                  }
+                ]
+              }
+            ]
+          }
