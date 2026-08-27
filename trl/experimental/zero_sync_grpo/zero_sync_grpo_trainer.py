@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import atexit
-import enum
 from collections import defaultdict, deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -46,16 +45,7 @@ class TurnRecord:
 
     prompt_ids: list[int]
     output_ids: list[int]
-    output_log_probs: list[float] = field(default_factory=list)
-
-
-@dataclass
-class TrainingSequence:
-    """One training row."""
-
-    input_ids: list[int]  # full tokens (prompt included)
-    completion_mask: list[int]  # 1 = train this token, 0 = context
-    old_log_probs: list[float]  # generator logprobs, 0.0 where mask is 0
+    output_log_probs: list[float]
 
 
 def _common_prefix_len(a: list[int], b: list[int], chunk: int = 4096) -> int:
@@ -64,92 +54,67 @@ def _common_prefix_len(a: list[int], b: list[int], chunk: int = 4096) -> int:
     matched = 0
     while matched < limit:
         end = min(matched + chunk, limit)
-        if a[matched:end] == b[matched:end]:
-            matched = end
-        else:
-            while matched < end and a[matched] == b[matched]:
-                matched += 1
-            return matched
+        if a[matched:end] != b[matched:end]:
+            break
+        matched = end
+    while matched < limit and a[matched] == b[matched]:
+        matched += 1
     return matched
 
 
-class DriftKind(enum.Enum):
-    CLEAN = "clean"  # new prompt starts exactly with held tokens -> append the new part
-    REALIGN = "realign"  # small change in the last answer -> overwrite it as context
-    FORK = "fork"  # bigger change -> start a new row
-
-
 class _SampleBuilder:
-    def __init__(self, fork_threshold: int):
-        self._fork_threshold = fork_threshold
+    """Accumulates one training row from consecutive turns of a conversation."""
+
+    def __init__(self):
         self.tokens: list[int] = []
         self.loss_mask: list[int] = []
         self.logprobs: list[float] = []
-        self.last_response_start_idx: int | None = None
+        self.last_response_start = 0
 
-    def classify_token_drift(self, turn: TurnRecord) -> tuple[DriftKind, int]:
-        """Classify this turn's re-tokenization against the held tokens, and report by how many tokens it drifted."""
-        matched = _common_prefix_len(self.tokens, turn.prompt_ids)
-        drift = len(self.tokens) - matched
-        if drift == 0:
-            return DriftKind.CLEAN, 0
-        start = self.last_response_start_idx
-        if start is not None and matched >= start and drift < self._fork_threshold:
-            return DriftKind.REALIGN, drift
-        return DriftKind.FORK, drift
-
-    def append_turn(self, turn: TurnRecord, kind: DriftKind) -> None:
-        assert kind is not DriftKind.FORK
-        if kind is DriftKind.REALIGN:
-            self._align_to_prompt(turn.prompt_ids)  # overwrite drifted tail as context
-        else:  # CLEAN: held tokens are a prefix of the new prompt; append the tail as context
-            self._append(turn.prompt_ids[len(self.tokens) :], mask=0)
-        self.last_response_start_idx = len(self.tokens)
-        self._append(turn.output_ids, mask=1, logprobs=turn.output_log_probs)
-
-    def _align_to_prompt(self, prompt_ids: list[int]) -> None:
-        matched = _common_prefix_len(self.tokens, prompt_ids)
-        tail = prompt_ids[matched:]
+    def append_turn(self, turn: TurnRecord, matched: int) -> None:
+        # Overwrite everything past the matched prefix with the re-tokenized prompt, as context. When the
+        # re-tokenization was a clean append this overwrites nothing and just appends the new tail.
+        tail = turn.prompt_ids[matched:]
         self.tokens[matched:] = tail
         self.loss_mask[matched:] = [0] * len(tail)
         self.logprobs[matched:] = [0.0] * len(tail)
-
-    def _append(self, ids: list[int], *, mask: int, logprobs: list[float] | None = None) -> None:
-        self.tokens.extend(ids)
-        self.loss_mask.extend([mask] * len(ids))
-        self.logprobs.extend(logprobs if logprobs else [0.0] * len(ids))
-
-    def has_trained_token(self) -> bool:
-        return any(self.loss_mask)
-
-    def to_training_sequence(self) -> TrainingSequence:
-        return TrainingSequence(list(self.tokens), list(self.loss_mask), list(self.logprobs))
+        self.last_response_start = len(self.tokens)
+        self.tokens.extend(turn.output_ids)
+        self.loss_mask.extend([1] * len(turn.output_ids))
+        self.logprobs.extend(turn.output_log_probs)
 
 
-def _chain_to_sequences(turns: list[TurnRecord], fork_threshold: int) -> tuple[list[TrainingSequence], int]:
+def _chain_to_sequences(turns: list[TurnRecord], fork_threshold: int) -> tuple[list[dict[str, Any]], int]:
     """Reconcile one conversation's turns (in order) into training rows; fork when re-tokenization drifts.
 
     Every turn renders the full conversation through the chat template, so a template that rewrites history (dropped
     reasoning, summarized turns) re-tokenizes previously generated tokens differently. A drift confined to the last
-    answer and smaller than `fork_threshold` is realigned as context; a larger drift forks a new row so the trained
-    tokens keep their training signal instead of being silently masked. Returns the rows and the number of forks.
+    answer and smaller than `fork_threshold` is overwritten as context (a re-tokenization wobble); a larger drift
+    forks a new row so the trained tokens keep their training signal instead of being silently masked. Returns the
+    rows and the number of forks.
     """
     builders: list[_SampleBuilder] = []
     forks = 0
     for turn in turns:
-        if not builders:
-            builders.append(_SampleBuilder(fork_threshold))
-            builders[-1].append_turn(turn, DriftKind.CLEAN)
-            continue
-        kind, _ = builders[-1].classify_token_drift(turn)
-        if kind is DriftKind.FORK:
-            forks += 1
-            builder = _SampleBuilder(fork_threshold)
-            builder.append_turn(turn, DriftKind.CLEAN)
-            builders.append(builder)
+        matched = 0
+        if builders:
+            builder = builders[-1]
+            matched = _common_prefix_len(builder.tokens, turn.prompt_ids)
+            drift = len(builder.tokens) - matched
+            drift_in_last_response = matched >= builder.last_response_start
+            if drift > 0 and not (drift_in_last_response and drift < fork_threshold):
+                forks += 1
+                builders.append(_SampleBuilder())
+                matched = 0
         else:
-            builders[-1].append_turn(turn, kind)
-    return [b.to_training_sequence() for b in builders if b.has_trained_token()], forks
+            builders.append(_SampleBuilder())
+        builders[-1].append_turn(turn, matched)
+    rows = [
+        {"input_ids": b.tokens, "completion_mask": b.loss_mask, "logprobs": b.logprobs}
+        for b in builders
+        if any(b.loss_mask)
+    ]
+    return rows, forks
 
 
 class ZeroSyncGRPOTrainer(_BaseTrainer):
@@ -361,6 +326,9 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         )
         cb_kwargs = dict(self.args.continuous_batching_config or {})
         cb_kwargs["return_logprobs"] = True  # the engine's logprobs are the behavior-policy logprobs
+        # Generation and training share the device, so the KV cache must leave room for gradients, optimizer states
+        # and activations; the engine's own default claims most of the free memory.
+        cb_kwargs.setdefault("max_memory_percent", 0.2)
         self._manager = model.init_continuous_batching(
             generation_config=generation_config,
             continuous_batching_config=ContinuousBatchingConfig(**cb_kwargs),
@@ -530,15 +498,8 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         # One advantage per rollout, stamped on every training row it produced: under the token-mean loss a fork is
         # invisible to the loss.
         for scored, advantage in zip(group["scored"], advantages, strict=True):
-            for sequence in scored["sequences"]:
-                self._ready.append(
-                    {
-                        "input_ids": sequence.input_ids,
-                        "completion_mask": sequence.completion_mask,
-                        "logprobs": sequence.old_log_probs,
-                        "advantage": advantage,
-                    }
-                )
+            for row in scored["sequences"]:
+                self._ready.append({**row, "advantage": advantage})
 
     def _prepare_inputs(self, generation_batch: list[dict[str, Any]]) -> dict[str, torch.Tensor | Any]:
         device = self.accelerator.device
