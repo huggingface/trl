@@ -444,7 +444,6 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         }
 
     def _finalize_group(self, group: dict[str, Any]) -> None:
-        mode = self._mode
         rewards_per_func = torch.stack([scored["rewards_per_func"] for scored in group["scored"]])
 
         # A completion for which every reward function returned None is unscorable. nansum would collapse it to 0,
@@ -459,34 +458,25 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         # them from moving the policy.
         advantages = torch.nan_to_num(advantages, nan=0.0)
 
-        # Metrics are per-process: groups are formed and scored locally, and `Trainer.log` reports process zero.
-        for i, reward_func_name in enumerate(self.reward_func_names):
-            self._metrics[mode][f"rewards/{reward_func_name}/mean"].append(
-                torch.nanmean(rewards_per_func[:, i]).item()
-            )
-        self._metrics[mode]["reward"].append(torch.nanmean(rewards).item())
-        self._metrics[mode]["reward_std"].append(nanstd(rewards).item())
-        completion_lengths = [scored["num_completion_tokens"] for scored in group["scored"]]
-        self._metrics[mode]["completions/mean_length"].append(sum(completion_lengths) / len(completion_lengths))
-        if self.tools:
-            self._metrics[mode]["tools/call_count"].append(
-                sum(scored["tool_calls"] for scored in group["scored"]) / len(group["scored"])
-            )
-            self._metrics[mode]["completions/forks"].append(
-                sum(scored["forks"] for scored in group["scored"]) / len(group["scored"])
-            )
-
-        # One advantage per rollout, stamped on every training row it produced: under the token-mean loss a fork is
-        # invisible to the loss.
-        for scored, advantage in zip(group["scored"], advantages, strict=True):
+        # A rollout produces one row, or several when the chat template rewrote history. They all carry the rollout's
+        # advantage, and its metrics ride along on the first one so a fork isn't counted twice.
+        for scored, reward, reward_per_func, advantage in zip(
+            group["scored"], rewards, rewards_per_func, advantages, strict=True
+        ):
+            metrics = {
+                "reward": reward,
+                "rewards_per_func": reward_per_func,
+                "completion_length": scored["num_completion_tokens"],
+                "tool_calls": scored["tool_calls"],
+                "forks": scored["forks"],
+            }
             for row in scored["sequences"]:
-                self._ready.append({**row, "advantage": advantage})
+                self._ready.append({**row, "advantage": advantage, "metrics": metrics})
+                metrics = None  # only the rollout's first row carries them
 
     def _prepare_inputs(self, generation_batch: list[dict[str, Any]]) -> dict[str, torch.Tensor | Any]:
         device = self.accelerator.device
-        # Scoring happens inside `_drain`, possibly before the Trainer flips the model to training mode for the step,
-        # so the mode is captured here and read by `_finalize_group`.
-        mode = self._mode = "train" if self.model.training else "eval"
+        mode = "train" if self.model.training else "eval"
 
         if self._manager is None:
             self._init_manager()
@@ -506,6 +496,28 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         while len(self._ready) < num_samples:
             self._drain(timeout=1.0)
         samples = [self._ready.popleft() for _ in range(num_samples)]
+
+        # Metrics of the rollouts this step trains on. They are per process: groups are formed and scored locally,
+        # and `Trainer.log` reports process zero.
+        rollout_metrics = [sample["metrics"] for sample in samples if sample["metrics"] is not None]
+        rewards = torch.stack([metrics["reward"] for metrics in rollout_metrics])
+        rewards_per_func = torch.stack([metrics["rewards_per_func"] for metrics in rollout_metrics])
+        for i, reward_func_name in enumerate(self.reward_func_names):
+            self._metrics[mode][f"rewards/{reward_func_name}/mean"].append(
+                torch.nanmean(rewards_per_func[:, i]).item()
+            )
+        self._metrics[mode]["reward"].append(torch.nanmean(rewards).item())
+        self._metrics[mode]["reward_std"].append(nanstd(rewards).item())
+        self._metrics[mode]["completions/mean_length"].append(
+            sum(metrics["completion_length"] for metrics in rollout_metrics) / len(rollout_metrics)
+        )
+        if self.tools:
+            self._metrics[mode]["tools/call_count"].append(
+                sum(metrics["tool_calls"] for metrics in rollout_metrics) / len(rollout_metrics)
+            )
+            self._metrics[mode]["completions/forks"].append(
+                sum(metrics["forks"] for metrics in rollout_metrics) / len(rollout_metrics)
+            )
 
         # Build the training tensors. Each row already carries its full token sequence, the mask over the trained
         # (model-generated) tokens and the engine's behavior-policy logprobs aligned to them, 0.0 on context.
