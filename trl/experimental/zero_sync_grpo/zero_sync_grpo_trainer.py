@@ -13,8 +13,10 @@
 # limitations under the License.
 
 import atexit
+import enum
 from collections import defaultdict, deque
 from collections.abc import Callable
+from dataclasses import dataclass, field
 from typing import Any
 
 import torch
@@ -29,6 +31,7 @@ from transformers import (
 )
 from transformers.generation import ContinuousBatchingConfig
 
+from ...chat_template_utils import parse_response
 from ...trainer.base_trainer import _BaseTrainer
 from ...trainer.utils import create_model_from_path, nanstd, pad
 from .zero_sync_grpo_config import ZeroSyncGRPOConfig
@@ -36,6 +39,117 @@ from .zero_sync_grpo_config import ZeroSyncGRPOConfig
 
 # Functions with this signature can be used as reward functions
 RewardFunc = Callable[[list, list], list[float]]
+
+@dataclass(frozen=True)
+class TurnRecord:
+    """One generation call: the whole prompt this turn, the tokens the model produced, their logprobs."""
+
+    prompt_ids: list[int]
+    output_ids: list[int]
+    output_log_probs: list[float] = field(default_factory=list)
+
+
+@dataclass
+class TrainingSequence:
+    """One training row."""
+
+    input_ids: list[int]  # full tokens (prompt included)
+    completion_mask: list[int]  # 1 = train this token, 0 = context
+    old_log_probs: list[float]  # generator logprobs, 0.0 where mask is 0
+
+
+def _common_prefix_len(a: list[int], b: list[int], chunk: int = 4096) -> int:
+    """How many tokens at the start are identical in `a` and `b`."""
+    limit = min(len(a), len(b))
+    matched = 0
+    while matched < limit:
+        end = min(matched + chunk, limit)
+        if a[matched:end] == b[matched:end]:
+            matched = end
+        else:
+            while matched < end and a[matched] == b[matched]:
+                matched += 1
+            return matched
+    return matched
+
+
+class DriftKind(enum.Enum):
+    CLEAN = "clean"  # new prompt starts exactly with held tokens -> append the new part
+    REALIGN = "realign"  # small change in the last answer -> overwrite it as context
+    FORK = "fork"  # bigger change -> start a new row
+
+
+class _SampleBuilder:
+    def __init__(self, fork_threshold: int):
+        self._fork_threshold = fork_threshold
+        self.tokens: list[int] = []
+        self.loss_mask: list[int] = []
+        self.logprobs: list[float] = []
+        self.last_response_start_idx: int | None = None
+
+    def classify_token_drift(self, turn: TurnRecord) -> tuple[DriftKind, int]:
+        """Classify this turn's re-tokenization against the held tokens, and report by how many tokens it drifted."""
+        matched = _common_prefix_len(self.tokens, turn.prompt_ids)
+        drift = len(self.tokens) - matched
+        if drift == 0:
+            return DriftKind.CLEAN, 0
+        start = self.last_response_start_idx
+        if start is not None and matched >= start and drift < self._fork_threshold:
+            return DriftKind.REALIGN, drift
+        return DriftKind.FORK, drift
+
+    def append_turn(self, turn: TurnRecord, kind: DriftKind) -> None:
+        assert kind is not DriftKind.FORK
+        if kind is DriftKind.REALIGN:
+            self._align_to_prompt(turn.prompt_ids)  # overwrite drifted tail as context
+        else:  # CLEAN: held tokens are a prefix of the new prompt; append the tail as context
+            self._append(turn.prompt_ids[len(self.tokens) :], mask=0)
+        self.last_response_start_idx = len(self.tokens)
+        self._append(turn.output_ids, mask=1, logprobs=turn.output_log_probs)
+
+    def _align_to_prompt(self, prompt_ids: list[int]) -> None:
+        matched = _common_prefix_len(self.tokens, prompt_ids)
+        tail = prompt_ids[matched:]
+        self.tokens[matched:] = tail
+        self.loss_mask[matched:] = [0] * len(tail)
+        self.logprobs[matched:] = [0.0] * len(tail)
+
+    def _append(self, ids: list[int], *, mask: int, logprobs: list[float] | None = None) -> None:
+        self.tokens.extend(ids)
+        self.loss_mask.extend([mask] * len(ids))
+        self.logprobs.extend(logprobs if logprobs else [0.0] * len(ids))
+
+    def has_trained_token(self) -> bool:
+        return any(self.loss_mask)
+
+    def to_training_sequence(self) -> TrainingSequence:
+        return TrainingSequence(list(self.tokens), list(self.loss_mask), list(self.logprobs))
+
+
+def _chain_to_sequences(turns: list[TurnRecord], fork_threshold: int) -> tuple[list[TrainingSequence], int]:
+    """Reconcile one conversation's turns (in order) into training rows; fork when re-tokenization drifts.
+
+    Every turn renders the full conversation through the chat template, so a template that rewrites history (dropped
+    reasoning, summarized turns) re-tokenizes previously generated tokens differently. A drift confined to the last
+    answer and smaller than `fork_threshold` is realigned as context; a larger drift forks a new row so the trained
+    tokens keep their training signal instead of being silently masked. Returns the rows and the number of forks.
+    """
+    builders: list[_SampleBuilder] = []
+    forks = 0
+    for turn in turns:
+        if not builders:
+            builders.append(_SampleBuilder(fork_threshold))
+            builders[-1].append_turn(turn, DriftKind.CLEAN)
+            continue
+        kind, _ = builders[-1].classify_token_drift(turn)
+        if kind is DriftKind.FORK:
+            forks += 1
+            builder = _SampleBuilder(fork_threshold)
+            builder.append_turn(turn, DriftKind.CLEAN)
+            builders.append(builder)
+        else:
+            builders[-1].append_turn(turn, kind)
+    return [b.to_training_sequence() for b in builders if b.has_trained_token()], forks
 
 
 class ZeroSyncGRPOTrainer(_BaseTrainer):
@@ -122,6 +236,7 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         train_dataset: Dataset | IterableDataset | None = None,
         eval_dataset: Dataset | None = None,
         processing_class: PreTrainedTokenizerBase | ProcessorMixin | None = None,
+        tools: list[Callable] | None = None,
         callbacks: list[TrainerCallback] | None = None,
         optimizers: tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None] = (None, None),
     ):
@@ -170,6 +285,12 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         self.chat_template_kwargs = args.chat_template_kwargs or {}
         self.epsilon = args.epsilon
         self.generation_ahead = args.generation_ahead
+        self.max_tool_calling_iterations = args.max_tool_calling_iterations
+        self.fork_threshold_tokens = args.fork_threshold_tokens
+
+        # Tools
+        self.tools = tools
+        self.tool_dict = {tool.__name__: tool for tool in tools} if tools else {}
 
         if args.per_device_train_batch_size % self.num_generations != 0:
             raise ValueError(
@@ -250,16 +371,31 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         # exception in the training loop.
         atexit.register(self._manager.stop, block=False)
 
-    def _submit_group(self, example: dict[str, Any]) -> None:
-        # Tokenize the prompt (the whole conversation goes through the chat template) and submit `num_generations`
-        # requests for it. The group is scored as a unit once its last completion lands.
-        prompt_ids = self.processing_class.apply_chat_template(
-            example["prompt"], add_generation_prompt=True, **self.chat_template_kwargs
+    def _tokenize_conversation(self, messages: list[dict[str, Any]]) -> list[int]:
+        # Re-tokenize the WHOLE conversation each turn: the reconciler in `_chain_to_sequences` catches template
+        # rewrites of earlier turns precisely because the prompt is rebuilt from the message list instead of glued
+        # onto held tokens.
+        return self.processing_class.apply_chat_template(
+            messages, add_generation_prompt=True, tools=self.tools or None, **self.chat_template_kwargs
         )["input_ids"]
-        group = {"example": example, "prompt_ids": prompt_ids, "scored": [], "size": self.num_generations}
+
+    def _submit_group(self, example: dict[str, Any]) -> None:
+        # Start `num_generations` rollouts of the prompt. Each rollout is a chain of turns: a completed turn that
+        # calls tools spawns the next turn's request, and the rollout is scored when its final turn lands.
+        group = {"example": example, "scored": [], "size": self.num_generations}
         for _ in range(self.num_generations):
+            prompt_ids = self._tokenize_conversation(example["prompt"])
+            rollout = {
+                "group": group,
+                "messages": list(example["prompt"]),
+                "completion": [],
+                "turns": [],
+                "prompt_ids": prompt_ids,
+                "iterations": 0,
+                "tool_calls": 0,
+            }
             request_id = self._manager.add_request(prompt_ids, max_new_tokens=self.max_completion_length)
-            self._inflight[request_id] = group
+            self._inflight[request_id] = rollout
 
     def _drain(self, timeout: float) -> None:
         # Collect and score every completion the engine has finished; a group's advantages are computed once its last
@@ -272,30 +408,89 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
                 if fatal_error is not None:
                     raise RuntimeError("The continuous batching background thread died.") from fatal_error
                 return
-            group = self._inflight.pop(result.request_id)
-            group["scored"].append(self._score_completion(group, result))
-            if len(group["scored"]) == group["size"]:
-                self._finalize_group(group)
+            rollout = self._inflight.pop(result.request_id)
+            self._advance_rollout(rollout, result)
 
-    def _score_completion(self, group: dict[str, Any], result) -> dict[str, Any]:
-        # Score one completion the moment it finishes, so reward computation overlaps generation. The reward
-        # functions receive one-element lists, with the same signature as everywhere else in TRL.
-        example = group["example"]
-        completion_ids = list(result.generated_tokens)
-        completion_text = self._tokenizer.decode(completion_ids, skip_special_tokens=True)
-        completions = [[{"role": "assistant", "content": completion_text}]]
+    def _advance_rollout(self, rollout: dict[str, Any], result) -> None:
+        # One turn just finished: record it, and either spawn the next turn (the model called tools) or score the
+        # rollout (it produced a final answer). Scoring happens the moment the rollout finishes, so reward
+        # computation overlaps generation.
+        turn_ids = list(result.generated_tokens)
+        rollout["turns"].append(
+            TurnRecord(rollout["prompt_ids"], turn_ids, list(result.logprobs[: len(turn_ids)]))
+        )
+        if self.tools:
+            assistant_message = parse_response(self._tokenizer, turn_ids, prefix=rollout["prompt_ids"])
+        else:
+            assistant_message = {
+                "role": "assistant",
+                "content": self._tokenizer.decode(turn_ids, skip_special_tokens=True),
+            }
+        rollout["messages"].append(assistant_message)
+        rollout["completion"].append(assistant_message)
+
+        tool_calls = assistant_message.get("tool_calls")
+        may_iterate = (
+            self.max_tool_calling_iterations is None or rollout["iterations"] < self.max_tool_calling_iterations
+        )
+        if tool_calls and may_iterate:
+            tool_messages = self._execute_tool_calls(tool_calls)
+            rollout["tool_calls"] += len(tool_calls)
+            rollout["messages"].extend(tool_messages)  # tool result goes back as a MESSAGE, re-tokenized next turn
+            rollout["completion"].extend(tool_messages)
+            rollout["iterations"] += 1
+            rollout["prompt_ids"] = self._tokenize_conversation(rollout["messages"])
+            request_id = self._manager.add_request(rollout["prompt_ids"], max_new_tokens=self.max_completion_length)
+            self._inflight[request_id] = rollout
+            return
+
+        group = rollout["group"]
+        group["scored"].append(self._score_rollout(group["example"], rollout))
+        if len(group["scored"]) == group["size"]:
+            self._finalize_group(group)
+
+    def _execute_tool_calls(self, tool_calls: list[dict[str, Any]]) -> list[dict[str, str]]:
+        tool_messages = []
+        for tool_call in tool_calls:
+            function = tool_call["function"]
+            name = function["name"]
+            tool = self.tool_dict.get(name)
+            if tool is None:
+                # A hallucinated tool name is a policy error that should decay with training
+                tool_messages.append({"role": "tool", "name": name, "content": str({"error": f"unknown tool {name}"})})
+                continue
+            try:
+                result = tool(**function.get("arguments", {}))
+            except Exception as error:
+                result = {"error": str(error)}
+            tool_messages.append({"role": "tool", "name": name, "content": str(result)})
+        return tool_messages
+
+    def _score_rollout(self, example: dict[str, Any], rollout: dict[str, Any]) -> dict[str, Any]:
+        # The reward functions receive the whole conversation's completion (assistant and tool messages) as
+        # one-element lists, with the same signature as everywhere else in TRL.
+        completion_ids = [token for turn in rollout["turns"] for token in turn.output_ids]
         reward_kwargs = {key: [example[key]] for key in example if key not in ["prompt"]}
 
         rewards_per_func = torch.zeros(len(self.reward_funcs))
         for i, reward_func in enumerate(self.reward_funcs):
             output_reward_func = reward_func(
-                prompts=[example["prompt"]], completions=completions, completion_ids=[completion_ids], **reward_kwargs
+                prompts=[example["prompt"]],
+                completions=[rollout["completion"]],
+                completion_ids=[completion_ids],
+                **reward_kwargs,
             )
             # Convert None values to NaN
             rewards_per_func[i] = torch.nan if output_reward_func[0] is None else output_reward_func[0]
+
+        # Reconcile the turn chain into training rows: one row for a conversation the template only appended to,
+        # several when a rewrite forked it.
+        sequences, forks = _chain_to_sequences(rollout["turns"], self.fork_threshold_tokens)
         return {
-            "completion_ids": completion_ids,
-            "logprobs": list(result.logprobs[: len(completion_ids)]),
+            "sequences": sequences,
+            "num_completion_tokens": len(completion_ids),
+            "tool_calls": rollout["tool_calls"],
+            "forks": forks,
             "rewards_per_func": rewards_per_func,
         }
 
@@ -322,18 +517,28 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             )
         self._metrics[mode]["reward"].append(torch.nanmean(rewards).item())
         self._metrics[mode]["reward_std"].append(nanstd(rewards).item())
-        completion_lengths = [len(scored["completion_ids"]) for scored in group["scored"]]
+        completion_lengths = [scored["num_completion_tokens"] for scored in group["scored"]]
         self._metrics[mode]["completions/mean_length"].append(sum(completion_lengths) / len(completion_lengths))
-
-        for scored, advantage in zip(group["scored"], advantages, strict=True):
-            self._ready.append(
-                {
-                    "prompt_ids": group["prompt_ids"],
-                    "completion_ids": scored["completion_ids"],
-                    "logprobs": scored["logprobs"],
-                    "advantage": advantage,
-                }
+        if self.tools:
+            self._metrics[mode]["tools/call_count"].append(
+                sum(scored["tool_calls"] for scored in group["scored"]) / len(group["scored"])
             )
+            self._metrics[mode]["completions/forks"].append(
+                sum(scored["forks"] for scored in group["scored"]) / len(group["scored"])
+            )
+
+        # One advantage per rollout, stamped on every training row it produced: under the token-mean loss a fork is
+        # invisible to the loss.
+        for scored, advantage in zip(group["scored"], advantages, strict=True):
+            for sequence in scored["sequences"]:
+                self._ready.append(
+                    {
+                        "input_ids": sequence.input_ids,
+                        "completion_mask": sequence.completion_mask,
+                        "logprobs": sequence.old_log_probs,
+                        "advantage": advantage,
+                    }
+                )
 
     def _prepare_inputs(self, generation_batch: list[dict[str, Any]]) -> dict[str, torch.Tensor | Any]:
         device = self.accelerator.device
@@ -361,27 +566,11 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             self._drain(timeout=1.0)
         samples = [self._ready.popleft() for _ in range(num_samples)]
 
-        # Build the training tensors: prompt + completion concatenated, with a mask over the completion tokens and
-        # the engine's behavior-policy logprobs aligned to them.
-        input_ids = [torch.tensor(s["prompt_ids"] + s["completion_ids"]) for s in samples]
-        completion_mask = [
-            torch.cat(
-                [
-                    torch.zeros(len(s["prompt_ids"]), dtype=torch.long),
-                    torch.ones(len(s["completion_ids"]), dtype=torch.long),
-                ]
-            )
-            for s in samples
-        ]
-        old_per_token_logps = [
-            torch.cat(
-                [
-                    torch.zeros(len(s["prompt_ids"]), dtype=torch.float32),
-                    torch.tensor(s["logprobs"], dtype=torch.float32),
-                ]
-            )
-            for s in samples
-        ]
+        # Build the training tensors. Each row already carries its full token sequence, the mask over the trained
+        # (model-generated) tokens and the engine's behavior-policy logprobs aligned to them, 0.0 on context.
+        input_ids = [torch.tensor(s["input_ids"]) for s in samples]
+        completion_mask = [torch.tensor(s["completion_mask"], dtype=torch.long) for s in samples]
+        old_per_token_logps = [torch.tensor(s["logprobs"], dtype=torch.float32) for s in samples]
         attention_mask = [torch.ones(len(ids), dtype=torch.long) for ids in input_ids]
         pad_token_id = self._tokenizer.pad_token_id
         return {

@@ -57,6 +57,19 @@ class ZeroSyncGRPOConfig(_BaseConfig):
             disabled and all tokens are considered.
         chat_template_kwargs (`dict[str, Any]`, *optional*):
             Additional keyword arguments to pass to the `apply_chat_template` function when generating completions.
+        max_tool_calling_iterations (`int`, *optional*):
+            Maximum number of tool-calling turns when training an agent. If `None`, there is no limit and generation
+            stops when the model generates a response turn with no tool calls or when the total response length
+            reaches `max_completion_length`.
+        fork_threshold_tokens (`int`, *optional*, defaults to `1024`):
+            A multi-turn conversation is turned into training rows by re-tokenizing the whole conversation every turn
+            and reconciling the result against the tokens held so far: a clean append stays one row, a rewrite
+            (dropped reasoning, summarized history) forks a new row. When a turn's re-tokenized prompt drifts inside
+            the last generated answer, the decision is made on the **drift size** — how many previously-trained
+            tokens the realign would mask to context. A drift smaller than this many tokens is treated as a
+            re-tokenization wobble (realigned as context); a larger drift — e.g. a long reasoning block dropped by
+            the template — forks a new row so those trained tokens keep their training signal instead of being
+            silently masked.
         generation_ahead (`int`, *optional*, defaults to `4`):
             Number of batches of prompts kept in flight in the generation engine ahead of training. Deeper pipelines
             keep the engine busier (generation never stops) at the cost of more KV cache and completions that lag the
@@ -158,6 +171,23 @@ class ZeroSyncGRPOConfig(_BaseConfig):
         metadata={
             "help": "Additional keyword arguments to pass to the `apply_chat_template` function when generating "
             "completions."
+        },
+    )
+    max_tool_calling_iterations: int | None = field(
+        default=None,
+        metadata={
+            "help": "Maximum number of tool-calling turns when training an agent. If `None`, there is no limit and "
+            "generation stops when the model generates a response turn with no tool calls or when the total response "
+            "length reaches `max_completion_length`."
+        },
+    )
+    fork_threshold_tokens: int = field(
+        default=1024,
+        metadata={
+            "help": "Multi-turn conversations are re-tokenized every turn and reconciled against the tokens held so "
+            "far. A drift inside the last answer smaller than this many tokens (measured as the number of "
+            "previously-trained tokens the realign would mask) is realigned as context; a larger drift forks a new "
+            "training row."
         },
     )
     generation_ahead: int = field(
