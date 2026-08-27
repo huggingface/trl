@@ -185,7 +185,10 @@ In this mode, vLLM runs in a separate process (and using separate GPUs) and comm
 1. **Start the vLLM server**:
 
    ```bash
-   trl vllm-serve --model <model_name>
+   VLLM_SERVER_DEV_MODE=1 vllm serve <model_name> \
+       --weight-transfer-config '{"backend": "nccl"}' \
+       --logprobs-mode processed_logprobs \
+       --max-logprobs -1
    ```
 
 2. **Enable server mode in your training script**:
@@ -253,7 +256,10 @@ srun --nodes=4 --ntasks=4 --nodelist="${NODELIST[@]:0:4}" accelerate launch \
      --server_ip $VLLM_NODE &
 
 # Run vLLM server on the 5th node (Group 2)
-srun --nodes=1 --ntasks=1 --nodelist="${NODELIST[4]}" trl vllm-serve --model Qwen/Qwen2.5-72B --tensor_parallel_size 8 &
+srun --nodes=1 --ntasks=1 --nodelist="${NODELIST[4]}" env VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen2.5-72B --tensor-parallel-size 8 \
+    --weight-transfer-config '{"backend": "nccl"}' \
+    --logprobs-mode processed_logprobs \
+    --max-logprobs -1 &
 
 wait
 ```
@@ -557,12 +563,12 @@ Tested with:
 
 ### Quick Start
 
-Use [rloo\_vlm.py](https://github.com/huggingface/trl/blob/main/examples/scripts/rloo_vlm.py) to fine-tune a VLM. Example command for training on [`lmms-lab/multimodal-open-r1-8k-verified`](https://huggingface.co/datasets/lmms-lab/multimodal-open-r1-8k-verified):
+Use [rloo\_vlm.py](https://github.com/huggingface/trl/blob/main/examples/rloo_visual_math/rloo_visual_math.py) to fine-tune a VLM. Example command for training on [`lmms-lab/multimodal-open-r1-8k-verified`](https://huggingface.co/datasets/lmms-lab/multimodal-open-r1-8k-verified):
 
 ```bash
 accelerate launch \
   --config_file=examples/accelerate_configs/deepspeed_zero3.yaml \
-  examples/scripts/rloo_vlm.py \
+  examples/rloo_visual_math/rloo_visual_math.py \
   --model_name_or_path Qwen/Qwen2.5-VL-3B-Instruct \
   --output_dir rloo-Qwen2.5-VL-3B-Instruct \
   --learning_rate 1e-5 \
