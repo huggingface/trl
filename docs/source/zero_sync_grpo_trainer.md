@@ -71,6 +71,14 @@ Because the weights change while a rollout is being generated, a long completion
 
 What remains is that the KV cache of a rollout's prefix was computed with older weights, while the training forward recomputes it with current ones. Measured on Qwen3-0.6B at `learning_rate=1e-5`, the resulting logprob gap peaks at about 0.16 nats on a rollout's first tokens (an importance ratio of 1.17, inside the default clip range) and falls to the kernel-numerics floor by token 50. It grows with the learning rate, the completion length, and `generation_ahead`.
 
+## Debugging
+
+The generation engine runs in a background thread that is not a daemon, so a crash in the
+training step kills the main thread while the process stays alive with no progress and no
+traceback on screen. The trainer stops the manager on exit to avoid this, but if you build your
+own loop on top of continuous batching, a run that appears to hang is usually a training-side
+error that already happened: check the log rather than the GPU.
+
 ## ZeroSyncGRPOTrainer
 
 [[autodoc]] experimental.zero_sync_grpo.ZeroSyncGRPOTrainer
