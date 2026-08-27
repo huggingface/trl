@@ -64,5 +64,5 @@ jobs:
         uses: ./.github/actions/post-slack
         with:
           slack_channel: ${{ env.CI_SLACK_CHANNEL }}
-          title: Results with Python ${{ matrix.python-version }}
+          title: Tests with Python ${{ matrix.python-version }}
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
