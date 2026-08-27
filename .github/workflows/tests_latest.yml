@@ -28,7 +28,7 @@ jobs:
     steps:
       - name: Git checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-        with: { ref: v1.10-release }
+        with: { ref: v1.11-release }
 
       - name: Set up Python 3.12
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
@@ -76,5 +76,5 @@ jobs:
         uses: ./slack-action/.github/actions/post-slack
         with:
           slack_channel: ${{ env.CI_SLACK_CHANNEL }}
-          title: Results of latest TRL with Python 3.12 and dev dependencies
+          title: Tests latest TRL release with dev dependencies
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
