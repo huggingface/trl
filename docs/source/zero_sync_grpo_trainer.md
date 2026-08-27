@@ -80,8 +80,13 @@ from the ones the training step issues, which hangs the run. Giving each a separ
 is necessary but not sufficient; supporting this needs continuous batching to treat a concurrent
 trainer as a first-class case.
 
-Since generation runs behind the training step rather than in series with it, the throughput lever
-is the batch, not the engine. Measured on one H100 with Qwen3-0.6B, GSM8K, 512-token completions:
+Which knob to turn depends on whether generation or training is the bottleneck, and
+`generation_wait_s` tells you which regime you are in: it logs how long each step waited for the
+engine.
+
+When it is near zero, generation is fully hidden and the throughput lever is the batch. Measured on
+one H100 with Qwen3-0.6B, GSM8K, 512-token completions, 8 generations per prompt, where the wait
+stayed around a microsecond throughout:
 
 | samples per step | steps/s | completion tokens/s |
 |---|---|---|
@@ -89,8 +94,10 @@ is the batch, not the engine. Measured on one H100 with Qwen3-0.6B, GSM8K, 512-t
 | 32 | 0.71 | 4,400 |
 | 64 | 0.53 | 6,000 |
 
-`generation_wait_s` stayed around a microsecond in all three, so the engine was never the
-bottleneck; raising `generation_ahead` does not help, raising the batch does.
+Do not assume that regime. A bigger model, longer completions or more generations per prompt make
+decoding dominate, and then the wait grows and the levers reverse: a larger batch only makes the
+trainer wait longer, while `generation_ahead` and the size of the KV pool are what help. Read the
+metric for your own setup rather than copying these numbers.
 
 ## Debugging
 
