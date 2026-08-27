@@ -267,6 +267,7 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         # advantages are computed as soon as its last completion lands, and its samples join `_ready`, from which
         # training batches are drawn.
         self._manager = None
+        self._primed = False
         self._inflight = {}
         self._ready = deque()
 
@@ -490,20 +491,17 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         if self._manager is None:
             self._init_manager()
 
-        if mode == "train":
-            # Keep the engine `generation_ahead` batches of prompts ahead of training: the first batch primes the
-            # pipeline (its prompts are generated and trained `generation_ahead` extra times), after which submitting
-            # one incoming batch per step maintains the depth.
-            while len(self._inflight) < self.generation_ahead * len(generation_batch) * self.num_generations:
+        # Submit this step's prompts, then train on the oldest scored samples. In training the very first batch is
+        # submitted `generation_ahead` extra times to prime the pipeline; from then on one batch in per step keeps
+        # that many batches in flight, so the engine always has work queued while the trainer computes its step.
+        if mode == "train" and not self._primed:
+            for _ in range(self.generation_ahead):
                 for example in generation_batch:
                     self._submit_group(example)
-            for example in generation_batch:
-                self._submit_group(example)
-            num_samples = len(generation_batch) * self.num_generations
-        else:
-            for example in generation_batch:
-                self._submit_group(example)
-            num_samples = len(generation_batch) * self.num_generations
+            self._primed = True
+        for example in generation_batch:
+            self._submit_group(example)
+        num_samples = len(generation_batch) * self.num_generations
 
         while len(self._ready) < num_samples:
             self._drain(timeout=1.0)
