@@ -20,7 +20,6 @@ from ...trainer.base_config import _BaseConfig
 
 @dataclass
 class AsyncGRPOConfig(_BaseConfig):
-    # docstyle-ignore
     r"""
     Configuration class for the [`AsyncGRPOTrainer`].
 
@@ -34,6 +33,15 @@ class AsyncGRPOConfig(_BaseConfig):
         model_init_kwargs (`dict[str, Any]` or `str`, *optional*):
             Keyword arguments for [`~transformers.AutoModelForCausalLM.from_pretrained`], used when instantiating the
             model from a path.
+        dtype (`str`, *optional*, defaults to `"float32"`):
+            Data type to load the model under, one of `"auto"`, `"bfloat16"`, `"float16"` or `"float32"`. It defaults
+            to `"float32"` because the training-inference mismatch this trainer is measured against ([Defeating the
+            Training-Inference Mismatch via FP16](https://huggingface.co/papers/2510.26788), walked through for this
+            trainer in [Defeating the trainer-generator precision mismatch in
+            TRL](https://huggingface.co/spaces/aminediroHF/trainer-generator-bf16-mismatch)) is sensitive to the
+            trainer's own precision. Closing that gap end to end also requires serving the vLLM server in the same
+            dtype (`vllm serve --dtype`); a mismatch is logged as a warning at train start. A `dtype` in
+            `model_init_kwargs` takes precedence.
         trust_remote_code (`bool`, *optional*, defaults to `False`):
             Whether to allow loading models and tokenizers that ship custom Python code from the Hub. Forwarded to
             [`~transformers.AutoModelForCausalLM.from_pretrained`] and [`~transformers.AutoTokenizer.from_pretrained`].
@@ -74,9 +82,9 @@ class AsyncGRPOConfig(_BaseConfig):
             and reconciling the result against the tokens held so far: a clean append stays one row, a rewrite (dropped
             reasoning, summarized history) forks a new row. When a turn's re-tokenized prompt drifts inside the last
             generated answer, the decision is made on the **drift size** — how many previously-trained tokens the
-            realign would mask to context. A drift smaller than this many tokens is treated as a re-tokenization
-            wobble (realigned as context); a larger drift — e.g. a long reasoning block dropped by the template —
-            forks a new row so those trained tokens keep their training signal instead of being silently masked.
+            realign would mask to context. A drift smaller than this many tokens is treated as a re-tokenization wobble
+            (realigned as context); a larger drift — e.g. a long reasoning block dropped by the template — forks a new
+            row so those trained tokens keep their training signal instead of being silently masked.
 
         > Parameters that control the vLLM server
 
@@ -95,22 +103,22 @@ class AsyncGRPOConfig(_BaseConfig):
             Upper-bound epsilon value for clipping. If not specified, it defaults to the same value as the lower-bound
             specified in argument `epsilon`. Paper [DAPO](https://huggingface.co/papers/2503.14476) recommends `0.28`.
         token_budget (`int`, *optional*):
-            Maximum number of real tokens packed into a single row (one DP rank's forward) for dynamic
-            token-budgeted micro-batching. When `> 0`, a `TokenBudgetBatcher` forms Σ Lᵢ²-balanced micro-batches
-            whose rows each stay within this budget, bounding peak memory independently of the sample count (the
-            number of samples per row becomes dynamic). If `None` (default), it is set to the vLLM server's
-            `max_model_len` (queried at train start) — the cap on prompt + completion length — so no rollout sample
-            can ever exceed the budget. A sample longer than `token_budget` fits in no row and is dropped with a
-            warning. Set `<= 0` to disable token budgeting and instead pack a fixed `per_device_train_batch_size ×
-            num_processes` samples per micro-batch, Σ Lᵢ²-balanced across the rows.
+            Maximum number of real tokens packed into a single row (one DP rank's forward) for dynamic token-budgeted
+            micro-batching. When `> 0`, a `TokenBudgetBatcher` forms Σ Lᵢ²-balanced micro-batches whose rows each stay
+            within this budget, bounding peak memory independently of the sample count (the number of samples per row
+            becomes dynamic). If `None` (default), it is set to the vLLM server's `max_model_len` (queried at train
+            start) — the cap on prompt + completion length — so no rollout sample can ever exceed the budget. A sample
+            longer than `token_budget` fits in no row and is dropped with a warning. Set `<= 0` to disable token
+            budgeting and instead pack a fixed `per_device_train_batch_size × num_processes` samples per micro-batch, Σ
+            Lᵢ²-balanced across the rows.
 
         > Parameters that control the async rollout pipeline
 
         max_inflight_tasks (`int`, *optional*, defaults to `-1`):
-            Maximum number of concurrent generation tasks sent to the vLLM server. Defaults to `-1` (auto), which
-            sets it to `max_staleness * per_device_train_batch_size * gradient_accumulation_steps * num_processes`.
-            If using tool-use environments, you may want to set this manually based on how many parallel environments
-            you can run.
+            Maximum number of concurrent generation tasks sent to the vLLM server. Defaults to `-1` (auto), which sets
+            it to `max_staleness * per_device_train_batch_size * gradient_accumulation_steps * num_processes`. If using
+            tool-use environments, you may want to set this manually based on how many parallel environments you can
+            run.
         max_staleness (`int`, *optional*, defaults to `4`):
             Maximum number of weight update steps a rollout sample can lag behind the current model version before
             being discarded.
@@ -119,8 +127,7 @@ class AsyncGRPOConfig(_BaseConfig):
         weight_sync_steps (`int`, *optional*, defaults to `1`):
             Number of training steps between weight synchronizations to the vLLM server.
         heartbeat_stale_after_s (`float`, *optional*, defaults to `300.0`):
-            Seconds since the rollout worker's last heartbeat after which the trainer treats it as
-            hung and aborts.
+            Seconds since the rollout worker's last heartbeat after which the trainer treats it as hung and aborts.
 
         > Parameters that control the logging
 
@@ -136,6 +143,7 @@ class AsyncGRPOConfig(_BaseConfig):
     > - `bf16`: Defaults to `True` if `fp16` is not set, instead of `False`.
     > - `learning_rate`: Defaults to `1e-6` instead of `5e-5`.
     > - `lr_scheduler_type`: Defaults to `constant` instead of `linear` (see below).
+    > - `ignore_data_skip`: Defaults to `True` instead of `False`; the base Trainer's skip-and-replay loop does not apply to the async rollout queue.
 
     > [!NOTE]
     > Training duration and learning rate under message-mode reconciliation:
@@ -161,6 +169,15 @@ class AsyncGRPOConfig(_BaseConfig):
         metadata={
             "help": "Keyword arguments for `transformers.AutoModelForCausalLM.from_pretrained`, used when instantiating "
             "the model from a path."
+        },
+    )
+    dtype: str = field(
+        default="float32",
+        metadata={
+            "help": "Dtype to load the model under. Defaults to 'float32', the precision the training-inference "
+            "mismatch results this trainer is measured against were obtained at. A `dtype` in `model_init_kwargs` "
+            "takes precedence.",
+            "choices": ["auto", "bfloat16", "float16", "float32"],
         },
     )
     trust_remote_code: bool = field(
@@ -198,6 +215,13 @@ class AsyncGRPOConfig(_BaseConfig):
             "message-mode forks make the total step count unknown up front, so `max_steps` is only a safety ceiling "
             "and a decay horizon can't be calibrated. Set a decaying schedule (e.g. `cosine`) together with an "
             "explicit `max_steps` if you want LR decay."
+        },
+    )
+    ignore_data_skip: bool = field(
+        default=True,
+        metadata={
+            "help": "Always `True` for AsyncGRPO; the base Trainer's skip-and-replay loop does not apply to a live "
+            "rollout queue."
         },
     )
 
@@ -359,6 +383,17 @@ class AsyncGRPOConfig(_BaseConfig):
 
     def __post_init__(self):
         super().__post_init__()
+
+        if self.parallelism_config is not None and (
+            self.parallelism_config.cp_enabled or self.parallelism_config.sp_enabled
+        ):
+            raise ValueError(
+                "AsyncGRPOTrainer does not support sequence-dim parallelism (`parallelism_config.cp_size > 1` "
+                "or `parallelism_config.sp_size > 1`) yet. GRPO builds model inputs after generation "
+                "inside the trainer, so Transformers' context-parallel / Ulysses sequence-parallel input "
+                "sharding cannot be applied to the raw generation batch. Set both `cp_size=1` and `sp_size=1`, "
+                "or disable `parallelism_config`."
+            )
 
         # Accelerator config: required for the async IterableDataset-backed dataloader to work correctly.
         # split_batches=True and dispatch_batches=True ensure that the main process drives the dataloader

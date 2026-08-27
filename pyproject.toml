@@ -57,7 +57,7 @@ kernels = [  # transformers renamed the "hub-kernels" extra to "kernels" in 5.1.
     "transformers[hub-kernels]",  # transformers < 5.1.0
 ]
 liger = [
-    "liger-kernel>=0.8.0,!=0.8.1"  # upstream PR https://github.com/linkedin/Liger-Kernel/pull/1316
+    "liger-kernel>=0.8.2"
 ]
 peft = [
     "peft>=0.8.0"
@@ -75,17 +75,16 @@ scikit = [
 test = [
     "pytest-cov",
     "pytest-datadir>=1.7.0",  # lazy datadirs
+    "pytest-reportlog",  # test report consumed by scripts/log_reports.py
     "pytest-rerunfailures==15.1",
     "pytest-xdist",
-    "pytest"
+    "pytest",
+    "tabulate"  # test report rendering in scripts/log_reports.py
 ]
 vllm = [
-    "vllm>=0.17.0,<=0.26.0",
-    "fastapi",
-    "pydantic",
+    "vllm>=0.19.0,<=0.27.1",
     "aiohttp>=3.13.3",
     "requests",
-    "uvicorn"
 ]
 vlm = [
     "Pillow",
@@ -111,7 +110,7 @@ dev = [
     "transformers[kernels]",  # transformers >= 5.1.0
     "transformers[hub-kernels]",  # transformers < 5.1.0
     # liger
-    "liger-kernel>=0.8.0,!=0.8.1",  # upstream PR https://github.com/linkedin/Liger-Kernel/pull/1316
+    "liger-kernel>=0.8.2",
     # openreward (requires Python 3.11+)
     "openreward>=0.1.109; python_version >= '3.11'",
     # peft
@@ -125,9 +124,11 @@ dev = [
     # test
     "pytest-cov",
     "pytest-datadir>=1.7.0",  # lazy datadirs
+    "pytest-reportlog",  # test report consumed by scripts/log_reports.py
     "pytest-rerunfailures==15.1",
     "pytest-xdist",
     "pytest",
+    "tabulate",  # test report rendering in scripts/log_reports.py
     # vllm: not included in dev by default due to CUDA error; see GH-4228
     # vlm
     "Pillow",
@@ -165,7 +166,6 @@ extend-select = ["E", "F", "I", "W", "UP", "B", "T", "C"]
 "examples/**.py" = ["T201"]
 "scripts/**.py" = ["T201"]
 "trl/cli/**.py" = ["T201"]
-"trl/skills/cli.py" = ["T201"]
 # Ignore import violations in all `__init__.py` files.
 "__init__.py" = ["F401"]
 
@@ -208,14 +208,6 @@ filterwarnings = [
     "ignore:The argument 'device' of Tensor.pin_memory:DeprecationWarning",
     "ignore:The argument 'device' of Tensor.is_pinned:DeprecationWarning",
 
-    # Liger SAPO loss torch.compile anomaly-mode warning (upstream, not actionable in TRL)
-    # Liger's SAPO branch assigns per-token loss with boolean-mask indexing, which graph-breaks under
-    # torch.compile and is traced by AOTAutograd under anomaly mode
-    # Tracking issue: https://github.com/huggingface/trl/issues/6435
-    # Upstream fix released in liger-kernel 0.8.1: https://github.com/linkedin/Liger-Kernel/pull/1274
-    # Remove once: liger-kernel >= 0.8.2 is required (0.8.1 has the fix but is excluded, see GH-6517)
-    "ignore:Error detected in IndexPutBackward0:UserWarning",
-
     # bitsandbytes calls the deprecated torch._check_is_size in its CUDA quant ops (upstream, not actionable in TRL)
     # Triggered indirectly by loading bitsandbytes-quantized models in the PEFT + quantization tests
     # Tracking issue: https://github.com/huggingface/trl/issues/6447
@@ -246,4 +238,22 @@ filterwarnings = [
     # Upstream issue: https://github.com/bitsandbytes-foundation/bitsandbytes/issues/2027
     # Remove once: no supported bitsandbytes version emits it
     "ignore:inner dimension \\(\\d+\\) is not aligned for fast kernel:UserWarning",
+
+    # transformers passes the `num_patches` torch tensor to np.cumsum in the InternVL processor, so numpy falls back to
+    # the legacy Tensor.__array_wrap__ path, whose signature predates NumPy 2.0 (upstream, not actionable in TRL)
+    # Triggered by the InternVL cases of the GRPO, RLOO and Distillation VLM tests
+    # Tracking issue: https://github.com/huggingface/trl/issues/6848
+    # Upstream issue: https://github.com/huggingface/transformers/issues/48177
+    # Upstream issue (torch, for the outdated signature): https://github.com/pytorch/pytorch/issues/180657
+    # Remove once: no supported transformers version passes a tensor to np.cumsum there
+    "ignore:__array_wrap__ must accept context and return_scalar arguments:DeprecationWarning",
+
+    # torch inductor advises enabling TF32 on every compile when the float32 matmul precision is left at its default
+    # (upstream, not actionable in TRL: the precision is a process-wide numerics setting only the user should change)
+    # Triggered by the DPO and KTO Liger tests, the only ones that compile, since the GPU CI moved from T4 to L40S:
+    # the advisory is guarded on compute capability >= (8, 0), unreachable on T4
+    # Tracking issue: https://github.com/huggingface/trl/issues/6849
+    # Upstream issue: https://github.com/pytorch/pytorch/issues/175484
+    # Remove once: no supported torch version emits it
+    "ignore:TensorFloat32 tensor cores for float32 matrix multiplication available but not enabled:UserWarning",
 ]

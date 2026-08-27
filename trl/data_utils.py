@@ -454,12 +454,11 @@ def _unpair_row(batch: dict[str, list[Any]]) -> dict[str, list[Any]]:
 def unpair_preference_dataset(
     dataset: DatasetType | IterableDatasetType, **map_kwargs
 ) -> DatasetType | IterableDatasetType:
-    # docstyle-ignore
     """
     Unpair a preference dataset.
 
-    The output contains `"prompt"`, `"completion"`, and `"label"` plus any extra columns, which are duplicated for
-    each chosen and rejected row.
+    The output contains `"prompt"`, `"completion"`, and `"label"` plus any extra columns, which are duplicated for each
+    chosen and rejected row.
 
     Args:
         dataset ([`~datasets.Dataset`] or [`~datasets.DatasetDict`] or [`~datasets.IterableDataset`] or [`~datasets.IterableDatasetDict`]):
@@ -469,7 +468,8 @@ def unpair_preference_dataset(
             Additional keyword arguments to pass to the dataset's map method when unpairing preferences.
 
     Returns:
-        [`~datasets.Dataset`] or [`~datasets.DatasetDict`] or [`~datasets.IterableDataset`] or [`~datasets.IterableDatasetDict`]:
+        [`~datasets.Dataset`] or [`~datasets.DatasetDict`] or [`~datasets.IterableDataset`] or
+        [`~datasets.IterableDatasetDict`]:
             The unpaired preference dataset.
 
     Example:

@@ -21,7 +21,6 @@ from .base_config import _BaseConfig
 
 @dataclass
 class RLOOConfig(_BaseConfig):
-    # docstyle-ignore
     r"""
     Configuration class for the [`RLOOTrainer`].
 
@@ -41,8 +40,8 @@ class RLOOConfig(_BaseConfig):
             argument of the [`RLOOTrainer`] is provided as a string.
         trust_remote_code (`bool`, *optional*, defaults to `False`):
             Whether to allow loading models and tokenizers that ship custom Python code from the Hub. Forwarded to
-            [`~transformers.AutoModelForCausalLM.from_pretrained`] and
-            [`~transformers.AutoProcessor.from_pretrained`]. Also applied to reward-model and reward-tokenizer loads.
+            [`~transformers.AutoModelForCausalLM.from_pretrained`] and [`~transformers.AutoProcessor.from_pretrained`].
+            Also applied to reward-model and reward-tokenizer loads.
         router_aux_loss_coef (`float`, *optional*, defaults to `0.001`):
             Coefficient of the load-balancing auxiliary loss. Only has an effect when training a Mixture-of-Experts
             (MoE) model; for other models it does nothing. The auxiliary loss is added to the training loss with this
@@ -117,8 +116,8 @@ class RLOOConfig(_BaseConfig):
             Mode to use for vLLM integration when `use_vllm` is set to `True`. Must be one of `"server"` or
             `"colocate"`.
 
-            - `"server"`: The trainer will send generation requests to a separate vLLM server. Make sure a TRL vLLM
-              server is running (start with `trl vllm-serve`).
+            - `"server"`: The trainer will send generation requests to a separate vLLM server. Make sure a vLLM server
+              is running (start with `vllm serve`).
             - `"colocate"`: vLLM will run in the same process and share the training GPUs. This avoids the need for a
               separate server but may cause resource contention with training.
         vllm_model_impl (`str`, *optional*, defaults to `"vllm"`):
@@ -244,6 +243,8 @@ class RLOOConfig(_BaseConfig):
     _VALID_DICT_FIELDS = _BaseConfig._VALID_DICT_FIELDS + [
         "model_init_kwargs",
         "transformers_continuous_batching_config",
+        "generation_kwargs",
+        "chat_template_kwargs",
     ]
 
     # Parameters whose default values are overridden from TrainingArguments
@@ -367,7 +368,7 @@ class RLOOConfig(_BaseConfig):
             "must be a value between 0.0 and 1.0. Typical values are in the 0.01-0.2 range."
         },
     )
-    generation_kwargs: dict | None = field(
+    generation_kwargs: dict | str | None = field(
         default=None,
         metadata={
             "help": "Additional keyword arguments to pass to `GenerationConfig` (if using transformers) or "
@@ -376,7 +377,7 @@ class RLOOConfig(_BaseConfig):
             "conflict with the other generation parameters (like `min_p`, `top_p`, etc.), they will override them."
         },
     )
-    chat_template_kwargs: dict | None = field(
+    chat_template_kwargs: dict | str | None = field(
         default=None,
         metadata={
             "help": "Additional keyword arguments to pass to the `apply_chat_template` function when generating "
@@ -409,7 +410,7 @@ class RLOOConfig(_BaseConfig):
         metadata={
             "help": "Mode to use for vLLM integration when `use_vllm` is set to `True`. Must be one of `'server'` or "
             "`'colocate'`. `'server'`: The trainer will send generation requests to a separate vLLM server. Make sure "
-            "a TRL vLLM server is running (start with `trl vllm-serve`). `'colocate'`: vLLM will run in the same "
+            "a vLLM server is running (start with `vllm serve`). `'colocate'`: vLLM will run in the same "
             "process and share the training GPUs. This avoids the need for a separate server but may cause resource "
             "contention with training."
         },
@@ -597,7 +598,7 @@ class RLOOConfig(_BaseConfig):
             "transformers>=5.8.0."
         },
     )
-    transformers_continuous_batching_config: dict | None = field(
+    transformers_continuous_batching_config: dict | str | None = field(
         default=None,
         metadata={"help": "Keyword arguments for `transformers.generation.ContinuousBatchingConfig`."},
     )
