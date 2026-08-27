@@ -96,20 +96,6 @@ The dataset should contain the following columns: `prompt`, `completions` and `l
 
 The [`experimental.prm.PRMTrainer`] only supports [standard](dataset_formats#standard) dataset format.
 
-## Example script
-
-We provide an example script to train a model using the PRM method. The script is available in [`examples/scripts/prm.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/prm.py)
-
-To use the PRM script with the [Qwen2 0.5B model](https://huggingface.co/Qwen/Qwen2-0.5B) on the [Math Shepherd dataset](https://huggingface.co/datasets/trl-lib/math_shepherd), run the following command:
-
-```bash
-accelerate launch examples/scripts/prm.py \
-    --model_name_or_path Qwen/Qwen2-0.5B \
-    --dataset_name trl-lib/math_shepherd \
-    --num_train_epochs 1 \
-    --output_dir Qwen2-0.5B-Reward-Math-Sheperd
-```
-
 ## PRMTrainer
 
 [[autodoc]] experimental.prm.PRMTrainer
