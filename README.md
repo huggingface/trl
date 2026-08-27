@@ -22,9 +22,7 @@
 
 ## 🎉 What's New
 
-**🌍 Multi-environment agentic RL:** [`GRPOTrainer`](https://huggingface.co/docs/trl/grpo_trainer) now supports per-example environment selection and environment-owned rewards — mix multiple sandboxed task suites in one run and let each environment define its own scoring, with [Harbor](https://huggingface.co/docs/trl/harbor) and [OpenEnv](https://huggingface.co/docs/trl/openenv).
-
-**🎯 KTO is now stable:** [`KTOTrainer`](https://huggingface.co/docs/trl/kto_trainer) graduates to the stable API after a full alignment pass with [`DPOTrainer`](https://huggingface.co/docs/trl/dpo_trainer).
+**⚗️ DistillationTrainer is now stable:** [`DistillationTrainer`](https://huggingface.co/docs/trl/distillation_trainer) graduates to the stable API — on-policy knowledge distillation that matches a teacher's full next-token distribution with a memory-efficient chunked JSD loss and vLLM-powered generation.
 
 ## Overview
 

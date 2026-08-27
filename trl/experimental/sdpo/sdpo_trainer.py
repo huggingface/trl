@@ -258,6 +258,13 @@ class SuccessfulRolloutTeacherContextBuilder:
             if has_solution:
                 num_with_solution += 1
 
+        if num_with_feedback_available > 0 and not self.trainer.args.include_environment_feedback:
+            logger.warning_once(
+                "SDPO received environment feedback (`privileged_context`) in the batch, but "
+                "`include_environment_feedback=False`, so it is being ignored (no reprompting from feedback). "
+                "Set `include_environment_feedback=True` to use it."
+            )
+
         local_teacher_messages = []
         local_self_distillation_mask = self_distillation_mask[process_slice]
         for global_idx in range(process_start, process_start + num_local):
@@ -1646,6 +1653,12 @@ class SDPOTrainer(_BaseTrainer):
         device = self.accelerator.device
         completion_ids_list = self._get_completion_ids_list(batch)
         agg_completion_lengths = self.accelerator.gather(batch["raw_completion_lengths"])
+        # Fail clearly if the generation backend returned no completions (avoids a cryptic min() error below).
+        if agg_completion_lengths.numel() == 0:
+            raise RuntimeError(
+                "No completions were generated. This usually means the generation backend failed to return any "
+                "results; see the generation logs above for the underlying error."
+            )
         self._metrics[mode]["completions/mean_length"].append(agg_completion_lengths.float().mean().item())
         self._metrics[mode]["completions/min_length"].append(agg_completion_lengths.float().min().item())
         self._metrics[mode]["completions/max_length"].append(agg_completion_lengths.float().max().item())
