@@ -234,7 +234,18 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
 
         # Compute per-token logprobs without ever materializing the [batch, seq, vocab] logits: the lm_head runs in
         # chunks with an online logsumexp. Long completions make this the difference between training and an OOM.
+        # The patch replaces `forward`, and the generation engine decodes through that same object, so the standard
+        # forward is kept for calls without labels, which is what decoding does.
+        generation_forward = model.forward
         patch_chunked_lm_head(model, chunk_size=8192, temperature=self.temperature)
+        training_forward = model.forward
+
+        def forward(*args, labels=None, **kwargs):
+            if labels is None:
+                return generation_forward(*args, **kwargs)
+            return training_forward(*args, labels=labels, **kwargs)
+
+        model.forward = forward
 
         def data_collator(features):
             # No data collation is needed in GRPO
