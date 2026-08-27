@@ -1374,9 +1374,6 @@ class _ChunkedLogProbFunction(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, grad_logprobs: torch.Tensor | None, grad_entropy: torch.Tensor | None):  # type: ignore
-        if grad_logprobs is None and grad_entropy is None:
-            return None, None, None, None, None, None, None
-
         hidden, weight, labels, log_z, entropy = ctx.saved_tensors
         temperature: float = ctx.temperature
         chunk_size: int = ctx.chunk_size
@@ -1414,22 +1411,22 @@ class _ChunkedLogProbFunction(torch.autograd.Function):
                 logits_chunk.copy_(tanh_scaled * final_logit_softcapping)
 
             logits_chunk.mul_(inv_t)  # [N, C]
-            log_p_chunk = logits_chunk - log_z.unsqueeze(-1)  # [N, C]
-            probs = torch.exp(log_p_chunk)  # [N, C]
-
-            grad_logits = torch.zeros_like(probs)
+            probs = torch.exp(logits_chunk - log_z.unsqueeze(-1))  # [N, C]
 
             if g is not None:
                 # dL/d(logits) = g * (1_[label] - p)
-                grad_logits -= g.unsqueeze(-1) * probs
+                grad_logits = (-g).unsqueeze(-1) * probs  # [N, C]
 
                 in_chunk_cond = (labels >= start) & (labels < end)
                 local_idx = torch.clamp(labels - start, 0, end - start - 1)
                 # If label in chunk add g to grad else it stays the same
                 grad_logits[row_idx, local_idx] += g * in_chunk_cond
+            else:
+                grad_logits = torch.zeros_like(probs)
 
             if g_entropy is not None:
                 # d(entropy)/d(logits_j) = -p_j * (log_p_j + entropy), entropy = -sum_k p_k * log_p_k
+                log_p_chunk = logits_chunk - log_z.unsqueeze(-1)  # [N, C]
                 grad_logits += (-g_entropy).unsqueeze(-1) * probs * (log_p_chunk + entropy.unsqueeze(-1))
 
             grad_logits = grad_logits * inv_t
