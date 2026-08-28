@@ -1330,6 +1330,10 @@ class _ChunkedLogProbFunction(torch.autograd.Function):
         final_logit_softcapping: float | None = None,
         logit_scale: float = 1.0,
     ) -> tuple[torch.Tensor, torch.Tensor]:
+        # entropy is often computed for logging only (no grad required); without this, autograd would
+        # materialize its incoming gradient as zeros and backward would waste compute on a no-op term
+        ctx.set_materialize_grads(False)
+
         device = last_hidden.device
         N, _ = last_hidden.shape
         vocab, _ = weight.shape
@@ -1381,7 +1385,7 @@ class _ChunkedLogProbFunction(torch.autograd.Function):
         logprobs = target_logit - log_z
         entropy = log_z - x_sum_exp / sum_exp
 
-        ctx.save_for_backward(last_hidden, weight, targets, log_z)
+        ctx.save_for_backward(last_hidden, weight, targets, log_z, entropy)
         ctx.temperature = temperature
         ctx.chunk_size = chunk_size
         ctx.logit_scale = logit_scale
@@ -1390,8 +1394,8 @@ class _ChunkedLogProbFunction(torch.autograd.Function):
         return logprobs, entropy
 
     @staticmethod
-    def backward(ctx, grad_logprobs: torch.Tensor, grad_entropy: torch.Tensor):  # type: ignore
-        hidden, weight, labels, log_z = ctx.saved_tensors
+    def backward(ctx, grad_logprobs: torch.Tensor | None, grad_entropy: torch.Tensor | None):  # type: ignore
+        hidden, weight, labels, log_z, entropy = ctx.saved_tensors
         temperature: float = ctx.temperature
         chunk_size: int = ctx.chunk_size
         logit_scale: float = ctx.logit_scale
@@ -1409,7 +1413,8 @@ class _ChunkedLogProbFunction(torch.autograd.Function):
         mm_buf = torch.empty((N, chunk_size), device=hidden.device, dtype=hidden.dtype)
         logits_buf = torch.empty((N, chunk_size), device=hidden.device, dtype=torch.float32)
 
-        g = grad_logprobs.to(torch.float32)  # [N]
+        g = grad_logprobs.to(torch.float32) if grad_logprobs is not None else None  # [N]
+        g_entropy = grad_entropy.to(torch.float32) if grad_entropy is not None else None  # [N]
         row_idx = torch.arange(N, device=hidden.device)
 
         for start in range(0, vocab, chunk_size):
@@ -1429,13 +1434,21 @@ class _ChunkedLogProbFunction(torch.autograd.Function):
             logits_chunk.mul_(inv_t)  # [N, C]
             probs = torch.exp(logits_chunk - log_z.unsqueeze(-1))  # [N, C]
 
-            # dL/d(logits) = g * (1_[label] - p)
-            grad_logits = (-g).unsqueeze(-1) * probs  # [N, C]
+            if g is not None:
+                # dL/d(logits) = g * (1_[label] - p)
+                grad_logits = (-g).unsqueeze(-1) * probs  # [N, C]
 
-            in_chunk_cond = (labels >= start) & (labels < end)
-            local_idx = torch.clamp(labels - start, 0, end - start - 1)
-            # If label in chunk add g to grad else it stays the same
-            grad_logits[row_idx, local_idx] += g * in_chunk_cond
+                in_chunk_cond = (labels >= start) & (labels < end)
+                local_idx = torch.clamp(labels - start, 0, end - start - 1)
+                # If label in chunk add g to grad else it stays the same
+                grad_logits[row_idx, local_idx] += g * in_chunk_cond
+            else:
+                grad_logits = torch.zeros_like(probs)
+
+            if g_entropy is not None:
+                # d(entropy)/d(logits_j) = -p_j * (log_p_j + entropy), entropy = -sum_k p_k * log_p_k
+                log_p_chunk = logits_chunk - log_z.unsqueeze(-1)  # [N, C]
+                grad_logits += (-g_entropy).unsqueeze(-1) * probs * (log_p_chunk + entropy.unsqueeze(-1))
 
             grad_logits = grad_logits * inv_t
             if final_logit_softcapping is not None:
@@ -1565,7 +1578,9 @@ def compute_flops_per_token(config: PretrainedConfig, seq_len: int) -> int:
     V = config.vocab_size
     n_heads = config.num_attention_heads
     n_kv_heads = config.num_key_value_heads
-    head_dim = config.head_dim
+    # `head_dim` is optional on configs: Llama and Mistral declare it, Qwen2 doesn't. Derive it when missing, like
+    # transformers' own modeling code does.
+    head_dim = getattr(config, "head_dim", None) or h // n_heads
 
     # Attention: Q/K/V/O projections + attention score (Q·Kᵀ and attn·V).
     qkv_flops = 2 * h * (n_heads * head_dim + 2 * n_kv_heads * head_dim)
@@ -1651,5 +1666,6 @@ def adjusted_mfu(mfu: float, config: PretrainedConfig, seq_len: int) -> float:
     """
     flops_full = compute_flops_per_token(config, seq_len)
     # Half of the attention-score FLOPs (Q·Kᵀ and attn·V), per layer, ×3 for fwd+bwd.
-    half_attn_score = config.num_hidden_layers * 3 * 2 * config.num_attention_heads * config.head_dim * seq_len
+    head_dim = getattr(config, "head_dim", None) or config.hidden_size // config.num_attention_heads
+    half_attn_score = config.num_hidden_layers * 3 * 2 * config.num_attention_heads * head_dim * seq_len
     return mfu * (flops_full - half_attn_score) / flops_full
