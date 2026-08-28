@@ -795,7 +795,7 @@ def get_reward(
 
 def validate_reward_processing_class_shares_vocab(
     reward_func: Any,
-    reward_processing_class: PreTrainedTokenizerBase | None,
+    reward_processing_class: PreTrainedTokenizerBase | ProcessorMixin | None,
     policy_processing_class: PreTrainedTokenizerBase | ProcessorMixin,
 ) -> None:
     """
@@ -815,7 +815,12 @@ def validate_reward_processing_class_shares_vocab(
         if isinstance(policy_processing_class, ProcessorMixin)
         else policy_processing_class
     )
-    if reward_processing_class.get_vocab() != policy_tokenizer.get_vocab():
+    reward_tokenizer = (
+        reward_processing_class.tokenizer
+        if isinstance(reward_processing_class, ProcessorMixin)
+        else reward_processing_class
+    )
+    if reward_tokenizer.get_vocab() != policy_tokenizer.get_vocab():
         raise ValueError(
             "The reward model's tokenizer vocabulary does not match the policy model's tokenizer vocabulary. This "
             "trainer feeds token IDs produced by the policy's tokenizer directly to the reward model (it does not "

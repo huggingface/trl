@@ -182,8 +182,10 @@ class XPOTrainer(OnlineDPOTrainer):
         if len(self.reward_funcs) != 1:
             raise ValueError("XPOTrainer only supports one reward function/model.")
         self.reward_funcs = self.reward_funcs[0]
+        # self.reward_funcs may already be wrapped (DeepSpeed engine / DDP) by the super().__init__() call above,
+        # which would make it fail the PreTrainedModel check below; unwrap first so the check still fires.
         validate_reward_processing_class_shares_vocab(
-            self.reward_funcs, self.reward_processing_classes[0], self.processing_class
+            self.accelerator.unwrap_model(self.reward_funcs), self.reward_processing_classes[0], self.processing_class
         )
 
     @property

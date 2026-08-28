@@ -12,8 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from unittest.mock import patch
+
 import pytest
 import torch
+from accelerate import Accelerator
 from datasets import DatasetDict, load_dataset
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer, GenerationConfig
 from transformers.utils import is_peft_available
@@ -213,6 +216,42 @@ class TestNashMDTrainer(TrlTestCase):
                 processing_class=self.tokenizer,
                 train_dataset=dataset,
             )
+
+    def test_reward_processing_class_vocab_mismatch_raises_when_reward_model_is_wrapped(self):
+        # Regression test: `self.reward_funcs` can already be wrapped (a DeepSpeed engine, or
+        # torch.nn.parallel.DistributedDataParallel under multi-process DDP) by `Accelerator.prepare_model` inside
+        # `super().__init__()`, before the vocab check runs. A wrapper is not itself a `PreTrainedModel`, so the
+        # check must unwrap first or it silently never fires for exactly the training setups (DeepSpeed/DDP) where
+        # catching a mismatch matters most. `Accelerator.prepare_model` doesn't actually wrap on a plain CPU/
+        # single-process test, so reproduce the same wrapper `accelerate.unwrap_model` has to see through in
+        # production by wrapping the reward model in a real (single-process) `DistributedDataParallel`.
+        mismatched_tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-GPT2LMHeadModel")
+        training_args = NashMDConfig(output_dir=self.tmp_dir, report_to="none")
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        reward_model = self.reward_model
+
+        original_prepare_model = Accelerator.prepare_model
+
+        def fake_prepare_model(self, model, *args, **kwargs):
+            prepared = original_prepare_model(self, model, *args, **kwargs)
+            return torch.nn.parallel.DistributedDataParallel(prepared) if prepared is reward_model else prepared
+
+        store = torch.distributed.HashStore()
+        torch.distributed.init_process_group(backend="gloo", store=store, rank=0, world_size=1)
+        try:
+            with patch.object(Accelerator, "prepare_model", fake_prepare_model):
+                with pytest.raises(ValueError, match="vocabulary"):
+                    NashMDTrainer(
+                        model=self.model,
+                        ref_model=self.ref_model,
+                        reward_funcs=reward_model,
+                        reward_processing_class=mismatched_tokenizer,
+                        args=training_args,
+                        processing_class=self.tokenizer,
+                        train_dataset=dataset,
+                    )
+        finally:
+            torch.distributed.destroy_process_group()
 
     def test_reward_processing_class_can_be_passed_explicitly(self):
         # Regression test for #6951: NashMDTrainer previously hardcoded `reward_processing_classes=processing_class`
