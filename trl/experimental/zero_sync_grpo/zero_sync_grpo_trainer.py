@@ -513,8 +513,11 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
                 if fatal_error is not None:
                     raise RuntimeError("The continuous batching background thread died.") from fatal_error
                 return
-            rollout = self._inflight.pop(result.request_id)
-            self._advance_rollout(rollout, result)
+            # Capturing the cuda graphs submits the engine's own warmup requests, and their results come back through
+            # this same queue. They are not rollouts, so drop them instead of looking them up.
+            rollout = self._inflight.pop(result.request_id, None)
+            if rollout is not None:
+                self._advance_rollout(rollout, result)
 
     def _advance_rollout(self, rollout: dict[str, Any], result) -> None:
         # One turn just finished: record it, and either spawn the next turn (the model called tools) or score the
