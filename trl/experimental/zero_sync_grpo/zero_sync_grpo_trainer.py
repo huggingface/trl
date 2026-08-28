@@ -414,11 +414,7 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             return
         self._stepping = True
         try:
-            import os as _os
-
-            for _ in range(int(_os.environ.get("ZS_STEPS_PER_BOUNDARY", "1"))):
-                if not self._manager.step():
-                    break
+            if self._manager.step():
                 self._decode_steps += 1
         finally:
             self._stepping = False
