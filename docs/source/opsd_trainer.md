@@ -87,10 +87,10 @@ The trainer emits a small set of callback hooks that are useful for debugging, o
 
 ## Example script
 
-Use [`trl/experimental/opsd/opsd.py`](https://github.com/huggingface/trl/blob/main/trl/experimental/opsd/opsd.py) to launch OPSD training from the command line. It maps gsm8k-style `question`/`answer` or `problem`/`solution` columns automatically (use `--solution_column` for other names) and supports PEFT/LoRA via the standard `ModelConfig` flags.
+Use [`examples/opsd_math/opsd_math.py`](https://github.com/huggingface/trl/blob/main/examples/opsd_math/opsd_math.py) to launch OPSD training from the command line. It maps gsm8k-style `question`/`answer` or `problem`/`solution` columns automatically (use `--solution_column` for other names) and supports PEFT/LoRA via the standard `ModelConfig` flags.
 
 ```bash
-accelerate launch trl/experimental/opsd/opsd.py \
+accelerate launch examples/opsd_math/opsd_math.py \
     --model_name_or_path Qwen/Qwen3-1.7B \
     --dataset_name open-thoughts/OpenThoughts-114k \
     --output_dir opsd-qwen3-1.7b \

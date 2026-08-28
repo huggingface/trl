@@ -12,6 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# /// script
+# dependencies = [
+#     "trl",
+#     "peft",
+#     "trackio",
+#     "kernels",
+# ]
+# ///
+
 """
 Train a model with On-Policy Self-Distillation (OPSD).
 
@@ -24,7 +33,7 @@ The dataset must provide a problem and its ground-truth solution. Each example n
 Example (mirrors the official Qwen3-1.7B configuration):
 
 ```bash
-accelerate launch trl/experimental/opsd/opsd.py \
+accelerate launch examples/opsd_math/opsd_math.py \
     --model_name_or_path Qwen/Qwen3-1.7B \
     --dataset_name open-thoughts/OpenThoughts-114k \
     --output_dir opsd-qwen3-1.7b \
