@@ -256,6 +256,8 @@ class SDFTTrainer(_BaseTrainer):
 
         if train_dataset is None:
             raise ValueError("`train_dataset` is required")
+        if not isinstance(train_dataset, Dataset):
+            raise TypeError(f"`train_dataset` must be a `Dataset`, got `{type(train_dataset).__name__}`.")
 
         if isinstance(model, str):
             model_init_kwargs = args.model_init_kwargs or {}
@@ -990,12 +992,9 @@ class SDFTTrainer(_BaseTrainer):
         loss = loss.mean()
 
         mode = "train" if model.training else "eval"
-        mean_distill_loss = (
-            per_token_loss * distillation_logits.loss_mask
-        ).sum() / distillation_logits.loss_mask.sum().clamp(min=1.0)
         self._log_self_distillation_metric(
             mode,
-            self.accelerator.gather(mean_distill_loss).mean().item(),
+            self._global_masked_mean(per_token_loss, distillation_logits.loss_mask),
         )
         return loss
 
@@ -1050,11 +1049,9 @@ class SDFTTrainer(_BaseTrainer):
 
         # Diagnostic for disagreement between local student scores and server teacher scores on realized tokens.
         # Sudden jumps can indicate stale server weights or numerical drift.
-        abs_diff = ((student_per_token_logps.detach() - teacher_per_token_logps).abs() * loss_mask).sum() / (
-            loss_mask.sum().clamp(min=1.0)
-        )
+        abs_diff = (student_per_token_logps.detach() - teacher_per_token_logps).abs()
         self._metrics[mode]["self_distillation/server_logprob_abs_diff"].append(
-            self.accelerator.gather(abs_diff).mean().item()
+            self._global_masked_mean(abs_diff, loss_mask)
         )
 
         if self.args.distillation_mode == "sampled_token":
@@ -1089,8 +1086,7 @@ class SDFTTrainer(_BaseTrainer):
 
         loss = (per_token_loss * loss_mask).sum(-1) / loss_mask.sum(-1).clamp(min=1.0)
         loss = loss.mean()
-        mean_distill_loss = (per_token_loss * loss_mask).sum() / loss_mask.sum().clamp(min=1.0)
-        self._log_self_distillation_metric(mode, self.accelerator.gather(mean_distill_loss).mean().item())
+        self._log_self_distillation_metric(mode, self._global_masked_mean(per_token_loss, loss_mask))
         return loss
 
     def _get_teacher_token_logprobs_from_server(
@@ -1386,6 +1382,19 @@ class SDFTTrainer(_BaseTrainer):
         metric_prefix = self._name.lower().replace(" ", "_")
         self._metrics[mode]["self_distillation/distillation_loss"].append(value)
         self._metrics[mode][f"{metric_prefix}/distillation_loss"].append(value)
+
+    def _global_masked_mean(self, values: torch.Tensor, mask: torch.Tensor) -> float:
+        """Cross-rank weighted mean of `values` under `mask`, weighted by each rank's valid-token count.
+
+        Averaging each rank's own masked mean with an unweighted `gather(...).mean()` is biased whenever ranks hold
+        different numbers of valid tokens (e.g. variable completion lengths): a rank with few valid tokens would
+        count as much as one with many. Summing the local numerator/denominator and dividing once (GRPO/RLOO's
+        `global_masked_mean` pattern) weights every token equally regardless of which rank it landed on.
+        """
+        local_sum = (values * mask).sum()
+        local_count = mask.sum().float()
+        totals = self.accelerator.reduce(torch.stack([local_sum, local_count]), reduction="sum")
+        return (totals[0] / totals[1].clamp(min=1.0)).item()
 
     def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
         mode = "train" if self.model.training else "eval"

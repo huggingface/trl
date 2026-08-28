@@ -53,7 +53,9 @@ class TestSelfDistillationTrainerBehavior(TrlTestCase):
         }
         args.update(args_overrides)
         trainer.args = SimpleNamespace(**args)
-        trainer.accelerator = SimpleNamespace(gather=lambda tensor: tensor)
+        trainer.accelerator = SimpleNamespace(
+            gather=lambda tensor: tensor, reduce=lambda tensor, reduction="sum": tensor
+        )
         trainer._metrics = {
             "train": defaultdict(list),
             "eval": defaultdict(list),
