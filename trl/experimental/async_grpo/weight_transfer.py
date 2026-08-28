@@ -45,8 +45,11 @@ class WeightTransferClient:
             Names, dtypes and shapes of the parameters to send. The server sizes its receive buffers from it, so it
             must describe exactly what [`send_weights`] streams.
         weight_sync_timeout (`int`, *optional*, defaults to `1800`):
-            Seconds to wait for the server to acknowledge a weight-transfer request before failing the run.
+            Seconds allowed for the steps that scale with model size: the NCCL handshake, the transfer itself, and the
+            finalisation that follows it. Pause, resume and the reload setup are bounded by `_CONTROL_TIMEOUT` instead.
     """
+
+    _CONTROL_TIMEOUT = 300
 
     def __init__(
         self,
@@ -121,7 +124,7 @@ class WeightTransferClient:
             return
         t0 = time.time()
         # Prepare the workers for the reload; must complete before any weights are sent.
-        self.vllm.start_weight_update(timeout=self.weight_sync_timeout)
+        self.vllm.start_weight_update(timeout=self._CONTROL_TIMEOUT)
 
         error: list[BaseException] = []
 
@@ -156,12 +159,12 @@ class WeightTransferClient:
 
     def pause(self) -> None:
         t0 = time.time()
-        self.vllm.pause(timeout=self.weight_sync_timeout)
+        self.vllm.pause(timeout=self._CONTROL_TIMEOUT)
         logger.debug(f"[weight_sync] pause HTTP took {time.time() - t0:.1f}s")
 
     def resume(self) -> None:
         t0 = time.time()
-        self.vllm.resume(timeout=self.weight_sync_timeout)
+        self.vllm.resume(timeout=self._CONTROL_TIMEOUT)
         logger.debug(f"[weight_sync] resume HTTP took {time.time() - t0:.1f}s")
 
     def destroy(self) -> None:
