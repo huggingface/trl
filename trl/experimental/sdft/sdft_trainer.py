@@ -1391,7 +1391,10 @@ class SDFTTrainer(_BaseTrainer):
         count as much as one with many. Summing the local numerator/denominator and dividing once (GRPO/RLOO's
         `global_masked_mean` pattern) weights every token equally regardless of which rank it landed on.
         """
-        local_sum = (values * mask).sum()
+        # Cast to float32 before stacking: `values` may be bf16/fp16 under mixed precision while `local_count` is
+        # float32, and `torch.stack` requires matching dtypes (also avoids precision loss summing many low-precision
+        # values).
+        local_sum = (values * mask).sum().float()
         local_count = mask.sum().float()
         totals = self.accelerator.reduce(torch.stack([local_sum, local_count]), reduction="sum")
         return (totals[0] / totals[1].clamp(min=1.0)).item()
