@@ -14,8 +14,8 @@
 
 """CPU-only unit tests for the DOPD (https://huggingface.co/papers/2606.30626) token-routing loss.
 
-These tests exercise `compute_dopd_routed_loss` in isolation with hand-built logits: no model, tokenizer, vLLM, or
-GPU is involved, matching the coverage style of `test_self_distillation_trainer_behavior.py`'s pure loss-util tests.
+These tests exercise `compute_dopd_routed_loss` in isolation with hand-built logits: no model, tokenizer, vLLM, or GPU
+is involved, matching the coverage style of `test_self_distillation_trainer_behavior.py`'s pure loss-util tests.
 """
 
 import pytest
@@ -46,9 +46,9 @@ class TestDOPDRouting:
     def _build_batch(self):
         """Five single-token rows, one per routing regime (see inline comments for the intended regime).
 
-        `privileged_student_logits` are the student's own forward on the privileged context: they differ from the
-        bare `student_logits` while preserving each row's routing regime, so regimes 2 and 4 anchor on a genuinely
-        different distribution rather than the bare student's detached copy.
+        `privileged_student_logits` are the student's own forward on the privileged context: they differ from the bare
+        `student_logits` while preserving each row's routing regime, so regimes 2 and 4 anchor on a genuinely different
+        distribution rather than the bare student's detached copy.
         """
         # Row 0 - low gap, both confident -> regime 1 (light top-k reverse-KL)
         student_0 = [0.85, 0.05, 0.05, 0.05]
@@ -169,9 +169,9 @@ class TestDOPDRouting:
     def test_self_reg_regime_anchors_on_privileged_student_not_bare(self):
         """Regime 2 (paper eq. 7) anchors on the privileged student, not the bare student's own detached logits.
 
-        `KL(p || sg(p))` is identically zero in value *and* gradient, so a bare-student anchor would make the
-        regime a no-op. With a genuinely different privileged student the loss must be nonzero and must backprop
-        a nonzero gradient into the live student.
+        `KL(p || sg(p))` is identically zero in value *and* gradient, so a bare-student anchor would make the regime a
+        no-op. With a genuinely different privileged student the loss must be nonzero and must backprop a nonzero
+        gradient into the live student.
         """
         # Degenerate case: privileged student == bare student -> the anchor collapses to KL(p || sg(p)) == 0.
         student_logits = _row([0.30, 0.30, 0.20, 0.20]).unsqueeze(1).clone().requires_grad_(True)
@@ -200,8 +200,8 @@ class TestDOPDRouting:
     def test_all_regimes_produce_nonzero_gradient_through_student_logits(self):
         """Every regime (1, 2, 3, 4) must backprop into the student, not just regime 2 (checked separately above).
 
-        A silently mis-detached path in any regime's loss formula would zero out that row's gradient while leaving
-        the forward value (and the other regime-specific value tests) untouched, so this needs its own check.
+        A silently mis-detached path in any regime's loss formula would zero out that row's gradient while leaving the
+        forward value (and the other regime-specific value tests) untouched, so this needs its own check.
         """
         student_logits, privileged_student_logits, teacher_logits, completion_ids = self._build_batch()
         student_logits = student_logits.clone().requires_grad_(True)
@@ -239,10 +239,9 @@ class TestDOPDRouting:
     def test_routing_uses_privileged_student_not_bare_student(self):
         """The advantage gap is measured between teacher and *privileged* student, not the bare student.
 
-        A token where the bare student agrees with the teacher (low bare gap) but the privileged student is unsure
-        and far from the teacher (high privileged gap) must route to regime 3, not regime 1. Routing on the bare
-        student would conflate the information-asymmetry gap with the capability gap (the paper's "privilege
-        illusion").
+        A token where the bare student agrees with the teacher (low bare gap) but the privileged student is unsure and
+        far from the teacher (high privileged gap) must route to regime 3, not regime 1. Routing on the bare student
+        would conflate the information-asymmetry gap with the capability gap (the paper's "privilege illusion").
         """
         # Bare student: close to the teacher on the realized token -> low bare gap.
         student_logits = _row([0.85, 0.05, 0.05, 0.05]).unsqueeze(1)
@@ -304,8 +303,8 @@ class TestDOPDConfigValidation:
 class TestTopkSupportParameter:
     """`compute_topk_self_distillation_loss`'s `topk_support` controls whose top-k defines the token support.
 
-    These use logits where the student's and teacher's top-k token sets are disjoint, so switching support must
-    change which tokens are even considered, not just reweight the same ones.
+    These use logits where the student's and teacher's top-k token sets are disjoint, so switching support must change
+    which tokens are even considered, not just reweight the same ones.
     """
 
     def _build_disjoint_logits(self):
@@ -358,8 +357,8 @@ class TestTopkSupportParameter:
 
 class TestKLClip:
     """`compute_divergence`'s `kl_clip` caps the per-position KL (summed over the vocabulary), not individual
-    per-vocabulary-entry `F.kl_div` terms, which can be negative on their own and would otherwise let clipping
-    flip the summed divergence negative.
+    per-vocabulary-entry `F.kl_div` terms, which can be negative on their own and would otherwise let clipping flip the
+    summed divergence negative.
     """
 
     def test_kl_clip_bounds_the_summed_divergence(self):

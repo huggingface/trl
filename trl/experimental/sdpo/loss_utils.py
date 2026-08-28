@@ -83,10 +83,10 @@ def compute_topk_self_distillation_loss(
 ) -> torch.Tensor:
     """Compute distillation loss on a top-k token support.
 
-    `topk_support` selects which side's top-k logits define the support: SDPO's convention is `"student"`;
-    passing `"teacher"` uses the teacher's top-k instead. The other side's distribution is projected
-    onto the same token indices. The selected support is then either renormalized or augmented with a tail bucket
-    before the divergence is computed.
+    `topk_support` selects which side's top-k logits define the support: SDPO's convention is `"student"`; passing
+    `"teacher"` uses the teacher's top-k instead. The other side's distribution is projected onto the same token
+    indices. The selected support is then either renormalized or augmented with a tail bucket before the divergence is
+    computed.
     """
     if topk_support == "student":
         support_logits, other_logits = student_logits, teacher_logits

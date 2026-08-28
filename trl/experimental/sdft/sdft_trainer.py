@@ -1449,8 +1449,8 @@ class SDFTTrainer(_BaseTrainer):
         """Cross-rank weighted mean of `values` under `mask`, weighted by each rank's valid-token count.
 
         Averaging each rank's own masked mean with an unweighted `gather(...).mean()` is biased whenever ranks hold
-        different numbers of valid tokens (e.g. variable completion lengths): a rank with few valid tokens would
-        count as much as one with many. Summing the local numerator/denominator and dividing once (GRPO/RLOO's
+        different numbers of valid tokens (e.g. variable completion lengths): a rank with few valid tokens would count
+        as much as one with many. Summing the local numerator/denominator and dividing once (GRPO/RLOO's
         `global_masked_mean` pattern) weights every token equally regardless of which rank it landed on.
         """
         # Cast to float32 before stacking: `values` may be bf16/fp16 under mixed precision while `local_count` is

@@ -37,12 +37,11 @@ class SDFTConfig(_BaseConfig):
         distillation_topk (`int`, *optional*, defaults to `100`):
             Number of top tokens used by the default SDFT top-k logit objective.
         distillation_topk_support (`Literal["student", "teacher"]`, *optional*, defaults to `"student"`):
-            Which side's logits define the top-k token support for `distillation_mode="topk_logits"`. SDFT's
-            convention is `"student"`; pass `"teacher"` to project onto the teacher's top-k instead. Only
-            used when `distillation_mode="topk_logits"`; the `"dopd"` mode's internal top-k regimes always use
-            `"teacher"` support per that method's own convention, regardless of this setting. With
-            `use_teacher_server=True`, this field is force-aligned to `"teacher"` at construction (the server
-            only returns the teacher's top-k).
+            Which side's logits define the top-k token support for `distillation_mode="topk_logits"`. SDFT's convention
+            is `"student"`; pass `"teacher"` to project onto the teacher's top-k instead. Only used when
+            `distillation_mode="topk_logits"`; the `"dopd"` mode's internal top-k regimes always use `"teacher"`
+            support per that method's own convention, regardless of this setting. With `use_teacher_server=True`, this
+            field is force-aligned to `"teacher"` at construction (the server only returns the teacher's top-k).
         distillation_kl_clip (`float`, *optional*):
             Per-token upper bound on the summed vocabulary divergence, applied before averaging across the batch.
             Prevents high-divergence outlier tokens from dominating the training signal. `None` (the default) disables
@@ -53,11 +52,11 @@ class SDFTConfig(_BaseConfig):
         distillation_add_tail (`bool`, *optional*, defaults to `False`):
             Whether to add a tail bucket for non-top-k probability mass.
         distillation_dopd_gap_threshold (`float`, *optional*, defaults to `2.0`):
-            Advantage-gap threshold (in nats, on the realized token's log-probability difference) separating the
-            "low gap" and "high gap" DOPD regimes. Only used when `distillation_mode="dopd"`.
+            Advantage-gap threshold (in nats, on the realized token's log-probability difference) separating the "low
+            gap" and "high gap" DOPD regimes. Only used when `distillation_mode="dopd"`.
         distillation_dopd_confidence_threshold (`float`, *optional*, defaults to `0.5`):
-            Per-token max-probability threshold separating "confident" from "unsure" for both teacher and student.
-            Only used when `distillation_mode="dopd"`.
+            Per-token max-probability threshold separating "confident" from "unsure" for both teacher and student. Only
+            used when `distillation_mode="dopd"`.
         distillation_dopd_light_topk (`int`, *optional*, defaults to `8`):
             Top-k support size used by the DOPD regimes that apply a "light" distillation signal (low-gap /
             high-gap-student-confident). Only used when `distillation_mode="dopd"`.
@@ -67,8 +66,8 @@ class SDFTConfig(_BaseConfig):
             `distillation_mode="dopd"`.
         distillation_dopd_student_consistency_weight (`float`, *optional*, defaults to `0.1`):
             Weight of the light privileged-student consistency term (paper's beta_l) applied to high-gap,
-            student-confident tokens: top-k reverse KL of the bare student against a stop-gradient
-            *privileged*-student anchor. Only used when `distillation_mode="dopd"`.
+            student-confident tokens: top-k reverse KL of the bare student against a stop-gradient *privileged*-student
+            anchor. Only used when `distillation_mode="dopd"`.
         num_loss_tokens_to_skip (`int`, *optional*, defaults to `0`):
             Number of initial completion tokens to exclude from the distillation loss.
 
