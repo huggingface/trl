@@ -123,7 +123,7 @@ class SDPOConfig(_BaseConfig):
             Whether to allow loading models and tokenizers that ship custom Python code from the Hub. Forwarded to
             [`~transformers.AutoModelForCausalLM.from_pretrained`] and [`~transformers.AutoProcessor.from_pretrained`].
             Also applied to reward-model and reward-tokenizer loads.
-        disable_dropout (`bool`, *optional*, defaults to `False`):
+        disable_dropout (`bool`, *optional*, defaults to `True`):
             Whether to disable dropout in the model. This is useful for training with a reference model, as it prevents
             the model from generating different logprobs for the same input.
 
@@ -272,8 +272,11 @@ class SDPOConfig(_BaseConfig):
             "reward-model and reward-tokenizer loads."
         },
     )
+    # Unlike GRPO/DistillationTrainer, `teacher_model_kind in {"live", "base"+peft, "ema"+pure-lora}` reuses the
+    # student module as the teacher (no separate `.eval()` copy), so dropout must stay disabled by default or the
+    # teacher forward becomes stochastic during training.
     disable_dropout: bool = field(
-        default=False,
+        default=True,
         metadata={
             "help": "Whether to disable dropout in the model. This is useful for training with a reference model, as it prevents the model from generating different logprobs for the same input."
         },

@@ -68,7 +68,7 @@ class SDFTConfig(_BaseConfig):
             Whether to allow loading models and tokenizers that ship custom Python code from the Hub. Forwarded to
             [`~transformers.AutoModelForCausalLM.from_pretrained`] and [`~transformers.AutoProcessor.from_pretrained`],
             for both the student and teacher.
-        disable_dropout (`bool`, *optional*, defaults to `False`):
+        disable_dropout (`bool`, *optional*, defaults to `True`):
             Whether to disable dropout in the student and teacher models.
 
         > Parameters that control data preprocessing
@@ -199,8 +199,11 @@ class SDFTConfig(_BaseConfig):
             "student and teacher."
         },
     )
+    # Unlike GRPO/DistillationTrainer, `teacher_model_kind in {"live", "base"+peft, "ema"+pure-lora}` reuses the
+    # student module as the teacher (no separate `.eval()` copy), so dropout must stay disabled by default or the
+    # teacher forward becomes stochastic during training.
     disable_dropout: bool = field(
-        default=False,
+        default=True,
         metadata={"help": "Whether to disable dropout in the student and teacher models."},
     )
     remove_unused_columns: bool | None = field(
