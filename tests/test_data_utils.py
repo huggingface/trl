@@ -1195,6 +1195,39 @@ class TestExtractPrompt(TrlTestCase):
         example_extracted_prompt = maybe_extract_prompt(self.example_explicit_prompt_standard)
         assert example_extracted_prompt == self.example_explicit_prompt_standard, "The prompt should remain unchanged."
 
+    def test_extract_prompt_conversational_chosen_is_prefix_of_rejected(self):
+        # When "chosen" is a strict prefix of "rejected" (no divergence within the compared range), the whole of
+        # "chosen" is the common prompt, and it must not be duplicated into either output.
+        example = {
+            "chosen": [{"role": "user", "content": "What color is the sky?"}],
+            "rejected": [
+                {"role": "user", "content": "What color is the sky?"},
+                {"role": "assistant", "content": "It is blue."},
+            ],
+        }
+        example_extracted_prompt = extract_prompt(example)
+        assert example_extracted_prompt == {
+            "prompt": [{"role": "user", "content": "What color is the sky?"}],
+            "chosen": [],
+            "rejected": [{"role": "assistant", "content": "It is blue."}],
+        }
+
+    def test_extract_prompt_conversational_chosen_equals_rejected(self):
+        # When "chosen" and "rejected" are identical (no divergence at all), the whole conversation is the common
+        # prompt, and "chosen"/"rejected" must both end up empty.
+        example = {
+            "chosen": [
+                {"role": "user", "content": "What color is the sky?"},
+                {"role": "assistant", "content": "It is blue."},
+            ],
+            "rejected": [
+                {"role": "user", "content": "What color is the sky?"},
+                {"role": "assistant", "content": "It is blue."},
+            ],
+        }
+        example_extracted_prompt = extract_prompt(example)
+        assert example_extracted_prompt == {"prompt": example["chosen"], "chosen": [], "rejected": []}
+
 
 class TestPackDatasetWrapped(TrlTestCase):
     def test_with_dataset(self):

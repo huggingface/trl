@@ -629,11 +629,16 @@ def extract_prompt(example: dict[str, Sequence]) -> dict[str, Sequence]:
      'rejected': [{'role': 'assistant', 'content': 'It is green.'}]}
     ```
     """
-    for idx in range(min(len(example["chosen"]), len(example["rejected"]))):
+    common_length = min(len(example["chosen"]), len(example["rejected"]))
+    for idx in range(common_length):
         if example["chosen"][idx] != example["rejected"][idx]:
             if example["chosen"][idx - 1] == " ":  # remove space before the prompt
                 idx -= 1
             break
+    else:
+        # No divergence found within the compared range: one of "chosen"/"rejected" is a prefix of the other, so
+        # the whole compared range is the common prompt.
+        idx = common_length
     return {
         "prompt": example["chosen"][:idx],
         "chosen": example["chosen"][idx:],
