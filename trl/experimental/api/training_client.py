@@ -26,6 +26,11 @@ return a connected loss, so it evaluates `loss_fn` locally on the log probs the 
 * log_probs)`, a first-order surrogate whose gradient with respect to every parameter equals the gradient of the real
 loss.
 
+A loss the model produces itself, rather than from its log probs, is the one term that surrogate cannot carry: a
+mixture-of-experts router loss never passes through the log probs, so no gradient of it survives in
+`d(loss)/d(log_probs)`. It stays a backend concern, added to whatever the backend back-propagates, and reaches the
+trainer only as a number to log. That is where every other framework at this boundary puts it too.
+
 Either way `loss_fn` runs in the trainer's process, so a user-defined loss never has to exist on a backend.
 """
 
@@ -53,7 +58,7 @@ class ForwardBackwardOutput:
             reported as a metric and never differentiated.
         aux_loss (`torch.Tensor`, *optional*):
             Mixture-of-experts router load-balancing loss, if the model produces one. Detached, and reported for
-            logging only: `aux_loss_coef * aux_loss` is already folded into `loss`.
+            logging only: `aux_loss_coef * aux_loss` is already part of what the backend back-propagates.
     """
 
     loss: torch.Tensor
@@ -110,7 +115,11 @@ class TrainingClientProtocol(Protocol):
                 the backend never sees any of it. Called exactly once, in the trainer's process, with grad enabled.
             aux_loss_coef (`float`, *optional*, defaults to `0.0`):
                 Coefficient for the mixture-of-experts auxiliary loss, already scaled for gradient accumulation. The
-                backend folds `aux_loss_coef * aux_loss` into the returned loss. `0.0` disables it.
+                backend adds `aux_loss_coef * aux_loss` to the objective it back-propagates, and reports the same
+                total as `loss`. An in-process backend gets both at once by adding it to the connected loss. An
+                off-process backend has to add it to its *remote* backward, next to the log-prob surrogate: the router
+                loss is produced by the model and never reaches `loss_fn`, so adding it only to the returned scalar
+                would report it while dropping the router's gradients. `0.0` disables it.
         """
         ...
 

@@ -1144,7 +1144,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
             completion_mask=completion_mask,
             loss_fn=loss_fn,
             # The policy loss is scaled for gradient accumulation (HF auto-scaling is off here), so scale aux too.
-            # The client folds `aux_loss_coef * aux_loss` into the loss it returns.
+            # The client adds `aux_loss_coef * aux_loss` to what it back-propagates, and reports the same total.
             aux_loss_coef=self.router_aux_loss_coef / self.current_gradient_accumulation_steps
             if self.aux_loss_enabled
             else 0.0,

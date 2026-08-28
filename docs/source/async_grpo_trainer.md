@@ -55,6 +55,12 @@ callable in the trainer process, and send `d(loss) / d(log_probs)` back to the s
 equivalent first-order surrogate to its model. The callable itself is not a wire format: transport, serialization, and
 remote lifecycle are the responsibility of the backend adapter.
 
+A mixture-of-experts router loss is the one term that surrogate does not carry, because it is produced by the model
+rather than from its log probs. It stays with the backend, which adds `aux_loss_coef * aux_loss` to the objective it
+back-propagates and reports the same total back. For an off-process backend that means adding it to the remote
+backward, alongside the log-prob surrogate: adding it only to the returned scalar would report the term while dropping
+the router's gradients.
+
 The training client is independent of the other two extension points:
 
 | Extension point | Responsibility |
