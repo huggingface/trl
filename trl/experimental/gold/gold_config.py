@@ -21,7 +21,6 @@ from ...trainer.sft_config import SFTConfig
 
 @dataclass
 class GOLDConfig(SFTConfig):
-    # docstyle-ignore
     r"""
     Configuration class for [`GOLDTrainer`].
 
@@ -75,8 +74,8 @@ class GOLDConfig(SFTConfig):
             Whether to use Universal Logit Distillation (ULD) loss instead of Generalized Jensen-Shannon Divergence
             loss.
         use_extended_uld (`bool`, *optional*, defaults to `True`):
-            Whether to enable extended ULD alignment that uses tokenizers to align and merge token probabilities
-            across student and teacher tokenizations. When `True`, the trainer will compute token mappings and merge
+            Whether to enable extended ULD alignment that uses tokenizers to align and merge token probabilities across
+            student and teacher tokenizations. When `True`, the trainer will compute token mappings and merge
             probabilities for split tokens; when `False`, ULD will use simple positional truncation like in the
             original ULD paper.
         uld_token_merge_strategy (`str`, *optional*, defaults to `"observed"`):
@@ -117,7 +116,7 @@ class GOLDConfig(SFTConfig):
         use_vllm (`bool`, *optional*, defaults to `False`):
             Whether to use vLLM for generating completions from the student model. Requires `vllm` to be installed.
         vllm_mode (`str`, *optional*, defaults to `"colocate"`):
-            Mode for student vLLM integration. Either `"server"` (connect to a running TRL vLLM server) or `"colocate"`
+            Mode for student vLLM integration. Either `"server"` (connect to a running vLLM server) or `"colocate"`
             (run vLLM in the same process).
         vllm_server_host (`str`, *optional*, defaults to `"0.0.0.0"`):
             Host of the vLLM server for the student model (if `vllm_mode="server"`).
@@ -367,7 +366,7 @@ class GOLDConfig(SFTConfig):
     vllm_mode: str = field(
         default="colocate",
         metadata={
-            "help": 'Mode for vLLM integration. Either "server" (connect to a running TRL vLLM server) or "colocate" (run vLLM in the same process).'
+            "help": 'Mode for vLLM integration. Either "server" (connect to a running vLLM server) or "colocate" (run vLLM in the same process).'
         },
     )
     vllm_server_base_url: str | None = field(

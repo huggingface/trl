@@ -129,8 +129,8 @@ class VLLMGeneration:
 
             - `"colocate"`: vLLM will run in the same process and share the training GPUs. This avoids the need for a
               separate server but may cause resource contention with training.
-            - `"server"`: The trainer will send generation requests to a separate vLLM server. Make sure a TRL vLLM
-              server is running (start with `trl vllm-serve`).
+            - `"server"`: The trainer will send generation requests to a separate vLLM server. Make sure a vLLM server
+              is running (start with `vllm serve`).
 
         structured_outputs_regex (`str`, *optional*):
             Regex for vLLM structured outputs. If `None` (default), structured outputs is disabled.
@@ -211,14 +211,6 @@ class VLLMGeneration:
             `seed`, `frequency_penalty`, etc. If it contains keys that conflict with the other parameters, they will
             override them.
 
-        > Parameters for chat/tools:
-
-        chat_template (`str`, *optional*):
-            Template to use for structuring the chat. If not provided, the model's default chat template will be used.
-        chat_template_kwargs (`dict`, *optional*):
-            Additional keyword arguments to customize the chat template used by the model.
-        tools (`list`, *optional*):
-            Tools available for tool calling during chat generation.
     """
 
     def __init__(
@@ -288,9 +280,9 @@ class VLLMGeneration:
         self.logprobs = logprobs
         self.generation_kwargs = generation_kwargs or {}
 
-        # Size in bytes of each per-push weight bucket. Reduces the number of HTTP round trips (server mode) and
-        # NCCL/XCCL broadcasts when syncing weights to vLLM.
-        self._weight_sync_buffer_bytes = 256 * 1024 * 1024
+        # Tensor names, dtypes and shapes streamed to the server on each weight sync. Collected on the first sync, as
+        # it requires gathering the parameters, and constant afterwards.
+        self._weight_metadata = None
 
         self._init_vllm()
 
@@ -390,61 +382,19 @@ class VLLMGeneration:
             name = name.replace(prefix, "")
         return name
 
-    def _push_params_to_vllm(self, names: list[str], params: list[torch.Tensor]) -> None:
-        """Push a batch of parameter tensors to the vLLM engine (server or colocate mode)."""
-        if self.mode == "server" and self.accelerator.is_main_process:
-            self.vllm_client.update_named_params(names, params)
-        elif self.mode == "colocate":
-            self.llm.llm_engine.model_executor.driver_worker.model_runner.model.load_weights(
-                list(zip(names, params, strict=True))
-            )
-
-    def _bucket_push(self, named_params) -> None:
-        """Accumulate `(name, param)` pairs up to ``_weight_sync_buffer_bytes`` and push each bucket to vLLM.
-
-        For each bucket, gathers the params (no-op for non-sharded backends, FSDP, and params already gathered by an
-        outer ``gather_params`` context) and calls ``_push_params_to_vllm`` once for the whole batch.
-        """
-        names: list[str] = []
-        params: list[torch.Tensor] = []
-        bytes_used = 0
-        for name, param in named_params:
-            size = param.numel() * param.element_size()
-            if bytes_used + size > self._weight_sync_buffer_bytes and names:
-                with self._dist.gather_params(params):
-                    self._push_params_to_vllm(names, [p.data for p in params])
-                names, params, bytes_used = [], [], 0
-            names.append(name)
-            params.append(param)
-            bytes_used += size
-        if names:
-            with self._dist.gather_params(params):
-                self._push_params_to_vllm(names, [p.data for p in params])
-
-    def _iter_peft_named_params(self, model: nn.Module):
-        """Yield ``(fixed_name, param)`` pairs for a PEFT model, skipping adapter-only/original-module entries."""
-        for name, param in model.named_parameters():
-            name = name.removeprefix("base_model.model.").replace(".base_layer", "")
-            if model.prefix in name:
-                continue
-            if "original_module" in name:
-                continue
-            yield self._fix_param_name_to_vllm(name, extra_prefixes=["modules_to_save.default."]), param
-
-    def _sync_fsdp1_params_to_vllm(self, module: nn.Module, prefix: str = "", visited: set[str] | None = None):
-        """Memory-efficient post-order traversal of FSDP modules to extract full parameters and sync with vLLM."""
+    def _iter_fsdp1_params(self, module: nn.Module, prefix: str = "", visited: set[str] | None = None):
+        """Memory-efficient post-order traversal of FSDP modules to extract full parameters."""
         # For FSDP1, we need to recurse into children and also use summon_full_params
         if visited is None:
             visited = set()
         for child_name, child_module in module.named_children():
             child_prefix = f"{prefix}.{child_name}" if prefix else child_name
-            self._sync_fsdp1_params_to_vllm(
+            yield from self._iter_fsdp1_params(
                 child_module, prefix=child_prefix, visited=visited
             )  # recurse into the child
 
         if isinstance(module, FSDP):
             with FSDP.summon_full_params(module, recurse=False, writeback=False):
-                items = []
                 for param_name, param in module.named_parameters():
                     full_name = f"{prefix}.{param_name}" if prefix else param_name
                     full_name = self._fix_param_name_to_vllm(full_name, extra_prefixes=["_fsdp_wrapped_module."])
@@ -452,13 +402,12 @@ class VLLMGeneration:
                     if full_name in visited:
                         continue  # skip FSDP subtrees already traversed
                     visited.add(full_name)
-                    items.append((full_name, param))
-                self._bucket_push(items)
 
-    def _sync_fsdp2_params_to_vllm(self, module: nn.Module):
-        """FSDP2-specific parameter synchronization."""
+                    yield full_name, param.data
+
+    def _iter_fsdp2_params(self, module: nn.Module):
+        """FSDP2-specific parameter iteration."""
         # For FSDP2, module.state_dict() already covers all parameters, so no need for recursion
-        items = []
         for name, param in module.state_dict().items():
             # When using PEFT, we need to recover the original parameter name
             name = name.removeprefix("base_model.model.").replace(".base_layer", "")
@@ -474,15 +423,60 @@ class VLLMGeneration:
                 param = param.to(self.accelerator.device)
             param = param.full_tensor()
 
-            items.append((name, param))
-        self._bucket_push(items)
+            yield name, param
 
-    def _sync_fsdp_params_to_vllm(self, model: nn.Module):
-        """Dispatch FSDP weight sync to the version-appropriate method."""
+    def _iter_fsdp_params(self, model: nn.Module):
+        """Dispatch FSDP parameter iteration to the version-appropriate method."""
         if self._dist.fsdp_version == 1:
-            self._sync_fsdp1_params_to_vllm(model)
+            yield from self._iter_fsdp1_params(model)
         elif self._dist.fsdp_version == 2:
-            self._sync_fsdp2_params_to_vllm(model)
+            yield from self._iter_fsdp2_params(model)
+
+    def _iter_named_params(self):
+        """Iterate over the model parameters, materialized one at a time under the name vLLM expects.
+
+        Handles FSDP, DeepSpeed and PEFT. Gathering a parameter is a collective operation, so every process must
+        iterate, even the ones that don't push the weights anywhere.
+        """
+        model = self.model
+
+        if is_peft_model(model):
+            # With PEFT and FSDP/DeepSpeed ZeRO Stage 3, we must gather the full model at once before merging, as
+            # merging adapters in a sharded manner is not supported.
+            # TODO: does this work with FSDP?
+            with self._dist.gather_params(list(model.parameters())):
+                model.merge_adapter()
+
+                # Read the vLLM weights while parameters are gathered
+                if self._dist.is_fsdp:  # note if using FSDP, gather_params is a no-op
+                    # For PEFT with FSDP we need to use the memory efficient post-order traversal
+                    yield from self._iter_fsdp_params(model)
+                else:
+                    # DeepSpeed ZeRO-3 with PEFT
+                    for name, param in model.named_parameters():
+                        # When using PEFT, we need to recover the original parameter name
+                        name = name.removeprefix("base_model.model.").replace(".base_layer", "")
+                        # Skip PEFT layers: they don't exist in vLLM, and they are merged already.
+                        if model.prefix in name:
+                            continue
+                        # When module to save, remove its prefix and discard the original module
+                        if "original_module" in name:
+                            continue
+                        name = self._fix_param_name_to_vllm(name, extra_prefixes=["modules_to_save.default."])
+
+                        yield name, param.data
+                # Unmerge adapters while parameters are still gathered
+                model.unmerge_adapter()
+                # Parameters will automatically be repartitioned when exiting the context
+        else:
+            # For non-PEFT models, simply gather (if needed) and read each parameter individually.
+            if self._dist.is_fsdp:
+                yield from self._iter_fsdp_params(model)
+            else:
+                for name, param in model.named_parameters():
+                    name = self._fix_param_name_to_vllm(name)
+                    with self._dist.gather_params([param]):
+                        yield name, param.data
 
     def sync_weights(self):
         """Synchronize model weights to vLLM.
@@ -497,40 +491,61 @@ class VLLMGeneration:
             self.llm.wake_up(tags=["weights"])
             self._llm_weights_sleeping = False
 
-        model = self.model
         accelerator = self.accelerator
 
-        if is_peft_model(model):
-            # With PEFT and FSDP/DeepSpeed ZeRO Stage 3, we must gather the full model at once before merging, as
-            # merging adapters in a sharded manner is not supported.
-            # TODO: does this work with FSDP?
-            with self._dist.gather_params(list(model.parameters())):
-                model.merge_adapter()
-
-                # Update vLLM weights while parameters are gathered
-                if self._dist.is_fsdp:  # note if using FSDP, gather_params is a no-op
-                    # For PEFT with FSDP we need to use the memory efficient post-order traversal
-                    self._sync_fsdp_params_to_vllm(model)
-                else:
-                    # DeepSpeed ZeRO-3 with PEFT
-                    self._bucket_push(self._iter_peft_named_params(model))
-                # Unmerge adapters while parameters are still gathered
-                model.unmerge_adapter()
-                # Parameters will automatically be repartitioned when exiting the context
-        else:
-            # For non-PEFT models, simply gather (if needed) and update each parameter individually.
-            if self._dist.is_fsdp:
-                self._sync_fsdp_params_to_vllm(model)
+        if self.mode == "server":
+            # The server must know every tensor it is about to receive before the first one is broadcast, so the
+            # parameters are walked once to collect their metadata, and streamed on subsequent passes.
+            if self._weight_metadata is None:
+                self._weight_metadata = [
+                    (name, str(param.dtype).removeprefix("torch."), list(param.shape))
+                    for name, param in self._iter_named_params()
+                ]
+            if accelerator.is_main_process:
+                self.vllm_client.update_named_params(self._weight_metadata, self._iter_named_params())
             else:
-                self._bucket_push(
-                    ((self._fix_param_name_to_vllm(name), param) for name, param in model.named_parameters())
-                )
+                for _ in self._iter_named_params():  # take part in the gather collectives
+                    pass
+        elif self.mode == "colocate":
+            for name, param in self._iter_named_params():
+                self.llm.llm_engine.model_executor.driver_worker.model_runner.model.load_weights([(name, param)])
 
         # Reset cache on vLLM
         if self.mode == "server" and accelerator.is_main_process:
             self.vllm_client.reset_prefix_cache()
         elif self.mode == "colocate":
             self.llm.reset_prefix_cache()
+
+    def _place_features(self, features: dict | None, prompt_ids: list[int]) -> dict | None:
+        """Point the image features at the image tokens of `prompt_ids`.
+
+        The server reports where the images sit in the throwaway conversation it processed them in, which says nothing
+        about the prompt being trained on, so their positions are recomputed from the runs of image tokens in the
+        trainer's own token IDs.
+        """
+        if features is None:
+            return None
+
+        image_token_id = self.processing_class.image_token_id
+        placeholders = []
+        offset = 0
+        while offset < len(prompt_ids):
+            if prompt_ids[offset] == image_token_id:
+                length = 0
+                while offset + length < len(prompt_ids) and prompt_ids[offset + length] == image_token_id:
+                    length += 1
+                placeholders.append({"offset": offset, "length": length})
+                offset += length
+            else:
+                offset += 1
+
+        expected = len(features["mm_placeholders"]["image"])
+        if len(placeholders) != expected:
+            raise ValueError(
+                f"Found {len(placeholders)} runs of image tokens in the prompt but {expected} images were processed. "
+                "The prompt must contain one run of image tokens per image."
+            )
+        return {**features, "mm_placeholders": {**features["mm_placeholders"], "image": placeholders}}
 
     def generate(
         self,
@@ -588,7 +603,16 @@ class VLLMGeneration:
                 # generate num_generations outputs for each one. This is faster than generating outputs for each
                 # duplicate prompt individually.
                 ordered_set_of_prompt_ids = all_prompts[::num_generations]
-                ordered_set_of_images = all_images[::num_generations] if all_images is not None else None
+
+                # The server generates from either token IDs or images, so images are processed on their own first
+                # and the resulting features are paired with the token IDs.
+                features = None
+                if all_images is not None:
+                    features = self.vllm_client.image_features(all_images[::num_generations])
+                    features = [
+                        self._place_features(prompt_features, prompt_ids)
+                        for prompt_features, prompt_ids in zip(features, ordered_set_of_prompt_ids, strict=True)
+                    ]
 
                 sampling_params = {
                     "n": num_generations,
@@ -604,9 +628,7 @@ class VLLMGeneration:
                 }
                 with profiler:
                     output = self.vllm_client.generate(
-                        prompts=ordered_set_of_prompt_ids,
-                        images=ordered_set_of_images,
-                        **sampling_params,
+                        prompts=ordered_set_of_prompt_ids, features=features, **sampling_params
                     )
                     payload = (
                         output["prompt_ids"],
