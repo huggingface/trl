@@ -1962,7 +1962,11 @@ class GRPOTrainer(_BaseTrainer):
         return completion_ids, logprobs
 
     def _get_tool_suffix_ids(self, tool_messages):
-        """Get token IDs for tool result formatting by using a minimal dummy conversation."""
+        """Get token IDs for tool result formatting by using a minimal dummy conversation.
+
+        Returns the processor-expanded suffix IDs, and a copy holding a single placeholder token per
+        tool-returned image for the vLLM call. The two are identical unless generating with vLLM for a VLM.
+        """
         # Use the real tool name instead of a dummy: some templates (e.g. GPT-OSS) derive the tool response
         # header from the assistant's tool call name.
         dummy_tool_calls = [{"type": "function", "function": {"name": tool_messages[0]["name"], "arguments": {}}}]
@@ -2000,18 +2004,50 @@ class GRPOTrainer(_BaseTrainer):
         if self._is_vlm:
             prefix_ids = prefix_ids[0]
             full_ids = full_ids[0]
+        tracks = [(prefix_ids, full_ids)]
 
-        # Some chat templates (notably Qwen3/Qwen3.5) render "...<|im_end|>\n" after an assistant/tool block.
-        # When we compute `suffix_ids` by slicing `full_ids`, we must align the slicing boundary to
-        # EOS (not EOS + newline). Templates that don't use EOS as end-of-turn (e.g. Gemma uses
-        # <turn|>) skip this trimming.
-        eos_positions = [i for i, tok_id in enumerate(prefix_ids) if tok_id == self._tokenizer.eos_token_id]
-        if eos_positions:
-            prefix_ids = prefix_ids[: eos_positions[-1] + 1]
+        if self.use_vllm and self._is_vlm:
+            # Render the same pair with the tokenizer alone, so images returned by tools keep the single
+            # placeholder token vLLM expands itself, as in `_tokenize_prompts`.
+            # `tokenize=False` returns a plain string here, since a single conversation is passed rather than a batch.
+            prefix_text = self.processing_class.apply_chat_template(
+                dummy_messages,
+                add_generation_prompt=False,
+                tokenize=False,
+                chat_template=self.chat_template,
+                **self.chat_template_kwargs,
+            )
+            full_text = self.processing_class.apply_chat_template(
+                dummy_messages + tool_messages,
+                add_generation_prompt=True,
+                tokenize=False,
+                chat_template=self.chat_template,
+                **self.chat_template_kwargs,
+            )
+            tracks.append(
+                (
+                    self._tokenizer(prefix_text, add_special_tokens=False)["input_ids"],
+                    self._tokenizer(full_text, add_special_tokens=False)["input_ids"],
+                )
+            )
 
-        if full_ids[: len(prefix_ids)] != prefix_ids:
-            raise ValueError("Unexpected tokenization: the EOS-trimmed prefix IDs are not a prefix of the full IDs.")
-        return full_ids[len(prefix_ids) :]
+        suffix_ids = []
+        for prefix, full in tracks:
+            # Some chat templates (notably Qwen3/Qwen3.5) render "...<|im_end|>\n" after an assistant/tool block.
+            # When we compute `suffix_ids` by slicing `full`, we must align the slicing boundary to
+            # EOS (not EOS + newline). Templates that don't use EOS as end-of-turn (e.g. Gemma uses
+            # <turn|>) skip this trimming.
+            eos_positions = [i for i, tok_id in enumerate(prefix) if tok_id == self._tokenizer.eos_token_id]
+            if eos_positions:
+                prefix = prefix[: eos_positions[-1] + 1]
+
+            if full[: len(prefix)] != prefix:
+                raise ValueError(
+                    "Unexpected tokenization: the EOS-trimmed prefix IDs are not a prefix of the full IDs."
+                )
+            suffix_ids.append(full[len(prefix) :])
+        # Without the vLLM track, both returned suffixes are the expanded one.
+        return suffix_ids[0], suffix_ids[-1]
 
     def _tool_call_loop(
         self, prompts, prompt_ids, vllm_prompt_ids, completion_ids, completions, logprobs, images, multimodal_fields
@@ -2021,6 +2057,9 @@ class GRPOTrainer(_BaseTrainer):
         idxs_with_tool = [idx for idx, tool_call in enumerate(tool_calls) if tool_call]
         tool_calls = [tool_calls[idx] for idx in idxs_with_tool]
         tool_mask = [[1] * len(ids) for ids in completion_ids]  # 0 for tool result tokens, 1 elsewhere
+        # Completions as seen on the unexpanded track handed to vLLM: they differ from `completion_ids` only once a
+        # tool has returned an image, since the tool suffix is appended to both.
+        vllm_completion_ids = list(completion_ids)
         # Collect images from multimodal tool responses for the forward pass
         tool_images = [[] for _ in completion_ids]
         tool_call_count = 0
@@ -2110,14 +2149,14 @@ class GRPOTrainer(_BaseTrainer):
                         tool_messages.insert(0, message)
                     else:
                         break
-                suffix_ids = self._get_tool_suffix_ids(tool_messages)
+                suffix_ids, vllm_suffix_ids = self._get_tool_suffix_ids(tool_messages)
                 prompt_completion_tool_ids.append(
                     prompt_ids[idx_with_tool] + completion_ids[idx_with_tool] + suffix_ids
                 )
                 # Same concatenation on the unexpanded track, so vLLM keeps receiving one placeholder token per
-                # prompt image. Images returned by tools are still expanded by `_get_tool_suffix_ids`.
+                # image, for prompt images and tool-returned images alike.
                 vllm_prompt_completion_tool_ids.append(
-                    vllm_prompt_ids[idx_with_tool] + completion_ids[idx_with_tool] + suffix_ids
+                    vllm_prompt_ids[idx_with_tool] + vllm_completion_ids[idx_with_tool] + vllm_suffix_ids
                 )
 
             # Drop tool results whose addition would push the sequence past max_completion_length (the completion
@@ -2243,6 +2282,11 @@ class GRPOTrainer(_BaseTrainer):
                 prompt_length = len(prompt_ids[idx_with_tool])
                 pct = prompt_completion_tool_ids[idx]  # = prompt-completion-tool
                 completion_ids[idx_with_tool] = pct[prompt_length:] + post_tool_ids[idx]
+                # Mirror the update on the unexpanded track, so the next iteration builds on unexpanded history
+                vllm_pct = vllm_prompt_completion_tool_ids[idx]
+                vllm_completion_ids[idx_with_tool] = (
+                    vllm_pct[len(vllm_prompt_ids[idx_with_tool]) :] + post_tool_ids[idx]
+                )
 
             # Decode post-tool completions
             post_tool_completions = [
