@@ -21,8 +21,17 @@ def resolve_accelerate_config_argument(launch_args: list[str]) -> list[str]:
     Resolve `--accelerate_config` from CLI arguments into `accelerate --config_file`.
 
     The function supports either a filesystem path or a predefined config name shipped in `trl/accelerate_configs`
-    (without the `.yaml` suffix).
+    (without the `.yaml` suffix). Both the two-token form (`--accelerate_config single_gpu`) and the `=`-joined form
+    (`--accelerate_config=single_gpu`) are supported.
     """
+    # Normalize the `--accelerate_config=<value>` form into the two-token `--accelerate_config <value>` form so the
+    # rest of the function only has to handle a single case.
+    for index, arg in enumerate(launch_args):
+        if arg.startswith("--accelerate_config="):
+            config_name = arg.split("=", 1)[1]
+            launch_args = launch_args[:index] + ["--accelerate_config", config_name] + launch_args[index + 1 :]
+            break
+
     if "--accelerate_config" not in launch_args:
         return launch_args
 
