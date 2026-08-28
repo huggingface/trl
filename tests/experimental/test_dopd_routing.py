@@ -23,6 +23,7 @@ import torch
 
 from trl.experimental.sdft import SDFTConfig
 from trl.experimental.sdft.loss_utils import (
+    compute_divergence,
     compute_dopd_routed_loss,
     compute_full_logit_self_distillation_loss,
     compute_topk_self_distillation_loss,
@@ -187,7 +188,10 @@ class TestDOPDRouting:
         torch.testing.assert_close(routed, torch.zeros_like(routed), atol=1e-5, rtol=0)
         routed.sum().backward()
         assert student_logits.grad is not None
-        assert not torch.any(student_logits.grad.abs() > 0)
+        # `KL(p || sg(p))` has zero gradient in exact arithmetic, but computing log_softmax twice on the same
+        # tensor can leave float32-epsilon-scale residue depending on backend/kernel fusion; use a tolerance
+        # instead of an exact-zero check so this isn't hardware-dependent.
+        torch.testing.assert_close(student_logits.grad, torch.zeros_like(student_logits.grad), atol=1e-6, rtol=0)
 
         # Real case: privileged student differs from the bare student -> regime 2 is a live KL with gradient.
         privileged_student_logits = _row([0.35, 0.25, 0.20, 0.20]).unsqueeze(1)
@@ -393,3 +397,34 @@ class TestTopkSupportParameter:
                 distillation_add_tail=True,
                 topk_support="nonsense",
             )
+
+
+class TestKLClip:
+    """`compute_divergence`'s `kl_clip` caps the per-position KL (summed over the vocabulary), not individual
+    per-vocabulary-entry `F.kl_div` terms, which can be negative on their own and would otherwise let clipping
+    flip the summed divergence negative.
+    """
+
+    def test_kl_clip_bounds_the_summed_divergence(self):
+        # Mismatched enough that the unclipped reverse-KL comfortably exceeds the clip threshold below, and that
+        # per-entry `F.kl_div` terms have mixed signs (the low-probability token's term is negative), so a naive
+        # per-vocab-entry clip (rather than a post-sum clip) would risk flipping the summed value negative.
+        student_log_probs = _row([0.99, 0.01])
+        teacher_log_probs = _row([0.5, 0.5])
+
+        unclipped = compute_divergence(student_log_probs, teacher_log_probs, alpha=1.0)
+        clip_threshold = unclipped.item() / 2
+        clipped = compute_divergence(student_log_probs, teacher_log_probs, alpha=1.0, kl_clip=clip_threshold)
+
+        assert unclipped.item() > clip_threshold, "test setup invalid: clipping never engages"
+        assert clipped.item() == pytest.approx(clip_threshold)
+        assert clipped.item() >= 0.0
+
+    def test_kl_clip_none_disables_clipping(self):
+        student_log_probs = _row([0.99, 0.01])
+        teacher_log_probs = _row([0.5, 0.5])
+
+        unclipped = compute_divergence(student_log_probs, teacher_log_probs, alpha=1.0)
+        explicit_none = compute_divergence(student_log_probs, teacher_log_probs, alpha=1.0, kl_clip=None)
+
+        torch.testing.assert_close(unclipped, explicit_none)

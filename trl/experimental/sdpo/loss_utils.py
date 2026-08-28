@@ -24,6 +24,7 @@ def compute_divergence(
     student_log_probs: torch.Tensor,
     teacher_log_probs: torch.Tensor,
     alpha: float,
+    kl_clip: float | None = None,
 ) -> torch.Tensor:
     if alpha == 0.0:
         kl = F.kl_div(student_log_probs, teacher_log_probs, reduction="none", log_target=True)
@@ -38,7 +39,12 @@ def compute_divergence(
         kl_teacher = F.kl_div(mixture, teacher_log_probs, reduction="none", log_target=True)
         kl_student = F.kl_div(mixture, student_log_probs, reduction="none", log_target=True)
         kl = torch.lerp(kl_student, kl_teacher, alpha)
-    return kl.sum(-1)
+    # Sum over the vocabulary first (per-entry `F.kl_div` values can be negative and are meant to cancel;
+    # the summed per-position KL is non-negative by construction). Then optionally cap outlier tokens.
+    kl = kl.sum(-1)
+    if kl_clip is not None:
+        kl = kl.clamp(max=kl_clip)
+    return kl
 
 
 def add_tail_bucket(log_probs: torch.Tensor) -> torch.Tensor:
@@ -72,19 +78,35 @@ def compute_topk_self_distillation_loss(
     distillation_topk: int,
     distillation_alpha: float,
     distillation_add_tail: bool,
+    distillation_kl_clip: float | None = None,
+    topk_support: str = "student",
 ) -> torch.Tensor:
-    """Compute distillation loss on the student's top-k token support.
+    """Compute distillation loss on a top-k token support.
 
-    The student's top-k logits define the support. The teacher distribution is projected onto the same token indices.
-    The selected support is then either renormalized or augmented with a tail bucket before the divergence is computed.
+    `topk_support` selects which side's top-k logits define the support: SDPO's convention is `"student"`;
+    passing `"teacher"` uses the teacher's top-k instead. The other side's distribution is projected
+    onto the same token indices. The selected support is then either renormalized or augmented with a tail bucket
+    before the divergence is computed.
     """
-    student_logsumexp = torch.logsumexp(student_logits, dim=-1, keepdim=True)
-    topk_student_logits, topk_indices = torch.topk(student_logits, k=distillation_topk, dim=-1)
-    topk_student_log_probs = topk_student_logits - student_logsumexp
+    if topk_support == "student":
+        support_logits, other_logits = student_logits, teacher_logits
+    elif topk_support == "teacher":
+        support_logits, other_logits = teacher_logits, student_logits
+    else:
+        raise ValueError(f"topk_support must be 'student' or 'teacher', got {topk_support!r}")
 
-    teacher_logsumexp = torch.logsumexp(teacher_logits, dim=-1, keepdim=True)
-    topk_teacher_logits = torch.gather(teacher_logits, dim=-1, index=topk_indices)
-    topk_teacher_log_probs = topk_teacher_logits - teacher_logsumexp
+    support_logsumexp = torch.logsumexp(support_logits, dim=-1, keepdim=True)
+    topk_support_logits, topk_indices = torch.topk(support_logits, k=distillation_topk, dim=-1)
+    topk_support_log_probs = topk_support_logits - support_logsumexp
+
+    other_logsumexp = torch.logsumexp(other_logits, dim=-1, keepdim=True)
+    topk_other_logits = torch.gather(other_logits, dim=-1, index=topk_indices)
+    topk_other_log_probs = topk_other_logits - other_logsumexp
+
+    if topk_support == "student":
+        topk_student_log_probs, topk_teacher_log_probs = topk_support_log_probs, topk_other_log_probs
+    else:
+        topk_teacher_log_probs, topk_student_log_probs = topk_support_log_probs, topk_other_log_probs
 
     # Top-k log-probs sum to the captured mass P_topk <= 1; the rest (1 - P_topk) is the "tail".
     if distillation_add_tail:
@@ -96,7 +118,7 @@ def compute_topk_self_distillation_loss(
         topk_student_log_probs = topk_student_log_probs - torch.logsumexp(topk_student_log_probs, dim=-1, keepdim=True)
         topk_teacher_log_probs = topk_teacher_log_probs - torch.logsumexp(topk_teacher_log_probs, dim=-1, keepdim=True)
 
-    return compute_divergence(topk_student_log_probs, topk_teacher_log_probs, distillation_alpha)
+    return compute_divergence(topk_student_log_probs, topk_teacher_log_probs, distillation_alpha, distillation_kl_clip)
 
 
 def compute_full_logit_self_distillation_loss(
@@ -104,11 +126,12 @@ def compute_full_logit_self_distillation_loss(
     teacher_logits: torch.Tensor,
     *,
     distillation_alpha: float,
+    distillation_kl_clip: float | None = None,
 ) -> torch.Tensor:
     """Compute full-vocabulary self-distillation loss between student and teacher logits."""
     student_log_probs = torch.log_softmax(student_logits, dim=-1)
     teacher_log_probs = torch.log_softmax(teacher_logits, dim=-1)
-    return compute_divergence(student_log_probs, teacher_log_probs, distillation_alpha)
+    return compute_divergence(student_log_probs, teacher_log_probs, distillation_alpha, distillation_kl_clip)
 
 
 def compute_sampled_token_self_distillation_loss(
