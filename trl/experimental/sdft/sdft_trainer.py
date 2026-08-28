@@ -520,22 +520,6 @@ class SDFTTrainer(_BaseTrainer):
             self.model.add_model_tags(self._tag_names)
 
         self._setup_teacher_model()
-        # The Liger fused JSD kernel projects `h @ Wᵀ` directly and has no `logit_scale` / `final_logit_softcapping`
-        # parameters, so (unlike the chunked path) it cannot reproduce Cohere `logit_scale` or Gemma
-        # `final_logit_softcapping`. Refuse rather than silently optimize a different objective than the model's
-        # real forward.
-        if self.use_liger_loss:
-            for name, config in [("student", self.model.config), ("teacher", self.teacher_model.config)]:
-                scaled = getattr(config, "logit_scale", 1.0) not in (None, 1.0)
-                softcapped = getattr(config, "final_logit_softcapping", None) is not None
-                if scaled or softcapped:
-                    raise ValueError(
-                        f"`use_liger_kernel=True` is incompatible with the {name} model's `logit_scale` / "
-                        f"`final_logit_softcapping` (e.g. Cohere / Gemma models): the Liger fused JSD loss reads "
-                        f"`lm_head.weight` directly and cannot apply them, so it would optimize a different "
-                        f"objective than the model's real forward. Set `use_liger_kernel=False` to use the chunked "
-                        f"loss, which applies both."
-                    )
         self.model_accepts_loss_kwargs = False
 
     def _set_signature_columns_if_needed(self):
@@ -586,10 +570,12 @@ class SDFTTrainer(_BaseTrainer):
 
         if teacher_model_kind == "live":
             self.teacher_model = self.model
+            self._check_liger_logit_scale_compat(self.teacher_model)
             return
 
         if teacher_model_kind == "base" and is_peft_model(self.model):
             self.teacher_model = self.model
+            self._check_liger_logit_scale_compat(self.teacher_model)
             return
 
         if self._use_peft_ema_teacher_adapter():
@@ -604,6 +590,7 @@ class SDFTTrainer(_BaseTrainer):
                 )
             )
             self.teacher_model = self.model
+            self._check_liger_logit_scale_compat(self.teacher_model)
             return
 
         if is_peft_model(self.model):
@@ -622,6 +609,9 @@ class SDFTTrainer(_BaseTrainer):
         self.teacher_model = create_model_from_path(get_config_model_id(self.model.config), **model_init_kwargs)
         self.teacher_model.requires_grad_(False)
         self.teacher_model.eval()
+        # Check compatibility before DeepSpeed/FSDP wrapping below: a `DeepSpeedEngine`'s own `.config` is its
+        # ds_config, not the model's, so reading `self.teacher_model.config` afterwards would silently skip this.
+        self._check_liger_logit_scale_compat(self.teacher_model)
         if self.is_deepspeed_enabled:
             self.teacher_model = prepare_deepspeed(self.teacher_model, self.accelerator)
         elif self.is_fsdp_enabled:
@@ -631,6 +621,32 @@ class SDFTTrainer(_BaseTrainer):
 
         if teacher_model_kind == "ema":
             self.add_callback(SyncTeacherModelCallback(teacher_model=self.teacher_model, accelerator=self.accelerator))
+
+    def _check_liger_logit_scale_compat(self, teacher_model) -> None:
+        """The Liger fused JSD kernel projects `h @ Wᵀ` directly and has no `logit_scale` / `final_logit_softcapping`
+        parameters, so (unlike the chunked path) it cannot reproduce Cohere `logit_scale` or Gemma
+        `final_logit_softcapping`. Refuse rather than silently optimize a different objective than the model's real
+        forward.
+        """
+        if not self.use_liger_loss:
+            return
+        for name, model in [("student", self.model), ("teacher", teacher_model)]:
+            # On VLMs the logit post-processing lives on `text_config`, so read it through `get_text_config()`.
+            # Muse Glimmer names its pre-softcap multiplier `output_multiplier`.
+            config = model.config.get_text_config()
+            logit_scale = getattr(config, "logit_scale", None)
+            if logit_scale is None:
+                logit_scale = getattr(config, "output_multiplier", None)
+            scaled = logit_scale not in (None, 1.0)
+            softcapped = getattr(config, "final_logit_softcapping", None) is not None
+            if scaled or softcapped:
+                raise ValueError(
+                    f"`use_liger_kernel=True` is incompatible with the {name} model's `logit_scale` / "
+                    f"`final_logit_softcapping` (e.g. Cohere / Gemma models): the Liger fused JSD loss reads "
+                    f"`lm_head.weight` directly and cannot apply them, so it would optimize a different "
+                    f"objective than the model's real forward. Set `use_liger_kernel=False` to use the chunked "
+                    f"loss, which applies both."
+                )
 
     def _use_peft_ema_teacher_adapter(self) -> bool:
         return self.args.teacher_model_kind == "ema" and is_pure_lora_training(self.model, self.accelerator)

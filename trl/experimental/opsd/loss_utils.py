@@ -39,10 +39,12 @@ def compute_divergence(
         kl_teacher = F.kl_div(mixture, teacher_log_probs, reduction="none", log_target=True)
         kl_student = F.kl_div(mixture, student_log_probs, reduction="none", log_target=True)
         kl = torch.lerp(kl_student, kl_teacher, alpha)
+    # Sum over the vocabulary first (per-entry `F.kl_div` values can be negative and are meant to cancel;
+    # the summed per-position KL is non-negative by construction). Then optionally cap outlier tokens.
+    kl = kl.sum(-1)
     if kl_clip is not None:
-        # Pointwise per-vocabulary-entry clip (OPSD): caps high-divergence style tokens before the vocabulary sum.
         kl = kl.clamp(max=kl_clip)
-    return kl.sum(-1)
+    return kl
 
 
 def add_tail_bucket(log_probs: torch.Tensor) -> torch.Tensor:
