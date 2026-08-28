@@ -188,6 +188,16 @@ class ZeroSyncGRPOConfig(_BaseConfig):
         },
     )
 
+    tp_size: int = field(
+        default=1,
+        metadata={
+            "help": "Number of processes the model is split across (tensor parallelism). With more than one, the "
+            "trainer advances generation itself, between its own layers, rather than letting the engine run in its "
+            "background thread: every rank then issues its collectives in the same order, which is what NCCL "
+            "requires. Generation still runs throughout the training step."
+        },
+    )
+
     # Parameters that control the training
     epsilon: float = field(
         default=0.2,

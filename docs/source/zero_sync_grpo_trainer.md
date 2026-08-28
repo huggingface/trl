@@ -73,12 +73,35 @@ What remains is that the KV cache of a rollout's prefix was computed with older 
 
 ## Scaling
 
-Every process holds a full copy of the weights and runs its own generation engine, so scaling is
-data parallel: `accelerate launch --num_processes N`. Tensor parallelism is not supported. The
-engine decodes in a background thread, and under tensor parallelism its collectives desynchronize
-from the ones the training step issues, which hangs the run. Giving each a separate process group
-is necessary but not sufficient; supporting this needs continuous batching to treat a concurrent
-trainer as a first-class case.
+Every process holds a full copy of the weights and runs its own generation engine, so the default
+scaling is data parallel: `accelerate launch --num_processes N`. Generation issues no collectives
+there, so the engine free-runs in its background thread and never waits for the trainer.
+
+Tensor parallelism splits one copy of the weights across processes instead, with `tp_size`:
+
+```python
+ZeroSyncGRPOConfig(tp_size=4)
+```
+
+Generation still runs throughout the training step, but it gets there differently, and the reason is
+worth knowing. Under tensor parallelism both generation and training issue collectives, and NCCL
+matches collectives by position across ranks: rank 0's third call pairs with rank 1's third call,
+whatever each of them is. Two threads racing produce an order the ranks do not agree on, so they
+pair a training collective on one rank with a decode collective on the other and the run deadlocks.
+Nothing outside the application can fix that, because nothing else knows the intended order.
+
+So under `tp_size > 1` the trainer advances the engine itself, between its own layers, rather than
+letting it run in a background thread. Every rank runs the same program, so every rank issues the
+same collectives in the same order by construction. Generation does not wait for the training step:
+it advances a decode step at each layer boundary, through the forward and the backward alike, which
+`generation/decode_steps` reports per step (two per layer). Nothing is drained and no request is
+lost.
+
+Two consequences to know about. The vocabulary projection is replicated rather than split, which
+costs one copy of that matrix per process and removes a gather from every forward. And the engine
+decodes through a second view of the model, sharing every parameter, because continuous batching
+switches a model to a paged attention implementation that cannot serve the training forward; that
+view costs no extra memory.
 
 Which knob to turn depends on whether generation or training is the bottleneck, and
 `generation_wait_s` tells you which regime you are in: it logs how long each step waited for the

@@ -1489,9 +1489,15 @@ def patch_chunked_lm_head(
             hidden_flat = hidden_flat[valid_mask]  # [N_valid, H]
             targets_flat = targets_flat[valid_mask]  # [N_valid]
 
+        # A replicated weight under tensor parallelism is a DTensor holding the whole matrix; the chunked matmul
+        # runs on plain tensors, and its local view is that same matrix.
+        lm_head_weight = self.lm_head.weight
+        if hasattr(lm_head_weight, "to_local"):
+            lm_head_weight = lm_head_weight.to_local()
+
         logprobs_valid, entropy_valid = _ChunkedLogProbFunction.apply(
             hidden_flat,
-            self.lm_head.weight,
+            lm_head_weight,
             targets_flat,
             temperature,
             chunk_size,

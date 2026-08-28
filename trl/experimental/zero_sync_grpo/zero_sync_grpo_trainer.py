@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import atexit
+import copy
 import time
 from collections import defaultdict, deque
 from collections.abc import Callable
@@ -21,6 +22,8 @@ from typing import Any
 
 import torch
 from datasets import Dataset, IterableDataset
+from torch import nn
+from torch.distributed.tensor import DTensor, Replicate
 from transformers import (
     AutoProcessor,
     GenerationConfig,
@@ -28,6 +31,12 @@ from transformers import (
     PreTrainedTokenizerBase,
     ProcessorMixin,
     TrainerCallback,
+)
+from transformers.distributed.configuration_utils import DistributedConfig
+from transformers.distributed.tensor_parallel import (
+    ALL_PARALLEL_STYLES,
+    _get_parameter_tp_plan,
+    _use_local_dtensor_params,
 )
 from transformers.generation import ContinuousBatchingConfig
 
@@ -74,6 +83,21 @@ def _chain_to_sequences(turns: list[TurnRecord]) -> tuple[list[dict[str, Any]], 
         row["completion_mask"].extend([0] * len(context) + [1] * len(turn.output_ids))
         row["logprobs"].extend([0.0] * len(context) + turn.output_log_probs)
     return [row for row in rows if any(row["completion_mask"])], forks
+
+
+def _compute_on_local_view(module):
+    """Run `module` on the local view of its parameters.
+
+    A replicated parameter is still a DTensor, and an op mixing one with a plain tensor raises. Keeping it a DTensor
+    matters because gradient clipping cannot mix the two kinds either, so the unwrapping happens here instead.
+    """
+    original = type(module).forward
+
+    def forward(*args, **kwargs):
+        with _use_local_dtensor_params(module):
+            return original(module, *args, **kwargs)
+
+    module.forward = forward
 
 
 class ZeroSyncGRPOTrainer(_BaseTrainer):
@@ -176,6 +200,11 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             model_init_kwargs = args.model_init_kwargs or {}
             # The same weights both generate and train, so default to the checkpoint dtype rather than fp32
             model_init_kwargs.setdefault("dtype", "auto")
+            if args.tp_size > 1:
+                # The model is split across the processes rather than placed on one device, and the two ways of
+                # deciding where parameters go are mutually exclusive.
+                model_init_kwargs["distributed_config"] = DistributedConfig(tp_size=args.tp_size)
+                model_init_kwargs["device_map"] = None
             model = create_model_from_path(model, **model_init_kwargs)
         else:
             if args.model_init_kwargs is not None:
@@ -209,6 +238,12 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         self.chat_template_kwargs = args.chat_template_kwargs or {}
         self.epsilon = args.epsilon
         self.generation_ahead = args.generation_ahead
+        self.tp_size = args.tp_size
+        # Under tensor parallelism the trainer advances generation itself, through a second view of the model, so
+        # that every rank issues its collectives in the same order. Both are built in `_init_manager`.
+        self._generation_view = None
+        self._request_counter = 0
+        self._decode_steps = 0
         self.max_tool_calling_iterations = args.max_tool_calling_iterations
 
         # Tools. `add_response_schema` teaches the tokenizer how to parse tool calls back out of a
@@ -232,6 +267,31 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
                 "`per_device_train_batch_size` scored samples while the dataloader feeds "
                 "`per_device_train_batch_size / num_generations` prompts."
             )
+
+        # Under tensor parallelism the vocabulary projection is replicated rather than split. The chunked lm_head
+        # below multiplies by the weight directly, which a sharded weight cannot serve, and the projection is the one
+        # place where splitting buys least: it costs one copy of that matrix per process and removes a gather from
+        # every forward. Everything else stays split.
+        if args.tp_size > 1:
+            output_embeddings = model.get_output_embeddings()
+            input_embeddings = model.get_input_embeddings()
+            tied = input_embeddings.weight is output_embeddings.weight
+            # Kept as a DTensor, replicated rather than split: every parameter then has the same type, which
+            # gradient clipping requires, and the chunked lm_head reads its local view.
+            weight = output_embeddings.weight
+            replicated = nn.Parameter(
+                DTensor.from_local(
+                    weight.full_tensor().contiguous(), weight.device_mesh, [Replicate()], run_check=False
+                )
+            )
+            output_embeddings.weight = replicated
+            # The transform installed for the split weight would now mix a plain weight with a DTensor input.
+            output_embeddings.__dict__.pop("forward", None)
+            _compute_on_local_view(output_embeddings)
+            if tied:
+                input_embeddings.weight = replicated
+                input_embeddings.__dict__.pop("forward", None)
+                _compute_on_local_view(input_embeddings)
 
         # Compute per-token logprobs without ever materializing the [batch, seq, vocab] logits: the lm_head runs in
         # chunks with an online logsumexp. Long completions make this the difference between training and an OOM.
@@ -295,6 +355,56 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             is_training=True,
         )
 
+    def _make_generation_view(self, model):
+        """A second view of the model for the engine to decode through, over the same parameters.
+
+        `init_continuous_batching` switches a model to a paged attention implementation, which is written for the
+        packed inputs the engine prepares and cannot serve the training forward. Under tensor parallelism the engine
+        is stepped from the training thread, so there is no moment at which the implementation could be switched back
+        and forth. This view shares every parameter, so an optimizer step is what the engine decodes from, and it
+        costs no extra memory: only the module objects and the config are copied.
+        """
+
+        def clone(module, config):
+            copied = copy.copy(module)
+            copied._parameters = dict(module._parameters)
+            copied._buffers = dict(module._buffers)
+            copied._modules = {name: clone(child, config) for name, child in module._modules.items()}
+            # Fresh hook containers: a shallow copy shares them, so the hooks that advance generation would fire
+            # again inside the engine's own forward.
+            for attribute, value in list(copied.__dict__.items()):
+                if attribute.endswith(("_hooks", "_hooks_with_kwargs")):
+                    copied.__dict__[attribute] = type(value)()
+            copied.__dict__.pop("forward", None)  # the tensor parallel forward is reinstalled below
+            if hasattr(copied, "config"):
+                copied.config = config
+            return copied
+
+        view = clone(model, copy.deepcopy(model.config))
+        for name, module in view.named_modules():
+            style = _get_parameter_tp_plan(parameter_name=name, tp_plan=model.tp_plan, is_weight=False)
+            # Replicated parameters are DTensors too, and a transform that splits their input would be wrong.
+            sharded = any(
+                any(not isinstance(placement, Replicate) for placement in getattr(param, "placements", ()))
+                for param in module.parameters(recurse=False)
+            )
+            if style is not None and style in ALL_PARALLEL_STYLES and sharded:
+                ALL_PARALLEL_STYLES[style].install_forward(module, model._device_mesh)
+            elif any(isinstance(param, DTensor) for param in module.parameters(recurse=False)):
+                _compute_on_local_view(module)
+        return view
+
+    def _advance_generation(self, *args):
+        """One decode step, taken from the training thread at a point every rank reaches identically."""
+        if self._stepping:  # the engine's own forward must not step the engine again
+            return
+        self._stepping = True
+        try:
+            if self._manager.step():
+                self._decode_steps += 1
+        finally:
+            self._stepping = False
+
     def _init_manager(self):
         # The manager is attached to the unwrapped training model: decoding reads the same parameter tensors the
         # optimizer updates in place. warmup() must run before start() so the cuda graphs are captured on the main
@@ -313,15 +423,27 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         # Generation and training share the device, so the KV cache must leave room for gradients, optimizer states
         # and activations; the engine's own default claims most of the free memory.
         cb_kwargs.setdefault("max_memory_percent", 0.2)
-        self._manager = model.init_continuous_batching(
+        # Under tensor parallelism the engine decodes through its own view of the model, and the trainer steps it
+        # rather than letting it run in the background: two threads issuing tensor parallel collectives would have to
+        # agree on an order, since NCCL matches them by position across ranks, and racing threads cannot. Stepping it
+        # between the trainer's own layers gives every rank the same order, and generation keeps advancing throughout
+        # the training step rather than waiting for it.
+        self._generation_view = self._make_generation_view(model) if self.tp_size > 1 else model
+        self._manager = self._generation_view.init_continuous_batching(
             generation_config=generation_config,
             continuous_batching_config=ContinuousBatchingConfig(**cb_kwargs),
         )
         self._manager.warmup()
-        self._manager.start()
-        # The background thread is not a daemon: without an explicit stop the process never exits, including after an
-        # exception in the training loop.
-        atexit.register(self._manager.stop, block=False)
+        if self.tp_size > 1:
+            self._stepping = False
+            for layer in model.model.layers:
+                layer.register_forward_hook(self._advance_generation)
+                layer.register_full_backward_hook(self._advance_generation)
+        else:
+            self._manager.start()
+            # The background thread is not a daemon: without an explicit stop the process never exits, including
+            # after an exception in the training loop.
+            atexit.register(self._manager.stop, block=False)
 
     def _tokenize_conversation(self, messages: list[dict[str, Any]]) -> list[int]:
         # Re-tokenize the WHOLE conversation each turn: the reconciler in `_chain_to_sequences` catches template
@@ -346,14 +468,28 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
                 "iterations": 0,
                 "tool_calls": 0,
             }
-            request_id = self._manager.add_request(prompt_ids, max_new_tokens=self.max_completion_length)
+            request_id = self._next_request_id()
+            self._manager.add_request(prompt_ids, request_id=request_id, max_new_tokens=self.max_completion_length)
             self._inflight[request_id] = rollout
+
+    def _next_request_id(self) -> str:
+        """Name a request identically on every rank.
+
+        `add_request` only queues on the tensor parallel driver and returns nothing elsewhere, while the results come
+        back on every rank. Every rank submits the same rollouts in the same order, so a counter names them the same.
+        """
+        self._request_counter += 1
+        return f"zero-sync-{self._request_counter}"
 
     def _drain(self, timeout: float) -> None:
         # Collect and score every completion the engine has finished; a group's advantages are computed once its last
         # completion lands. A dead background thread never raises from `get_result` (it returns None forever,
         # transformers#48334), so poll `fatal_error` to fail fast instead of spinning.
         while True:
+            if self.tp_size > 1:
+                # Nothing else advances the engine: the trainer owns it.
+                self._manager.step()
+                timeout = 0.0
             result = self._manager.get_result(timeout=timeout)
             if result is None:
                 fatal_error = self._manager.background_thread_status.fatal_error
@@ -390,7 +526,10 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             rollout["completion"].extend(tool_messages)
             rollout["iterations"] += 1
             rollout["prompt_ids"] = self._tokenize_conversation(rollout["messages"])
-            request_id = self._manager.add_request(rollout["prompt_ids"], max_new_tokens=self.max_completion_length)
+            request_id = self._next_request_id()
+            self._manager.add_request(
+                rollout["prompt_ids"], request_id=request_id, max_new_tokens=self.max_completion_length
+            )
             self._inflight[request_id] = rollout
             return
 
@@ -501,6 +640,12 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         while len(self._ready) < num_samples:
             self._drain(timeout=1.0)
         self._metrics[mode]["generation_wait_s"].append(time.perf_counter() - wait_start)
+        if self.tp_size > 1:
+            # How far generation got while this step was being computed. Under tensor parallelism the trainer
+            # advances the engine itself, between its own layers, so this counts the decode steps that happened
+            # inside the forward and backward rather than around them.
+            self._metrics[mode]["generation/decode_steps"].append(self._decode_steps)
+            self._decode_steps = 0
         samples = [self._ready.popleft() for _ in range(num_samples)]
 
         # Metrics of the rollouts this step trains on. They are per process: groups are formed and scored locally,
