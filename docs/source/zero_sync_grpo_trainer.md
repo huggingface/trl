@@ -84,18 +84,22 @@ ZeroSyncGRPOConfig(tp_size=4)
 ```
 
 Generation still runs throughout the training step, but it gets there differently, and the reason is
-worth knowing. Under tensor parallelism both generation and training issue collectives, and NCCL
-matches collectives by position across ranks: rank 0's third call pairs with rank 1's third call,
-whatever each of them is. Two threads racing produce an order the ranks do not agree on, so they
-pair a training collective on one rank with a decode collective on the other and the run deadlocks.
-Nothing outside the application can fix that, because nothing else knows the intended order.
+worth knowing. Under tensor parallelism both generation and training issue collectives, on separate
+NCCL communicators. NCCL requires that every rank issue the operations on its communicators in the
+same host-side order: [its user guide](https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/usage/communicators.html)
+states that "to remain deadlock free, users must ensure the order of host-side launches matches for
+all devices", and recommends "a deterministic order issued from a single host thread per-device".
+Two threads racing cannot provide that, because each rank's order then depends on its own timing.
+When the orders disagree the run deadlocks, and it does so in a way that is hard to read: a rank
+blocks inside an ordinary kernel launch, not inside a collective, because a CUDA call waits on the
+resident NCCL kernel and so prevents the other communicator's kernel from ever launching.
 
 So under `tp_size > 1` the trainer advances the engine itself, between its own layers, rather than
-letting it run in a background thread. Every rank runs the same program, so every rank issues the
-same collectives in the same order by construction. Generation does not wait for the training step:
-it advances a decode step at each layer boundary, through the forward and the backward alike, which
-`generation/decode_steps` reports per step (two per layer). Nothing is drained and no request is
-lost.
+letting it run in a background thread. That is the single deterministic host thread NCCL asks for:
+every rank runs the same program, so every rank issues the same collectives in the same order by
+construction. Generation does not wait for the training step: it advances a decode step at each
+layer boundary, through the forward and the backward alike, which `generation/decode_steps` reports
+per step (two per layer). Nothing is drained and no request is lost.
 
 Two consequences to know about. The vocabulary projection is replicated rather than split, which
 costs one copy of that matrix per process and removes a gather from every forward. And the engine

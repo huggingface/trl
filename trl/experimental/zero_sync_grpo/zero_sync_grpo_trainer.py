@@ -196,9 +196,12 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         # Model. The architecture (causal LM or vision-language model) is inferred from the checkpoint; VLMs are
         # supported with text-only data.
         if isinstance(model, str):
-            model_init_kwargs = args.model_init_kwargs or {}
+            model_init_kwargs = dict(args.model_init_kwargs or {})  # copy to avoid mutating model_init_kwargs
             # The same weights both generate and train, so default to the checkpoint dtype rather than fp32
             model_init_kwargs.setdefault("dtype", "auto")
+            # Distributed training requires device_map=None ("auto" fails)
+            if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
+                model_init_kwargs["device_map"] = None
             if args.tp_size > 1:
                 # The model is split across the processes rather than placed on one device, and the two ways of
                 # deciding where parameters go are mutually exclusive.
@@ -411,7 +414,11 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             return
         self._stepping = True
         try:
-            if self._manager.step():
+            import os as _os
+
+            for _ in range(int(_os.environ.get("ZS_STEPS_PER_BOUNDARY", "1"))):
+                if not self._manager.step():
+                    break
                 self._decode_steps += 1
         finally:
             self._stepping = False
@@ -435,10 +442,12 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         # and activations; the engine's own default claims most of the free memory.
         cb_kwargs.setdefault("max_memory_percent", 0.2)
         # Under tensor parallelism the engine decodes through its own view of the model, and the trainer steps it
-        # rather than letting it run in the background: two threads issuing tensor parallel collectives would have to
-        # agree on an order, since NCCL matches them by position across ranks, and racing threads cannot. Stepping it
-        # between the trainer's own layers gives every rank the same order, and generation keeps advancing throughout
-        # the training step rather than waiting for it.
+        # rather than letting it run in the background. The engine and the trainer then hold one NCCL communicator
+        # each, and NCCL requires every rank to issue the operations on its communicators in the same host-side order,
+        # recommending "a deterministic order issued from a single host thread per-device". Two racing threads cannot
+        # promise that, and when the orders disagree the run deadlocks inside an ordinary kernel launch rather than
+        # inside a collective. Stepping the engine between the trainer's own layers is that single thread, and
+        # generation keeps advancing throughout the training step rather than waiting for it.
         self._generation_view = self._make_generation_view(model) if self.tp_size > 1 else model
         self._manager = self._generation_view.init_continuous_batching(
             generation_config=generation_config,
