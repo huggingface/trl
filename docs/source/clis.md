@@ -19,7 +19,7 @@ Currently supported commands are:
 ### Other Commands
 
 - `trl env`: get the system information
-- `trl vllm-serve`: serve a model with vLLM
+- `trl vllm-serve`: serve a model with vLLM (deprecated, use `vllm serve` directly, see [vLLM integration](vllm_integration))
 
 ## Fine-Tuning with the TRL CLI
 
