@@ -80,20 +80,24 @@ class TestDOPDRouting:
         completion_ids = torch.zeros((5, 1), dtype=torch.long)
         return student_logits, privileged_student_logits, teacher_logits, completion_ids
 
+    def _route(self, student_logits, teacher_logits, privileged_student_logits, completion_ids, **overrides):
+        """`compute_dopd_routed_loss` with the module-level default hyperparameters, individually overridable."""
+        kwargs = {
+            "gap_threshold": GAP_THRESHOLD,
+            "confidence_threshold": CONFIDENCE_THRESHOLD,
+            "light_topk": LIGHT_TOPK,
+            "self_reg_weight": SELF_REG_WEIGHT,
+            "student_consistency_weight": STUDENT_CONSISTENCY_WEIGHT,
+        }
+        kwargs.update(overrides)
+        return compute_dopd_routed_loss(
+            student_logits, teacher_logits, privileged_student_logits, completion_ids, **kwargs
+        )
+
     def test_each_row_routes_to_its_expected_regime(self):
         student_logits, privileged_student_logits, teacher_logits, completion_ids = self._build_batch()
 
-        routed = compute_dopd_routed_loss(
-            student_logits,
-            teacher_logits,
-            privileged_student_logits,
-            completion_ids,
-            gap_threshold=GAP_THRESHOLD,
-            confidence_threshold=CONFIDENCE_THRESHOLD,
-            light_topk=LIGHT_TOPK,
-            self_reg_weight=SELF_REG_WEIGHT,
-            student_consistency_weight=STUDENT_CONSISTENCY_WEIGHT,
-        )
+        routed = self._route(student_logits, teacher_logits, privileged_student_logits, completion_ids)
         assert routed.shape == (5, 1)
 
         expected_regime1 = compute_topk_self_distillation_loss(
@@ -174,17 +178,8 @@ class TestDOPDRouting:
         teacher_logits = _row([0.28, 0.30, 0.22, 0.20]).unsqueeze(1)
         completion_ids = torch.zeros((1, 1), dtype=torch.long)
 
-        routed = compute_dopd_routed_loss(
-            student_logits,
-            teacher_logits,
-            student_logits,  # degenerate: privileged == bare student
-            completion_ids,
-            gap_threshold=GAP_THRESHOLD,
-            confidence_threshold=CONFIDENCE_THRESHOLD,
-            light_topk=LIGHT_TOPK,
-            self_reg_weight=SELF_REG_WEIGHT,
-            student_consistency_weight=STUDENT_CONSISTENCY_WEIGHT,
-        )
+        # degenerate: privileged == bare student
+        routed = self._route(student_logits, teacher_logits, student_logits, completion_ids)
         torch.testing.assert_close(routed, torch.zeros_like(routed), atol=1e-5, rtol=0)
         routed.sum().backward()
         assert student_logits.grad is not None
@@ -196,17 +191,7 @@ class TestDOPDRouting:
         # Real case: privileged student differs from the bare student -> regime 2 is a live KL with gradient.
         privileged_student_logits = _row([0.35, 0.25, 0.20, 0.20]).unsqueeze(1)
         student_logits = _row([0.30, 0.30, 0.20, 0.20]).unsqueeze(1).clone().requires_grad_(True)
-        routed = compute_dopd_routed_loss(
-            student_logits,
-            teacher_logits,
-            privileged_student_logits,
-            completion_ids,
-            gap_threshold=GAP_THRESHOLD,
-            confidence_threshold=CONFIDENCE_THRESHOLD,
-            light_topk=LIGHT_TOPK,
-            self_reg_weight=SELF_REG_WEIGHT,
-            student_consistency_weight=STUDENT_CONSISTENCY_WEIGHT,
-        )
+        routed = self._route(student_logits, teacher_logits, privileged_student_logits, completion_ids)
         assert not torch.allclose(routed, torch.zeros_like(routed), atol=1e-5)
         routed.sum().backward()
         assert student_logits.grad is not None
@@ -221,17 +206,7 @@ class TestDOPDRouting:
         student_logits, privileged_student_logits, teacher_logits, completion_ids = self._build_batch()
         student_logits = student_logits.clone().requires_grad_(True)
 
-        routed = compute_dopd_routed_loss(
-            student_logits,
-            teacher_logits,
-            privileged_student_logits,
-            completion_ids,
-            gap_threshold=GAP_THRESHOLD,
-            confidence_threshold=CONFIDENCE_THRESHOLD,
-            light_topk=LIGHT_TOPK,
-            self_reg_weight=SELF_REG_WEIGHT,
-            student_consistency_weight=STUDENT_CONSISTENCY_WEIGHT,
-        )
+        routed = self._route(student_logits, teacher_logits, privileged_student_logits, completion_ids)
         routed.sum().backward()
 
         assert student_logits.grad is not None
@@ -242,20 +217,12 @@ class TestDOPDRouting:
                 f"row {row} ({regime_name}) got a zero gradient through student_logits"
             )
 
-    def test_raising_gap_threshold_moves_high_gap_rows_into_regime_two(self):
+    def test_raising_gap_threshold_moves_high_gap_rows_into_regime_one(self):
         """Sanity check on the threshold's monotonic effect: a huge gap_threshold collapses everything to 'low gap'."""
         student_logits, privileged_student_logits, teacher_logits, completion_ids = self._build_batch()
 
-        routed_permissive = compute_dopd_routed_loss(
-            student_logits,
-            teacher_logits,
-            privileged_student_logits,
-            completion_ids,
-            gap_threshold=100.0,
-            confidence_threshold=CONFIDENCE_THRESHOLD,
-            light_topk=LIGHT_TOPK,
-            self_reg_weight=SELF_REG_WEIGHT,
-            student_consistency_weight=STUDENT_CONSISTENCY_WEIGHT,
+        routed_permissive = self._route(
+            student_logits, teacher_logits, privileged_student_logits, completion_ids, gap_threshold=100.0
         )
         expected_regime1 = compute_topk_self_distillation_loss(
             student_logits,
@@ -284,17 +251,7 @@ class TestDOPDRouting:
         teacher_logits = _row([0.90, 0.05, 0.03, 0.02]).unsqueeze(1)
         completion_ids = torch.zeros((1, 1), dtype=torch.long)
 
-        routed = compute_dopd_routed_loss(
-            student_logits,
-            teacher_logits,
-            privileged_student_logits,
-            completion_ids,
-            gap_threshold=GAP_THRESHOLD,
-            confidence_threshold=CONFIDENCE_THRESHOLD,
-            light_topk=LIGHT_TOPK,
-            self_reg_weight=SELF_REG_WEIGHT,
-            student_consistency_weight=STUDENT_CONSISTENCY_WEIGHT,
-        )
+        routed = self._route(student_logits, teacher_logits, privileged_student_logits, completion_ids)
 
         # High privileged gap + teacher confident -> regime 3 (full-vocab JSD), NOT regime 1.
         expected_regime3 = compute_full_logit_self_distillation_loss(
