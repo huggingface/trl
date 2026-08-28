@@ -67,8 +67,7 @@ jobs:
         uses: ./.github/actions/post-slack
         with:
           slack_channel: ${{ env.CI_SLACK_CHANNEL }}
-          title: Results of the slow tests on a single GPU
-          status: ${{ job.status }}
+          title: Slow tests on a single GPU
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
 
   run_all_tests_multi_gpu:
@@ -125,6 +124,5 @@ jobs:
         uses: ./.github/actions/post-slack
         with:
           slack_channel: ${{ env.CI_SLACK_CHANNEL }}
-          title: Results of the slow tests on multiple GPUs
-          status: ${{ job.status }}
+          title: Slow tests on multiple GPUs
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}

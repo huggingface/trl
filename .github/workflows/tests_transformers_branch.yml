@@ -66,8 +66,7 @@ jobs:
         uses: ./.github/actions/post-slack
         with:
           slack_channel: ${{ env.CI_SLACK_CHANNEL }}
-          title: Results with Transformers ${{ inputs.transformers_ref }}
-          status: ${{ job.status }}
+          title: Tests with Transformers ${{ inputs.transformers_ref }}
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
 
   distributed_smoke:
@@ -122,6 +121,5 @@ jobs:
         uses: ./.github/actions/post-slack
         with:
           slack_channel: ${{ env.CI_SLACK_CHANNEL }}
-          title: Results of distributed smoke tests with Transformers ${{ inputs.transformers_ref }}
-          status: ${{ job.status }}
+          title: Distributed smoke tests with Transformers ${{ inputs.transformers_ref }}
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}

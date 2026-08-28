@@ -95,8 +95,7 @@ jobs:
         uses: ./.github/actions/post-slack
         with:
           slack_channel: ${{ env.CI_SLACK_CHANNEL }}
-          title: Results with latest dependencies
-          status: ${{ job.status }}
+          title: Tests with latest dependencies
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
 
   tests_dev:
@@ -151,8 +150,7 @@ jobs:
         uses: ./.github/actions/post-slack
         with:
           slack_channel: ${{ env.CI_SLACK_CHANNEL }}
-          title: Results with dev dependencies
-          status: ${{ job.status }}
+          title: Tests with dev dependencies
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
 
   tests_wo_optional_deps:
@@ -202,8 +200,7 @@ jobs:
         uses: ./.github/actions/post-slack
         with:
           slack_channel: ${{ env.CI_SLACK_CHANNEL }}
-          title: Results without optional dependencies
-          status: ${{ job.status }}
+          title: Tests without optional dependencies
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
 
   tests_min_versions:
@@ -257,8 +254,7 @@ jobs:
         uses: ./.github/actions/post-slack
         with:
           slack_channel: ${{ env.CI_SLACK_CHANNEL }}
-          title: Results with minimum versions
-          status: ${{ job.status }}
+          title: Tests with minimum versions
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
 
   distributed_smoke:
@@ -310,6 +306,5 @@ jobs:
         uses: ./.github/actions/post-slack
         with:
           slack_channel: ${{ env.CI_SLACK_CHANNEL }}
-          title: Results of distributed smoke tests
-          status: ${{ job.status }}
+          title: Distributed smoke tests
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
