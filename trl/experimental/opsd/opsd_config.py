@@ -184,7 +184,12 @@ class OPSDConfig(_BaseConfig):
             Number of steps per generation. If `None`, it defaults to `gradient_accumulation_steps`.
     """
 
-    _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs"]
+    _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + [
+        "model_init_kwargs",
+        "generation_kwargs",
+        "chat_template_kwargs",
+        "teacher_chat_template_kwargs",
+    ]
 
     model_init_kwargs: dict[str, Any] | None = field(
         default=None,
@@ -204,7 +209,7 @@ class OPSDConfig(_BaseConfig):
         default=False,
         metadata={"help": "Whether to disable dropout in the student and teacher models."},
     )
-    remove_unused_columns: bool = field(
+    remove_unused_columns: bool | None = field(
         default=False,
         metadata={
             "help": "Whether to only keep the columns required by the trainer in the dataset. Keep this to `False` if you provide extra columns (such as `privileged_context`) that the trainer needs."
@@ -272,13 +277,13 @@ class OPSDConfig(_BaseConfig):
             "help": "Minimum token probability, which will be scaled by the probability of the most likely token. It must be a value between 0.0 and 1.0. Typical values are in the 0.01-0.2 range."
         },
     )
-    generation_kwargs: dict[str, Any] | None = field(
+    generation_kwargs: dict[str, Any] | str | None = field(
         default=None,
         metadata={
             "help": "Additional keyword arguments to pass to `GenerationConfig` (if using transformers) or `SamplingParams` (if using vLLM) when sampling completions. This can be used to further customize the generation behavior, such as setting `suppress_tokens`, `num_beams`, etc. If it contains keys that conflict with the other generation parameters (like `min_p`, `top_p`, etc.), they will override them."
         },
     )
-    chat_template_kwargs: dict[str, Any] | None = field(
+    chat_template_kwargs: dict[str, Any] | str | None = field(
         default=None,
         metadata={
             "help": "Additional keyword arguments to pass to the `apply_chat_template` function when generating completions."
@@ -440,7 +445,7 @@ class OPSDConfig(_BaseConfig):
             "prompt. Must contain the `{prompt}` and `{privileged_context}` placeholders."
         },
     )
-    teacher_chat_template_kwargs: dict[str, Any] | None = field(
+    teacher_chat_template_kwargs: dict[str, Any] | str | None = field(
         default=None,
         metadata={"help": "Extra kwargs forwarded to `apply_chat_template` when building the teacher prompt."},
     )
@@ -496,3 +501,13 @@ class OPSDConfig(_BaseConfig):
                     f"The global eval batch size ({self.per_device_eval_batch_size} * {num_processes}) must be "
                     f"divisible by the number of generations used for evaluation ({num_generations_eval})."
                 )
+
+        if self.parallelism_config is not None and (
+            self.parallelism_config.cp_enabled or self.parallelism_config.sp_enabled
+        ):
+            raise ValueError(
+                "OPSDTrainer does not support sequence-dim parallelism (`parallelism_config.cp_size > 1` or "
+                "`parallelism_config.sp_size > 1`) yet. OPSD builds model inputs after generation inside the trainer, "
+                "so Transformers' context-parallel / Ulysses sequence-parallel input sharding cannot be applied to the "
+                "raw generation batch. Set both `cp_size=1` and `sp_size=1`, or disable `parallelism_config`."
+            )

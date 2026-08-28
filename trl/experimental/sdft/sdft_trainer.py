@@ -520,6 +520,22 @@ class SDFTTrainer(_BaseTrainer):
             self.model.add_model_tags(self._tag_names)
 
         self._setup_teacher_model()
+        # The Liger fused JSD kernel projects `h @ Wᵀ` directly and has no `logit_scale` / `final_logit_softcapping`
+        # parameters, so (unlike the chunked path) it cannot reproduce Cohere `logit_scale` or Gemma
+        # `final_logit_softcapping`. Refuse rather than silently optimize a different objective than the model's
+        # real forward.
+        if self.use_liger_loss:
+            for name, config in [("student", self.model.config), ("teacher", self.teacher_model.config)]:
+                scaled = getattr(config, "logit_scale", 1.0) not in (None, 1.0)
+                softcapped = getattr(config, "final_logit_softcapping", None) is not None
+                if scaled or softcapped:
+                    raise ValueError(
+                        f"`use_liger_kernel=True` is incompatible with the {name} model's `logit_scale` / "
+                        f"`final_logit_softcapping` (e.g. Cohere / Gemma models): the Liger fused JSD loss reads "
+                        f"`lm_head.weight` directly and cannot apply them, so it would optimize a different "
+                        f"objective than the model's real forward. Set `use_liger_kernel=False` to use the chunked "
+                        f"loss, which applies both."
+                    )
         self.model_accepts_loss_kwargs = False
 
     def _set_signature_columns_if_needed(self):
