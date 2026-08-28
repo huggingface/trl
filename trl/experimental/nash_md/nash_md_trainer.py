@@ -37,7 +37,7 @@ from ...data_utils import maybe_apply_chat_template
 from ...models.utils import unwrap_model_for_generation
 from ...trainer.utils import selective_log_softmax
 from ..online_dpo import OnlineDPOTrainer
-from ..utils import empty_cache, get_reward, truncate_right
+from ..utils import empty_cache, get_reward, truncate_right, validate_reward_processing_class_shares_vocab
 from .nash_md_config import NashMDConfig
 
 
@@ -139,6 +139,15 @@ class NashMDTrainer(OnlineDPOTrainer):
             Processing class used to process the data. If provided, will be used to automatically process the inputs
             for the model, and it will be saved along the model to make it easier to rerun an interrupted training or
             reuse the fine-tuned model.
+        reward_processing_class ([`~transformers.PreTrainedTokenizerBase`], *optional*):
+            Processing class for the reward model specified in `reward_funcs`. If set to `None`, it defaults to
+            `processing_class`.
+
+            Note: `NashMDTrainer` scores completions by feeding token IDs produced by `processing_class` directly to
+            the reward model, instead of decoding and re-tokenizing with `reward_processing_class` (unlike
+            [`~trl.experimental.online_dpo.OnlineDPOTrainer`]). Because of this, the reward model must share the exact
+            same vocabulary as the policy model; this is validated at init time and raises a `ValueError` if the
+            vocabularies don't match.
         peft_config ([`~peft.PeftConfig`], *optional*):
             The peft config to use for training.
         compute_metrics (`Callable[[EvalPrediction], dict]`, *optional*):
@@ -183,6 +192,7 @@ class NashMDTrainer(OnlineDPOTrainer):
         | FeatureExtractionMixin
         | ProcessorMixin
         | None = None,
+        reward_processing_class: PreTrainedTokenizerBase | None = None,
         peft_config: "PeftConfig | None" = None,
         compute_metrics: Callable[[EvalPrediction], dict] | None = None,
         callbacks: list[TrainerCallback] | None = None,
@@ -198,7 +208,11 @@ class NashMDTrainer(OnlineDPOTrainer):
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
             processing_class=processing_class,
-            reward_processing_classes=processing_class,
+            # `NashMDTrainer` feeds token IDs produced by `processing_class` directly to the reward model (see
+            # `_compute_rewards` below), so the reward model's tokenizer must share the same vocabulary as
+            # `processing_class`. Default to `processing_class` itself when the caller doesn't supply one, and
+            # validate the vocabularies match below.
+            reward_processing_classes=reward_processing_class or processing_class,
             peft_config=peft_config,
             compute_metrics=compute_metrics,
             callbacks=callbacks,
@@ -230,6 +244,9 @@ class NashMDTrainer(OnlineDPOTrainer):
         if len(self.reward_funcs) != 1:
             raise ValueError("NashMDTrainer only supports one reward function/model.")
         self.reward_funcs = self.reward_funcs[0]
+        validate_reward_processing_class_shares_vocab(
+            self.reward_funcs, self.reward_processing_classes[0], self.processing_class
+        )
 
     @property
     def mixture_coef(self):
