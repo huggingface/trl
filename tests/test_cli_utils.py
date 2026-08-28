@@ -160,6 +160,24 @@ class TestTrlParser(TrlTestCase):
         assert isinstance(result_args[0], MyDataclass)
         assert result_args[0].arg1 == 42
 
+    def test_bare_flag_for_optional_bool_field(self):
+        """A `bool | None` field (e.g. `SFTConfig.bf16`) must accept a bare `--flag`, like a plain `bool` field."""
+
+        @dataclass
+        class OptionalBoolDataclass:
+            flag: bool | None = None
+
+        parser = TrlParser(dataclass_types=[OptionalBoolDataclass])
+
+        (result,) = parser.parse_args_and_config(["--flag"])
+        assert result.flag is True
+
+        (result,) = parser.parse_args_and_config([])
+        assert result.flag is None
+
+        (result,) = parser.parse_args_and_config(["--flag", "false"])
+        assert result.flag is False
+
     def test_parse_args_and_config_with_remaining_strings(self):
         parser = TrlParser(dataclass_types=[MyDataclass])
 
