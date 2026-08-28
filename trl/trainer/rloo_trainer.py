@@ -1185,6 +1185,15 @@ class RLOOTrainer(_BaseTrainer):
                 images.append(prompt_images if prompt_images else None)
             images = images if has_images else None
 
+            # vLLM expects prompts holding one placeholder token per image, and expands them itself against the
+            # images passed alongside. The processor-expanded IDs required by the training forward pass therefore
+            # get expanded a second time, which corrupts the prompt. Render an unexpanded copy with the tokenizer
+            # alone for the vLLM call. See https://github.com/huggingface/trl/issues/6294
+            # This holds for both vLLM modes: colocate expands the placeholders from the images it is given, and
+            # server locates them from the runs of image tokens (`VLLMGeneration._place_features`), which expects
+            # one run per image. Expanded IDs break both.
+            unexpand_for_vllm = self.use_vllm and images is not None
+
             # Workaround for a bug in transformers 5.3.0 where some processors (e.g. Qwen2.5-VL) crash on
             # batched unpadded input (transformers#44514).
             # Fixed in transformers 5.4.0 (transformers#44563).
@@ -1207,13 +1216,24 @@ class RLOOTrainer(_BaseTrainer):
                 prompt_ids = tokenized["input_ids"]
             # For VLMs, the processor returns extra multimodal fields (pixel_values, image_grid_thw, etc.)
             multimodal_fields = {k: v for k, v in tokenized.items() if k not in ("input_ids", "attention_mask")}
+            if unexpand_for_vllm:
+                texts = self.processing_class.apply_chat_template(
+                    conversation=prompts,
+                    add_generation_prompt=True,
+                    tokenize=False,
+                    **self.chat_template_kwargs,
+                )
+                vllm_prompt_ids = self._tokenizer(texts, add_special_tokens=False)["input_ids"]
+            else:
+                vllm_prompt_ids = prompt_ids
         else:
             prompt_ids = self.processing_class(text=prompts)["input_ids"]
             images = None
             multimodal_fields = {}
-        return prompt_ids, images, multimodal_fields
+            vllm_prompt_ids = prompt_ids
+        return prompt_ids, images, multimodal_fields, vllm_prompt_ids
 
-    def _generate_single_turn(self, prompt_ids, images, multimodal_fields):
+    def _generate_single_turn(self, prompt_ids, images, multimodal_fields, vllm_prompt_ids):
         device = self.accelerator.device
         mode = "train" if self.model.training else "eval"
 
@@ -1228,7 +1248,7 @@ class RLOOTrainer(_BaseTrainer):
             # Generate using vLLM (note: RLOO doesn't use logprobs from generation, so we ignore them)
             num_generations = self.num_generations if mode == "train" else self.num_generations_eval
             _, completion_ids, _, _ = self.vllm_generation.generate(
-                prompts=prompt_ids,
+                prompts=vllm_prompt_ids,
                 images=images,
                 num_generations=num_generations,
                 profiler=profiling_context(self, "vLLM.generate"),
@@ -1311,8 +1331,8 @@ class RLOOTrainer(_BaseTrainer):
         # Copy the prompts to avoid modifying the original list
         prompts = copy.deepcopy(prompts)
 
-        prompt_ids, images, multimodal_fields = self._tokenize_prompts(prompts)
-        completion_ids = self._generate_single_turn(prompt_ids, images, multimodal_fields)
+        prompt_ids, images, multimodal_fields, vllm_prompt_ids = self._tokenize_prompts(prompts)
+        completion_ids = self._generate_single_turn(prompt_ids, images, multimodal_fields, vllm_prompt_ids)
 
         # Decode completions. It's important to use `parse_response` when possible, because it handles tool calls.
         if is_conversational({"prompt": prompts[0]}):
