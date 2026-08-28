@@ -494,12 +494,14 @@ def unpair_preference_dataset(
     {'prompt': 'The sky is', 'completion': ' blue.', 'label': True}
     ```
     """
-    if isinstance(dataset, DatasetDict):
-        column_names = next(iter(dataset.values())).column_names
-    elif isinstance(dataset, Dataset):
-        column_names = dataset.column_names
+    if isinstance(dataset, (DatasetDict, IterableDatasetDict)):
+        dataset_or_split = next(iter(dataset.values()))
+    else:  # Dataset or IterableDataset
+        dataset_or_split = dataset
+    if isinstance(dataset_or_split, Dataset):
+        column_names = dataset_or_split.column_names
     else:  # IterableDataset
-        column_names = dataset.column_names or list(next(iter(dataset)).keys())
+        column_names = dataset_or_split.column_names or list(next(iter(dataset_or_split)).keys())
     return dataset.map(_unpair_row, batched=True, remove_columns=column_names, **map_kwargs)
 
 
