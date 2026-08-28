@@ -103,3 +103,39 @@ class TestZeroSyncGRPOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+
+class TestGenerationView(TrlTestCase):
+    """The second view of the model the engine decodes through, under tensor parallelism."""
+
+    def _view(self):
+        from transformers import AutoModelForCausalLM
+
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM")
+        view = ZeroSyncGRPOTrainer._make_generation_view(None, model)
+        return model, view
+
+    def test_shares_every_parameter(self):
+        # The point of the view: an optimizer step on the model is what the engine decodes from.
+        model, view = self._view()
+        originals = dict(model.named_parameters())
+        assert originals, "the model should have parameters"
+        for name, param in view.named_parameters():
+            assert param is originals[name], f"{name} is not shared with the model"
+
+    def test_hooks_are_not_shared(self):
+        # A shallow copy shares the hook containers, so a hook meant to advance generation between the
+        # trainer's layers would fire again inside the engine's own forward, without end.
+        model, view = self._view()
+        layer = view.model.layers[0]
+        layer.register_forward_hook(lambda *args: None)
+        assert len(layer._forward_hooks) == 1
+        assert len(model.model.layers[0]._forward_hooks) == 0
+
+    def test_attention_is_independent(self):
+        # The engine switches its own view to a paged implementation; the model keeps one a plain
+        # forward can use.
+        model, view = self._view()
+        assert view.config is not model.config
+        view.config._attn_implementation = "paged|sdpa"
+        assert model.config._attn_implementation != "paged|sdpa"

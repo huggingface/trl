@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import atexit
 import copy
 import time
 from collections import defaultdict, deque
@@ -355,6 +354,18 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             is_training=True,
         )
 
+    def train(self, *args, **kwargs):
+        try:
+            return super().train(*args, **kwargs)
+        finally:
+            if self._manager is not None:
+                # The generation thread is not a daemon, and Python joins those before it runs any atexit hook, so
+                # the process would never exit. A flush would wait for every rollout still in flight, and there are
+                # always some, since the trainer keeps `generation_ahead` batches queued; none of them will be
+                # trained on now.
+                self._manager.stop(block=True, timeout=30, hard_stop=True)
+                self._manager = None
+
     def _make_generation_view(self, model):
         """A second view of the model for the engine to decode through, over the same parameters.
 
@@ -382,7 +393,7 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
 
         view = clone(model, copy.deepcopy(model.config))
         for name, module in view.named_modules():
-            style = _get_parameter_tp_plan(parameter_name=name, tp_plan=model.tp_plan, is_weight=False)
+            style = _get_parameter_tp_plan(parameter_name=name, tp_plan=model.tp_plan or {}, is_weight=False)
             # Replicated parameters are DTensors too, and a transform that splits their input would be wrong.
             sharded = any(
                 any(not isinstance(placement, Replicate) for placement in getattr(param, "placements", ()))
@@ -441,9 +452,6 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
                 layer.register_full_backward_hook(self._advance_generation)
         else:
             self._manager.start()
-            # The background thread is not a daemon: without an explicit stop the process never exits, including
-            # after an exception in the training loop.
-            atexit.register(self._manager.stop, block=False)
 
     def _tokenize_conversation(self, messages: list[dict[str, Any]]) -> list[int]:
         # Re-tokenize the WHOLE conversation each turn: the reconciler in `_chain_to_sequences` catches template
