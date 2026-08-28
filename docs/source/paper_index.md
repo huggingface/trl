@@ -1320,11 +1320,11 @@ $$
 d_\theta(x_t, t)^\ell = \mathrm{softmax}\!\left( f_\theta(x_t, t)^\ell + \log\!\left(1 + \frac{K\,\alpha_t}{1 - \alpha_t}\, x_t^\ell\right) \right),
 $$
 
-i.e. an additive correction on the logit of the observed token, where \\( K \\) is the vocabulary size and \\( \alpha_t \\) the probability the uniform forward keeps the clean token. The paper reports that the LOO parameterization consistently improves generation. The block-diffusion SFT example [`examples/scripts/sft_diffusion_gemma.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/sft_diffusion_gemma.py) exposes both parameterizations via `--model_prediction_type` (`mean` for the plain denoiser, matching the released checkpoint, or `mean_loo` for the LOO posterior):
+i.e. an additive correction on the logit of the observed token, where \\( K \\) is the vocabulary size and \\( \alpha_t \\) the probability the uniform forward keeps the clean token. The paper reports that the LOO parameterization consistently improves generation. The block-diffusion SFT example [`examples/sft_diffusion_gemma/sft_diffusion_gemma.py`](https://github.com/huggingface/trl/blob/main/examples/sft_diffusion_gemma/sft_diffusion_gemma.py) exposes both parameterizations via `--model_prediction_type` (`mean` for the plain denoiser, matching the released checkpoint, or `mean_loo` for the LOO posterior):
 
 ```bash
 accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
-    examples/scripts/sft_diffusion_gemma.py \
+    examples/sft_diffusion_gemma/sft_diffusion_gemma.py \
     --use_peft \
     --gradient_checkpointing \
     --model_prediction_type mean_loo \

@@ -91,23 +91,6 @@ This callback logs the model's generated completions directly to Weights & Biase
 
 ![Logged Completions](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/wandb_completions.png)
 
-## Example script
-
-We provide an example script to train a model using the online DPO method. The script is available in [`examples/scripts/online_dpo.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/online_dpo.py)
-
-To test the online DPO script with the [Qwen2.5 0.5B model](https://huggingface.co/trl-lib/Qwen/Qwen2.5-0.5B-Instruct) on the [UltraFeedback dataset](https://huggingface.co/datasets/openbmb/UltraFeedback), run the following command:
-
-```bash
-python examples/scripts/online_dpo.py \
-    --model_name_or_path Qwen/Qwen2.5-0.5B-Instruct \
-    --reward_model_path trl-lib/Qwen2-0.5B-Reward \
-    --dataset_name trl-lib/ultrafeedback-prompt \
-    --learning_rate 5.0e-7 \
-    --output_dir Qwen2.5-0.5B-Online-DPO \
-    --warmup_steps 0.1 \
-    --push_to_hub
-```
-
 ## Logged metrics
 
 While training and evaluating, we record the following metrics. Here is an example [tracked run at Weights and Biases](https://wandb.ai/huggingface/trl/runs/w4apmsi9)
@@ -129,7 +112,7 @@ While training and evaluating, we record the following metrics. Here is an examp
 
 ## Benchmark experiments
 
-To validate the online DPO implementation works, we ran experiments with the Pythia 1B, 2.8B, and 6.9B models on a single node of 8 x H100s. Here are the commands we used to run the experiments. We take the SFT / RM models directly from [The N+ Implementation Details of RLHF with PPO: A Case Study on TL;DR Summarization](https://huggingface.co/papers/2403.17031).
+To validate the online DPO implementation works, we ran experiments with the Pythia 1B, 2.8B, and 6.9B models on a single node of 8 x H100s. Here are the commands we used to run the experiments, with the online DPO example script as it existed at the time ([`examples/scripts/online_dpo.py`](https://github.com/huggingface/trl/blob/v1.10.0/examples/scripts/online_dpo.py), since removed) — to reproduce them, run from a v1.10.0 checkout (`git checkout v1.10.0`). We take the SFT / RM models directly from [The N+ Implementation Details of RLHF with PPO: A Case Study on TL;DR Summarization](https://huggingface.co/papers/2403.17031).
 
 ```shell
 # 1B Online DPO experiment
