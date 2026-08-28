@@ -34,6 +34,7 @@ from transformers import (
     AutoModelForSequenceClassification,
     AutoProcessor,
     AutoTokenizer,
+    BitsAndBytesConfig,
     GenerationConfig,
     PreTrainedModel,
     PreTrainedTokenizerBase,
@@ -77,7 +78,8 @@ if is_liger_kernel_available():
 
 
 if is_peft_available():
-    from peft import PeftConfig
+    from peft import PeftConfig, PromptLearningConfig
+    from peft.tuners.tuners_utils import BaseTunerLayer
 
 
 logger = get_logger(__name__)
@@ -361,6 +363,7 @@ class SDPOTrainer(_BaseTrainer):
         reward_processing_classes: PreTrainedTokenizerBase | list[PreTrainedTokenizerBase] | None = None,
         callbacks: list[TrainerCallback] | None = None,
         optimizers: tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None] = (None, None),
+        quantization_config: "BitsAndBytesConfig | None" = None,
         peft_config=None,
     ):
         if reward_funcs is None or (isinstance(reward_funcs, list) and len(reward_funcs) == 0):
@@ -374,15 +377,30 @@ class SDPOTrainer(_BaseTrainer):
 
         if isinstance(model, str):
             model_init_kwargs = args.model_init_kwargs or {}
+            if quantization_config is not None:
+                if "quantization_config" in model_init_kwargs:
+                    raise ValueError(
+                        "You set `quantization_config` both as a trainer argument and in `args.model_init_kwargs`. "
+                        "Please set it in only one place, preferably as a trainer argument."
+                    )
+                model_init_kwargs["quantization_config"] = quantization_config
             if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 model_init_kwargs["device_map"] = None
             model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
             model = create_model_from_path(model, **model_init_kwargs)
-        elif args.model_init_kwargs is not None:
-            logger.warning(
-                "You passed `model_init_kwargs` to the self-distillation config, but `model` is already "
-                "instantiated. The `model_init_kwargs` will be ignored."
-            )
+        else:
+            if args.model_init_kwargs is not None:
+                logger.warning(
+                    "You passed `model_init_kwargs` to the self-distillation config, but `model` is already "
+                    "instantiated. The `model_init_kwargs` will be ignored."
+                )
+            if quantization_config is not None:
+                logger.warning(
+                    "You passed `quantization_config` to the trainer, but your model is already instantiated. "
+                    "The `quantization_config` will be ignored."
+                )
+        # Non-quantized models do not have the `is_loaded_in_{8,4}bit` attributes, whereas quantized models do.
+        is_quantized_model = getattr(model, "is_loaded_in_4bit", False) or getattr(model, "is_loaded_in_8bit", False)
 
         self.model_kwarg_keys = (
             inspect.signature(model.forward).parameters.keys()
@@ -416,6 +434,15 @@ class SDPOTrainer(_BaseTrainer):
                 )
         if peft_config is not None or (is_peft_available() and getattr(model, "peft_config", None) is not None):
             model = prepare_peft_model(model, peft_config, args)
+
+        # When using QLoRA, the PEFT adapter weights are converted to bf16 to follow the recommendations from the
+        # original paper (see https://huggingface.co/papers/2305.14314, paragraph 3). Normally, this can be done by
+        # passing `autocast_adapter_dtype=False` to `get_peft_model`, but this option is not yet supported for
+        # quantized models. See: https://github.com/huggingface/peft/issues/2889
+        if is_quantized_model:
+            for param in model.parameters():
+                if param.requires_grad:
+                    param.data = param.data.to(torch.bfloat16)
 
         if processing_class is None:
             processing_class = AutoProcessor.from_pretrained(
@@ -514,6 +541,21 @@ class SDPOTrainer(_BaseTrainer):
                     "Liger is required to use `use_liger_kernel` as the self-distillation loss. Run "
                     "`pip install liger-kernel`."
                 )
+            if is_peft_model(model):
+                # The fused kernel reads `lm_head.weight` directly and forwards the backbone via
+                # `_forward_redirection`, bypassing `PeftModel.forward()`.
+                if isinstance(model.get_output_embeddings(), BaseTunerLayer):
+                    raise ValueError(
+                        "`use_liger_kernel` does not support a PEFT adapter on `lm_head`: the fused kernel reads "
+                        "`lm_head.weight` directly, so the adapter is ignored and never trained. Remove "
+                        "`'lm_head'` from your `target_modules`."
+                    )
+                if any(isinstance(cfg, PromptLearningConfig) for cfg in model.peft_config.values()):
+                    raise ValueError(
+                        "`use_liger_kernel` does not support prompt-learning PEFT methods (PromptTuning, "
+                        "PrefixTuning, P-Tuning): the fused kernel calls the backbone directly, so virtual tokens "
+                        "are never prepended. Use a weight-based adapter such as LoRA instead."
+                    )
             if args.distillation_weight != 1.0:
                 raise ValueError(
                     "`use_liger_kernel` only supports pure self-distillation with `distillation_weight=1.0`, got "
@@ -609,6 +651,22 @@ class SDPOTrainer(_BaseTrainer):
             self.model.add_model_tags(self._tag_names)
 
         self._setup_teacher_model()
+        # The Liger fused JSD kernel projects `h @ Wᵀ` directly and has no `logit_scale` / `final_logit_softcapping`
+        # parameters, so (unlike the chunked path) it cannot reproduce Cohere `logit_scale` or Gemma
+        # `final_logit_softcapping`. Refuse rather than silently optimize a different objective than the model's
+        # real forward.
+        if self.use_liger_loss:
+            for name, config in [("student", self.model.config), ("teacher", self.teacher_model.config)]:
+                scaled = getattr(config, "logit_scale", 1.0) not in (None, 1.0)
+                softcapped = getattr(config, "final_logit_softcapping", None) is not None
+                if scaled or softcapped:
+                    raise ValueError(
+                        f"`use_liger_kernel=True` is incompatible with the {name} model's `logit_scale` / "
+                        f"`final_logit_softcapping` (e.g. Cohere / Gemma models): the Liger fused JSD loss reads "
+                        f"`lm_head.weight` directly and cannot apply them, so it would optimize a different "
+                        f"objective than the model's real forward. Set `use_liger_kernel=False` to use the chunked "
+                        f"loss, which applies both."
+                    )
         self.model_accepts_loss_kwargs = False
 
         self.importance_sampling_level = args.importance_sampling_level
