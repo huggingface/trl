@@ -121,7 +121,7 @@ class WeightTransferClient:
             return
         t0 = time.time()
         # Prepare the workers for the reload; must complete before any weights are sent.
-        self.vllm.start_weight_update()
+        self.vllm.start_weight_update(timeout=self.weight_sync_timeout)
 
         error: list[BaseException] = []
 
@@ -144,14 +144,14 @@ class WeightTransferClient:
         except Exception as exc:
             # Best-effort: a failure to clean up must not mask the error below.
             with contextlib.suppress(Exception):
-                self.vllm.finish_weight_update()
+                self.vllm.finish_weight_update(timeout=self.weight_sync_timeout)
             raise RuntimeError(
                 f"Weight sync to the vLLM server at {self.vllm.server_url} failed. The server keeps the partially "
                 "updated weights but stays paused, and a new run re-sends every parameter at start-up. If the "
                 "underlying error is a CUDA OOM on the server, restart it with a lower `--gpu-memory-utilization`: "
                 "receiving a transfer needs a few GB of headroom on top of the weights and the KV cache."
             ) from exc
-        self.vllm.finish_weight_update()
+        self.vllm.finish_weight_update(timeout=self.weight_sync_timeout)
         logger.debug(f"[weight_sync] send_weights took {time.time() - t0:.1f}s")
 
     def pause(self) -> None:
