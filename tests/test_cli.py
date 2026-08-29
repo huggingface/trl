@@ -54,6 +54,13 @@ def test_accelerate_config_argument(accelerate_config_args):
     assert launch_args[2:] == ["--num_processes", "2"]
 
 
+def test_accelerate_config_equals_requires_value():
+    from trl.cli.accelerate_config import resolve_accelerate_config_argument
+
+    with pytest.raises(ValueError, match="Expected a value after `--accelerate_config`."):
+        resolve_accelerate_config_argument(["--accelerate_config="])
+
+
 class TestCLI(TrlTestCase):
     def test_distillation(self):
         from trl.cli import main
