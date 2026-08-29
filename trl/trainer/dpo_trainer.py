@@ -650,8 +650,19 @@ class DPOTrainer(_BaseTrainer):
             ):
                 get_peft_model_kwargs["autocast_adapter_dtype"] = False
             model = get_peft_model(model, peft_config, **get_peft_model_kwargs)
+            # A freshly created adapter is zero-initialized, so disabling it recovers the base model, and that base
+            # model is the reference. That equivalence only holds while the reference stays fixed: with
+            # `sync_ref_model=True` the reference has to track the policy, which requires parameters of its own to
+            # move. So in that case create the "ref" adapter here as well.
+            needs_ref_adapter = args.sync_ref_model and ref_model is None
 
         elif is_peft_model(model) and ref_model is None:
+            needs_ref_adapter = True
+
+        else:
+            needs_ref_adapter = False
+
+        if needs_ref_adapter:
             # If the model is a PEFT model with a pretrained adapter, we need to create a "ref" adapter that is a copy
             # of the "default" adapter, so that we can use it as the reference model during DPO training. Before PEFT
             # 0.20.0, only one adapter per model was supported when the LoRA config uses `target_parameters` (see
@@ -962,14 +973,13 @@ class DPOTrainer(_BaseTrainer):
                 self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
 
         if args.sync_ref_model:
-            if is_peft_model(self.model):
+            if is_peft_model(self.model) and "ref" not in self.model.peft_config:
                 raise NotImplementedError(
-                    "You passed `sync_ref_model=True` while using a PEFT model, which is currently not supported. "
-                    "With PEFT, DPOTrainer does not keep a separate reference model in memory; instead, it recovers "
-                    "reference behavior by temporarily disabling the adapter. As a result, there is no standalone "
-                    "`ref_model` instance to synchronize. Use `sync_ref_model=False`, or opt for full fine-tuning if "
-                    "you need a synced reference model. If you need `sync_ref_model` to work with PEFT, please open a "
-                    "feature request at https://github.com/huggingface/trl/issues."
+                    "You passed `sync_ref_model=True` while using a PEFT model whose reference adapter could not be "
+                    "created, so there is nothing to synchronize. This happens with `peft<0.20.0` when the LoRA "
+                    "config uses `target_parameters` (peft#3340): the reference log probs then come from the base "
+                    "model with adapters disabled, which is fixed and cannot track the policy. Upgrade to "
+                    "`peft>=0.20.0`, or use `sync_ref_model=False`."
                 )
             if args.precompute_ref_log_probs:
                 raise ValueError(

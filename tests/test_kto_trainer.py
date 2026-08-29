@@ -749,6 +749,41 @@ class TestKTOTrainer(TrlTestCase):
             new_ref_param = trainer.ref_model.get_parameter(n)
             assert not torch.equal(previous_ref_params[n], new_ref_param), f"Ref Parameter {n} has not changed."
 
+    @require_peft
+    def test_train_with_sync_ref_model_and_peft(self):
+        # With PEFT there is no standalone `ref_model`; the reference lives in a frozen "ref" adapter inside the
+        # policy model. Check that `sync_ref_model=True` creates that adapter and that it tracks the policy.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
+
+        training_args = KTOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            sync_ref_model=True,
+            ref_model_sync_steps=2,  # reduce sync steps to ensure a sync happens
+            report_to="none",
+        )
+        trainer = KTOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset,
+            peft_config=LoraConfig(),
+        )
+
+        assert trainer.ref_model is None  # PEFT keeps the reference as an adapter, not a separate model
+        model = trainer.accelerator.unwrap_model(trainer.model)
+        assert "ref" in model.peft_config  # the EMA target the callback syncs into
+        previous_ref_params = {n: param.clone() for n, param in model.named_parameters() if ".ref." in n}
+        assert previous_ref_params  # guard against the loop below vacuously passing
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the reference adapter has tracked the policy
+        for n, param in previous_ref_params.items():
+            new_param = model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Ref adapter parameter {n} has not changed."
+
     def test_train_model_dtype(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
 
