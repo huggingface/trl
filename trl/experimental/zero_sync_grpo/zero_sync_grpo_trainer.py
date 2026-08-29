@@ -301,8 +301,17 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             _compute_on_local_view(output_embeddings)
             if tied:
                 input_embeddings.weight = replicated
-                input_embeddings.__dict__.pop("forward", None)
-                _compute_on_local_view(input_embeddings)
+            else:
+                # Untied models load the input embedding outside the tensor parallel plan, as a plain full tensor.
+                # It sits in the same optimizer group as the DTensor weights, and fused optimizers reject the mix.
+                input_embeddings.weight = nn.Parameter(
+                    DTensor.from_local(
+                        input_embeddings.weight.data, output_embeddings.weight.device_mesh, [Replicate()],
+                        run_check=False,
+                    )
+                )
+            input_embeddings.__dict__.pop("forward", None)
+            _compute_on_local_view(input_embeddings)
 
         # Compute per-token logprobs without ever materializing the [batch, seq, vocab] logits: the lm_head runs in
         # chunks with an online logsumexp. Long completions make this the difference between training and an OOM.
