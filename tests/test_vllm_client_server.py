@@ -12,11 +12,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import http.server
 import os
+import socket
+import socketserver
 import subprocess
+import threading
+import time
 from types import SimpleNamespace
 
 import pytest
+import requests
 from transformers import AutoModelForCausalLM, AutoProcessor, AutoTokenizer
 from transformers.testing_utils import torch_device
 
@@ -125,6 +131,53 @@ class TestExtractLogprobs(TrlTestCase):
 
         assert all_logprobs is None
         assert all_token_ids is None
+
+
+class TestCheckServerHealthProbe(TrlTestCase):
+    """`check_server` must give up after `total_timeout` even when the server stalls rather than refusing."""
+
+    @staticmethod
+    def _client_for(port: int) -> VLLMClient:
+        # `__init__` needs a live vLLM server; `check_server` is exercised on its own here.
+        client = VLLMClient.__new__(VLLMClient)
+        client.base_url = f"http://127.0.0.1:{port}"
+        return client
+
+    def test_stalled_server_raises_rather_than_blocking(self):
+        # A socket that accepts connections and never answers. The request succeeds at the TCP level and then hangs,
+        # so an unbounded probe never raises and `total_timeout` is never reached.
+        server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        server.bind(("127.0.0.1", 0))
+        server.listen(8)
+        try:
+            client = self._client_for(server.getsockname()[1])
+            start = time.time()
+            with pytest.raises(requests.exceptions.ConnectionError):
+                client.check_server(total_timeout=0.1, retry_interval=0.5)
+            assert time.time() - start < 5.0, "check_server did not honor total_timeout against a stalled server"
+        finally:
+            server.close()
+
+    def test_healthy_server_still_accepted(self):
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.end_headers()
+
+            def log_message(self, *args):
+                pass
+
+        httpd = socketserver.TCPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        thread.start()
+        try:
+            client = self._client_for(httpd.server_address[1])
+            client.check_server(total_timeout=5.0, retry_interval=0.5)  # must return without raising
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+            thread.join(timeout=5.0)
 
 
 @pytest.mark.slow

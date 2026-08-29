@@ -270,7 +270,9 @@ class VLLMClient:
 
         while True:
             try:
-                response = requests.get(url)
+                # The probe must be bounded: a server that accepts the connection and then stalls would otherwise
+                # block here forever, and `total_timeout` is only checked in the except branch below.
+                response = requests.get(url, timeout=retry_interval)
             except requests.exceptions.RequestException as exc:
                 # Check if the total timeout duration has passed
                 elapsed_time = time.time() - start_time
