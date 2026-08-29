@@ -3683,3 +3683,201 @@ class TestGOLDTrainerLoss(TrlTestCase):
             assert "input_ids" in next(iter(trainer.eval_dataset["data2"]))
         else:
             assert "input_ids" in next(iter(trainer.eval_dataset))
+
+
+class TestGOLDTrainerIterableDataset(TrlTestCase):
+    def setup_method(self):
+        self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
+        self.tokenizer.pad_token = self.tokenizer.eos_token
+
+    @pytest.mark.parametrize("lmbda", [0.0, 1.0])
+    def test_train_with_iterable_dataset(self, lmbda):
+        # Iterable (streaming) datasets have no length, so `max_steps` is required. Both GOLD paths consume the same
+        # repeated stream: off-policy (lmbda=0.0, loss on the dataset's ground-truth completions) and on-policy
+        # (lmbda=1.0, loss on student-generated completions).
+        dataset = load_dataset(
+            "trl-internal-testing/zen", "conversational_prompt_completion", split="train", streaming=True
+        )
+
+        training_args = GOLDConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=2,  # reduce the batch size to reduce memory usage
+            gradient_accumulation_steps=2,  # >1 so the stream must repeat each generation batch across the window
+            num_generations=2,  # >1 so the stream must group prompt repeats like the sampler
+            lmbda=lmbda,
+            max_length=64,
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            max_steps=3,
+            use_cpu=True,
+            bf16=False,
+            report_to="none",
+        )
+        trainer = GOLDTrainer(
+            model=self.model_id,
+            teacher_model=self.model_id,
+            args=training_args,
+            train_dataset=dataset,
+            processing_class=self.tokenizer,
+        )
+
+        # Iterable datasets force `dispatch_batches=False` so the stream can be sharded per process.
+        assert trainer.args.accelerator_config.dispatch_batches is False
+
+        # Diverge the teacher from the student so JSD is well above fp noise (else the loss is identically 0 and
+        # parameters never move).
+        torch.manual_seed(0)
+        with torch.no_grad():
+            for p in trainer.teacher_model.parameters():
+                p.add_(0.5 * torch.randn_like(p))
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    def test_iterable_dataset_requires_dispatch_batches_false(self):
+        # `dispatch_batches=True` is incompatible with iterable datasets (see get_train_dataloader).
+        dataset = load_dataset(
+            "trl-internal-testing/zen", "conversational_prompt_completion", split="train", streaming=True
+        )
+
+        training_args = GOLDConfig(
+            output_dir=self.tmp_dir, accelerator_config={"dispatch_batches": True}, report_to="none"
+        )
+        with pytest.raises(ValueError, match="Iterable datasets require `dispatch_batches=False`"):
+            GOLDTrainer(
+                model=self.model_id,
+                teacher_model=self.model_id,
+                args=training_args,
+                train_dataset=dataset,
+                processing_class=self.tokenizer,
+            )
+
+    def test_iterable_dataset_forces_num_workers_zero(self):
+        # Multiple workers would shard and interleave the repeated stream, splitting num_generations groups, so
+        # `dataloader_num_workers` is forced to 0 for iterable datasets.
+        dataset = load_dataset(
+            "trl-internal-testing/zen", "conversational_prompt_completion", split="train", streaming=True
+        )
+
+        training_args = GOLDConfig(output_dir=self.tmp_dir, dataloader_num_workers=4, max_steps=1, report_to="none")
+        trainer = GOLDTrainer(
+            model=self.model_id,
+            teacher_model=self.model_id,
+            args=training_args,
+            train_dataset=dataset,
+            processing_class=self.tokenizer,
+        )
+
+        assert trainer.args.dataloader_num_workers == 0
+
+    def test_evaluate_with_iterable_dataset(self):
+        # GOLD evaluation is off-policy (a plain forward over the ground truth, no generation), so an iterable eval
+        # set flows through the base `Trainer` eval path; only the accelerator dispatch config needs the
+        # iterable-aware setup at init.
+        train_dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
+        eval_dataset = load_dataset(
+            "trl-internal-testing/zen", "conversational_prompt_completion", split="test", streaming=True
+        )
+
+        training_args = GOLDConfig(
+            output_dir=self.tmp_dir,
+            per_device_eval_batch_size=2,  # reduce the batch size to reduce memory usage
+            max_length=64,
+            max_completion_length=8,  # must stay below max_length (unused in eval, which never generates)
+            use_cpu=True,
+            bf16=False,
+            report_to="none",
+        )
+        trainer = GOLDTrainer(
+            model=self.model_id,
+            teacher_model=self.model_id,
+            args=training_args,
+            train_dataset=train_dataset,
+            eval_dataset=eval_dataset,
+            processing_class=self.tokenizer,
+        )
+
+        assert trainer.args.accelerator_config.dispatch_batches is False
+
+        metrics = trainer.evaluate()
+        assert metrics["eval_loss"] is not None
+
+
+class TestGOLDTrainerRepeatBatchDataLoader(TrlTestCase):
+    def setup_method(self):
+        self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
+        self.tokenizer.pad_token = self.tokenizer.eos_token
+
+    @pytest.mark.parametrize("streaming", [False, True])
+    def test_generation_batch_is_collated_once_per_window(self, streaming):
+        # The training dataloader must collate (tokenize) each generation batch exactly once and then replay the cached
+        # batch across the gradient-accumulation window, instead of re-collating the same examples on every micro-step.
+        # `_RepeatBatchDataLoader` applies this window replay uniformly to map-style datasets (sampler `repeat_count=1`)
+        # and iterable datasets (`repeat_iterable_dataset(repeat_count=1)`), so the collator runs exactly once per
+        # window on both paths -- in particular the iterable path must not repeat the window a second time.
+        grad_accum = 3
+        per_device = 2
+        num_windows = 2  # dataset holds `per_device * grad_accum * num_windows` unique examples
+        messages = [
+            [{"role": "user", "content": f"Question {i}?"}, {"role": "assistant", "content": f"Answer {i}."}]
+            for i in range(per_device * grad_accum * num_windows)
+        ]
+        dataset = Dataset.from_dict({"messages": messages})
+        if streaming:
+            dataset = dataset.to_iterable_dataset()
+
+        trainer = GOLDTrainer(
+            model=self.model_id,
+            teacher_model=self.model_id,
+            args=GOLDConfig(
+                output_dir=self.tmp_dir,
+                report_to="none",
+                per_device_train_batch_size=per_device,
+                gradient_accumulation_steps=grad_accum,
+                num_generations=1,
+                max_length=64,
+                max_completion_length=16,
+                # Required for the streaming case: the Trainer rejects a length-less dataset at construction without
+                # it. Harmless for the map-style case since this test only builds the dataloader, never trains.
+                max_steps=num_windows * grad_accum,
+                use_cpu=True,
+                bf16=False,
+            ),
+            train_dataset=dataset,
+            processing_class=self.tokenizer,
+        )
+
+        # Wrap the collator to count how many times examples are actually collated (tokenized).
+        class _CountingCollator:
+            def __init__(self, inner):
+                self.inner = inner
+                self.n_calls = 0
+
+            def __call__(self, examples):
+                self.n_calls += 1
+                return self.inner(examples)
+
+        counting_collator = _CountingCollator(trainer.data_collator)
+        trainer.data_collator = counting_collator
+
+        batches = list(trainer.get_train_dataloader())
+
+        # Collated exactly once per window (not once per micro-step, and not twice for iterable datasets), then
+        # replayed `grad_accum` times across the window.
+        assert counting_collator.n_calls == num_windows
+        assert len(batches) == num_windows * grad_accum
+
+        # The `grad_accum` micro-step batches within a window are the same cached object (proof of no re-collation).
+        for window_start in range(0, len(batches), grad_accum):
+            window = batches[window_start : window_start + grad_accum]
+            assert all(batch is window[0] for batch in window)
