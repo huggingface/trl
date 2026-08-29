@@ -271,8 +271,10 @@ class RLOOTrainer(_BaseTrainer):
             if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 model_init_kwargs["device_map"] = None
             model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
+            model_revision = model_init_kwargs.get("revision")
             model = create_model_from_path(model, **model_init_kwargs)
         else:
+            model_revision = None
             if args.model_init_kwargs is not None:
                 logger.warning(
                     "You passed `model_init_kwargs` to the `RLOOConfig`, but your model is already instantiated. "
@@ -298,6 +300,7 @@ class RLOOTrainer(_BaseTrainer):
         if processing_class is None:
             processing_class = AutoProcessor.from_pretrained(
                 get_config_model_id(model.config),
+                revision=model_revision,
                 truncation_side="left",
                 padding_side="left",
                 trust_remote_code=args.trust_remote_code,
