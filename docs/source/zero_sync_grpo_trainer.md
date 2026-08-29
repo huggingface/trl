@@ -51,11 +51,7 @@ Only the blocks a rollout is actually using are copied to host memory and back, 
 
 This turns off `use_async_batching`, since a batch still in flight cannot have its cache taken from under it. That costs nothing here (1.52 against 1.53 s/step).
 
-<Tip warning={true}>
-
-Known issue: above roughly 128-token completions, a run with this option enabled fails partway with `probability tensor contains inf, nan or element < 0`, meaning the generation state does not survive the release and restore. It is the completion length that matters: 128 tokens finishes with either 4 or 8 rollouts per prompt, 256 tokens fails with 4. It is not the cuda graphs, since it fails with them off too. The same configurations without this option are stable. Leave it off until this is fixed.
-
-</Tip>
+With 512-token completions and 8 rollouts per prompt it is also free: 2.52 and 2.40 s/step with it, against 2.51 and 2.45 without.
 
 ## Multi-turn and tools
 
