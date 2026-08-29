@@ -53,6 +53,8 @@ This turns off `use_async_batching`, since a batch still in flight cannot have i
 
 With 512-token completions and 8 rollouts per prompt it is also free: 2.52 and 2.40 s/step with it, against 2.51 and 2.45 without.
 
+The cost follows the live cache, so it stops being free once many rollouts are in flight: at batch size 256 (Qwen3-4B, tp 4, 512-token completions) releasing measured 8.4 s/step against 6.9 without, and 9.7 with a 24 GiB CPU pool, since every step then copies gigabytes over PCIe both ways. Reach for it when the training step does not fit in memory otherwise, not for speed.
+
 ## Multi-turn and tools
 
 Pass tools to train an agent. Each turn re-renders the whole conversation through the chat template, so a template that rewrites history (dropping reasoning, summarizing earlier turns) can re-tokenize tokens the model already generated. When that happens, the conversation forks into a second training row rather than silently masking those tokens as context, and both rows carry the rollout's advantage:
