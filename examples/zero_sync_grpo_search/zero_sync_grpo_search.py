@@ -43,21 +43,20 @@ Each turn resubmits the conversation so far, and the continuous batching engine 
 prefix from its cache (~91% of the second turn's prompt), so a tool loop costs far less than the
 same tokens generated fresh.
 
-FLA_CACHE_MODE=FULL python examples/zero_sync_grpo_search/zero_sync_grpo_search.py
+FLA_CACHE_MODE=FULL torchrun --nproc-per-node 4 examples/zero_sync_grpo_search/zero_sync_grpo_search.py
 
 `FLA_CACHE_MODE=FULL` makes flash-linear-attention take its own kernel configuration instead of
 autotuning through Triton, whose autotuner it currently crashes in (`fla.modules.l2norm`).
 
-As a smoke test, six steps on a single H100 run the loop end to end: 2.5 search calls per question
-and 0.28 answer F1 on Qwen3.5-2B. That is the starting point, not a training curve.
+Qwen3.5-9B takes 4 GPUs (its 4 key-value heads set the tensor parallel width). For a single GPU,
+set `MODEL` to Qwen/Qwen3.5-2B.
 
-Single GPU for now: the tool loop injects each follow-up turn as a new request the moment that
-rollout's tool call returns, so the request streams of two processes do not line up, and tensor
-parallelism needs every rank to issue the same collectives in the same order. Set `MODEL` to a
-larger checkpoint and `tp_size` once the tool loop is synchronized across ranks.
+As a smoke test, four steps on 4xH100 run the loop end to end: 1.9 search calls per question and
+0.76 answer F1 on Qwen3.5-9B. That is the starting point, not a training curve.
 """
 
 import math
+import os
 import re
 import string
 from collections import Counter, defaultdict
@@ -67,7 +66,7 @@ from datasets import load_dataset
 from trl.experimental.zero_sync_grpo import ZeroSyncGRPOConfig, ZeroSyncGRPOTrainer
 
 
-MODEL = "Qwen/Qwen3.5-2B"
+MODEL = "Qwen/Qwen3.5-9B"
 
 # Telling the model it does not know the answer is what gets it to search: left to itself, it
 # answers the question straight away from memory, and there is no tool use to reinforce.
@@ -79,9 +78,12 @@ SYSTEM_PROMPT = (
 )
 
 # The corpus the `search` tool reads. Tools are plain functions called by the trainer, so the index
-# lives at module level, built once in `main`.
+# lives at module level, built once in `main`. Every process must retrieve the same articles for the
+# same query: under tensor parallelism the ranks run one conversation together, so a tool result that
+# differs between them makes their requests diverge. Hence sorted postings rather than sets, whose
+# iteration order over strings changes from one process to the next.
 DOCUMENTS: dict[str, str] = {}
-INVERTED_INDEX: dict[str, set[str]] = defaultdict(set)
+INVERTED_INDEX: dict[str, list[str]] = {}
 INVERSE_DOCUMENT_FREQUENCY: dict[str, float] = {}
 
 
@@ -94,10 +96,12 @@ def build_index(dataset) -> None:
     for example in dataset:
         for title, sentences in zip(example["context"]["title"], example["context"]["sentences"], strict=True):
             DOCUMENTS.setdefault(title, "".join(sentences))
+    postings = defaultdict(set)
     for title, text in DOCUMENTS.items():
         for token in set(tokenize(title + " " + text)):
-            INVERTED_INDEX[token].add(title)
-    for token, titles in INVERTED_INDEX.items():
+            postings[token].add(title)
+    for token, titles in postings.items():
+        INVERTED_INDEX[token] = sorted(titles)
         INVERSE_DOCUMENT_FREQUENCY[token] = math.log(len(DOCUMENTS) / len(titles))
 
 
@@ -108,14 +112,16 @@ def search(query: str) -> str:
         query: What to look for, for example the name of a person, work or place.
     """
     scores = Counter()
-    for token in set(tokenize(query)):
+    for token in sorted(set(tokenize(query))):
         weight = INVERSE_DOCUMENT_FREQUENCY.get(token, 0.0)
         for title in INVERTED_INDEX.get(token, ()):
             # A match in the title is what identifies an article, so it counts double
             scores[title] += weight * (2.0 if token in tokenize(title) else 1.0)
     if not scores:
         return "No article found."
-    return "\n\n".join(f"# {title}\n{DOCUMENTS[title]}" for title, _ in scores.most_common(3))
+    # Ranked by score, ties broken by title, so the ranking never depends on iteration order
+    ranked = sorted(scores.items(), key=lambda item: (-item[1], item[0]))[:3]
+    return "\n\n".join(f"# {title}\n{DOCUMENTS[title]}" for title, _ in ranked)
 
 
 def normalize(text: str) -> list[str]:
@@ -170,6 +176,7 @@ def main():
         # Fraction of free VRAM for the KV cache; the rest is for activations and gradients
         continuous_batching_config={"max_memory_percent": 0.25},
         packed_training=True,
+        tp_size=int(os.environ.get("WORLD_SIZE", "1")),
         max_steps=200,
     )
     trainer = ZeroSyncGRPOTrainer(

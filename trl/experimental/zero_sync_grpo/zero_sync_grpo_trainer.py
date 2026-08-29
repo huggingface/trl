@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import contextlib
 import copy
 import time
 from collections import defaultdict, deque
@@ -95,6 +96,34 @@ def _compute_on_local_view(module):
 
     def forward(*args, **kwargs):
         with _use_local_dtensor_params(module):
+            return original(module, *args, **kwargs)
+
+    module.forward = forward
+
+
+def _compute_on_local_subtree(module):
+    """Like `_compute_on_local_view`, but also for the replicated parameters of `module`'s descendants.
+
+    A module does not always read its parameters through its own forward: the gated delta net convolves with
+    `self.conv1d.weight` itself, so unwrapping the convolution alone never fires. Wrapping the reader instead keeps
+    the whole subtree local for the call. It has to be a forward wrapper rather than one context around the step,
+    because gradient checkpointing replays these forwards during the backward pass.
+    """
+    original = type(module).forward
+    replicated = [
+        submodule
+        for submodule in module.modules()
+        if any(True for _ in submodule.parameters(recurse=False))
+        and all(
+            isinstance(param, DTensor) and all(isinstance(p, Replicate) for p in param.placements)
+            for param in submodule.parameters(recurse=False)
+        )
+    ]
+
+    def forward(*args, **kwargs):
+        with contextlib.ExitStack() as stack:
+            for submodule in replicated:
+                stack.enter_context(_use_local_dtensor_params(submodule))
             return original(module, *args, **kwargs)
 
     module.forward = forward
@@ -329,6 +358,33 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             input_embeddings.__dict__.pop("forward", None)
             _compute_on_local_view(input_embeddings)
 
+            # Whatever the plan leaves out loads as a plain tensor: norms, and on hybrid models the gated delta
+            # net's convolution and gates. Those parameters see the same inputs and produce the same gradients on
+            # every rank, so they are replicated, but fused optimizers and gradient clipping still reject a group
+            # mixing them with DTensors. Their modules then compute on the local view, like the embeddings above.
+            converted = []
+            for module in model.modules():
+                plain_names = [
+                    name for name, param in module.named_parameters(recurse=False) if not isinstance(param, DTensor)
+                ]
+                if not plain_names:
+                    continue
+                for name in plain_names:
+                    param = getattr(module, name)
+                    setattr(
+                        module,
+                        name,
+                        nn.Parameter(
+                            DTensor.from_local(param.data, device_mesh, [Replicate()], run_check=False),
+                            requires_grad=param.requires_grad,
+                        ),
+                    )
+                converted.append(module)
+            # In a second pass, so that each wrapper sees the whole of its subtree already replicated: modules are
+            # walked parents first, and a child converted later would not have been picked up.
+            for module in converted:
+                _compute_on_local_subtree(module)
+
         # Compute per-token logprobs without ever materializing the [batch, seq, vocab] logits: the lm_head runs in
         # chunks with an online logsumexp. Long completions make this the difference between training and an OOM.
         # The patch replaces `forward`, and the generation engine decodes through that same object, so the standard
@@ -450,7 +506,7 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             if style is not None and style in ALL_PARALLEL_STYLES and sharded:
                 ALL_PARALLEL_STYLES[style].install_forward(module, model._device_mesh)
             elif any(isinstance(param, DTensor) for param in module.parameters(recurse=False)):
-                _compute_on_local_view(module)
+                _compute_on_local_subtree(module)
         return view
 
     def _init_manager(self):
