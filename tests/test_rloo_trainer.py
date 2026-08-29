@@ -52,7 +52,9 @@ class TestRLOOTrainer(TrlTestCase):
     def test_init_auto_processing_class_uses_model_revision(self):
         # The automatically created processing_class must be loaded from the same revision as the model
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
-        with patch.object(AutoProcessor, "from_pretrained", wraps=AutoProcessor.from_pretrained) as mock_from_pretrained:
+        with patch.object(
+            AutoProcessor, "from_pretrained", wraps=AutoProcessor.from_pretrained
+        ) as mock_from_pretrained:
             RLOOTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
                 reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
