@@ -805,7 +805,7 @@ def _pack_bfd(
         if space > 0:
             segment_tree.add(space)
 
-    examples = pc.take(examples, [id_ for bin in bins for id_ in bin["ids"]])
+    examples = pc.take(examples, pa.array([id_ for bin in bins for id_ in bin["ids"]], type=pa.int64()))
     offsets = np.cumsum([0] + [bin["length"] for bin in bins])
 
     assert all(

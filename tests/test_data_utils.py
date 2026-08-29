@@ -18,7 +18,7 @@ from time import strftime
 
 import pytest
 import transformers
-from datasets import Dataset, DatasetDict
+from datasets import Dataset, DatasetDict, Features, Sequence, Value
 from packaging.version import Version
 from transformers import AutoProcessor, AutoTokenizer, is_vision_available
 
@@ -1338,6 +1338,16 @@ class TestPackDatasetBfd(TrlTestCase):
         }
         dataset = pack_dataset(dataset, seq_length, strategy="bfd_split")
         assert dataset.to_dict() == expected_output
+
+    @pytest.mark.parametrize("strategy", ["bfd", "bfd_split"])
+    def test_with_all_empty_sequences(self, strategy):
+        dataset = Dataset.from_dict(
+            {"input_ids": [[], []]}, features=Features({"input_ids": Sequence(Value("int64"))})
+        )
+
+        packed_dataset = pack_dataset(dataset, seq_length=4, strategy=strategy)
+
+        assert packed_dataset.to_dict() == {"input_ids": [], "seq_lengths": []}
 
 
 class TestMaybeConvertToChatML(TrlTestCase):
