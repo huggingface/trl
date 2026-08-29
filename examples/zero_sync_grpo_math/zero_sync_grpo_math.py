@@ -30,7 +30,8 @@ most `generation_ahead` steps stale).
 This recipe is the tuned configuration for the long-completion regime (Qwen3-14B, ~3-4k-token
 thinking completions, 4x H100). Each knob below is what moved the needle:
 
-- `packed_training` + flex attention: samples are packed back to back, so no pad-token compute.
+- `packed_training`: samples are packed back to back, so no pad-token compute (this also defaults
+  the model to flex attention, which skips the masked-out cross-sample blocks).
 - `generation_ahead=16`: a 4k rollout spans many optimizer steps, so the engine needs a deep
   lookahead to keep its decode batch full. Going 8 -> 16 -> 32 kept improving throughput at 14B
   (7.4 -> 8.5 -> 9.8% MFU) at the cost of completions up to that many steps stale; past the point
@@ -88,7 +89,6 @@ def main():
     config = ZeroSyncGRPOConfig(
         output_dir="zero-sync-grpo-gsm8k",
         save_strategy="no",
-        model_init_kwargs={"attn_implementation": "flex_attention"},
         per_device_train_batch_size=8,
         gradient_accumulation_steps=4,
         num_generations=8,

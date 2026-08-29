@@ -38,6 +38,7 @@ from transformers.distributed.tensor_parallel import (
     _use_local_dtensor_params,
 )
 from transformers.generation import ContinuousBatchingConfig
+from transformers.utils import is_flash_attn_2_available, is_flash_attn_3_available
 
 from ...chat_template_utils import add_response_schema, parse_response, supports_tool_calling
 from ...trainer.base_trainer import _BaseTrainer
@@ -208,6 +209,20 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
                 model_init_kwargs["distributed_config"] = DistributedConfig(tp_size=args.tp_size)
                 model_init_kwargs["device_map"] = None
             model = create_model_from_path(model, **model_init_kwargs)
+            if args.packed_training and "attn_implementation" not in model_init_kwargs:
+                if "linear_attention" in (getattr(model.config.get_text_config(), "layer_types", None) or []):
+                    # Hybrid models read the sample boundaries from the flash varlen kwargs; flex attention is
+                    # not supported there, and a dense implementation would attend across samples
+                    if is_flash_attn_3_available(kernels_fallback_ok=True):
+                        model.set_attn_implementation("flash_attention_3")
+                    elif is_flash_attn_2_available(kernels_fallback_ok=True):
+                        model.set_attn_implementation("flash_attention_2")
+                    else:
+                        raise ValueError("Packed training on a hybrid model requires flash attention")
+                else:
+                    # Packed rows attend through a block-diagonal mask; flex attention skips the masked-out
+                    # cross-sample blocks, where a dense implementation still pays for them.
+                    model.set_attn_implementation("flex_attention")
         else:
             if args.model_init_kwargs is not None:
                 raise ValueError(
@@ -240,6 +255,11 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         self.chat_template_kwargs = args.chat_template_kwargs or {}
         self.epsilon = args.epsilon
         self.packed_training = args.packed_training
+        # Linear attention layers (hybrid models like Qwen3.5) scan packed rows with varlen kernels that take one
+        # flat row with explicit boundaries, so packing then goes in a single unpadded row instead of several rows
+        self.packed_single_row = "linear_attention" in (
+            getattr(model.config.get_text_config(), "layer_types", None) or []
+        )
         self.generation_ahead = args.generation_ahead
         self.tp_size = args.tp_size
         # Giving the KV cache memory to the training step only works when generation is quiescent while it runs, which
@@ -306,7 +326,9 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
                 # It sits in the same optimizer group as the DTensor weights, and fused optimizers reject the mix.
                 input_embeddings.weight = nn.Parameter(
                     DTensor.from_local(
-                        input_embeddings.weight.data, output_embeddings.weight.device_mesh, [Replicate()],
+                        input_embeddings.weight.data,
+                        output_embeddings.weight.device_mesh,
+                        [Replicate()],
                         run_check=False,
                     )
                 )
@@ -402,11 +424,17 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         module objects and the config are copied.
         """
 
-        def clone(module, config):
+        # The deepcopy memo maps every original config object to its copy, sub-configs included, so each module
+        # of the view keeps the same config it held on the model (composite models give their text and vision
+        # submodels their own sub-configs).
+        memo: dict[int, Any] = {}
+        copy.deepcopy(model.config, memo)
+
+        def clone(module):
             copied = copy.copy(module)
             copied._parameters = dict(module._parameters)
             copied._buffers = dict(module._buffers)
-            copied._modules = {name: clone(child, config) for name, child in module._modules.items()}
+            copied._modules = {name: clone(child) for name, child in module._modules.items()}
             # Fresh hook containers: a shallow copy shares them, so the hooks that advance generation would fire
             # again inside the engine's own forward.
             for attribute, value in list(copied.__dict__.items()):
@@ -414,10 +442,10 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
                     copied.__dict__[attribute] = type(value)()
             copied.__dict__.pop("forward", None)  # the tensor parallel forward is reinstalled below
             if hasattr(copied, "config"):
-                copied.config = config
+                copied.config = memo.get(id(module.config), module.config)
             return copied
 
-        view = clone(model, copy.deepcopy(model.config))
+        view = clone(model)
         for name, module in view.named_modules():
             style = _get_parameter_tp_plan(parameter_name=name, tp_plan=model.tp_plan or {}, is_weight=False)
             # Replicated parameters are DTensors too, and a transform that splits their input would be wrong.
@@ -480,8 +508,13 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         # rewrites of earlier turns precisely because the prompt is rebuilt from the message list instead of glued
         # onto held tokens.
         return self.processing_class.apply_chat_template(
-            messages, add_generation_prompt=True, tools=self.tools or None, **self.chat_template_kwargs
-        )["input_ids"]
+            [messages],
+            add_generation_prompt=True,
+            tokenize=True,
+            return_dict=True,
+            tools=self.tools or None,
+            **self.chat_template_kwargs,
+        )["input_ids"][0]
 
     def _submit_group(self, example: dict[str, Any]) -> None:
         # Start `num_generations` rollouts of the prompt. Each rollout is a chain of turns: a completed turn that
@@ -726,6 +759,32 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         # Build the training tensors. Each row already carries its full token sequence, the mask over the trained
         # (model-generated) tokens and the engine's behavior-policy logprobs aligned to them, 0.0 on context.
         pad_token_id = self._tokenizer.pad_token_id
+        if self.packed_training and self.packed_single_row:
+            # One flat row, no padding: samples go back to back and the boundaries travel as cu_seq_lens_q, which
+            # the varlen attention kernels and the linear attention layers consume directly. Position ids still
+            # restart at every sample, and the loss shift stays sound at the seams for the same reason as below.
+            lengths = torch.tensor([len(s["input_ids"]) for s in samples])
+            cu_seq_lens = torch.cat([torch.zeros(1, dtype=torch.int32), lengths.cumsum(0).to(torch.int32)])
+            return {
+                "input_ids": torch.tensor([t for s in samples for t in s["input_ids"]]).unsqueeze(0).to(device),
+                "position_ids": torch.cat([torch.arange(len(s["input_ids"])) for s in samples])
+                .unsqueeze(0)
+                .to(device),
+                "completion_mask": torch.tensor([m for s in samples for m in s["completion_mask"]], dtype=torch.long)
+                .unsqueeze(0)
+                .to(device),
+                "old_per_token_logps": torch.tensor([lp for s in samples for lp in s["logprobs"]], dtype=torch.float32)
+                .unsqueeze(0)
+                .to(device),
+                "advantages": torch.cat([s["advantage"].repeat(len(s["input_ids"])) for s in samples])
+                .to(torch.float32)
+                .unsqueeze(0)
+                .to(device),
+                "cu_seq_lens_q": cu_seq_lens.to(device),
+                "cu_seq_lens_k": cu_seq_lens.to(device),
+                "max_length_q": int(lengths.max()),
+                "max_length_k": int(lengths.max()),
+            }
         if self.packed_training:
             # Pack the samples back to back, first-fit by decreasing length, instead of padding each to the
             # longest. Position ids restart at every sample and no attention mask is passed, so the model builds
@@ -782,12 +841,18 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
 
         # Per-token logprobs of the sampled tokens under the current policy, computed by the chunked lm_head, so
         # only completion positions are scored and the full-vocab logits never materialize.
+        boundary_kwargs = {
+            key: inputs[key]
+            for key in ("cu_seq_lens_q", "cu_seq_lens_k", "max_length_q", "max_length_k")
+            if key in inputs
+        }
         outputs = model(
             input_ids=inputs["input_ids"],
             attention_mask=inputs.get("attention_mask"),
             position_ids=inputs.get("position_ids"),
             labels=inputs["input_ids"],
             completion_mask=completion_mask,
+            **boundary_kwargs,
         )
         per_token_logps = outputs["log_probs"]
         mask = completion_mask[:, 1:].to(per_token_logps.dtype)
