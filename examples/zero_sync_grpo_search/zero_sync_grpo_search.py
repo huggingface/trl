@@ -44,15 +44,11 @@ same tokens generated fresh.
 
 torchrun --nproc-per-node 4 examples/zero_sync_grpo_search/zero_sync_grpo_search.py
 
-Training runs on padded batches rather than packed ones: packing a hybrid model needs the delta
-rule to take sequence boundaries, which only the flash-linear-attention kernels do, and that
-package does not currently survive its own Triton autotuning here.
-
 Qwen3.5-9B takes 4 GPUs (its 4 key-value heads set the tensor parallel width). For a single GPU,
 set `MODEL` to Qwen/Qwen3.5-2B.
 
-As a smoke test, four steps on 4xH100 run the loop end to end: 1.7 search calls per question and
-0.76 answer F1 on Qwen3.5-9B. That is the starting point, not a training curve.
+As a smoke test, a few steps on 4xH100 run the loop end to end: about 2 search calls per question
+and 0.73 answer F1 on Qwen3.5-9B. That is the starting point, not a training curve.
 """
 
 import math
@@ -175,7 +171,7 @@ def main():
         generation_ahead=8,
         # Fraction of free VRAM for the KV cache; the rest is for activations and gradients
         continuous_batching_config={"max_memory_percent": 0.25},
-        packed_training=False,
+        packed_training=True,
         tp_size=int(os.environ.get("WORLD_SIZE", "1")),
         max_steps=200,
     )

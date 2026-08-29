@@ -14,7 +14,6 @@
 
 import contextlib
 import copy
-import importlib.util
 import time
 from collections import defaultdict, deque
 from collections.abc import Callable
@@ -88,27 +87,14 @@ def _chain_to_sequences(turns: list[TurnRecord]) -> tuple[list[dict[str, Any]], 
 
 
 def _compute_on_local_view(module):
-    """Run `module` on the local view of its parameters.
+    """Run `module` on the local view of the replicated parameters in its subtree.
 
     A replicated parameter is still a DTensor, and an op mixing one with a plain tensor raises. Keeping it a DTensor
-    matters because gradient clipping cannot mix the two kinds either, so the unwrapping happens here instead.
-    """
-    original = type(module).forward
-
-    def forward(*args, **kwargs):
-        with _use_local_dtensor_params(module):
-            return original(module, *args, **kwargs)
-
-    module.forward = forward
-
-
-def _compute_on_local_subtree(module):
-    """Like `_compute_on_local_view`, but also for the replicated parameters of `module`'s descendants.
-
-    A module does not always read its parameters through its own forward: the gated delta net convolves with
-    `self.conv1d.weight` itself, so unwrapping the convolution alone never fires. Wrapping the reader instead keeps
-    the whole subtree local for the call. It has to be a forward wrapper rather than one context around the step,
-    because gradient checkpointing replays these forwards during the backward pass.
+    matters because gradient clipping cannot mix the two kinds either, so the unwrapping happens here instead. It
+    covers the descendants because a module does not always read its parameters through its own forward: the gated
+    delta net convolves with `self.conv1d.weight` itself, so unwrapping the convolution alone would never fire. And
+    it is a forward wrapper rather than one context around the step, because gradient checkpointing replays these
+    forwards during the backward pass.
     """
     original = type(module).forward
     replicated = [
@@ -290,15 +276,6 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         self.packed_single_row = "linear_attention" in (
             getattr(model.config.get_text_config(), "layer_types", None) or []
         )
-        if self.packed_training and self.packed_single_row and importlib.util.find_spec("fla") is None:
-            # Without flash-linear-attention, the delta rule falls back to a torch implementation that takes no
-            # sequence boundaries, and the recurrent state would run straight through the packed samples: every
-            # sample after the first would train on a state carried over from its predecessors.
-            raise ValueError(
-                "`packed_training=True` on a model with linear attention layers requires the "
-                "flash-linear-attention package, whose kernels take the sequence boundaries. Install it, or set "
-                "`packed_training=False` to train on padded batches."
-            )
         self.generation_ahead = args.generation_ahead
         self.tp_size = args.tp_size
         # Giving the KV cache memory to the training step only works when generation is quiescent while it runs, which
@@ -359,14 +336,10 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             _compute_on_local_view(output_embeddings)
             if tied:
                 input_embeddings.weight = replicated
-            else:
-                # Untied models load the input embedding outside the tensor parallel plan, as a plain full tensor.
-                # It sits in the same optimizer group as the DTensor weights, and fused optimizers reject the mix.
-                input_embeddings.weight = nn.Parameter(
-                    DTensor.from_local(input_embeddings.weight.data, device_mesh, [Replicate()], run_check=False)
-                )
-            input_embeddings.__dict__.pop("forward", None)
-            _compute_on_local_view(input_embeddings)
+                # The transform installed for the split weight would now mix a plain weight with a DTensor input.
+                input_embeddings.__dict__.pop("forward", None)
+                _compute_on_local_view(input_embeddings)
+            # An untied input embedding loads outside the plan, as a plain tensor, and the sweep below replicates it
 
             # Whatever the plan leaves out loads as a plain tensor: norms, and on hybrid models the gated delta
             # net's convolution and gates. Those parameters see the same inputs and produce the same gradients on
@@ -393,7 +366,7 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             # In a second pass, so that each wrapper sees the whole of its subtree already replicated: modules are
             # walked parents first, and a child converted later would not have been picked up.
             for module in converted:
-                _compute_on_local_subtree(module)
+                _compute_on_local_view(module)
 
         # Compute per-token logprobs without ever materializing the [batch, seq, vocab] logits: the lm_head runs in
         # chunks with an online logsumexp. Long completions make this the difference between training and an OOM.
@@ -516,7 +489,7 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             if style is not None and style in ALL_PARALLEL_STYLES and sharded:
                 ALL_PARALLEL_STYLES[style].install_forward(module, model._device_mesh)
             elif any(isinstance(param, DTensor) for param in module.parameters(recurse=False)):
-                _compute_on_local_subtree(module)
+                _compute_on_local_view(module)
         return view
 
     def _init_manager(self):
