@@ -14,6 +14,7 @@
 
 import contextlib
 import copy
+import importlib.util
 import time
 from collections import defaultdict, deque
 from collections.abc import Callable
@@ -289,6 +290,15 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         self.packed_single_row = "linear_attention" in (
             getattr(model.config.get_text_config(), "layer_types", None) or []
         )
+        if self.packed_training and self.packed_single_row and importlib.util.find_spec("fla") is None:
+            # Without flash-linear-attention, the delta rule falls back to a torch implementation that takes no
+            # sequence boundaries, and the recurrent state would run straight through the packed samples: every
+            # sample after the first would train on a state carried over from its predecessors.
+            raise ValueError(
+                "`packed_training=True` on a model with linear attention layers requires the "
+                "flash-linear-attention package, whose kernels take the sequence boundaries. Install it, or set "
+                "`packed_training=False` to train on padded batches."
+            )
         self.generation_ahead = args.generation_ahead
         self.tp_size = args.tp_size
         # Giving the KV cache memory to the training step only works when generation is quiescent while it runs, which

@@ -16,7 +16,6 @@
 # dependencies = [
 #     "trl",
 #     "kernels",
-#     "flash-linear-attention",
 # ]
 # ///
 
@@ -43,15 +42,16 @@ Each turn resubmits the conversation so far, and the continuous batching engine 
 prefix from its cache (~91% of the second turn's prompt), so a tool loop costs far less than the
 same tokens generated fresh.
 
-FLA_CACHE_MODE=FULL torchrun --nproc-per-node 4 examples/zero_sync_grpo_search/zero_sync_grpo_search.py
+torchrun --nproc-per-node 4 examples/zero_sync_grpo_search/zero_sync_grpo_search.py
 
-`FLA_CACHE_MODE=FULL` makes flash-linear-attention take its own kernel configuration instead of
-autotuning through Triton, whose autotuner it currently crashes in (`fla.modules.l2norm`).
+Training runs on padded batches rather than packed ones: packing a hybrid model needs the delta
+rule to take sequence boundaries, which only the flash-linear-attention kernels do, and that
+package does not currently survive its own Triton autotuning here.
 
 Qwen3.5-9B takes 4 GPUs (its 4 key-value heads set the tensor parallel width). For a single GPU,
 set `MODEL` to Qwen/Qwen3.5-2B.
 
-As a smoke test, four steps on 4xH100 run the loop end to end: 1.9 search calls per question and
+As a smoke test, four steps on 4xH100 run the loop end to end: 1.7 search calls per question and
 0.76 answer F1 on Qwen3.5-9B. That is the starting point, not a training curve.
 """
 
@@ -175,7 +175,7 @@ def main():
         generation_ahead=8,
         # Fraction of free VRAM for the KV cache; the rest is for activations and gradients
         continuous_batching_config={"max_memory_percent": 0.25},
-        packed_training=True,
+        packed_training=False,
         tp_size=int(os.environ.get("WORLD_SIZE", "1")),
         max_steps=200,
     )
