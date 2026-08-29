@@ -308,7 +308,10 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         # The patch replaces `forward`, and the generation engine decodes through that same object, so the standard
         # forward is kept for calls without labels, which is what decoding does.
         generation_forward = model.forward
-        patch_chunked_lm_head(model, chunk_size=8192, temperature=self.temperature)
+        # Under tensor parallelism the replicated lm_head would make every rank compute the whole vocabulary;
+        # passing the group makes each rank take every tp_size-th chunk instead, combined with two collectives.
+        tp_group = model._device_mesh.get_group() if args.tp_size > 1 else None
+        patch_chunked_lm_head(model, chunk_size=8192, temperature=self.temperature, tp_group=tp_group)
         training_forward = model.forward
 
         def forward(*args, labels=None, **kwargs):

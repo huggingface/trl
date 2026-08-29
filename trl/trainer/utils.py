@@ -1330,11 +1330,18 @@ class _ChunkedLogProbFunction(torch.autograd.Function):
         chunk_size: int,
         final_logit_softcapping: float | None = None,
         logit_scale: float = 1.0,
+        tp_group=None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         device = last_hidden.device
         N, _ = last_hidden.shape
         vocab, _ = weight.shape
         inv_t = 1 / temperature
+
+        # Under tensor parallelism with a replicated lm_head, every rank holds the full matrix, so instead of all
+        # of them computing every chunk, each takes every tp_world-th chunk and the online stats are combined with
+        # two small collectives. This divides the dominant GEMMs by the group size without sharding anything.
+        tp_rank = torch.distributed.get_rank(tp_group) if tp_group is not None else 0
+        tp_world = torch.distributed.get_world_size(tp_group) if tp_group is not None else 1
 
         # NOTE(@aminediro): always acc in fp32 for stability
         max_old = torch.full((N,), float("-inf"), device=device, dtype=torch.float32)
@@ -1346,7 +1353,7 @@ class _ChunkedLogProbFunction(torch.autograd.Function):
         mm_buf = torch.empty((N, chunk_size), device=device, dtype=last_hidden.dtype)
         logits_buf = torch.empty((N, chunk_size), device=device, dtype=torch.float32)
 
-        for start in range(0, vocab, chunk_size):
+        for start in range(tp_rank * chunk_size, vocab, tp_world * chunk_size):
             end = min(start + chunk_size, vocab)
             C = end - start
             # using fp16=True, the model's hidden states get cast to float16 by autocast, but the mm_buf is allocated
@@ -1378,6 +1385,17 @@ class _ChunkedLogProbFunction(torch.autograd.Function):
             # take the new logit if target_idx is in this chunk bounds else 0
             target_logit += logits_chunk[torch.arange(N, device=device), local_idx] * in_chunk_cond
 
+        if tp_group is not None:
+            # Combine the per-rank online stats: agree on the max first, rescale the sums to it, then sum them.
+            # The target logit is only ever written by the rank whose chunks held the target, so summing is a select.
+            global_max = max_old.clone()
+            torch.distributed.all_reduce(global_max, op=torch.distributed.ReduceOp.MAX, group=tp_group)
+            rescale = torch.exp(max_old - global_max)
+            packed = torch.stack([sum_exp * rescale, x_sum_exp * rescale, target_logit])
+            torch.distributed.all_reduce(packed, group=tp_group)
+            sum_exp, x_sum_exp, target_logit = packed[0], packed[1], packed[2]
+            max_old = global_max
+
         log_z = max_old + torch.log(sum_exp)
         logprobs = target_logit - log_z
         entropy = log_z - x_sum_exp / sum_exp
@@ -1387,6 +1405,7 @@ class _ChunkedLogProbFunction(torch.autograd.Function):
         ctx.chunk_size = chunk_size
         ctx.logit_scale = logit_scale
         ctx.final_logit_softcapping = final_logit_softcapping
+        ctx.tp_group = tp_group
 
         return logprobs, entropy
 
@@ -1397,10 +1416,13 @@ class _ChunkedLogProbFunction(torch.autograd.Function):
         chunk_size: int = ctx.chunk_size
         logit_scale: float = ctx.logit_scale
         final_logit_softcapping: float = ctx.final_logit_softcapping
+        tp_group = ctx.tp_group
         inv_t = 1 / temperature
 
         N, _ = hidden.shape
         vocab = weight.shape[0]
+        tp_rank = torch.distributed.get_rank(tp_group) if tp_group is not None else 0
+        tp_world = torch.distributed.get_world_size(tp_group) if tp_group is not None else 1
 
         # NOTE(@aminediro): always acc in fp32 even if input is not
         grad_hidden = torch.zeros(hidden.shape, device=hidden.device, dtype=torch.float32)
@@ -1413,7 +1435,7 @@ class _ChunkedLogProbFunction(torch.autograd.Function):
         g = grad_logprobs.to(torch.float32)  # [N]
         row_idx = torch.arange(N, device=hidden.device)
 
-        for start in range(0, vocab, chunk_size):
+        for start in range(tp_rank * chunk_size, vocab, tp_world * chunk_size):
             end = min(start + chunk_size, vocab)
             C = end - start
             w_chunk = weight[start:end].to(hidden.dtype)  # [C, H]
@@ -1450,11 +1472,17 @@ class _ChunkedLogProbFunction(torch.autograd.Function):
             grad_hidden.add_(grad_logits @ w_chunk)
             grad_weight[start:end].add_(grad_logits.t() @ hidden)
 
-        return grad_hidden.to(hidden.dtype), grad_weight.to(weight.dtype), None, None, None, None, None
+        grad_weight = grad_weight.to(weight.dtype)
+        if tp_group is not None:
+            # Each rank only computed its chunks: the input gradient misses the other ranks' vocab slices, and the
+            # replicated weight's gradient must end identical on every rank for the optimizer to stay in sync.
+            torch.distributed.all_reduce(grad_hidden, group=tp_group)
+            torch.distributed.all_reduce(grad_weight, group=tp_group)
+        return grad_hidden.to(hidden.dtype), grad_weight, None, None, None, None, None, None
 
 
 def patch_chunked_lm_head(
-    model: torch.nn.Module, chunk_size: int, temperature: float, output_router_logits: bool = False
+    model: torch.nn.Module, chunk_size: int, temperature: float, output_router_logits: bool = False, tp_group=None
 ) -> None:
     final_logit_softcapping = getattr(model.config, "final_logit_softcapping", None)
 
@@ -1507,6 +1535,7 @@ def patch_chunked_lm_head(
             chunk_size,
             final_logit_softcapping,
             logit_scale,
+            tp_group,
         )
 
         if valid_mask is not None:
