@@ -11,7 +11,7 @@ on:
 env:
   RUN_SLOW: "yes"
   IS_GITHUB_CI: "1"
-  SLACK_API_TOKEN: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
+  CI_SLACK_CHANNEL: ${{ secrets.CI_PUSH_MAIN_CHANNEL }}
   HF_TOKEN: ${{ secrets.HF_TOKEN }}
   TRL_EXPERIMENTAL_SILENCE: 1
   # The base image ships a ROCm build of torch, so install into it directly. A fresh `uv venv`
@@ -27,7 +27,8 @@ jobs:
     env:
       TEST_TYPE: "single_gpu_amd"
     container:
-      # Stable ROCm torch, matching transformers' AMD image; bump in lockstep with the FA2 wheel below.
+      # Stable ROCm torch, matching triton's AMD CI image (transformers is currently pinned to
+      # rocm7.2.2); bump in lockstep with the FA2 wheel below.
       image: rocm/pytorch:rocm7.2.4_ubuntu22.04_py3.10_pytorch_release_2.10.0
       # --env-file forwards the runner's GPU-isolation assignment (HIP_VISIBLE_DEVICES + ROCR_VISIBLE_DEVICES)
       # into the container, same as transformers' AMD CI.
@@ -38,7 +39,7 @@ jobs:
         shell: bash
     steps:
       - name: Git checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Install system dependencies
         run: apt-get update && apt-get install -y make git curl
@@ -48,8 +49,14 @@ jobs:
           python3 -m pip install --upgrade pip
           python3 -m pip install -e ".[dev]" pytest-reportlog
           # Prebuilt ROCm flash-attention wheel, pinned to the base image's ABI (gfx942/gfx950).
-          python3 -m pip install --no-cache-dir \
-            https://rocm.frameworks-devreleases.amd.com/whl/gfx942-gfx950/flash_attn-2.8.3-cp310-cp310-linux_x86_64.whl
+          # Retried: a single external wheel host is a single point of failure for the whole job.
+          for i in 1 2 3; do
+            python3 -m pip install --no-cache-dir \
+              https://rocm.frameworks-devreleases.amd.com/whl/gfx942-gfx950/flash_attn-2.8.3-cp310-cp310-linux_x86_64.whl \
+              && break
+            echo "flash-attn wheel install attempt $i failed, retrying in 10s..."
+            sleep 10
+          done
           # Most hub kernels have no ROCm build and cause failing tests on ROCm (same as transformers' AMD CI).
           python3 -m pip uninstall -y kernels
 
@@ -57,13 +64,19 @@ jobs:
         run: python3 -c "import torch; assert torch.version.hip, 'CUDA torch got installed'; print('ROCm torch', torch.__version__, '| HIP', torch.version.hip)"
 
       - name: Run slow tests on single GPU
-        run: make slow_tests
+        run: make slow_tests PYTEST_ARGS="--report-log=slow_tests.log"
 
       - name: Generate Report
         if: always()
-        run: |
-          python3 -m pip install slack_sdk tabulate
-          python3 scripts/log_reports.py >> $GITHUB_STEP_SUMMARY
+        run: python3 scripts/log_reports.py >> $GITHUB_STEP_SUMMARY
+
+      - name: Post to Slack
+        if: always()
+        uses: ./.github/actions/post-slack
+        with:
+          slack_channel: ${{ env.CI_SLACK_CHANNEL }}
+          title: Slow tests on AMD ROCm (single GPU)
+          slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
 
   run_all_tests_multi_gpu:
     # Uncomment once the multi-GPU runner group is provisioned (e.g. `amd-mi325-2gpu`); same
@@ -72,6 +85,10 @@ jobs:
     #   group: amd-mi325-2gpu
     env:
       TEST_TYPE: "multi_gpu_amd"
+      # Known RCCL hang/correctness issues on AMD multi-GPU, same as sglang's AMD CI.
+      NCCL_CUMEM_ENABLE: "0"
+      NCCL_NVLS_ENABLE: "0"
+      RCCL_MSCCL_ENABLE: "0"
     container:
       image: rocm/pytorch:rocm7.2.4_ubuntu22.04_py3.10_pytorch_release_2.10.0
       options: --device /dev/kfd --device /dev/dri --group-add video --env-file /etc/podinfo/gha-gpu-isolation-settings --ipc=host --shm-size "16gb"
@@ -81,7 +98,7 @@ jobs:
         shell: bash
     steps:
       - name: Git checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Install system dependencies
         run: apt-get update && apt-get install -y make git curl
@@ -90,18 +107,30 @@ jobs:
         run: |
           python3 -m pip install --upgrade pip
           python3 -m pip install -e ".[dev]" pytest-reportlog
-          python3 -m pip install --no-cache-dir \
-            https://rocm.frameworks-devreleases.amd.com/whl/gfx942-gfx950/flash_attn-2.8.3-cp310-cp310-linux_x86_64.whl
+          # Retried: a single external wheel host is a single point of failure for the whole job.
+          for i in 1 2 3; do
+            python3 -m pip install --no-cache-dir \
+              https://rocm.frameworks-devreleases.amd.com/whl/gfx942-gfx950/flash_attn-2.8.3-cp310-cp310-linux_x86_64.whl \
+              && break
+            echo "flash-attn wheel install attempt $i failed, retrying in 10s..."
+            sleep 10
+          done
           python3 -m pip uninstall -y kernels
 
       - name: Verify ROCm torch is intact
         run: python3 -c "import torch; assert torch.version.hip, 'CUDA torch got installed'; print('ROCm torch', torch.__version__, '| HIP', torch.version.hip)"
 
       - name: Run slow tests on multi GPU
-        run: make slow_tests
+        run: make slow_tests PYTEST_ARGS="--report-log=slow_tests.log"
 
       - name: Generate Report
         if: always()
-        run: |
-          python3 -m pip install slack_sdk tabulate
-          python3 scripts/log_reports.py >> $GITHUB_STEP_SUMMARY
+        run: python3 scripts/log_reports.py >> $GITHUB_STEP_SUMMARY
+
+      - name: Post to Slack
+        if: always()
+        uses: ./.github/actions/post-slack
+        with:
+          slack_channel: ${{ env.CI_SLACK_CHANNEL }}
+          title: Slow tests on AMD ROCm (multi GPU)
+          slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
