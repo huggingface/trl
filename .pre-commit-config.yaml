@@ -8,12 +8,9 @@ repos:
       - id: ruff-format
         types_or: [ python, pyi ]
 
-  - repo: local
+  - repo: https://github.com/huggingface/doc-builder
+    rev: 0ab9ea03baf111ed8dd83e88233430b663127368  # main
     hooks:
       - id: doc-builder-style
-        name: Check style with doc-builder
-        language: python
-        entry: doc-builder style trl tests docs/source --max_len 119
-        additional_dependencies: ["git+https://github.com/huggingface/doc-builder@af49b8dc3859c3d80c7220c8c0ba146431132e49"]
-        pass_filenames: false
-        types_or: [python, markdown, rst]
+        args: [--max_len, "119"]
+        files: ^(trl|tests|docs/source)/

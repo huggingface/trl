@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from unittest.mock import patch
+
 import pytest
 import torch
 import torch.nn.functional as F
@@ -19,7 +21,7 @@ import transformers
 from accelerate.utils.memory import release_memory
 from datasets import DatasetDict, IterableDatasetDict, load_dataset
 from packaging.version import Version
-from transformers import AutoModelForCausalLM
+from transformers import AutoModelForCausalLM, BitsAndBytesConfig
 from transformers.utils import is_peft_available
 
 from trl import DistillationConfig, DistillationTrainer
@@ -28,12 +30,28 @@ from trl.trainer.distillation_trainer import _chunked_divergence_loss
 
 from .testing_utils import (
     TrlTestCase,
+    require_bitsandbytes,
     require_liger_kernel,
     require_peft,
+    require_response_parsing,
     require_torch_accelerator,
     require_vision,
     require_vllm,
 )
+
+
+def multiply_tool(a: int, b: int) -> int:
+    """
+    Multiplies two integers.
+
+    Args:
+        a: The first integer.
+        b: The second integer.
+
+    Returns:
+        The product of the two integers.
+    """
+    return a * b
 
 
 if is_peft_available():
@@ -319,6 +337,74 @@ class TestDistillationTrainer(TrlTestCase):
         # ran and every parameter stayed finite. See `test_train` for the params-changed assertion.
         assert trainer.state.log_history[-1]["train_loss"] is not None
         assert all(torch.isfinite(param).all() for param in trainer.model.parameters())
+
+    @pytest.mark.xfail(
+        condition=Version(transformers.__version__) < Version("5.0.0"),
+        reason="Tool parsing is not supported in transformers versions below 5.0.0",
+        strict=True,
+    )
+    @require_response_parsing
+    def test_train_with_tools(self):
+        # A `multiply_tool` is exposed and generation is mocked to deterministically emit, for the batch of 3 prompts,
+        # one valid tool call, one invalid tool call (wrong argument name), and one non-tool completion. This exercises
+        # the tool-calling loop (execution + `tool_mask`) without relying on the tiny model to emit valid calls.
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+
+        training_args = DistillationConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            max_completion_length=128,
+            report_to="none",
+        )
+        trainer = DistillationTrainer(
+            model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            teacher_model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            args=training_args,
+            train_dataset=dataset,
+            tools=[multiply_tool],
+        )
+
+        def fake_generate(input_ids, **kwargs):
+            if input_ids.shape[0] == 3:  # first call
+                # fmt: off
+                completion_ids = torch.tensor(
+                    [
+                        # '<tool_call>\n{"name": "multiply_tool", "arguments": {"a": 3, "b": 4}}\n</tool_call><|im_end|>'
+                        [151657, 198, 4913, 606, 788, 330, 64648, 22785, 497, 330, 16370, 788, 5212, 64, 788, 220, 18, 11, 330, 65, 788, 220, 19, 11248, 151658, 151645],
+                        # an invalid tool call with wrong argument name
+                        # '<tool_call>\n{"name": "multiply_tool", "arguments": {"a": 3, "c": 4}}\n</tool_call><|im_end|>'
+                        [151657, 198, 4913, 606, 788, 330, 64648, 22785, 497, 330, 16370, 788, 5212, 64, 788, 220, 18, 11, 330, 66, 788, 220, 19, 11248, 151658, 151645],
+                        # "I don't know any tool<|im_end|>"
+                        [40, 1513, 944, 1414, 894, 5392, 151645, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643],
+                    ],
+                    device=input_ids.device,
+                )
+                # fmt: on
+            else:  # second call will only have two inputs in the batch, because two examples have a tool call.
+                completion_ids = torch.tensor(
+                    [
+                        # 'Done!<|im_end|>'
+                        [17453, 0, 151645],
+                        # 'Done!<|im_end|>'
+                        [17453, 0, 151645],
+                    ],
+                    device=input_ids.device,
+                )
+            return torch.cat([input_ids, completion_ids], dim=-1)
+
+        with patch.object(trainer.model, "generate", side_effect=fake_generate):
+            trainer.train()
+
+        # Self-distillation gives a near-zero teacher signal, so we assert the tool-calling loop ran end to end and the
+        # loss stayed finite rather than params-changed (see `test_train_dataset_format`). The tool metrics confirm the
+        # loop executed: 2 of 3 completions were tool calls, and 1 of those 2 failed (wrong argument name).
+        train_loss = trainer.state.log_history[-1]["train_loss"]
+        assert train_loss is not None
+        assert torch.isfinite(torch.tensor(train_loss))
+        assert trainer.state.log_history[-1]["tools/call_frequency"] is not None
+        assert trainer.state.log_history[-1]["tools/call_frequency"] == pytest.approx(2 / 3)
+        assert trainer.state.log_history[-1]["tools/failure_frequency"] is not None
+        assert trainer.state.log_history[-1]["tools/failure_frequency"] == pytest.approx(1 / 2)
 
     def test_trust_remote_code(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
@@ -862,6 +948,51 @@ class TestDistillationTrainer(TrlTestCase):
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @require_peft
+    @require_bitsandbytes
+    def test_train_peft_and_quantization(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        training_args = DistillationConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            report_to="none",
+        )
+        quantization_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_use_double_quant=True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_compute_dtype=torch.bfloat16,
+        )
+        trainer = DistillationTrainer(
+            model="trl-internal-testing/tiny-Qwen3ForCausalLM",  # identifier, so that the trainer quantizes it
+            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
+            args=training_args,
+            train_dataset=dataset,
+            quantization_config=quantization_config,
+            peft_config=LoraConfig(),
+        )
+
+        # Check that the trainer applied the quantization config when loading the model
+        assert trainer.model.base_model.model.is_loaded_in_4bit
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the peft params have changed, and that they are cast to bfloat16, as recommended by the QLoRA
+        # paper. The base model params are not checked: bitsandbytes casts the biases of a Linear4bit in-place during
+        # the forward pass, so some of them change in a way that is unrelated to training.
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            if "lora" in n:  # We expect the peft params to be different
+                assert param.dtype == torch.bfloat16, f"Parameter {n} is not in bfloat16."
+                assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @require_peft
     def test_train_peft_model(self):
         model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM", dtype="float32")
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
@@ -1339,3 +1470,143 @@ class TestDistillationTrainerVLM(TrlTestCase):
         train_loss = trainer.state.log_history[-1]["train_loss"]
         assert train_loss is not None
         assert torch.isfinite(torch.tensor(train_loss))
+
+    @pytest.mark.xfail(
+        condition=Version(transformers.__version__) < Version("5.2.0"),
+        reason="Qwen3.5 models were introduced in transformers-5.2.0",
+        strict=True,
+    )
+    @require_response_parsing
+    def test_train_with_tools_multimodal_response(self):
+        # Test that tools returning images (multimodal responses) work correctly with a VLM.
+        # The tool returns a list of content blocks including an image.
+        from PIL import Image as PILImage
+
+        def screenshot_tool() -> list:
+            """
+            Takes a screenshot and returns it.
+
+            Returns:
+                A list of content blocks with the screenshot image.
+            """
+            img = PILImage.new("RGB", (64, 64), color="red")
+            return [{"type": "image", "image": img}, {"type": "text", "text": "Here is the screenshot"}]
+
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
+
+        training_args = DistillationConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,  # VLM training is memory intensive, reduce batch size to avoid OOM
+            max_completion_length=512,
+            report_to="none",
+        )
+        trainer = DistillationTrainer(
+            model="trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
+            teacher_model="trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
+            args=training_args,
+            train_dataset=dataset,
+            tools=[screenshot_tool],
+        )
+
+        def fake_generate(input_ids, **kwargs):
+            if input_ids.shape[0] == 2:  # first call
+                # fmt: off
+                completion_ids = torch.tensor(
+                    [
+                        # '<tool_call>\n<function=screenshot_tool>\n</function>\n</tool_call><|im_end|>'
+                        [248058, 198, 27, 1628, 13744, 30091, 22076, 29, 198, 510, 1628, 29, 198, 248059, 248046],
+                        # "I don't know any tool<|im_end|>" + padding
+                        [40, 1459, 914, 1366, 866, 5224, 248046, 248044, 248044, 248044, 248044, 248044, 248044, 248044, 248044],
+                    ],
+                    device=input_ids.device,
+                )
+                # fmt: on
+            else:  # second call: 1 tool call succeeded
+                assert "image_grid_thw" in kwargs, "image_grid_thw must be passed to generate"
+                assert kwargs["image_grid_thw"].shape[0] == 2, (
+                    f"Expected 2 images (1 original + 1 tool-returned), got {kwargs['image_grid_thw'].shape[0]}"
+                )
+                completion_ids = torch.tensor(
+                    [
+                        # 'Done!<|im_end|>'
+                        [16936, 0, 248046],
+                    ],
+                    device=input_ids.device,
+                )
+            return torch.cat([input_ids, completion_ids], dim=-1)
+
+        with patch.object(trainer.model, "generate", side_effect=fake_generate):
+            trainer.train()
+
+        # Self-distillation gives a near-zero teacher signal, so we assert the tool-calling loop ran end to end and the
+        # loss stayed finite, rather than params-changed (see `test_train_dataset_format`). With a batch of 2, one
+        # completion is a tool call (1/2) and it succeeds (0 failures).
+        train_loss = trainer.state.log_history[-1]["train_loss"]
+        assert train_loss is not None
+        assert torch.isfinite(torch.tensor(train_loss))
+        assert trainer.state.log_history[-1]["tools/call_frequency"] == pytest.approx(1 / 2)
+        assert trainer.state.log_history[-1]["tools/failure_frequency"] == pytest.approx(0.0)
+
+    @pytest.mark.xfail(
+        condition=Version(transformers.__version__) < Version("5.2.0"),
+        reason="Qwen3.5 models were introduced in transformers-5.2.0",
+        strict=True,
+    )
+    @require_response_parsing
+    def test_train_with_tools_text_response_multimodal_prompt(self):
+        # Test that tools returning text (non-multimodal response) work correctly with a VLM prompt having images.
+        def screenshot_tool() -> str:
+            """Simple text-returning tool."""
+            return "The image shows a red square."
+
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
+
+        training_args = DistillationConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,  # VLM training is memory intensive, reduce batch size to avoid OOM
+            max_completion_length=512,
+            report_to="none",
+        )
+        trainer = DistillationTrainer(
+            model="trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
+            teacher_model="trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
+            args=training_args,
+            train_dataset=dataset,
+            tools=[screenshot_tool],
+        )
+
+        def fake_generate(input_ids, **kwargs):
+            if input_ids.shape[0] == 2:  # first call
+                # fmt: off
+                completion_ids = torch.tensor(
+                    [
+                        # '<tool_call>\n<function=screenshot_tool>\n</function>\n</tool_call><|im_end|>'
+                        [248058, 198, 27, 1628, 13744, 30091, 22076, 29, 198, 510, 1628, 29, 198, 248059, 248046],
+                        # "I don't know any tool<|im_end|>" + padding
+                        [40, 1459, 914, 1366, 866, 5224, 248046, 248044, 248044, 248044, 248044, 248044, 248044, 248044, 248044],
+                    ],
+                    device=input_ids.device,
+                )
+                # fmt: on
+            else:  # second call after text tool response: original image grid thw should still be present
+                assert "image_grid_thw" in kwargs, "image_grid_thw must be passed to generate"
+                assert kwargs["image_grid_thw"].shape[0] == 1, (
+                    f"Expected 1 original image, got {kwargs['image_grid_thw'].shape[0]}"
+                )
+                completion_ids = torch.tensor(
+                    [
+                        # 'Done!<|im_end|>'
+                        [16936, 0, 248046],
+                    ],
+                    device=input_ids.device,
+                )
+            return torch.cat([input_ids, completion_ids], dim=-1)
+
+        with patch.object(trainer.model, "generate", side_effect=fake_generate):
+            trainer.train()
+
+        train_loss = trainer.state.log_history[-1]["train_loss"]
+        assert train_loss is not None
+        assert torch.isfinite(torch.tensor(train_loss))
+        assert trainer.state.log_history[-1]["tools/call_frequency"] == pytest.approx(1 / 2)
+        assert trainer.state.log_history[-1]["tools/failure_frequency"] == pytest.approx(0.0)

@@ -46,20 +46,6 @@ accelerate launch train_cpo.py
 
 CPO requires a [preference dataset](dataset_formats#preference). The [`experimental.cpo.CPOTrainer`] supports both [conversational](dataset_formats#conversational) and [standard](dataset_formats#standard) dataset formats. When provided with a conversational dataset, the trainer will automatically apply the chat template to the dataset.
 
-## Example script
-
-We provide an example script to train a model using the CPO method. The script is available in [`examples/scripts/cpo.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/cpo.py)
-
-To test the CPO script with the [Qwen2 0.5B model](https://huggingface.co/Qwen/Qwen2-0.5B-Instruct) on the [UltraFeedback dataset](https://huggingface.co/datasets/trl-lib/ultrafeedback_binarized), run the following command:
-
-```bash
-accelerate launch examples/scripts/cpo.py \
-    --model_name_or_path Qwen/Qwen2-0.5B-Instruct \
-    --dataset_name trl-lib/ultrafeedback_binarized \
-    --num_train_epochs 1 \
-    --output_dir Qwen2-0.5B-CPO
-```
-
 ## Logged metrics
 
 While training and evaluating, we record the following metrics:

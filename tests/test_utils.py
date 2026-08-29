@@ -1295,6 +1295,57 @@ class TestChunkedLogProbFunction:
         torch.testing.assert_close(grad_hidden_chunked, hidden.grad, atol=1e-2, rtol=1e-2)
         torch.testing.assert_close(grad_weight_chunked, weight.grad, atol=1e-2, rtol=1e-2)
 
+    @pytest.mark.parametrize("temperature", [1.0, 0.7])
+    def test_backward_entropy(self, temperature):
+        """Backprop through the `entropy` output alone (as opposed to `logprobs`, covered above)."""
+        torch.manual_seed(42)
+        hidden = torch.randn(self.N, self.H, requires_grad=True)
+        weight = torch.randn(self.V, self.H, requires_grad=True)
+        labels = torch.randint(0, self.V, (self.N,))
+
+        # Chunked backward
+        _, entropy_chunked = _ChunkedLogProbFunction.apply(hidden, weight, labels, temperature, self.CHUNK_SIZE)
+        entropy_chunked.sum().backward()
+        grad_hidden_chunked = hidden.grad.clone()
+        grad_weight_chunked = weight.grad.clone()
+
+        hidden.grad = None
+        weight.grad = None
+
+        # Reference backward
+        _, entropy_ref = self._reference_logprobs_and_entropy(hidden, weight, labels, temperature)
+        entropy_ref.sum().backward()
+
+        torch.testing.assert_close(grad_hidden_chunked, hidden.grad, atol=1e-4, rtol=1e-4)
+        torch.testing.assert_close(grad_weight_chunked, weight.grad, atol=1e-4, rtol=1e-4)
+
+    @pytest.mark.parametrize("temperature", [1.0, 0.7])
+    def test_backward_combined(self, temperature):
+        """Backprop through `logprobs` and `entropy` together, to catch the gradients overwriting each other
+        instead of accumulating."""
+        torch.manual_seed(42)
+        hidden = torch.randn(self.N, self.H, requires_grad=True)
+        weight = torch.randn(self.V, self.H, requires_grad=True)
+        labels = torch.randint(0, self.V, (self.N,))
+
+        # Chunked backward
+        logprobs_chunked, entropy_chunked = _ChunkedLogProbFunction.apply(
+            hidden, weight, labels, temperature, self.CHUNK_SIZE
+        )
+        (2.0 * logprobs_chunked + 0.5 * entropy_chunked).sum().backward()
+        grad_hidden_chunked = hidden.grad.clone()
+        grad_weight_chunked = weight.grad.clone()
+
+        hidden.grad = None
+        weight.grad = None
+
+        # Reference backward
+        logprobs_ref, entropy_ref = self._reference_logprobs_and_entropy(hidden, weight, labels, temperature)
+        (2.0 * logprobs_ref + 0.5 * entropy_ref).sum().backward()
+
+        torch.testing.assert_close(grad_hidden_chunked, hidden.grad, atol=1e-4, rtol=1e-4)
+        torch.testing.assert_close(grad_weight_chunked, weight.grad, atol=1e-4, rtol=1e-4)
+
 
 class _FakeTransformerModel(nn.Module):
     """Minimal stand-in for a transformer body: returns random hidden states of the right shape."""
