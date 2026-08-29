@@ -443,6 +443,12 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             # Async batching keeps a batch in flight while the next is prepared, and the cache cannot be taken from
             # under it. It is worth nothing here anyway, measured at 1.52 against 1.53 s/step.
             cb_kwargs["use_async_batching"] = False
+        if self.tp_size > 1:
+            # The engine turns NCCL's graph-mixing support off, which fits a pure-decode server but slows the
+            # training collectives here (measured 3.62 against 3.71 s/step at batch 128). The trainer strictly
+            # alternates generation and training, so captured and eager collectives are never in flight together
+            # and the NCCL default, which is also the safe setting, can stay.
+            cb_kwargs.setdefault("disable_nccl_graph_mixing", False)
         # Under tensor parallelism the engine decodes through its own view of the model, and the trainer steps it
         # rather than letting it run in the background. The engine and the trainer then hold one NCCL communicator
         # each, and NCCL requires every rank to issue the operations on its communicators in the same host-side order,
