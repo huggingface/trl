@@ -409,7 +409,7 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             style = _get_parameter_tp_plan(parameter_name=name, tp_plan=model.tp_plan or {}, is_weight=False)
             # Replicated parameters are DTensors too, and a transform that splits their input would be wrong.
             sharded = any(
-                any(not isinstance(placement, Replicate) for placement in getattr(param, "placements", ()))
+                isinstance(param, DTensor) and any(not isinstance(p, Replicate) for p in param.placements)
                 for param in module.parameters(recurse=False)
             )
             if style is not None and style in ALL_PARALLEL_STYLES and sharded:

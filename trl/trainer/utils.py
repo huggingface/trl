@@ -38,6 +38,7 @@ from accelerate.logging import get_logger
 from datasets import IterableDataset
 from huggingface_hub import ModelCard, ModelCardData
 from packaging.version import Version
+from torch.distributed.tensor import DTensor
 from torch.utils.data import Sampler
 from transformers import (
     AutoConfig,
@@ -1492,7 +1493,7 @@ def patch_chunked_lm_head(
         # A replicated weight under tensor parallelism is a DTensor holding the whole matrix; the chunked matmul
         # runs on plain tensors, and its local view is that same matrix.
         lm_head_weight = self.lm_head.weight
-        if hasattr(lm_head_weight, "to_local"):
+        if isinstance(lm_head_weight, DTensor):
             lm_head_weight = lm_head_weight.to_local()
 
         logprobs_valid, entropy_valid = _ChunkedLogProbFunction.apply(
