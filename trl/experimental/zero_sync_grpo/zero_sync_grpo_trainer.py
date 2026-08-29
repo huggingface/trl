@@ -241,6 +241,14 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         self.epsilon = args.epsilon
         self.generation_ahead = args.generation_ahead
         self.tp_size = args.tp_size
+        # Giving the KV cache memory to the training step only works when generation is quiescent while it runs, which
+        # is what the trainer owning the engine gives us.
+        if args.release_kv_cache_during_step and args.tp_size == 1:
+            raise ValueError(
+                "`release_kv_cache_during_step` requires `tp_size > 1`, since generation otherwise runs "
+                "in its own thread and is never quiescent."
+            )
+        self.release_kv_cache_during_step = args.release_kv_cache_during_step
         # Under tensor parallelism the trainer advances generation itself, through a second view of the model, so
         # that every rank issues its collectives in the same order. Both are built in `_init_manager`.
         self._generation_view = None
@@ -408,17 +416,6 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
                 _compute_on_local_view(module)
         return view
 
-    def _advance_generation(self, *args):
-        """One decode step, taken from the training thread at a point every rank reaches identically."""
-        if self._stepping:  # the engine's own forward must not step the engine again
-            return
-        self._stepping = True
-        try:
-            if self._manager.step():
-                self._decode_steps += 1
-        finally:
-            self._stepping = False
-
     def _init_manager(self):
         # The manager is attached to the unwrapped training model: decoding reads the same parameter tensors the
         # optimizer updates in place. warmup() must run before start() so the cuda graphs are captured on the main
@@ -442,20 +439,15 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         # each, and NCCL requires every rank to issue the operations on its communicators in the same host-side order,
         # recommending "a deterministic order issued from a single host thread per-device". Two racing threads cannot
         # promise that, and when the orders disagree the run deadlocks inside an ordinary kernel launch rather than
-        # inside a collective. Stepping the engine between the trainer's own layers is that single thread, and
-        # generation keeps advancing throughout the training step rather than waiting for it.
+        # inside a collective. The trainer is that single thread: it runs the engine between its own steps, so the
+        # forward and backward have the device to themselves and generation is quiescent while they run.
         self._generation_view = self._make_generation_view(model) if self.tp_size > 1 else model
         self._manager = self._generation_view.init_continuous_batching(
             generation_config=generation_config,
             continuous_batching_config=ContinuousBatchingConfig(**cb_kwargs),
         )
         self._manager.warmup()
-        if self.tp_size > 1:
-            self._stepping = False
-            for layer in model.model.layers:
-                layer.register_forward_hook(self._advance_generation)
-                layer.register_full_backward_hook(self._advance_generation)
-        else:
+        if self.tp_size == 1:
             self._manager.start()
 
     def _tokenize_conversation(self, messages: list[dict[str, Any]]) -> list[int]:
@@ -500,8 +492,9 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         # transformers#48334), so poll `fatal_error` to fail fast instead of spinning.
         while True:
             if self.tp_size > 1:
-                # Nothing else advances the engine: the trainer owns it.
-                self._manager.step()
+                # Nothing else advances the engine: the trainer owns it, and this is the only place it runs.
+                if self._manager.step():
+                    self._decode_steps += 1
                 timeout = 0.0
             result = self._manager.get_result(timeout=timeout)
             if result is None:
@@ -652,16 +645,21 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         # Time spent waiting for the engine. Near zero means generation is fully hidden behind the training step; a
         # large value means the engine is the bottleneck, so raise `generation_ahead` (more requests in flight) or
         # give it a bigger KV pool.
+        if self.release_kv_cache_during_step:
+            self._manager.restore_memory()  # generation needs its cache back before it can run
         wait_start = time.perf_counter()
         while len(self._ready) < num_samples:
             self._drain(timeout=1.0)
         self._metrics[mode]["generation_wait_s"].append(time.perf_counter() - wait_start)
         if self.tp_size > 1:
-            # How far generation got while this step was being computed. Under tensor parallelism the trainer
-            # advances the engine itself, between its own layers, so this counts the decode steps that happened
-            # inside the forward and backward rather than around them.
+            # How far generation got for this step. Under tensor parallelism the trainer advances the engine itself,
+            # between its own steps, so this counts the decode steps taken while waiting for enough scored samples.
             self._metrics[mode]["generation/decode_steps"].append(self._decode_steps)
             self._decode_steps = 0
+        if self.release_kv_cache_during_step:
+            # Generation is done for this step, so hand its memory to the forward and backward that come next.
+            released = self._manager.release_memory()
+            self._metrics[mode]["generation/kv_released_gib"].append(released / 2**30)
         samples = [self._ready.popleft() for _ in range(num_samples)]
 
         # Metrics of the rollouts this step trains on. They are per process: groups are formed and scored locally,

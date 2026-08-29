@@ -41,6 +41,18 @@ ZeroSyncGRPOConfig(
 
 An oversized pool is not free: it starves the training step, which shows up as an out-of-memory error in the backward pass, not as slow generation.
 
+Under `tp_size > 1` the pool does not have to be held for the whole step. Generation is quiescent while the forward and backward run, so the cache can be freed and handed to them:
+
+```python
+ZeroSyncGRPOConfig(
+    tp_size=2,
+    release_kv_cache_during_step=True,
+    continuous_batching_config={"use_async_batching": False},
+)
+```
+
+Rollouts in flight are copied to host memory and back each step, so this buys room for longer completions or a larger batch at the cost of that copy. `generation/kv_released_gib` logs how much is handed over. It requires `use_async_batching=False`, since offloading a batch that is still in flight corrupts it.
+
 ## Multi-turn and tools
 
 Pass tools to train an agent. Each turn re-renders the whole conversation through the chat template, so a template that rewrites history (dropping reasoning, summarizing earlier turns) can re-tokenize tokens the model already generated. When that happens, the conversation forks into a second training row rather than silently masking those tokens as context, and both rows carry the rollout's advantage:
@@ -94,12 +106,17 @@ When the orders disagree the run deadlocks, and it does so in a way that is hard
 blocks inside an ordinary kernel launch, not inside a collective, because a CUDA call waits on the
 resident NCCL kernel and so prevents the other communicator's kernel from ever launching.
 
-So under `tp_size > 1` the trainer advances the engine itself, between its own layers, rather than
+So under `tp_size > 1` the trainer drives the engine itself, between its own steps, rather than
 letting it run in a background thread. That is the single deterministic host thread NCCL asks for:
 every rank runs the same program, so every rank issues the same collectives in the same order by
-construction. Generation does not wait for the training step: it advances a decode step at each
-layer boundary, through the forward and the backward alike, which `generation/decode_steps` reports
-per step (two per layer). Nothing is drained and no request is lost.
+construction. `generation/decode_steps` reports how far generation got each step. Nothing is drained
+and no request is lost.
+
+Generation is therefore quiescent while the forward and backward run. Interleaving it through the
+step instead, a decode step at every layer boundary, was measured and is not worth it: identical
+throughput on short completions (1.55 against 1.54 s/step) and about 7% better on long ones (2.28
+against 2.44 s/step with 512-token completions and 8 rollouts per prompt), at the cost of a design
+that cannot ever hand the KV cache memory to the training step.
 
 Two consequences to know about. The vocabulary projection is replicated rather than split, which
 costs one copy of that matrix per process and removes a gather from every forward. And the engine

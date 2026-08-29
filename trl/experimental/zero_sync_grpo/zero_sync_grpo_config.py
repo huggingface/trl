@@ -192,9 +192,19 @@ class ZeroSyncGRPOConfig(_BaseConfig):
         default=1,
         metadata={
             "help": "Number of processes the model is split across (tensor parallelism). With more than one, the "
-            "trainer advances generation itself, between its own layers, rather than letting the engine run in its "
+            "trainer drives generation itself, between its own steps, rather than letting the engine run in its "
             "background thread: every rank then issues its collectives in the same order, which is what NCCL "
-            "requires. Generation still runs throughout the training step."
+            "requires."
+        },
+    )
+    release_kv_cache_during_step: bool = field(
+        default=False,
+        metadata={
+            "help": "Free the generation KV cache while the training step runs, so the forward and backward can use "
+            "that memory, and reallocate it before generating again. Only with `tp_size > 1`, where the trainer owns "
+            "the engine and generation is quiescent during the step. Live rollouts are copied to host memory and back "
+            "each step, so this trades throughput for the room to train on longer completions or larger batches. "
+            "Requires `use_async_batching=False` in `continuous_batching_config`."
         },
     )
 
