@@ -1430,7 +1430,10 @@ class _ChunkedLogProbFunction(torch.autograd.Function):
 
         # NOTE(@aminediro): always acc in fp32 even if input is not
         grad_hidden = torch.zeros(hidden.shape, device=hidden.device, dtype=torch.float32)
-        grad_weight = torch.zeros(weight.shape, device=weight.device, dtype=torch.float32)
+        # Each vocab slice of grad_weight is written by exactly one chunk iteration, so unlike grad_hidden there
+        # is no cross-chunk accumulation and an fp32 buffer changes nothing; keeping the weight dtype saves the
+        # [vocab, hidden] fp32 copy plus the cast at the end (~4.5 GiB at a 152k vocab).
+        grad_weight = torch.zeros(weight.shape, device=weight.device, dtype=weight.dtype)
 
         # Pre-allocate reusable buffers to avoid per-chunk allocation; the updates below run in place because at
         # long sequence lengths every extra [N, chunk] temporary is gigabytes of peak memory.
@@ -1478,7 +1481,6 @@ class _ChunkedLogProbFunction(torch.autograd.Function):
             grad_hidden.add_(grad_chunk @ w_chunk)
             grad_weight[start:end].add_(grad_chunk.t() @ hidden)
 
-        grad_weight = grad_weight.to(weight.dtype)
         if tp_group is not None:
             # Each rank only computed its chunks: the input gradient misses the other ranks' vocab slices, and the
             # replicated weight's gradient must end identical on every rank for the optimizer to stay in sync.
