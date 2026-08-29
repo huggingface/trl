@@ -381,10 +381,12 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         """A second view of the model for the engine to decode through, over the same parameters.
 
         `init_continuous_batching` switches a model to a paged attention implementation, which is written for the
-        packed inputs the engine prepares and cannot serve the training forward. Under tensor parallelism the engine
-        is stepped from the training thread, so there is no moment at which the implementation could be switched back
-        and forth. This view shares every parameter, so an optimizer step is what the engine decodes from, and it
-        costs no extra memory: only the module objects and the config are copied.
+        packed inputs the engine prepares and raises on the training forward. The switch is a setting on the config,
+        shared by every module and every thread, so it cannot be flipped around each forward: under tensor parallelism
+        there is no moment to flip it, and in the data parallel case the engine decodes in its own thread throughout.
+        Giving the engine its own view, with its own config, means the switch never has to happen. The view shares
+        every parameter, so an optimizer step is what the engine decodes from, and it costs no extra memory: only the
+        module objects and the config are copied.
         """
 
         def clone(module, config):
@@ -445,7 +447,7 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         # promise that, and when the orders disagree the run deadlocks inside an ordinary kernel launch rather than
         # inside a collective. The trainer is that single thread: it runs the engine between its own steps, so the
         # forward and backward have the device to themselves and generation is quiescent while they run.
-        self._generation_view = self._make_generation_view(model) if self.tp_size > 1 else model
+        self._generation_view = self._make_generation_view(model)
         self._manager = self._generation_view.init_continuous_batching(
             generation_config=generation_config,
             continuous_batching_config=ContinuousBatchingConfig(**cb_kwargs),
