@@ -16,10 +16,11 @@ import types
 from unittest.mock import patch
 
 import pytest
+from accelerate import Accelerator
 from transformers import AutoModelForCausalLM
 
 from trl.import_utils import is_deepspeed_available
-from trl.models.utils import disable_gradient_checkpointing, prepare_deepspeed
+from trl.models.utils import _unwrap_model_for_generation, disable_gradient_checkpointing, prepare_deepspeed
 
 
 @pytest.mark.skipif(not is_deepspeed_available(), reason="deepspeed is not installed")
@@ -72,4 +73,19 @@ class TestDisableGradientCheckpointing:
         assert model.is_gradient_checkpointing is True
         with disable_gradient_checkpointing(model):
             assert model.is_gradient_checkpointing is False
+        assert model.is_gradient_checkpointing is True
+
+
+class TestUnwrapModelForGeneration:
+    def test_restores_gradient_checkpointing_after_exception(self):
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
+        model.gradient_checkpointing_enable()
+        assert model.is_gradient_checkpointing is True
+        accelerator = Accelerator()
+
+        with pytest.raises(RuntimeError, match="boom"), _unwrap_model_for_generation(model, accelerator):
+            raise RuntimeError("boom")
+
+        # The context manager must restore gradient checkpointing even though generation raised, so the model isn't
+        # left in an inconsistent state for the training steps that follow.
         assert model.is_gradient_checkpointing is True
