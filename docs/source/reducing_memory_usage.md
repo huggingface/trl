@@ -208,6 +208,9 @@ Padding-free batching is an alternative approach for reducing memory usage. In t
 <hfoptions id="padding-free">
 <hfoption id="DPO">
 
+> [!WARNING]
+> Padding-free is temporarily unavailable in DPO since the refactor in [#3906](https://github.com/huggingface/trl/pull/3906). Setting `padding_free=True` in [`DPOConfig`] logs a warning and falls back to standard padding. It is planned to return in a future update, tracked in [#2469](https://github.com/huggingface/trl/issues/2469).
+
 ```python
 from trl import DPOConfig
 
