@@ -434,6 +434,10 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         # Generation and training share the device, so the KV cache must leave room for gradients, optimizer states
         # and activations; the engine's own default claims most of the free memory.
         cb_kwargs.setdefault("max_memory_percent", 0.2)
+        if self.release_kv_cache_during_step:
+            # Async batching keeps a batch in flight while the next is prepared, and the cache cannot be taken from
+            # under it. It is worth nothing here anyway, measured at 1.52 against 1.53 s/step.
+            cb_kwargs["use_async_batching"] = False
         # Under tensor parallelism the engine decodes through its own view of the model, and the trainer steps it
         # rather than letting it run in the background. The engine and the trainer then hold one NCCL communicator
         # each, and NCCL requires every rank to issue the operations on its communicators in the same host-side order,
