@@ -1349,9 +1349,11 @@ class _ChunkedLogProbFunction(torch.autograd.Function):
         x_sum_exp = torch.zeros((N,), device=device, dtype=torch.float32)
         target_logit = torch.zeros((N,), device=device, dtype=torch.float32)
 
-        # Pre-allocate reusable buffers to avoid per-chunk allocation
+        # Pre-allocate reusable buffers to avoid per-chunk allocation; the updates below run in place because at
+        # long sequence lengths every extra [N, chunk] temporary is gigabytes of peak memory.
         mm_buf = torch.empty((N, chunk_size), device=device, dtype=last_hidden.dtype)
         logits_buf = torch.empty((N, chunk_size), device=device, dtype=torch.float32)
+        exp_buf = torch.empty((N, chunk_size), device=device, dtype=torch.float32)
 
         for start in range(tp_rank * chunk_size, vocab, tp_world * chunk_size):
             end = min(start + chunk_size, vocab)
@@ -1373,10 +1375,12 @@ class _ChunkedLogProbFunction(torch.autograd.Function):
             chunk_max = logits_chunk.amax(dim=-1)  # [N]
             max_new = torch.maximum(max_old, chunk_max)
             rescale = torch.exp(max_old - max_new)
-            chunk_exp = torch.exp(logits_chunk - max_new.unsqueeze(-1))  # [N, C]
+            chunk_exp = exp_buf[:, :C]
+            chunk_exp.copy_(logits_chunk).sub_(max_new.unsqueeze(-1)).exp_()  # [N, C]
 
             sum_exp = sum_exp * rescale + chunk_exp.sum(dim=-1)
-            x_sum_exp = x_sum_exp * rescale + (chunk_exp * logits_chunk).sum(dim=-1)
+            chunk_exp.mul_(logits_chunk)  # not read again this iteration, so it can hold the product
+            x_sum_exp = x_sum_exp * rescale + chunk_exp.sum(dim=-1)
             max_old = max_new
 
             # Gather target logits for labels in this chunk
@@ -1428,11 +1432,13 @@ class _ChunkedLogProbFunction(torch.autograd.Function):
         grad_hidden = torch.zeros(hidden.shape, device=hidden.device, dtype=torch.float32)
         grad_weight = torch.zeros(weight.shape, device=weight.device, dtype=torch.float32)
 
-        # Pre-allocate reusable buffers to avoid per-chunk allocation
+        # Pre-allocate reusable buffers to avoid per-chunk allocation; the updates below run in place because at
+        # long sequence lengths every extra [N, chunk] temporary is gigabytes of peak memory.
         mm_buf = torch.empty((N, chunk_size), device=hidden.device, dtype=hidden.dtype)
         logits_buf = torch.empty((N, chunk_size), device=hidden.device, dtype=torch.float32)
 
         g = grad_logprobs.to(torch.float32)  # [N]
+        neg_g = -g
         row_idx = torch.arange(N, device=hidden.device)
 
         for start in range(tp_rank * chunk_size, vocab, tp_world * chunk_size):
@@ -1450,27 +1456,27 @@ class _ChunkedLogProbFunction(torch.autograd.Function):
                 logits_chunk.copy_(tanh_scaled * final_logit_softcapping)
 
             logits_chunk.mul_(inv_t)  # [N, C]
-            probs = torch.exp(logits_chunk - log_z.unsqueeze(-1))  # [N, C]
-
-            # dL/d(logits) = g * (1_[label] - p)
-            grad_logits = (-g).unsqueeze(-1) * probs  # [N, C]
+            # dL/d(logits) = g * (1_[label] - p), built in place over the logits buffer
+            grad_logits = logits_chunk
+            grad_logits.sub_(log_z.unsqueeze(-1)).exp_().mul_(neg_g.unsqueeze(-1))  # [N, C]
 
             in_chunk_cond = (labels >= start) & (labels < end)
             local_idx = torch.clamp(labels - start, 0, end - start - 1)
             # If label in chunk add g to grad else it stays the same
             grad_logits[row_idx, local_idx] += g * in_chunk_cond
 
-            grad_logits = grad_logits * inv_t
+            grad_logits.mul_(inv_t)
             if final_logit_softcapping is not None:
                 grad_logits.mul_(1 - tanh_scaled.pow(2))
 
-            grad_logits = grad_logits * logit_scale
+            grad_logits.mul_(logit_scale)
 
             # The GEMMs run in the model dtype so they hit the tensor cores (an fp32 matmul falls back to SIMT
             # kernels, ~16x slower on H100); accumulation stays fp32 through `add_` into the fp32 buffers.
-            grad_logits = grad_logits.to(hidden.dtype)
-            grad_hidden.add_(grad_logits @ w_chunk)
-            grad_weight[start:end].add_(grad_logits.t() @ hidden)
+            grad_chunk = mm_buf[:, :C]
+            grad_chunk.copy_(grad_logits)
+            grad_hidden.add_(grad_chunk @ w_chunk)
+            grad_weight[start:end].add_(grad_chunk.t() @ hidden)
 
         grad_weight = grad_weight.to(weight.dtype)
         if tp_group is not None:
