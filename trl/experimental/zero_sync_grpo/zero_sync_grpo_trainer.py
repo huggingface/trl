@@ -239,6 +239,7 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         self.top_k = args.top_k
         self.chat_template_kwargs = args.chat_template_kwargs or {}
         self.epsilon = args.epsilon
+        self.packed_training = args.packed_training
         self.generation_ahead = args.generation_ahead
         self.tp_size = args.tp_size
         # Giving the KV cache memory to the training step only works when generation is quiescent while it runs, which
@@ -709,11 +710,49 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
 
         # Build the training tensors. Each row already carries its full token sequence, the mask over the trained
         # (model-generated) tokens and the engine's behavior-policy logprobs aligned to them, 0.0 on context.
+        pad_token_id = self._tokenizer.pad_token_id
+        if self.packed_training:
+            # Pack the samples back to back, first-fit by decreasing length, instead of padding each to the
+            # longest. Position ids restart at every sample and no attention mask is passed, so the model builds
+            # the block-diagonal mask from them. The global shift in the loss stays sound at the seams: the first
+            # token of a sample is always context (mask 0), so no term ever crosses two samples. Advantages and
+            # behavior logprobs become per-token, since one row now holds several samples.
+            capacity = max(4096, max(len(s["input_ids"]) for s in samples))
+            rows = []  # each row is a list of samples whose total length fits the capacity
+            row_space = []
+            for sample in sorted(samples, key=lambda s: len(s["input_ids"]), reverse=True):
+                length = len(sample["input_ids"])
+                for i, space in enumerate(row_space):
+                    if length <= space:
+                        rows[i].append(sample)
+                        row_space[i] -= length
+                        break
+                else:
+                    rows.append([sample])
+                    row_space.append(capacity - length)
+            input_ids, position_ids, completion_mask, old_per_token_logps, advantages = [], [], [], [], []
+            for row in rows:
+                input_ids.append(torch.tensor([t for s in row for t in s["input_ids"]]))
+                position_ids.append(torch.cat([torch.arange(len(s["input_ids"])) for s in row]))
+                completion_mask.append(torch.tensor([m for s in row for m in s["completion_mask"]], dtype=torch.long))
+                old_per_token_logps.append(
+                    torch.tensor([lp for s in row for lp in s["logprobs"]], dtype=torch.float32)
+                )
+                advantages.append(
+                    torch.cat([s["advantage"].repeat(len(s["input_ids"])) for s in row]).to(torch.float32)
+                )
+            return {
+                "input_ids": pad(input_ids, padding_value=pad_token_id, padding_side="right").to(device),
+                # Padding restarts the position ids, so the mask treats it as one more (never-trained) sample
+                "position_ids": pad(position_ids, padding_value=0, padding_side="right").to(device),
+                "completion_mask": pad(completion_mask, padding_value=0, padding_side="right").to(device),
+                "old_per_token_logps": pad(old_per_token_logps, padding_value=0.0, padding_side="right").to(device),
+                "advantages": pad(advantages, padding_value=0.0, padding_side="right").to(device),
+            }
         input_ids = [torch.tensor(s["input_ids"]) for s in samples]
         completion_mask = [torch.tensor(s["completion_mask"], dtype=torch.long) for s in samples]
         old_per_token_logps = [torch.tensor(s["logprobs"], dtype=torch.float32) for s in samples]
         attention_mask = [torch.ones(len(ids), dtype=torch.long) for ids in input_ids]
-        pad_token_id = self._tokenizer.pad_token_id
         return {
             "input_ids": pad(input_ids, padding_value=pad_token_id, padding_side="right").to(device),
             "attention_mask": pad(attention_mask, padding_value=0, padding_side="right").to(device),
@@ -730,7 +769,8 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         # only completion positions are scored and the full-vocab logits never materialize.
         outputs = model(
             input_ids=inputs["input_ids"],
-            attention_mask=inputs["attention_mask"],
+            attention_mask=inputs.get("attention_mask"),
+            position_ids=inputs.get("position_ids"),
             labels=inputs["input_ids"],
             completion_mask=completion_mask,
         )
@@ -742,7 +782,9 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         old_per_token_logps = inputs["old_per_token_logps"][:, 1:]
         ratio = torch.exp(per_token_logps - old_per_token_logps)
         clipped_ratio = torch.clamp(ratio, 1 - self.epsilon, 1 + self.epsilon)
-        per_token_loss = -torch.min(ratio * advantages.unsqueeze(1), clipped_ratio * advantages.unsqueeze(1))
+        # Packed rows hold several samples, so the advantage is per token there; padded rows hold one each
+        advantages = advantages[:, 1:] if advantages.dim() == 2 else advantages.unsqueeze(1)
+        per_token_loss = -torch.min(ratio * advantages, clipped_ratio * advantages)
         loss = (per_token_loss * mask).sum() / mask.sum().clamp(min=1.0)
 
         # Log the metrics
