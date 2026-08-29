@@ -55,6 +55,19 @@ With 512-token completions and 8 rollouts per prompt it is also free: 2.52 and 2
 
 The cost follows the live cache, so it stops being free once many rollouts are in flight: at batch size 256 (Qwen3-4B, tp 4, 512-token completions) releasing measured 8.4 s/step against 6.9 without, and 9.7 with a 24 GiB CPU pool, since every step then copies gigabytes over PCIe both ways. Reach for it when the training step does not fit in memory otherwise, not for speed.
 
+## Packed training
+
+Training rows are padded to the longest sample in the batch, and mixed lengths waste up to a third of the forward on pad tokens. `packed_training=True` packs the samples back to back instead; each token keeps its own sample's advantage and behavior logprob, so the loss is unchanged. Pair it with a block-sparse attention implementation so the block-diagonal mask skips the cross-sample blocks instead of computing and masking them:
+
+```python
+ZeroSyncGRPOConfig(
+    packed_training=True,
+    model_init_kwargs={"attn_implementation": "flex_attention"},
+)
+```
+
+Measured on Qwen3-4B with `tp_size=4` and batch 256 on GSM8K: 6.98 to 5.82 s/step.
+
 ## Multi-turn and tools
 
 Pass tools to train an agent. Each turn re-renders the whole conversation through the chat template, so a template that rewrites history (dropping reasoning, summarizing earlier turns) can re-tokenize tokens the model already generated. When that happens, the conversation forks into a second training row rather than silently masking those tokens as context, and both rows carry the rollout's advantage:
