@@ -1416,7 +1416,7 @@ class _ChunkedLogProbFunction(torch.autograd.Function):
         for start in range(0, vocab, chunk_size):
             end = min(start + chunk_size, vocab)
             C = end - start
-            w_chunk = weight[start:end]  # [C, H]
+            w_chunk = weight[start:end].to(hidden.dtype)  # [C, H]
 
             torch.mm(hidden, w_chunk.t(), out=mm_buf[:, :C])
             logits_chunk = logits_buf[:, :C]
@@ -1444,8 +1444,11 @@ class _ChunkedLogProbFunction(torch.autograd.Function):
 
             grad_logits = grad_logits * logit_scale
 
-            grad_hidden.add_(grad_logits @ w_chunk.float())
-            grad_weight[start:end].add_(grad_logits.t() @ hidden.float())
+            # The GEMMs run in the model dtype so they hit the tensor cores (an fp32 matmul falls back to SIMT
+            # kernels, ~16x slower on H100); accumulation stays fp32 through `add_` into the fp32 buffers.
+            grad_logits = grad_logits.to(hidden.dtype)
+            grad_hidden.add_(grad_logits @ w_chunk)
+            grad_weight[start:end].add_(grad_logits.t() @ hidden)
 
         return grad_hidden.to(hidden.dtype), grad_weight.to(weight.dtype), None, None, None, None, None
 
