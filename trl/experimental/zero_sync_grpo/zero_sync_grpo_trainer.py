@@ -310,11 +310,10 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             # Kept as a DTensor, replicated rather than split: every parameter then has the same type, which
             # gradient clipping requires, and the chunked lm_head reads its local view.
             weight = output_embeddings.weight
-            replicated = nn.Parameter(
-                DTensor.from_local(
-                    weight.full_tensor().contiguous(), weight.device_mesh, [Replicate()], run_check=False
-                )
-            )
+            device_mesh = model._device_mesh
+            # Some models keep the projection out of their tensor parallel plan, so it is already a full tensor
+            local_weight = weight.full_tensor().contiguous() if isinstance(weight, DTensor) else weight.data
+            replicated = nn.Parameter(DTensor.from_local(local_weight, device_mesh, [Replicate()], run_check=False))
             output_embeddings.weight = replicated
             # The transform installed for the split weight would now mix a plain weight with a DTensor input.
             output_embeddings.__dict__.pop("forward", None)
@@ -325,12 +324,7 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
                 # Untied models load the input embedding outside the tensor parallel plan, as a plain full tensor.
                 # It sits in the same optimizer group as the DTensor weights, and fused optimizers reject the mix.
                 input_embeddings.weight = nn.Parameter(
-                    DTensor.from_local(
-                        input_embeddings.weight.data,
-                        output_embeddings.weight.device_mesh,
-                        [Replicate()],
-                        run_check=False,
-                    )
+                    DTensor.from_local(input_embeddings.weight.data, device_mesh, [Replicate()], run_check=False)
                 )
             input_embeddings.__dict__.pop("forward", None)
             _compute_on_local_view(input_embeddings)
