@@ -38,6 +38,7 @@ if is_vision_available():
 def test_generate_vllm_server_with_mixed_image_batch(monkeypatch):
     class DummyProcessor:
         def __call__(self, **kwargs):
+            self.text = kwargs["text"]
             return {"input_ids": torch.tensor([[1], [2]])}
 
     class DummyClient:
@@ -45,7 +46,13 @@ def test_generate_vllm_server_with_mixed_image_batch(monkeypatch):
             self.messages = messages
             return {"completion_ids": [[3], [4], [5], [6]]}
 
-    monkeypatch.setattr(online_dpo_trainer, "apply_chat_template", lambda example, processor: {"prompt": "prompt"})
+    monkeypatch.setattr(
+        online_dpo_trainer,
+        "apply_chat_template",
+        lambda example, processor: {
+            "prompt": " ".join(part["type"] for message in example["prompt"] for part in message["content"])
+        },
+    )
     monkeypatch.setattr(online_dpo_trainer, "gather_object", lambda value: value)
     monkeypatch.setattr(online_dpo_trainer, "broadcast_object_list", lambda value, from_process: value)
 
@@ -74,6 +81,7 @@ def test_generate_vllm_server_with_mixed_image_batch(monkeypatch):
 
     assert trainer.vllm_client.messages[0][0]["content"][0] == {"type": "image", "image": image}
     assert trainer.vllm_client.messages[1][0]["content"] == [{"type": "text", "text": "Say hello"}]
+    assert trainer.processing_class.text == ["image text", "text"]
 
 
 class TestOnlineDPOTrainer(TrlTestCase):

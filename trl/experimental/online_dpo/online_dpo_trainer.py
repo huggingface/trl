@@ -645,6 +645,22 @@ class OnlineDPOTrainer(_BaseTrainer):
             self._move_model_to_vllm()
             self._last_loaded_step = self.state.global_step
 
+        if has_images:
+            prompts = [
+                [
+                    {
+                        **message,
+                        "content": [
+                            part for part in message["content"] if part.get("type") != "image" or "image" in part
+                        ],
+                    }
+                    if image is None and isinstance(message.get("content"), list)
+                    else message
+                    for message in prompt
+                ]
+                for prompt, image in zip(prompts, images, strict=True)
+            ]
+
         # Apply chat template if conversational
         if is_conversational({"prompt": prompts[0]}):
             prompts_text = [apply_chat_template({"prompt": p}, self.processing_class)["prompt"] for p in prompts]
@@ -655,21 +671,10 @@ class OnlineDPOTrainer(_BaseTrainer):
         if has_images:
             # The server can't take images alongside text prompts, so multimodal prompts are sent as messages, with
             # the images inlined in place of their placeholders.
-            messages = []
-            for prompt, image in zip(prompts, images, strict=True):
-                if image is None:
-                    prompt = [
-                        {
-                            **message,
-                            "content": [
-                                part for part in message["content"] if part.get("type") != "image" or "image" in part
-                            ],
-                        }
-                        if isinstance(message.get("content"), list)
-                        else message
-                        for message in prompt
-                    ]
-                messages.append(prepare_multimodal_messages(prompt, images=[image] if image is not None else None))
+            messages = [
+                prepare_multimodal_messages(prompt, images=[image] if image is not None else None)
+                for prompt, image in zip(prompts, images, strict=True)
+            ]
             all_messages = gather_object(messages)
 
         if self.accelerator.is_main_process:
