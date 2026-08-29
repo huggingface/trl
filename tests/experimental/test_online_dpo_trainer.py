@@ -12,12 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from types import SimpleNamespace
+
 import pytest
+import torch
 from datasets import Dataset, DatasetDict, features, load_dataset
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
 from transformers.utils import is_peft_available, is_vision_available
 
-from trl.experimental.online_dpo import OnlineDPOConfig, OnlineDPOTrainer
+from trl.experimental.online_dpo import OnlineDPOConfig, OnlineDPOTrainer, online_dpo_trainer
 
 from ..testing_utils import TrlTestCase, require_peft, require_torch_accelerator, require_vision, require_vllm
 
@@ -30,6 +33,47 @@ if is_vision_available():
     import numpy as np
     from PIL import Image
     from transformers import AutoModelForImageTextToText, AutoProcessor
+
+
+def test_generate_vllm_server_with_mixed_image_batch(monkeypatch):
+    class DummyProcessor:
+        def __call__(self, **kwargs):
+            return {"input_ids": torch.tensor([[1], [2]])}
+
+    class DummyClient:
+        def chat(self, messages, **kwargs):
+            self.messages = messages
+            return {"completion_ids": [[3], [4], [5], [6]]}
+
+    monkeypatch.setattr(online_dpo_trainer, "apply_chat_template", lambda example, processor: {"prompt": "prompt"})
+    monkeypatch.setattr(online_dpo_trainer, "gather_object", lambda value: value)
+    monkeypatch.setattr(online_dpo_trainer, "broadcast_object_list", lambda value, from_process: value)
+
+    trainer = OnlineDPOTrainer.__new__(OnlineDPOTrainer)
+    trainer.state = SimpleNamespace(global_step=0)
+    trainer._move_model_to_vllm = lambda: None
+    trainer.processing_class = DummyProcessor()
+    trainer.accelerator = SimpleNamespace(is_main_process=True, process_index=0)
+    trainer.num_generations = 2
+    trainer.repetition_penalty = 1.0
+    trainer.temperature = 1.0
+    trainer.top_p = 1.0
+    trainer.top_k = None
+    trainer.min_p = None
+    trainer.generation_config = SimpleNamespace(max_tokens=16)
+    trainer.args = SimpleNamespace(generation_kwargs=None)
+    trainer.vllm_client = DummyClient()
+
+    image = object()
+    prompts = [
+        [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "Describe it"}]}],
+        [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "Say hello"}]}],
+    ]
+
+    trainer._generate_vllm_server(prompts, images=[image, None])
+
+    assert trainer.vllm_client.messages[0][0]["content"][0] == {"type": "image", "image": image}
+    assert trainer.vllm_client.messages[1][0]["content"] == [{"type": "text", "text": "Say hello"}]
 
 
 class TestOnlineDPOTrainer(TrlTestCase):

@@ -655,10 +655,21 @@ class OnlineDPOTrainer(_BaseTrainer):
         if has_images:
             # The server can't take images alongside text prompts, so multimodal prompts are sent as messages, with
             # the images inlined in place of their placeholders.
-            messages = [
-                prepare_multimodal_messages(prompt, images=[image] if image is not None else None)
-                for prompt, image in zip(prompts, images, strict=True)
-            ]
+            messages = []
+            for prompt, image in zip(prompts, images, strict=True):
+                if image is None:
+                    prompt = [
+                        {
+                            **message,
+                            "content": [
+                                part for part in message["content"] if part.get("type") != "image" or "image" in part
+                            ],
+                        }
+                        if isinstance(message.get("content"), list)
+                        else message
+                        for message in prompt
+                    ]
+                messages.append(prepare_multimodal_messages(prompt, images=[image] if image is not None else None))
             all_messages = gather_object(messages)
 
         if self.accelerator.is_main_process:
