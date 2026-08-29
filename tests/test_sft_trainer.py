@@ -29,6 +29,7 @@ from packaging.version import Version
 from transformers import (
     AutoModelForCausalLM,
     AutoModelForImageTextToText,
+    AutoProcessor,
     AutoTokenizer,
     BitsAndBytesConfig,
     TrainingArguments,
@@ -290,6 +291,17 @@ class TestSFTTrainer(TrlTestCase):
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
         args = TrainingArguments(output_dir=self.tmp_dir, report_to="none")
         SFTTrainer(model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=args, train_dataset=dataset)
+
+    def test_init_auto_processing_class_uses_model_revision(self):
+        # The automatically created processing_class must be loaded from the same revision as the model
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        with patch.object(AutoProcessor, "from_pretrained", wraps=AutoProcessor.from_pretrained) as mock_from_pretrained:
+            SFTTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                args=SFTConfig(output_dir=self.tmp_dir, model_init_kwargs={"revision": "main"}),
+                train_dataset=dataset,
+            )
+        assert mock_from_pretrained.call_args.kwargs["revision"] == "main"
 
     @pytest.mark.parametrize(
         "model_id",

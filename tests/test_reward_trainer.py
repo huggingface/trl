@@ -14,6 +14,7 @@
 
 import json
 import pathlib
+from unittest.mock import patch
 
 import pytest
 import torch
@@ -108,6 +109,17 @@ class TestDataCollatorForPreference(TrlTestCase):
 
 
 class TestRewardTrainer(TrlTestCase):
+    def test_init_auto_processing_class_uses_model_revision(self):
+        # The automatically created processing_class must be loaded from the same revision as the model
+        dataset = load_dataset("trl-internal-testing/zen", "standard_implicit_prompt_preference", split="train")
+        with patch.object(AutoTokenizer, "from_pretrained", wraps=AutoTokenizer.from_pretrained) as mock_from_pretrained:
+            RewardTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                args=RewardConfig(output_dir=self.tmp_dir, model_init_kwargs={"revision": "main"}),
+                train_dataset=dataset,
+            )
+        assert mock_from_pretrained.call_args.kwargs["revision"] == "main"
+
     def test_raises_error_when_model_num_labels_not_one(self):
         """Test that RewardTrainer raises ValueError when model doesn't have num_labels=1."""
         model = AutoModelForSequenceClassification.from_pretrained(
