@@ -69,6 +69,7 @@ Check for additional optional dependencies [here](https://github.com/huggingface
 | [`ssd_codegen`](https://github.com/huggingface/trl/tree/main/examples/ssd_codegen) | Simple Self-Distillation for code generation with [`experimental.ssd.SSDTrainer`], plus evaluation on LiveCodeBench. | |
 | [`tpo_ultrafeedback`](https://github.com/huggingface/trl/tree/main/examples/tpo_ultrafeedback) | Triple Preference Optimization with [`experimental.tpo.TPOTrainer`] using the [tpo-alignment/triple-preference-ultrafeedback-40K](https://huggingface.co/datasets/tpo-alignment/triple-preference-ultrafeedback-40K) dataset. | |
 | [`zero_sync_grpo_math`](https://github.com/huggingface/trl/tree/main/examples/zero_sync_grpo_math) | Zero-sync GRPO on GSM8K with [`experimental.zero_sync_grpo.ZeroSyncGRPOTrainer`]: training and generation share one weight copy (no server, no weight sync), tuned for long thinking completions (packing, flex attention, deep generation lookahead, tensor parallelism). | |
+| [`zero_sync_grpo_search`](https://github.com/huggingface/trl/tree/main/examples/zero_sync_grpo_search) | Multi-hop search agent on HotpotQA with [`experimental.zero_sync_grpo.ZeroSyncGRPOTrainer`]: Qwen3.5 learns to use a retrieval tool over several turns, training and generating from one weight copy. | |
 
 ## Distributed Training
 
