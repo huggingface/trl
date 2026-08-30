@@ -118,6 +118,34 @@ def _compute_on_local_view(module):
     module.forward = forward
 
 
+class _SharedPromptStream:
+    """One pass over the prompts, shared by the training loop and by the generation queue.
+
+    The loop pulls a batch per step; the queue pulls whatever else it needs to keep `rollouts_in_flight` rollouts
+    generating. Both take from the same iterator, so a prompt is read once and the loop simply advances past what the
+    queue already took.
+    """
+
+    def __init__(self, loader, trainer):
+        self._loader = loader
+        self._trainer = trainer
+        self._iterator = None
+
+    def __iter__(self):
+        self._iterator = iter(self._loader)
+        self._trainer._prompt_stream = self
+        return self
+
+    def __next__(self):
+        return next(self._iterator)
+
+    def __len__(self):
+        return len(self._loader)
+
+    def __getattr__(self, name):
+        return getattr(self._loader, name)
+
+
 class ZeroSyncGRPOTrainer(_BaseTrainer):
     """
     Trainer for the Group Relative Policy Optimization (GRPO) method with zero-sync generation. Generation and
@@ -436,7 +464,7 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         # training batches are drawn.
         self._manager = None
         self._pending: deque[dict[str, Any]] = deque()
-        self._primed = False
+        self._prompt_stream = None
         self._inflight = {}
         self._ready = deque()
 
@@ -452,6 +480,11 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             self._signature_columns = ["prompt"]
 
     def get_train_dataloader(self):
+        # The loop and the generation queue read prompts from one iterator. The queue has to run ahead of the loop to
+        # keep the engine full, and reading ahead through a second iterator would hand the same prompts to both.
+        return _SharedPromptStream(self._build_train_dataloader(), self)
+
+    def _build_train_dataloader(self):
         # Each step consumes `per_device_train_batch_size` scored samples and every prompt produces
         # `num_generations` of them, so the dataloader feeds `per_device_train_batch_size / num_generations`
         # prompts per step.
@@ -814,19 +847,21 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         # on each step queues its own batch and `_fill_slots` starts them as rollouts finish, which is what holds the
         # decode batch at `rollouts_in_flight` instead of letting it drain and refill once per step.
         #
-        # The prompts read ahead are the ones the loop goes on to hand over itself, so the first few batches of an
-        # epoch are seen twice. Skipping them instead empties the queue, since a step only replaces what it consumes
-        # and the depth would drain away over those steps. It replaces a worse version of the same thing: filling the
-        # pipeline used to mean submitting the first batch `generation_ahead` times, so the opening steps trained on
-        # copies of one prompt.
-        if mode == "train" and not self._primed:
-            ahead = iter(self.get_train_dataloader())
-            while len(self._pending) < self.rollouts_in_flight:
-                self._enqueue_group_batch(next(ahead))
-            self._primed = True
-        self._enqueue_group_batch(generation_batch)
-        self._fill_slots()
+        # Filling it used to mean submitting the first batch `generation_ahead` times over, so the opening steps
+        # trained on copies of a single prompt.
         num_samples = len(generation_batch) * self.num_generations
+        self._enqueue_group_batch(generation_batch)
+        # Read further prompts from the same stream the loop is walking, enough to keep every slot filled and one
+        # batch spare: prompts arrive a batch at a time while rollouts finish one at a time, and without that spare a
+        # burst of completions would leave slots idle until the next step. The loop carries on from where this left
+        # off, so no prompt is read twice and none is skipped.
+        if mode == "train" and self._prompt_stream is not None:
+            while len(self._pending) < self.rollouts_in_flight + num_samples:
+                try:
+                    self._enqueue_group_batch(next(self._prompt_stream))
+                except StopIteration:
+                    break
+        self._fill_slots()
 
         # Time spent waiting for the engine. Near zero means generation is fully hidden behind the training step; a
         # large value means the engine is the bottleneck, so raise `rollouts_in_flight` (more requests generating at
