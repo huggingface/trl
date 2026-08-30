@@ -808,12 +808,19 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             # fill its batch early, train, and then sit at the gradient sum waiting for a replica still decoding,
             # and it would carry a lighter forward while that one carries the heavy tail alone. Waiting for the
             # count to cover every replica, then handing the samples out, is what keeps the steps aligned.
+            # Asking every replica for its count costs a collective, and between two of them the engine takes one
+            # decode step, on the same devices through a different communicator. Asking once per decode step was
+            # enough to cost 10% of decoding. Asked once every eight instead, on the same schedule everywhere: a
+            # replica that skipped a collective the others were waiting on would hang them all.
+            drained = 0
             while True:
-                counts = torch.tensor([len(self._ready)], device=self.accelerator.device)
-                torch.distributed.all_reduce(counts, group=self._replica_group)
-                if int(counts.item()) >= num_samples * self.dp_size:
-                    break
+                if drained % 8 == 0:
+                    counts = torch.tensor([len(self._ready)], device=self.accelerator.device)
+                    torch.distributed.all_reduce(counts, group=self._replica_group)
+                    if int(counts.item()) >= num_samples * self.dp_size:
+                        break
                 self._drain(timeout=1.0)
+                drained += 1
         self._metrics[mode]["generation_wait_s"].append(time.perf_counter() - wait_start)
         if self.tp_size > 1:
             # How far generation got for this step. Under tensor parallelism the trainer advances the engine itself,
