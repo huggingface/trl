@@ -5,7 +5,7 @@
     "args": {
       "model_name_or_path": "Qwen/Qwen2.5-0.5B-Instruct",
       "model_revision": "7ae557604adf67be50417f59c2c2f167def9a775",
-      "attn_implementation": "kernels-community/flash-attn2",
+      "attn_implementation": "kernels-community/flash-attn2@v2",
       "dataset_name": "trl-lib/Capybara",
       "max_steps": "50",
       "max_length": "None",

@@ -32,6 +32,11 @@ from ..testing_utils import is_bf16_supported
 MODEL = "Qwen/Qwen2.5-0.5B-Instruct"
 MODEL_REVISION = "7ae557604adf67be50417f59c2c2f167def9a775"
 
+# Pinned to the kernel repo's v2 branch: the v3 stable-ABI builds (the default since transformers 5.16.1) crash in
+# the backward whenever num_heads != num_heads_kv, which is exactly the Qwen2.5 configuration this suite trains.
+# Remove the pin once https://github.com/huggingface/kernels-community/issues/1085 is fixed.
+FA2_KERNEL = "kernels-community/flash-attn2@v2"
+
 SFT_DATASET = "trl-lib/Capybara"
 DPO_DATASET = "trl-lib/ultrafeedback_binarized"
 
@@ -218,7 +223,7 @@ EQUIVALENCE_CLASSES: dict[str, dict] = {
                 "sft_fa2",
                 "sft",
                 SFT_DATASET,
-                attn="kernels-community/flash-attn2",  # to avoid cross-contamination between samples when padding_free=True
+                attn=FA2_KERNEL,  # to avoid cross-contamination between samples when padding_free=True
                 bf16=True,  # required for FA2 kernels, which are bfloat16-only
                 max_length=None,  # Required when padding_free=True
                 per_device_train_batch_size=2,
@@ -227,7 +232,7 @@ EQUIVALENCE_CLASSES: dict[str, dict] = {
                 "sft_fa2_padfree",
                 "sft",
                 SFT_DATASET,
-                attn="kernels-community/flash-attn2",  # to avoid cross-contamination between samples when padding_free=True
+                attn=FA2_KERNEL,  # to avoid cross-contamination between samples when padding_free=True
                 bf16=True,  # required for FA2 kernels, which are bfloat16-only
                 max_length=None,  # Required when padding_free=True
                 per_device_train_batch_size=2,
