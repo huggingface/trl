@@ -14,6 +14,7 @@
 
 import contextlib
 import copy
+import os
 import time
 from collections import defaultdict, deque
 from collections.abc import Callable
@@ -286,6 +287,27 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
                 "in its own thread and is never quiescent."
             )
         self.release_kv_cache_during_step = args.release_kv_cache_during_step
+
+        # The ranks a model is not split across hold replicas of it, which train on their own prompts and have to
+        # agree on the update. Their gradients are summed over a group holding one rank per replica: the ranks that
+        # carry the same tensor parallel shard. Parameters stay whole, which is what lets generation read them in
+        # place, so this is ZeRO-0 over the replicas; the optimizer states are what a ZeRO-2 step would split next.
+        world_size = int(os.environ.get("WORLD_SIZE", "1"))
+        if world_size % args.tp_size != 0:
+            raise ValueError(
+                f"The world ({world_size} processes) must divide into replicas of `tp_size` ({args.tp_size}) "
+                "processes each."
+            )
+        self.dp_size = world_size // args.tp_size
+        self._replica_group = None
+        if self.dp_size > 1 and args.tp_size > 1:
+            rank = int(os.environ.get("RANK", "0"))
+            # Every rank builds every group, in the same order, and keeps the one it belongs to
+            groups = [
+                torch.distributed.new_group([r for r in range(world_size) if r % args.tp_size == shard])
+                for shard in range(args.tp_size)
+            ]
+            self._replica_group = groups[rank % args.tp_size]
         # Under tensor parallelism the trainer advances generation itself, through a second view of the model, so
         # that every rank issues its collectives in the same order. Both are built in `_init_manager`.
         self._generation_view = None
@@ -867,6 +889,21 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             "old_per_token_logps": pad(old_per_token_logps, padding_value=0.0, padding_side="right").to(device),
             "advantages": torch.stack([s["advantage"] for s in samples]).to(device),
         }
+
+    def training_step(self, *args, **kwargs):
+        output = super().training_step(*args, **kwargs)
+        # `sync_gradients` is true only on the last micro-step, so the replicas exchange one summed gradient per
+        # optimizer step rather than one per accumulation micro-step.
+        if self._replica_group is not None and self.accelerator.sync_gradients:
+            for param in self.accelerator.unwrap_model(self.model).parameters():
+                if param.grad is None:
+                    continue
+                # A sharded gradient is summed shard by shard: every rank in the group holds the same shard of the
+                # model, so summing their local views is the same as summing the whole gradients.
+                grad = param.grad.to_local() if isinstance(param.grad, DTensor) else param.grad
+                torch.distributed.all_reduce(grad, group=self._replica_group)
+                grad /= self.dp_size
+        return output
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         completion_mask = inputs["completion_mask"]
