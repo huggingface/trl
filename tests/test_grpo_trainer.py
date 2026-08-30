@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import gc
+import math
 import os
 import warnings
 from collections.abc import Callable
@@ -283,31 +284,112 @@ class TestGRPOTrainer(TrlTestCase):
             train_dataset=dataset,
         )
 
-    def test_kl_log_ratio_clip(self):
-        # Regression test for #3015: the K3 KL estimator `exp(log_ratio) - log_ratio - 1` overflows to `inf` when the
-        # policy and reference distributions drift far apart (large positive log-ratio). `kl_log_ratio_clip` clips the
-        # log-ratio before the exponential so the KL term stays finite, without changing the estimate when unset.
-        def k3(log_ratio, clip=None):
-            if clip is not None:
-                log_ratio = log_ratio.clamp(-clip, clip)
-            return torch.exp(log_ratio) - log_ratio - 1
+    def _kl_clip_setup(self):
+        # Shared scaffolding for the #3015 regression tests below. Returns a trainer whose loss actually runs the
+        # K3 KL branch (beta > 0) and hand-built inputs whose reference log-probs equal the policy's, so each test
+        # can offset `ref_per_token_logps` to drive `kl_log_ratio = ref - policy` into the regime it cares about.
+        # The clip is read from `args` at loss time, so a single trainer can serve several clip settings.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        training_args = GRPOConfig(output_dir=self.tmp_dir, beta=0.1, report_to="none")
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+        trainer.model.eval()
 
-        # A large positive log-ratio overflows the unclipped estimator.
-        drifted = torch.tensor([50.0, 90.0, 100.0])
-        assert torch.isinf(k3(drifted)).any(), "expected the unclipped K3 estimator to overflow on a large log-ratio"
+        # Trainer.__init__ moves the model to args.device, so on a GPU runner the inputs have to be built there too.
+        device = next(trainer.model.parameters()).device
+        batch_size, prompt_len, completion_len = 2, 3, 6
+        prompt_ids = torch.randint(1, 1000, (batch_size, prompt_len), device=device)
+        prompt_mask = torch.ones(batch_size, prompt_len, dtype=torch.long, device=device)
+        completion_ids = torch.randint(1, 1000, (batch_size, completion_len), device=device)
+        completion_mask = torch.ones(batch_size, completion_len, dtype=torch.long, device=device)
+        with torch.no_grad():
+            baseline_logps, _, _ = trainer._get_per_token_logps_and_entropies(
+                trainer.model,
+                torch.cat([prompt_ids, completion_ids], dim=1),
+                torch.cat([prompt_mask, completion_mask], dim=1),
+                completion_len,
+            )
+        inputs = {
+            "prompt_ids": prompt_ids,
+            "prompt_mask": prompt_mask,
+            "completion_ids": completion_ids,
+            "completion_mask": completion_mask,
+            "advantages": torch.tensor([1.0, -1.0], device=device),
+            "old_per_token_logps": baseline_logps,
+            "ref_per_token_logps": baseline_logps,
+            # The default loss_type ("dapo") normalizes by this, built here the way _generate_and_score_completions
+            # builds it: the number of unmasked completion tokens in the batch.
+            "num_items_in_batch": completion_mask.sum(),
+        }
+        return trainer, inputs
 
-        # Clipping keeps it finite and non-negative (K3 is a Bregman divergence, always >= 0).
-        clipped = k3(drifted, clip=10.0)
-        assert torch.isfinite(clipped).all(), "kl_log_ratio_clip did not tame the overflow"
-        assert (clipped >= 0).all(), "clipped K3 must stay non-negative"
+    @staticmethod
+    def _exp_ceiling(dtype):
+        # Largest log-ratio whose exponential is still representable in `dtype`. Derived rather than hardcoded: the
+        # threshold is ~88.7 for float32, ~88.7 for bfloat16 and ~11.1 for float16, so a literal would be wrong for
+        # whichever dtype the test does not run under.
+        return math.log(torch.finfo(dtype).max)
 
-        # When unset (the default), the estimate is unchanged for normally scaled log-ratios.
-        normal = torch.tensor([-1.3, 0.0, 0.5, 2.1])
-        torch.testing.assert_close(k3(normal, clip=None), torch.exp(normal) - normal - 1)
+    def test_kl_log_ratio_clip_tames_overflow(self):
+        # Regression test for #3015: when the policy drifts far below the reference, `kl_log_ratio` grows large and
+        # positive and the K3 estimator `exp(kl_log_ratio) - kl_log_ratio - 1` overflows to `inf`. Clipping must
+        # bring the loss back to a finite value.
+        trainer, inputs = self._kl_clip_setup()
+        ceiling = self._exp_ceiling(inputs["ref_per_token_logps"].dtype)
+        inputs["ref_per_token_logps"] = inputs["ref_per_token_logps"] + (ceiling + 1.0)
 
-        # The config field exists, defaults to None (no clipping), and is settable.
-        assert GRPOConfig(output_dir=self.tmp_dir, use_cpu=True).kl_log_ratio_clip is None
-        assert GRPOConfig(output_dir=self.tmp_dir, use_cpu=True, kl_log_ratio_clip=10.0).kl_log_ratio_clip == 10.0
+        trainer.args.kl_log_ratio_clip = None
+        assert not torch.isfinite(trainer._compute_loss(trainer.model, inputs)), (
+            "expected the unclipped K3 estimator to overflow on a log-ratio above the dtype's exp ceiling"
+        )
+
+        trainer.args.kl_log_ratio_clip = 10.0
+        assert torch.isfinite(trainer._compute_loss(trainer.model, inputs)), (
+            "kl_log_ratio_clip did not tame the overflow"
+        )
+
+    def test_kl_log_ratio_clip_above_dtype_ceiling_raises(self):
+        # A clip whose own exponential overflows cannot keep the KL term finite, so it is rejected instead of
+        # silently producing `inf`.
+        trainer, inputs = self._kl_clip_setup()
+        ceiling = self._exp_ceiling(inputs["ref_per_token_logps"].dtype)
+        trainer.args.kl_log_ratio_clip = ceiling + 1.0
+
+        with pytest.raises(ValueError, match="is too large for"):
+            trainer._compute_loss(trainer.model, inputs)
+
+    def test_kl_log_ratio_clip_leaves_large_negative_log_ratio_intact(self):
+        # `exp` cannot overflow for a large negative log-ratio, it underflows to zero and leaves K3 finite and
+        # growing as `-kl_log_ratio - 1`. Clipping that side would shrink an already correct estimate, so the clip
+        # is one-sided and the loss must not depend on it here.
+        trainer, inputs = self._kl_clip_setup()
+        inputs["ref_per_token_logps"] = inputs["ref_per_token_logps"] - 50.0
+
+        trainer.args.kl_log_ratio_clip = None
+        unclipped = trainer._compute_loss(trainer.model, inputs)
+        trainer.args.kl_log_ratio_clip = 10.0
+        clipped = trainer._compute_loss(trainer.model, inputs)
+
+        torch.testing.assert_close(clipped, unclipped)
+
+    def test_kl_log_ratio_clip_does_not_bind_normally_scaled_log_ratios(self):
+        # The clip only bounds the log-ratio from above, so a clip far outside the data's range is a no-op.
+        trainer, inputs = self._kl_clip_setup()
+        inputs["ref_per_token_logps"] = inputs["ref_per_token_logps"] + 0.05
+
+        trainer.args.kl_log_ratio_clip = None
+        unclipped = trainer._compute_loss(trainer.model, inputs)
+        trainer.args.kl_log_ratio_clip = 10.0
+        clipped = trainer._compute_loss(trainer.model, inputs)
+
+        torch.testing.assert_close(clipped, unclipped)
+        # The field exists, defaults to no clipping, and is settable.
+        assert GRPOConfig(output_dir=self.tmp_dir).kl_log_ratio_clip is None
+        assert GRPOConfig(output_dir=self.tmp_dir, kl_log_ratio_clip=10.0).kl_log_ratio_clip == 10.0
 
     @pytest.mark.parametrize(
         "model_id",

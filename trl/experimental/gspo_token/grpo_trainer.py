@@ -53,9 +53,20 @@ class GRPOTrainer(_GRPOTrainer):
             ref_per_token_logps = inputs["ref_per_token_logps"]
             kl_log_ratio = ref_per_token_logps - per_token_logps
             # Clip the log-ratio before the exponential so the K3 estimator stays finite when the policy and
-            # reference distributions drift far apart (issue #3015). No-op when kl_log_ratio_clip is None.
+            # reference distributions drift far apart (issue #3015). Only a large positive log-ratio overflows
+            # `exp`; a large negative one underflows to zero and leaves K3 finite, so clamping that side would
+            # shrink an already correct estimate. A clip whose own exponential overflows the working dtype cannot
+            # keep the term finite, so reject it instead of returning `inf`. No-op when the clip is None.
             if self.args.kl_log_ratio_clip is not None:
-                kl_log_ratio = kl_log_ratio.clamp(-self.args.kl_log_ratio_clip, self.args.kl_log_ratio_clip)
+                clip = torch.tensor(self.args.kl_log_ratio_clip, dtype=kl_log_ratio.dtype, device=kl_log_ratio.device)
+                if not torch.isfinite(torch.exp(clip)):
+                    raise ValueError(
+                        f"`kl_log_ratio_clip={self.args.kl_log_ratio_clip}` is too large for {kl_log_ratio.dtype}: "
+                        f"`torch.exp` overflows to `inf` at that value, so the clip cannot keep the KL term finite. "
+                        f"Lower it until `torch.exp(torch.tensor(kl_log_ratio_clip, dtype={kl_log_ratio.dtype}))` "
+                        f"is finite."
+                    )
+                kl_log_ratio = kl_log_ratio.clamp(max=self.args.kl_log_ratio_clip)
             per_token_kl = torch.exp(kl_log_ratio) - kl_log_ratio - 1
 
         # Compute the loss

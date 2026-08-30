@@ -362,10 +362,13 @@ class GRPOConfig(_BaseConfig):
             exactly 1. The unbiased reverse-KL property holds for `importance_sampling_level="token"`; with
             `"sequence"` a sequence-level weight is broadcast onto the per-token KL.
         kl_log_ratio_clip (`float`, *optional*):
-            Clips the log-ratio `log(pi_ref / pi_theta)` to `[-kl_log_ratio_clip, kl_log_ratio_clip]` before the
-            exponential in the K3 KL estimator. If `None` (default), no clipping is applied and the estimator is
-            unchanged. Set to a positive value to keep the KL term finite when the policy and reference distributions
-            drift far apart during training, which otherwise overflows `torch.exp` to `inf` (see issue #3015).
+            Upper-bounds the log-ratio `log(pi_ref / pi_theta)` before the exponential in the K3 KL estimator, so that
+            a policy drifting far above the reference cannot overflow `torch.exp` to `inf` (see issue #3015). Only the
+            upper side is clipped: a large negative log-ratio underflows to zero and leaves the estimator finite, so
+            clipping it would shrink a correct value. If `None` (default), no clipping is applied and the estimator is
+            unchanged. The value must be small enough that `torch.exp` of it is representable in the dtype the
+            log-probs are computed in, which is roughly 11 for float16 and 88 for bfloat16 and float32; a larger value
+            raises `ValueError` rather than silently returning `inf`.
 
         > Parameters that control the logging
 
@@ -981,11 +984,14 @@ class GRPOConfig(_BaseConfig):
     kl_log_ratio_clip: float | None = field(
         default=None,
         metadata={
-            "help": "Clips the log-ratio `log(pi_ref / pi_theta)` to `[-kl_log_ratio_clip, kl_log_ratio_clip]` before "
-            "the exponential in the K3 KL estimator. If `None` (default), no clipping is applied and the estimator is "
-            "unchanged. Set to a positive value to keep the KL term finite when the policy and reference "
-            "distributions drift far apart during training, which otherwise overflows `torch.exp` to `inf` (see "
-            "issue #3015)."
+            "help": "Upper-bounds the log-ratio `log(pi_ref / pi_theta)` before the exponential in the K3 KL "
+            "estimator, so that a policy drifting far above the reference cannot overflow `torch.exp` to `inf` "
+            "(see issue #3015). Only the upper side is clipped: a large negative log-ratio underflows to zero "
+            "and leaves the estimator finite, so clipping it would shrink a correct value. If `None` (default), "
+            "no clipping is applied and the estimator is unchanged. The value must be small enough that "
+            "`torch.exp` of it is representable in the dtype the log-probs are computed in, which is roughly 11 "
+            "for float16 and 88 for bfloat16 and float32; a larger value raises `ValueError` rather than "
+            "silently returning `inf`."
         },
     )
 
