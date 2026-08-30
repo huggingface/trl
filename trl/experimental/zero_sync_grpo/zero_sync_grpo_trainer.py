@@ -301,7 +301,7 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         self.dp_size = world_size // args.tp_size
         self._replica_group = None
         self._parameter_owner: dict[str, int] = {}
-        if self.dp_size > 1 and args.tp_size > 1:
+        if self.dp_size > 1:
             rank = int(os.environ.get("RANK", "0"))
             # Every rank builds every group, in the same order, and keeps the one it belongs to
             groups = [
@@ -999,7 +999,9 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         output = super().training_step(*args, **kwargs)
         # `sync_gradients` is true only on the last micro-step, so the replicas exchange one summed gradient per
         # optimizer step rather than one per accumulation micro-step.
-        if self._replica_group is not None and self.accelerator.sync_gradients:
+        # Without tensor parallelism the model is a plain DDP one and accelerate already reduced the gradients;
+        # DDP cannot wrap a tensor-parallel model, which is why the reduction is done here instead.
+        if self.tp_size > 1 and self._replica_group is not None and self.accelerator.sync_gradients:
             for param in self.accelerator.unwrap_model(self.model).parameters():
                 if param.grad is None:
                     continue
