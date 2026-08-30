@@ -736,6 +736,39 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
                 self._ready.append({**row, "advantage": advantage, "metrics": metrics})
                 metrics = None  # only the rollout's first row carries them
 
+    def _take_from_pool(self, num_samples: int) -> list[dict[str, Any]]:
+        """Hand this replica its share of the samples every replica has ready.
+
+        A sample is data: nothing ties it to the replica that generated it. Pooling them lets the batches be built
+        for balance instead of for locality, so the replicas reach their forward together and carry the same load.
+        Every rank runs the same assignment over the same pool, so no one has to be told the result.
+        """
+        pool: list[Any] = [None] * self.dp_size
+        torch.distributed.all_gather_object(pool, list(self._ready), group=self._replica_group)
+        replica = self.accelerator.process_index // self.tp_size
+        # Longest first into the emptiest replica, by the sum of squared lengths: attention is quadratic, so that
+        # is what predicts both the step time and the activation peak, and it is the quantity worth equalizing.
+        indexed = sorted(
+            ((owner, index, sample) for owner, samples in enumerate(pool) for index, sample in enumerate(samples)),
+            key=lambda item: -len(item[2]["input_ids"]),
+        )
+        loads = [0] * self.dp_size
+        assigned: list[list[Any]] = [[] for _ in range(self.dp_size)]
+        for owner, index, sample in indexed:
+            open_replicas = [r for r in range(self.dp_size) if len(assigned[r]) < num_samples]
+            if not open_replicas:
+                break
+            target = min(open_replicas, key=lambda r: loads[r])
+            assigned[target].append((owner, index, sample))
+            loads[target] += len(sample["input_ids"]) ** 2
+        taken = {index for group in assigned for owner, index, _ in group if owner == replica}
+        self._ready = deque(sample for index, sample in enumerate(self._ready) if index not in taken)
+        self._metrics["train"]["batch/row_imbalance"].append(max(loads) / (sum(loads) / len(loads)))
+        self._metrics["train"]["batch/from_other_replicas"].append(
+            sum(1 for owner, _, _ in assigned[replica] if owner != replica) / max(len(assigned[replica]), 1)
+        )
+        return [sample for _, _, sample in assigned[replica]]
+
     def _prepare_inputs(self, generation_batch: list[dict[str, Any]]) -> dict[str, torch.Tensor | Any]:
         device = self.accelerator.device
         mode = "train" if self.model.training else "eval"
@@ -761,8 +794,20 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         if self.release_kv_cache_during_step:
             self._manager.restore_memory()  # generation needs its cache back before it can run
         wait_start = time.perf_counter()
-        while len(self._ready) < num_samples:
-            self._drain(timeout=1.0)
+        if self._replica_group is None:
+            while len(self._ready) < num_samples:
+                self._drain(timeout=1.0)
+        else:
+            # The replicas draw one pool between them. A replica whose completions come back short would otherwise
+            # fill its batch early, train, and then sit at the gradient sum waiting for a replica still decoding,
+            # and it would carry a lighter forward while that one carries the heavy tail alone. Waiting for the
+            # count to cover every replica, then handing the samples out, is what keeps the steps aligned.
+            while True:
+                counts = torch.tensor([len(self._ready)], device=self.accelerator.device)
+                torch.distributed.all_reduce(counts, group=self._replica_group)
+                if int(counts.item()) >= num_samples * self.dp_size:
+                    break
+                self._drain(timeout=1.0)
         self._metrics[mode]["generation_wait_s"].append(time.perf_counter() - wait_start)
         if self.tp_size > 1:
             # How far generation got for this step. Under tensor parallelism the trainer advances the engine itself,
@@ -773,7 +818,9 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             # Generation is done for this step, so hand its memory to the forward and backward that come next.
             released = self._manager.release_memory()
             self._metrics[mode]["generation/kv_released_gib"].append(released / 2**30)
-        if self.packed_training:
+        if self._replica_group is not None:
+            samples = self._take_from_pool(num_samples)
+        elif self.packed_training:
             # Packing already removes the padding, and picking like-length samples would concentrate the long
             # ones into a single batch, whose activations then blow past memory (a batch of 256 samples all near
             # the length cap is over twice the tokens of a mixed one). Arrival order keeps the mix.
