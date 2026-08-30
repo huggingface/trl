@@ -670,7 +670,15 @@ class DPOTrainer(_BaseTrainer):
             # probs with adapters disabled, i.e. with the base model. The fix only allows adapters targeting the same
             # parameters, which holds here since the "ref" adapter reuses the "default" config.
             default_config = model.peft_config["default"]
-            if (
+            if isinstance(default_config, LoraConfig) and default_config.bias != "none":
+                logger.warning(
+                    f"A LoRA config with `bias={default_config.bias!r}` trains bias terms that are shared with the "
+                    "base model rather than owned by the adapter, and PEFT allows only one such adapter per model "
+                    "(`LoraModel supports only 1 adapter with bias`). The reference log probs are therefore computed "
+                    "from the base model (adapters disabled). Set `bias='none'` to train against a copy of your "
+                    "adapter instead."
+                )
+            elif (
                 isinstance(default_config, LoraConfig)
                 and default_config.target_parameters
                 and Version(peft.__version__) < Version("0.20.0")
@@ -685,9 +693,12 @@ class DPOTrainer(_BaseTrainer):
                 )
             else:
                 model.add_adapter("ref", default_config)
+                # The adapter name is a path component that is not always followed by one: `trainable_token_indices`
+                # keys its deltas by adapter, so those parameter names end in `.default`. Split on `.` to match both.
                 for name, param in model.named_parameters():
-                    if ".default." in name:
-                        ref_name = name.replace(".default.", ".ref.")
+                    parts = name.split(".")
+                    if "default" in parts:
+                        ref_name = ".".join("ref" if part == "default" else part for part in parts)
                         ref_param = model.get_parameter(ref_name)
                         ref_param.data.copy_(param.data)
 
@@ -976,10 +987,12 @@ class DPOTrainer(_BaseTrainer):
             if is_peft_model(self.model) and "ref" not in self.model.peft_config:
                 raise NotImplementedError(
                     "You passed `sync_ref_model=True` while using a PEFT model whose reference adapter could not be "
-                    "created, so there is nothing to synchronize. This happens with `peft<0.20.0` when the LoRA "
-                    "config uses `target_parameters` (peft#3340): the reference log probs then come from the base "
-                    "model with adapters disabled, which is fixed and cannot track the policy. Upgrade to "
-                    "`peft>=0.20.0`, or use `sync_ref_model=False`."
+                    "created, so there is nothing to synchronize. The adapter is skipped when the LoRA config sets "
+                    "`bias` to anything other than `'none'`, because PEFT allows only one bias-bearing adapter per "
+                    "model, and with `peft<0.20.0` when the config uses `target_parameters` (peft#3340). In both "
+                    "cases the reference log probs come from the base model with adapters disabled, which is fixed "
+                    "and cannot track the policy. Set `bias='none'`, upgrade to `peft>=0.20.0`, or use "
+                    "`sync_ref_model=False`."
                 )
             if args.precompute_ref_log_probs:
                 raise ValueError(

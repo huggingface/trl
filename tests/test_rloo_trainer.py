@@ -1152,6 +1152,68 @@ class TestRLOOTrainer(TrlTestCase):
             new_param = model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Ref adapter parameter {n} has not changed."
 
+    def test_train_with_sync_ref_model_and_peft_trainable_tokens(self):
+        # `trainable_token_indices` stores its deltas in a `ParameterDict` keyed by adapter, so those parameter names
+        # END in ".default" with no component after it. Pairing "default" with "ref" by substring would skip them and
+        # leave the reference copy of the token deltas frozen at its initial value while the policy moves.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        training_args = RLOOConfig(
+            output_dir=self.tmp_dir,
+            beta=0.1,  # ensure the reference is used so sync has an effect
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            sync_ref_model=True,
+            ref_model_sync_steps=2,  # reduce sync steps to ensure a sync happens
+            report_to="none",
+        )
+        trainer = RLOOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+            peft_config=LoraConfig(trainable_token_indices=[0, 1]),
+        )
+
+        model = trainer.accelerator.unwrap_model(trainer.model)
+        token_ref_params = {
+            n: param.clone() for n, param in model.named_parameters() if "trainable_tokens_delta" in n and "ref" in n
+        }
+        assert token_ref_params  # the config must actually produce token deltas, or the loop below passes vacuously
+
+        trainer.train()
+
+        for n, param in token_ref_params.items():
+            assert not torch.equal(param, model.get_parameter(n)), f"Ref token delta {n} has not changed."
+
+    def test_train_with_sync_ref_model_and_peft_bias(self):
+        # A LoRA config with `bias != "none"` trains bias terms shared with the base model, and PEFT permits only one
+        # such adapter per model. No "ref" adapter can be created, and the base model is a fixed reference that cannot
+        # track the policy, so asking for both is rejected rather than silently training against a frozen reference.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        training_args = RLOOConfig(
+            output_dir=self.tmp_dir,
+            beta=0.1,  # ensure the reference is used so sync has an effect
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            sync_ref_model=True,
+            ref_model_sync_steps=2,  # reduce sync steps to ensure a sync happens
+            report_to="none",
+        )
+        with pytest.raises(NotImplementedError, match="bias"):
+            RLOOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
+                peft_config=LoraConfig(bias="all"),
+            )
+
     def test_train_beta_zero(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         training_args = RLOOConfig(

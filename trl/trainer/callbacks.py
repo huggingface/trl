@@ -138,9 +138,14 @@ class SyncRefModelCallback(TrainerCallback):
         # With PEFT the reference is not a separate module but a second adapter inside the policy model, so
         # `_sync_target_model`'s parameter-wise zip of two modules does not apply. Pair each `"default"` parameter with
         # its `"ref"` counterpart by name instead; this is the same mapping used to initialize the `"ref"` adapter.
+        # The adapter name is a path component, and it is not always followed by one: `trainable_token_indices` stores
+        # its deltas in a `ParameterDict` keyed by adapter, so those names END in `.default`. Splitting on `.` matches
+        # both placements, where a `".default." in name` substring test silently skips the terminal ones.
         for name, param in model.named_parameters():
-            if ".default." in name:
-                ref_param = model.get_parameter(name.replace(".default.", ".ref."))
+            parts = name.split(".")
+            if "default" in parts:
+                ref_name = ".".join("ref" if part == "default" else part for part in parts)
+                ref_param = model.get_parameter(ref_name)
                 ref_param.data.mul_(1.0 - alpha).add_(param.data, alpha=alpha)
 
     @staticmethod
