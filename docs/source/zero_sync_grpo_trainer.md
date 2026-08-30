@@ -35,7 +35,7 @@ The generation engine reserves its KV cache when the trainer starts, and whateve
 ```python
 ZeroSyncGRPOConfig(
     continuous_batching_config={"max_memory_percent": 0.25},
-    generation_ahead=4,
+    rollouts_in_flight=32,
 )
 ```
 
@@ -96,7 +96,7 @@ trainer = ZeroSyncGRPOTrainer(
 
 Because the weights change while a rollout is being generated, a long completion can span several optimizer steps: its tokens are sampled by different versions of the policy. The engine returns, for each token, the logprob computed by the weights that actually sampled it, so the importance ratio in the clipped loss is exact per token even though no single old policy exists.
 
-What remains is that the KV cache of a rollout's prefix was computed with older weights, while the training forward recomputes it with current ones. Measured on Qwen3-0.6B at `learning_rate=1e-5`, the resulting logprob gap peaks at about 0.16 nats on a rollout's first tokens (an importance ratio of 1.17, inside the default clip range) and falls to the kernel-numerics floor by token 50. It grows with the learning rate, the completion length, and `generation_ahead`.
+What remains is that the KV cache of a rollout's prefix was computed with older weights, while the training forward recomputes it with current ones. Measured on Qwen3-0.6B at `learning_rate=1e-5`, the resulting logprob gap peaks at about 0.16 nats on a rollout's first tokens (an importance ratio of 1.17, inside the default clip range) and falls to the kernel-numerics floor by token 50. It grows with the learning rate, the completion length, and `rollouts_in_flight`.
 
 ## Scaling
 
@@ -176,7 +176,7 @@ stayed around a microsecond throughout:
 
 Do not assume that regime. A bigger model, longer completions or more generations per prompt make
 decoding dominate, and then the wait grows and the levers reverse: a larger batch only makes the
-trainer wait longer, while `generation_ahead` and the size of the KV pool are what help. Read the
+trainer wait longer, while `rollouts_in_flight` and the size of the KV pool are what help. Read the
 metric for your own setup rather than copying these numbers.
 
 ## Debugging

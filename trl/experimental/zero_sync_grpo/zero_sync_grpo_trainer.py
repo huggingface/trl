@@ -278,7 +278,7 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         self.packed_single_row = "linear_attention" in (
             getattr(model.config.get_text_config(), "layer_types", None) or []
         )
-        self.generation_ahead = args.generation_ahead
+        self.rollouts_in_flight = args.rollouts_in_flight
         self.tp_size = args.tp_size
         # Giving the KV cache memory to the training step only works when generation is quiescent while it runs, which
         # is what the trainer owning the engine gives us.
@@ -435,6 +435,7 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         # advantages are computed as soon as its last completion lands, and its samples join `_ready`, from which
         # training batches are drawn.
         self._manager = None
+        self._pending: deque[dict[str, Any]] = deque()
         self._primed = False
         self._inflight = {}
         self._ready = deque()
@@ -469,7 +470,7 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             if self._manager is not None:
                 # The generation thread is not a daemon, and Python joins those before it runs any atexit hook, so
                 # the process would never exit. A flush would wait for every rollout still in flight, and there are
-                # always some, since the trainer keeps `generation_ahead` batches queued; none of them will be
+                # always some, since the trainer keeps `rollouts_in_flight` rollouts generating; none of them will be
                 # trained on now.
                 self._manager.stop(block=True, timeout=30, hard_stop=True)
                 self._manager = None
@@ -578,23 +579,41 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             **self.chat_template_kwargs,
         )["input_ids"][0]
 
-    def _submit_group(self, example: dict[str, Any]) -> None:
-        # Start `num_generations` rollouts of the prompt. Each rollout is a chain of turns: a completed turn that
-        # calls tools spawns the next turn's request, and the rollout is scored when its final turn lands.
+    def _enqueue_group(self, example: dict[str, Any]) -> None:
+        # Queue `num_generations` rollouts of the prompt. Each rollout is a chain of turns: a completed turn that
+        # calls tools spawns the next turn's request, and the rollout is scored when its final turn lands. They are
+        # queued rather than started: `_fill_slots` starts them as the engine has room.
         group = {"example": example, "scored": [], "size": self.num_generations}
         for _ in range(self.num_generations):
-            prompt_ids = self._tokenize_conversation(example["prompt"])
-            rollout = {
+            self._pending.append({
                 "group": group,
                 "messages": list(example["prompt"]),
                 "completion": [],
                 "turns": [],
-                "prompt_ids": prompt_ids,
+                "prompt_ids": self._tokenize_conversation(example["prompt"]),
                 "iterations": 0,
                 "tool_calls": 0,
-            }
+            })
+
+    def _enqueue_group_batch(self, batch) -> None:
+        for example in batch:
+            self._enqueue_group(example)
+
+    def _fill_slots(self) -> None:
+        """Keep `rollouts_in_flight` rollouts generating, starting the next one the moment one finishes.
+
+        A decode step costs about the same whatever number of sequences it carries: it reads the whole model and pays
+        the per-layer all-reduces either way. Letting the batch drain between optimizer steps and refill in one burst
+        therefore wastes decode steps on a batch that is half empty. The rollouts of a group start as slots free
+        rather than all at once, which is no change in kind: zero-sync updates the weights while generation runs, so
+        the members of a group already see more than one version of the policy.
+        """
+        while len(self._inflight) < self.rollouts_in_flight and self._pending:
+            rollout = self._pending.popleft()
             request_id = self._next_request_id()
-            self._manager.add_request(prompt_ids, request_id=request_id, max_new_tokens=self.max_completion_length)
+            self._manager.add_request(
+                rollout["prompt_ids"], request_id=request_id, max_new_tokens=self.max_completion_length
+            )
             self._inflight[request_id] = rollout
 
     def _next_request_id(self) -> str:
@@ -627,6 +646,8 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             rollout = self._inflight.pop(result.request_id, None)
             if rollout is not None:
                 self._advance_rollout(rollout, result)
+            # A rollout that ended freed a slot; a rollout that called a tool took its own slot back
+            self._fill_slots()
 
     def _advance_rollout(self, rollout: dict[str, Any], result) -> None:
         # One turn just finished: record it, and either spawn the next turn (the model called tools) or score the
@@ -788,21 +809,28 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         if self._manager is None:
             self._init_manager()
 
-        # Submit this step's prompts, then train on the oldest scored samples. In training the very first batch is
-        # submitted `generation_ahead` extra times to prime the pipeline; from then on one batch in per step keeps
-        # that many batches in flight, so the engine always has work queued while the trainer computes its step.
+        # A step queues one batch of prompts and consumes one batch of samples, so the depth of the pipeline is
+        # whatever it starts with. It is filled once, here, by reading prompts ahead of the training loop; from then
+        # on each step queues its own batch and `_fill_slots` starts them as rollouts finish, which is what holds the
+        # decode batch at `rollouts_in_flight` instead of letting it drain and refill once per step.
+        #
+        # The prompts read ahead are the ones the loop goes on to hand over itself, so the first few batches of an
+        # epoch are seen twice. Skipping them instead empties the queue, since a step only replaces what it consumes
+        # and the depth would drain away over those steps. It replaces a worse version of the same thing: filling the
+        # pipeline used to mean submitting the first batch `generation_ahead` times, so the opening steps trained on
+        # copies of one prompt.
         if mode == "train" and not self._primed:
-            for _ in range(self.generation_ahead):
-                for example in generation_batch:
-                    self._submit_group(example)
+            ahead = iter(self.get_train_dataloader())
+            while len(self._pending) < self.rollouts_in_flight:
+                self._enqueue_group_batch(next(ahead))
             self._primed = True
-        for example in generation_batch:
-            self._submit_group(example)
+        self._enqueue_group_batch(generation_batch)
+        self._fill_slots()
         num_samples = len(generation_batch) * self.num_generations
 
         # Time spent waiting for the engine. Near zero means generation is fully hidden behind the training step; a
-        # large value means the engine is the bottleneck, so raise `generation_ahead` (more requests in flight) or
-        # give it a bigger KV pool.
+        # large value means the engine is the bottleneck, so raise `rollouts_in_flight` (more requests generating at
+        # once) or give it a bigger KV pool.
         if self.release_kv_cache_during_step:
             self._manager.restore_memory()  # generation needs its cache back before it can run
         wait_start = time.perf_counter()

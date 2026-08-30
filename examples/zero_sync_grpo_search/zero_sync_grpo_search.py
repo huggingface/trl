@@ -36,7 +36,7 @@ cache is the scarce resource in zero-sync training, because generation and train
 - Qwen3.5 is a hybrid: 3 layers in 4 are linear attention, which keeps a fixed-size recurrent state
   instead of a growing KV cache. Qwen3.5-9B stores 32 KiB of KV per token where a dense Qwen3-14B
   stores 160 KiB, so a 32k-token rollout costs 1 GiB instead of 5. That headroom is what pays for a
-  deep `generation_ahead` and many concurrent rollouts.
+  a large `rollouts_in_flight`.
 
 Each turn resubmits the conversation so far, and the continuous batching engine serves the repeated
 prefix from its cache (~91% of the second turn's prompt), so a tool loop costs far less than the
@@ -168,7 +168,7 @@ def main():
         max_tool_calling_iterations=4,
         # The tool loop is the reasoning here, so the model answers from what it read
         chat_template_kwargs={"enable_thinking": False},
-        generation_ahead=8,
+        rollouts_in_flight=64,
         # Fraction of free VRAM for the KV cache; the rest is for activations and gradients
         continuous_batching_config={"max_memory_percent": 0.25},
         packed_training=True,

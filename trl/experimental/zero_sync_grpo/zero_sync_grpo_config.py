@@ -61,11 +61,13 @@ class ZeroSyncGRPOConfig(_BaseConfig):
             Maximum number of tool-calling turns when training an agent. If `None`, there is no limit and generation
             stops when the model generates a response turn with no tool calls or when the total response length
             reaches `max_completion_length`.
-        generation_ahead (`int`, *optional*, defaults to `4`):
-            Number of batches of prompts kept in flight in the generation engine ahead of training. Deeper pipelines
-            keep the engine busier (generation never stops) at the cost of more KV cache and completions that lag the
-            policy by up to this many optimizer steps. Lower it when completions are long enough to crowd the KV
-            cache.
+        rollouts_in_flight (`int`, *optional*, defaults to `32`):
+            Number of rollouts the engine keeps generating at any moment. A rollout that finishes is replaced
+            immediately by the next one, so the decode batch stays full instead of emptying and refilling once per
+            optimizer step. The cost of a decode step is mostly reading the weights and the per-layer all-reduces,
+            which do not depend on how many sequences are decoded, so a fuller batch is close to free throughput. Set
+            it as high as the KV cache holds: past that, rollouts crowd the cache and decode slows. Completions lag
+            the policy by roughly this many rollouts divided by the batch trained on per step.
         continuous_batching_config (`dict`, *optional*):
             Keyword arguments for [`~transformers.generation.ContinuousBatchingConfig`]. `return_logprobs` is always
             forced to `True`: the engine's logprobs are the behavior-policy logprobs of the completions.
@@ -180,12 +182,13 @@ class ZeroSyncGRPOConfig(_BaseConfig):
             "length reaches `max_completion_length`."
         },
     )
-    generation_ahead: int = field(
-        default=4,
+    rollouts_in_flight: int = field(
+        default=32,
         metadata={
-            "help": "Number of batches of prompts kept in flight in the generation engine ahead of training. Deeper "
-            "pipelines keep the engine busier at the cost of more KV cache and completions that lag the policy by up "
-            "to this many optimizer steps. Lower it when completions are long enough to crowd the KV cache."
+            "help": "Number of rollouts the engine keeps generating at any moment. A rollout that finishes is "
+            "replaced immediately by the next one, so the decode batch stays full instead of emptying and refilling "
+            "once per optimizer step. Set it as high as the KV cache holds: past that, rollouts crowd the cache and "
+            "decode slows."
         },
     )
     continuous_batching_config: dict[str, Any] | None = field(

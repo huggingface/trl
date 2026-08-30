@@ -82,7 +82,7 @@ class TestZeroSyncGRPOTrainer(TrlTestCase):
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
-            generation_ahead=1,  # keep few requests in flight, the test model is tiny
+            rollouts_in_flight=3,  # keep few rollouts generating, the test model is tiny
             max_steps=2,
             report_to="none",
         )
@@ -112,7 +112,7 @@ class TestZeroSyncGRPOTrainer(TrlTestCase):
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
-            generation_ahead=1,  # keep few requests in flight, the test model is tiny
+            rollouts_in_flight=3,  # keep few rollouts generating, the test model is tiny
             packed_training=True,
             max_steps=2,
             report_to="none",

@@ -25,18 +25,18 @@ Zero-sync GRPO on GSM8K with long thinking completions, tuned for throughput.
 Training and generation share one weight copy: the continuous batching engine decodes through a
 view of the training model, so there is no inference server and no weight sync. The engine
 generates between optimizer steps, and every completion is produced by the current policy (at
-most `generation_ahead` steps stale).
+most `rollouts_in_flight` rollouts behind the policy).
 
 This recipe is the tuned configuration for the long-completion regime (Qwen3-14B, ~3-4k-token
 thinking completions, 4x H100). Each knob below is what moved the needle:
 
 - `packed_training`: samples are packed back to back, so no pad-token compute (this also defaults
   the model to flex attention, which skips the masked-out cross-sample blocks).
-- `generation_ahead=16`: a 4k rollout spans many optimizer steps, so the engine needs a deep
-  lookahead to keep its decode batch full. Going 8 -> 16 -> 32 kept improving throughput at 14B
-  (7.4 -> 8.5 -> 9.8% MFU) at the cost of completions up to that many steps stale; past the point
-  where in-flight rollouts crowd the KV cache it regresses, so raise `max_memory_percent` before
-  raising this further.
+- `rollouts_in_flight=128`: a decode step costs about the same whatever number of sequences it
+  carries, so the engine wants its batch kept full. A finished rollout is replaced immediately by
+  the next one rather than the batch refilling once per optimizer step. Raising it kept improving
+  throughput at 14B until in-flight rollouts crowd the KV cache, where it regresses: raise
+  `max_memory_percent` before raising this further.
 - `gradient_accumulation_steps`: splits the step into forwards that fit in memory next to the KV
   cache; advantages are computed at scoring time, so accumulation does not change the loss.
 - `tp_size` should be the smallest that fits the model: decode is all-reduce latency-bound, so
@@ -99,7 +99,7 @@ def main():
         num_generations=8,
         max_completion_length=4096,
         chat_template_kwargs={"enable_thinking": True},
-        generation_ahead=16,
+        rollouts_in_flight=128,
         # Fraction of free VRAM for the KV cache; the rest is for activations and gradients.
         continuous_batching_config={"max_memory_percent": 0.25},
         packed_training=True,
