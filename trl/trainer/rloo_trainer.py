@@ -401,14 +401,19 @@ class RLOOTrainer(_BaseTrainer):
                 )
             else:
                 model.add_adapter("ref", default_config)
-                # The adapter name is a path component that is not always followed by one: `trainable_token_indices`
-                # keys its deltas by adapter, so those parameter names end in `.default`. Split on `.` to match both.
                 for name, param in model.named_parameters():
                     parts = name.split(".")
-                    if "default" in parts:
-                        ref_name = ".".join("ref" if part == "default" else part for part in parts)
-                        ref_param = model.get_parameter(ref_name)
-                        ref_param.data.copy_(param.data)
+                    # PEFT keys adapter parameters by adapter name inside a `ModuleDict` (LoRA matrices, `modules_to_save`) or a
+                    # `ParameterDict` (`trainable_token_indices` deltas), and the key is not always the last "default" component:
+                    # `modules_to_save` wraps a module that may itself contain one. Scan the candidates from the end and take the
+                    # first whose container also holds a "ref" key. Names where none qualifies belong to the base model, even when
+                    # a module or parameter there happens to be called "default".
+                    for index in (i for i in reversed(range(len(parts))) if parts[i] == "default"):
+                        parent = model.get_submodule(".".join(parts[:index])) if index else model
+                        if isinstance(parent, (torch.nn.ModuleDict, torch.nn.ParameterDict)) and "ref" in parent:
+                            ref_param = model.get_parameter(".".join(parts[:index] + ["ref"] + parts[index + 1 :]))
+                            ref_param.data.copy_(param.data)
+                            break
 
         # PEFT + DeepSpeed ZeRO-3 requires reentrant checkpointing. For more details, see
         # https://github.com/huggingface/trl/issues/2514#issuecomment-2692152703.

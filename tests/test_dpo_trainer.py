@@ -702,6 +702,7 @@ class TestDPOTrainer(TrlTestCase):
             new_param = model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Ref adapter parameter {n} has not changed."
 
+    @require_peft
     def test_train_with_sync_ref_model_and_peft_trainable_tokens(self):
         # `trainable_token_indices` stores its deltas in a `ParameterDict` keyed by adapter, so those parameter names
         # END in ".default" with no component after it. Pairing "default" with "ref" by substring would skip them and
@@ -733,6 +734,7 @@ class TestDPOTrainer(TrlTestCase):
         for n, param in token_ref_params.items():
             assert not torch.equal(param, model.get_parameter(n)), f"Ref token delta {n} has not changed."
 
+    @require_peft
     def test_train_with_sync_ref_model_and_peft_bias(self):
         # A LoRA config with `bias != "none"` trains bias terms shared with the base model, and PEFT permits only one
         # such adapter per model. Creating a "ref" adapter would raise, so the trainer falls back to the base model as

@@ -138,15 +138,19 @@ class SyncRefModelCallback(TrainerCallback):
         # With PEFT the reference is not a separate module but a second adapter inside the policy model, so
         # `_sync_target_model`'s parameter-wise zip of two modules does not apply. Pair each `"default"` parameter with
         # its `"ref"` counterpart by name instead; this is the same mapping used to initialize the `"ref"` adapter.
-        # The adapter name is a path component, and it is not always followed by one: `trainable_token_indices` stores
-        # its deltas in a `ParameterDict` keyed by adapter, so those names END in `.default`. Splitting on `.` matches
-        # both placements, where a `".default." in name` substring test silently skips the terminal ones.
         for name, param in model.named_parameters():
             parts = name.split(".")
-            if "default" in parts:
-                ref_name = ".".join("ref" if part == "default" else part for part in parts)
-                ref_param = model.get_parameter(ref_name)
-                ref_param.data.mul_(1.0 - alpha).add_(param.data, alpha=alpha)
+            # PEFT keys adapter parameters by adapter name inside a `ModuleDict` (LoRA matrices, `modules_to_save`) or a
+            # `ParameterDict` (`trainable_token_indices` deltas), and the key is not always the last "default" component:
+            # `modules_to_save` wraps a module that may itself contain one. Scan the candidates from the end and take the
+            # first whose container also holds a "ref" key. Names where none qualifies belong to the base model, even when
+            # a module or parameter there happens to be called "default".
+            for index in (i for i in reversed(range(len(parts))) if parts[i] == "default"):
+                parent = model.get_submodule(".".join(parts[:index])) if index else model
+                if isinstance(parent, (torch.nn.ModuleDict, torch.nn.ParameterDict)) and "ref" in parent:
+                    ref_param = model.get_parameter(".".join(parts[:index] + ["ref"] + parts[index + 1 :]))
+                    ref_param.data.mul_(1.0 - alpha).add_(param.data, alpha=alpha)
+                    break
 
     @staticmethod
     def sync_ref_adapter(model, alpha):

@@ -16,12 +16,14 @@ import json
 import os
 from unittest.mock import call, patch
 
+import torch
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig, Trainer, TrainingArguments
 
 from trl import BEMACallback, LogCompletionsCallback
+from trl.trainer.callbacks import SyncRefModelCallback
 
-from .testing_utils import TrlTestCase, require_comet, require_wandb
+from .testing_utils import TrlTestCase, require_comet, require_peft, require_wandb
 
 
 class TestLogCompletionsCallback(TrlTestCase):
@@ -236,3 +238,162 @@ class TestBEMACallback(TrlTestCase):
             callbacks=[bema_callback],
         )
         trainer.train()
+
+
+@require_peft
+class TestSyncRefModelCallbackAdapterPairing(TrlTestCase):
+    """`_sync_ref_adapter` pairs a "default" parameter with its "ref" counterpart by name."""
+
+    @staticmethod
+    def _peft_model_with_base_parameter_named_default():
+        from peft import LoraConfig, get_peft_model
+
+        # A base model owning both a parameter and a submodule literally called "default". PEFT reserves neither, so
+        # the adapter parameters here read `...default.proj.lora_A.default.weight`, with a base component and an
+        # adapter component of the same name, and the base parameter reads `...default` with no component after it.
+        class Inner(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.proj = torch.nn.Linear(2, 2)
+
+            def forward(self, x):
+                return self.proj(x)
+
+        class Model(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.default = Inner()
+                self.register_parameter("default_bias", torch.nn.Parameter(torch.ones(2)))
+
+            def forward(self, x):
+                return self.default(x)
+
+        config = LoraConfig(target_modules=["proj"])
+        model = get_peft_model(Model(), config)
+        model.add_adapter("ref", config)
+        return model
+
+    def test_base_module_and_parameter_named_default_are_not_paired(self):
+        model = self._peft_model_with_base_parameter_named_default()
+        adapter_names = [n for n, _ in model.named_parameters() if n.split(".").count("default") == 2]
+        assert adapter_names, "the fixture must produce a path with both a base and an adapter 'default' component"
+
+        SyncRefModelCallback._sync_ref_adapter(model, alpha=1.0)  # must not raise
+
+        # Only the adapter component may be rewritten; the base module keeps its name.
+        for name in adapter_names:
+            parts = name.split(".")
+            index = len(parts) - 1 - parts[::-1].index("default")
+            model.get_parameter(".".join(parts[:index] + ["ref"] + parts[index + 1 :]))
+
+    def test_adapter_parameters_follow_the_ema_equation(self):
+        from peft import LoraConfig, get_peft_model
+        from transformers import AutoModelForCausalLM
+
+        config = LoraConfig(r=4, target_modules=["q_proj"], trainable_token_indices=[0, 1])
+        model = get_peft_model(
+            AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"), config
+        )
+        model.add_adapter("ref", config)
+
+        alpha = 0.25
+        with torch.no_grad():
+            for name, param in model.named_parameters():
+                if "default" in name.split("."):
+                    param.fill_(4.0)
+                elif "ref" in name.split("."):
+                    param.fill_(8.0)
+
+        SyncRefModelCallback._sync_ref_adapter(model, alpha=alpha)
+
+        expected = (1.0 - alpha) * 8.0 + alpha * 4.0
+        checked = 0
+        for name, param in model.named_parameters():
+            if "ref" in name.split("."):
+                assert torch.allclose(param, torch.full_like(param, expected)), name
+                checked += 1
+        assert checked, "no reference parameter was examined"
+
+    def test_terminal_adapter_parameter_is_paired(self):
+        from peft import LoraConfig, get_peft_model
+        from transformers import AutoModelForCausalLM
+
+        # `trainable_token_indices` deltas live in a `ParameterDict` keyed by adapter, so the adapter name is the
+        # final path component with nothing after it.
+        config = LoraConfig(r=4, target_modules=["q_proj"], trainable_token_indices=[0, 1])
+        model = get_peft_model(
+            AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"), config
+        )
+        model.add_adapter("ref", config)
+
+        delta = "base_model.model.model.embed_tokens.token_adapter.trainable_tokens_delta"
+        with torch.no_grad():
+            model.get_parameter(f"{delta}.default").fill_(7.0)
+            model.get_parameter(f"{delta}.ref").fill_(0.0)
+
+        SyncRefModelCallback._sync_ref_adapter(model, alpha=1.0)
+
+        assert torch.equal(
+            model.get_parameter(f"{delta}.ref"), torch.full_like(model.get_parameter(f"{delta}.ref"), 7.0)
+        )
+
+    def test_modules_to_save_with_a_child_named_default_is_paired(self):
+        from peft import LoraConfig, get_peft_model
+
+        # `modules_to_save` wraps the saved module in a `ModuleDict` keyed by adapter, so a saved module that itself
+        # contains a child called "default" produces two "default" components and the adapter key is the FIRST one.
+        class Block(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.default = torch.nn.Linear(4, 4)
+
+            def forward(self, x):
+                return self.default(x)
+
+        class Model(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.proj = torch.nn.Linear(4, 4)
+                self.block = Block()
+
+            def forward(self, x):
+                return self.block(self.proj(x))
+
+        config = LoraConfig(target_modules=["proj"], modules_to_save=["block"])
+        model = get_peft_model(Model(), config)
+        model.add_adapter("ref", config)
+
+        policy = "base_model.model.block.modules_to_save.default.default.weight"
+        reference = "base_model.model.block.modules_to_save.ref.default.weight"
+        with torch.no_grad():
+            model.get_parameter(policy).fill_(5.0)
+            model.get_parameter(reference).fill_(0.0)
+
+        SyncRefModelCallback._sync_ref_adapter(model, alpha=1.0)
+
+        assert torch.equal(model.get_parameter(reference), torch.full_like(model.get_parameter(reference), 5.0)), (
+            "a modules_to_save parameter was skipped because the adapter key was not the last 'default' component"
+        )
+
+    def test_base_module_dict_without_a_ref_key_is_not_paired(self):
+        from peft import LoraConfig, get_peft_model
+
+        # A `ModuleDict` in the base model may hold a "default" key that PEFT knows nothing about, so there is no
+        # "ref" counterpart to pair it with.
+        class Model(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.proj = torch.nn.Linear(4, 4)
+                self.heads = torch.nn.ModuleDict({"default": torch.nn.Linear(4, 4)})
+
+            def forward(self, x):
+                return self.heads["default"](self.proj(x))
+
+        config = LoraConfig(target_modules=["proj"])
+        model = get_peft_model(Model(), config)
+        model.add_adapter("ref", config)
+        head = model.get_parameter("base_model.model.heads.default.weight").clone()
+
+        SyncRefModelCallback._sync_ref_adapter(model, alpha=1.0)  # must not raise
+
+        assert torch.equal(model.get_parameter("base_model.model.heads.default.weight"), head)
