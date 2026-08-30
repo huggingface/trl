@@ -133,6 +133,27 @@ throughput on short completions (1.55 against 1.54 s/step) and about 7% better o
 against 2.44 s/step with 512-token completions and 8 rollouts per prompt), at the cost of a design
 that cannot ever hand the KV cache memory to the training step.
 
+The two combine. `tp_size` only has to divide the world, and the ranks the model is not split across
+hold replicas of it: they draw their own prompts, and their gradients are summed. Pick the smallest
+`tp_size` the model fits in and spend the rest on replicas, because decode is bound by all-reduce
+latency, so a wider split slows generation. On 16 H100 with Qwen3-14B, `tp_size=4` with four replicas
+does 8220 trained tokens/s against 3280 for `tp_size=8` with two.
+
+```python
+ZeroSyncGRPOConfig(tp_size=4)  # on 16 processes: four replicas of a model split four ways
+```
+
+The replicas draw their training batches from one pool. A sample is data, and nothing ties it to the
+replica that generated it, so waiting until the replicas together have enough and then handing them
+out to whoever carries the least, by sum of squared lengths, keeps their forwards aligned and their
+memory peaks alike. Otherwise a replica whose completions came back short trains first and then sits
+at the gradient sum waiting for one still decoding. `batch/row_imbalance` logs how even the result
+is, 1.0 being even, and `batch/from_other_replicas` how much of the batch came from elsewhere.
+
+Each replica also keeps the optimizer state of only its share of the parameters, updates it, and
+passes the updated parameters back, since replicas hold the same weights and none of them needs a
+second copy of Adam's moments. The parameters stay whole everywhere, which is what generation reads.
+
 Two consequences to know about. The vocabulary projection is replicated rather than split, which
 costs one copy of that matrix per process and removes a gather from every forward. And the engine
 decodes through a second view of the model, sharing every parameter, because continuous batching
