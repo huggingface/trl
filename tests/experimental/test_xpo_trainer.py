@@ -117,7 +117,11 @@ class TestXPOTrainer(TrlTestCase):
             processing_class=self.tokenizer,
         )
 
-        assert "eval_loss" in trainer.evaluate()
+        # A hardcoded return value would satisfy a bare membership check, so assert the loss itself. Its sign is
+        # not fixed across these trainers, so bound the magnitude instead: non-zero rules out a stubbed
+        # `prediction_step`, and finite rules out inf and NaN.
+        metrics = trainer.evaluate()
+        assert 0 < abs(metrics["eval_loss"]) < float("inf")
 
     def test_evaluate_does_not_pollute_training_stats(self):
         # `self.stats` is averaged and cleared by the training logger, so appending evaluation values to it would
@@ -140,7 +144,12 @@ class TestXPOTrainer(TrlTestCase):
             eval_dataset=dataset,
             processing_class=self.tokenizer,
         )
+        # Train first: comparing an empty dict against an empty dict would pass even if `_compute_loss` had
+        # stopped recording statistics altogether, so the lengths have to be non-zero for the comparison to mean
+        # anything.
+        trainer.train()
         lengths = {key: len(value) for key, value in trainer.stats.items()}
+        assert lengths and all(length > 0 for length in lengths.values())
 
         trainer.evaluate()
 
