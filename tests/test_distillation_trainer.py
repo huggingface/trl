@@ -21,7 +21,7 @@ import transformers
 from accelerate.utils.memory import release_memory
 from datasets import DatasetDict, IterableDatasetDict, load_dataset
 from packaging.version import Version
-from transformers import AutoModelForCausalLM, AutoProcessor, BitsAndBytesConfig
+from transformers import AutoModelForCausalLM, BitsAndBytesConfig
 from transformers.utils import is_peft_available
 
 from trl import DistillationConfig, DistillationTrainer
@@ -30,6 +30,7 @@ from trl.trainer.distillation_trainer import _chunked_divergence_loss
 
 from .testing_utils import (
     TrlTestCase,
+    assert_processing_class_revision,
     require_bitsandbytes,
     require_liger_kernel,
     require_peft,
@@ -284,16 +285,13 @@ class TestDistillationTrainer(TrlTestCase):
     def test_init_auto_processing_class_uses_model_revision(self):
         # The automatically created processing_class must be loaded from the same revision as the model
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
-        with patch.object(
-            AutoProcessor, "from_pretrained", wraps=AutoProcessor.from_pretrained
-        ) as mock_from_pretrained:
+        with assert_processing_class_revision("trl-internal-testing/tiny-Qwen3ForCausalLM", "main"):
             DistillationTrainer(
                 model="trl-internal-testing/tiny-Qwen3ForCausalLM",
                 teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
                 args=DistillationConfig(output_dir=self.tmp_dir, model_init_kwargs={"revision": "main"}),
                 train_dataset=dataset,
             )
-        assert mock_from_pretrained.call_args.kwargs["revision"] == "main"
 
     def test_train(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")

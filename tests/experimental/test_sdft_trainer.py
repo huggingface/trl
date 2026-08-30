@@ -22,7 +22,13 @@ from transformers.utils import is_peft_available
 
 from trl.experimental.sdft import SDFTConfig, SDFTTrainer
 
-from ..testing_utils import TrlTestCase, require_liger_kernel, require_peft, require_torch_accelerator
+from ..testing_utils import (
+    TrlTestCase,
+    assert_processing_class_revision,
+    require_liger_kernel,
+    require_peft,
+    require_torch_accelerator,
+)
 
 
 if is_peft_available():
@@ -100,6 +106,21 @@ class TestSDFTTrainer(TrlTestCase):
             train_dataset=dataset,
         )
         assert type(trainer.model).__name__ == "RemoteForCausalLM"
+
+    def test_init_auto_processing_class_uses_model_revision(self):
+        # The automatically created processing_class must be loaded from the same revision as the model
+        dataset = Dataset.from_dict(
+            {
+                "prompt": ["Solve 2+2.", "Name the capital of France."],
+                "privileged_context": ["Example answer: 4.", "Example answer: Paris."],
+            }
+        )
+        with assert_processing_class_revision("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", "main"):
+            SDFTTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                args=SDFTConfig(output_dir=self.tmp_dir, report_to="none", model_init_kwargs={"revision": "main"}),
+                train_dataset=dataset,
+            )
 
     def test_train(self):
         dataset = Dataset.from_dict(

@@ -22,7 +22,12 @@ from transformers import HfArgumentParser, TrainerCallback
 
 from trl.experimental.sdpo import SDPOConfig, SDPOTrainer
 
-from ..testing_utils import TrlTestCase, require_liger_kernel, require_torch_accelerator
+from ..testing_utils import (
+    TrlTestCase,
+    assert_processing_class_revision,
+    require_liger_kernel,
+    require_torch_accelerator,
+)
 
 
 class SelfDistillationCaptureCallback(TrainerCallback):
@@ -77,6 +82,22 @@ class TestSDPOTrainer(TrlTestCase):
     def teardown_method(self):
         if hasattr(self, "_liger_module"):
             importlib.reload(importlib.import_module(self._liger_module))
+
+    def test_init_auto_processing_class_uses_model_revision(self):
+        # The automatically created processing_class must be loaded from the same revision as the model
+        dataset = Dataset.from_dict(
+            {
+                "prompt": ["Solve 2+2.", "Name the capital of France."],
+                "privileged_context": ["Example answer: 4.", "Example answer: Paris."],
+            }
+        )
+        with assert_processing_class_revision("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", "main"):
+            SDPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs=lambda **kwargs: [0.0] * len(kwargs["prompts"]),
+                args=SDPOConfig(output_dir=self.tmp_dir, report_to="none", model_init_kwargs={"revision": "main"}),
+                train_dataset=dataset,
+            )
 
     def test_trust_remote_code(self):
         dataset = Dataset.from_dict(

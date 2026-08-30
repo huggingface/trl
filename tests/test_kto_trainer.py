@@ -12,21 +12,26 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from unittest.mock import patch
-
 import multiprocess
 import pytest
 import torch
 import transformers
 from datasets import Dataset, DatasetDict, IterableDatasetDict, load_dataset
 from packaging.version import Version
-from transformers import AutoModelForCausalLM, AutoProcessor, AutoTokenizer, BitsAndBytesConfig
+from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 from transformers.utils import is_peft_available
 
 from trl import KTOConfig, KTOTrainer
 from trl.trainer.kto_trainer import DataCollatorForUnpairedPreference, DataCollatorForVisionUnpairedPreference
 
-from .testing_utils import TrlTestCase, require_bitsandbytes, require_liger_kernel, require_peft, require_vision
+from .testing_utils import (
+    TrlTestCase,
+    assert_processing_class_revision,
+    require_bitsandbytes,
+    require_liger_kernel,
+    require_peft,
+    require_vision,
+)
 
 
 if is_peft_available():
@@ -292,15 +297,12 @@ class TestKTOTrainer(TrlTestCase):
     def test_init_auto_processing_class_uses_model_revision(self):
         # The automatically created processing_class must be loaded from the same revision as the model
         dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
-        with patch.object(
-            AutoProcessor, "from_pretrained", wraps=AutoProcessor.from_pretrained
-        ) as mock_from_pretrained:
+        with assert_processing_class_revision("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", "main"):
             KTOTrainer(
                 model=self.model_id,
                 args=KTOConfig(output_dir=self.tmp_dir, model_init_kwargs={"revision": "main"}),
                 train_dataset=dataset,
             )
-        assert mock_from_pretrained.call_args.kwargs["revision"] == "main"
 
     @pytest.mark.parametrize(
         "config_name, loss_type, pre_compute, eval_dataset",
