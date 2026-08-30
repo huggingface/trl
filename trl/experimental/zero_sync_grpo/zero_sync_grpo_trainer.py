@@ -747,18 +747,23 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         pool: list[Any] = [None] * self.dp_size
         torch.distributed.all_gather_object(pool, list(self._ready), group=self._replica_group)
         replica = self.accelerator.process_index // self.tp_size
+
+        # Which samples to train on is decided by age, not by length. Preferring the long ones leaves the short
+        # ones sitting in the ready lists, and since a rollout is either in flight or waiting there, a growing
+        # backlog is fewer sequences decoding at once, which is exactly what makes the engine efficient. Each
+        # replica gives up its oldest, and whoever has a surplus covers a replica that is short.
+        taking = [min(num_samples, len(samples)) for samples in pool]
+        while sum(taking) < num_samples * self.dp_size:
+            spare = [r for r in range(self.dp_size) if taking[r] < len(pool[r])]
+            taking[min(spare, key=lambda r: taking[r])] += 1
+        chosen = [(owner, index, pool[owner][index]) for owner in range(self.dp_size) for index in range(taking[owner])]
+
         # Longest first into the emptiest replica, by the sum of squared lengths: attention is quadratic, so that
         # is what predicts both the step time and the activation peak, and it is the quantity worth equalizing.
-        indexed = sorted(
-            ((owner, index, sample) for owner, samples in enumerate(pool) for index, sample in enumerate(samples)),
-            key=lambda item: -len(item[2]["input_ids"]),
-        )
         loads = [0] * self.dp_size
         assigned: list[list[Any]] = [[] for _ in range(self.dp_size)]
-        for owner, index, sample in indexed:
+        for owner, index, sample in sorted(chosen, key=lambda item: -len(item[2]["input_ids"])):
             open_replicas = [r for r in range(self.dp_size) if len(assigned[r]) < num_samples]
-            if not open_replicas:
-                break
             target = min(open_replicas, key=lambda r: loads[r])
             assigned[target].append((owner, index, sample))
             loads[target] += len(sample["input_ids"]) ** 2
