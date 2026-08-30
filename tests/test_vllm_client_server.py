@@ -134,7 +134,13 @@ class TestExtractLogprobs(TrlTestCase):
 
 
 class TestCheckServerHealthProbe(TrlTestCase):
-    """`check_server` must give up after `total_timeout` even when the server stalls rather than refusing."""
+    """`check_server` must give up after `total_timeout` whenever the server is not up, however it fails."""
+
+    # A retry interval far larger than the deadline: every guard that must clamp to the remaining budget shows up
+    # as the difference between finishing near TOTAL_TIMEOUT and finishing near RETRY_INTERVAL. Asserting against
+    # RETRY_INTERVAL / 2 keeps the bound derived from these two values rather than a hand-picked constant.
+    TOTAL_TIMEOUT = 0.1
+    RETRY_INTERVAL = 5.0
 
     @staticmethod
     def _client_for(port: int) -> VLLMClient:
@@ -142,6 +148,22 @@ class TestCheckServerHealthProbe(TrlTestCase):
         client = VLLMClient.__new__(VLLMClient)
         client.base_url = f"http://127.0.0.1:{port}"
         return client
+
+    @staticmethod
+    def _serve(status: int) -> tuple[socketserver.TCPServer, threading.Thread]:
+        # Parameterised over the status code so the healthy and the not-ready cases share one server.
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(status)
+                self.end_headers()
+
+            def log_message(self, *args):
+                pass
+
+        httpd = socketserver.TCPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        thread.start()
+        return httpd, thread
 
     def test_stalled_server_raises_rather_than_blocking(self):
         # A socket that accepts connections and never answers. The request succeeds at the TCP level and then hangs,
@@ -154,23 +176,36 @@ class TestCheckServerHealthProbe(TrlTestCase):
             client = self._client_for(server.getsockname()[1])
             start = time.time()
             with pytest.raises(requests.exceptions.ConnectionError):
-                client.check_server(total_timeout=0.1, retry_interval=0.5)
-            assert time.time() - start < 5.0, "check_server did not honor total_timeout against a stalled server"
+                client.check_server(total_timeout=self.TOTAL_TIMEOUT, retry_interval=self.RETRY_INTERVAL)
+            elapsed = time.time() - start
+            assert elapsed < self.RETRY_INTERVAL / 2, (
+                f"check_server took {elapsed:.3f}s against a stalled server: the probe is bounded by the retry "
+                f"interval instead of the {self.TOTAL_TIMEOUT}s deadline"
+            )
         finally:
             server.close()
 
+    def test_unavailable_server_raises_rather_than_looping(self):
+        # A server that is reachable but reports it is not ready. `requests` returns normally, so a deadline checked
+        # only on the exception path never fires and the probe retries forever. vLLM answers 503 while it loads.
+        httpd, thread = self._serve(503)
+        try:
+            client = self._client_for(httpd.server_address[1])
+            start = time.time()
+            with pytest.raises(requests.exceptions.ConnectionError):
+                client.check_server(total_timeout=self.TOTAL_TIMEOUT, retry_interval=self.RETRY_INTERVAL)
+            elapsed = time.time() - start
+            assert elapsed < self.RETRY_INTERVAL / 2, (
+                f"check_server took {elapsed:.3f}s against a server answering 503: it slept the full retry "
+                f"interval instead of stopping at the {self.TOTAL_TIMEOUT}s deadline"
+            )
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+            thread.join(timeout=5.0)
+
     def test_healthy_server_still_accepted(self):
-        class Handler(http.server.BaseHTTPRequestHandler):
-            def do_GET(self):
-                self.send_response(200)
-                self.end_headers()
-
-            def log_message(self, *args):
-                pass
-
-        httpd = socketserver.TCPServer(("127.0.0.1", 0), Handler)
-        thread = threading.Thread(target=httpd.serve_forever, daemon=True)
-        thread.start()
+        httpd, thread = self._serve(200)
         try:
             client = self._client_for(httpd.server_address[1])
             client.check_server(total_timeout=5.0, retry_interval=0.5)  # must return without raising
