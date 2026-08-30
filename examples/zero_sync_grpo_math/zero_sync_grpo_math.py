@@ -40,12 +40,17 @@ thinking completions, 4x H100). Each knob below is what moved the needle:
 - `gradient_accumulation_steps`: splits the step into forwards that fit in memory next to the KV
   cache; advantages are computed at scoring time, so accumulation does not change the loss.
 - `tp_size` should be the smallest that fits the model: decode is all-reduce latency-bound, so
-  wider TP slows generation (14B at tp=8 decodes slower than at tp=4).
+  wider TP slows generation (14B at tp=8 decodes slower than at tp=4). The ranks left over hold
+  replicas of the model, which train on their own prompts and sum their gradients, so more GPUs
+  means more replicas rather than a wider split. On 16 GPUs, tp=4 with four replicas is 2.4x
+  tp=8 with two.
 
 Measured on 4x H100 with Qwen3-14B: ~75k trained tokens per optimizer step, ~3.1k decoded
-tokens/s, 94% average SM utilization, generation and training together reaching ~10% MFU.
+tokens/s, 94% average SM utilization, generation and training together reaching ~10% MFU. On 8 and
+16 H100 the same recipe does 4.1k and 9.2k trained tokens/s, the second being 2.2x the first.
 
 torchrun --nproc-per-node 4 examples/zero_sync_grpo_math/zero_sync_grpo_math.py
+torchrun --nproc-per-node 8 examples/zero_sync_grpo_math/zero_sync_grpo_math.py  # tp=4, two replicas
 """
 
 import os
@@ -98,7 +103,8 @@ def main():
         # Fraction of free VRAM for the KV cache; the rest is for activations and gradients.
         continuous_batching_config={"max_memory_percent": 0.25},
         packed_training=True,
-        tp_size=int(os.environ.get("WORLD_SIZE", "1")),
+        # The smallest split that fits a 14B; whatever ranks are left over hold replicas of it.
+        tp_size=min(4, int(os.environ.get("WORLD_SIZE", "1"))),
         max_steps=200,
     )
     trainer = ZeroSyncGRPOTrainer(

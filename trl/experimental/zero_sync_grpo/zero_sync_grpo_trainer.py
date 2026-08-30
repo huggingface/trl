@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import torch
+from accelerate.parallelism_config import ParallelismConfig
 from datasets import Dataset, IterableDataset
 from torch import nn
 from torch.distributed.tensor import DTensor, Replicate
@@ -299,6 +300,11 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
                 "processes each."
             )
         self.dp_size = world_size // args.tp_size
+        if self.dp_size > 1 and args.parallelism_config is None:
+            # The split of the world into replicas follows from `tp_size`, so there is nothing for the caller to
+            # decide. Accelerate needs to be told it, or it wraps the model for data parallelism itself, which it
+            # cannot do to a tensor-parallel one.
+            args.parallelism_config = ParallelismConfig(dp_replicate_size=self.dp_size, tp_size=args.tp_size)
         self._replica_group = None
         self._parameter_owner: dict[str, int] = {}
         if self.dp_size > 1:
