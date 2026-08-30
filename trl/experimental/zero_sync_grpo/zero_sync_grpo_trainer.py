@@ -300,6 +300,7 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             )
         self.dp_size = world_size // args.tp_size
         self._replica_group = None
+        self._parameter_owner: dict[str, int] = {}
         if self.dp_size > 1 and args.tp_size > 1:
             rank = int(os.environ.get("RANK", "0"))
             # Every rank builds every group, in the same order, and keeps the one it belongs to
@@ -936,6 +937,63 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             "old_per_token_logps": pad(old_per_token_logps, padding_value=0.0, padding_side="right").to(device),
             "advantages": torch.stack([s["advantage"] for s in samples]).to(device),
         }
+
+    def create_optimizer(self, model=None):
+        """Give each replica the optimizer state of only its share of the parameters.
+
+        Adam carries two fp32 moments per parameter, four times the weights themselves, so it is the term that
+        decides whether a model fits: for a 14B at tp=4 it is 27.6 GiB of the 41.5 GiB a rank holds. The replicas
+        split it between them and each updates its own share, then passes the updated parameters back to the
+        others. The parameters themselves stay whole everywhere, which is what generation reads.
+        """
+        if self._replica_group is None or self.optimizer is not None:
+            return super().create_optimizer(model)
+
+        opt_model = self.model if model is None else model
+        trainable = [(name, param) for name, param in opt_model.named_parameters() if param.requires_grad]
+        # Largest first into the emptiest replica, so the shares come out even whatever the parameter sizes are.
+        self._parameter_owner = {}
+        held = [0] * self.dp_size
+        for name, param in sorted(trainable, key=lambda item: -item[1].numel()):
+            owner = min(range(self.dp_size), key=lambda replica: held[replica])
+            self._parameter_owner[name] = owner
+            held[owner] += param.numel()
+
+        replica = self.accelerator.process_index // self.tp_size
+        decay = set(self.get_decay_parameter_names(opt_model))
+        mine = [(name, param) for name, param in trainable if self._parameter_owner[name] == replica]
+        groups = [
+            {"params": [p for n, p in mine if n in decay], "weight_decay": self.args.weight_decay},
+            {"params": [p for n, p in mine if n not in decay], "weight_decay": 0.0},
+        ]
+        optimizer_cls, optimizer_kwargs = self.get_optimizer_cls_and_kwargs(self.args, opt_model)
+        self.optimizer = optimizer_cls(groups, **optimizer_kwargs)
+
+        step = self.optimizer.step
+
+        def step_and_share(*args, **kwargs):
+            out = step(*args, **kwargs)
+            self._share_updated_parameters()
+            # The optimizer only knows this replica's share, so its zero_grad would leave the rest holding
+            # gradients that the next step would accumulate onto.
+            opt_model.zero_grad(set_to_none=True)
+            return out
+
+        self.optimizer.step = step_and_share
+        return self.optimizer
+
+    def _share_updated_parameters(self) -> None:
+        """Send each parameter from the replica that updated it to the others."""
+        model = self.accelerator.unwrap_model(self.model)
+        shard = self.accelerator.process_index % self.tp_size
+        with torch.no_grad():
+            for name, param in model.named_parameters():
+                owner = self._parameter_owner.get(name)
+                if owner is None:
+                    continue
+                # Every rank in the group holds the same slice of the model, so the local views line up
+                local = param.data.to_local() if isinstance(param.data, DTensor) else param.data
+                torch.distributed.broadcast(local, src=owner * self.tp_size + shard, group=self._replica_group)
 
     def training_step(self, *args, **kwargs):
         output = super().training_step(*args, **kwargs)
