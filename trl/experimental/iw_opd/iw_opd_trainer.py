@@ -1691,11 +1691,6 @@ class IWOPDTrainer(_BaseTrainer):
                         "Teacher server is missing top-1 logprobs for required forward-KL positions on at least one "
                         f"rank: {int(missing_teacher[:, 1].sum().item())}/{total_required} across all ranks."
                     )
-                if missing_teacher[:, 1].any():
-                    raise ValueError(
-                        "Teacher server is missing top-1 logprobs for required forward-KL positions on at least "
-                        "one rank."
-                    )
                 loss = self._compute_server_sparse_top_1_divergence_loss(
                     teacher_result=teacher_result,
                     student_log_probs=student_log_probs[:, :comp_len, :],
