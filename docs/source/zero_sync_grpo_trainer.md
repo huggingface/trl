@@ -59,16 +59,11 @@ Copying the live cache to host memory instead, so rollouts could resume where th
 
 ## Packed training
 
-Training rows are padded to the longest sample in the batch, and mixed lengths waste up to a third of the forward on pad tokens. `packed_training=True` packs the samples back to back instead; each token keeps its own sample's advantage and behavior logprob, so the loss is unchanged. Pair it with a block-sparse attention implementation so the block-diagonal mask skips the cross-sample blocks instead of computing and masking them:
+Training rows are packed back to back rather than padded to the longest sample in the batch, which on mixed lengths would waste up to a third of the forward on pad tokens. Position ids restart at each sample and no attention mask is passed, so the model builds the block-diagonal mask itself; each token keeps its own sample's advantage and behavior logprob, so the loss is unchanged.
 
-```python
-ZeroSyncGRPOConfig(
-    packed_training=True,
-    model_init_kwargs={"attn_implementation": "flex_attention"},
-)
-```
+Unless `model_init_kwargs` sets one, the attention implementation defaults to `flex_attention`, so the block-diagonal mask skips the cross-sample blocks instead of computing and masking them. Models with linear attention layers get flash attention instead, whose kernels read the sample boundaries from the varlen kwargs.
 
-Measured on Qwen3-4B with `tp_size=4` and batch 256 on GSM8K: 6.98 to 5.82 s/step.
+Measured on Qwen3-4B with `tp_size=4` and batch 256 on GSM8K: 6.98 to 5.82 s/step against padding.
 
 ## Multi-turn and tools
 

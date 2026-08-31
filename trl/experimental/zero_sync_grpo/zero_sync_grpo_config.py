@@ -74,14 +74,6 @@ class ZeroSyncGRPOConfig(_BaseConfig):
 
         > Parameters that control the training
 
-        packed_training (`bool`, *optional*, defaults to `False`):
-            Pack the training samples back to back instead of padding them to the longest in the batch. Position ids
-            restart at each sample and no attention mask is passed, so the model builds the block-diagonal mask
-            itself; with a block-sparse attention implementation this removes the pad-token compute entirely, so
-            unless `model_init_kwargs` sets an `attn_implementation`, packed training defaults it to
-            `flex_attention` (flash attention for models with linear attention layers, whose kernels read the
-            sample boundaries from the varlen kwargs and take the samples in one flat row). The loss is
-            unchanged: each token keeps its own sample's advantage and behavior logprob.
         epsilon (`float`, *optional*, defaults to `0.2`):
             Epsilon value for clipping.
 
@@ -206,18 +198,6 @@ class ZeroSyncGRPOConfig(_BaseConfig):
             "trainer drives generation itself, between its own steps, rather than letting the engine run in its "
             "background thread: every rank then issues its collectives in the same order, which is what NCCL "
             "requires."
-        },
-    )
-    packed_training: bool = field(
-        default=False,
-        metadata={
-            "help": "Pack the training samples back to back instead of padding them to the longest in the batch. "
-            "Position ids restart at each sample and no attention mask is passed, so the model builds the "
-            "block-diagonal mask itself; with a block-sparse attention implementation this removes the pad-token "
-            "compute entirely, so unless `model_init_kwargs` sets an `attn_implementation`, packed training "
-            "defaults it to `flex_attention` (flash attention for models with linear attention layers, whose "
-            "kernels read the sample boundaries from the varlen kwargs and take the samples in one flat row). "
-            "The loss is unchanged: each token keeps its own sample's advantage and behavior logprob."
         },
     )
     release_kv_cache_during_step: bool = field(
