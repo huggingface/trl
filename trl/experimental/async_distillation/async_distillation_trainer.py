@@ -1005,6 +1005,15 @@ class AsyncDistillationTrainer(_BaseTrainer):
         # `DistillationTrainer`'s identical need for its own chunked JSD path.
         self._forward_redirection = _ForwardRedirection()
 
+        # The base Trainer's data-skip replay loop doesn't apply to AsyncDistillation's live rollout queue;
+        # force it off regardless of what the user passed.
+        if not self.args.ignore_data_skip:
+            logger.warning(
+                "`ignore_data_skip` is forced to `True` for AsyncDistillation because the base Trainer's "
+                "skip-and-replay loop does not apply to a live rollout queue."
+            )
+        self.args.ignore_data_skip = True
+
         # The metric sink. Values are floats, or `(numerator, denominator)` pairs for rates
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
         # MOPD (multi-teacher on-policy distillation): a stable teacher_id -> index mapping so compute_loss can

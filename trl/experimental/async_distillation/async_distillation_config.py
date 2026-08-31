@@ -163,7 +163,8 @@ class AsyncDistillationConfig(_BaseConfig):
     > [!NOTE] > These parameters have default values different from [`~transformers.TrainingArguments`]: > -
     `logging_steps`: Defaults to `1` instead of `500`. > - `gradient_checkpointing`: Defaults to `True` instead of
     `False`. > - `bf16`: Defaults to `True` if `fp16` is not set, instead of `False`. > - `learning_rate`: Defaults to
-    `1e-6` instead of `5e-5`.
+    `1e-6` instead of `5e-5`. > - `ignore_data_skip`: Defaults to `True` instead of `False`; the base Trainer's
+    skip-and-replay loop does not apply to the async rollout queue.
     """
 
     _VALID_DICT_FIELDS = _BaseConfig._VALID_DICT_FIELDS + [
@@ -198,6 +199,13 @@ class AsyncDistillationConfig(_BaseConfig):
         metadata={
             "help": "Log every X update steps. Should be an integer or a float in range `[0,1)`. If smaller than 1, "
             "will be interpreted as ratio of total training steps."
+        },
+    )
+    ignore_data_skip: bool = field(
+        default=True,
+        metadata={
+            "help": "Always `True` for AsyncDistillation; the base Trainer's skip-and-replay loop does not apply to "
+            "a live rollout queue."
         },
     )
 
