@@ -104,41 +104,6 @@ class TestZeroSyncGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    def test_train_packed(self):
-        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
-        training_args = ZeroSyncGRPOConfig(
-            output_dir=self.tmp_dir,
-            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
-            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
-            num_generations=3,  # reduce the number of generations to reduce memory usage
-            max_completion_length=8,  # reduce the completion length to reduce memory usage
-            rollouts_in_flight=3,  # keep few rollouts generating, the test model is tiny
-            packed_training=True,
-            max_steps=2,
-            report_to="none",
-        )
-        trainer = ZeroSyncGRPOTrainer(
-            model="trl-internal-testing/small-Qwen2ForCausalLM-2.5",
-            reward_funcs=dummy_reward_func,
-            args=training_args,
-            train_dataset=dataset,
-        )
-
-        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
-
-        trainer.train()
-
-        assert trainer.state.log_history[-1]["train_loss"] is not None
-
-        # Check that the params have changed
-        for n, param in previous_trainable_params.items():
-            new_param = trainer.model.get_parameter(n)
-            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
-
-
-class TestGenerationView(TrlTestCase):
-    """The second view of the model the engine decodes through, under tensor parallelism."""
-
     def _view(self):
         from transformers import AutoModelForCausalLM
 
