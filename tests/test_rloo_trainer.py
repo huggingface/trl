@@ -26,7 +26,7 @@ from transformers import (
     AutoTokenizer,
     BitsAndBytesConfig,
 )
-from transformers.utils import is_peft_available
+from transformers.utils import is_peft_available, is_torch_xla_available
 
 from trl import RLOOConfig, RLOOTrainer
 
@@ -1880,9 +1880,15 @@ class TestRLOOTrainer(TrlTestCase):
         healthy_step, poisoned_step = trainer.state.log_history[0], trainer.state.log_history[1]
         assert healthy_step["frac_nonfinite_loss"] == 0.0
         assert poisoned_step["frac_nonfinite_loss"] == 1.0
-        # `transformers` substitutes the average of the previously logged losses for the non-finite one, so the loss
-        # it reports for the poisoned step is still finite. That substitution is why the metric above is needed.
-        assert torch.isfinite(torch.tensor(poisoned_step["loss"]))
+        # `logging_nan_inf_filter` is enabled by default, so `transformers` discards the step's own non-finite loss
+        # and substitutes a value derived from the loss accumulated since the last log. The reported loss therefore
+        # stays finite and the failing step is invisible, which is why the metric above is needed. The filter is
+        # gated on `not is_torch_xla_available()`, so under XLA the non-finite loss reaches the log unchanged and
+        # the substitution this metric compensates for does not happen.
+        if is_torch_xla_available():
+            assert not torch.isfinite(torch.tensor(poisoned_step["loss"]))
+        else:
+            assert torch.isfinite(torch.tensor(poisoned_step["loss"]))
 
 
 @require_vision

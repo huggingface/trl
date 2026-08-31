@@ -15,7 +15,7 @@
 import pytest
 import torch
 from datasets import DatasetDict, IterableDatasetDict, load_dataset
-from transformers.utils import is_peft_available
+from transformers.utils import is_peft_available, is_torch_xla_available
 
 from trl.experimental.tpo import TPOConfig, TPOTrainer
 from trl.experimental.tpo.tpo_trainer import DataCollatorForTriplePreference
@@ -129,6 +129,54 @@ class TestTPOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    def test_nonfinite_loss_is_visible_in_log_history(self):
+        """A non-finite loss must reach `log_history`, which `logging_nan_inf_filter` otherwise hides."""
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        dataset = dataset.map(_add_reference_column)
+
+        class NonFiniteLossTPOTrainer(TPOTrainer):
+            def _compute_loss(self, model, inputs, return_outputs):
+                if self.state.global_step == 1:
+
+                    def poison_logits(module, args, output):
+                        output.logits = output.logits * float("nan")
+                        return output
+
+                    handle = model.register_forward_hook(poison_logits)
+                    try:
+                        return super()._compute_loss(model, inputs, return_outputs)
+                    finally:
+                        handle.remove()
+                return super()._compute_loss(model, inputs, return_outputs)
+
+        training_args = TPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,
+            max_steps=2,
+            logging_steps=1,
+            report_to="none",
+        )
+        trainer = NonFiniteLossTPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        trainer.train()
+
+        healthy_step, poisoned_step = trainer.state.log_history[0], trainer.state.log_history[1]
+        assert healthy_step["frac_nonfinite_loss"] == 0.0
+        assert poisoned_step["frac_nonfinite_loss"] == 1.0
+        # `logging_nan_inf_filter` is enabled by default, so `transformers` discards the step's own non-finite loss
+        # and substitutes a value derived from the loss accumulated since the last log. The reported loss therefore
+        # stays finite and the failing step is invisible, which is why the metric above is needed. The filter is
+        # gated on `not is_torch_xla_available()`, so under XLA the non-finite loss reaches the log unchanged and
+        # the substitution this metric compensates for does not happen.
+        if is_torch_xla_available():
+            assert not torch.isfinite(torch.tensor(poisoned_step["loss"]))
+        else:
+            assert torch.isfinite(torch.tensor(poisoned_step["loss"]))
 
     @pytest.mark.parametrize(
         "eval_dataset_type",

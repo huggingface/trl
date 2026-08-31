@@ -34,7 +34,7 @@ from transformers import (
     BitsAndBytesConfig,
 )
 from transformers.testing_utils import backend_empty_cache, torch_device
-from transformers.utils import is_peft_available
+from transformers.utils import is_peft_available, is_torch_xla_available
 
 from trl import GRPOConfig, GRPOTrainer
 from trl.import_utils import is_liger_kernel_available
@@ -3938,13 +3938,16 @@ class TestGRPOTrainer(TrlTestCase):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         class NonFiniteLossGRPOTrainer(GRPOTrainer):
-            # Poison the last step only, so the first step doubles as the finite control. Multiplying keeps the
-            # autograd graph, so `backward` runs on the non-finite value exactly as it would for a real NaN. A
-            # poisoned step corrupts the weights, so a later step's generation would fail on a non-finite
+            # Poison the last step only, so the first step doubles as the finite control. Arithmetic on the loss
+            # keeps the autograd graph, so `backward` runs on the non-finite value exactly as it would for a real
+            # one. A poisoned step corrupts the weights, so a later step's generation would fail on a non-finite
             # distribution rather than on the behavior under test.
+            # Inf rather than NaN, and added rather than multiplied: the guard tests `~isfinite`, so a suite that
+            # only ever injects NaN is also passed by an `isnan` implementation, which would report a clean rate
+            # for an infinite loss. Multiplying would reintroduce that gap, since `0.0 * inf` is NaN.
             def _compute_loss(self, model, inputs):
                 loss = super()._compute_loss(model, inputs)
-                return loss * float("nan") if self.state.global_step == 1 else loss
+                return loss + float("inf") if self.state.global_step == 1 else loss
 
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
@@ -3967,9 +3970,15 @@ class TestGRPOTrainer(TrlTestCase):
         healthy_step, poisoned_step = trainer.state.log_history[0], trainer.state.log_history[1]
         assert healthy_step["frac_nonfinite_loss"] == 0.0
         assert poisoned_step["frac_nonfinite_loss"] == 1.0
-        # `transformers` substitutes the average of the previously logged losses for the non-finite one, so the loss
-        # it reports for the poisoned step is still finite. That substitution is why the metric above is needed.
-        assert torch.isfinite(torch.tensor(poisoned_step["loss"]))
+        # `logging_nan_inf_filter` is enabled by default, so `transformers` discards the step's own non-finite loss
+        # and substitutes a value derived from the loss accumulated since the last log. The reported loss therefore
+        # stays finite and the failing step is invisible, which is why the metric above is needed. The filter is
+        # gated on `not is_torch_xla_available()`, so under XLA the non-finite loss reaches the log unchanged and
+        # the substitution this metric compensates for does not happen.
+        if is_torch_xla_available():
+            assert not torch.isfinite(torch.tensor(poisoned_step["loss"]))
+        else:
+            assert torch.isfinite(torch.tensor(poisoned_step["loss"]))
 
 
 @require_vision

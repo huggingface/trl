@@ -799,6 +799,20 @@ class ORPOTrainer(_BaseTrainer):
             labels = concatenated_batch["concatenated_input_ids"].clone()
             attention_mask = concatenated_batch["concatenated_attention_mask"]
             labels = torch.where(attention_mask == 1, labels, -100)
+        # This check reads this rank's own tensor shapes, so raising on one rank alone would leave the others blocked in
+        # the next collective with no error to explain it. Agree across ranks first, so a mismatch anywhere raises
+        # everywhere. It has to precede the cross-entropy below, which raises on this very mismatch: a rank that died
+        # there would never reach the gather, and its peers would wait on it until the NCCL timeout.
+        shape_mismatch = torch.tensor(
+            all_logits.shape[:-1] != concatenated_batch["concatenated_labels"].shape,
+            device=all_logits.device,
+        )
+        shape_mismatch = self.accelerator.gather(shape_mismatch.any().reshape(1).float())
+        if shape_mismatch.any():
+            raise ValueError(
+                "Logits (batch and sequence length dim) and labels have different shapes on at least one rank."
+            )
+
         # orpo chosen nll loss is computed over the full prompt and response
         chosen_nll_loss = cross_entropy_loss(all_logits[:len_chosen], labels[:len_chosen])
 
@@ -899,21 +913,25 @@ class ORPOTrainer(_BaseTrainer):
         # force log the metrics
         self.store_metrics(metrics, train_eval="train")
 
-        # During training, `transformers` replaces a non-finite loss with the average of the previously logged losses
-        # before logging it (`logging_nan_inf_filter`, enabled by default), while the backward pass still runs on the
-        # non-finite value. The reported curve therefore stays plausible while the run is degrading, so report the
-        # condition here. Gather first: a NaN on a single rank would otherwise stay invisible. This trainer logs
-        # through `store_metrics`, whose call site here is hard-coded to `train_eval="train"`, so an eval-time rate
-        # would be filed under training. Report the condition through the warning alone. Evaluation goes through
-        # `prediction_step`, which never calls this method, so only the training message can fire here.
-        nonfinite = self.accelerator.gather((~torch.isfinite(loss.detach())).float())
+        # A non-finite training loss can pass through the logs as a plausible number. When `logging_nan_inf_filter` is
+        # enabled, which is the default, and `is_torch_xla_available()` is false, `transformers` discards the step's
+        # own loss and logs a value derived from the losses accumulated since the last log, so the curve never shows
+        # the step that failed. Report the condition here instead. Gather first, so a rank whose loss went non-finite
+        # is counted even when the other ranks are finite. This trainer logs through `store_metrics`. Evaluation goes
+        # through `prediction_step`, which never calls this method, so only training reaches here and the rate belongs
+        # under training.
+        nonfinite = self.accelerator.gather((~torch.isfinite(loss.detach().mean())).float())
+        self.store_metrics({"frac_nonfinite_loss": nonfinite.mean().item()}, train_eval="train")
         if nonfinite.any():
             logger.warning_once(
-                "The training loss is not finite (NaN or Inf) for at least one step. When `logging_nan_inf_filter` is "
-                "enabled, which is the default, the logged loss is replaced by the average of the previously logged "
-                "losses, so the reported curve stays plausible. The backward pass still runs on the non-finite value; "
-                "whether the optimizer step also runs depends on the precision, since `fp16` scales gradients and "
-                "skips a step whose gradients are non-finite, while `bf16` and `float32` have no such guard."
+                "The training loss is not finite (NaN or Inf) for at least one step. The logged loss may not show it: "
+                "when `logging_nan_inf_filter` is enabled, which is the default, and `is_torch_xla_available()` is "
+                "false, `transformers` discards the step's own loss and logs a value derived from the losses "
+                "accumulated since the last training log. The backward pass still runs on the non-finite value; "
+                "whether that ultimately produces a parameter update depends on the resulting gradients and the "
+                "configured scaler, optimizer and backend. `frac_nonfinite_loss` reports the fraction of ranks whose "
+                "loss was non-finite, averaged over every loss computation since the last log, so it is a rate rather "
+                "than a count of affected optimizer steps."
             )
 
         if return_outputs:

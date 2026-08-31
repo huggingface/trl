@@ -20,6 +20,7 @@ import pytest
 import torch
 from datasets import Dataset, DatasetDict, IterableDatasetDict, load_dataset
 from transformers import AutoModelForCausalLM, AutoModelForImageTextToText, AutoProcessor, AutoTokenizer
+from transformers.utils import is_torch_xla_available
 
 from trl.experimental.gold import GOLDConfig
 from trl.experimental.gold import gold_trainer as gold_trainer_module
@@ -3407,6 +3408,69 @@ def test_vlm_jsd_same_family_train_step_smoke(tmp_path, vlm_dataset):
 
 
 _TINY_LLAMA = "trl-internal-testing/tiny-LlamaForCausalLM-3.2"
+
+
+@pytest.mark.slow
+def test_nonfinite_loss_is_visible_in_log_history(tmp_path):
+    """A non-finite loss must reach `log_history`, which `logging_nan_inf_filter` otherwise hides."""
+    try:
+        student = AutoModelForCausalLM.from_pretrained(_TINY_LLAMA, dtype=torch.bfloat16)
+        teacher = AutoModelForCausalLM.from_pretrained(_TINY_LLAMA, dtype=torch.bfloat16)
+        tokenizer = AutoTokenizer.from_pretrained(_TINY_LLAMA)
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train[:3]")
+    except Exception as exc:  # pragma: no cover - network/environment dependent
+        pytest.skip(f"tiny Llama / zen assets unavailable: {exc}")
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+    class NonFiniteLossGOLDTrainer(GOLDTrainer):
+        def generalized_jsd_loss(self, *args, **kwargs):
+            loss = super().generalized_jsd_loss(*args, **kwargs)
+            return loss * float("nan") if self.state.global_step == 1 else loss
+
+    args = GOLDConfig(
+        output_dir=str(tmp_path),
+        report_to="none",
+        bf16=True,
+        max_steps=2,
+        per_device_train_batch_size=1,
+        gradient_accumulation_steps=1,
+        max_completion_length=8,
+        max_length=512,
+        lmbda=0.0,
+        beta=0.5,
+        temperature=1.0,
+        num_generations=1,
+        use_vllm=False,
+        use_uld_loss=False,
+        log_completions=False,
+        save_strategy="no",
+        eval_strategy="no",
+        logging_steps=1,
+        dataloader_drop_last=True,
+    )
+    trainer = NonFiniteLossGOLDTrainer(
+        model=student,
+        teacher_model=teacher,
+        args=args,
+        train_dataset=dataset,
+        processing_class=tokenizer,
+    )
+
+    trainer.train()
+
+    healthy_step, poisoned_step = trainer.state.log_history[0], trainer.state.log_history[1]
+    assert healthy_step["frac_nonfinite_loss"] == 0.0
+    assert poisoned_step["frac_nonfinite_loss"] == 1.0
+    # `logging_nan_inf_filter` is enabled by default, so `transformers` discards the step's own non-finite loss
+    # and substitutes a value derived from the loss accumulated since the last log. The reported loss therefore
+    # stays finite and the failing step is invisible, which is why the metric above is needed. The filter is
+    # gated on `not is_torch_xla_available()`, so under XLA the non-finite loss reaches the log unchanged and
+    # the substitution this metric compensates for does not happen.
+    if is_torch_xla_available():
+        assert not torch.isfinite(torch.tensor(poisoned_step["loss"]))
+    else:
+        assert torch.isfinite(torch.tensor(poisoned_step["loss"]))
 
 
 @pytest.mark.slow

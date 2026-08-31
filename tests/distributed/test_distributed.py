@@ -503,3 +503,19 @@ class TestDistributed(TrlTestCase):
             os.environ.copy(),
         )
         # fmt: on
+
+    def test_nonfinite_loss(self, get_config_path):
+        # `frac_nonfinite_loss` is gathered across ranks so that a loss going non-finite on one rank is visible on all
+        # of them. Only a multi-process run can check that: with one rank `gather` is the identity, so deleting it
+        # leaves every single-process test green. The child poisons the last rank and asserts, on every rank, that the
+        # logged fraction accounts for the whole world. It is not named `test_*.py` so pytest does not collect it here,
+        # where there is one rank and its assertion would be false.
+        # fmt: off
+        run_command(
+            [
+                "accelerate", "launch", "--config_file", get_config_path("ddp"),
+                "tests/distributed/nonfinite_loss.py",
+            ],
+            os.environ.copy(),
+        )
+        # fmt: on

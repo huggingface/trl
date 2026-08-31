@@ -15,6 +15,7 @@
 import pytest
 import torch
 from datasets import Dataset, DatasetDict
+from transformers.utils import is_torch_xla_available
 
 from trl.experimental.a2po import A2POConfig, A2POTrainer
 
@@ -78,6 +79,50 @@ class TestA2POTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    def test_nonfinite_loss_is_visible_in_log_history(self):
+        """A non-finite loss must reach `log_history`, which `logging_nan_inf_filter` otherwise hides."""
+        dataset = Dataset.from_dict(
+            {"prompt": ["The capital of France is", "Two plus two equals", "Water is made of", "The sky is"]}
+        )
+
+        class NonFiniteLossA2POTrainer(A2POTrainer):
+            def _get_sequence_logps(self, model, input_ids, attention_mask, logits_to_keep):
+                logps = super()._get_sequence_logps(model, input_ids, attention_mask, logits_to_keep)
+                return logps * float("nan") if self.state.global_step == 1 and model.training else logps
+
+        training_args = A2POConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,
+            per_device_train_batch_size=2,
+            max_completion_length=8,
+            num_value_samples=2,
+            filter_all_incorrect=False,
+            max_steps=2,
+            logging_steps=1,
+            report_to="none",
+        )
+        trainer = NonFiniteLossA2POTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs=completion_parity_reward,
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        trainer.train()
+
+        healthy_step, poisoned_step = trainer.state.log_history[0], trainer.state.log_history[1]
+        assert healthy_step["frac_nonfinite_loss"] == 0.0
+        assert poisoned_step["frac_nonfinite_loss"] == 1.0
+        # `logging_nan_inf_filter` is enabled by default, so `transformers` discards the step's own non-finite loss
+        # and substitutes a value derived from the loss accumulated since the last log. The reported loss therefore
+        # stays finite and the failing step is invisible, which is why the metric above is needed. The filter is
+        # gated on `not is_torch_xla_available()`, so under XLA the non-finite loss reaches the log unchanged and
+        # the substitution this metric compensates for does not happen.
+        if is_torch_xla_available():
+            assert not torch.isfinite(torch.tensor(poisoned_step["loss"]))
+        else:
+            assert torch.isfinite(torch.tensor(poisoned_step["loss"]))
 
     @pytest.mark.parametrize("eval_dataset_type", ["dataset", "dataset_dict", "dict_of_dataset", "none"])
     def test_init_with_eval_dataset(self, eval_dataset_type):

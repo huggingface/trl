@@ -23,6 +23,7 @@ import torch
 import torch.nn.functional as F
 from datasets import Dataset, DatasetDict, IterableDatasetDict, load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers.utils import is_torch_xla_available
 
 from trl.experimental.iw_opd import IWOPDConfig, IWOPDTrainer
 from trl.experimental.iw_opd.iw_opd_trainer import (
@@ -526,6 +527,45 @@ class TestIWOPDTrainer(TrlTestCase):
         assert trainer.state.log_history[0]["eval_loss"] is not None
         assert train_result.metrics["train_loss"] >= 0.0
         assert "model.safetensors" in os.listdir(self.tmp_dir + "/checkpoint-2")
+
+    def test_nonfinite_loss_is_visible_in_log_history(self):
+        """A non-finite loss must reach `log_history`, which `logging_nan_inf_filter` otherwise hides."""
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
+
+        class NonFiniteLossIWOPDTrainer(IWOPDTrainer):
+            # `beta` and `loss_top_k` default to 1.0 and 1, which selects the sparse top-1 branch, so
+            # poison that one rather than `generalized_jsd_loss`, which only the `else` branch reaches.
+            def _compute_local_sparse_top_1_divergence_loss(self, *args, **kwargs):
+                loss = super()._compute_local_sparse_top_1_divergence_loss(*args, **kwargs)
+                return loss * float("nan") if self.state.global_step == 1 else loss
+
+        training_args = self._make_args(
+            dataloader_drop_last=True,
+            max_steps=2,
+            logging_steps=1,
+        )
+        trainer = NonFiniteLossIWOPDTrainer(
+            model=self.model_id,
+            teacher_model=self.model_id,
+            args=training_args,
+            train_dataset=dataset,
+            processing_class=self.tokenizer,
+        )
+
+        trainer.train()
+
+        healthy_step, poisoned_step = trainer.state.log_history[0], trainer.state.log_history[1]
+        assert healthy_step["frac_nonfinite_loss"] == 0.0
+        assert poisoned_step["frac_nonfinite_loss"] == 1.0
+        # `logging_nan_inf_filter` is enabled by default, so `transformers` discards the step's own non-finite loss
+        # and substitutes a value derived from the loss accumulated since the last log. The reported loss therefore
+        # stays finite and the failing step is invisible, which is why the metric above is needed. The filter is
+        # gated on `not is_torch_xla_available()`, so under XLA the non-finite loss reaches the log unchanged and
+        # the substitution this metric compensates for does not happen.
+        if is_torch_xla_available():
+            assert not torch.isfinite(torch.tensor(poisoned_step["loss"]))
+        else:
+            assert torch.isfinite(torch.tensor(poisoned_step["loss"]))
 
     @pytest.mark.parametrize(
         "eval_dataset_type",

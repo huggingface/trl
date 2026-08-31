@@ -327,6 +327,9 @@ class SDFTTrainer(_BaseTrainer):
         self._step = 0
         self._buffered_inputs = None
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
+        # Set by `_open_eval_window`, the only place the caller's prefix is visible. `log` needs it to file
+        # eval metrics under the prefix the caller actually asked for.
+        self._metric_key_prefix = "eval"
 
         self.generation_kwargs = {
             "max_new_tokens": self.max_completion_length,
@@ -841,34 +844,39 @@ class SDFTTrainer(_BaseTrainer):
             loss = self._compute_self_distillation_loss(model, inputs, distillation_logits)
         accumulation_scale = self.current_gradient_accumulation_steps if self.model.training else 1.0
         loss = loss / accumulation_scale
-        # During training, `transformers` replaces a non-finite loss with the average of the previously logged losses
-        # before logging it (`logging_nan_inf_filter`, enabled by default), while the backward pass still runs on the
-        # non-finite value. The reported curve therefore stays plausible while the run is degrading, so report the
-        # condition here. Gather first: a NaN on a single rank would otherwise stay invisible.
+        # A non-finite training loss can pass through the logs as a plausible number. When `logging_nan_inf_filter` is
+        # enabled, which is the default, and `is_torch_xla_available()` is false, `transformers` discards the step's
+        # own loss and logs a value derived from the losses accumulated since the last log, so the curve never shows
+        # the step that failed. Report the condition here instead. Gather first, so a rank whose loss went non-finite
+        # is counted even when the other ranks are finite.
         mode = "train" if self.model.training else "eval"
-        nonfinite = self.accelerator.gather((~torch.isfinite(loss.detach())).float())
+        nonfinite = self.accelerator.gather((~torch.isfinite(loss.detach().mean())).float())
         self._metrics[mode]["frac_nonfinite_loss"].append(nonfinite.mean().item())
         if nonfinite.any():
             # `logging_nan_inf_filter` and the optimizer step belong to the training loop only, so each mode gets its
-            # own message. `warning_once` caches on the message, so this also stops a harmless evaluation warning from
-            # consuming the slot a later, genuinely damaging training step needs.
+            # own message. `warning_once` caches on the message, so this also stops a repeated evaluation warning from
+            # consuming the slot a later training step needs.
             if mode == "train":
                 logger.warning_once(
-                    "The training loss is not finite (NaN or Inf) for at least one step. When "
-                    "`logging_nan_inf_filter` is enabled, which is the default, the logged loss is replaced by the "
-                    "average of the previously logged losses, so the reported curve stays plausible. The backward "
-                    "pass still runs on the non-finite value; whether the optimizer step also runs depends on the "
-                    "precision, since `fp16` scales gradients and skips a step whose gradients are non-finite, while "
-                    "`bf16` and `float32` have no such guard. `frac_nonfinite_loss` reports the fraction of ranks "
-                    "whose loss was non-finite, averaged over the logging window, so it is a rate rather than a count "
-                    "of affected optimizer steps."
+                    "The training loss is not finite (NaN or Inf) for at least one step. The logged loss may not show "
+                    "it: when `logging_nan_inf_filter` is enabled, which is the default, and "
+                    "`is_torch_xla_available()` is false, `transformers` discards the step's own loss and logs a "
+                    "value derived from the losses accumulated since the last training log. The backward pass still "
+                    "runs on the non-finite value; whether that ultimately produces a parameter update depends on the "
+                    "resulting gradients and the configured scaler, optimizer and backend. `frac_nonfinite_loss` "
+                    "reports the fraction of ranks whose loss was non-finite, averaged over every loss computation "
+                    "since the last log, so it is a rate rather than a count of affected optimizer steps."
                 )
             else:
                 logger.warning_once(
-                    "The evaluation loss is not finite (NaN or Inf) for at least one step. Evaluation runs no "
-                    "backward pass and no optimizer step, so no weights are affected, but the reported evaluation "
-                    "loss is meaningless. `frac_nonfinite_loss` reports the fraction of ranks whose loss was "
-                    "non-finite, averaged over the logging window."
+                    "The evaluation loss is not finite (NaN or Inf) for at least one batch. It is neither "
+                    "backpropagated nor used for an optimizer step, so it does not itself change the weights, but any "
+                    "metric derived from it may be affected, including the reported evaluation loss and anything "
+                    "downstream of it such as best-model selection, early stopping and metric-driven schedulers. "
+                    "`frac_nonfinite_loss` reports the fraction of ranks whose loss was non-finite, averaged over "
+                    "this evaluation. It records one flag per rank per loss computation, while the reported loss is "
+                    "gathered per sample with padded positions trimmed, so the two can disagree. Only `evaluate()` "
+                    "logs it, never `predict()`."
                 )
 
         return loss
@@ -893,7 +901,17 @@ class SDFTTrainer(_BaseTrainer):
         """
         if distillation_logits.loss_mask.sum() == 0:
             mode = "train" if model.training else "eval"
-            self._log_self_distillation_metric(mode, 0.0)
+            # `loss_mask` is data-dependent, so this branch is taken per rank. The path below gathers the mean
+            # distillation loss, and a rank that returned here without gathering would leave its next collective
+            # paired against a peer's gather of a different quantity. Both are one-element float tensors, so they
+            # would complete rather than fail, and each rank would record the other's number. Gather a matching zero
+            # so every rank issues the same collectives whichever branch it takes.
+            self._log_self_distillation_metric(
+                mode,
+                self.accelerator.gather(torch.zeros((), device=distillation_logits.student_logits.device))
+                .mean()
+                .item(),
+            )
             # Keep the zero loss attached to the student graph so backward produces zero gradients instead of stopping.
             return distillation_logits.student_logits.sum() * 0.0
 
@@ -997,8 +1015,16 @@ class SDFTTrainer(_BaseTrainer):
         student_per_token_logps = selective_log_softmax(student_logits, completion_ids)
 
         teacher_per_token_logps = teacher["actual_logprobs"]
-        if (required & ~torch.isfinite(teacher_per_token_logps)).any():
-            raise ValueError("Teacher server returned no logprob for a required completion token.")
+        # This check reads this rank's own tensors, so raising on one rank alone would leave the others blocked in the
+        # next collective with no error to explain it. Agree across ranks first, so missing logprobs anywhere raise
+        # everywhere.
+        missing_teacher = self.accelerator.gather(
+            (required & ~torch.isfinite(teacher_per_token_logps)).any().reshape(1).float()
+        )
+        if missing_teacher.any():
+            raise ValueError(
+                "Teacher server returned no logprob for a required completion token on at least one rank."
+            )
         teacher_per_token_logps = torch.where(
             required, teacher_per_token_logps, torch.zeros_like(teacher_per_token_logps)
         )
@@ -1340,11 +1366,34 @@ class SDFTTrainer(_BaseTrainer):
         self._metrics[mode]["self_distillation/distillation_loss"].append(value)
         self._metrics[mode][f"{metric_prefix}/distillation_loss"].append(value)
 
+    def _open_eval_window(self, metric_key_prefix):
+        # `log()` drains `self._metrics` but `predict()` never calls it, so batches scored by
+        # `predict()` would survive into the next evaluation window and skew its averages. Opening the window here
+        # makes each one self-contained whichever entry point started it, and stays correct across repeated calls.
+        # The prefix is recorded because `log()` cannot see it, and it is not always "eval": `evaluate()` takes it as
+        # an argument and `predict()` defaults it to "test". Both public entry points are hooked rather than
+        # `evaluation_loop`, because `use_legacy_prediction_loop` routes to `prediction_loop` instead on the older
+        # `transformers` versions this package still supports.
+        self._metrics["eval"].clear()
+        self._metric_key_prefix = metric_key_prefix
+
+    def evaluate(self, eval_dataset=None, ignore_keys=None, metric_key_prefix="eval"):
+        self._open_eval_window(metric_key_prefix)
+        return super().evaluate(eval_dataset, ignore_keys, metric_key_prefix)
+
+    def predict(self, test_dataset, ignore_keys=None, metric_key_prefix="test"):
+        self._open_eval_window(metric_key_prefix)
+        return super().predict(test_dataset, ignore_keys, metric_key_prefix)
+
     def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
         mode = "train" if self.model.training else "eval"
         metrics = {k: sum(v) / len(v) for k, v in self._metrics[mode].items() if v}
+        # This method can be called both in training and evaluation. When called in evaluation, the keys in `logs`
+        # already carry the caller's `metric_key_prefix`, which defaults to "eval" but is "test" for `predict()`
+        # and arbitrary when passed explicitly. Match that prefix rather than assuming "eval", so these metrics
+        # land beside the ones `transformers` produced instead of in a separate `eval_` namespace.
         if mode == "eval":
-            metrics = {f"eval_{k}": v for k, v in metrics.items()}
-        logs = {**logs, **metrics}
+            metrics = {f"{self._metric_key_prefix}_{k}": v for k, v in metrics.items()}
+        logs.update(metrics)
         super().log(logs, start_time)
         self._metrics[mode].clear()

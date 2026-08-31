@@ -1416,6 +1416,9 @@ class SFTTrainer(_BaseTrainer):
 
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
+        # Set by `_open_eval_window`, the only place the caller's prefix is visible. `log` needs it to file
+        # eval metrics under the prefix the caller actually asked for.
+        self._metric_key_prefix = "eval"
         self._total_train_tokens = 0
 
         # Add tags to the model
@@ -1717,10 +1720,14 @@ class SFTTrainer(_BaseTrainer):
         ignore_keys: list[str] | None = None,
         metric_key_prefix: str = "eval",
     ) -> dict[str, float]:
+        # This trainer overrides `evaluate`, so the window is opened here; a second override would
+        # shadow this one and skip its dataset preparation.
+        self._open_eval_window(metric_key_prefix)
         # When a dataset is passed directly to `evaluate` (e.g. a held-out test set), preprocess it the same way
         # `__init__` does, so that `evaluate` accepts the same dataset types as the trainer (language modeling,
-        # prompt-completion, etc.). `_prepare_dataset` is idempotent: it skips datasets that are already tokenized. A
-        # `str` selects a dataset that was already prepared at init time, so it's left untouched.
+        # prompt-completion, etc.). `_prepare_dataset` skips the tokenizing steps for an already-tokenized dataset,
+        # but with `packing` it still re-packs, so preparing twice is not a no-op in that case. A `str` selects a
+        # dataset that was already prepared at init time, so it's left untouched.
         if not self._skip_prepare_dataset and eval_dataset is not None and not isinstance(eval_dataset, str):
             packing = self.args.packing if self.args.eval_packing is None else self.args.eval_packing
             if isinstance(eval_dataset, dict):
@@ -1878,33 +1885,38 @@ class SFTTrainer(_BaseTrainer):
             aux_loss = self.accelerator.gather_for_metrics(aux_loss).mean().item()
             self._metrics[mode]["aux_loss"].append(aux_loss)
 
-        # During training, `transformers` replaces a non-finite loss with the average of the previously logged losses
-        # before logging it (`logging_nan_inf_filter`, enabled by default), while the backward pass still runs on the
-        # non-finite value. The reported curve therefore stays plausible while the run is degrading, so report the
-        # condition here. Gather first: a NaN on a single rank would otherwise stay invisible.
-        nonfinite = self.accelerator.gather((~torch.isfinite(loss.detach())).float())
+        # A non-finite training loss can pass through the logs as a plausible number. When `logging_nan_inf_filter` is
+        # enabled, which is the default, and `is_torch_xla_available()` is false, `transformers` discards the step's
+        # own loss and logs a value derived from the losses accumulated since the last log, so the curve never shows
+        # the step that failed. Report the condition here instead. Gather first, so a rank whose loss went non-finite
+        # is counted even when the other ranks are finite.
+        nonfinite = self.accelerator.gather((~torch.isfinite(loss.detach().mean())).float())
         self._metrics[mode]["frac_nonfinite_loss"].append(nonfinite.mean().item())
         if nonfinite.any():
             # `logging_nan_inf_filter` and the optimizer step belong to the training loop only, so each mode gets its
-            # own message. `warning_once` caches on the message, so this also stops a harmless evaluation warning from
-            # consuming the slot a later, genuinely damaging training step needs.
+            # own message. `warning_once` caches on the message, so this also stops a repeated evaluation warning from
+            # consuming the slot a later training step needs.
             if mode == "train":
                 logger.warning_once(
-                    "The training loss is not finite (NaN or Inf) for at least one step. When "
-                    "`logging_nan_inf_filter` is enabled, which is the default, the logged loss is replaced by the "
-                    "average of the previously logged losses, so the reported curve stays plausible. The backward "
-                    "pass still runs on the non-finite value; whether the optimizer step also runs depends on the "
-                    "precision, since `fp16` scales gradients and skips a step whose gradients are non-finite, while "
-                    "`bf16` and `float32` have no such guard. `frac_nonfinite_loss` reports the fraction of ranks "
-                    "whose loss was non-finite, averaged over the logging window, so it is a rate rather than a count "
-                    "of affected optimizer steps."
+                    "The training loss is not finite (NaN or Inf) for at least one step. The logged loss may not show "
+                    "it: when `logging_nan_inf_filter` is enabled, which is the default, and "
+                    "`is_torch_xla_available()` is false, `transformers` discards the step's own loss and logs a "
+                    "value derived from the losses accumulated since the last training log. The backward pass still "
+                    "runs on the non-finite value; whether that ultimately produces a parameter update depends on the "
+                    "resulting gradients and the configured scaler, optimizer and backend. `frac_nonfinite_loss` "
+                    "reports the fraction of ranks whose loss was non-finite, averaged over every loss computation "
+                    "since the last log, so it is a rate rather than a count of affected optimizer steps."
                 )
             else:
                 logger.warning_once(
-                    "The evaluation loss is not finite (NaN or Inf) for at least one step. Evaluation runs no "
-                    "backward pass and no optimizer step, so no weights are affected, but the reported evaluation "
-                    "loss is meaningless. `frac_nonfinite_loss` reports the fraction of ranks whose loss was "
-                    "non-finite, averaged over the logging window."
+                    "The evaluation loss is not finite (NaN or Inf) for at least one batch. It is neither "
+                    "backpropagated nor used for an optimizer step, so it does not itself change the weights, but any "
+                    "metric derived from it may be affected, including the reported evaluation loss and anything "
+                    "downstream of it such as best-model selection, early stopping and metric-driven schedulers. "
+                    "`frac_nonfinite_loss` reports the fraction of ranks whose loss was non-finite, averaged over "
+                    "this evaluation. It records one flag per rank per loss computation, while the reported loss is "
+                    "gathered per sample with padded positions trimmed, so the two can disagree. Only `evaluate()` "
+                    "logs it, never `predict()`."
                 )
 
         return (loss, outputs) if return_outputs else loss
@@ -1913,6 +1925,21 @@ class SFTTrainer(_BaseTrainer):
         # Preserve the eval loop intent so compute_loss can decide whether logits are needed.
         inputs["_prediction_loss_only"] = prediction_loss_only
         return super().prediction_step(model, inputs, prediction_loss_only, ignore_keys=ignore_keys)
+
+    def _open_eval_window(self, metric_key_prefix):
+        # `log()` drains `self._metrics` but `predict()` never calls it, so batches scored by
+        # `predict()` would survive into the next evaluation window and skew its averages. Opening the window here
+        # makes each one self-contained whichever entry point started it, and stays correct across repeated calls.
+        # The prefix is recorded because `log()` cannot see it, and it is not always "eval": `evaluate()` takes it as
+        # an argument and `predict()` defaults it to "test". Both public entry points are hooked rather than
+        # `evaluation_loop`, because `use_legacy_prediction_loop` routes to `prediction_loop` instead on the older
+        # `transformers` versions this package still supports.
+        self._metrics["eval"].clear()
+        self._metric_key_prefix = metric_key_prefix
+
+    def predict(self, test_dataset, ignore_keys=None, metric_key_prefix="test"):
+        self._open_eval_window(metric_key_prefix)
+        return super().predict(test_dataset, ignore_keys, metric_key_prefix)
 
     # Override training step to add activation offloading context.
     def training_step(self, *args, **kwargs):
@@ -1924,9 +1951,11 @@ class SFTTrainer(_BaseTrainer):
         metrics = {key: sum(val) / len(val) for key, val in self._metrics[mode].items()}  # average the metrics
 
         # This method can be called both in training and evaluation. When called in evaluation, the keys in `logs`
-        # start with "eval_". We need to add the prefix "eval_" to the keys in `metrics` to match the format.
+        # already carry the caller's `metric_key_prefix`, which defaults to "eval" but is "test" for `predict()`
+        # and arbitrary when passed explicitly. Match that prefix rather than assuming "eval", so these metrics
+        # land beside the ones `transformers` produced instead of in a separate `eval_` namespace.
         if mode == "eval":
-            metrics = {f"eval_{key}": val for key, val in metrics.items()}
+            metrics = {f"{self._metric_key_prefix}_{key}": val for key, val in metrics.items()}
 
         logs.update(metrics)
         super().log(logs, start_time)
