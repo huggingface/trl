@@ -493,8 +493,10 @@ class _OptimizerTimeCallback(TrainerCallback):
         self._trainer._step_optimizer_s += time.perf_counter() - self._t0
 
 
-class _InitialWeightSyncCallback(TrainerCallback):
-    """Idempotent: NCCL group setup + cold weight sync to vLLM on train begin."""
+class _TrainBeginCallback(TrainerCallback):
+    """Idempotent train-begin setup: NCCL group setup + cold weight sync to vLLM, then start the rollout worker.
+    The weight sync must complete before the worker starts, which the ordering here guarantees.
+    """
 
     def __init__(self, trainer: "AsyncDistillationTrainer"):
         self._trainer = trainer
@@ -507,19 +509,6 @@ class _InitialWeightSyncCallback(TrainerCallback):
         if self._trainer.accelerator.is_main_process and self._trainer.weight_transfer is not None:
             self._trainer.weight_transfer.init_weight_transfer()
         self._trainer._sync_weight()
-
-
-class _StartRolloutWorkerCallback(TrainerCallback):
-    """Idempotent: starts the rollout worker. Must be registered AFTER `_InitialWeightSyncCallback`."""
-
-    def __init__(self, trainer: "AsyncDistillationTrainer"):
-        self._trainer = trainer
-        self._fired = False
-
-    def on_train_begin(self, _args, _state, _control, **_kwargs):
-        if self._fired:
-            return
-        self._fired = True
         if self._trainer.accelerator.is_main_process and self._trainer.rollout_worker is not None:
             self._trainer.rollout_worker.start()
 
@@ -1099,10 +1088,9 @@ class AsyncDistillationTrainer(_BaseTrainer):
             self.vllm_client = None
             self.weight_transfer = None
 
-        # Add callbacks. Registration order matters: weight sync first, then worker start.
+        # Add callbacks. Cold weight sync + worker start on train begin, then periodic weight syncs.
         self.add_callback(_OptimizerTimeCallback(self))
-        self.add_callback(_InitialWeightSyncCallback(self))
-        self.add_callback(_StartRolloutWorkerCallback(self))
+        self.add_callback(_TrainBeginCallback(self))
         self.add_callback(StepIntervalCallback(self._sync_weight, self.args.weight_sync_steps))
         self.add_callback(StepIntervalCallback(self._log_step_metrics, 1))
 
