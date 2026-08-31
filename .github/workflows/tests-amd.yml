@@ -50,13 +50,17 @@ jobs:
           python3 -m pip install -e ".[dev]" pytest-reportlog
           # Prebuilt ROCm flash-attention wheel, pinned to the base image's ABI (gfx942/gfx950).
           # Retried: a single external wheel host is a single point of failure for the whole job.
+          # `break` only skips the rest of the loop, so track success explicitly and fail the step
+          # if all attempts are exhausted rather than silently running the suite without flash-attn.
+          install_ok=0
           for i in 1 2 3; do
             python3 -m pip install --no-cache-dir \
               https://rocm.frameworks-devreleases.amd.com/whl/gfx942-gfx950/flash_attn-2.8.3-cp310-cp310-linux_x86_64.whl \
-              && break
+              && { install_ok=1; break; }
             echo "flash-attn wheel install attempt $i failed, retrying in 10s..."
             sleep 10
           done
+          [ "$install_ok" -eq 1 ] || exit 1
           # Most hub kernels have no ROCm build and cause failing tests on ROCm (same as transformers' AMD CI).
           python3 -m pip uninstall -y kernels
 
@@ -108,13 +112,17 @@ jobs:
           python3 -m pip install --upgrade pip
           python3 -m pip install -e ".[dev]" pytest-reportlog
           # Retried: a single external wheel host is a single point of failure for the whole job.
+          # `break` only skips the rest of the loop, so track success explicitly and fail the step
+          # if all attempts are exhausted rather than silently running the suite without flash-attn.
+          install_ok=0
           for i in 1 2 3; do
             python3 -m pip install --no-cache-dir \
               https://rocm.frameworks-devreleases.amd.com/whl/gfx942-gfx950/flash_attn-2.8.3-cp310-cp310-linux_x86_64.whl \
-              && break
+              && { install_ok=1; break; }
             echo "flash-attn wheel install attempt $i failed, retrying in 10s..."
             sleep 10
           done
+          [ "$install_ok" -eq 1 ] || exit 1
           python3 -m pip uninstall -y kernels
 
       - name: Verify ROCm torch is intact
