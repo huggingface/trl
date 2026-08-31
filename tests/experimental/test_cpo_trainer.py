@@ -12,9 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import math
+
 import pytest
 import torch
-from datasets import DatasetDict, load_dataset
+from datasets import Dataset, DatasetDict, load_dataset
 from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokenizer
 
 from trl.experimental.cpo import CPOConfig, CPOTrainer
@@ -33,6 +35,38 @@ class TestCPOTrainer(TrlTestCase):
         model_id = "trl-internal-testing/tiny-T5ForConditionalGeneration"
         self.t5_model = AutoModelForSeq2SeqLM.from_pretrained(model_id, dtype="float32")
         self.t5_tokenizer = AutoTokenizer.from_pretrained(model_id)
+
+    def test_simpo_loss_is_finite_with_truncated_completion(self):
+        dataset = Dataset.from_dict(
+            {
+                "prompt": ["Question: what is 2+2?\nAnswer:"],
+                "chosen": [" step" * 64],
+                "rejected": [" The answer is 4."],
+            }
+        )
+        training_args = CPOConfig(
+            output_dir=self.tmp_dir,
+            loss_type="simpo",
+            cpo_alpha=0.0,
+            max_length=32,
+            max_steps=1,
+            logging_steps=1,
+            per_device_train_batch_size=1,
+            report_to="none",
+        )
+        trainer = CPOTrainer(
+            model=self.model,
+            args=training_args,
+            processing_class=self.tokenizer,
+            train_dataset=dataset,
+        )
+
+        trainer.train()
+
+        step_metrics = next(metrics for metrics in trainer.state.log_history if "grad_norm" in metrics)
+        assert math.isfinite(step_metrics["loss"])
+        assert math.isfinite(step_metrics["grad_norm"])
+        assert all(torch.isfinite(parameter).all() for parameter in trainer.model.parameters())
 
     def test_trust_remote_code(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
