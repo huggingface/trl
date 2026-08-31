@@ -20,6 +20,10 @@
     <a href="https://huggingface.co/trl-lib"><img alt="Hugging Face Hub" src="https://img.shields.io/badge/🤗%20Hub-trl--lib-yellow"></a>
 </p>
 
+<p align="center">
+    <b>English</b> · <a href="README.zh.md">简体中文</a>
+</p>
+
 ## 🎉 What's New
 
 **⚗️ DistillationTrainer is now stable:** [`DistillationTrainer`](https://huggingface.co/docs/trl/distillation_trainer) graduates to the stable API — on-policy knowledge distillation that matches a teacher's full next-token distribution with a memory-efficient chunked JSD loss and vLLM-powered generation.
