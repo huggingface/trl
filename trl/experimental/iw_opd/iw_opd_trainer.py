@@ -25,6 +25,7 @@ import torch
 import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
+from accelerate.logging import get_logger
 from accelerate.utils import DistributedType, broadcast_object_list, gather_object
 from datasets import Dataset
 from packaging.version import Version
@@ -48,6 +49,9 @@ from ...models.utils import _ForwardRedirection, unwrap_model_for_generation
 from ...trainer.base_trainer import _BaseTrainer
 from ...trainer.utils import RepeatSampler, create_model_from_path, disable_dropout_in_model, pad, split_tensor_dict
 from .iw_opd_config import IWOPDConfig
+
+
+logger = get_logger(__name__)
 
 
 if is_liger_kernel_available():
@@ -1581,6 +1585,36 @@ class IWOPDTrainer(_BaseTrainer):
 
         if self.use_liger_loss:
             loss = self._compute_liger_loss(model, inputs, num_items_in_batch=num_items_in_batch)
+            # During training, `transformers` replaces a non-finite loss with the average of the previously logged
+            # losses before logging it (`logging_nan_inf_filter`, enabled by default), while the backward pass still
+            # runs on the non-finite value. The reported curve therefore stays plausible while the run is degrading, so
+            # report the condition here. Gather first: a NaN on a single rank would otherwise stay invisible.
+            mode = "train" if self.model.training else "eval"
+            nonfinite = self.accelerator.gather((~torch.isfinite(loss.detach())).float())
+            self._metrics[mode]["frac_nonfinite_loss"].append(nonfinite.mean().item())
+            if nonfinite.any():
+                # `logging_nan_inf_filter` and the optimizer step belong to the training loop only, so each mode gets
+                # its own message. `warning_once` caches on the message, so this also stops a harmless evaluation
+                # warning from consuming the slot a later, genuinely damaging training step needs.
+                if mode == "train":
+                    logger.warning_once(
+                        "The training loss is not finite (NaN or Inf) for at least one step. When "
+                        "`logging_nan_inf_filter` is enabled, which is the default, the logged loss is replaced by "
+                        "the average of the previously logged losses, so the reported curve stays plausible. The "
+                        "backward pass still runs on the non-finite value; whether the optimizer step also runs "
+                        "depends on the precision, since `fp16` scales gradients and skips a step whose gradients are "
+                        "non-finite, while `bf16` and `float32` have no such guard. `frac_nonfinite_loss` reports the "
+                        "fraction of ranks whose loss was non-finite, averaged over the logging window, so it is a "
+                        "rate rather than a count of affected optimizer steps."
+                    )
+                else:
+                    logger.warning_once(
+                        "The evaluation loss is not finite (NaN or Inf) for at least one step. Evaluation runs no "
+                        "backward pass and no optimizer step, so no weights are affected, but the reported evaluation "
+                        "loss is meaningless. `frac_nonfinite_loss` reports the fraction of ranks whose loss was "
+                        "non-finite, averaged over the logging window."
+                    )
+
             return (loss, None) if return_outputs else loss
 
         # Student forward pass
@@ -1617,7 +1651,11 @@ class IWOPDTrainer(_BaseTrainer):
                 # Unlike the JSD server losses, IW-OPD raises on missing teacher coverage instead of skipping
                 # positions, so once the window is verified to cover every valid token, num_items_in_batch is
                 # the correct gradient-accumulation denominator here too.
-                if (labels[:, comp_len:] != -100).any():
+                # The coverage check reads this rank's own labels, so raising on one rank alone would leave
+                # the others blocked in the next collective with no error to explain it. Agree across ranks
+                # first, so a shortfall anywhere raises everywhere.
+                uncovered = self.accelerator.gather((labels[:, comp_len:] != -100).any().reshape(1).float())
+                if uncovered.any():
                     raise ValueError(
                         "Teacher server returned fewer completion logprobs than the student completion length; "
                         "IW-OPD requires teacher logprobs for every completion token."
@@ -1679,6 +1717,36 @@ class IWOPDTrainer(_BaseTrainer):
                     top_k=self.loss_top_k,
                     add_tail=self.loss_add_tail,
                     num_items_in_batch=num_items_in_batch,
+                )
+
+        # During training, `transformers` replaces a non-finite loss with the average of the previously logged losses
+        # before logging it (`logging_nan_inf_filter`, enabled by default), while the backward pass still runs on the
+        # non-finite value. The reported curve therefore stays plausible while the run is degrading, so report the
+        # condition here. Gather first: a NaN on a single rank would otherwise stay invisible.
+        mode = "train" if self.model.training else "eval"
+        nonfinite = self.accelerator.gather((~torch.isfinite(loss.detach())).float())
+        self._metrics[mode]["frac_nonfinite_loss"].append(nonfinite.mean().item())
+        if nonfinite.any():
+            # `logging_nan_inf_filter` and the optimizer step belong to the training loop only, so each mode gets its
+            # own message. `warning_once` caches on the message, so this also stops a harmless evaluation warning from
+            # consuming the slot a later, genuinely damaging training step needs.
+            if mode == "train":
+                logger.warning_once(
+                    "The training loss is not finite (NaN or Inf) for at least one step. When "
+                    "`logging_nan_inf_filter` is enabled, which is the default, the logged loss is replaced by the "
+                    "average of the previously logged losses, so the reported curve stays plausible. The backward "
+                    "pass still runs on the non-finite value; whether the optimizer step also runs depends on the "
+                    "precision, since `fp16` scales gradients and skips a step whose gradients are non-finite, while "
+                    "`bf16` and `float32` have no such guard. `frac_nonfinite_loss` reports the fraction of ranks "
+                    "whose loss was non-finite, averaged over the logging window, so it is a rate rather than a count "
+                    "of affected optimizer steps."
+                )
+            else:
+                logger.warning_once(
+                    "The evaluation loss is not finite (NaN or Inf) for at least one step. Evaluation runs no "
+                    "backward pass and no optimizer step, so no weights are affected, but the reported evaluation "
+                    "loss is meaningless. `frac_nonfinite_loss` reports the fraction of ranks whose loss was "
+                    "non-finite, averaged over the logging window."
                 )
 
         return (loss, student_outputs) if return_outputs else loss

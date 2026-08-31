@@ -16,10 +16,14 @@ from typing import Any
 
 import torch
 import torch.nn.functional as F
+from accelerate.logging import get_logger
 
 from ...extras.profiling import profiling_decorator
 from ...trainer.distillation_trainer import DistillationTrainer
 from .server_distillation_config import ServerDistillationConfig
+
+
+logger = get_logger(__name__)
 
 
 # Self-contained copy of the base trainer's `_jsd_divergence` (together with the `_compute_prompt_length` /
@@ -341,6 +345,36 @@ class ServerDistillationTrainer(DistillationTrainer):
         # not consume `num_items_in_batch`, so it must re-apply that scaling itself.
         if self.model.training:
             loss = loss / self.current_gradient_accumulation_steps
+
+        # During training, `transformers` replaces a non-finite loss with the average of the previously logged losses
+        # before logging it (`logging_nan_inf_filter`, enabled by default), while the backward pass still runs on the
+        # non-finite value. The reported curve therefore stays plausible while the run is degrading, so report the
+        # condition here. Gather first: a NaN on a single rank would otherwise stay invisible.
+        mode = "train" if self.model.training else "eval"
+        nonfinite = self.accelerator.gather((~torch.isfinite(loss.detach())).float())
+        self._metrics[mode]["frac_nonfinite_loss"].append(nonfinite.mean().item())
+        if nonfinite.any():
+            # `logging_nan_inf_filter` and the optimizer step belong to the training loop only, so each mode gets its
+            # own message. `warning_once` caches on the message, so this also stops a harmless evaluation warning from
+            # consuming the slot a later, genuinely damaging training step needs.
+            if mode == "train":
+                logger.warning_once(
+                    "The training loss is not finite (NaN or Inf) for at least one step. When "
+                    "`logging_nan_inf_filter` is enabled, which is the default, the logged loss is replaced by the "
+                    "average of the previously logged losses, so the reported curve stays plausible. The backward "
+                    "pass still runs on the non-finite value; whether the optimizer step also runs depends on the "
+                    "precision, since `fp16` scales gradients and skips a step whose gradients are non-finite, while "
+                    "`bf16` and `float32` have no such guard. `frac_nonfinite_loss` reports the fraction of ranks "
+                    "whose loss was non-finite, averaged over the logging window, so it is a rate rather than a count "
+                    "of affected optimizer steps."
+                )
+            else:
+                logger.warning_once(
+                    "The evaluation loss is not finite (NaN or Inf) for at least one step. Evaluation runs no "
+                    "backward pass and no optimizer step, so no weights are affected, but the reported evaluation "
+                    "loss is meaningless. `frac_nonfinite_loss` reports the fraction of ranks whose loss was "
+                    "non-finite, averaged over the logging window."
+                )
 
         return (loss, student_outputs) if return_outputs else loss
 

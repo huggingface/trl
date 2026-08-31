@@ -899,6 +899,23 @@ class ORPOTrainer(_BaseTrainer):
         # force log the metrics
         self.store_metrics(metrics, train_eval="train")
 
+        # During training, `transformers` replaces a non-finite loss with the average of the previously logged losses
+        # before logging it (`logging_nan_inf_filter`, enabled by default), while the backward pass still runs on the
+        # non-finite value. The reported curve therefore stays plausible while the run is degrading, so report the
+        # condition here. Gather first: a NaN on a single rank would otherwise stay invisible. This trainer logs
+        # through `store_metrics`, whose call site here is hard-coded to `train_eval="train"`, so an eval-time rate
+        # would be filed under training. Report the condition through the warning alone. Evaluation goes through
+        # `prediction_step`, which never calls this method, so only the training message can fire here.
+        nonfinite = self.accelerator.gather((~torch.isfinite(loss.detach())).float())
+        if nonfinite.any():
+            logger.warning_once(
+                "The training loss is not finite (NaN or Inf) for at least one step. When `logging_nan_inf_filter` is "
+                "enabled, which is the default, the logged loss is replaced by the average of the previously logged "
+                "losses, so the reported curve stays plausible. The backward pass still runs on the non-finite value; "
+                "whether the optimizer step also runs depends on the precision, since `fp16` scales gradients and "
+                "skips a step whose gradients are non-finite, while `bf16` and `float32` have no such guard."
+            )
+
         if return_outputs:
             return (loss, metrics)
         return loss

@@ -1215,17 +1215,21 @@ class AsyncGRPOTrainer(_BaseTrainer):
         self._step_samples += n_forward_tokens / mean_seq_len
         self._step_forward_s += self._last_forward_time_s
 
-        # `transformers` replaces a non-finite loss with the average of the previously logged losses before logging it
-        # (`logging_nan_inf_filter`, enabled by default), but the backward pass and the optimizer step still run on the
-        # non-finite value. The reported curve therefore stays plausible while the weights are being corrupted, so
-        # report the condition here. Gather first: a NaN on a single rank would otherwise stay invisible.
+        # During training, `transformers` replaces a non-finite loss with the average of the previously logged losses
+        # before logging it (`logging_nan_inf_filter`, enabled by default), while the backward pass still runs on the
+        # non-finite value. The reported curve therefore stays plausible while the run is degrading, so report the
+        # condition here. Gather first: a NaN on a single rank would otherwise stay invisible.
         nonfinite = self.accelerator.gather((~torch.isfinite(loss.detach())).float())
         self._metrics["train"]["frac_nonfinite_loss"].append(nonfinite.mean().item())
         if nonfinite.any():
             logger.warning_once(
-                "The loss is not finite (NaN or Inf) for at least one step. The backward pass and the optimizer step "
-                "still run on it, while the logged loss is replaced by the average of the previously logged losses. "
-                "Track `frac_nonfinite_loss` in the logs to see how many steps are affected."
+                "The training loss is not finite (NaN or Inf) for at least one step. When `logging_nan_inf_filter` is "
+                "enabled, which is the default, the logged loss is replaced by the average of the previously logged "
+                "losses, so the reported curve stays plausible. The backward pass still runs on the non-finite value; "
+                "whether the optimizer step also runs depends on the precision, since `fp16` scales gradients and "
+                "skips a step whose gradients are non-finite, while `bf16` and `float32` have no such guard. "
+                "`frac_nonfinite_loss` reports the fraction of ranks whose loss was non-finite, averaged over the "
+                "logging window, so it is a rate rather than a count of affected optimizer steps."
             )
         return loss
 
