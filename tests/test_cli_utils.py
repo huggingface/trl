@@ -385,6 +385,23 @@ class TestGetDataset:
         with pytest.raises(ValueError, match="must be set for either all datasets"):
             get_dataset(mixture_config)
 
+    @pytest.mark.parametrize(
+        ("fractions", "error_message"),
+        [
+            ([0.0, 0.0], "must be greater than zero"),
+            ([-0.5, 1.5], "must be non-negative"),
+        ],
+    )
+    def test_dataset_fraction_invalid_raises_error_before_loading(self, fractions, error_message):
+        mixture_config = DatasetMixtureConfig(
+            datasets=[DatasetConfig(path="unused", fraction=fraction) for fraction in fractions]
+        )
+
+        with patch("datasets.load_dataset") as load_dataset_mock, pytest.raises(ValueError, match=error_message):
+            get_dataset(mixture_config)
+
+        load_dataset_mock.assert_not_called()
+
     def test_dataset_fraction_streaming_raises_error(self):
         mixture_config = DatasetMixtureConfig(
             datasets=[DatasetConfig(path="trl-internal-testing/zen", name="standard_language_modeling", fraction=0.5)],
