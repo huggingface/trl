@@ -133,6 +133,9 @@ training_args = SFTConfig(..., model_init_kwargs={"attn_implementation": "kernel
 
 Other options include `kernels-community/vllm-flash-attn3` and `kernels-community/paged-attention`.
 
+> [!WARNING]
+> Training a grouped-query attention model with `kernels-community/flash-attn2` currently fails in the backward pass; see [FlashAttention 2 backward pass on GQA models](kernels_hub#flashattention-2-backward-pass-on-gqa-models).
+
 Optimized attention works across all TRL trainers. For more details, see [Kernels Hub Integration](kernels_hub).
 
 </hfoption>
