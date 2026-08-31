@@ -29,6 +29,7 @@ The authors find that on-policy data (high `lmbda`) performs better and the opti
 
 > [!WARNING]
 > Make sure that `attn_implementation="kernels-community/flash-attn2"` when training [Gemma models](https://huggingface.co/models?other=gemma2). Otherwise you will encounter NaNs in the logits due to the [soft capping technique](https://huggingface.co/blog/gemma2#soft-capping-and-attention-implementations) adopted by this architecture.
+> Gemma models use grouped-query attention, so this kernel currently needs to be pinned; see [FlashAttention 2 backward pass on GQA models](kernels_hub#flashattention-2-backward-pass-on-gqa-models).
 
 The basic API is as follows:
 

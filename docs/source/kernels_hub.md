@@ -46,6 +46,24 @@ trl sft ... --attn_implementation kernels-community/flash-attn2
 > [!TIP]
 > Now you can leverage faster attention backends with a pre-optimized kernel for your hardware configuration from the Hub, speeding up both development and training.
 
+## FlashAttention 2 backward pass on GQA models
+
+> [!WARNING]
+> Since Transformers v5.16, `kernels-community/flash-attn2` resolves to the kernel repository's `v3` branch, whose Torch stable ABI builds fail in the backward pass when `num_attention_heads != num_key_value_heads`, that is, on any model using grouped-query attention (most recent models). The forward pass is unaffected, so inference works and training fails at the first optimizer step with `RuntimeError: torch_call_dispatcher( "aten::sum", ... ) API call failed`.
+
+This also affects `attn_implementation="flash_attention_2"` when the `flash-attn` package is not installed, because Transformers then falls back to the same Hub kernel.
+
+Until [huggingface/kernels-community#1085](https://github.com/huggingface/kernels-community/issues/1085) is fixed, pin the kernel to the `v2` branch, whose builds cover Torch 2.11 to 2.13:
+
+```python
+from transformers import AutoModelForCausalLM
+
+model = AutoModelForCausalLM.from_pretrained(
+    "your-model-name",
+    attn_implementation="kernels-community/flash-attn2@v2",
+)
+```
+
 ## Comparing Attention Implementations
 
 We evaluated various attention implementations available in transformers, along with different kernel backends, using **TRL** and **SFT**.  

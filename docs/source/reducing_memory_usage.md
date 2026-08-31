@@ -204,6 +204,7 @@ Padding-free batching is an alternative approach for reducing memory usage. In t
 
 > [!WARNING]
 > It's highly recommended to use padding-free batching with **FlashAttention 2** or **FlashAttention 3**. Otherwise, you may encounter batch contamination issues.
+> If you use the `kernels-community/flash-attn2` Hub kernel, see [FlashAttention 2 backward pass on GQA models](kernels_hub#flashattention-2-backward-pass-on-gqa-models).
 
 <hfoptions id="padding-free">
 <hfoption id="DPO">
