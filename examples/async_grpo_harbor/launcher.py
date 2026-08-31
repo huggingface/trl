@@ -88,6 +88,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -177,6 +178,78 @@ def wait_for_public_proxy(log: pathlib.Path, capture_port: int, deadline_s: floa
     raise RuntimeError(f"the capture proxy never became publicly reachable in {deadline_s:.0f}s\n{tail}")
 
 
+def _serve_cmd(args: argparse.Namespace) -> list[str]:
+    return [
+        "openenv", "harbor", "serve",
+        "--dataset", args.split,
+        "--port", str(args.server_port),
+        "--capture-port", str(args.capture_port),
+        "--expose", "gradio",
+    ]  # fmt: skip
+
+
+def start_harbor_server(args: argparse.Namespace, log: pathlib.Path) -> str:
+    """Start the server and return its verified public proxy URL."""
+    _spawn(_serve_cmd(args), log)
+    return wait_for_public_proxy(log, args.capture_port)
+
+
+def supervise_tunnel(args: argparse.Namespace, log: pathlib.Path, interval_s: float) -> None:
+    """Keep the published proxy reachable for the whole run, restarting the server when it is not.
+
+    Verifying once at startup is not enough, and this is measured rather than defensive: over 27 hours
+    on our own cluster the published tunnel stopped serving the proxy 69 times -- roughly once every 24
+    minutes -- so a run of any length will lose it mid-flight. When that happens the sandboxed agent gets
+    the tunnel provider's error page instead of an OpenAI endpoint, makes zero model calls, and every
+    rollout comes back unscorable, with nothing in the trainer's own logs to say why.
+
+    A restart changes the published URL, which is fine: the trainer talks to the server over localhost
+    and the server hands its current URL to each new sandbox, so only rollouts already in flight are
+    lost. Two consecutive failures are required before acting, so one flaky request does not bounce a
+    healthy server mid-step.
+
+    Note which check does the work. The failure signature we originally debugged -- the provider's
+    "no interface is running" placeholder -- accounted for 2 of those 69. The other 137 probe failures
+    were plain 502s. So the test is positive and generic: the URL must return OUR health document.
+    Enumerating known failure modes would have caught almost none of them.
+    """
+    consecutive = 0
+    while True:
+        time.sleep(interval_s)
+        url = _published_url(log, args.capture_port)
+        if url and _http_json_has(f"{url}/health", "status"):
+            consecutive = 0
+            continue
+        consecutive += 1
+        print(f"[launcher] tunnel probe failed ({consecutive}/2) for {url or '<no url yet>'}", flush=True)
+        if consecutive < 2:
+            continue
+        print("[launcher] the published proxy is not reachable; restarting the Harbor server", flush=True)
+        for proc in list(_children):
+            if proc.poll() is None and "harbor" in " ".join(getattr(proc, "args", []) or []):
+                try:
+                    os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+                except (ProcessLookupError, PermissionError):
+                    pass
+                _children.remove(proc)
+        time.sleep(5)
+        try:
+            new_url = start_harbor_server(args, log)
+            print(f"[launcher] Harbor server back up; proxy now {new_url}", flush=True)
+            consecutive = 0
+        except RuntimeError as exc:
+            print(f"[launcher] WARNING could not republish the proxy: {exc}", flush=True)
+
+
+def _published_url(log: pathlib.Path, capture_port: int) -> str | None:
+    """The most recent published URL in the server log, or None."""
+    if not log.exists():
+        return None
+    text = re.sub(r"\x1b\[[0-9;]*m", "", log.read_text(errors="replace"))
+    found = re.findall(rf"capture\s+:{capture_port}\s+->\s+(https://\S+)", text)
+    return found[-1].rstrip(".,") if found else None
+
+
 def wait_for_vllm(url: str, proc: subprocess.Popen, log: pathlib.Path, deadline_s: float = 1200.0) -> None:
     """Block until vLLM answers /health, failing fast with its log if it died instead."""
     started = time.monotonic()
@@ -243,6 +316,7 @@ def parse_args() -> tuple[argparse.Namespace, list[str]]:
     p.add_argument("--train-script-url", default=TRAIN_SCRIPT_URL)
     p.add_argument("--data-root", default=str(DATA_ROOT))  # a mounted bucket, if any
     p.add_argument("--skip-warm", action="store_true")
+    p.add_argument("--tunnel-check-s", type=float, default=60.0)  # 0 disables the supervisor
     return p.parse_known_args()
 
 
@@ -286,15 +360,8 @@ def main() -> None:
 
     # 1. the Harbor dataset + the capture proxy, published for the sandboxed agent
     server_log = logs / "openenv-server.log"
-    _spawn(
-        ["openenv", "harbor", "serve",
-         "--dataset", args.split,
-         "--port", str(args.server_port),
-         "--capture-port", str(args.capture_port),
-         "--expose", "gradio"],
-        server_log,
-    )  # fmt: skip
-    public_proxy = wait_for_public_proxy(server_log, args.capture_port)
+    public_proxy = start_harbor_server(args, server_log)
+    threading.Thread(target=supervise_tunnel, args=(args, server_log, args.tunnel_check_s), daemon=True).start()
 
     # 2. the policy. The token-id and logprob flags are load-bearing: without them the proxy grades
     #    every rollout `eval` and the run produces nothing trainable.
