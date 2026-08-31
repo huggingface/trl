@@ -1345,9 +1345,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 global_low_clip_sum, global_high_clip_sum, global_region_clip_sum = clip_stats.unbind(0)
                 self._metrics["train"]["clip_ratio/low_mean"].append((global_low_clip_sum / global_count).item())
                 self._metrics["train"]["clip_ratio/high_mean"].append((global_high_clip_sum / global_count).item())
-                self._metrics["train"]["clip_ratio/region_mean"].append(
-                    (global_region_clip_sum / global_count).item()
-                )
+                self._metrics["train"]["clip_ratio/region_mean"].append((global_region_clip_sum / global_count).item())
 
                 seq_ids = (position_ids[0] == 0).cumsum(0)[1:] - 1  # (T-1,) completion index per (shifted) token
                 n_completions = (position_ids == 0).sum()  # number of packed completions in this rank's row
