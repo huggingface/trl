@@ -1427,7 +1427,11 @@ class _ChunkedLogProbFunction(torch.autograd.Function):
                 C = end - start
                 w_chunk = weight[start:end]  # [C, H]
 
-                torch.mm(hidden, w_chunk.t(), out=mm_buf[:, :C])
+                # Same cast as in forward: under autocast the hidden states are half precision while
+                # the lm_head weight is not, and `torch.mm` needs both operands and `out` in one dtype.
+                # Only the logit recompute is cast; the gradient accumulation below keeps the full
+                # precision weight.
+                torch.mm(hidden, w_chunk.to(hidden.dtype).t(), out=mm_buf[:, :C])
                 if bias is not None:
                     mm_buf[:, :C].add_(bias[start:end].to(hidden.dtype))
                 logits_chunk = logits_buf[:, :C]
