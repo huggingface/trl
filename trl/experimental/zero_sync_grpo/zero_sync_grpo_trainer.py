@@ -897,7 +897,9 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             self._metrics[mode]["generation/decode_steps"].append(self._decode_steps)
             self._decode_steps = 0
         if self.release_kv_cache_during_step:
-            # Generation is done for this step, so hand its memory to the forward and backward that come next.
+            # Generation is done for this step, so hand its memory to the forward and backward that come next. The
+            # rollouts in flight lose their cache and re-prefill when they are next scheduled, which is what the
+            # option costs: the weights move during the step anyway, so the cache it throws away was already stale.
             released = self._manager.release_memory()
             self._metrics[mode]["generation/kv_released_gib"].append(released / 2**30)
         if self._replica_group is not None:

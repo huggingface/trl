@@ -47,13 +47,15 @@ Under `tp_size > 1` the pool does not have to be held for the whole step. Genera
 ZeroSyncGRPOConfig(tp_size=2, release_kv_cache_during_step=True)
 ```
 
-Only the blocks a rollout is actually using are copied to host memory and back, not the whole pool, so the cost follows the live cache rather than its size. Measured with 128-token completions it is free: 1.43 against 1.44 s/step, while handing 5.36 GiB to the training step. `generation/kv_released_gib` logs how much is handed over each step.
+The rollouts in flight lose their cache: they keep their place in the queue and re-prefill when they are next scheduled, so what the option costs is those prefills, paid again every step. The cache being thrown away was already stale, since the weights move during the step. Measured with 128-token completions it is free: 1.43 against 1.44 s/step, while handing 5.36 GiB to the training step. `generation/kv_released_gib` logs how much is handed over each step.
 
 This turns off `use_async_batching`, since a batch still in flight cannot have its cache taken from under it. That costs nothing here (1.52 against 1.53 s/step).
 
 With 512-token completions and 8 rollouts per prompt it is also free: 2.52 and 2.40 s/step with it, against 2.51 and 2.45 without.
 
-The cost follows the live cache, so it stops being free once many rollouts are in flight: at batch size 256 (Qwen3-4B, tp 4, 512-token completions) releasing measured 8.4 s/step against 6.9 without, and 9.7 with a 24 GiB CPU pool, since every step then copies gigabytes over PCIe both ways. Reach for it when the training step does not fit in memory otherwise, not for speed.
+The cost follows how much generation has to be redone, so it stops being free once many rollouts are in flight: at batch size 256 (Qwen3-4B, tp 4, 512-token completions) releasing measured 8.4 s/step against 6.9 without. Reach for it when the training step does not fit in memory otherwise, not for speed.
+
+Copying the live cache to host memory instead, so rollouts could resume where they left off rather than re-prefill, is not supported. It restores the blocks byte for byte and still produces garbage as soon as anything else uses the memory in between, which is precisely what a training step does; `exp/repro_kv_offload.py` reproduces it on one GPU.
 
 ## Packed training
 
