@@ -25,7 +25,7 @@ import torch.nn.functional as F
 import transformers
 from datasets import IterableDataset
 from packaging.version import Version
-from transformers import AutoConfig, AutoModelForCausalLM
+from transformers import AutoConfig, AutoModelForCausalLM, GPTNeoXConfig
 from transformers.testing_utils import torch_device
 from transformers.utils import is_peft_available
 
@@ -1621,6 +1621,14 @@ class TestComputeFlopsPerToken(TrlTestCase):
         cfg.head_dim = cfg.hidden_size // cfg.num_attention_heads
         assert compute_flops_per_token(cfg, 16384) == derived
 
+    def test_config_without_num_key_value_heads(self):
+        # GPT-NeoX uses standard multi-head attention and does not declare `num_key_value_heads`. Falling back to
+        # `num_attention_heads` must give the same result as setting it explicitly.
+        cfg = GPTNeoXConfig()
+        derived = compute_flops_per_token(cfg, 16384)
+        cfg.num_key_value_heads = cfg.num_attention_heads
+        assert compute_flops_per_token(cfg, 16384) == derived
+
 
 class TestComputeMfu(TrlTestCase):
     def test_perfect_utilization(self):
@@ -1669,4 +1677,12 @@ class TestAdjustedMfu(TrlTestCase):
         cfg = AutoConfig.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
         derived = adjusted_mfu(100.0, cfg, 16384)
         cfg.head_dim = cfg.hidden_size // cfg.num_attention_heads
+        assert adjusted_mfu(100.0, cfg, 16384) == pytest.approx(derived)
+
+    def test_config_without_num_key_value_heads(self):
+        # GPT-NeoX uses standard multi-head attention and does not declare `num_key_value_heads`. Falling back to
+        # `num_attention_heads` must give the same result as setting it explicitly.
+        cfg = GPTNeoXConfig()
+        derived = adjusted_mfu(100.0, cfg, 16384)
+        cfg.num_key_value_heads = cfg.num_attention_heads
         assert adjusted_mfu(100.0, cfg, 16384) == pytest.approx(derived)
