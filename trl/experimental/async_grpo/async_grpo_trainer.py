@@ -14,7 +14,10 @@
 
 
 import contextvars
+import itertools
+import json
 import math
+import os
 import queue
 import textwrap
 import threading
@@ -32,6 +35,7 @@ from torch.distributed._tensor import DTensor
 from torch.utils.data import DataLoader
 from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenizerBase, TrainerCallback
 from transformers.data.data_collator import DataCollatorMixin
+from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR
 
 from ...trainer.base_trainer import _BaseTrainer
 from ...trainer.utils import (
@@ -198,8 +202,10 @@ class _OptimizerTimeCallback(TrainerCallback):
         self._trainer._step_optimizer_s += time.perf_counter() - self._t0
 
 
-class _InitialWeightSyncCallback(TrainerCallback):
-    """Idempotent: NCCL group setup + cold weight sync to vLLM on train begin."""
+class _TrainBeginCallback(TrainerCallback):
+    """Idempotent train-begin setup: NCCL group setup + cold weight sync to vLLM, then start the rollout worker.
+    The weight sync must complete before the worker starts, which the ordering here guarantees.
+    """
 
     def __init__(self, trainer: "AsyncGRPOTrainer"):
         self._trainer = trainer
@@ -212,19 +218,6 @@ class _InitialWeightSyncCallback(TrainerCallback):
         if self._trainer.accelerator.is_main_process and self._trainer.weight_transfer is not None:
             self._trainer.weight_transfer.init_weight_transfer()
         self._trainer._sync_weight()
-
-
-class _StartRolloutWorkerCallback(TrainerCallback):
-    """Idempotent: starts the rollout worker. Must be registered AFTER `_InitialWeightSyncCallback`."""
-
-    def __init__(self, trainer: "AsyncGRPOTrainer"):
-        self._trainer = trainer
-        self._fired = False
-
-    def on_train_begin(self, _args, _state, _control, **_kwargs):
-        if self._fired:
-            return
-        self._fired = True
         if self._trainer.accelerator.is_main_process and self._trainer.rollout_worker is not None:
             self._trainer.rollout_worker.start()
 
@@ -245,7 +238,8 @@ class _EpochStopCallback(TrainerCallback):
 
     def on_step_end(self, _args, _state, control, **_kwargs):
         acc = self._trainer.accelerator
-        reached = torch.tensor(int(len(self._trainer._trained_groups) >= self._target), device=acc.device)
+        trained = self._trainer._groups_before_resume + len(self._trainer._trained_groups)
+        reached = torch.tensor(int(trained >= self._target), device=acc.device)
         if int(acc.reduce(reached, reduction="sum").item()) >= 1:
             control.should_training_stop = True
 
@@ -861,12 +855,12 @@ class AsyncGRPOTrainer(_BaseTrainer):
         # Model
         model_init_kwargs = args.model_init_kwargs or {}
         model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
+        model_init_kwargs.setdefault("dtype", args.dtype)
         # FlashAttention is required: training runs in padding-free mode, where sequences are concatenated into a
         # single row and `cu_seq_lens` are derived from `position_ids` resets. SDPA/eager can't handle this.
         model = AutoModelForCausalLM.from_pretrained(
             model,
             device_map=None,
-            dtype=torch.float32,
             attn_implementation="kernels-community/flash-attn3",
             **model_init_kwargs,
         )
@@ -910,13 +904,13 @@ class AsyncGRPOTrainer(_BaseTrainer):
                     "`environment` column to route each example to its environment. Provide a dataset, or pass a "
                     "single environment factory."
                 )
-            if self.args.max_steps <= 0:
+            if args.max_steps <= 0:
                 raise ValueError(
                     "When training without a `train_dataset` (the environment owns the data and returns the prompt "
                     "from `reset()`), `max_steps` must be set to a positive value to define the training length. Set "
                     "it via `AsyncGRPOConfig(max_steps=...)`."
                 )
-            num_placeholder_rows = self.args.per_device_train_batch_size * self.args.gradient_accumulation_steps
+            num_placeholder_rows = args.per_device_train_batch_size * args.gradient_accumulation_steps
             train_dataset = Dataset.from_dict({"prompt": [[{"role": "user", "content": ""}]] * num_placeholder_rows})
 
         # Initialize the Trainer
@@ -937,6 +931,8 @@ class AsyncGRPOTrainer(_BaseTrainer):
         # Epoch handling: stop after num_train_epochs full passes over the PROMPT dataset, counted as distinct
         # prompt-groups trained (fork-independent).
         self._trained_groups: set[int] = set()
+        # Tracks restart to match `num_train_epochs`
+        self._groups_before_resume = 0
         self._epoch_stop_groups: int | None = None
         samples_per_step = (
             self.args.per_device_train_batch_size
@@ -959,13 +955,24 @@ class AsyncGRPOTrainer(_BaseTrainer):
             )
 
         # Infer max_inflight_tasks when not explicitly set. Generating more samples than the trainer can consume
-        # before they become stale is wasteful. The useful upper bound is max_staleness * samples_per_step.
+        # before they become stale is wasteful. The useful upper bound is max_staleness * samples_per_step, floored
+        # at samples_per_step so max_staleness=0 (a valid, strict discard policy) can't also zero out the rollout
+        # loop's own scheduling capacity and hang the trainer forever on an empty queue.
         if self.args.max_inflight_tasks < 0:
-            self.args.max_inflight_tasks = self.args.max_staleness * samples_per_step
+            self.args.max_inflight_tasks = max(self.args.max_staleness, 1) * samples_per_step
             logger.info(
                 f"max_inflight_tasks set to {self.args.max_inflight_tasks} "
                 f"(max_staleness={self.args.max_staleness} × samples_per_step={samples_per_step})"
             )
+
+        # The base Trainer's data-skip replay loop doesn't apply to AsyncGRPO's live rollout queue;
+        # force it off regardless of what the user passed.
+        if not self.args.ignore_data_skip:
+            logger.warning(
+                "`ignore_data_skip` is forced to `True` for AsyncGRPO because the base Trainer's skip-and-replay "
+                "loop does not apply to a live rollout queue."
+            )
+        self.args.ignore_data_skip = True
 
         # The metric sink. Values are floats, or `(numerator, denominator)` pairs for rates
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
@@ -1009,6 +1016,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
                         "shapes": weight_shapes,
                         "packed": True,
                     },
+                    weight_sync_timeout=self.args.weight_sync_timeout,
                 )
 
             if rollout_worker is not None:
@@ -1047,10 +1055,9 @@ class AsyncGRPOTrainer(_BaseTrainer):
             self.vllm_client = None
             self.weight_transfer = None
 
-        # Add callbacks. Registration order matters: weight sync first, then worker start.
+        # Add callbacks. Cold weight sync + worker start on train begin, then periodic weight syncs.
         self.add_callback(_OptimizerTimeCallback(self))
-        self.add_callback(_InitialWeightSyncCallback(self))
-        self.add_callback(_StartRolloutWorkerCallback(self))
+        self.add_callback(_TrainBeginCallback(self))
         self.add_callback(StepIntervalCallback(self._sync_weight, self.args.weight_sync_steps))
         self.add_callback(StepIntervalCallback(self._log_step_metrics, 1))
         if self._epoch_stop_groups is not None:
@@ -1318,44 +1325,20 @@ class AsyncGRPOTrainer(_BaseTrainer):
             valid_mask = completion_mask > 0
             local_count = valid_mask.sum().float()
 
-            local_ratio_sum = (
-                coef_1[valid_mask].sum() if valid_mask.any() else torch.zeros((), device=completion_mask.device)
-            )
+            # Empty masked selections sum to a 0 scalar on the right device, so no valid_mask.any() guard is needed.
+            local_ratio_sum = coef_1[valid_mask].sum()
             # Approx KL: http://joschu.net/blog/kl-approx.html
             # log_importance_weights, not log_ratio: they diverge under importance_sampling_level="sequence".
-            local_kl_sum = (
-                ((coef_1[valid_mask] - 1) - log_importance_weights[valid_mask]).sum()
-                if valid_mask.any()
-                else torch.zeros((), device=completion_mask.device)
-            )
-
-            local_entropy_sum = (
-                entropy[valid_mask].sum() if valid_mask.any() else torch.zeros((), device=completion_mask.device)
-            )
+            local_kl_sum = ((coef_1[valid_mask] - 1) - log_importance_weights[valid_mask]).sum()
+            local_entropy_sum = entropy[valid_mask].sum()
 
             # Compute the clipped probability ratios
             is_low_clipped = (coef_1 < 1 - self.epsilon_low) & (advantages < 0)
             is_high_clipped = (coef_1 > 1 + self.epsilon_high) & (advantages > 0)
             is_region_clipped = is_low_clipped | is_high_clipped
-            local_low_clip_sum = (
-                is_low_clipped[valid_mask].float().sum()
-                if valid_mask.any()
-                else torch.zeros((), device=completion_mask.device)
-            )
-            local_high_clip_sum = (
-                is_high_clipped[valid_mask].float().sum()
-                if valid_mask.any()
-                else torch.zeros((), device=completion_mask.device)
-            )
-            local_region_clip_sum = (
-                is_region_clipped[valid_mask].float().sum()
-                if valid_mask.any()
-                else torch.zeros((), device=completion_mask.device)
-            )
-
-            # Per-rank clip fractions, gathered below to report the cross-rank saturation extrema.
-            local_low_clip_mean = local_low_clip_sum / local_count.clamp(min=1.0)
-            local_high_clip_mean = local_high_clip_sum / local_count.clamp(min=1.0)
+            local_low_clip_sum = is_low_clipped[valid_mask].float().sum()
+            local_high_clip_sum = is_high_clipped[valid_mask].float().sum()
+            local_region_clip_sum = is_region_clipped[valid_mask].float().sum()
 
             # Batch all-reduce: [ratio_sum, kl_sum, entropy_sum, low_clip_sum, high_clip_sum, region_clip_sum, count]
             stats = torch.stack(
@@ -1386,12 +1369,23 @@ class AsyncGRPOTrainer(_BaseTrainer):
             self._metrics["train"]["clip_ratio/high_mean"].append((global_high_clip_sum / global_count).item())
             self._metrics["train"]["clip_ratio/region_mean"].append((global_region_clip_sum / global_count).item())
 
-            # Cross-rank saturation extrema, mirroring GRPOTrainer's clip_ratio/low_min and clip_ratio/high_max:
-            # the smallest per-rank low-clip and largest per-rank high-clip fractions across ranks.
-            gathered_low_clip = self.accelerator.gather(local_low_clip_mean)
-            gathered_high_clip = self.accelerator.gather(local_high_clip_mean)
-            self._metrics["train"]["clip_ratio/low_min"].append(nanmin(gathered_low_clip).item())
-            self._metrics["train"]["clip_ratio/high_max"].append(nanmax(gathered_high_clip).item())
+            seq_ids = (position_ids[0] == 0).cumsum(0)[1:] - 1  # (T-1,) completion index per (shifted) token
+            n_completions = (position_ids == 0).sum()  # number of packed completions in this rank's row
+            num_seq = int(n_completions)
+            comp_mask = completion_mask[0].float()  # (T-1,) valid completion-token mask
+
+            def seg_sum(vals):  # per-completion segment sum over the packed row
+                return torch.zeros(num_seq, device=comp_mask.device).index_add_(0, seq_ids, vals)
+
+            seq_tokens = seg_sum(comp_mask)
+            seq_low = seg_sum(is_low_clipped[0].float() * comp_mask)
+            seq_high = seg_sum(is_high_clipped[0].float() * comp_mask)
+            per_seq_low = seq_low / seq_tokens  # NaN for a completion with no valid tokens; ignored by nan-aware min
+            per_seq_high = seq_high / seq_tokens
+            gathered_low_min = self.accelerator.gather(nanmin(per_seq_low))
+            gathered_high_max = self.accelerator.gather(nanmax(per_seq_high))
+            self._metrics["train"]["clip_ratio/low_min"].append(nanmin(gathered_low_min).item())
+            self._metrics["train"]["clip_ratio/high_max"].append(nanmax(gathered_high_max).item())
 
             if self.aux_loss_enabled:
                 gathered_aux = self.accelerator.reduce(aux_loss.detach().to(torch.float32), reduction="sum")
@@ -1545,7 +1539,42 @@ class AsyncGRPOTrainer(_BaseTrainer):
         self._metrics["train"]["perf/weight_sync_transfer_s"].append(t_transfer - t_barrier)
         logger.info(f"Weight sync: done. Total {weight_sync_s:.1f}s")
 
+    def _save_checkpoint(self, model, trial):
+        if self.accelerator.is_main_process and isinstance(self.rollout_worker, AsyncRolloutWorker):
+            checkpoint_folder = f"{PREFIX_CHECKPOINT_DIR}-{self.state.global_step}"
+            checkpoint_dir = os.path.join(self._get_output_dir(trial=trial), checkpoint_folder)
+            os.makedirs(checkpoint_dir, exist_ok=True)
+            trained = self._trained_groups
+            first_untrained = next(g for g in itertools.count() if g not in trained)
+            prompt_index = self.rollout_worker._loop_kwargs["dataset_start_index"] + first_untrained
+            rollout_state = {"prompt_index": prompt_index}
+            with open(os.path.join(checkpoint_dir, "rollout_state.json"), "w") as f:
+                json.dump(rollout_state, f)
+        super()._save_checkpoint(model, trial)
+
     def _inner_training_loop(self, *args, **kwargs):
+        # When resuming, pass the saved prompt position to the worker before _StartRolloutWorkerCallback fires.
+        # Skipped for IterableDataset since len() isn't available on streaming datasets.
+        # Always reset first so a stale value from a prior train() call is never carried over.
+        if isinstance(self.rollout_worker, AsyncRolloutWorker):
+            self.rollout_worker._loop_kwargs["dataset_start_index"] = 0
+            self._groups_before_resume = 0
+            resume_from_checkpoint = kwargs.get("resume_from_checkpoint")
+            if resume_from_checkpoint is not None:
+                rollout_state_file = os.path.join(resume_from_checkpoint, "rollout_state.json")
+                # IterableDataset is skipped deliberately: streaming datasets have no len() and can't be repositioned.
+                if not os.path.isfile(rollout_state_file):
+                    logger.warning(
+                        "rollout_state.json not found in the checkpoint; "
+                        "the rollout worker will restart from prompt 0."
+                    )
+                elif not isinstance(self.train_dataset, Dataset):
+                    logger.warning("Resuming with an IterableDataset; the rollout worker will restart from prompt 0.")
+                else:
+                    with open(rollout_state_file) as f:
+                        rollout_state = json.load(f)
+                    self.rollout_worker._loop_kwargs["dataset_start_index"] = rollout_state["prompt_index"]
+                    self._groups_before_resume = rollout_state["prompt_index"]
         try:
             return super()._inner_training_loop(*args, **kwargs)
         finally:

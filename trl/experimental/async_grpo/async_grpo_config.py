@@ -33,6 +33,15 @@ class AsyncGRPOConfig(_BaseConfig):
         model_init_kwargs (`dict[str, Any]` or `str`, *optional*):
             Keyword arguments for [`~transformers.AutoModelForCausalLM.from_pretrained`], used when instantiating the
             model from a path.
+        dtype (`str`, *optional*, defaults to `"float32"`):
+            Data type to load the model under, one of `"auto"`, `"bfloat16"`, `"float16"` or `"float32"`. It defaults
+            to `"float32"` because the training-inference mismatch this trainer is measured against ([Defeating the
+            Training-Inference Mismatch via FP16](https://huggingface.co/papers/2510.26788), walked through for this
+            trainer in [Defeating the trainer-generator precision mismatch in
+            TRL](https://huggingface.co/spaces/aminediroHF/trainer-generator-bf16-mismatch)) is sensitive to the
+            trainer's own precision. Closing that gap end to end also requires serving the vLLM server in the same
+            dtype (`vllm serve --dtype`); a mismatch is logged as a warning at train start. A `dtype` in
+            `model_init_kwargs` takes precedence.
         trust_remote_code (`bool`, *optional*, defaults to `False`):
             Whether to allow loading models and tokenizers that ship custom Python code from the Hub. Forwarded to
             [`~transformers.AutoModelForCausalLM.from_pretrained`] and [`~transformers.AutoTokenizer.from_pretrained`].
@@ -85,6 +94,9 @@ class AsyncGRPOConfig(_BaseConfig):
             Total timeout duration in seconds to wait for the vLLM server to be ready.
         request_timeout (`int`, *optional*, defaults to `600`):
             Timeout in seconds for individual HTTP requests to the vLLM server.
+        weight_sync_timeout (`int`, *optional*, defaults to `1800`):
+            Timeout in seconds for a weight transfer to the vLLM server. A transfer that does not complete within this
+            time raises instead of hanging the run.
 
         > Parameters that control the training
 
@@ -196,6 +208,7 @@ class AsyncGRPOConfig(_BaseConfig):
     > - `bf16`: Defaults to `True` if `fp16` is not set, instead of `False`.
     > - `learning_rate`: Defaults to `1e-6` instead of `5e-5`.
     > - `lr_scheduler_type`: Defaults to `constant` instead of `linear` (see below).
+    > - `ignore_data_skip`: Defaults to `True` instead of `False`; the base Trainer's skip-and-replay loop does not apply to the async rollout queue.
 
     > [!NOTE]
     > Training duration and learning rate under message-mode reconciliation:
@@ -221,6 +234,15 @@ class AsyncGRPOConfig(_BaseConfig):
         metadata={
             "help": "Keyword arguments for `transformers.AutoModelForCausalLM.from_pretrained`, used when instantiating "
             "the model from a path."
+        },
+    )
+    dtype: str = field(
+        default="float32",
+        metadata={
+            "help": "Dtype to load the model under. Defaults to 'float32', the precision the training-inference "
+            "mismatch results this trainer is measured against were obtained at. A `dtype` in `model_init_kwargs` "
+            "takes precedence.",
+            "choices": ["auto", "bfloat16", "float16", "float32"],
         },
     )
     trust_remote_code: bool = field(
@@ -258,6 +280,13 @@ class AsyncGRPOConfig(_BaseConfig):
             "message-mode forks make the total step count unknown up front, so `max_steps` is only a safety ceiling "
             "and a decay horizon can't be calibrated. Set a decaying schedule (e.g. `cosine`) together with an "
             "explicit `max_steps` if you want LR decay."
+        },
+    )
+    ignore_data_skip: bool = field(
+        default=True,
+        metadata={
+            "help": "Always `True` for AsyncGRPO; the base Trainer's skip-and-replay loop does not apply to a live "
+            "rollout queue."
         },
     )
 
@@ -343,6 +372,13 @@ class AsyncGRPOConfig(_BaseConfig):
     request_timeout: int = field(
         default=600,
         metadata={"help": "Timeout in seconds for individual HTTP requests to the vLLM server."},
+    )
+    weight_sync_timeout: int = field(
+        default=1800,
+        metadata={
+            "help": "Timeout in seconds for a weight transfer to the vLLM server. A transfer that does not complete "
+            "within this time raises instead of hanging the run."
+        },
     )
 
     # Parameters that control the training
@@ -516,6 +552,17 @@ class AsyncGRPOConfig(_BaseConfig):
 
     def __post_init__(self):
         super().__post_init__()
+
+        if self.parallelism_config is not None and (
+            self.parallelism_config.cp_enabled or self.parallelism_config.sp_enabled
+        ):
+            raise ValueError(
+                "AsyncGRPOTrainer does not support sequence-dim parallelism (`parallelism_config.cp_size > 1` "
+                "or `parallelism_config.sp_size > 1`) yet. GRPO builds model inputs after generation "
+                "inside the trainer, so Transformers' context-parallel / Ulysses sequence-parallel input "
+                "sharding cannot be applied to the raw generation batch. Set both `cp_size=1` and `sp_size=1`, "
+                "or disable `parallelism_config`."
+            )
 
         # Accelerator config: required for the async IterableDataset-backed dataloader to work correctly.
         # split_batches=True and dispatch_batches=True ensure that the main process drives the dataloader
