@@ -159,7 +159,9 @@ ignore = [
     "C901", # function complexity
     "E501",
 ]
-extend-select = ["E", "F", "I", "W", "UP", "B", "T", "C"]
+# `select`, not `extend-select`: the rule set is explicit, so a ruff release that expands its default
+# selection (0.16 raised the defaults from 59 to 413 rules) does not silently enable new rules.
+select = ["E", "F", "I", "W", "UP", "B", "T", "C"]
 
 [tool.ruff.lint.per-file-ignores]
 # Allow prints in auxiliary scripts
