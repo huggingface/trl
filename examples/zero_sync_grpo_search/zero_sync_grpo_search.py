@@ -171,7 +171,6 @@ def main():
         rollouts_in_flight=64,
         # Fraction of free VRAM for the KV cache; the rest is for activations and gradients
         continuous_batching_config={"max_memory_percent": 0.25},
-        packed_training=True,
         tp_size=int(os.environ.get("WORLD_SIZE", "1")),
         max_steps=200,
     )

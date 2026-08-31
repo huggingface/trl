@@ -30,8 +30,8 @@ most `rollouts_in_flight` rollouts behind the policy).
 This recipe is the tuned configuration for the long-completion regime (Qwen3-14B, ~3-4k-token
 thinking completions, 4x H100). Each knob below is what moved the needle:
 
-- `packed_training`: samples are packed back to back, so no pad-token compute (this also defaults
-  the model to flex attention, which skips the masked-out cross-sample blocks).
+- rows are always packed back to back, so no pad-token compute, and the model defaults to flex
+  attention, which skips the masked-out cross-sample blocks.
 - `rollouts_in_flight=128`: a decode step costs about the same whatever number of sequences it
   carries, so the engine wants its batch kept full. A finished rollout is replaced immediately by
   the next one rather than the batch refilling once per optimizer step. Raising it kept improving
@@ -102,7 +102,6 @@ def main():
         rollouts_in_flight=128,
         # Fraction of free VRAM for the KV cache; the rest is for activations and gradients.
         continuous_batching_config={"max_memory_percent": 0.25},
-        packed_training=True,
         # The smallest split that fits a 14B; whatever ranks are left over hold replicas of it.
         tp_size=min(4, int(os.environ.get("WORLD_SIZE", "1"))),
         max_steps=200,
