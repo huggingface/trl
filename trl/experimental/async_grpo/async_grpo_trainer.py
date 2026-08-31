@@ -663,19 +663,6 @@ def _segment_sum(values: torch.Tensor, sequence_id: torch.Tensor, n_samples: int
     )
 
 
-def _segment_sum(values: torch.Tensor, sequence_id: torch.Tensor, n_samples: int) -> torch.Tensor:
-    """Sums `values` (1, T), grouped by `sequence_id` (1, T) — a 0-indexed id per packed sequence — into a
-    per-sequence tensor of shape (n_samples,).
-
-    GRPOTrainer's (B, T) batch layout gets per-sequence reductions "for free" from a plain `dim=-1` sum.
-    AsyncGRPOTrainer instead packs every sample for a rank into a single padding-free row (B=1), so the same
-    per-sequence reduction needs an explicit segment-sum over `sequence_id` (see `compute_loss`).
-    """
-    return torch.zeros(n_samples, device=values.device, dtype=values.dtype).scatter_add(
-        0, sequence_id.squeeze(0), values.squeeze(0)
-    )
-
-
 class AsyncGRPOTrainer(_BaseTrainer):
     """
     Trainer for the Group Relative Policy Optimization (GRPO) method. This algorithm was initially proposed in the
@@ -1332,60 +1319,63 @@ class AsyncGRPOTrainer(_BaseTrainer):
             local_kl_sum = ((coef_1[valid_mask] - 1) - log_importance_weights[valid_mask]).sum()
             local_entropy_sum = entropy[valid_mask].sum()
 
-            # Compute the clipped probability ratios
-            is_low_clipped = (coef_1 < 1 - self.epsilon_low) & (advantages < 0)
-            is_high_clipped = (coef_1 > 1 + self.epsilon_high) & (advantages > 0)
-            is_region_clipped = is_low_clipped | is_high_clipped
-            local_low_clip_sum = is_low_clipped[valid_mask].float().sum()
-            local_high_clip_sum = is_high_clipped[valid_mask].float().sum()
-            local_region_clip_sum = is_region_clipped[valid_mask].float().sum()
-
-            # Batch all-reduce: [ratio_sum, kl_sum, entropy_sum, low_clip_sum, high_clip_sum, region_clip_sum, count]
-            stats = torch.stack(
-                [
-                    local_ratio_sum,
-                    local_kl_sum,
-                    local_entropy_sum,
-                    local_low_clip_sum,
-                    local_high_clip_sum,
-                    local_region_clip_sum,
-                    local_count,
-                ]
-            )
+            # Batch all-reduce: [ratio_sum, kl_sum, entropy_sum, count]
+            stats = torch.stack([local_ratio_sum, local_kl_sum, local_entropy_sum, local_count])
             stats = self.accelerator.reduce(stats, reduction="sum")
-            (
-                global_ratio_sum,
-                global_kl_sum,
-                global_entropy_sum,
-                global_low_clip_sum,
-                global_high_clip_sum,
-                global_region_clip_sum,
-                global_count,
-            ) = stats.unbind(0)
+            global_ratio_sum, global_kl_sum, global_entropy_sum, global_count = stats.unbind(0)
             self._metrics["train"]["ratio"].append((global_ratio_sum / global_count).item())
             self._metrics["train"]["kl"].append((global_kl_sum / global_count).item())
             self._metrics["train"]["entropy"].append((global_entropy_sum / global_count).item())
-            self._metrics["train"]["clip_ratio/low_mean"].append((global_low_clip_sum / global_count).item())
-            self._metrics["train"]["clip_ratio/high_mean"].append((global_high_clip_sum / global_count).item())
-            self._metrics["train"]["clip_ratio/region_mean"].append((global_region_clip_sum / global_count).item())
 
-            seq_ids = (position_ids[0] == 0).cumsum(0)[1:] - 1  # (T-1,) completion index per (shifted) token
-            n_completions = (position_ids == 0).sum()  # number of packed completions in this rank's row
-            num_seq = int(n_completions)
-            comp_mask = completion_mask[0].float()  # (T-1,) valid completion-token mask
+            # Loss-type-specific metrics, mirroring GRPOTrainer's branching: hard-clip stats only for the
+            # hard-clipped loss types, cispo_clip_ratio for cispo, vespo/phi_seq_mean for vespo. "sapo" logs none
+            # of these, same as GRPOTrainer.
+            if self.loss_type in ["grpo", "bnpo", "dr_grpo", "dapo", "luspo"]:
+                # Compute the clipped probability ratios
+                is_low_clipped = (coef_1 < 1 - self.epsilon_low) & (advantages < 0)
+                is_high_clipped = (coef_1 > 1 + self.epsilon_high) & (advantages > 0)
+                is_region_clipped = is_low_clipped | is_high_clipped
+                local_low_clip_sum = is_low_clipped[valid_mask].float().sum()
+                local_high_clip_sum = is_high_clipped[valid_mask].float().sum()
+                local_region_clip_sum = is_region_clipped[valid_mask].float().sum()
 
-            def seg_sum(vals):  # per-completion segment sum over the packed row
-                return torch.zeros(num_seq, device=comp_mask.device).index_add_(0, seq_ids, vals)
+                # Batch all-reduce: [low_clip_sum, high_clip_sum, region_clip_sum]
+                clip_stats = torch.stack([local_low_clip_sum, local_high_clip_sum, local_region_clip_sum])
+                clip_stats = self.accelerator.reduce(clip_stats, reduction="sum")
+                global_low_clip_sum, global_high_clip_sum, global_region_clip_sum = clip_stats.unbind(0)
+                self._metrics["train"]["clip_ratio/low_mean"].append((global_low_clip_sum / global_count).item())
+                self._metrics["train"]["clip_ratio/high_mean"].append((global_high_clip_sum / global_count).item())
+                self._metrics["train"]["clip_ratio/region_mean"].append(
+                    (global_region_clip_sum / global_count).item()
+                )
 
-            seq_tokens = seg_sum(comp_mask)
-            seq_low = seg_sum(is_low_clipped[0].float() * comp_mask)
-            seq_high = seg_sum(is_high_clipped[0].float() * comp_mask)
-            per_seq_low = seq_low / seq_tokens  # NaN for a completion with no valid tokens; ignored by nan-aware min
-            per_seq_high = seq_high / seq_tokens
-            gathered_low_min = self.accelerator.gather(nanmin(per_seq_low))
-            gathered_high_max = self.accelerator.gather(nanmax(per_seq_high))
-            self._metrics["train"]["clip_ratio/low_min"].append(nanmin(gathered_low_min).item())
-            self._metrics["train"]["clip_ratio/high_max"].append(nanmax(gathered_high_max).item())
+                seq_ids = (position_ids[0] == 0).cumsum(0)[1:] - 1  # (T-1,) completion index per (shifted) token
+                n_completions = (position_ids == 0).sum()  # number of packed completions in this rank's row
+                num_seq = int(n_completions)
+                comp_mask = completion_mask[0].float()  # (T-1,) valid completion-token mask
+
+                def seg_sum(vals):  # per-completion segment sum over the packed row
+                    return torch.zeros(num_seq, device=comp_mask.device).index_add_(0, seq_ids, vals)
+
+                seq_tokens = seg_sum(comp_mask)
+                seq_low = seg_sum(is_low_clipped[0].float() * comp_mask)
+                seq_high = seg_sum(is_high_clipped[0].float() * comp_mask)
+                # NaN for a completion with no valid tokens; ignored by nan-aware min/max below.
+                per_seq_low = seq_low / seq_tokens
+                per_seq_high = seq_high / seq_tokens
+                gathered_low_min = self.accelerator.gather(nanmin(per_seq_low))
+                gathered_high_max = self.accelerator.gather(nanmax(per_seq_high))
+                self._metrics["train"]["clip_ratio/low_min"].append(nanmin(gathered_low_min).item())
+                self._metrics["train"]["clip_ratio/high_max"].append(nanmax(gathered_high_max).item())
+            elif self.loss_type == "cispo":
+                is_cispo_clipped = (coef_1 > self.epsilon_high) & (advantages > 0)
+                local_cispo_clip_sum = is_cispo_clipped[valid_mask].float().sum()
+                global_cispo_clip_sum = self.accelerator.reduce(local_cispo_clip_sum, reduction="sum")
+                self._metrics["train"]["cispo_clip_ratio"].append((global_cispo_clip_sum / global_count).item())
+            elif self.loss_type == "vespo":
+                local_phi_sum = phi[valid_mask].sum()
+                global_phi_sum = self.accelerator.reduce(local_phi_sum, reduction="sum")
+                self._metrics["train"]["vespo/phi_seq_mean"].append((global_phi_sum / global_count).item())
 
             if self.aux_loss_enabled:
                 gathered_aux = self.accelerator.reduce(aux_loss.detach().to(torch.float32), reduction="sum")
