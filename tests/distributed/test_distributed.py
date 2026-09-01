@@ -509,7 +509,7 @@ class TestDistributed(TrlTestCase):
         # of them. Only a multi-process run can check that: with one rank `gather` is the identity, so deleting it
         # leaves every single-process test green. The child poisons the last rank and asserts, on every rank, that the
         # logged fraction accounts for the whole world. It is not named `test_*.py` so pytest does not collect it here,
-        # where there is one rank and its assertion would be false.
+        # where the sole rank is also the poisoned one, so its assertion would pass whether or not the gather is there.
         # fmt: off
         run_command(
             [

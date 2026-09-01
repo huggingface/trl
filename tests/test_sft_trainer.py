@@ -16,6 +16,7 @@ import collections
 import copy
 import gc
 import json
+import logging
 import pathlib
 from unittest.mock import MagicMock, patch
 
@@ -23,6 +24,7 @@ import pytest
 import torch
 import torch.nn.functional as F
 import transformers
+from accelerate.logging import MultiProcessAdapter
 from accelerate.utils.memory import release_memory
 from datasets import Dataset, DatasetDict, IterableDatasetDict, load_dataset
 from packaging.version import Version
@@ -430,6 +432,91 @@ class TestSFTTrainer(TrlTestCase):
             assert not torch.isfinite(torch.tensor(poisoned_step["loss"]))
         else:
             assert torch.isfinite(torch.tensor(poisoned_step["loss"]))
+
+    def test_nonfinite_loss_warns_once_per_mode(self, caplog):
+        """Both warnings must fire. `warning_once` keys its cache on the message text, so a single shared message
+        would let an evaluation warning suppress every later training warning."""
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+
+        class NonFiniteLossSFTTrainer(SFTTrainer):
+            def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+                def poison_loss(module, args, output):
+                    output.loss = output.loss + float("nan")
+                    return output
+
+                handle = model.register_forward_hook(poison_loss)
+                try:
+                    return super().compute_loss(model, inputs, return_outputs, num_items_in_batch)
+                finally:
+                    handle.remove()
+
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            max_steps=1,
+            logging_steps=1,
+            eval_strategy="steps",
+            eval_steps=1,
+            report_to="none",
+        )
+        trainer = NonFiniteLossSFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset,
+            eval_dataset=dataset,
+        )
+
+        # `warning_once` is an `lru_cache` on `MultiProcessAdapter`, so it is shared process-wide and any earlier
+        # test that emitted these same messages would suppress them here. Clear it so this test observes the
+        # trainer's own behaviour rather than whatever ran before it.
+        MultiProcessAdapter.warning_once.cache_clear()
+        with caplog.at_level(logging.WARNING, logger="trl.trainer.sft_trainer"):
+            trainer.train()
+
+        assert "The training loss is not finite" in caplog.text
+        assert "The evaluation loss is not finite" in caplog.text
+
+    def test_nonfinite_loss_metric_is_a_rate_over_the_logging_window(self):
+        """The metric averages one flag per loss computation, so a single bad micro-batch out of two reads 0.5.
+        With `gradient_accumulation_steps=1` every window holds one computation and the averaging is invisible."""
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+
+        class NonFiniteLossSFTTrainer(SFTTrainer):
+            # Poison the first micro-batch of the step only. The optimizer step spans two of them, so the window the
+            # metric averages over holds one non-finite loss and one finite one.
+            microbatches = 0
+
+            def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+                NonFiniteLossSFTTrainer.microbatches += 1
+                if NonFiniteLossSFTTrainer.microbatches == 1:
+
+                    def poison_loss(module, args, output):
+                        output.loss = output.loss + float("nan")
+                        return output
+
+                    handle = model.register_forward_hook(poison_loss)
+                    try:
+                        return super().compute_loss(model, inputs, return_outputs, num_items_in_batch)
+                    finally:
+                        handle.remove()
+                return super().compute_loss(model, inputs, return_outputs, num_items_in_batch)
+
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=1,
+            gradient_accumulation_steps=2,
+            max_steps=1,
+            logging_steps=1,
+            report_to="none",
+        )
+        trainer = NonFiniteLossSFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        trainer.train()
+
+        assert trainer.state.log_history[0]["frac_nonfinite_loss"] == 0.5
 
     @pytest.mark.parametrize("metric_key_prefix", ["eval", "test", "holdout"])
     def test_nonfinite_loss_metric_uses_the_callers_prefix(self, metric_key_prefix):

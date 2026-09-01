@@ -209,10 +209,12 @@ class TestAsyncGRPOTrainer(TrlTestCase):
 
         class NonFiniteLossAsyncGRPOTrainer(AsyncGRPOTrainer):
             # Only NaN is injected here. The guard runs inside the loss computation, so the poison has to land
-            # upstream of it, on the logits or the log-probabilities, and the poisoned values meet each other on the
-            # way in, where `inf - inf` and `inf / inf` are both NaN. An injected `inf` therefore arrives at the loss
-            # as NaN, so this test cannot tell `~isfinite` from an `isnan` implementation. The trainers whose poison
-            # reaches the loss as a distinct Inf are parametrized over both values instead.
+            # upstream of it, on the model's log-probabilities. Those are then differenced against
+            # `inputs["old_log_probs"]`, which the collator builds from the rollout worker's values and which no
+            # forward pass touches, so the poisoned value never meets a second poisoned one. An injected `inf` would
+            # therefore give `-inf - finite = -inf` and then `exp(-inf) = 0.0`, a finite coefficient that never
+            # reaches the guard as non-finite at all. NaN is the only value that survives this seam. The trainers
+            # whose poison reaches the loss as a distinct Inf are parametrized over both values instead.
             def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
                 if self.state.global_step == 1:
 

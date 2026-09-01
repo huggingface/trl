@@ -1397,7 +1397,7 @@ class SDFTTrainer(_BaseTrainer):
         # and arbitrary when passed explicitly. Match that prefix rather than assuming "eval", so these metrics
         # land beside the ones `transformers` produced instead of in a separate `eval_` namespace.
         if mode == "eval":
-            metrics = {f"{self._metric_key_prefix}_{k}": v for k, v in metrics.items()}
+            metrics = {f"{self._metric_key_prefix}_{key}": val for key, val in metrics.items()}
         logs.update(metrics)
         super().log(logs, start_time)
         self._metrics[mode].clear()
