@@ -935,12 +935,11 @@ class AsyncDistillationTrainer(_BaseTrainer):
     ):
         if args is None:
             args = AsyncDistillationConfig(f"{model.split('/')[-1]}-AsyncDistillation")
-        self.args = args
 
         # Model
         model_name = model
-        model_init_kwargs = self.args.model_init_kwargs or {}
-        model_init_kwargs.setdefault("trust_remote_code", self.args.trust_remote_code)
+        model_init_kwargs = args.model_init_kwargs or {}
+        model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
         # FlashAttention is required: training runs in padding-free mode, where sequences are concatenated into a
         # single row and attention is derived from `position_ids` resets. SDPA/eager can't handle this. Unlike
         # AsyncGRPOTrainer, the student's own lm_head is NOT patched (via `patch_chunked_lm_head`) to a chunked
@@ -956,19 +955,19 @@ class AsyncDistillationTrainer(_BaseTrainer):
             **model_init_kwargs,
         )
 
-        if self.args.use_liger_kernel:
+        if args.use_liger_kernel:
             raise NotImplementedError("`use_liger_kernel` is not supported yet.")
 
         # Processing class
         if processing_class is None:
-            processing_class = AutoTokenizer.from_pretrained(model_name, trust_remote_code=self.args.trust_remote_code)
+            processing_class = AutoTokenizer.from_pretrained(model_name, trust_remote_code=args.trust_remote_code)
         if processing_class.pad_token is None:
             processing_class.pad_token = processing_class.eos_token
 
         # Initialize the Trainer
         super().__init__(
             model=model,
-            args=self.args,
+            args=args,
             train_dataset=train_dataset,
             processing_class=processing_class,
             callbacks=callbacks,
@@ -1064,6 +1063,7 @@ class AsyncDistillationTrainer(_BaseTrainer):
                         "shapes": weight_shapes,
                         "packed": True,
                     },
+                    weight_sync_timeout=self.args.weight_sync_timeout,
                 )
 
             if rollout_worker is not None:
@@ -1410,7 +1410,7 @@ class AsyncDistillationTrainer(_BaseTrainer):
         ## `_wall_clock` divides by `perf/step_s`: the whole step, rollout waits included  and says what fraction of the allocation actually became training.
         if self._step_forward_tokens > 0:
             mean_seq_len = self._step_seq_len_weighted / self._step_forward_tokens
-            flops_per_token = compute_flops_per_token(self.model.config, int(mean_seq_len))
+            flops_per_token = compute_flops_per_token(self.model.config.get_text_config(), int(mean_seq_len))
             world_size = self.accelerator.num_processes
             metrics["perf/forwarded_tok_s_fwd_bwd"].append((self._step_forward_tokens, fwd_bwd_s))
             metrics["perf/mfu_fwd_bwd"].append(

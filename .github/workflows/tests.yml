@@ -9,6 +9,7 @@ on:
     paths:
       # Run only when relevant files are modified
       - ".github/**.yml"
+      - ".pre-commit-config.yaml"
       - "examples/**.py"
       - "scripts/**.py"
       - "tests/**.py"
@@ -35,10 +36,18 @@ jobs:
       - name: Set up Python 3.12
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
-          python-version: 3.12
-      - uses: pre-commit/action@2c7b3805fd2a0fd8c1884dcaebf91fc102a13ecd  # v3.0.1
+          python-version: '3.12'
+      - name: Cache pre-commit environments
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
-          extra_args: --all-files
+          path: ~/.cache/pre-commit
+          key: pre-commit-3|${{ env.pythonLocation }}|${{ hashFiles('.pre-commit-config.yaml') }}
+
+      - name: Install pre-commit
+        run: python -m pip install pre-commit
+
+      - name: Run pre-commit
+        run: pre-commit run --all-files --show-diff-on-failure --color=always
 
   tests:
     name: Tests with latest dependencies
@@ -65,7 +74,7 @@ jobs:
           apt-get update && apt-get install -y make git curl
 
       - name: Install uv
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
 
       - name: Create Python virtual environment
         run: |
@@ -84,11 +93,10 @@ jobs:
 
       - name: Post to Slack
         if: github.ref == 'refs/heads/main' && always()  # Check if the branch is main
-        uses: huggingface/hf-workflows/.github/actions/post-slack@main
+        uses: ./.github/actions/post-slack
         with:
           slack_channel: ${{ env.CI_SLACK_CHANNEL }}
-          title: Results with latest dependencies
-          status: ${{ job.status }}
+          title: Tests with latest dependencies
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
 
   tests_dev:
@@ -116,7 +124,7 @@ jobs:
           apt-get update && apt-get install -y make git curl
 
       - name: Install uv
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
 
       - name: Create Python virtual environment
         run: |
@@ -140,11 +148,10 @@ jobs:
 
       - name: Post to Slack
         if: github.ref == 'refs/heads/main' && always()  # Check if the branch is main
-        uses: huggingface/hf-workflows/.github/actions/post-slack@main
+        uses: ./.github/actions/post-slack
         with:
           slack_channel: ${{ env.CI_SLACK_CHANNEL }}
-          title: Results with dev dependencies
-          status: ${{ job.status }}
+          title: Tests with dev dependencies
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
 
   tests_wo_optional_deps:
@@ -172,7 +179,7 @@ jobs:
           apt-get update && apt-get install -y make git curl
 
       - name: Install uv
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
 
       - name: Create Python virtual environment
         run: |
@@ -191,11 +198,10 @@ jobs:
 
       - name: Post to Slack
         if: github.ref == 'refs/heads/main' && always()  # Check if the branch is main
-        uses: huggingface/hf-workflows/.github/actions/post-slack@main
+        uses: ./.github/actions/post-slack
         with:
           slack_channel: ${{ env.CI_SLACK_CHANNEL }}
-          title: Results without optional dependencies
-          status: ${{ job.status }}
+          title: Tests without optional dependencies
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
 
   tests_min_versions:
@@ -223,7 +229,7 @@ jobs:
           apt-get update && apt-get install -y make git curl
 
       - name: Install uv
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
 
       - name: Create Python virtual environment
         run: |
@@ -246,11 +252,10 @@ jobs:
 
       - name: Post to Slack
         if: github.ref == 'refs/heads/main' && always()  # Check if the branch is main
-        uses: huggingface/hf-workflows/.github/actions/post-slack@main
+        uses: ./.github/actions/post-slack
         with:
           slack_channel: ${{ env.CI_SLACK_CHANNEL }}
-          title: Results with minimum versions
-          status: ${{ job.status }}
+          title: Tests with minimum versions
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
 
   distributed_smoke:
@@ -280,7 +285,7 @@ jobs:
           apt-get update && apt-get install -y make git curl
 
       - name: Install uv
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
 
       - name: Create Python virtual environment
         run: |
@@ -299,9 +304,8 @@ jobs:
 
       - name: Post to Slack
         if: github.ref == 'refs/heads/main' && always()  # Check if the branch is main
-        uses: huggingface/hf-workflows/.github/actions/post-slack@main
+        uses: ./.github/actions/post-slack
         with:
           slack_channel: ${{ env.CI_SLACK_CHANNEL }}
-          title: Results of distributed smoke tests
-          status: ${{ job.status }}
+          title: Distributed smoke tests
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}

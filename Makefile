@@ -4,8 +4,13 @@ check_dirs := examples tests trl
 
 ACCELERATE_CONFIG_PATH = `pwd`/examples/accelerate_configs
 
+# Transient infrastructure errors that are worth retrying, matched against "<ExceptionType>: <message>":
+#  - OSError, Timeout, HTTPError 502/504: Hub flakiness
+#  - OutOfMemoryError, STATUS_ALLOC_FAILED: GPU memory pressure from the parallel workers
+rerun_errors := (OSError|Timeout|HTTPError.*502|HTTPError.*504|OutOfMemoryError|STATUS_ALLOC_FAILED)
+
 test:
-	pytest -n auto -m "not slow and not low_priority" -s -v --reruns 5 --reruns-delay 1 --only-rerun '(OSError|Timeout|HTTPError.*502|HTTPError.*504|OutOfMemoryError)' tests
+	pytest -n auto -m "not slow and not low_priority" -s -v --reruns 5 --reruns-delay 1 --only-rerun '$(rerun_errors)' tests
 
 precommit:
 	python scripts/add_copyrights.py
