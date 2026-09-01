@@ -1174,22 +1174,22 @@ class BCOTrainer(_BaseTrainer):
     def forward(
         self, model: nn.Module, batch: dict[str, list | torch.LongTensor]
     ) -> tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
-        model_kwargs = (
-            {
+        if self.is_encoder_decoder:
+            # The encoder reads the prompt and the completion arrives as labels, so the encoder-decoder branch of
+            # `_process_tokens` builds `completion_labels` but never a concatenated `completion_input_ids`. Read the
+            # prompt here instead of that key, which does not exist on this path.
+            input_ids, attention_mask = batch["prompt_input_ids"], batch["prompt_attention_mask"]
+            model_kwargs = {
                 "labels": batch["completion_labels"],
                 "decoder_input_ids": batch.get("completion_decoder_input_ids"),
             }
-            if self.is_encoder_decoder
-            else {}
-        )
+        else:
+            input_ids, attention_mask = batch["completion_input_ids"], batch["completion_attention_mask"]
+            model_kwargs = {}
         if self.aux_loss_enabled:
             model_kwargs["output_router_logits"] = True
 
-        outputs = model(
-            batch["completion_input_ids"],
-            attention_mask=batch["completion_attention_mask"],
-            **model_kwargs,
-        )
+        outputs = model(input_ids, attention_mask=attention_mask, **model_kwargs)
         completion_logits = outputs.logits
 
         completion_logps = self.get_batch_logps(

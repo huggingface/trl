@@ -18,7 +18,7 @@ import pytest
 import torch
 from accelerate import Accelerator
 from datasets import DatasetDict, load_dataset
-from transformers import AutoModel, AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModel, AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokenizer
 from transformers.utils import is_peft_available
 
 from trl.experimental.bco import BCOConfig, BCOTrainer
@@ -89,6 +89,47 @@ class TestBCOTrainer(TrlTestCase):
             processing_class=tokenizer,
             train_dataset=dataset,
         )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            if param.sum() != 0:  # ignore 0 biases
+                assert not torch.equal(param.cpu(), new_param.cpu())
+
+    @require_sklearn
+    def test_train_encoder_decoder(self):
+        model_id = "trl-internal-testing/tiny-T5ForConditionalGeneration"
+        model = AutoModelForSeq2SeqLM.from_pretrained(model_id, dtype="float32")
+        ref_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+
+        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
+
+        training_args = BCOConfig(
+            output_dir=self.tmp_dir,
+            remove_unused_columns=False,  # warning raised if not set to False
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            report_to="none",
+        )
+
+        trainer = BCOTrainer(
+            model=model,
+            ref_model=ref_model,
+            args=training_args,
+            processing_class=tokenizer,
+            train_dataset=dataset,
+        )
+
+        # The encoder-decoder branches of `_process_tokens`, of the collator and of `forward` build and read a
+        # different key set from the decoder-only ones, so assert the path is taken. A model that resolved
+        # as decoder-only here would leave this test green while covering none of that code.
+        assert trainer.is_encoder_decoder
 
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
@@ -397,6 +438,50 @@ class TestBCOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             if param.sum() != 0:  # ignore 0 biases
                 assert not torch.equal(param.cpu(), new_param.cpu())
+
+    @require_sklearn
+    def test_train_encoder_decoder_udm(self):
+        """The UDM path adds `embedding_*` columns on top of the `answer_*` ones, and reaches the collator from
+        `_get_sample_prompt_embeddings` during init rather than from the training loop, so it exercises the
+        encoder-decoder padding rules at a second, earlier call site."""
+        model_id = "trl-internal-testing/tiny-T5ForConditionalGeneration"
+        model = AutoModelForSeq2SeqLM.from_pretrained(model_id, dtype="float32")
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+
+        embedding_model_id = "trl-internal-testing/tiny-BartModel"
+        embedding_model = AutoModel.from_pretrained(embedding_model_id)
+        embedding_tokenizer = AutoTokenizer.from_pretrained(embedding_model_id)
+
+        def embed_prompt(input_ids, attention_mask, model):
+            outputs = model(input_ids=input_ids, attention_mask=attention_mask)
+
+            return outputs.last_hidden_state.mean(dim=1)
+
+        embedding_model = Accelerator().prepare_model(embedding_model)
+        embedding_func = partial(embed_prompt, model=embedding_model)
+
+        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
+
+        training_args = BCOConfig(
+            output_dir=self.tmp_dir,
+            remove_unused_columns=False,  # warning raised if not set to False
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            report_to="none",
+        )
+
+        trainer = BCOTrainer(
+            model=model,
+            args=training_args,
+            processing_class=tokenizer,
+            train_dataset=dataset,
+            embedding_func=embedding_func,
+            embedding_tokenizer=embedding_tokenizer,
+        )
+        assert trainer.is_encoder_decoder
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
     @require_sklearn
     @require_peft
