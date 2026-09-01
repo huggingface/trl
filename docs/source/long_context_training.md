@@ -2,9 +2,9 @@
 
 Training on sequences of hundreds of thousands to millions of tokens needs more than a bigger GPU: the sequence itself has to be split across devices, and the activations that survive that split have to be kept small. This guide covers both.
 
-## Sequence Parallelism
+## Sequence and Context Parallelism
 
-Sequence Parallelism (also called Context Parallelism) is a parallelization technique that enables training with longer sequences by splitting the sequence dimension across multiple GPUs. Each GPU processes a portion of the sequence, allowing you to train with sequences longer than what would fit on a single GPU's memory.
+Splitting the sequence dimension across GPUs lets you train on sequences longer than one GPU can hold: each GPU keeps a slice of the sequence, and the ranks exchange what attention needs to stay exact. TRL supports two techniques that do this, Context Parallelism and Sequence Parallelism, which are not the same thing.
 
 > [!NOTE]
 > **Terminology clarification:** This section describes parallelism techniques for splitting sequences to enable longer context training:
@@ -17,7 +17,7 @@ Sequence Parallelism (also called Context Parallelism) is a parallelization tech
 > - Use `cp_size` with `cp_backend="torch"` for Ring Attention (FSDP2)
 > - Use `sp_size` with `sp_backend="deepspeed"` for ALST/Ulysses (DeepSpeed)
 
-Sequence parallelism is particularly useful when:
+Splitting the sequence is particularly useful when:
 
 - You want to train with very long sequences (>32k tokens)
 - Single GPU memory is insufficient for your desired sequence length
@@ -25,7 +25,7 @@ Sequence parallelism is particularly useful when:
 
 ### Available Implementations
 
-TRL supports two sequence parallelism implementations, each with different characteristics:
+TRL supports two implementations, each with different characteristics:
 
 1. **Ring Attention (FSDP2)** - Uses ring-based communication for memory-efficient processing of extremely long sequences
 2. **ALST/Ulysses (DeepSpeed)** - Uses attention head parallelism for faster training with high-bandwidth interconnects
