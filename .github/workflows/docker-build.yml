@@ -56,6 +56,6 @@ jobs:
       - name: Assert the installed TRL version matches the build arg
         run: |
           set -euo pipefail
-          INSTALLED=$(docker run --rm trl-verify:${VERSION} python -c "import trl; print(trl.__version__)")
+          INSTALLED=$(docker run --rm --entrypoint python trl-verify:${VERSION} -c "import trl; print(trl.__version__)" | tail -n1)
           echo "tag=${VERSION} installed=${INSTALLED}"
           test "${INSTALLED}" = "${VERSION}"
