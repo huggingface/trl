@@ -1092,7 +1092,11 @@ class AsyncDistillationTrainer(_BaseTrainer):
                 # DTensor.shape returns the global shape without triggering any all-gather.
                 weight_names, weight_dtype_names, weight_shapes = [], [], []
                 for name, param in model.named_parameters():
-                    name = name.removeprefix("module.")  # DDP/FSDP1 wrapping
+                    # Frozen parameters never change, so they are never sent.
+                    if not param.requires_grad:
+                        continue
+                    # DDP/FSDP1 wrapping and gradient checkpointing, avoids vllm module not exist error
+                    name = name.removeprefix("module.").replace("_checkpoint_wrapped_module.", "")
                     weight_names.append(name)
                     weight_dtype_names.append(str(param.dtype).split(".")[-1])
                     weight_shapes.append(list(param.shape))
@@ -1505,7 +1509,10 @@ class AsyncDistillationTrainer(_BaseTrainer):
         # FSDP ranks, then frees it once the generator advances, avoiding materializing the full model in memory.
         device = self.accelerator.device
         for name, param in self.model.named_parameters():
-            name = name.removeprefix("module.")  # DDP/FSDP1 wrapping
+            if not param.requires_grad:
+                continue
+            # DDP/FSDP1 wrapping and gradient checkpointing, avoids vllm module not exist error
+            name = name.removeprefix("module.").replace("_checkpoint_wrapped_module.", "")
             full = param.full_tensor() if isinstance(param, DTensor) else param.detach()
             if full.device != device:
                 full = full.to(device)
