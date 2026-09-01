@@ -1410,7 +1410,7 @@ class AsyncDistillationTrainer(_BaseTrainer):
         ## `_wall_clock` divides by `perf/step_s`: the whole step, rollout waits included  and says what fraction of the allocation actually became training.
         if self._step_forward_tokens > 0:
             mean_seq_len = self._step_seq_len_weighted / self._step_forward_tokens
-            flops_per_token = compute_flops_per_token(self.model.config, int(mean_seq_len))
+            flops_per_token = compute_flops_per_token(self.model.config.get_text_config(), int(mean_seq_len))
             world_size = self.accelerator.num_processes
             metrics["perf/forwarded_tok_s_fwd_bwd"].append((self._step_forward_tokens, fwd_bwd_s))
             metrics["perf/mfu_fwd_bwd"].append(
