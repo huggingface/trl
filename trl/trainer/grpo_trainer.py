@@ -1813,9 +1813,8 @@ class GRPOTrainer(_BaseTrainer):
             multimodal_fields = {}
         return prompt_ids, images, multimodal_fields
 
-    def _generate_single_turn(self, prompt_ids, images, multimodal_fields, has_tool_images=False):
+    def _generate_single_turn(self, prompt_ids, images, multimodal_fields, num_generations, has_tool_images=False):
         device = self.accelerator.device
-        mode = "train" if self.model.training else "eval"
 
         # Generate completions using either vLLM or regular generation
         if self.use_vllm:
@@ -1826,7 +1825,6 @@ class GRPOTrainer(_BaseTrainer):
                 self._last_loaded_step = self.state.global_step
 
             # Generate using vLLM with raw token IDs
-            num_generations = self.num_generations if mode == "train" else self.num_generations_eval
             _, completion_ids, logprobs, _ = self.vllm_generation.generate(
                 prompts=prompt_ids,
                 images=images,
@@ -2156,11 +2154,13 @@ class GRPOTrainer(_BaseTrainer):
             else:
                 loop_multimodal_fields = {}
 
-            # Generate new completions after tool execution (using concatenated IDs, no re-tokenization)
+            # Generate new completions after tool execution (using concatenated IDs, no re-tokenization).
+            # One generation per entry: each entry carries its own sampled completion and tool result
             post_tool_ids, post_tool_logprobs = self._generate_single_turn(
                 prompt_completion_tool_ids,
                 loop_images,
                 loop_multimodal_fields,
+                1,
                 has_tool_images=any(imgs for imgs in tool_images),
             )
 
@@ -2246,7 +2246,10 @@ class GRPOTrainer(_BaseTrainer):
             multimodal_fields = {}
         else:
             prompt_ids, images, multimodal_fields = self._tokenize_prompts(prompts)
-            completion_ids, logprobs = self._generate_single_turn(prompt_ids, images, multimodal_fields)
+            num_generations = self.num_generations if mode == "train" else self.num_generations_eval
+            completion_ids, logprobs = self._generate_single_turn(
+                prompt_ids, images, multimodal_fields, num_generations
+            )
             extra_fields = {}
 
         # Decode completions. It's important to use `parse_response` when possible, because it handles tool calls.
