@@ -24,6 +24,12 @@ import torch.nn as nn
 import transformers
 from packaging.version import Version
 
+
+try:
+    from torch.distributed.tensor import DTensor
+except ImportError:  # torch < 2.5
+    from torch.distributed._tensor import DTensor
+
 from trl.generation.vllm_generation import VLLMGeneration
 
 from ..testing_utils import TrlTestCase, require_liger_kernel, require_torch_multi_accelerator
@@ -539,18 +545,18 @@ def test_fsdp2_vllm_sync_with_ignored_params():
         try:
             fully_shard(model, ignored_params=ignored_params)
 
-            # Instantiate the backend without starting vLLM; the crash happens before any vLLM call.
+            # Instantiate the backend without starting vLLM; the crash happened inside the FSDP2
+            # parameter iteration, before any vLLM call.
             sync = object.__new__(VLLMGeneration)
-            sync.model = model
             sync.accelerator = SimpleNamespace(device=torch.device("cpu"))
-            sync.mode = "colocate"
-            pushed = []
-            sync._push_param_to_vllm = lambda name, param: pushed.append(name)
 
-            sync._sync_fsdp2_params_to_vllm(model)
+            yielded = dict(sync._iter_fsdp2_params(model))
 
-            # Every parameter must be pushed, including the ignored `head.*` ones.
+            # Every parameter must be yielded, including the ignored `head.*` ones, and ignored
+            # params must pass through as plain tensors instead of being gathered.
             expected = set(model.state_dict().keys())
-            assert set(pushed) == expected, f"pushed={pushed}, expected={expected}"
+            assert set(yielded) == expected, f"yielded={sorted(yielded)}, expected={sorted(expected)}"
+            for name in ("head.weight", "head.bias"):
+                assert not isinstance(yielded[name], DTensor), f"{name} must be a plain tensor"
         finally:
             torch.distributed.destroy_process_group()
