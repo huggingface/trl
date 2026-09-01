@@ -223,7 +223,7 @@ With the setup above plus a few levers, SFT scales to million-token sequences on
 | Qwen3-0.6B | 1M | 8 | 137 s | 27.9 GB |
 | Qwen3-0.6B | 2M | 8 | 538 s | 42.2 GB |
 | Qwen3-0.6B | 4M | 8 | 2135 s | 73.7 GB |
-| Qwen3-8B | 1M | 8 | 373 s | 56.2 GB |
+| Qwen3-8B | 1M | 8 | 380 s | 56.2 GB |
 
 Context length scales with the number of nodes: sequence length and GPU count can be doubled together at roughly 2x step time (because each GPU keeps the same shard of the sequence).
 
@@ -239,7 +239,7 @@ above, so read them for the scaling ratio and not as absolute step times.
 The levers, roughly in the order you will need them as model size or sequence length grows:
 
 1. **Keep the default `loss_type="chunked_nll"`.** At 1M tokens, materializing `[seq, vocab]` logits costs tens of GB per GPU; the chunked loss never does.
-2. **Offload checkpointed activations to host memory** (≥ ~1.5M tokens, or ≥ ~8B parameters): set `fsdp_activation_checkpointing_offload: true` in the accelerate FSDP config. This option ships with [accelerate#4175](https://github.com/huggingface/accelerate/pull/4175); until that lands, install accelerate from its branch. Each checkpointed layer's input — the dominant surviving activation, `layers × seq/cp × hidden` bytes — moves to pinned host memory during the forward and returns on demand during the backward.
+2. **Offload checkpointed activations to host memory** (≥ ~1.5M tokens, or ≥ ~8B parameters): pass `gradient_checkpointing_kwargs={"offload": True}`, which needs transformers ≥ 5.16. Each checkpointed layer's input — the dominant surviving activation, `layers × seq/cp × hidden` bytes — moves to pinned host memory during the forward and returns on demand during the backward. Both copies run on the compute stream, so the step gets slower.
 3. **Context extension needs RoPE scaling.** A base model evaluated at positions far beyond its trained range starts at a high loss (10.6 vs 4.4 for Qwen3-8B at 1M with YaRN ×32). Configure it at load time, and note that in transformers v5 `rope_theta` lives inside `rope_parameters`, so the override must carry it:
 
    ```python

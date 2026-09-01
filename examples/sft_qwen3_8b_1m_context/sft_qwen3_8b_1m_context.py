@@ -16,8 +16,7 @@
 # dependencies = [
 #     "trl",
 #     "trackio",
-#     "transformers>=5.0",  # the `rope_parameters` override below is a v5 schema; v4 ignores it silently
-#     "accelerate>=1.15.0",  # `fsdp_activation_checkpointing_offload`, used by the config below
+#     "transformers>=5.16.0",  # `rope_parameters` schema, and `offload` for gradient checkpointing
 # ]
 # ///
 
@@ -27,8 +26,8 @@ Fine-tune Qwen3-8B on 1,048,576-token sequences, one 8xH100 node.
 Context parallelism splits each sequence across the 8 GPUs, so every GPU holds 131,072 tokens and
 attention is computed as a ring. One book-length sequence per step, 373 s/step, 56.2 GB per GPU.
 
-The accelerate config sets `fsdp_activation_checkpointing_offload`, which is what keeps an 8B model
-inside 80 GB at this length. It ships in accelerate 1.15.0.
+Gradient checkpointing runs with `offload`, which holds each checkpointed layer's input in pinned host
+memory. That is what keeps an 8B model inside 80 GB at this length.
 
 accelerate launch \
     --config_file examples/sft_qwen3_8b_1m_context/context_parallel_8gpu.yaml \
@@ -39,7 +38,6 @@ sliding-window or linear attention layers are refused. That rules out gpt-oss, G
 Qwen3.5 and later. Qwen3 and Qwen3-MoE are full attention. Qwen3-0.6B takes 137 s/step on the same node.
 """
 
-import accelerate
 import torch
 import transformers
 from datasets import Dataset, load_dataset
@@ -51,19 +49,15 @@ from trl import SFTConfig, SFTTrainer
 MODEL = "Qwen/Qwen3-8B"
 SEQ_LEN = 1_048_576
 
-# `accelerate launch` does not read the dependency header above, so the versions it declares are not
-# enforced at run time. Both features below are dropped without an error when they are missing, and the
-# run starts anyway, so check them here rather than let a 373 s/step job start off wrong. On transformers
-# v4 the `rope_parameters` override is ignored and the model trains at 1M with no YaRN. On accelerate
-# < 1.15 the config's `fsdp_activation_checkpointing_offload` is ignored and the run goes OOM.
-if Version(transformers.__version__) < Version("5.0.0"):
+# `accelerate launch` does not read the dependency header above, so the version it declares is not
+# enforced at run time. Both features this example needs are dropped without an error on older versions,
+# and the run starts anyway, so check here rather than let a 380 s/step job start off wrong: the
+# `rope_parameters` override is ignored and the model trains at 1M with no YaRN, and the `offload` key is
+# forwarded to `torch.utils.checkpoint.checkpoint`, which rejects it.
+if Version(transformers.__version__) < Version("5.16.0"):
     raise RuntimeError(
-        f"This example needs transformers>=5.0 for the `rope_parameters` schema, got {transformers.__version__}."
-    )
-if Version(accelerate.__version__) < Version("1.15.0"):
-    raise RuntimeError(
-        f"This example needs accelerate>=1.15.0 for `fsdp_activation_checkpointing_offload`, got "
-        f"{accelerate.__version__}."
+        f"This example needs transformers>=5.16.0 for the `rope_parameters` schema and gradient "
+        f"checkpointing `offload`, got {transformers.__version__}."
     )
 
 
@@ -100,8 +94,10 @@ def main():
         save_strategy="no",
         # The sequence has to divide `cp_size * 2`, which the collator handles by padding.
         pad_to_multiple_of=16,
-        # Activation checkpointing is already enabled in the accelerate config; setting both raises.
-        gradient_checkpointing=False,
+        # `offload` holds each checkpointed layer's input in pinned host memory, freeing
+        # `layers x sequence x hidden` bytes of GPU memory for a slower step.
+        gradient_checkpointing=True,
+        gradient_checkpointing_kwargs={"offload": True},
         bf16=True,
         # A base model used far beyond its trained context needs RoPE scaling: without it, loss at 1M
         # starts around 10.6 instead of 4.4. In Transformers v5 `rope_theta` lives inside
