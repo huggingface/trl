@@ -26,10 +26,10 @@ from accelerate.logging import get_logger
 from accelerate.utils import is_peft_model
 from datasets import Dataset, IterableDataset
 from torch import nn
-from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.utils.data import DataLoader, Sampler
 from transformers import (
     AutoProcessor,
+    BitsAndBytesConfig,
     GenerationConfig,
     PreTrainedModel,
     PreTrainedTokenizerBase,
@@ -40,6 +40,7 @@ from transformers.trainer_utils import seed_worker
 from transformers.utils import is_datasets_available, is_liger_kernel_available, is_peft_available
 
 from ...data_utils import is_conversational
+from ...distributed import DistributedBackend
 from ...models import prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
 from ...models.utils import _ForwardRedirection
 from ...trainer.base_trainer import _BaseTrainer
@@ -54,6 +55,7 @@ from ...trainer.utils import (
     split_tensor_dict,
     use_adapter,
 )
+from ..callbacks import PEFTAdapterEMACallback, SyncTeacherModelCallback, is_pure_lora_training
 from ..utils import prepare_peft_model
 from .loss_utils import (
     add_tail_bucket,
@@ -64,7 +66,6 @@ from .loss_utils import (
     compute_topk_self_distillation_loss,
 )
 from .sdft_config import SDFTConfig
-from .teacher_sync import PEFTAdapterEMACallback, SyncTeacherModelCallback, is_pure_lora_training
 
 
 if is_liger_kernel_available():
@@ -72,7 +73,8 @@ if is_liger_kernel_available():
 
 
 if is_peft_available():
-    from peft import PeftConfig
+    from peft import PeftConfig, PromptLearningConfig
+    from peft.tuners.tuners_utils import BaseTunerLayer
 
 
 logger = get_logger(__name__)
@@ -192,7 +194,9 @@ class DemonstrationTeacherContextBuilder:
             self._compose_teacher_prompt(prompt, privileged_context)
             for prompt, privileged_context in zip(prompts, privileged_contexts, strict=True)
         ]
-        teacher_prompt_ids_list = self.trainer._tokenize_prompts(teacher_prompts)
+        # Score the teacher on the full prompt: the problem leads the teacher template, so left-truncating to
+        # max_prompt_length (correct for the student generation prompt) would drop it. Matches SDPO.
+        teacher_prompt_ids_list = self.trainer._tokenize_prompts_untruncated(teacher_prompts)
         device = completion_ids.device
         teacher_prompt_ids = [torch.tensor(ids) for ids in teacher_prompt_ids_list]
         teacher_prompt_mask = [torch.ones_like(ids, dtype=torch.long) for ids in teacher_prompt_ids]
@@ -236,6 +240,7 @@ class SDFTTrainer(_BaseTrainer):
         processing_class: PreTrainedTokenizerBase | ProcessorMixin | None = None,
         callbacks: list[TrainerCallback] | None = None,
         optimizers: tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None] = (None, None),
+        quantization_config: "BitsAndBytesConfig | None" = None,
         peft_config: PeftConfig | None = None,
     ):
         if isinstance(train_dataset, IterableDataset):
@@ -253,15 +258,30 @@ class SDFTTrainer(_BaseTrainer):
 
         if isinstance(model, str):
             model_init_kwargs = args.model_init_kwargs or {}
+            if quantization_config is not None:
+                if "quantization_config" in model_init_kwargs:
+                    raise ValueError(
+                        "You set `quantization_config` both as a trainer argument and in `args.model_init_kwargs`. "
+                        "Please set it in only one place, preferably as a trainer argument."
+                    )
+                model_init_kwargs["quantization_config"] = quantization_config
             if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 model_init_kwargs["device_map"] = None
             model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
             model = create_model_from_path(model, **model_init_kwargs)
-        elif args.model_init_kwargs is not None:
-            logger.warning(
-                "You passed `model_init_kwargs` to the self-distillation config, but `model` is already "
-                "instantiated. The `model_init_kwargs` will be ignored."
-            )
+        else:
+            if args.model_init_kwargs is not None:
+                logger.warning(
+                    "You passed `model_init_kwargs` to the self-distillation config, but `model` is already "
+                    "instantiated. The `model_init_kwargs` will be ignored."
+                )
+            if quantization_config is not None:
+                logger.warning(
+                    "You passed `quantization_config` to the trainer, but your model is already instantiated. "
+                    "The `quantization_config` will be ignored."
+                )
+        # Non-quantized models do not have the `is_loaded_in_{8,4}bit` attributes, whereas quantized models do.
+        is_quantized_model = getattr(model, "is_loaded_in_4bit", False) or getattr(model, "is_loaded_in_8bit", False)
 
         self.model_kwarg_keys = (
             inspect.signature(model.forward).parameters.keys()
@@ -295,6 +315,23 @@ class SDFTTrainer(_BaseTrainer):
                 )
         if peft_config is not None or (is_peft_available() and getattr(model, "peft_config", None) is not None):
             model = prepare_peft_model(model, peft_config, args)
+
+        # When using QLoRA, the PEFT adapter weights are converted to bf16 to follow the recommendations from the
+        # original paper (see https://huggingface.co/papers/2305.14314, paragraph 3). Normally, this can be done by
+        # passing `autocast_adapter_dtype=False` to `get_peft_model`, but this option is not yet supported for
+        # quantized models. See: https://github.com/huggingface/peft/issues/2889
+        if is_quantized_model:
+            for param in model.parameters():
+                if param.requires_grad:
+                    param.data = param.data.to(torch.bfloat16)
+
+        # The EMA teacher adapter must exist before accelerate/DeepSpeed wraps the model: ZeRO-3 registers every
+        # module exactly once at initialization and cannot adopt modules added afterwards.
+        if args.teacher_model_kind == "ema" and is_peft_model(model) and is_pure_lora_training(model):
+            active_adapter = model.active_adapter or "default"
+            model.add_adapter("teacher", model.peft_config[active_adapter])
+            # `PEFTAdapterEMACallback` zeroes the adapter too, but not until `Trainer.train()` starts.
+            PEFTAdapterEMACallback(model=model)._initialize_teacher_adapter()
 
         if processing_class is None:
             processing_class = AutoProcessor.from_pretrained(
@@ -382,6 +419,21 @@ class SDFTTrainer(_BaseTrainer):
                     "Liger is required to use `use_liger_kernel` as the self-distillation loss. Run "
                     "`pip install liger-kernel`."
                 )
+            if is_peft_model(model):
+                # The fused kernel reads `lm_head.weight` directly and forwards the backbone via
+                # `_forward_redirection`, bypassing `PeftModel.forward()`.
+                if isinstance(model.get_output_embeddings(), BaseTunerLayer):
+                    raise ValueError(
+                        "`use_liger_kernel` does not support a PEFT adapter on `lm_head`: the fused kernel reads "
+                        "`lm_head.weight` directly, so the adapter is ignored and never trained. Remove "
+                        "`'lm_head'` from your `target_modules`."
+                    )
+                if any(isinstance(cfg, PromptLearningConfig) for cfg in model.peft_config.values()):
+                    raise ValueError(
+                        "`use_liger_kernel` does not support prompt-learning PEFT methods (PromptTuning, "
+                        "PrefixTuning, P-Tuning): the fused kernel calls the backbone directly, so virtual tokens "
+                        "are never prepended. Use a weight-based adapter such as LoRA instead."
+                    )
             if args.distillation_mode != "full_logits":
                 raise ValueError(
                     "`use_liger_kernel` only supports `distillation_mode='full_logits'`, got "
@@ -462,6 +514,8 @@ class SDFTTrainer(_BaseTrainer):
         if args.disable_dropout:
             disable_dropout_in_model(self.model)
 
+        self._dist = DistributedBackend(self.accelerator)
+
         if hasattr(self.model, "add_model_tags"):
             self.model.add_model_tags(self._tag_names)
 
@@ -505,15 +559,23 @@ class SDFTTrainer(_BaseTrainer):
 
         Must be called after `super().__init__` so that `self.callback_handler` is available.
         """
+        if is_peft_model(self.model) and self._dist.is_zero3:
+            raise ValueError(
+                "PEFT with DeepSpeed ZeRO-3 is currently unsupported: the teacher forward on the shared model "
+                "invalidates the ZeRO-3 parameter coordinator trace and training crashes at backward recompute. "
+                "Use FSDP2 or ZeRO-2 with PEFT, or full fine-tuning under ZeRO-3."
+            )
 
         teacher_model_kind = self.args.teacher_model_kind
 
         if teacher_model_kind == "live":
             self.teacher_model = self.model
+            self._check_liger_logit_scale_compat(self.teacher_model)
             return
 
         if teacher_model_kind == "base" and is_peft_model(self.model):
             self.teacher_model = self.model
+            self._check_liger_logit_scale_compat(self.teacher_model)
             return
 
         if self._use_peft_ema_teacher_adapter():
@@ -528,6 +590,7 @@ class SDFTTrainer(_BaseTrainer):
                 )
             )
             self.teacher_model = self.model
+            self._check_liger_logit_scale_compat(self.teacher_model)
             return
 
         if is_peft_model(self.model):
@@ -546,6 +609,9 @@ class SDFTTrainer(_BaseTrainer):
         self.teacher_model = create_model_from_path(get_config_model_id(self.model.config), **model_init_kwargs)
         self.teacher_model.requires_grad_(False)
         self.teacher_model.eval()
+        # Check compatibility before DeepSpeed/FSDP wrapping below: a `DeepSpeedEngine`'s own `.config` is its
+        # ds_config, not the model's, so reading `self.teacher_model.config` afterwards would silently skip this.
+        self._check_liger_logit_scale_compat(self.teacher_model)
         if self.is_deepspeed_enabled:
             self.teacher_model = prepare_deepspeed(self.teacher_model, self.accelerator)
         elif self.is_fsdp_enabled:
@@ -555,6 +621,32 @@ class SDFTTrainer(_BaseTrainer):
 
         if teacher_model_kind == "ema":
             self.add_callback(SyncTeacherModelCallback(teacher_model=self.teacher_model, accelerator=self.accelerator))
+
+    def _check_liger_logit_scale_compat(self, teacher_model) -> None:
+        """The Liger fused JSD kernel projects `h @ Wᵀ` directly and has no `logit_scale` / `final_logit_softcapping`
+        parameters, so (unlike the chunked path) it cannot reproduce Cohere `logit_scale` or Gemma
+        `final_logit_softcapping`. Refuse rather than silently optimize a different objective than the model's real
+        forward.
+        """
+        if not self.use_liger_loss:
+            return
+        for name, model in [("student", self.model), ("teacher", teacher_model)]:
+            # On VLMs the logit post-processing lives on `text_config`, so read it through `get_text_config()`.
+            # Muse Glimmer names its pre-softcap multiplier `output_multiplier`.
+            config = model.config.get_text_config()
+            logit_scale = getattr(config, "logit_scale", None)
+            if logit_scale is None:
+                logit_scale = getattr(config, "output_multiplier", None)
+            scaled = logit_scale not in (None, 1.0)
+            softcapped = getattr(config, "final_logit_softcapping", None) is not None
+            if scaled or softcapped:
+                raise ValueError(
+                    f"`use_liger_kernel=True` is incompatible with the {name} model's `logit_scale` / "
+                    f"`final_logit_softcapping` (e.g. Cohere / Gemma models): the Liger fused JSD loss reads "
+                    f"`lm_head.weight` directly and cannot apply them, so it would optimize a different "
+                    f"objective than the model's real forward. Set `use_liger_kernel=False` to use the chunked "
+                    f"loss, which applies both."
+                )
 
     def _use_peft_ema_teacher_adapter(self) -> bool:
         return self.args.teacher_model_kind == "ema" and is_pure_lora_training(self.model, self.accelerator)
@@ -731,7 +823,7 @@ class SDFTTrainer(_BaseTrainer):
             for ids, length in zip(batch["completion_ids"].detach().cpu(), raw_completion_lengths, strict=True)
         ]
 
-    def _tokenize_prompts(self, prompts: list[Any]) -> list[list[int]]:
+    def _tokenize_prompts_untruncated(self, prompts: list[Any]) -> list[list[int]]:
         if is_conversational({"prompt": prompts[0]}):
             tokenized = self.processing_class.apply_chat_template(
                 conversation=prompts,
@@ -743,6 +835,10 @@ class SDFTTrainer(_BaseTrainer):
             prompt_ids = tokenized["input_ids"]
         else:
             prompt_ids = self.processing_class(text=prompts)["input_ids"]
+        return prompt_ids
+
+    def _tokenize_prompts(self, prompts: list[Any]) -> list[list[int]]:
+        prompt_ids = self._tokenize_prompts_untruncated(prompts)
         if self.max_prompt_length is not None:
             prompt_ids = [ids[-self.max_prompt_length :] for ids in prompt_ids]
         return prompt_ids
@@ -785,7 +881,7 @@ class SDFTTrainer(_BaseTrainer):
                 generation_kwargs=self.generation_kwargs,
             ) as unwrapped_model,
             torch.no_grad(),
-            FSDP.summon_full_params(self.model_wrapped, recurse=False) if self.is_fsdp_enabled else nullcontext(),
+            self._dist.summon_full_params(self.model_wrapped, recurse=False),
         ):
             prompt_completion_ids = unwrapped_model.generate(
                 **generate_inputs, generation_config=self.generation_config
@@ -1241,11 +1337,8 @@ class SDFTTrainer(_BaseTrainer):
         if not self.use_liger_loss:
             return nullcontext()
 
-        deepspeed_plugin = self.accelerator.state.deepspeed_plugin
-        if deepspeed_plugin is None or deepspeed_plugin.zero_stage != 3:
+        if not self._dist.is_zero3:
             return nullcontext()
-
-        import deepspeed
 
         unwrapped_student = self.accelerator.unwrap_model(model)
         unwrapped_teacher = self.accelerator.unwrap_model(self.teacher_model)
@@ -1256,7 +1349,7 @@ class SDFTTrainer(_BaseTrainer):
             params.append(student_head.bias)
         if teacher_head.bias is not None:
             params.append(teacher_head.bias)
-        return deepspeed.zero.GatheredParameters(params, modifier_rank=None)
+        return self._dist.gather_params(params)
 
     def _get_teacher_context_for_self_distillation(self):
         """Return the context manager that routes the teacher forward to the correct weights.
@@ -1314,6 +1407,6 @@ class SDFTTrainer(_BaseTrainer):
         metrics = {k: sum(v) / len(v) for k, v in self._metrics[mode].items() if v}
         if mode == "eval":
             metrics = {f"eval_{k}": v for k, v in metrics.items()}
-        logs = {**logs, **metrics}
+        logs.update(metrics)
         super().log(logs, start_time)
         self._metrics[mode].clear()

@@ -21,49 +21,57 @@ from ...trainer.base_config import _BaseConfig
 
 
 @dataclass
-class SDFTConfig(_BaseConfig):
+class OPSDConfig(_BaseConfig):
     r"""
-    Configuration class for the [`SDFTTrainer`].
+    Configuration class for the [`OPSDTrainer`].
 
     Parameters:
-        > Parameters that control the SDFT loss
+        > Parameters that control the OPSD loss
 
-        distillation_alpha (`float`, *optional*, defaults to `0.5`):
-            Divergence interpolation coefficient for SDFT top-k logit distillation.
-        distillation_mode (`Literal["sampled_token", "full_logits", "topk_logits"]`, *optional*, defaults to `"topk_logits"`):
-            Distillation objective mode. SDFT defaults to top-k logit distillation.
-        distillation_topk (`int`, *optional*, defaults to `100`):
-            Number of top tokens used by the default SDFT top-k logit objective.
+        distillation_alpha (`float`, *optional*, defaults to `0.0`):
+            Divergence interpolation coefficient. `0.0` is forward KL (the official OPSD setting), `1.0` is reverse KL,
+            and intermediate values give the generalized JSD mixture.
+        distillation_mode (`Literal["sampled_token", "full_logits", "topk_logits"]`, *optional*, defaults to `"full_logits"`):
+            Distillation objective mode. OPSD defaults to the full-vocabulary divergence of the paper. `topk_logits`
+            restricts the divergence to the teacher's top-k support and `sampled_token` uses the token-level reverse KL
+            (requires `distillation_alpha=1.0`).
+        distillation_topk (`int`, *optional*):
+            Number of top tokens used by the `topk_logits` objective. Must be set when `distillation_mode=topk_logits`.
+        distillation_kl_clip (`float`, *optional*, defaults to `0.05`):
+            Pointwise per-vocabulary-entry clip applied to the divergence before it is summed over the vocabulary.
+            Prevents high-divergence style tokens from dominating the training signal. `None` disables clipping. Only
+            supported for the `full_logits` and `topk_logits` modes.
         distillation_is_clip (`float`, *optional*, defaults to `2.0`):
             Clipping coefficient for importance sampling in self-distillation. `None` disables clipping.
         distillation_add_tail (`bool`, *optional*, defaults to `False`):
             Whether to add a tail bucket for non-top-k probability mass.
-        num_loss_tokens_to_skip (`int`, *optional*, defaults to `0`):
-            Number of initial completion tokens to exclude from the distillation loss.
 
         > Parameters that control the teacher
 
         teacher_model_kind (`str`, *optional*, defaults to `"base"`):
-            Semantic teacher choice for SDFT. `base` uses the initial student, `live` uses the current student, and
-            `ema` uses an exponentially averaged teacher.
+            Semantic teacher choice for OPSD. `base` uses the initial student (the official OPSD setting), `live` uses
+            the current student, and `ema` uses an exponentially averaged teacher.
         teacher_update_rate (`float`, *optional*, defaults to `0.05`):
             EMA update rate used when `teacher_model_kind="ema"`. A value of `1.0` reduces the update to a hard
             overwrite, periodically resyncing the teacher to the current student weights.
         teacher_sync_steps (`int`, *optional*, defaults to `1`):
             Number of optimizer steps between teacher updates.
 
-        > Parameters that control teacher-conditioned generation
+        > Parameters that control the teacher prompt
 
-        generate_from_teacher (`bool`, *optional*, defaults to `False`):
-            Whether on-policy generation should use the teacher-conditioned prompt instead of the student prompt.
-        teacher_prompt_template (`str`, *optional*, defaults to `"{prompt}\n\n{privileged_context}"`):
-            Template used to combine the student prompt and privileged context into the teacher prompt.
+        teacher_prompt_template (`str`, *optional*):
+            Template used to combine the student prompt and the privileged ground-truth solution into the teacher
+            prompt. Must contain the `{prompt}` and `{privileged_context}` placeholders. Defaults to the official OPSD
+            wording, which wraps the solution in reference markers followed by a transition instruction.
+        teacher_chat_template_kwargs (`dict[str, Any]`, *optional*):
+            Extra kwargs forwarded to `apply_chat_template` when building the teacher prompt (for example
+            `{"enable_thinking": True}` to pair a thinking teacher with a non-thinking student).
 
         > Parameters that control the model
 
         model_init_kwargs (`dict[str, Any]`, *optional*):
             Keyword arguments for `transformers.AutoModelForCausalLM.from_pretrained`, used when the `model` argument
-            of the `SDFTTrainer` is provided as a string.
+            of the `OPSDTrainer` is provided as a string.
         trust_remote_code (`bool`, *optional*, defaults to `False`):
             Whether to allow loading models and tokenizers that ship custom Python code from the Hub. Forwarded to
             [`~transformers.AutoModelForCausalLM.from_pretrained`] and [`~transformers.AutoProcessor.from_pretrained`],
@@ -83,13 +91,13 @@ class SDFTConfig(_BaseConfig):
 
         > Parameters that control generation
 
-        num_generations (`int`, *optional*, defaults to `8`):
+        num_generations (`int`, *optional*, defaults to `1`):
             Number of generations to sample. The effective batch size (num_processes * per_device_batch_size *
             gradient_accumulation_steps) must be evenly divisible by this value.
         num_generations_eval (`int`, *optional*):
             Number of generations to sample during evaluation. This allows using fewer generations during evaluation to
             save computation. If `None`, uses the value of `num_generations`.
-        max_completion_length (`int`, *optional*, defaults to `256`):
+        max_completion_length (`int`, *optional*, defaults to `1024`):
             Maximum length of the generated completion.
         temperature (`float`, *optional*, defaults to `1.0`):
             Temperature for sampling. The higher the temperature, the more random the completions.
@@ -126,17 +134,12 @@ class SDFTConfig(_BaseConfig):
         use_vllm (`bool`, *optional*, defaults to `False`):
             Whether to use vLLM for generating completions. If set to `True`, the trainer will use vLLM for generation
             instead of the default model.generate(). Requires `vllm` to be installed.
-        use_teacher_server (`bool`, *optional*, defaults to `False`):
-            Compute teacher logprobs from the running vLLM generation server instead of a local teacher forward. Only
-            supported for `teacher_model_kind='live'` with `use_vllm=True` and `vllm_mode='server'`, and
-            `distillation_mode` in {'sampled_token', 'topk_logits'} (the server returns the teacher's top-k logprobs,
-            not the full vocabulary; `topk_logits` distills over the teacher's own top-k support).
         vllm_mode (`str`, *optional*, defaults to `"colocate"`):
             Mode to use for vLLM integration when `use_vllm` is set to `True`. Must be one of `'server'` or
             `'colocate'`. `'server'`: The trainer will send generation requests to a separate vLLM server. Make sure a
-            vLLM server is running (start with `vllm serve`). `'colocate'`: vLLM will run in the same process and share
-            the training GPUs. This avoids the need for a separate server but may cause resource contention with
-            training.
+            TRL vLLM server is running (start with `trl vllm-serve`). `'colocate'`: vLLM will run in the same process
+            and share the training GPUs. This avoids the need for a separate server but may cause resource contention
+            with training.
         vllm_model_impl (`str`, *optional*, defaults to `"vllm"`):
             Model implementation to use for vLLM. Must be one of `transformers` or `vllm`. `transformers`: Use the
             `transformers` backend for model implementation. `vllm`: Use the `vllm` library for model implementation.
@@ -170,6 +173,8 @@ class SDFTConfig(_BaseConfig):
 
         > Parameters that control the training
 
+        loss_type (`str`, *optional*, defaults to `"grpo"`):
+            Policy loss aggregation. Supported: `grpo`, `bnpo`, `dr_grpo`, `dapo`.
         num_iterations (`int`, *optional*, defaults to `1`):
             Number of iterations per batch (denoted as μ in the algorithm).
         generation_batch_size (`int`, *optional*):
@@ -183,12 +188,13 @@ class SDFTConfig(_BaseConfig):
         "model_init_kwargs",
         "generation_kwargs",
         "chat_template_kwargs",
+        "teacher_chat_template_kwargs",
     ]
 
     model_init_kwargs: dict[str, Any] | None = field(
         default=None,
         metadata={
-            "help": "Keyword arguments for `transformers.AutoModelForCausalLM.from_pretrained`, used when the `model` argument of the `SDFTTrainer` is provided as a string."
+            "help": "Keyword arguments for `transformers.AutoModelForCausalLM.from_pretrained`, used when the `model` argument of the `OPSDTrainer` is provided as a string."
         },
     )
     trust_remote_code: bool = field(
@@ -217,7 +223,7 @@ class SDFTConfig(_BaseConfig):
         metadata={"help": "Maximum prompt length. Longer prompts are truncated from the left."},
     )
     num_generations: int = field(
-        default=8,
+        default=1,
         metadata={
             "help": "Number of generations to sample. The effective batch size (num_processes * per_device_batch_size * gradient_accumulation_steps) must be evenly divisible by this value."
         },
@@ -229,7 +235,7 @@ class SDFTConfig(_BaseConfig):
         },
     )
     max_completion_length: int | None = field(
-        default=256,
+        default=1024,
         metadata={"help": "Maximum length of the generated completion."},
     )
     ds3_gather_for_generation: bool = field(
@@ -314,7 +320,7 @@ class SDFTConfig(_BaseConfig):
     vllm_mode: str = field(
         default="colocate",
         metadata={
-            "help": "Mode to use for vLLM integration when `use_vllm` is set to `True`. Must be one of `'server'` or `'colocate'`. `'server'`: The trainer will send generation requests to a separate vLLM server. Make sure a vLLM server is running (start with `vllm serve`). `'colocate'`: vLLM will run in the same process and share the training GPUs. This avoids the need for a separate server but may cause resource contention with training."
+            "help": "Mode to use for vLLM integration when `use_vllm` is set to `True`. Must be one of `'server'` or `'colocate'`. `'server'`: The trainer will send generation requests to a separate vLLM server. Make sure a TRL vLLM server is running (start with `trl vllm-serve`). `'colocate'`: vLLM will run in the same process and share the training GPUs. This avoids the need for a separate server but may cause resource contention with training."
         },
     )
     vllm_model_impl: str = field(
@@ -380,7 +386,7 @@ class SDFTConfig(_BaseConfig):
     teacher_model_kind: str = field(
         default="base",
         metadata={
-            "help": "Semantic teacher choice for SDFT. `base` uses the initial student, `live` uses the current "
+            "help": "Semantic teacher choice for OPSD. `base` uses the initial student, `live` uses the current "
             "student, and `ema` uses an exponentially averaged teacher."
         },
     )
@@ -396,16 +402,26 @@ class SDFTConfig(_BaseConfig):
         metadata={"help": "Number of optimizer steps between teacher updates."},
     )
     distillation_alpha: float = field(
-        default=0.5,
-        metadata={"help": "Divergence interpolation coefficient for SDFT top-k logit distillation."},
+        default=0.0,
+        metadata={
+            "help": "Divergence interpolation coefficient. `0.0` is forward KL (the official OPSD setting), `1.0` is "
+            "reverse KL, and intermediate values give the generalized JSD mixture."
+        },
     )
     distillation_mode: Literal["sampled_token", "full_logits", "topk_logits"] = field(
-        default="topk_logits",
-        metadata={"help": "Distillation objective mode. SDFT defaults to top-k logit distillation."},
+        default="full_logits",
+        metadata={"help": "Distillation objective mode. OPSD defaults to the full-vocabulary divergence."},
     )
     distillation_topk: int | None = field(
-        default=100,
-        metadata={"help": "Number of top tokens used by the default SDFT top-k logit objective."},
+        default=None,
+        metadata={"help": "Number of top tokens used by the `topk_logits` objective."},
+    )
+    distillation_kl_clip: float | None = field(
+        default=0.05,
+        metadata={
+            "help": "Pointwise per-vocabulary-entry clip applied to the divergence before it is summed over the "
+            "vocabulary. `None` disables clipping. Only supported for `full_logits` and `topk_logits`."
+        },
     )
     distillation_is_clip: float | None = field(
         default=2.0,
@@ -417,21 +433,24 @@ class SDFTConfig(_BaseConfig):
         default=False,
         metadata={"help": "Whether to add a tail bucket for non-top-k probability mass."},
     )
-    generate_from_teacher: bool = field(
-        default=False,
-        metadata={
-            "help": "Whether on-policy generation should use the teacher-conditioned prompt instead of the student prompt."
-        },
-    )
     teacher_prompt_template: str = field(
-        default="{prompt}\n\n{privileged_context}",
+        default=(
+            "{prompt}\n\n"
+            "Here is a reference solution to this problem:\n"
+            "=== Reference Solution Begin ===\n{privileged_context}\n=== Reference Solution End ===\n\n"
+            "After reading the reference solution above, make sure you truly understand the reasoning behind each "
+            "step, do not copy or paraphrase it. Now, using your own words and independent reasoning, derive the "
+            "same final answer to the problem above. Think step by step, explore different approaches, and don't "
+            "be afraid to backtrack or reconsider if something doesn't work out:"
+        ),
         metadata={
-            "help": "Template used to combine the student prompt and privileged context into the teacher prompt."
+            "help": "Template used to combine the student prompt and the ground-truth solution into the teacher "
+            "prompt. Must contain the `{prompt}` and `{privileged_context}` placeholders."
         },
     )
-    num_loss_tokens_to_skip: int = field(
-        default=0,
-        metadata={"help": "Number of initial completion tokens to exclude from the distillation loss."},
+    teacher_chat_template_kwargs: dict[str, Any] | str | None = field(
+        default=None,
+        metadata={"help": "Extra kwargs forwarded to `apply_chat_template` when building the teacher prompt."},
     )
 
     def __post_init__(self):
@@ -440,6 +459,22 @@ class SDFTConfig(_BaseConfig):
             raise ValueError(
                 "`distillation_mode='sampled_token'` only supports reverse KL, so it requires "
                 f"`distillation_alpha=1.0`, got {self.distillation_alpha}."
+            )
+        if self.distillation_kl_clip is not None:
+            if self.distillation_kl_clip <= 0:
+                raise ValueError(f"`distillation_kl_clip` must be positive, got {self.distillation_kl_clip}.")
+            if self.distillation_mode == "sampled_token":
+                raise ValueError(
+                    "`distillation_kl_clip` only supports `distillation_mode` in {'full_logits', 'topk_logits'}: the "
+                    "pointwise clip applies to per-vocabulary-entry divergences, which `sampled_token` does not "
+                    "compute. Set `distillation_kl_clip=None`."
+                )
+        if (
+            "{prompt}" not in self.teacher_prompt_template
+            or "{privileged_context}" not in self.teacher_prompt_template
+        ):
+            raise ValueError(
+                "teacher_prompt_template must contain both `{prompt}` and `{privileged_context}` placeholders"
             )
         num_processes = self.world_size
         if self.generation_batch_size is None and self.steps_per_generation is None:
@@ -470,20 +505,12 @@ class SDFTConfig(_BaseConfig):
                     f"divisible by the number of generations used for evaluation ({num_generations_eval})."
                 )
 
-        if (
-            "{prompt}" not in self.teacher_prompt_template
-            or "{privileged_context}" not in self.teacher_prompt_template
-        ):
-            raise ValueError(
-                "teacher_prompt_template must contain both `{prompt}` and `{privileged_context}` placeholders"
-            )
-
         if self.parallelism_config is not None and (
             self.parallelism_config.cp_enabled or self.parallelism_config.sp_enabled
         ):
             raise ValueError(
-                "SDFTTrainer does not support sequence-dim parallelism (`parallelism_config.cp_size > 1` or "
-                "`parallelism_config.sp_size > 1`) yet. SDFT builds model inputs after generation inside the trainer, "
+                "OPSDTrainer does not support sequence-dim parallelism (`parallelism_config.cp_size > 1` or "
+                "`parallelism_config.sp_size > 1`) yet. OPSD builds model inputs after generation inside the trainer, "
                 "so Transformers' context-parallel / Ulysses sequence-parallel input sharding cannot be applied to the "
                 "raw generation batch. Set both `cp_size=1` and `sp_size=1`, or disable `parallelism_config`."
             )

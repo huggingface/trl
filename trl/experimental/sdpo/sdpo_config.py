@@ -252,7 +252,11 @@ class SDPOConfig(_BaseConfig):
             practice for training stability.
     """
 
-    _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs"]
+    _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + [
+        "model_init_kwargs",
+        "generation_kwargs",
+        "chat_template_kwargs",
+    ]
 
     model_init_kwargs: dict[str, Any] | None = field(
         default=None,
@@ -268,13 +272,16 @@ class SDPOConfig(_BaseConfig):
             "reward-model and reward-tokenizer loads."
         },
     )
+    # Unlike GRPO/DistillationTrainer, `teacher_model_kind in {"live", "base"+peft, "ema"+pure-lora}` reuses the
+    # student module as the teacher (no separate `.eval()` copy), so dropout must stay disabled by default or the
+    # teacher forward becomes stochastic during training.
     disable_dropout: bool = field(
         default=True,
         metadata={
             "help": "Whether to disable dropout in the model. This is useful for training with a reference model, as it prevents the model from generating different logprobs for the same input."
         },
     )
-    remove_unused_columns: bool = field(
+    remove_unused_columns: bool | None = field(
         default=False,
         metadata={
             "help": "Whether to only keep the column 'prompt' in the dataset. If you use a custom reward function that requires any column other than 'prompts' and 'completions', you should keep this to `False`."
@@ -342,13 +349,13 @@ class SDPOConfig(_BaseConfig):
             "help": "Minimum token probability, which will be scaled by the probability of the most likely token. It must be a value between 0.0 and 1.0. Typical values are in the 0.01-0.2 range."
         },
     )
-    generation_kwargs: dict[str, Any] | None = field(
+    generation_kwargs: dict[str, Any] | str | None = field(
         default=None,
         metadata={
             "help": "Additional keyword arguments to pass to `GenerationConfig` (if using transformers) or `SamplingParams` (if using vLLM) when sampling completions. This can be used to further customize the generation behavior, such as setting `suppress_tokens`, `num_beams`, etc. If it contains keys that conflict with the other generation parameters (like `min_p`, `top_p`, etc.), they will override them."
         },
     )
-    chat_template_kwargs: dict[str, Any] | None = field(
+    chat_template_kwargs: dict[str, Any] | str | None = field(
         default=None,
         metadata={
             "help": "Additional keyword arguments to pass to the `apply_chat_template` function when generating completions."
@@ -642,3 +649,13 @@ class SDPOConfig(_BaseConfig):
 
         if self.epsilon_high is None:
             self.epsilon_high = self.epsilon
+
+        if self.parallelism_config is not None and (
+            self.parallelism_config.cp_enabled or self.parallelism_config.sp_enabled
+        ):
+            raise ValueError(
+                "SDPOTrainer does not support sequence-dim parallelism (`parallelism_config.cp_size > 1` or "
+                "`parallelism_config.sp_size > 1`) yet. SDPO builds model inputs after generation inside the trainer, "
+                "so Transformers' context-parallel / Ulysses sequence-parallel input sharding cannot be applied to the "
+                "raw generation batch. Set both `cp_size=1` and `sp_size=1`, or disable `parallelism_config`."
+            )
