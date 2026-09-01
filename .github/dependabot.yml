@@ -23,10 +23,14 @@ updates:
       local-actions:
         patterns: ["*"]
 
-  # Not grouped, so that a ruff bump, which reformats code, stays separate from a doc-builder bump
+  # Not grouped, so that each hook bump stays reviewable on its own
   - package-ecosystem: "pre-commit"
     directory: "/"
     schedule:
       interval: "weekly"
     cooldown:
       default-days: 7
+    ignore:
+      # Ruff is frozen on purpose: a bump reformats code and rewrites source through `--fix`, without
+      # reporting anything new under our own rule selection. Bump it by hand when there is a reason.
+      - dependency-name: "https://github.com/astral-sh/ruff-pre-commit"
