@@ -24,6 +24,7 @@ def compute_divergence(
     student_log_probs: torch.Tensor,
     teacher_log_probs: torch.Tensor,
     alpha: float,
+    kl_clip: float | None = None,
 ) -> torch.Tensor:
     if alpha == 0.0:
         kl = F.kl_div(student_log_probs, teacher_log_probs, reduction="none", log_target=True)
@@ -38,7 +39,12 @@ def compute_divergence(
         kl_teacher = F.kl_div(mixture, teacher_log_probs, reduction="none", log_target=True)
         kl_student = F.kl_div(mixture, student_log_probs, reduction="none", log_target=True)
         kl = torch.lerp(kl_student, kl_teacher, alpha)
-    return kl.sum(-1)
+    # Sum over the vocabulary first (per-entry `F.kl_div` values can be negative and are meant to cancel;
+    # the summed per-position KL is non-negative by construction). Then optionally cap outlier tokens.
+    kl = kl.sum(-1)
+    if kl_clip is not None:
+        kl = kl.clamp(max=kl_clip)
+    return kl
 
 
 def add_tail_bucket(log_probs: torch.Tensor) -> torch.Tensor:
@@ -72,19 +78,35 @@ def compute_topk_self_distillation_loss(
     distillation_topk: int,
     distillation_alpha: float,
     distillation_add_tail: bool,
+    distillation_kl_clip: float | None = None,
+    topk_support: str = "student",
 ) -> torch.Tensor:
-    """Compute distillation loss on the student's top-k token support.
+    """Compute distillation loss on a top-k token support.
 
-    The student's top-k logits define the support. The teacher distribution is projected onto the same token indices.
-    The selected support is then either renormalized or augmented with a tail bucket before the divergence is computed.
+    `topk_support` selects which side's top-k logits define the support: SDFT's convention is `"student"`; passing
+    `"teacher"` uses the teacher's top-k instead. The other side's distribution is projected onto the same token
+    indices. The selected support is then either renormalized or augmented with a tail bucket before the divergence is
+    computed.
     """
-    student_logsumexp = torch.logsumexp(student_logits, dim=-1, keepdim=True)
-    topk_student_logits, topk_indices = torch.topk(student_logits, k=distillation_topk, dim=-1)
-    topk_student_log_probs = topk_student_logits - student_logsumexp
+    if topk_support == "student":
+        support_logits, other_logits = student_logits, teacher_logits
+    elif topk_support == "teacher":
+        support_logits, other_logits = teacher_logits, student_logits
+    else:
+        raise ValueError(f"topk_support must be 'student' or 'teacher', got {topk_support!r}")
 
-    teacher_logsumexp = torch.logsumexp(teacher_logits, dim=-1, keepdim=True)
-    topk_teacher_logits = torch.gather(teacher_logits, dim=-1, index=topk_indices)
-    topk_teacher_log_probs = topk_teacher_logits - teacher_logsumexp
+    support_logsumexp = torch.logsumexp(support_logits, dim=-1, keepdim=True)
+    topk_support_logits, topk_indices = torch.topk(support_logits, k=distillation_topk, dim=-1)
+    topk_support_log_probs = topk_support_logits - support_logsumexp
+
+    other_logsumexp = torch.logsumexp(other_logits, dim=-1, keepdim=True)
+    topk_other_logits = torch.gather(other_logits, dim=-1, index=topk_indices)
+    topk_other_log_probs = topk_other_logits - other_logsumexp
+
+    if topk_support == "student":
+        topk_student_log_probs, topk_teacher_log_probs = topk_support_log_probs, topk_other_log_probs
+    else:
+        topk_teacher_log_probs, topk_student_log_probs = topk_support_log_probs, topk_other_log_probs
 
     # Top-k log-probs sum to the captured mass P_topk <= 1; the rest (1 - P_topk) is the "tail".
     if distillation_add_tail:
@@ -96,7 +118,7 @@ def compute_topk_self_distillation_loss(
         topk_student_log_probs = topk_student_log_probs - torch.logsumexp(topk_student_log_probs, dim=-1, keepdim=True)
         topk_teacher_log_probs = topk_teacher_log_probs - torch.logsumexp(topk_teacher_log_probs, dim=-1, keepdim=True)
 
-    return compute_divergence(topk_student_log_probs, topk_teacher_log_probs, distillation_alpha)
+    return compute_divergence(topk_student_log_probs, topk_teacher_log_probs, distillation_alpha, distillation_kl_clip)
 
 
 def compute_full_logit_self_distillation_loss(
@@ -104,11 +126,12 @@ def compute_full_logit_self_distillation_loss(
     teacher_logits: torch.Tensor,
     *,
     distillation_alpha: float,
+    distillation_kl_clip: float | None = None,
 ) -> torch.Tensor:
     """Compute full-vocabulary self-distillation loss between student and teacher logits."""
     student_log_probs = torch.log_softmax(student_logits, dim=-1)
     teacher_log_probs = torch.log_softmax(teacher_logits, dim=-1)
-    return compute_divergence(student_log_probs, teacher_log_probs, distillation_alpha)
+    return compute_divergence(student_log_probs, teacher_log_probs, distillation_alpha, distillation_kl_clip)
 
 
 def compute_sampled_token_self_distillation_loss(
@@ -133,3 +156,103 @@ def compute_sampled_token_self_distillation_loss(
     teacher_per_token_logps = selective_log_softmax(teacher_logits, completion_ids)
     log_ratio = student_per_token_logps - teacher_per_token_logps
     return log_ratio.detach() * student_per_token_logps
+
+
+def compute_dopd_routed_loss(
+    student_logits: torch.Tensor,
+    teacher_logits: torch.Tensor,
+    privileged_student_logits: torch.Tensor,
+    completion_ids: torch.Tensor,
+    *,
+    gap_threshold: float,
+    confidence_threshold: float,
+    light_topk: int,
+    self_reg_weight: float,
+    student_consistency_weight: float,
+) -> torch.Tensor:
+    """DOPD-style (https://huggingface.co/papers/2606.30626) advantage-gap routing between four token-level regimes.
+
+    The "advantage gap" is the absolute log-probability difference on the realized token between the privileged teacher
+    (``teacher_logits``, scored with the ground-truth solution in context) and the privileged student
+    (``privileged_student_logits``, the student's own no-grad forward on the same privileged context). Routing on this
+    pair isolates the transferable capability gap from the information-asymmetry gap (the paper's "privilege
+    illusion"): the bare-prompt student would conflate the two and invert regime selection. ``student_logits`` (sampled
+    on-policy from the bare problem) is what the loss terms train; ``privileged_student_logits`` is detached and used
+    only for routing. Each token is routed into exactly one of:
+
+        1. low gap, either side confident -> light top-k reverse-KL toward the teacher.
+        2. low gap, both sides unsure -> weak self-regularization, stop-gradient privileged-student anchor.
+        3. high gap, teacher confident -> full-vocabulary JSD toward the teacher.
+        4. high gap, student confident -> light privileged-student consistency nudge, stop-gradient.
+
+    Tokens where the gap is high but neither side is confident (no reliable regime 3/4 signal) fall back to the weak
+    self-regularization of regime 2, matching the paper's intent that ambiguous tokens get the smallest, least
+    committal update.
+    """
+    teacher_logp_tok = selective_log_softmax(teacher_logits, completion_ids)
+    privileged_student_logp_tok = selective_log_softmax(privileged_student_logits, completion_ids)
+    gap = (teacher_logp_tok - privileged_student_logp_tok).detach().abs()
+
+    student_confidence = privileged_student_logits.softmax(dim=-1).amax(dim=-1).detach()
+    teacher_confidence = teacher_logits.softmax(dim=-1).amax(dim=-1).detach()
+    teacher_confident = teacher_confidence >= confidence_threshold
+    student_confident = student_confidence >= confidence_threshold
+
+    low_gap = gap <= gap_threshold
+    high_gap = ~low_gap
+
+    regime1 = low_gap & (teacher_confident | student_confident)
+    regime3 = high_gap & teacher_confident
+    regime4 = high_gap & ~teacher_confident & student_confident
+    # Everything not claimed by 1/3/4 (both the plain low-confidence low-gap case and the unresolved
+    # high-gap-but-neither-confident case) gets the weak self-regularization fallback.
+    regime2 = ~(regime1 | regime3 | regime4)
+
+    loss1 = compute_topk_self_distillation_loss(
+        student_logits,
+        teacher_logits,
+        distillation_topk=light_topk,
+        distillation_alpha=1.0,
+        distillation_add_tail=True,
+        # DOPD's own convention (distinct from SDFT's default "student" support): the teacher's top-k logits define
+        # the support for this regime's light signal.
+        topk_support="teacher",
+    )
+
+    # Weak self-regularization (paper's LL regime, eq. 7, weight beta_w): top-k reverse KL of the bare student
+    # against a stop-gradient *privileged*-student anchor. The privileged student shares the student's parameters
+    # but sees the privileged context, so the anchor is a genuinely different distribution: KL against it is
+    # nonzero and its gradient regularizes the live student. (Anchoring on the bare student's own detached logits
+    # would make this term identically zero -- KL(p || sg(p)) has zero value and zero gradient.)
+    loss2 = self_reg_weight * compute_topk_self_distillation_loss(
+        student_logits,
+        privileged_student_logits.detach(),
+        distillation_topk=light_topk,
+        distillation_alpha=1.0,
+        distillation_add_tail=True,
+        topk_support="student",
+    )
+
+    loss3 = compute_full_logit_self_distillation_loss(
+        student_logits,
+        teacher_logits,
+        distillation_alpha=0.5,
+    )
+
+    # Light privileged-student distillation (paper's HS regime, eq. 9, weight beta_l): top-k reverse KL of the
+    # bare student against the same stop-gradient privileged-student anchor as regime 2. Preserves confident
+    # student exploration without pulling toward the unsure teacher on high-gap tokens.
+    loss4 = student_consistency_weight * compute_topk_self_distillation_loss(
+        student_logits,
+        privileged_student_logits.detach(),
+        distillation_topk=light_topk,
+        distillation_alpha=1.0,
+        distillation_add_tail=True,
+        topk_support="student",
+    )
+
+    per_token_loss = torch.where(regime1, loss1, torch.zeros_like(loss1))
+    per_token_loss = torch.where(regime2, loss2, per_token_loss)
+    per_token_loss = torch.where(regime3, loss3, per_token_loss)
+    per_token_loss = torch.where(regime4, loss4, per_token_loss)
+    return per_token_loss

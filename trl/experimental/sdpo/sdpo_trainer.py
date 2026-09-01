@@ -34,6 +34,7 @@ from transformers import (
     AutoModelForSequenceClassification,
     AutoProcessor,
     AutoTokenizer,
+    BitsAndBytesConfig,
     GenerationConfig,
     PreTrainedModel,
     PreTrainedTokenizerBase,
@@ -77,7 +78,8 @@ if is_liger_kernel_available():
 
 
 if is_peft_available():
-    from peft import PeftConfig
+    from peft import PeftConfig, PromptLearningConfig
+    from peft.tuners.tuners_utils import BaseTunerLayer
 
 
 logger = get_logger(__name__)
@@ -361,24 +363,44 @@ class SDPOTrainer(_BaseTrainer):
         reward_processing_classes: PreTrainedTokenizerBase | list[PreTrainedTokenizerBase] | None = None,
         callbacks: list[TrainerCallback] | None = None,
         optimizers: tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None] = (None, None),
+        quantization_config: "BitsAndBytesConfig | None" = None,
         peft_config=None,
     ):
         if reward_funcs is None or (isinstance(reward_funcs, list) and len(reward_funcs) == 0):
             raise ValueError("`reward_funcs` is required for SDPOTrainer because SDPO must score rollouts.")
         if train_dataset is None:
             raise ValueError("`train_dataset` is required")
+        if not isinstance(train_dataset, (Dataset, IterableDataset)):
+            raise TypeError(
+                f"`train_dataset` must be a `Dataset` or `IterableDataset`, got `{type(train_dataset).__name__}`."
+            )
 
         if isinstance(model, str):
             model_init_kwargs = args.model_init_kwargs or {}
+            if quantization_config is not None:
+                if "quantization_config" in model_init_kwargs:
+                    raise ValueError(
+                        "You set `quantization_config` both as a trainer argument and in `args.model_init_kwargs`. "
+                        "Please set it in only one place, preferably as a trainer argument."
+                    )
+                model_init_kwargs["quantization_config"] = quantization_config
             if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 model_init_kwargs["device_map"] = None
             model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
             model = create_model_from_path(model, **model_init_kwargs)
-        elif args.model_init_kwargs is not None:
-            logger.warning(
-                "You passed `model_init_kwargs` to the self-distillation config, but `model` is already "
-                "instantiated. The `model_init_kwargs` will be ignored."
-            )
+        else:
+            if args.model_init_kwargs is not None:
+                logger.warning(
+                    "You passed `model_init_kwargs` to the self-distillation config, but `model` is already "
+                    "instantiated. The `model_init_kwargs` will be ignored."
+                )
+            if quantization_config is not None:
+                logger.warning(
+                    "You passed `quantization_config` to the trainer, but your model is already instantiated. "
+                    "The `quantization_config` will be ignored."
+                )
+        # Non-quantized models do not have the `is_loaded_in_{8,4}bit` attributes, whereas quantized models do.
+        is_quantized_model = getattr(model, "is_loaded_in_4bit", False) or getattr(model, "is_loaded_in_8bit", False)
 
         self.model_kwarg_keys = (
             inspect.signature(model.forward).parameters.keys()
@@ -412,6 +434,15 @@ class SDPOTrainer(_BaseTrainer):
                 )
         if peft_config is not None or (is_peft_available() and getattr(model, "peft_config", None) is not None):
             model = prepare_peft_model(model, peft_config, args)
+
+        # When using QLoRA, the PEFT adapter weights are converted to bf16 to follow the recommendations from the
+        # original paper (see https://huggingface.co/papers/2305.14314, paragraph 3). Normally, this can be done by
+        # passing `autocast_adapter_dtype=False` to `get_peft_model`, but this option is not yet supported for
+        # quantized models. See: https://github.com/huggingface/peft/issues/2889
+        if is_quantized_model:
+            for param in model.parameters():
+                if param.requires_grad:
+                    param.data = param.data.to(torch.bfloat16)
 
         if processing_class is None:
             processing_class = AutoProcessor.from_pretrained(
@@ -510,6 +541,21 @@ class SDPOTrainer(_BaseTrainer):
                     "Liger is required to use `use_liger_kernel` as the self-distillation loss. Run "
                     "`pip install liger-kernel`."
                 )
+            if is_peft_model(model):
+                # The fused kernel reads `lm_head.weight` directly and forwards the backbone via
+                # `_forward_redirection`, bypassing `PeftModel.forward()`.
+                if isinstance(model.get_output_embeddings(), BaseTunerLayer):
+                    raise ValueError(
+                        "`use_liger_kernel` does not support a PEFT adapter on `lm_head`: the fused kernel reads "
+                        "`lm_head.weight` directly, so the adapter is ignored and never trained. Remove "
+                        "`'lm_head'` from your `target_modules`."
+                    )
+                if any(isinstance(cfg, PromptLearningConfig) for cfg in model.peft_config.values()):
+                    raise ValueError(
+                        "`use_liger_kernel` does not support prompt-learning PEFT methods (PromptTuning, "
+                        "PrefixTuning, P-Tuning): the fused kernel calls the backbone directly, so virtual tokens "
+                        "are never prepended. Use a weight-based adapter such as LoRA instead."
+                    )
             if args.distillation_weight != 1.0:
                 raise ValueError(
                     "`use_liger_kernel` only supports pure self-distillation with `distillation_weight=1.0`, got "
@@ -605,6 +651,22 @@ class SDPOTrainer(_BaseTrainer):
             self.model.add_model_tags(self._tag_names)
 
         self._setup_teacher_model()
+        # The Liger fused JSD kernel projects `h @ Wᵀ` directly and has no `logit_scale` / `final_logit_softcapping`
+        # parameters, so (unlike the chunked path) it cannot reproduce Cohere `logit_scale` or Gemma
+        # `final_logit_softcapping`. Refuse rather than silently optimize a different objective than the model's
+        # real forward.
+        if self.use_liger_loss:
+            for name, config in [("student", self.model.config), ("teacher", self.teacher_model.config)]:
+                scaled = getattr(config, "logit_scale", 1.0) not in (None, 1.0)
+                softcapped = getattr(config, "final_logit_softcapping", None) is not None
+                if scaled or softcapped:
+                    raise ValueError(
+                        f"`use_liger_kernel=True` is incompatible with the {name} model's `logit_scale` / "
+                        f"`final_logit_softcapping` (e.g. Cohere / Gemma models): the Liger fused JSD loss reads "
+                        f"`lm_head.weight` directly and cannot apply them, so it would optimize a different "
+                        f"objective than the model's real forward. Set `use_liger_kernel=False` to use the chunked "
+                        f"loss, which applies both."
+                    )
         self.model_accepts_loss_kwargs = False
 
         self.importance_sampling_level = args.importance_sampling_level
@@ -717,6 +779,14 @@ class SDPOTrainer(_BaseTrainer):
 
         Must be called after `super().__init__` so that `self.callback_handler` is available.
         """
+        deepspeed_plugin = self.accelerator.state.deepspeed_plugin
+        is_zero3 = deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3
+        if is_peft_model(self.model) and is_zero3:
+            raise ValueError(
+                "PEFT with DeepSpeed ZeRO-3 is currently unsupported: the teacher forward on the shared model "
+                "invalidates the ZeRO-3 parameter coordinator trace and training crashes at backward recompute. "
+                "Use FSDP2 or ZeRO-2 with PEFT, or full fine-tuning under ZeRO-3."
+            )
 
         teacher_model_kind = self.args.teacher_model_kind
 
@@ -1284,12 +1354,9 @@ class SDPOTrainer(_BaseTrainer):
         loss = loss.mean()
 
         mode = "train" if model.training else "eval"
-        mean_distill_loss = (
-            per_token_loss * distillation_logits.loss_mask
-        ).sum() / distillation_logits.loss_mask.sum().clamp(min=1.0)
         self._log_self_distillation_metric(
             mode,
-            self.accelerator.gather(mean_distill_loss).mean().item(),
+            self._global_masked_mean(per_token_loss, distillation_logits.loss_mask),
         )
         return loss
 
@@ -1344,11 +1411,9 @@ class SDPOTrainer(_BaseTrainer):
 
         # Diagnostic for disagreement between local student scores and server teacher scores on realized tokens.
         # Sudden jumps can indicate stale server weights or numerical drift.
-        abs_diff = ((student_per_token_logps.detach() - teacher_per_token_logps).abs() * loss_mask).sum() / (
-            loss_mask.sum().clamp(min=1.0)
-        )
+        abs_diff = (student_per_token_logps.detach() - teacher_per_token_logps).abs()
         self._metrics[mode]["self_distillation/server_logprob_abs_diff"].append(
-            self.accelerator.gather(abs_diff).mean().item()
+            self._global_masked_mean(abs_diff, loss_mask)
         )
 
         if self.args.distillation_mode == "sampled_token":
@@ -1381,8 +1446,7 @@ class SDPOTrainer(_BaseTrainer):
 
         loss = (per_token_loss * loss_mask).sum(-1) / loss_mask.sum(-1).clamp(min=1.0)
         loss = loss.mean()
-        mean_distill_loss = (per_token_loss * loss_mask).sum() / loss_mask.sum().clamp(min=1.0)
-        self._log_self_distillation_metric(mode, self.accelerator.gather(mean_distill_loss).mean().item())
+        self._log_self_distillation_metric(mode, self._global_masked_mean(per_token_loss, loss_mask))
         return loss
 
     def _get_teacher_token_logprobs_from_server(
@@ -1678,6 +1742,22 @@ class SDPOTrainer(_BaseTrainer):
         metric_prefix = self._name.lower().replace(" ", "_")
         self._metrics[mode]["self_distillation/distillation_loss"].append(value)
         self._metrics[mode][f"{metric_prefix}/distillation_loss"].append(value)
+
+    def _global_masked_mean(self, values: torch.Tensor, mask: torch.Tensor) -> float:
+        """Cross-rank weighted mean of `values` under `mask`, weighted by each rank's valid-token count.
+
+        Averaging each rank's own masked mean with an unweighted `gather(...).mean()` is biased whenever ranks hold
+        different numbers of valid tokens (e.g. variable completion lengths): a rank with few valid tokens would count
+        as much as one with many. Summing the local numerator/denominator and dividing once (GRPO/RLOO's
+        `global_masked_mean` pattern) weights every token equally regardless of which rank it landed on.
+        """
+        # Cast to float32 before stacking: `values` may be bf16/fp16 under mixed precision while `local_count` is
+        # float32, and `torch.stack` requires matching dtypes (also avoids precision loss summing many low-precision
+        # values).
+        local_sum = (values * mask).sum().float()
+        local_count = mask.sum().float()
+        totals = self.accelerator.reduce(torch.stack([local_sum, local_count]), reduction="sum")
+        return (totals[0] / totals[1].clamp(min=1.0)).item()
 
     def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
         mode = "train" if self.model.training else "eval"

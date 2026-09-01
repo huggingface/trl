@@ -30,6 +30,7 @@ from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.utils.data import DataLoader, Sampler
 from transformers import (
     AutoProcessor,
+    BitsAndBytesConfig,
     GenerationConfig,
     PreTrainedModel,
     PreTrainedTokenizerBase,
@@ -59,6 +60,7 @@ from .loss_utils import (
     add_tail_bucket,
     apply_importance_sampling_clipping,
     compute_divergence,
+    compute_dopd_routed_loss,
     compute_full_logit_self_distillation_loss,
     compute_sampled_token_self_distillation_loss,
     compute_topk_self_distillation_loss,
@@ -72,7 +74,8 @@ if is_liger_kernel_available():
 
 
 if is_peft_available():
-    from peft import PeftConfig
+    from peft import PeftConfig, PromptLearningConfig
+    from peft.tuners.tuners_utils import BaseTunerLayer
 
 
 logger = get_logger(__name__)
@@ -192,7 +195,12 @@ class DemonstrationTeacherContextBuilder:
             self._compose_teacher_prompt(prompt, privileged_context)
             for prompt, privileged_context in zip(prompts, privileged_contexts, strict=True)
         ]
-        teacher_prompt_ids_list = self.trainer._tokenize_prompts(teacher_prompts)
+        # Score the teacher on the full prompt: the problem leads the teacher template, so left-truncating
+        # would drop it. Generation also uses the untruncated teacher prompt for consistency, so teacher
+        # logits and on-policy completions always see the same context.
+        teacher_prompt_ids_list = self.trainer._tokenize_prompts_untruncated(
+            teacher_prompts, chat_template_kwargs=self.trainer.teacher_chat_template_kwargs
+        )
         device = completion_ids.device
         teacher_prompt_ids = [torch.tensor(ids) for ids in teacher_prompt_ids_list]
         teacher_prompt_mask = [torch.ones_like(ids, dtype=torch.long) for ids in teacher_prompt_ids]
@@ -236,6 +244,7 @@ class SDFTTrainer(_BaseTrainer):
         processing_class: PreTrainedTokenizerBase | ProcessorMixin | None = None,
         callbacks: list[TrainerCallback] | None = None,
         optimizers: tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None] = (None, None),
+        quantization_config: "BitsAndBytesConfig | None" = None,
         peft_config: PeftConfig | None = None,
     ):
         if isinstance(train_dataset, IterableDataset):
@@ -250,18 +259,35 @@ class SDFTTrainer(_BaseTrainer):
 
         if train_dataset is None:
             raise ValueError("`train_dataset` is required")
+        if not isinstance(train_dataset, Dataset):
+            raise TypeError(f"`train_dataset` must be a `Dataset`, got `{type(train_dataset).__name__}`.")
 
         if isinstance(model, str):
             model_init_kwargs = args.model_init_kwargs or {}
+            if quantization_config is not None:
+                if "quantization_config" in model_init_kwargs:
+                    raise ValueError(
+                        "You set `quantization_config` both as a trainer argument and in `args.model_init_kwargs`. "
+                        "Please set it in only one place, preferably as a trainer argument."
+                    )
+                model_init_kwargs["quantization_config"] = quantization_config
             if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 model_init_kwargs["device_map"] = None
             model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
             model = create_model_from_path(model, **model_init_kwargs)
-        elif args.model_init_kwargs is not None:
-            logger.warning(
-                "You passed `model_init_kwargs` to the self-distillation config, but `model` is already "
-                "instantiated. The `model_init_kwargs` will be ignored."
-            )
+        else:
+            if args.model_init_kwargs is not None:
+                logger.warning(
+                    "You passed `model_init_kwargs` to the self-distillation config, but `model` is already "
+                    "instantiated. The `model_init_kwargs` will be ignored."
+                )
+            if quantization_config is not None:
+                logger.warning(
+                    "You passed `quantization_config` to the trainer, but your model is already instantiated. "
+                    "The `quantization_config` will be ignored."
+                )
+        # Non-quantized models do not have the `is_loaded_in_{8,4}bit` attributes, whereas quantized models do.
+        is_quantized_model = getattr(model, "is_loaded_in_4bit", False) or getattr(model, "is_loaded_in_8bit", False)
 
         self.model_kwarg_keys = (
             inspect.signature(model.forward).parameters.keys()
@@ -296,6 +322,29 @@ class SDFTTrainer(_BaseTrainer):
         if peft_config is not None or (is_peft_available() and getattr(model, "peft_config", None) is not None):
             model = prepare_peft_model(model, peft_config, args)
 
+        # When using QLoRA, the PEFT adapter weights are converted to bf16 to follow the recommendations from the
+        # original paper (see https://huggingface.co/papers/2305.14314, paragraph 3). Normally, this can be done by
+        # passing `autocast_adapter_dtype=False` to `get_peft_model`, but this option is not yet supported for
+        # quantized models. See: https://github.com/huggingface/peft/issues/2889
+        if is_quantized_model:
+            for param in model.parameters():
+                if param.requires_grad:
+                    param.data = param.data.to(torch.bfloat16)
+
+        # The EMA teacher adapter must exist before accelerate/DeepSpeed wraps the model: ZeRO-3 registers every
+        # module exactly once at initialization and cannot adopt modules added afterwards.
+        if args.teacher_model_kind == "ema" and is_peft_model(model) and is_pure_lora_training(model):
+            active_adapter = model.active_adapter or "default"
+            # Resuming from a checkpoint (or loading a PEFT model that already bundles the teacher adapter) can
+            # mean "teacher" is already registered here; PEFT rejects re-adding an existing adapter name, and
+            # PEFTAdapterEMACallback._initialize_teacher_adapter already guards this same call for that reason.
+            if "teacher" not in model.peft_config:
+                model.add_adapter("teacher", model.peft_config[active_adapter])
+            # `PEFTAdapterEMACallback` zeroes the adapter too, but not until `Trainer.train()` starts; without
+            # this, a teacher forward before training (e.g. an early `evaluate()`) would see the adapter's
+            # default, non-zero PEFT init instead of the intended zero (no-op) EMA teacher.
+            PEFTAdapterEMACallback(model=model)._initialize_teacher_adapter()
+
         if processing_class is None:
             processing_class = AutoProcessor.from_pretrained(
                 get_config_model_id(model.config),
@@ -324,6 +373,11 @@ class SDFTTrainer(_BaseTrainer):
         self.generate_from_teacher = args.generate_from_teacher
         self.use_vllm = args.use_vllm
         self.chat_template_kwargs = args.chat_template_kwargs or {}
+        self.teacher_chat_template_kwargs = (
+            args.teacher_chat_template_kwargs
+            if args.teacher_chat_template_kwargs is not None
+            else self.chat_template_kwargs
+        )
         self._step = 0
         self._buffered_inputs = None
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
@@ -367,7 +421,9 @@ class SDFTTrainer(_BaseTrainer):
                     "`use_teacher_server=True` only supports `distillation_mode` in {'sampled_token', 'topk_logits'}, "
                     f"got {args.distillation_mode!r}. The server returns the teacher's top-k logprobs, not the full "
                     "vocabulary, so `full_logits` is unavailable. Note `topk_logits` distills over the teacher's own "
-                    "top-k support (the server cannot score the student's top-k indices)."
+                    "top-k support (the server cannot score the student's top-k indices). `dopd` is also unavailable: "
+                    "it needs full student/teacher logit access to compute per-token confidence and advantage gap, "
+                    "the same reason `full_logits` is excluded."
                 )
             if args.use_liger_kernel:
                 raise ValueError(
@@ -382,6 +438,21 @@ class SDFTTrainer(_BaseTrainer):
                     "Liger is required to use `use_liger_kernel` as the self-distillation loss. Run "
                     "`pip install liger-kernel`."
                 )
+            if is_peft_model(model):
+                # The fused kernel reads `lm_head.weight` directly and forwards the backbone via
+                # `_forward_redirection`, bypassing `PeftModel.forward()`.
+                if isinstance(model.get_output_embeddings(), BaseTunerLayer):
+                    raise ValueError(
+                        "`use_liger_kernel` does not support a PEFT adapter on `lm_head`: the fused kernel reads "
+                        "`lm_head.weight` directly, so the adapter is ignored and never trained. Remove "
+                        "`'lm_head'` from your `target_modules`."
+                    )
+                if any(isinstance(cfg, PromptLearningConfig) for cfg in model.peft_config.values()):
+                    raise ValueError(
+                        "`use_liger_kernel` does not support prompt-learning PEFT methods (PromptTuning, "
+                        "PrefixTuning, P-Tuning): the fused kernel calls the backbone directly, so virtual tokens "
+                        "are never prepended. Use a weight-based adapter such as LoRA instead."
+                    )
             if args.distillation_mode != "full_logits":
                 raise ValueError(
                     "`use_liger_kernel` only supports `distillation_mode='full_logits'`, got "
@@ -392,6 +463,12 @@ class SDFTTrainer(_BaseTrainer):
                 raise ValueError(
                     "`use_liger_kernel` is incompatible with `distillation_is_clip`: the fused kernel does not expose "
                     "per-token losses for importance-sampling clipping."
+                )
+            if args.distillation_kl_clip is not None:
+                raise ValueError(
+                    "`use_liger_kernel` is incompatible with `distillation_kl_clip`: the fused kernel does not expose "
+                    "the per-vocabulary-entry divergences the pointwise clip applies to. Set "
+                    "`distillation_kl_clip=None`."
                 )
             self.liger_loss = LigerFusedLinearJSDLoss(
                 beta=args.distillation_alpha,
@@ -466,6 +543,22 @@ class SDFTTrainer(_BaseTrainer):
             self.model.add_model_tags(self._tag_names)
 
         self._setup_teacher_model()
+        # The Liger fused JSD kernel projects `h @ Wᵀ` directly and has no `logit_scale` / `final_logit_softcapping`
+        # parameters, so (unlike the chunked path) it cannot reproduce Cohere `logit_scale` or Gemma
+        # `final_logit_softcapping`. Refuse rather than silently optimize a different objective than the model's
+        # real forward.
+        if self.use_liger_loss:
+            for name, config in [("student", self.model.config), ("teacher", self.teacher_model.config)]:
+                scaled = getattr(config, "logit_scale", 1.0) not in (None, 1.0)
+                softcapped = getattr(config, "final_logit_softcapping", None) is not None
+                if scaled or softcapped:
+                    raise ValueError(
+                        f"`use_liger_kernel=True` is incompatible with the {name} model's `logit_scale` / "
+                        f"`final_logit_softcapping` (e.g. Cohere / Gemma models): the Liger fused JSD loss reads "
+                        f"`lm_head.weight` directly and cannot apply them, so it would optimize a different "
+                        f"objective than the model's real forward. Set `use_liger_kernel=False` to use the chunked "
+                        f"loss, which applies both."
+                    )
         self.model_accepts_loss_kwargs = False
 
     def _set_signature_columns_if_needed(self):
@@ -505,6 +598,14 @@ class SDFTTrainer(_BaseTrainer):
 
         Must be called after `super().__init__` so that `self.callback_handler` is available.
         """
+        deepspeed_plugin = self.accelerator.state.deepspeed_plugin
+        is_zero3 = deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3
+        if is_peft_model(self.model) and is_zero3:
+            raise ValueError(
+                "PEFT with DeepSpeed ZeRO-3 is currently unsupported: the teacher forward on the shared model "
+                "invalidates the ZeRO-3 parameter coordinator trace and training crashes at backward recompute. "
+                "Use FSDP2 or ZeRO-2 with PEFT, or full fine-tuning under ZeRO-3."
+            )
 
         teacher_model_kind = self.args.teacher_model_kind
 
@@ -678,7 +779,9 @@ class SDFTTrainer(_BaseTrainer):
         student_prompt_ids_list = self._tokenize_prompts(prompts)
         if self.generate_from_teacher:
             generation_prompts = self.teacher_context_builder.select_generation_prompts(prompts, privileged_contexts)
-            generation_prompt_ids_list = self._tokenize_prompts(generation_prompts)
+            generation_prompt_ids_list = self._tokenize_prompts_untruncated(
+                generation_prompts, chat_template_kwargs=self.teacher_chat_template_kwargs
+            )
         else:
             generation_prompts = prompts
             generation_prompt_ids_list = student_prompt_ids_list
@@ -731,18 +834,26 @@ class SDFTTrainer(_BaseTrainer):
             for ids, length in zip(batch["completion_ids"].detach().cpu(), raw_completion_lengths, strict=True)
         ]
 
-    def _tokenize_prompts(self, prompts: list[Any]) -> list[list[int]]:
+    def _tokenize_prompts_untruncated(
+        self, prompts: list[Any], chat_template_kwargs: dict[str, Any] | None = None
+    ) -> list[list[int]]:
         if is_conversational({"prompt": prompts[0]}):
             tokenized = self.processing_class.apply_chat_template(
                 conversation=prompts,
                 add_generation_prompt=True,
                 tokenize=True,
                 return_dict=True,
-                **self.chat_template_kwargs,
+                **(self.chat_template_kwargs if chat_template_kwargs is None else chat_template_kwargs),
             )
             prompt_ids = tokenized["input_ids"]
         else:
             prompt_ids = self.processing_class(text=prompts)["input_ids"]
+        return prompt_ids
+
+    def _tokenize_prompts(
+        self, prompts: list[Any], chat_template_kwargs: dict[str, Any] | None = None
+    ) -> list[list[int]]:
+        prompt_ids = self._tokenize_prompts_untruncated(prompts, chat_template_kwargs=chat_template_kwargs)
         if self.max_prompt_length is not None:
             prompt_ids = [ids[-self.max_prompt_length :] for ids in prompt_ids]
         return prompt_ids
@@ -875,12 +986,15 @@ class SDFTTrainer(_BaseTrainer):
                 distillation_topk=self.args.distillation_topk,
                 distillation_alpha=self.args.distillation_alpha,
                 distillation_add_tail=self.args.distillation_add_tail,
+                distillation_kl_clip=self.args.distillation_kl_clip,
+                topk_support=self.args.distillation_topk_support,
             )
         elif self.args.distillation_mode == "full_logits":
             per_token_loss = compute_full_logit_self_distillation_loss(
                 distillation_logits.student_logits,
                 distillation_logits.teacher_logits,
                 distillation_alpha=self.args.distillation_alpha,
+                distillation_kl_clip=self.args.distillation_kl_clip,
             )
         elif self.args.distillation_mode == "sampled_token":
             per_token_loss = compute_sampled_token_self_distillation_loss(
@@ -889,14 +1003,40 @@ class SDFTTrainer(_BaseTrainer):
                 distillation_logits.completion_ids,
                 distillation_alpha=self.args.distillation_alpha,
             )
+        elif self.args.distillation_mode == "dopd":
+            # DOPD routes on the advantage gap between both policies under the same privileged context (the paper's
+            # "privilege illusion" fix): the bare-prompt student forward would conflate the transferable capability
+            # gap with the information-asymmetry gap. Forward the student on the teacher's privileged input under
+            # `no_grad` purely for routing; the loss terms still train the live bare-student logits.
+            with torch.no_grad():
+                privileged_student_logits = self._forward_logits(
+                    model=model,
+                    input_ids=inputs["teacher_input_ids"],
+                    attention_mask=inputs["teacher_attention_mask"],
+                    logits_to_keep=distillation_logits.completion_ids.size(1),
+                )
+            per_token_loss = compute_dopd_routed_loss(
+                distillation_logits.student_logits,
+                distillation_logits.teacher_logits,
+                privileged_student_logits,
+                distillation_logits.completion_ids,
+                gap_threshold=self.args.distillation_dopd_gap_threshold,
+                confidence_threshold=self.args.distillation_dopd_confidence_threshold,
+                light_topk=self.args.distillation_dopd_light_topk,
+                self_reg_weight=self.args.distillation_dopd_self_reg_weight,
+                student_consistency_weight=self.args.distillation_dopd_student_consistency_weight,
+            )
         else:
             raise ValueError(
-                "distillation_mode must be one of: 'sampled_token', 'full_logits', 'topk_logits', "
+                "distillation_mode must be one of: 'sampled_token', 'full_logits', 'topk_logits', 'dopd', "
                 f"got {self.args.distillation_mode!r}"
             )
 
         old_per_token_logps = inputs.get("old_per_token_logps")
         if self.args.distillation_is_clip is not None and old_per_token_logps is not None:
+            # Detached IS ratio is a per-token scalar multiplier — safe with any per_token_loss regime, including
+            # DOPD's four-regime routed loss whose stop-gradient sub-terms (regimes 2 and 4) are unaffected by an
+            # external detached weight.
             student_per_token_logps = selective_log_softmax(
                 distillation_logits.student_logits,
                 distillation_logits.completion_ids,
@@ -914,12 +1054,9 @@ class SDFTTrainer(_BaseTrainer):
         loss = loss.mean()
 
         mode = "train" if model.training else "eval"
-        mean_distill_loss = (
-            per_token_loss * distillation_logits.loss_mask
-        ).sum() / distillation_logits.loss_mask.sum().clamp(min=1.0)
         self._log_self_distillation_metric(
             mode,
-            self.accelerator.gather(mean_distill_loss).mean().item(),
+            self._global_masked_mean(per_token_loss, distillation_logits.loss_mask),
         )
         return loss
 
@@ -974,11 +1111,9 @@ class SDFTTrainer(_BaseTrainer):
 
         # Diagnostic for disagreement between local student scores and server teacher scores on realized tokens.
         # Sudden jumps can indicate stale server weights or numerical drift.
-        abs_diff = ((student_per_token_logps.detach() - teacher_per_token_logps).abs() * loss_mask).sum() / (
-            loss_mask.sum().clamp(min=1.0)
-        )
+        abs_diff = (student_per_token_logps.detach() - teacher_per_token_logps).abs()
         self._metrics[mode]["self_distillation/server_logprob_abs_diff"].append(
-            self.accelerator.gather(abs_diff).mean().item()
+            self._global_masked_mean(abs_diff, loss_mask)
         )
 
         if self.args.distillation_mode == "sampled_token":
@@ -1001,7 +1136,9 @@ class SDFTTrainer(_BaseTrainer):
             else:
                 student_topk_logps = student_topk_logps - torch.logsumexp(student_topk_logps, dim=-1, keepdim=True)
                 teacher_topk_logps = teacher_topk_logps - torch.logsumexp(teacher_topk_logps, dim=-1, keepdim=True)
-            per_token_loss = compute_divergence(student_topk_logps, teacher_topk_logps, self.args.distillation_alpha)
+            per_token_loss = compute_divergence(
+                student_topk_logps, teacher_topk_logps, self.args.distillation_alpha, self.args.distillation_kl_clip
+            )
 
         old_per_token_logps = inputs.get("old_per_token_logps")
         if self.args.distillation_is_clip is not None and old_per_token_logps is not None:
@@ -1011,8 +1148,7 @@ class SDFTTrainer(_BaseTrainer):
 
         loss = (per_token_loss * loss_mask).sum(-1) / loss_mask.sum(-1).clamp(min=1.0)
         loss = loss.mean()
-        mean_distill_loss = (per_token_loss * loss_mask).sum() / loss_mask.sum().clamp(min=1.0)
-        self._log_self_distillation_metric(mode, self.accelerator.gather(mean_distill_loss).mean().item())
+        self._log_self_distillation_metric(mode, self._global_masked_mean(per_token_loss, loss_mask))
         return loss
 
     def _get_teacher_token_logprobs_from_server(
@@ -1308,6 +1444,22 @@ class SDFTTrainer(_BaseTrainer):
         metric_prefix = self._name.lower().replace(" ", "_")
         self._metrics[mode]["self_distillation/distillation_loss"].append(value)
         self._metrics[mode][f"{metric_prefix}/distillation_loss"].append(value)
+
+    def _global_masked_mean(self, values: torch.Tensor, mask: torch.Tensor) -> float:
+        """Cross-rank weighted mean of `values` under `mask`, weighted by each rank's valid-token count.
+
+        Averaging each rank's own masked mean with an unweighted `gather(...).mean()` is biased whenever ranks hold
+        different numbers of valid tokens (e.g. variable completion lengths): a rank with few valid tokens would count
+        as much as one with many. Summing the local numerator/denominator and dividing once (GRPO/RLOO's
+        `global_masked_mean` pattern) weights every token equally regardless of which rank it landed on.
+        """
+        # Cast to float32 before stacking: `values` may be bf16/fp16 under mixed precision while `local_count` is
+        # float32, and `torch.stack` requires matching dtypes (also avoids precision loss summing many low-precision
+        # values).
+        local_sum = (values * mask).sum().float()
+        local_count = mask.sum().float()
+        totals = self.accelerator.reduce(torch.stack([local_sum, local_count]), reduction="sum")
+        return (totals[0] / totals[1].clamp(min=1.0)).item()
 
     def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
         mode = "train" if self.model.training else "eval"
