@@ -115,6 +115,7 @@ While training and evaluating, we record the following metrics:
 * `val/ref_contain_eos_token`: The amount of times the reference's output contains the eos token.
 * `alpha`: The weight of the XPO loss term. Typically fixed, but can be made dynamic by passing a list to [`experimental.xpo.XPOConfig`].
 * `beta`: The parameter that controls the weight of the loss term representing the deviation from the reference model. Typically fixed, but can be made dynamic by passing a list to [`experimental.xpo.XPOConfig`].
+* `frac_nonfinite_loss`: The fraction of loss computations in the logging interval whose loss was not finite (NaN or Inf), counted once per rank per gradient accumulation step, so it is a rate rather than a count of affected optimizer steps. Any non-zero value is worth investigating: `logging_nan_inf_filter` is enabled by default and substitutes a finite value for a non-finite loss in the reported `loss`, which leaves the failing step invisible in the loss curve.
 
 ## XPOTrainer
 

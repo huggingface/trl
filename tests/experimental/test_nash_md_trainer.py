@@ -112,17 +112,22 @@ class TestNashMDTrainer(TrlTestCase):
 
         assert "train_loss" in trainer.state.log_history[-1]
 
-    def test_nonfinite_loss_is_visible_in_log_history(self):
+    @pytest.mark.parametrize("poison", [float("nan"), float("inf")])
+    def test_nonfinite_loss_is_visible_in_log_history(self, poison):
         """A non-finite loss must reach `log_history`, which `logging_nan_inf_filter` otherwise hides."""
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         class NonFiniteLossNashMDTrainer(NashMDTrainer):
+            # Both NaN and Inf are injected, because the guard tests `~isfinite` and a suite that only ever injects
+            # one of them is passed by the matching `isnan` or `isinf` implementation. Adding rather than
+            # multiplying leaves the gradients finite, so the poisoned step does not corrupt the weights, and is
+            # invariant to a loss of exactly `0.0`, for which `0.0 * inf` would be NaN.
             def _compute_losses(self, model_logprobs_model_data, ref_logprobs_model_data, probability):
                 loss, score, kl_div = super()._compute_losses(
                     model_logprobs_model_data, ref_logprobs_model_data, probability
                 )
                 if self.state.global_step == 1:
-                    loss = loss * float("nan")
+                    loss = loss + poison
                 return loss, score, kl_div
 
         training_args = NashMDConfig(

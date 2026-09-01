@@ -383,6 +383,11 @@ class TestDPOTrainer(TrlTestCase):
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
 
         class NonFiniteLossDPOTrainer(DPOTrainer):
+            # Only NaN is injected here. The guard runs inside the loss computation, so the poison has to land
+            # upstream of it, on the logits or the log-probabilities, and the poisoned values meet each other on the
+            # way in, where `inf - inf` and `inf / inf` are both NaN. An injected `inf` therefore arrives at the loss
+            # as NaN, so this test cannot tell `~isfinite` from an `isnan` implementation. The trainers whose poison
+            # reaches the loss as a distinct Inf are parametrized over both values instead.
             def _compute_loss(self, model, inputs, return_outputs):
                 if self.state.global_step == 1:
 

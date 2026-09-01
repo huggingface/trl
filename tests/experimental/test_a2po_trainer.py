@@ -80,16 +80,23 @@ class TestA2POTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    def test_nonfinite_loss_is_visible_in_log_history(self):
+    @pytest.mark.parametrize("poison", [float("nan"), float("inf")])
+    def test_nonfinite_loss_is_visible_in_log_history(self, poison):
         """A non-finite loss must reach `log_history`, which `logging_nan_inf_filter` otherwise hides."""
         dataset = Dataset.from_dict(
             {"prompt": ["The capital of France is", "Two plus two equals", "Water is made of", "The sky is"]}
         )
 
         class NonFiniteLossA2POTrainer(A2POTrainer):
+            # Both NaN and Inf are injected, because the guard tests `~isfinite` and a suite that only ever injects
+            # one of them is passed by the matching `isnan` or `isinf` implementation. Both reach this loss
+            # distinctly, unlike the trainers whose poisoned log-probabilities collapse to NaN either way: mutating
+            # the guard to `isnan` fails the Inf case and mutating it to `isinf` fails the NaN case. Adding rather
+            # than multiplying preserves that separation, because a log-probability of exactly `0.0` would turn
+            # `inf` into NaN.
             def _get_sequence_logps(self, model, input_ids, attention_mask, logits_to_keep):
                 logps = super()._get_sequence_logps(model, input_ids, attention_mask, logits_to_keep)
-                return logps * float("nan") if self.state.global_step == 1 and model.training else logps
+                return logps + poison if self.state.global_step == 1 and model.training else logps
 
         training_args = A2POConfig(
             output_dir=self.tmp_dir,

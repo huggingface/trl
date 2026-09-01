@@ -422,8 +422,8 @@ class MiniLLMTrainer(GRPOTrainer):
         self._metrics[mode]["frac_nonfinite_loss"].append(nonfinite.mean().item())
         if nonfinite.any():
             # `logging_nan_inf_filter` and the optimizer step belong to the training loop only, so each mode gets its
-            # own message. `warning_once` caches on the message, so this also stops a repeated evaluation warning from
-            # consuming the slot a later training step needs.
+            # own message. `warning_once` keys its cache on the message text, so the two do not suppress each other and
+            # an evaluation warning cannot stop a later training warning from being emitted.
             if mode == "train":
                 logger.warning_once(
                     "The training loss is not finite (NaN or Inf) for at least one step. The logged loss may not show "

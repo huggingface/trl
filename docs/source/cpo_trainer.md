@@ -55,6 +55,7 @@ While training and evaluating, we record the following metrics:
 * `rewards/accuracies`: mean of how often the chosen rewards are > than the corresponding rejected rewards
 * `rewards/margins`: the mean difference between the chosen and corresponding rejected rewards
 * `nll_loss`: the mean negative log likelihood loss of the policy model for the chosen responses
+* `frac_nonfinite_loss`: The fraction of loss computations in the logging interval whose loss was not finite (NaN or Inf), counted once per rank per gradient accumulation step, so it is a rate rather than a count of affected optimizer steps. Any non-zero value is worth investigating: `logging_nan_inf_filter` is enabled by default and substitutes a finite value for a non-finite loss in the reported `loss`, which leaves the failing step invisible in the loss curve.
 
 ## CPO variants
 

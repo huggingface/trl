@@ -169,14 +169,19 @@ class TestORPOTrainer(TrlTestCase):
         trainer.train()
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
-    def test_nonfinite_loss_is_visible_in_log_history(self):
+    @pytest.mark.parametrize("poison", [float("nan"), float("inf")])
+    def test_nonfinite_loss_is_visible_in_log_history(self, poison):
         """A non-finite loss must reach `log_history`, which `logging_nan_inf_filter` otherwise hides."""
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
 
         class NonFiniteLossORPOTrainer(ORPOTrainer):
+            # Both NaN and Inf are injected, because the guard tests `~isfinite` and a suite that only ever injects
+            # one of them is passed by the matching `isnan` or `isinf` implementation. Adding rather than
+            # multiplying leaves the gradients finite, so the poisoned step does not corrupt the weights, and is
+            # invariant to a loss of exactly `0.0`, for which `0.0 * inf` would be NaN.
             def get_batch_loss_metrics(self, model, batch, train_eval="train"):
                 loss, metrics = super().get_batch_loss_metrics(model, batch, train_eval)
-                return (loss * float("nan") if self.state.global_step == 1 else loss), metrics
+                return (loss + poison if self.state.global_step == 1 else loss), metrics
 
         training_args = ORPOConfig(
             output_dir=self.tmp_dir,

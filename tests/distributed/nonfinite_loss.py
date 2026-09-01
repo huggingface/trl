@@ -35,8 +35,9 @@ def main() -> int:
     dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
     class NonFiniteLossGRPOTrainer(GRPOTrainer):
-        # Poison the last rank only. Adding keeps the autograd graph, and is invariant to a loss of exactly
-        # `0.0`, for which `0.0 * inf` would be a NaN and would collapse an Inf into the NaN case.
+        # Poison the last rank only, so the gathered fraction is `1 / world_size` rather than 1.0 and the test can
+        # tell a world-wide rate from a rank-local flag. Adding keeps the autograd graph, so `backward` runs on the
+        # non-finite value exactly as it would for a real one.
         def _compute_loss(self, model, inputs):
             loss = super()._compute_loss(model, inputs)
             if self.accelerator.process_index == self.accelerator.num_processes - 1:
@@ -70,7 +71,13 @@ def main() -> int:
         # rather than written as a literal, so the check stays correct if the launcher's rank count changes.
         expected = 1 / world_size
         actual = trainer.state.log_history[0]["frac_nonfinite_loss"]
-        assert actual == expected, (
+        # The metric is a float32 mean widened to a Python float, so it equals `1 / world_size` exactly only when
+        # the world size is a power of two: at three ranks it is 0.3333333432674408, not 0.3333333333333333. Compare
+        # with a tolerance instead, one far tighter than the gap this test exists to detect. Without the gather a
+        # rank reports 1.0 or 0.0, so the smaller of the two gaps is `1 / world_size`: 0.5 at two ranks, narrowing
+        # as the world grows but staying orders of magnitude above the tolerance, which therefore cannot hide the
+        # regression.
+        assert abs(actual - expected) < 1e-6, (
             f"rank {trainer.accelerator.process_index} logged frac_nonfinite_loss={actual}, expected "
             f"{expected}. Without the gather a rank sees only its own loss, so the poisoned rank reports 1.0 "
             f"and every other rank reports 0.0."

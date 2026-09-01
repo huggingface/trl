@@ -626,8 +626,8 @@ class RLOOTrainer(_BaseTrainer):
 
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
-        # Set by `_open_eval_window`, the only place the caller's prefix is visible. `log` needs it to file
-        # eval metrics under the prefix the caller actually asked for.
+        # Set by `_open_eval_window`, because `log` cannot see the caller's prefix and has to file eval
+        # metrics under the prefix the caller actually asked for.
         self._metric_key_prefix = "eval"
         self._total_train_tokens = 0
         self._current_train_step_time = 0.0
@@ -1710,8 +1710,8 @@ class RLOOTrainer(_BaseTrainer):
         self._metrics[mode]["frac_nonfinite_loss"].append(nonfinite.mean().item())
         if nonfinite.any():
             # `logging_nan_inf_filter` and the optimizer step belong to the training loop only, so each mode gets its
-            # own message. `warning_once` caches on the message, so this also stops a repeated evaluation warning from
-            # consuming the slot a later training step needs.
+            # own message. `warning_once` keys its cache on the message text, so the two do not suppress each other and
+            # an evaluation warning cannot stop a later training warning from being emitted.
             if mode == "train":
                 logger.warning_once(
                     "The training loss is not finite (NaN or Inf) for at least one step. The logged loss may not show "

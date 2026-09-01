@@ -379,16 +379,22 @@ class TestSFTTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    def test_nonfinite_loss_is_visible_in_log_history(self):
+    @pytest.mark.parametrize("poison", [float("nan"), float("inf")])
+    def test_nonfinite_loss_is_visible_in_log_history(self, poison):
         """A non-finite loss must reach `log_history`, which `logging_nan_inf_filter` otherwise hides."""
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
 
         class NonFiniteLossSFTTrainer(SFTTrainer):
+            # The guard runs inside `compute_loss`, so the poison has to land before it: hook the forward and
+            # perturb the loss it returns. Both NaN and Inf are injected, because the guard tests `~isfinite` and a
+            # suite that only ever injects one of them is passed by the matching `isnan` or `isinf` implementation.
+            # Adding rather than multiplying leaves the gradients finite, so the poisoned step does not corrupt the
+            # weights, and is invariant to a loss of exactly `0.0`, for which `0.0 * inf` would be NaN.
             def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
                 if self.state.global_step == 1:
 
                     def poison_loss(module, args, output):
-                        output.loss = output.loss * float("nan")
+                        output.loss = output.loss + poison
                         return output
 
                     handle = model.register_forward_hook(poison_loss)
@@ -424,6 +430,44 @@ class TestSFTTrainer(TrlTestCase):
             assert not torch.isfinite(torch.tensor(poisoned_step["loss"]))
         else:
             assert torch.isfinite(torch.tensor(poisoned_step["loss"]))
+
+    @pytest.mark.parametrize("metric_key_prefix", ["eval", "test", "holdout"])
+    def test_nonfinite_loss_metric_uses_the_callers_prefix(self, metric_key_prefix):
+        """During evaluation the metric must carry the prefix the caller asked for, not a hardcoded `eval_`."""
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+
+        class NonFiniteLossSFTTrainer(SFTTrainer):
+            # Poison every evaluation step, so the metric is 1.0 whenever the guard ran. `evaluate` takes one pass
+            # over the eval set, so there is no healthy step to compare against here; the training-side test above
+            # already covers the healthy case.
+            def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+                if model.training:
+                    return super().compute_loss(model, inputs, return_outputs, num_items_in_batch)
+
+                def poison_loss(module, args, output):
+                    output.loss = output.loss + float("nan")
+                    return output
+
+                handle = model.register_forward_hook(poison_loss)
+                try:
+                    return super().compute_loss(model, inputs, return_outputs, num_items_in_batch)
+                finally:
+                    handle.remove()
+
+        training_args = SFTConfig(output_dir=self.tmp_dir, max_steps=1, report_to="none")
+        trainer = NonFiniteLossSFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset,
+            eval_dataset=dataset,
+        )
+
+        metrics = trainer.evaluate(metric_key_prefix=metric_key_prefix)
+
+        # `predict()` passes "test" and a caller may pass anything, so a guard that hardcoded "eval_" would file the
+        # metric under a prefix nobody asked for and leave it out of the returned mapping under the right one.
+        assert f"{metric_key_prefix}_frac_nonfinite_loss" in metrics
+        assert metrics[f"{metric_key_prefix}_frac_nonfinite_loss"] == 1.0
 
     def test_trust_remote_code(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")

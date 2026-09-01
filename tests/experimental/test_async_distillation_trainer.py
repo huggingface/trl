@@ -747,16 +747,21 @@ class TestAsyncDistillationTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    def test_nonfinite_loss_is_visible_in_log_history(self):
+    @pytest.mark.parametrize("poison", [float("nan"), float("inf")])
+    def test_nonfinite_loss_is_visible_in_log_history(self, poison):
         """A non-finite loss must reach `log_history`, which `logging_nan_inf_filter` otherwise hides."""
         model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
         tokenizer = AutoTokenizer.from_pretrained(model_id)
 
         class NonFiniteLossAsyncDistillationTrainer(AsyncDistillationTrainer):
+            # Both NaN and Inf are injected, because the guard tests `~isfinite` and a suite that only ever injects
+            # one of them is passed by the matching `isnan` or `isinf` implementation. Adding rather than
+            # multiplying leaves the gradients finite, so the poisoned step does not corrupt the weights, and is
+            # invariant to a loss of exactly `0.0`, for which `0.0 * inf` would be NaN.
             def _compute_loss(self, unwrapped_model, inputs):
                 loss = super()._compute_loss(unwrapped_model, inputs)
-                return loss * float("nan") if self.state.global_step == 1 else loss
+                return loss + poison if self.state.global_step == 1 else loss
 
         training_args = AsyncDistillationConfig(
             output_dir=self.tmp_dir,

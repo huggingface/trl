@@ -175,16 +175,21 @@ class TestSDPOTrainer(TrlTestCase):
             if param.sum() != 0:
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    def test_nonfinite_loss_is_visible_in_log_history(self):
+    @pytest.mark.parametrize("poison", [float("nan"), float("inf")])
+    def test_nonfinite_loss_is_visible_in_log_history(self, poison):
         """A non-finite loss must reach `log_history`, which `logging_nan_inf_filter` otherwise hides."""
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         class NonFiniteLossSDPOTrainer(SDPOTrainer):
+            # Both NaN and Inf are injected, because the guard tests `~isfinite` and a suite that only ever injects
+            # one of them is passed by the matching `isnan` or `isinf` implementation. Adding rather than
+            # multiplying leaves the gradients finite, so the poisoned step does not corrupt the weights, and is
+            # invariant to a loss of exactly `0.0`, for which `0.0 * inf` would be NaN.
             # `distillation_weight` defaults to 1.0, and that branch returns the self-distillation loss
             # without ever calling `_compute_policy_loss`, so poison the method the default path uses.
             def _compute_self_distillation_loss(self, model, inputs, distillation_logits):
                 loss = super()._compute_self_distillation_loss(model, inputs, distillation_logits)
-                return loss * float("nan") if self.state.global_step == 1 else loss
+                return loss + poison if self.state.global_step == 1 else loss
 
         training_args = SDPOConfig(
             output_dir=self.tmp_dir,

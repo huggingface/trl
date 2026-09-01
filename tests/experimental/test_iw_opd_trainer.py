@@ -528,16 +528,21 @@ class TestIWOPDTrainer(TrlTestCase):
         assert train_result.metrics["train_loss"] >= 0.0
         assert "model.safetensors" in os.listdir(self.tmp_dir + "/checkpoint-2")
 
-    def test_nonfinite_loss_is_visible_in_log_history(self):
+    @pytest.mark.parametrize("poison", [float("nan"), float("inf")])
+    def test_nonfinite_loss_is_visible_in_log_history(self, poison):
         """A non-finite loss must reach `log_history`, which `logging_nan_inf_filter` otherwise hides."""
         dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
 
         class NonFiniteLossIWOPDTrainer(IWOPDTrainer):
+            # Both NaN and Inf are injected, because the guard tests `~isfinite` and a suite that only ever injects
+            # one of them is passed by the matching `isnan` or `isinf` implementation. Adding rather than
+            # multiplying leaves the gradients finite, so the poisoned step does not corrupt the weights, and is
+            # invariant to a loss of exactly `0.0`, for which `0.0 * inf` would be NaN.
             # `beta` and `loss_top_k` default to 1.0 and 1, which selects the sparse top-1 branch, so
             # poison that one rather than `generalized_jsd_loss`, which only the `else` branch reaches.
             def _compute_local_sparse_top_1_divergence_loss(self, *args, **kwargs):
                 loss = super()._compute_local_sparse_top_1_divergence_loss(*args, **kwargs)
-                return loss * float("nan") if self.state.global_step == 1 else loss
+                return loss + poison if self.state.global_step == 1 else loss
 
         training_args = self._make_args(
             dataloader_drop_last=True,

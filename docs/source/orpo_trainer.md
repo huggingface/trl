@@ -104,6 +104,7 @@ While training and evaluating, we record the following metrics:
 - `log_odds_chosen`: the mean log odds ratio of the chosen responses over the rejected responses
 - `log_odds_ratio`: the mean of the `log(sigmoid(log_odds_chosen))`
 - `nll_loss`: the mean negative log likelihood loss from the SFT part of the loss over chosen responses
+- `frac_nonfinite_loss`: The fraction of loss computations in the logging interval whose loss was not finite (NaN or Inf), counted once per rank per gradient accumulation step, so it is a rate rather than a count of affected optimizer steps. Any non-zero value is worth investigating: `logging_nan_inf_filter` is enabled by default and substitutes a finite value for a non-finite loss in the reported `loss`, which leaves the failing step invisible in the loss curve.
 
 ## ORPOTrainer
 
