@@ -27,7 +27,7 @@ import pytest
 import torch
 from accelerate import PartialState
 from datasets import Dataset, load_dataset
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, PreTrainedModel
 from transformers.testing_utils import torch_device
 
 import trl.experimental.async_grpo.async_rollout_worker as worker
@@ -55,6 +55,10 @@ from trl.experimental.async_grpo.async_rollout_worker import (
 from trl.trainer.base_trainer import _BaseTrainer
 
 from ..testing_utils import TrlTestCase, is_ampere_or_newer
+
+
+# The trainer loads the model with Flash Attention, which requires a `head_size` multiple of 8. Hence the `small-*`
+# model (`head_size=32`) below, rather than the usual `tiny-*` one (`head_size=2`).
 
 
 def dummy_reward_func(completions, **kwargs):
@@ -153,7 +157,7 @@ class _StubWeightTransfer:
 class TestAsyncGRPOTrainer(TrlTestCase):
     def test_init_minimal(self):
         # Test that AsyncGRPOTrainer can be instantiated with only model, reward_model and train_dataset
-        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
         AsyncGRPOTrainer(
             model=model_id,
@@ -164,7 +168,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         )
 
     def test_train(self):
-        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
 
         training_args = AsyncGRPOConfig(
@@ -201,7 +205,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         # Checks that ignore_data_skip is True and that resume doesn't crash. The stub worker is not an
         # AsyncRolloutWorker, so the checkpoint-write and resume-read paths stay inert here — those are
         # covered by TestRolloutStateCheckpoint.
-        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
         tokenizer = AutoTokenizer.from_pretrained(model_id)
 
@@ -260,7 +264,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         training_args = AsyncGRPOConfig(output_dir=self.tmp_dir, max_steps=5, report_to="none")
         with pytest.raises(ValueError, match="`train_dataset` is required"):
             AsyncGRPOTrainer(
-                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                model="trl-internal-testing/small-Qwen2ForCausalLM-2.5",
                 reward_funcs=dummy_reward_func,
                 args=training_args,
             )
@@ -275,7 +279,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         args = AsyncGRPOConfig(output_dir=self.tmp_dir, report_to="none")  # max_steps unset
         with pytest.raises(ValueError, match="max_steps"):
             AsyncGRPOTrainer(
-                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                model="trl-internal-testing/small-Qwen2ForCausalLM-2.5",
                 reward_funcs=dummy_reward_func,
                 args=args,
                 environment_factory=DummyEnvironment,
@@ -293,11 +297,114 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         args = AsyncGRPOConfig(output_dir=self.tmp_dir, max_steps=1, report_to="none")
         with pytest.raises(ValueError, match="requires a `train_dataset`"):
             AsyncGRPOTrainer(
-                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                model="trl-internal-testing/small-Qwen2ForCausalLM-2.5",
                 reward_funcs=dummy_reward_func,
                 args=args,
                 environment_factory={"a": EnvA, "b": EnvB},
             )
+
+
+def _vision_parameter_names(model) -> set[str]:
+    """Names of the parameters belonging to a vision-language model's vision tower.
+
+    Located through the vision config, since module names differ across architectures (`visual` for Qwen-VL,
+    `vision_tower` for Gemma 3, `vision_model` for SmolVLM).
+    """
+    vision_config = model.config.vision_config
+    return {
+        f"{module_name}.{parameter_name}"
+        for module_name, module in model.named_modules()
+        if isinstance(module, PreTrainedModel) and module.config is vision_config
+        for parameter_name, _ in module.named_parameters()
+    }
+
+
+@pytest.mark.skipif(
+    not is_ampere_or_newer() and torch_device != "xpu",
+    reason="Flash Attention 2 requires Ampere or newer GPU, or XPU",
+)
+@pytest.mark.parametrize(
+    "model_id",
+    [
+        pytest.param("trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-Think", id="qwen35"),
+        pytest.param("trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6", id="qwen36-moe"),
+        pytest.param("trl-internal-testing/tiny-Qwen3VLForConditionalGeneration", id="qwen3_vl"),
+    ],
+)
+class TestAsyncGRPOTrainerVLM(TrlTestCase):
+    """Text-only training on vision-language checkpoints. The vision tower is loaded (so parameter names match the
+    vLLM server) but frozen, since the dataset carries no images."""
+
+    def _trainer(self, model_id, **config_kwargs):
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
+        training_args = AsyncGRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            # `TokenBudgetBatcher` only closes a row once the next sample no longer fits, and these checkpoints
+            # render a `zen` row to ~36 tokens: at 256 no row ever closes and training blocks on an empty queue.
+            token_budget=64,
+            vllm_server_timeout=5.0,  # short timeout so test fails fast if queue runs dry
+            report_to="none",
+            **config_kwargs,
+        )
+        return AsyncGRPOTrainer(
+            model=model_id,
+            reward_funcs=dummy_reward_func,  # unused: the stub pre-computes rewards, but the trainer requires it
+            args=training_args,
+            train_dataset=dataset,
+            rollout_worker=_StubRolloutWorker(AutoTokenizer.from_pretrained(model_id), dataset, num_generations=3),
+            weight_transfer=_StubWeightTransfer(),
+        )
+
+    def test_vision_tower_is_frozen(self, model_id):
+        trainer = self._trainer(model_id)
+
+        vision = _vision_parameter_names(trainer.model)
+        frozen = {n for n, p in trainer.model.named_parameters() if not p.requires_grad}
+        trainable = {n for n, p in trainer.model.named_parameters() if p.requires_grad}
+        assert vision
+        assert vision <= frozen
+        assert trainable and not (trainable & vision)
+
+        # Frozen parameters get no optimizer state: the optimizer only sees the text tower.
+        trainer.create_optimizer()
+        optimized = {p.data_ptr() for group in trainer.optimizer.param_groups for p in group["params"]}
+        assert optimized == {p.data_ptr() for n, p in trainer.model.named_parameters() if n in trainable}
+
+    def test_weight_sync_streams_the_text_tower_only(self, model_id):
+        # The whole point of loading the full VLM: parameter names must match the vLLM server, which serves the
+        # `*ForConditionalGeneration` architecture (`model.language_model.*`), not the text tower alone
+        # (`model.*`). Frozen vision weights never change, so they are not streamed at all.
+        trainer = self._trainer(model_id)
+        streamed = dict(trainer._streaming_iter())
+
+        assert streamed
+        assert streamed.keys() == {n for n, p in trainer.model.named_parameters() if p.requires_grad}
+        assert any(name.startswith("model.language_model.") for name in streamed)
+        assert not any(".visual." in name or ".vision_tower." in name for name in streamed)
+
+    def test_train(self, model_id):
+        if "Moe" in model_id:
+            # `compute_flops_per_token` reads `num_local_experts`, `intermediate_size` and `decoder_sparse_step`,
+            # none of which exist on `Qwen3_5MoeTextConfig`. Text-only Qwen3.5-MoE hits this too.
+            pytest.skip("compute_flops_per_token does not support the Qwen3.5-MoE config shape")
+        trainer = self._trainer(model_id)
+        previous_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        vision = _vision_parameter_names(trainer.model)
+        for n, param in previous_params.items():
+            new_param = trainer.model.get_parameter(n)
+            if n in vision:
+                assert torch.equal(param, new_param), f"Vision-tower parameter {n} has changed."
+            elif new_param.requires_grad:
+                assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
 
 class TestRolloutStateCheckpoint(TrlTestCase):
@@ -1039,7 +1146,7 @@ class TestEpochStop(TrlTestCase):
     """
 
     def _train(self, fork_k, num_train_epochs=2):
-        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
         args = AsyncGRPOConfig(
             output_dir=self.tmp_dir,
@@ -1053,7 +1160,12 @@ class TestEpochStop(TrlTestCase):
         )
         worker = _StubRolloutWorker(AutoTokenizer.from_pretrained(model_id), dataset, num_generations=3, fork_k=fork_k)
         trainer = AsyncGRPOTrainer(
-            model=model_id, reward_funcs=dummy_reward_func, args=args, train_dataset=dataset, rollout_worker=worker
+            model=model_id,
+            reward_funcs=dummy_reward_func,
+            args=args,
+            train_dataset=dataset,
+            rollout_worker=worker,
+            weight_transfer=_StubWeightTransfer(),
         )
         trainer.train()
         return trainer, len(dataset)

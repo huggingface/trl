@@ -57,6 +57,9 @@ from ..testing_utils import TrlTestCase, is_ampere_or_newer
 
 TEACHER_TOP_K = 4
 
+# The trainer loads the model with Flash Attention, which requires a `head_size` multiple of 8. Hence the `small-*`
+# model (`head_size=32`) below, rather than the usual `tiny-*` one (`head_size=2`).
+
 
 def _make_teacher_topk(
     vocab_size: int, actual_token_ids: list[int], top_k: int, seed: int
@@ -418,7 +421,7 @@ class TestMultiTeacherRouting:
 
     def _run(self, teacher_server_urls, *teacher_ids):
         """Score one row per `teacher_ids` entry (`None` = no `teacher_id` column) and return the requests sent."""
-        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/small-Qwen2ForCausalLM-2.5")
         loop = _bare_loop(tokenizer, teacher_server_urls)
         requests = []
 
@@ -710,7 +713,7 @@ class TestSparseGeneralizedJSDMatchesFullVocabReference:
 )
 class TestAsyncDistillationTrainer(TrlTestCase):
     def test_init_minimal(self):
-        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         AsyncDistillationTrainer(
@@ -721,7 +724,7 @@ class TestAsyncDistillationTrainer(TrlTestCase):
         )
 
     def test_train(self):
-        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
         tokenizer = AutoTokenizer.from_pretrained(model_id)
 
@@ -796,7 +799,7 @@ class TestAsyncDistillationTrainer(TrlTestCase):
         # Adapted from ServerDistillationTrainer's own `test_reverse_kl_finite_grad_with_ragged_batch`: a real
         # training run through the narrow top-1 + actual-token support path (including the beta==1.0 special case),
         # checking grad_norm/loss stay finite throughout, not just that training completes.
-        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
         tokenizer = AutoTokenizer.from_pretrained(model_id)
 

@@ -42,7 +42,7 @@ default `beta=0.0` (forward KL).
 teacher scores it — for example, routing math prompts to a math-specialist teacher and code prompts to a
 code-specialist teacher, each served independently. Each sample is dispatched to its one matching teacher, never
 averaged or ensembled across teachers. A sample with a missing or unmapped `teacher_id` raises rather than silently
-falling back to the wrong teacher. See `examples/scripts/async_distillation_mopd.py` for a runnable two-teacher
+falling back to the wrong teacher. See `examples/async_distillation_math/async_distillation_mopd.py` for a runnable two-teacher
 example.
 
 > [!WARNING]
