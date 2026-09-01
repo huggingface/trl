@@ -905,10 +905,14 @@ class SDFTTrainer(_BaseTrainer):
             # distillation loss, and a rank that returned here without gathering would leave its next collective
             # paired against a peer's gather of a different quantity. Both are one-element float tensors, so they
             # would complete rather than fail, and each rank would record the other's number. Gather a matching zero
-            # so every rank issues the same collectives whichever branch it takes.
+            # so every rank issues the same collectives whichever branch it takes. Both sides are pinned to
+            # float32, because the peer's value follows the autocast dtype while a bare `torch.zeros` does not,
+            # and a gather whose operands disagree on dtype is not something the collective can reconcile.
             self._log_self_distillation_metric(
                 mode,
-                self.accelerator.gather(torch.zeros((), device=distillation_logits.student_logits.device))
+                self.accelerator.gather(
+                    torch.zeros((), device=distillation_logits.student_logits.device, dtype=torch.float32)
+                )
                 .mean()
                 .item(),
             )
@@ -968,7 +972,7 @@ class SDFTTrainer(_BaseTrainer):
         ).sum() / distillation_logits.loss_mask.sum().clamp(min=1.0)
         self._log_self_distillation_metric(
             mode,
-            self.accelerator.gather(mean_distill_loss).mean().item(),
+            self.accelerator.gather(mean_distill_loss.float()).mean().item(),
         )
         return loss
 

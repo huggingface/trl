@@ -109,7 +109,7 @@ While training and evaluating, we record the following metrics. Here is an examp
 * `logps/rejected`: The mean log probabilities of the rejected completions.
 * `val/contain_eos_token`: The fraction of completions which contain an EOS token.
 * `beta`: The parameter that controls the weight of the loss term representing the deviation from the reference model. Typically fixed, but can be made dynamic by passing a list to [`experimental.online_dpo.OnlineDPOConfig`].
-* `frac_nonfinite_loss`: The fraction of loss computations in the logging interval whose loss was not finite (NaN or Inf), counted once per rank per gradient accumulation step, so it is a rate rather than a count of affected optimizer steps. Any non-zero value is worth investigating: `logging_nan_inf_filter` is enabled by default and substitutes a finite value for a non-finite loss in the reported `loss`, which leaves the failing step invisible in the loss curve.
+* `frac_nonfinite_loss`: The fraction of loss computations in the logging interval whose loss was not finite (NaN or Inf), counted once per rank per gradient accumulation step, so it is a rate rather than a count of affected optimizer steps. This trainer records it on the training path only, so it does not appear among the evaluation metrics. Any non-zero value is worth investigating: `logging_nan_inf_filter` is enabled by default and substitutes a finite value for a non-finite loss in the reported `loss`, which leaves the failing step invisible in the loss curve.
 
 ## Benchmark experiments
 

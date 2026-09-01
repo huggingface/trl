@@ -19,8 +19,9 @@ visible on all of them. A single-process test cannot see that: `gather` is the i
 leaves every single-process test green. This file poisons the loss on the last rank only and asserts, on every rank,
 that the fraction each one logs accounts for the whole world rather than just itself.
 
-The filename is deliberately not `test_*.py`: pytest must not collect it in the parent process, where there is one rank
-and the assertion below would be false.
+The filename is deliberately not `test_*.py`: pytest must not collect it in the parent process. With one rank the sole
+rank is also the poisoned one, so the assertion below reads 1.0 against an expected 1.0 and passes whether or not the
+gather is there, which is exactly the blindness this file exists to remove.
 """
 
 import sys
