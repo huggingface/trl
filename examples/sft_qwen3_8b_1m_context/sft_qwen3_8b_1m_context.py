@@ -49,9 +49,6 @@ from trl import SFTConfig, SFTTrainer
 MODEL = "Qwen/Qwen3-8B"
 SEQ_LEN = 1_048_576
 
-# `accelerate launch` does not read the dependency header above, so the version it declares is not
-# enforced at run time. Check here rather than let a 380 s/step job fail once it reaches the first
-# backward, where `offload` is forwarded to `torch.utils.checkpoint.checkpoint` and rejected.
 if Version(transformers.__version__) < Version("5.16.0"):
     raise RuntimeError(
         f"This example needs transformers>=5.16.0 for gradient checkpointing `offload`, got "
