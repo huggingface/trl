@@ -223,7 +223,7 @@ With the setup above plus a few levers, SFT scales to million-token sequences on
 | Qwen3-0.6B | 1M | 8 | 137 s | 27.9 GB |
 | Qwen3-0.6B | 2M | 8 | 538 s | 42.2 GB |
 | Qwen3-0.6B | 4M | 8 | 2135 s | 73.7 GB |
-| Qwen3-8B | 1M | 8 | 606 s | 56.2 GB |
+| Qwen3-8B | 1M | 8 | 373 s | 56.2 GB |
 
 Context length scales with the number of nodes: sequence length and GPU count can be doubled together at roughly 2x step time (because each GPU keeps the same shard of the sequence).
 
