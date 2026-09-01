@@ -23,7 +23,8 @@ jobs:
 
       - name: Get TRL version from PyPI
         run: |
-          VERSION=$(curl -s https://pypi.org/pypi/trl/json | jq -r .info.version)
+          set -euo pipefail
+          VERSION=$(curl --fail --silent --show-error https://pypi.org/pypi/trl/json | jq -r .info.version)
           if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([a-zA-Z0-9._-]*)?$ ]]; then
             echo "Invalid version format: $VERSION"
             exit 1
