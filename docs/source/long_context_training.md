@@ -1,4 +1,4 @@
-# Long Context Training
+# Training Beyond 1M Tokens
 
 Training on sequences of hundreds of thousands to millions of tokens needs more than a bigger GPU: the sequence itself has to be split across devices, and the activations that survive that split have to be kept small. This guide covers both.
 

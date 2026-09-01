@@ -53,7 +53,7 @@ Example, these configurations are equivalent, and should yield the same results:
 > Having one model per GPU can lead to high memory usage, which may not be feasible for large models or low-memory GPUs. In such cases, you can leverage [DeepSpeed](https://github.com/deepspeedai/DeepSpeed), which provides optimizations like model sharding, Zero Redundancy Optimizer, mixed precision training, and offloading to CPU or NVMe. Check out our [DeepSpeed Integration](deepspeed_integration) guide for more details.
 
 > [!TIP]
-> Training on very long sequences has its own guide: [Long Context Training](long_context_training).
+> Training on very long sequences has its own guide: [Training Beyond 1M Tokens](long_context_training).
 
 ## Multi-Node Training
 
