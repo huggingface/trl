@@ -82,12 +82,9 @@ test = [
     "tabulate"  # test report rendering in scripts/log_reports.py
 ]
 vllm = [
-    "vllm>=0.18.0,<=0.27.1",
-    "fastapi",
-    "pydantic",
+    "vllm>=0.19.0,<=0.27.1",
     "aiohttp>=3.13.3",
     "requests",
-    "uvicorn"
 ]
 vlm = [
     "Pillow",
@@ -162,14 +159,15 @@ ignore = [
     "C901", # function complexity
     "E501",
 ]
-extend-select = ["E", "F", "I", "W", "UP", "B", "T", "C"]
+# `select`, not `extend-select`: the rule set is explicit, so a ruff release that expands its default
+# selection (0.16 raised the defaults from 59 to 413 rules) does not silently enable new rules.
+select = ["E", "F", "I", "W", "UP", "B", "T", "C"]
 
 [tool.ruff.lint.per-file-ignores]
 # Allow prints in auxiliary scripts
 "examples/**.py" = ["T201"]
 "scripts/**.py" = ["T201"]
 "trl/cli/**.py" = ["T201"]
-"trl/skills/cli.py" = ["T201"]
 # Ignore import violations in all `__init__.py` files.
 "__init__.py" = ["F401"]
 

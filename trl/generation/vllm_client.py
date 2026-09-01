@@ -16,20 +16,23 @@ import atexit
 import base64
 import copy
 import logging
+import math
 import socket
 import time
+import uuid
+from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from io import BytesIO
 from urllib.parse import urlparse
 
 import torch
-import torch.distributed.distributed_c10d as c10d
 from requests.adapters import HTTPAdapter
 from torch import nn
-from transformers import is_torch_xpu_available
 from transformers.utils import get_json_schema
 from urllib3.util.retry import Retry
 
-from ..import_utils import is_requests_available, is_vllm_ascend_available, is_vllm_available
+from ..import_utils import is_requests_available, is_vllm_available
 
 
 if is_requests_available():
@@ -38,11 +41,13 @@ if is_requests_available():
 
 
 if is_vllm_available():
-    from vllm.distributed.device_communicators.pynccl import PyNcclCommunicator
-    from vllm.distributed.utils import StatelessProcessGroup
+    from vllm.distributed.weight_transfer.nccl_engine import NCCLTrainerSendWeightsArgs, NCCLWeightTransferEngine
+    from vllm.utils.network_utils import get_ip
 
-    if is_vllm_ascend_available():
-        from vllm_ascend.distributed.device_communicators.pyhccl import PyHcclCommunicator as PyNcclCommunicator
+
+# `/start_weight_update` and `/finish_weight_update` were introduced in vLLM 0.21.0. Before that, `/update_weights`
+# ran the whole weight update lifecycle (layerwise reload init and finalize) on its own.
+_HAS_WEIGHT_UPDATE_LIFECYCLE = is_vllm_available(min_version="0.21.0")
 
 
 logger = logging.getLogger(__name__)
@@ -55,12 +60,80 @@ def pil_to_base64(image):
     return base64.b64encode(img_bytes).decode("utf-8")
 
 
+def to_openai_messages(messages: list[dict]) -> list[dict]:
+    """
+    Convert TRL-style messages to the OpenAI format understood by the vLLM server, by inlining images as data URLs.
+
+    Args:
+        messages (`list[dict]`):
+            Messages whose content parts may be `{"type": "image", "image": <PIL.Image>}` or `{"type": "image_pil",
+            "image_pil": <PIL.Image>}`.
+
+    Returns:
+        `list[dict]`: Messages with image parts replaced by `{"type": "image_url", "image_url": {"url": "data:..."}}`.
+    """
+    messages = copy.deepcopy(messages)
+    for message in messages:
+        if isinstance(message["content"], list):
+            for idx, part in enumerate(message["content"]):
+                key = "image" if part["type"] == "image" else "image_pil" if part["type"] == "image_pil" else None
+                if key is not None:
+                    url = f"data:image/png;base64,{pil_to_base64(part[key])}"
+                    message["content"][idx] = {"type": "image_url", "image_url": {"url": url}}
+    return messages
+
+
+def parse_logprobs(choices_logprobs: list[dict | None]) -> tuple[list | None, list | None]:
+    """
+    Parse the logprobs of a batch of choices into two lists of shape (num_sequences, seq_len, num_logprobs).
+
+    The server is asked for tokens as token IDs (`return_tokens_as_token_ids`), so every token is a `"token_id:<id>"`
+    string. Entries are sorted by descending probability, which matches the rank ordering used by vLLM.
+
+    Args:
+        choices_logprobs (`list[dict]`):
+            Logprobs of each choice, either `{"tokens": ..., "top_logprobs": ...}` (completions) or `{"content":
+            [{"token": ..., "logprob": ..., "top_logprobs": ...}]}` (chat completions and token IDs).
+
+    Returns:
+        Tuple of (logprobs, logprob_token_ids), or `(None, None)` when the server returned no logprob.
+    """
+    if choices_logprobs[0] is None:
+        return None, None
+
+    all_logprobs = []
+    all_token_ids = []
+    for logprobs in choices_logprobs:
+        if "content" in logprobs:  # chat completions
+            positions = [
+                (entry["token"], entry["logprob"], {top["token"]: top["logprob"] for top in entry["top_logprobs"]})
+                for entry in logprobs["content"]
+            ]
+        else:  # completions
+            positions = list(
+                zip(logprobs["tokens"], logprobs["token_logprobs"], logprobs["top_logprobs"], strict=True)
+            )
+
+        seq_logprobs = []
+        seq_token_ids = []
+        for token, logprob, top_logprobs in positions:
+            # The sampled token is always included, even when it falls outside the top-N.
+            top_logprobs = {token: logprob, **(top_logprobs or {})}
+            items = sorted(top_logprobs.items(), key=lambda item: -item[1])
+            seq_token_ids.append([int(token.removeprefix("token_id:")) for token, _ in items])
+            seq_logprobs.append([None if math.isnan(logprob) else logprob for _, logprob in items])
+        all_logprobs.append(seq_logprobs)
+        all_token_ids.append(seq_token_ids)
+    return all_logprobs, all_token_ids
+
+
 class VLLMClient:
     """
     A client class to interact with a vLLM server.
 
     This class provides methods to generate completions, initialize and manage weight update groups, and update model
-    weights in a distributed setting. Before using it, start the vLLM server with `trl vllm-serve`.
+    weights in a distributed setting. Before using it, start a vLLM server with `vllm serve`, see the vLLM integration
+    guide for the required flags.
 
     Args:
         base_url (`str`, *optional*):
@@ -80,7 +153,8 @@ class VLLMClient:
         Run the vLLM server with the model `Qwen/Qwen2.5-7B`:
 
         ```
-        $ trl vllm-serve --model Qwen/Qwen2.5-7B
+        $ VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen2.5-7B --weight-transfer-config '{"backend": "nccl"}' \
+              --logprobs-mode processed_logprobs --max-logprobs -1
         ...
         INFO:     Application startup complete.
         INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
@@ -163,7 +237,22 @@ class VLLMClient:
             self.server_port = server_port
             self.base_url = f"http://{self.host}:{self.server_port}"
         self.group_port = group_port
+        self.communicator = None
+        self._updating_weights = False  # set while inside `weight_update`
         self.check_server(connection_timeout)  # check server and fail after timeout
+        self.model = self._get(f"{self.base_url}/v1/models")["data"][0]["id"]
+
+    def _get(self, url: str, **kwargs) -> dict:
+        response = self.session.get(url, **kwargs)
+        if response.status_code != 200:
+            raise Exception(f"Request failed: {response.status_code}, {response.text}")
+        return response.json()
+
+    def _post(self, url: str, **kwargs) -> dict:
+        response = self.session.post(url, **kwargs)
+        if response.status_code != 200:
+            raise Exception(f"Request failed: {response.status_code}, {response.text}")
+        return response.json()
 
     def check_server(self, total_timeout: float = 0.0, retry_interval: float = 2.0):
         """
@@ -176,7 +265,7 @@ class VLLMClient:
             total_timeout (`float`, *optional*, defaults to `0.0`):
                 Total timeout duration in seconds.
         """
-        url = f"{self.base_url}/health/"
+        url = f"{self.base_url}/health"
         start_time = time.time()  # Record the start time
 
         while True:
@@ -188,23 +277,64 @@ class VLLMClient:
                 if elapsed_time >= total_timeout:
                     raise ConnectionError(
                         f"The vLLM server can't be reached at {self.base_url} after {total_timeout} seconds. Make "
-                        "sure the server is running by running `trl vllm-serve`."
+                        "sure the server is running by running `vllm serve`."
                     ) from exc
             else:
                 if response.status_code == 200:
                     if "X-Forwarded-For" in response.headers:
                         self.host = response.headers["X-Forwarded-For"]
                     logger.info("Server is up!")
-                    return None
+                    return
 
             # Retry logic: wait before trying again
             logger.info(f"Server is not up yet. Retrying in {retry_interval} seconds...")
             time.sleep(retry_interval)
 
+    def get_world_size(self) -> int:
+        """
+        Returns the number of workers of the vLLM server, i.e. `tensor_parallel_size * data_parallel_size`.
+        """
+        return self._get(f"{self.base_url}/get_world_size")["world_size"]
+
+    def image_features(self, images: list[list | None], max_concurrent_requests: int = 64) -> list[dict | None]:
+        """
+        Processes images server-side into the features that pair with token IDs in
+        [`~generation.vllm_client.VLLMClient.generate`].
+
+        The server generates from either token IDs or images, never both, so images are sent on their own first. The
+        features it returns carry the processed image data and its hashes, which depend on the image alone, and stay
+        valid for any token sequence they are paired with.
+
+        Args:
+            images (`list[list[PIL.Image] | None]`):
+                List of image lists for VLM support. Each element is a list of PIL images for the corresponding prompt,
+                or `None` if no images for that prompt.
+            max_concurrent_requests (`int`, *optional*, defaults to `64`):
+                Maximum number of prompts processed at the same time, as the endpoint takes one at a time.
+
+        Returns:
+            `list[dict]`: Processed image data for each prompt, `None` where the prompt had no image.
+        """
+
+        def send(images_for_prompt):
+            if not images_for_prompt:
+                return None
+            messages = [
+                {"role": "user", "content": [{"type": "image", "image": image} for image in images_for_prompt]}
+            ]
+            rendered = self._post(
+                f"{self.base_url}/v1/chat/completions/render",
+                json={"model": self.model, "messages": to_openai_messages(messages), "max_tokens": 1},
+            )
+            return rendered["features"]
+
+        with ThreadPoolExecutor(max_workers=min(max_concurrent_requests, len(images))) as executor:
+            return list(executor.map(send, images))
+
     def generate(
         self,
         prompts: list[str] | list[list[int]],
-        images: list | None = None,
+        features: list[dict | None] | None = None,
         n: int = 1,
         repetition_penalty: float = 1.0,
         temperature: float = 1.0,
@@ -222,9 +352,9 @@ class VLLMClient:
         Args:
             prompts (`list[str]` or `list[list[int]]`):
                 List of text prompts or list of token ID lists for which the model will generate completions.
-            images (`list[list[PIL.Image] | None]`, *optional*):
-                List of image lists for VLM support. Each element is a list of PIL images for the corresponding prompt,
-                or `None` if no images for that prompt.
+            features (`list[dict]`, *optional*):
+                Processed image data from [`~generation.vllm_client.VLLMClient.image_features`], one per prompt (`None`
+                for prompts without images). When provided, prompts must be token IDs.
             n (`int`, *optional*, defaults to `1`):
                 Number of completions to generate for each prompt.
             repetition_penalty (`float`, *optional*, defaults to `1.0`):
@@ -242,11 +372,11 @@ class VLLMClient:
             logprobs (`int` or `None`, *optional*, defaults to `0`):
                 Number of top logprobs to return per token. When 0, only the sampled token's logprob is returned. When
                 N>0, returns up to N+1 logprobs sorted by descending probability, because vLLM always includes the
-                sampled token's logprob (which may fall outside the top-N).
+                sampled token's logprob (which may fall outside the top-N). When `None`, no logprob is returned.
             structured_outputs_regex (`str`, *optional*):
                 Regular expression to guide the decoding process.
             generation_kwargs (`dict`, *optional*):
-                Additional generation parameters to pass to the vLLM `SamplingParams`. This can include parameters like
+                Additional generation parameters, passed as-is in the request body. This can include parameters like
                 `seed`, `frequency_penalty`, etc. If it contains keys that conflict with the other parameters, they
                 will override them.
 
@@ -262,42 +392,78 @@ class VLLMClient:
                 - `logprob_token_ids` (`list[list[list[int]]]`):
                     Token IDs corresponding to each logprob, same shape as `logprobs`.
         """
-        url = f"{self.base_url}/generate/"
+        sampling_params = {
+            "n": n,
+            "repetition_penalty": repetition_penalty,
+            "temperature": temperature,
+            "top_p": top_p,
+            "top_k": top_k,
+            "min_p": min_p,
+            "max_tokens": max_tokens,
+            "logprobs": logprobs,
+        }
+        if structured_outputs_regex is not None:
+            sampling_params["structured_outputs"] = {"regex": structured_outputs_regex}
+        sampling_params.update(generation_kwargs or {})
 
-        # Convert PIL images to base64 strings. Each element is a list of images for the corresponding prompt,
-        # or None if no images for that prompt.
-        if images:
-            images = [
-                [pil_to_base64(img) for img in img_list] if img_list is not None else None for img_list in images
-            ]
+        if features is not None:
+            return self._generate_from_features(prompts, features, sampling_params)
 
-        response = self.session.post(
-            url,
-            json={
-                "prompts": prompts,
-                "images": images,
-                "n": n,
-                "repetition_penalty": repetition_penalty,
-                "temperature": temperature,
-                "top_p": top_p,
-                "top_k": top_k,
-                "min_p": min_p,
-                "max_tokens": max_tokens,
-                "logprobs": logprobs,
-                "structured_outputs_regex": structured_outputs_regex,
-                "generation_kwargs": generation_kwargs or {},
-            },
-        )
-        if response.status_code == 200:
-            json_response = response.json()
-            return {
-                "prompt_ids": json_response["prompt_ids"],
-                "completion_ids": json_response["completion_ids"],
-                "logprobs": json_response["logprobs"],
-                "logprob_token_ids": json_response["logprob_token_ids"],
-            }
-        else:
-            raise Exception(f"Request failed: {response.status_code}, {response.text}")
+        payload = {
+            "model": self.model,
+            "prompt": prompts,
+            "return_token_ids": True,
+            "return_tokens_as_token_ids": True,
+            **sampling_params,
+        }
+        choices = self._post(f"{self.base_url}/v1/completions", json=payload)["choices"]
+
+        # Choices are returned prompt-major: the n completions of a prompt come before those of the next prompt.
+        prompt_ids = [choice["prompt_token_ids"] for choice in choices[::n]]
+        completion_ids = [choice["token_ids"] for choice in choices]
+        logprobs, logprob_token_ids = parse_logprobs([choice["logprobs"] for choice in choices])
+        return {
+            "prompt_ids": prompt_ids,
+            "completion_ids": completion_ids,
+            "logprobs": logprobs,
+            "logprob_token_ids": logprob_token_ids,
+        }
+
+    def _generate_from_features(
+        self,
+        prompts: list[list[int]],
+        features: list[dict | None],
+        sampling_params: dict,
+        max_concurrent_requests: int = 64,
+    ) -> dict[str, list[list[int]]]:
+        """Generate from token IDs paired with multimodal features, one request per prompt."""
+        # The server leaves the default output kind on non-streaming requests, under which it returns only the
+        # sequences that finished last, silently dropping the others when n > 1. See vLLM PR #52399.
+        sampling_params = {**sampling_params, "output_kind": 2}  # FINAL_ONLY
+
+        def send(index):
+            return self._post(
+                f"{self.base_url}/inference/v1/generate",
+                json={
+                    "request_id": f"trl-{uuid.uuid4().hex}",
+                    "model": self.model,
+                    "token_ids": prompts[index],
+                    "features": features[index],
+                    "sampling_params": sampling_params,
+                },
+            )
+
+        with ThreadPoolExecutor(max_workers=min(max_concurrent_requests, len(prompts))) as executor:
+            responses = list(executor.map(send, range(len(prompts))))
+
+        choices = [choice for response in responses for choice in response["choices"]]
+        logprobs, logprob_token_ids = parse_logprobs([choice["logprobs"] for choice in choices])
+        return {
+            "prompt_ids": list(prompts),  # the server generates from what it was given, so it echoes back unchanged
+            "completion_ids": [choice["token_ids"] for choice in choices],
+            "logprobs": logprobs,
+            "logprob_token_ids": logprob_token_ids,
+        }
 
     def chat(
         self,
@@ -315,9 +481,13 @@ class VLLMClient:
         chat_template_kwargs: dict | None = None,
         tools: list | None = None,
         chat_template: str | None = None,
+        max_concurrent_requests: int = 64,
     ) -> dict[str, list[list[int]]]:
         """
         Generates model completions for the provided chat messages.
+
+        The server renders the chat template, so this is the path to use for multimodal prompts: images travel as part
+        of the messages, while [`~generation.vllm_client.VLLMClient.generate`] only accepts text or token IDs.
 
         Args:
             messages (`list[list[dict]]`):
@@ -340,11 +510,11 @@ class VLLMClient:
             logprobs (`int` or `None`, *optional*, defaults to `0`):
                 Number of top logprobs to return per token. When 0, only the sampled token's logprob is returned. When
                 N>0, returns up to N+1 logprobs sorted by descending probability, because vLLM always includes the
-                sampled token's logprob (which may fall outside the top-N).
+                sampled token's logprob (which may fall outside the top-N). When `None`, no logprob is returned.
             structured_outputs_regex (`str`, *optional*):
                 Regular expression to guide the decoding process.
             generation_kwargs (`dict`, *optional*):
-                Additional generation parameters to pass to the vLLM `SamplingParams`. This can include parameters like
+                Additional generation parameters, passed as-is in the request body. This can include parameters like
                 `seed`, `frequency_penalty`, etc. If it contains keys that conflict with the other parameters, they
                 will override them.
             chat_template_kwargs (`dict`, *optional*):
@@ -354,6 +524,9 @@ class VLLMClient:
             chat_template (`str`, *optional*):
                 Template to use for structuring the chat. If not provided, the model's default chat template will be
                 used.
+            max_concurrent_requests (`int`, *optional*, defaults to `64`):
+                Maximum number of conversations sent to the server at the same time. The chat completions endpoint
+                takes a single conversation per request, so they are dispatched concurrently.
 
         Returns:
             `dict` with keys:
@@ -367,51 +540,152 @@ class VLLMClient:
                 - `logprob_token_ids` (`list[list[list[int]]]`):
                     Token IDs corresponding to each logprob, same shape as `logprobs`.
         """
+        payload = {
+            "model": self.model,
+            "n": n,
+            "repetition_penalty": repetition_penalty,
+            "temperature": temperature,
+            "top_p": top_p,
+            "top_k": top_k,
+            "min_p": min_p,
+            "max_tokens": max_tokens,
+            "logprobs": logprobs is not None,
+            "top_logprobs": logprobs,
+            "return_token_ids": True,
+            "return_tokens_as_token_ids": True,
+        }
+        if tools:  # the server rejects an empty list, so only send it when there is something to send
+            payload["tools"] = [get_json_schema(tool) if callable(tool) else tool for tool in tools]
+            # Tool calls are parsed from the completion by the caller, so the server only has to render the tools into
+            # the prompt. Without this, it defaults to `"auto"` and refuses the request unless it was started with
+            # `--enable-auto-tool-choice --tool-call-parser`.
+            payload["tool_choice"] = "none"
         if chat_template is not None:
-            raise NotImplementedError("Custom chat templates are not yet implemented in VLLMClient.chat().")
+            payload["chat_template"] = chat_template
+        if chat_template_kwargs:
+            payload["chat_template_kwargs"] = chat_template_kwargs
+        if structured_outputs_regex is not None:
+            payload["structured_outputs"] = {"regex": structured_outputs_regex}
+        payload.update(generation_kwargs or {})
 
-        url = f"{self.base_url}/chat/"
+        def send(conversation):
+            return self._post(
+                f"{self.base_url}/v1/chat/completions", json={**payload, "messages": to_openai_messages(conversation)}
+            )
 
-        # Convert PIL images to base64 strings
-        messages = copy.deepcopy(messages)  # avoid modifying the original messages
-        for message_list in messages:
-            for message in message_list:
-                if isinstance(message["content"], list):
-                    for part in message["content"]:
-                        if part["type"] == "image_pil":
-                            part["image_pil"] = pil_to_base64(part["image_pil"])
+        with ThreadPoolExecutor(max_workers=min(max_concurrent_requests, len(messages))) as executor:
+            responses = list(executor.map(send, messages))
 
-        if isinstance(tools, list) and len(tools) > 0:
-            tools = [get_json_schema(tool) if callable(tool) else tool for tool in tools]
+        prompt_ids = [response["prompt_token_ids"] for response in responses]
+        choices = [choice for response in responses for choice in response["choices"]]
+        completion_ids = [choice["token_ids"] for choice in choices]
+        logprobs, logprob_token_ids = parse_logprobs([choice["logprobs"] for choice in choices])
+        return {
+            "prompt_ids": prompt_ids,
+            "completion_ids": completion_ids,
+            "logprobs": logprobs,
+            "logprob_token_ids": logprob_token_ids,
+        }
 
-        response = self.session.post(
-            url,
-            json={
-                "messages": messages,
-                "n": n,
-                "repetition_penalty": repetition_penalty,
+    def get_sequence_logprobs(
+        self,
+        sequences: list[list[int]],
+        prompt_lengths: list[int],
+        top_logprobs: int = 100,
+        temperature: float = 1.0,
+        chunk_size: int = 0,
+        max_concurrent_requests: int = 4,
+    ) -> dict[str, list]:
+        """
+        Computes teacher logprobs for existing token sequences without generating new tokens.
+
+        Sends full sequences (prompt + completion) to the vLLM server and retrieves per-token top-k logprobs for the
+        completion region only. This is used for knowledge distillation where the teacher model evaluates existing
+        sequences rather than generating new ones.
+
+        When `chunk_size > 0`, splits the batch into chunks and dispatches them concurrently, so that the server can
+        start working before the whole batch has been sent.
+
+        Args:
+            sequences (`list[list[int]]`):
+                List of full token ID sequences (prompt + completion).
+            prompt_lengths (`list[int]`):
+                Number of prompt tokens in each sequence. Logprobs are returned starting from this position.
+            top_logprobs (`int`, *optional*, defaults to `100`):
+                Number of top logprobs to return per token position.
+            temperature (`float`, *optional*, defaults to `1.0`):
+                Temperature used when scoring the teacher distribution.
+            chunk_size (`int`, *optional*, defaults to `0`):
+                If > 0, split batch into chunks of this size and dispatch concurrently. If 0, send the entire batch in
+                a single request.
+            max_concurrent_requests (`int`, *optional*, defaults to `4`):
+                Maximum number of concurrent requests when using chunked dispatch.
+
+        Returns:
+            `dict` with keys:
+                - `logprobs` (`list[list[list[float]]]`):
+                    Teacher's top-k logprobs per completion token, of shape (batch, completion_len, top_logprobs),
+                    sorted by descending probability and padded with `-inf`. Used for the forward KL term.
+                - `logprob_token_ids` (`list[list[list[int]]]`):
+                    Token IDs corresponding to each logprob, same shape as `logprobs`.
+                - `actual_logprobs` (`list[list[list[float]]]`):
+                    Teacher logprob of the actual token at each position, of shape (batch, completion_len, 1), or
+                    `-inf` when the token falls outside the top-k. Used for the reverse KL term.
+                - `actual_token_ids` (`list[list[list[int]]]`):
+                    Actual token IDs, same shape as `actual_logprobs`.
+        """
+        if temperature <= 0:
+            raise ValueError(f"temperature must be positive, got {temperature}")
+
+        chunk_size = chunk_size if chunk_size > 0 else len(sequences)
+        chunks = [
+            (sequences[idx : idx + chunk_size], prompt_lengths[idx : idx + chunk_size])
+            for idx in range(0, len(sequences), chunk_size)
+        ]
+
+        def send(chunk):
+            chunk_sequences, chunk_prompt_lengths = chunk
+            payload = {
+                "model": self.model,
+                "prompt": chunk_sequences,
+                "max_tokens": 1,
                 "temperature": temperature,
-                "top_p": top_p,
-                "top_k": top_k,
-                "min_p": min_p,
-                "max_tokens": max_tokens,
-                "logprobs": logprobs,
-                "structured_outputs_regex": structured_outputs_regex,
-                "generation_kwargs": generation_kwargs or {},
-                "chat_template_kwargs": chat_template_kwargs or {},
-                "tools": tools,
-            },
-        )
-        if response.status_code == 200:
-            json_response = response.json()
-            return {
-                "prompt_ids": json_response["prompt_ids"],
-                "completion_ids": json_response["completion_ids"],
-                "logprobs": json_response["logprobs"],
-                "logprob_token_ids": json_response["logprob_token_ids"],
+                "prompt_logprobs": top_logprobs,
             }
-        else:
-            raise Exception(f"Request failed: {response.status_code}, {response.text}")
+            choices = self._post(f"{self.base_url}/v1/completions", json=payload)["choices"]
+            return [
+                self._format_sequence_logprobs(choice, sequence, prompt_length, top_logprobs)
+                for choice, sequence, prompt_length in zip(choices, chunk_sequences, chunk_prompt_lengths, strict=True)
+            ]
+
+        with ThreadPoolExecutor(max_workers=min(max_concurrent_requests, len(chunks))) as executor:
+            results = [result for chunk_results in executor.map(send, chunks) for result in chunk_results]
+
+        return {key: [result[key] for result in results] for key in results[0]}
+
+    @staticmethod
+    def _format_sequence_logprobs(choice: dict, sequence: list[int], prompt_length: int, top_logprobs: int) -> dict:
+        """Slice the completion region out of a choice's prompt logprobs, sort it by rank and pad it to `top_logprobs`."""
+        logprobs, logprob_token_ids, actual_logprobs, actual_token_ids = [], [], [], []
+        for position in range(prompt_length, len(choice["prompt_logprobs"])):
+            position_logprobs = choice["prompt_logprobs"][position] or {}
+            items = sorted(position_logprobs.items(), key=lambda item: item[1]["rank"])[:top_logprobs]
+            values = [-math.inf if math.isnan(item["logprob"]) else item["logprob"] for _, item in items]
+            token_ids = [int(token_id) for token_id, _ in items]
+            # Pad so that every position has exactly `top_logprobs` entries, as callers index it as an array.
+            logprobs.append(values + [-math.inf] * (top_logprobs - len(values)))
+            logprob_token_ids.append(token_ids + [0] * (top_logprobs - len(token_ids)))
+            actual = position_logprobs.get(str(sequence[position]))
+            actual_logprobs.append(
+                [-math.inf if actual is None or math.isnan(actual["logprob"]) else actual["logprob"]]
+            )
+            actual_token_ids.append([sequence[position]])
+        return {
+            "logprobs": logprobs,
+            "logprob_token_ids": logprob_token_ids,
+            "actual_logprobs": actual_logprobs,
+            "actual_token_ids": actual_token_ids,
+        }
 
     def init_communicator(self, device: torch.device | str | int = 0):
         """
@@ -422,69 +696,68 @@ class VLLMClient:
                 Device of trainer main process. It's the device that will be used for the weights synchronization. Can
                 be a `torch.device` object, a string like `'cuda:0'`, or an integer device index.
         """
-        # Get the world size from the server
-        url = f"{self.base_url}/get_world_size/"
-        response = requests.get(url)
-        if response.status_code == 200:
-            vllm_world_size = response.json()["world_size"]
-        else:
-            raise Exception(f"Request failed: {response.status_code}, {response.text}")
+        # The trainer joins the vLLM workers as an extra rank; it is rank 0, so the workers are offset by one.
+        world_size = self.get_world_size() + 1
+        init_info = {
+            "master_address": get_ip(),
+            "master_port": self.group_port,
+            "rank_offset": 1,
+            "world_size": world_size,
+        }
 
-        world_size = vllm_world_size + 1  # add the client to the world
-        self.rank = vllm_world_size  # the client's rank is the last process
-
-        # Initialize weight update group
-        url = f"{self.base_url}/init_communicator/"
-        # Will simplify it after torch xpu 2.9 support get uuid.
-        if is_torch_xpu_available():
-            if hasattr(torch.xpu.get_device_properties(device), "uuid"):
-                client_device_uuid = str(torch.xpu.get_device_properties(device).uuid)
-            else:
-                client_device_uuid = "42"
-        else:
-            client_device_uuid = str(torch.cuda.get_device_properties(device).uuid)
-
-        # Set the weight update group's host to "0.0.0.0" so that
-        # clients from different IPs can send updated weights
-        response = self.session.post(
-            url,
-            json={
-                "host": "0.0.0.0",
-                "port": self.group_port,
-                "world_size": world_size,
-                "client_device_uuid": client_device_uuid,
-            },
-        )
-        if response.status_code != 200:
-            raise Exception(f"Request failed: {response.status_code}, {response.text}")
-
-        # Brief delay to allow server initialization. While not strictly required (client socket will retry on
-        # connection failure), this prevents log warnings like:
-        # [W416 23:24:57.460001114 socket.cpp:204] [c10d] The hostname of the client socket cannot be retrieved. err=-3
-        time.sleep(0.1)
-
-        # Set up the communication group for weight broadcasting
-        if is_torch_xpu_available():
-            store = torch.distributed.TCPStore(
-                host_name=self.host, port=self.group_port, world_size=world_size, is_master=(self.rank == 0)
+        # vLLM builds the trainer side of the group on the current device, so point it at the requested one. A device
+        # without an index (e.g. `torch.device("cuda")`) means the current device, which is already the right one.
+        device = torch.device("cuda", device) if isinstance(device, int) else torch.device(device)
+        if device.type != "cuda":
+            raise NotImplementedError(
+                f"Weight synchronization runs on vLLM's NCCL weight-transfer engine, which needs a CUDA device, got "
+                f"'{device}'. Generation through the server is unaffected."
             )
-            prefixed_store = c10d.PrefixStore("client2server", store)
-            xccl_options = c10d.ProcessGroupXCCL.Options()
-            pg = c10d.ProcessGroupXCCL(
-                store=prefixed_store,
-                rank=self.rank,
-                size=world_size,
-                options=xccl_options,
+        if device.index is not None:
+            torch.cuda.set_device(device)
+
+        # The server blocks in the NCCL rendezvous while handling the request, so it must run concurrently with the
+        # trainer joining the same rendezvous.
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(
+                self._post, f"{self.base_url}/init_weight_transfer_engine", json={"init_info": init_info}
             )
-            self.communicator = pg
-        else:
-            pg = StatelessProcessGroup.create(
-                host=self.host, port=self.group_port, rank=self.rank, world_size=world_size
-            )
-            self.communicator = PyNcclCommunicator(pg, device=device)
+            self.communicator = NCCLWeightTransferEngine.trainer_init(init_info)
+            future.result()
 
         # When the client object is deleted, close the weight update group
         atexit.register(self.close_communicator)
+
+    @contextmanager
+    def weight_update(self):
+        """
+        Groups several [`~generation.vllm_client.VLLMClient.update_named_param`] calls into a single weight update.
+
+        The server prepares the model once on entry and finalizes it once on exit, instead of doing it per tensor.
+
+        Examples:
+
+        ```python
+        >>> with client.weight_update():
+        ...     for name, param in model.named_parameters():
+        ...         client.update_named_param(name, param.data)
+        ```
+        """
+        self._start_weight_update()
+        self._updating_weights = True
+        try:
+            yield
+        finally:
+            self._updating_weights = False
+            self._finish_weight_update()
+
+    def _start_weight_update(self):
+        if _HAS_WEIGHT_UPDATE_LIFECYCLE:
+            self._post(f"{self.base_url}/start_weight_update", json={})
+
+    def _finish_weight_update(self):
+        if _HAS_WEIGHT_UPDATE_LIFECYCLE:
+            self._post(f"{self.base_url}/finish_weight_update", json={})
 
     def update_named_param(self, name: str, weights: torch.Tensor):
         """
@@ -496,269 +769,84 @@ class VLLMClient:
             weights (`torch.Tensor`):
                 Tensor containing the updated weights.
         """
-        dtype, shape = str(weights.dtype), tuple(weights.shape)
-        url = f"{self.base_url}/update_named_param/"
-        response = self.session.post(url, json={"name": name, "dtype": dtype, "shape": shape})
-        if response.status_code != 200:
-            raise Exception(f"Request failed: {response.status_code}, {response.text}")
+        metadata = [(name, str(weights.dtype).removeprefix("torch."), list(weights.shape))]
+        self.update_named_params(metadata, iter([(name, weights)]))
 
-        if is_torch_xpu_available():
-            # Use XCCL to broadcast the updated weights from the client (src) to all workers.
-            self.communicator.broadcast(weights, root=self.rank)
-            self.communicator.barrier()
-        else:
-            # Use NCCL to broadcast the updated weights from the client (src) to all workers.
-            self.communicator.broadcast(weights, src=self.rank)
-            self.communicator.group.barrier()
+    def update_named_params(
+        self, metadata: list[tuple[str, str, list[int]]], named_params: Iterator[tuple[str, torch.Tensor]]
+    ):
+        """
+        Updates the model weights of the server, by streaming them over the weight update group.
+
+        The server needs to know what it is about to receive, so the tensors are announced first, then broadcast in the
+        same order.
+
+        Args:
+            metadata (`list[tuple[str, str, list[int]]]`):
+                One `(name, dtype, shape)` triplet per tensor, in the order they are streamed. Dtypes are vLLM style,
+                i.e. `"bfloat16"` rather than `"torch.bfloat16"`.
+            named_params (`Iterator[tuple[str, torch.Tensor]]`):
+                Iterator yielding the `(name, tensor)` pairs described by `metadata`.
+        """
+        names, dtype_names, shapes = (list(field) for field in zip(*metadata, strict=True))
+        update_info = {"names": names, "dtype_names": dtype_names, "shapes": shapes, "packed": True}
+
+        if not self._updating_weights:
+            self._start_weight_update()
+        # The workers block in the NCCL receive while handling the request, so it must run concurrently with the
+        # trainer-side broadcast.
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(self._post, f"{self.base_url}/update_weights", json={"update_info": update_info})
+            NCCLWeightTransferEngine.trainer_send_weights(
+                iterator=named_params,
+                trainer_args=NCCLTrainerSendWeightsArgs(group=self.communicator, packed=True),
+            )
+            future.result()
+        if not self._updating_weights:
+            self._finish_weight_update()
 
     def update_model_params(self, model: nn.Module):
         """
-        Updates all parameters of the given model by calling `update_named_param` for each parameter in the model.
+        Updates all parameters of the given model.
 
         Args:
             model (`nn.Module`):
                 Model whose parameters (weights/biases) are to be updated.
         """
-        for name, param in model.named_parameters():
-            # Update each parameter individually
-            self.update_named_param(name, param.data)
-
-    def get_sequence_logprobs(
-        self,
-        sequences: list[list[int]],
-        prompt_lengths: list[int],
-        top_logprobs: int = 100,
-        temperature: float = 1.0,
-        use_binary: bool = True,
-        chunk_size: int = 0,
-        max_concurrent_requests: int = 4,
-    ) -> dict[str, list]:
-        """
-        Computes teacher logprobs for existing token sequences without generating new tokens.
-
-        Sends full sequences (prompt + completion) to the vLLM server and retrieves per-token top-k logprobs for the
-        completion region only. This is used for knowledge distillation where the teacher model evaluates existing
-        sequences rather than generating new ones.
-
-        When `chunk_size > 0`, splits the batch into chunks and dispatches them concurrently via a thread pool, keeping
-        the server's data-parallel workers busy.
-
-        When `use_binary=True`, uses base64-encoded numpy arrays for fast serialization instead of nested JSON lists.
-
-        Args:
-            sequences (`list[list[int]]`):
-                List of full token ID sequences (prompt + completion).
-            prompt_lengths (`list[int]`):
-                Number of prompt tokens in each sequence. Logprobs are returned starting from this position.
-            top_logprobs (`int`, *optional*, defaults to `100`):
-                Number of top logprobs to return per token position.
-            temperature (`float`, *optional*, defaults to `1.0`):
-                Temperature used when scoring the teacher distribution.
-            use_binary (`bool`, *optional*, defaults to `True`):
-                Use binary (base64 numpy) response format for faster serialization.
-            chunk_size (`int`, *optional*, defaults to `0`):
-                If > 0, split batch into chunks of this size and dispatch concurrently. If 0, send the entire batch in
-                a single request.
-            max_concurrent_requests (`int`, *optional*, defaults to `4`):
-                Maximum number of concurrent requests when using chunked dispatch.
-
-        Returns:
-            `dict` with keys:
-                - `logprobs` (`list[list[list[float]]]`):
-                    Per-token logprobs of shape (batch, completion_len, top_logprobs), sorted by descending
-                    probability.
-                - `logprob_token_ids` (`list[list[list[int]]]`):
-                    Token IDs corresponding to each logprob, same shape as `logprobs`.
-        """
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-
-        if temperature <= 0:
-            raise ValueError(f"temperature must be positive, got {temperature}")
-
-        url = f"{self.base_url}/get_sequence_logprobs/"
-        response_format = "binary" if use_binary else "json"
-
-        if chunk_size > 0 and len(sequences) > chunk_size:
-            # Chunked concurrent dispatch
-            n = len(sequences)
-            chunks = []
-            for i in range(0, n, chunk_size):
-                chunks.append((sequences[i : i + chunk_size], prompt_lengths[i : i + chunk_size]))
-
-            responses = [None] * len(chunks)
-
-            def _send_chunk(idx, seqs, plens):
-                resp = self.session.post(
-                    url,
-                    json={
-                        "sequences": seqs,
-                        "prompt_lengths": plens,
-                        "top_logprobs": top_logprobs,
-                        "temperature": temperature,
-                        "response_format": response_format,
-                    },
-                )
-                if resp.status_code != 200:
-                    raise Exception(f"Request failed: {resp.status_code}, {resp.text}")
-                return idx, resp.json()
-
-            with ThreadPoolExecutor(max_workers=min(max_concurrent_requests, len(chunks))) as executor:
-                futures = {
-                    executor.submit(_send_chunk, idx, seqs, plens): idx for idx, (seqs, plens) in enumerate(chunks)
-                }
-                for future in as_completed(futures):
-                    idx, result = future.result()
-                    responses[idx] = result
-
-            # Merge results
-            if use_binary:
-                return self._merge_binary_responses(responses, top_logprobs)
-            else:
-                all_logprobs = []
-                all_token_ids = []
-                for resp in responses:
-                    all_logprobs.extend(resp["logprobs"])
-                    all_token_ids.extend(resp["logprob_token_ids"])
-                return {"logprobs": all_logprobs, "logprob_token_ids": all_token_ids}
-        else:
-            # Single request
-            response = self.session.post(
-                url,
-                json={
-                    "sequences": sequences,
-                    "prompt_lengths": prompt_lengths,
-                    "top_logprobs": top_logprobs,
-                    "temperature": temperature,
-                    "response_format": response_format,
-                },
-            )
-            if response.status_code != 200:
-                raise Exception(f"Request failed: {response.status_code}, {response.text}")
-
-            json_response = response.json()
-            if use_binary:
-                return self._decode_binary_logprobs(json_response)
-            else:
-                return {
-                    "logprobs": json_response["logprobs"],
-                    "logprob_token_ids": json_response["logprob_token_ids"],
-                }
-
-    @staticmethod
-    def _decode_binary_logprobs(response: dict) -> dict[str, list]:
-        """Decode base64-encoded numpy arrays back to nested lists.
-
-        Returns a dict with:
-            ``logprobs`` / ``logprob_token_ids`` — teacher's sorted top-k logprobs and
-                token IDs (shape per sequence: ``(comp_len, top_k)``). Used for the forward KL term.
-            ``actual_logprobs`` / ``actual_token_ids`` — teacher logprob for the actual
-                token at each position (shape per sequence: ``(comp_len, 1)``). Used for the reverse KL term.
-        """
-        import numpy as np
-
-        shape = response["shape"]  # [batch, max_comp_len, top_k]
-        comp_lengths = response["completion_lengths"]
-
-        logprobs_arr = np.frombuffer(base64.b64decode(response["logprobs_b64"]), dtype=np.float32).reshape(shape)
-        token_ids_arr = np.frombuffer(base64.b64decode(response["token_ids_b64"]), dtype=np.int32).reshape(shape)
-
-        # Convert back to nested lists, trimming padding
-        all_logprobs = []
-        all_token_ids = []
-        for i, comp_len in enumerate(comp_lengths):
-            all_logprobs.append(logprobs_arr[i, :comp_len, :].tolist())
-            all_token_ids.append(token_ids_arr[i, :comp_len, :].tolist())
-
-        result = {"logprobs": all_logprobs, "logprob_token_ids": all_token_ids}
-
-        # Decode actual-token logprobs (for reverse KL)
-        if "actual_logprobs_b64" in response:
-            actual_shape = [shape[0], shape[1], 1]
-            actual_lp = np.frombuffer(base64.b64decode(response["actual_logprobs_b64"]), dtype=np.float32).reshape(
-                actual_shape
-            )
-            actual_ids = np.frombuffer(base64.b64decode(response["actual_token_ids_b64"]), dtype=np.int32).reshape(
-                actual_shape
-            )
-            all_actual_lps = []
-            all_actual_ids = []
-            for i, comp_len in enumerate(comp_lengths):
-                all_actual_lps.append(actual_lp[i, :comp_len, :].tolist())
-                all_actual_ids.append(actual_ids[i, :comp_len, :].tolist())
-            result["actual_logprobs"] = all_actual_lps
-            result["actual_token_ids"] = all_actual_ids
-
-        return result
-
-    @staticmethod
-    def _merge_binary_responses(responses: list[dict], top_logprobs: int) -> dict[str, list]:
-        """Merge binary responses from multiple chunks into a single result."""
-
-        all_logprobs = []
-        all_token_ids = []
-        all_actual_lps = []
-        all_actual_ids = []
-        for resp in responses:
-            decoded = VLLMClient._decode_binary_logprobs(resp)
-            all_logprobs.extend(decoded["logprobs"])
-            all_token_ids.extend(decoded["logprob_token_ids"])
-            if "actual_logprobs" in decoded:
-                all_actual_lps.extend(decoded["actual_logprobs"])
-                all_actual_ids.extend(decoded["actual_token_ids"])
-
-        result = {"logprobs": all_logprobs, "logprob_token_ids": all_token_ids}
-        if all_actual_lps:
-            if len(all_actual_lps) != len(all_logprobs):
-                raise ValueError(
-                    f"Inconsistent chunks: {len(all_actual_lps)} actual_logprobs entries "
-                    f"but {len(all_logprobs)} logprobs entries."
-                )
-            result["actual_logprobs"] = all_actual_lps
-            result["actual_token_ids"] = all_actual_ids
-        return result
+        metadata = [
+            (name, str(param.dtype).removeprefix("torch."), list(param.shape))
+            for name, param in model.named_parameters()
+        ]
+        self.update_named_params(metadata, ((name, param.data) for name, param in model.named_parameters()))
 
     def reset_prefix_cache(self):
         """
         Resets the prefix cache for the model.
         """
-        url = f"{self.base_url}/reset_prefix_cache/"
-        response = self.session.post(url)
-        if response.status_code != 200:
-            raise Exception(f"Request failed: {response.status_code}, {response.text}")
+        self._post(f"{self.base_url}/reset_prefix_cache")
 
     def close_communicator(self):
         """
         Closes the weight update group and cleans up the communication group.
         """
-        url = f"{self.base_url}/close_communicator/"
-
-        try:
-            response = self.session.post(url)
-        except ConnectionError:
-            # The server might be already down, so we don't need to close the communicator
-            pass
-        else:
-            if response.status_code != 200:
-                raise Exception(f"Request failed: {response.status_code}, {response.text}")
-
         if self.communicator is not None:
+            # The group holds a socket to the trainer, which the server would keep waiting on.
+            self.communicator.group.store = None
+            self.communicator.group.socket = None
             self.communicator = None
 
 
 # Example usage
 if __name__ == "__main__":
-    from vllm import SamplingParams
-
-    device = "xpu" if is_torch_xpu_available() else "cuda"
     client = VLLMClient()
-    client.init_communicator(device=device)
+    client.init_communicator(device="cuda")
 
     # Generate completions
-    responses = client.generate(["Hello, AI!", "Tell me a joke"], n=4, max_tokens=32, sampling_params=SamplingParams())
+    responses = client.generate(["Hello, AI!", "Tell me a joke"], n=4, max_tokens=32)
     print("Responses:", responses)  # noqa
 
     # Update model weights
     from transformers import AutoModelForCausalLM
 
-    model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-7B").to(device)
+    model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-7B").to("cuda")
     client.update_model_params(model)

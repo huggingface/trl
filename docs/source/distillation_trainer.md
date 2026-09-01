@@ -82,15 +82,17 @@ The dataset should be formatted as a [conversational](dataset_formats#conversati
 
 While training and evaluating, we record the following metrics:
 
-- `num_tokens`: The total number of tokens processed so far, including both prompts and completions.
+- `num_tokens`: The total number of tokens processed so far, including both prompts and completions. When using tools, only non-tool tokens are counted.
 - `step_time`: The average time (in seconds) taken per training step (including generation).
-- `completions/mean_length`: The average length of generated completions.
-- `completions/min_length`: The minimum length of generated completions.
-- `completions/max_length`: The maximum length of generated completions.
-- `completions/mean_terminated_length`: The average length of generated completions that terminate with EOS.
-- `completions/min_terminated_length`: The minimum length of generated completions that terminate with EOS.
-- `completions/max_terminated_length`: The maximum length of generated completions that terminate with EOS.
+- `completions/mean_length`: The average length of generated completions. When using tools, only non-tool tokens are counted.
+- `completions/min_length`: The minimum length of generated completions. When using tools, only non-tool tokens are counted.
+- `completions/max_length`: The maximum length of generated completions. When using tools, only non-tool tokens are counted.
+- `completions/mean_terminated_length`: The average length of generated completions that terminate with EOS. When using tools, only non-tool tokens are counted.
+- `completions/min_terminated_length`: The minimum length of generated completions that terminate with EOS. When using tools, only non-tool tokens are counted.
+- `completions/max_terminated_length`: The maximum length of generated completions that terminate with EOS. When using tools, only non-tool tokens are counted.
 - `completions/clipped_ratio`: The ratio of truncated (clipped) completions.
+- `tools/call_frequency`: The average number of tool calls per completion in the generation batch. Logged only when `tools` are provided.
+- `tools/failure_frequency`: The fraction of tool calls that failed (the tool was not found, raised an exception, or the call type is unsupported). It is `0.0` when no tool was called. Logged only when `tools` are provided.
 - `entropy`: Average entropy of token predictions across generated completions (in nats). Not logged on the Liger fast path.
 
 ## Customization
@@ -125,7 +127,10 @@ In this mode, vLLM runs in a separate process (and using separate GPUs) and comm
 1. **Start the vLLM server**:
 
    ```bash
-   trl vllm-serve --model <model_name>
+   VLLM_SERVER_DEV_MODE=1 vllm serve <model_name> \
+       --weight-transfer-config '{"backend": "nccl"}' \
+       --logprobs-mode processed_logprobs \
+       --max-logprobs -1
    ```
 
 2. **Enable server mode in your training script**:
@@ -180,6 +185,78 @@ Set `use_liger_kernel=True` in the [`DistillationConfig`] to compute the JSD wit
 > [!WARNING]
 > The fused Liger kernel cannot apply per-model `logit_scale` (e.g. Cohere) or `final_logit_softcapping` (e.g. Gemma), so it is rejected for models that set them — use the default chunked path for those.
 
+## Agent Training
+
+[`DistillationTrainer`] supports **agent training**: the student calls tools during generation and is distilled on the resulting trajectory. Tool-result tokens are masked out of the loss, so the student is only trained on the tokens it generated itself.
+
+### Tools
+
+The `tools` argument expects a list of Python functions that define the tools available to the agent:
+
+```python
+from trl import DistillationTrainer
+
+trainer = DistillationTrainer(
+    tools=[tool1, tool2],
+    ...,
+)
+```
+
+Each tool must be a standard Python function with **type-hinted arguments and return types**, along with a **Google-style docstring** describing its purpose, arguments, and return value.
+For more details, see the [Passing tools guide](https://huggingface.co/docs/transformers/en/chat_extras#passing-tools).
+
+> [!TIP]
+> The tool call loop requires the chat template to be *prefix-preserving* (appending a tool message must not change how earlier messages are rendered). For known model families (e.g. Qwen3, DeepSeek-V3), TRL automatically swaps in a patched training template when tools are enabled. See [Chat Templates](chat_templates#training-templates) for the full list.
+
+Use `max_tool_calling_iterations` in the [`DistillationConfig`] to cap the number of tool-calling turns. By default there is no limit, and generation stops when the student produces a response turn with no tool calls.
+
+Example:
+
+```python
+from trl import DistillationTrainer
+
+def multiply(a: int, b: int) -> int:
+    """
+    Multiplies two integers.
+
+    Args:
+        a: The first integer.
+        b: The second integer.
+
+    Returns:
+        The product of the two integers.
+    """
+    return a * b
+
+trainer = DistillationTrainer(
+    tools=[multiply],
+    ...,
+)
+```
+
+> [!WARNING]
+> Async tools are not supported yet — pass synchronous functions.
+
+### Multimodal Tool Responses
+
+Tools can return images alongside text by returning a list of content blocks. This is useful for VLM agent training where the tool provides visual feedback (e.g., screenshots, plots, camera captures).
+
+```python
+from PIL import Image
+
+def take_screenshot() -> list:
+    """
+    Takes a screenshot of the current screen.
+
+    Returns:
+        The screenshot image with a description.
+    """
+    img = Image.open("screenshot.png")
+    return [{"type": "image", "image": img}, {"type": "text", "text": "Here is the screenshot."}]
+```
+
+The returned images are automatically injected into the conversation and passed to the VLM for subsequent generation turns.
+
 ## Training Vision Language Models
 
 [`DistillationTrainer`] supports distilling Vision-Language Models (VLMs) on multimodal datasets containing both text and images. Pass a VLM as both the student and the teacher, and provide a prompt-only dataset with either an `image` column (single image per sample) or an `images` column (list of images per sample). For more information on the expected dataset structure, see the [Dataset Format — Vision datasets](dataset_formats#vision-datasets) section.
@@ -194,13 +271,13 @@ Tested with:
 > [!TIP]
 > Compatibility with all VLMs is not guaranteed. If you believe a model should be supported, feel free to open an issue on GitHub — or better yet, submit a pull request with the required changes.
 
-## Example script
+## Command line interface
 
-Use [`examples/scripts/distillation.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/distillation.py) to launch distillation training from the command line. The script supports full training and LoRA via the standard `ModelConfig` flags.
+Use the [`trl distillation` CLI](clis) to launch distillation training from the command line. It supports full training and LoRA via the standard `ModelConfig` flags.
 
 ```bash
 # Full training:
-python examples/scripts/distillation.py \
+trl distillation \
     --model_name_or_path Qwen/Qwen2.5-0.5B-Instruct \
     --teacher_model_name_or_path Qwen/Qwen2.5-1.5B-Instruct \
     --dataset_name trl-lib/ultrafeedback-prompt \
@@ -213,7 +290,7 @@ python examples/scripts/distillation.py \
 
 ```bash
 # LoRA:
-python examples/scripts/distillation.py \
+trl distillation \
     --model_name_or_path Qwen/Qwen2.5-0.5B-Instruct \
     --teacher_model_name_or_path Qwen/Qwen2.5-1.5B-Instruct \
     --dataset_name trl-lib/ultrafeedback-prompt \
