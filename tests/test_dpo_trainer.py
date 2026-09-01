@@ -905,6 +905,37 @@ class TestDPOTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @require_liger_kernel
+    @pytest.mark.skipif(torch_device != "cuda", reason="test requires a CUDA or ROCm device")
+    def test_train_with_liger_uses_autocast(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            bf16=True,
+            max_steps=1,
+            use_liger_kernel=True,
+            report_to="none",
+        )
+        trainer = DPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        autocast_enabled = []
+
+        def record_autocast_state(*_):
+            autocast_enabled.append(torch.is_autocast_enabled("cuda"))
+
+        handle = trainer.model.base_model.register_forward_pre_hook(record_autocast_state)
+        try:
+            trainer.train()
+        finally:
+            handle.remove()
+
+        assert autocast_enabled
+        assert all(autocast_enabled)
+
+    @require_liger_kernel
     @require_peft
     def test_train_with_liger_kernel_and_peft(self):
         # A LoRA adapter that does not target lm_head leaves the head as a plain Linear, so Liger reads the real

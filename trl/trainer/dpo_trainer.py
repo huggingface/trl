@@ -1761,11 +1761,15 @@ class DPOTrainer(_BaseTrainer):
                 deepspeed_plugin = self.accelerator.state.deepspeed_plugin
                 is_zero3 = deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3
                 unwrapped_model = self.accelerator.unwrap_model(model)
-                if is_zero3 or self.is_fsdp_enabled:
-                    return self._forward_redirection(
-                        model, unwrapped_model, self._compute_loss_liger, unwrapped_model, inputs, return_outputs
-                    )
-                return self._compute_loss_liger(unwrapped_model, inputs, return_outputs)
+                # Accelerate normally enables mixed precision in a wrapper around the top-level model's forward.
+                # The Liger path calls the unwrapped backbone directly, so it must restore that autocast context or
+                # mixed-precision training silently executes the backbone and fused LM head in FP32.
+                with self.accelerator.autocast():
+                    if is_zero3 or self.is_fsdp_enabled:
+                        return self._forward_redirection(
+                            model, unwrapped_model, self._compute_loss_liger, unwrapped_model, inputs, return_outputs
+                        )
+                    return self._compute_loss_liger(unwrapped_model, inputs, return_outputs)
             return self._compute_loss(model, inputs, return_outputs)
         except ValueError as e:
             if "Image features and image tokens do not match" in str(e) and self.args.max_length is not None:
