@@ -160,10 +160,12 @@ Group Policy Gradient (GPG) is a minimalist GRPO variant. It removes the critic 
 What GPG adds on top is a correction for the gradient bias caused by degenerate groups. A group whose completions all receive the same reward has a zero advantage and contributes nothing to the gradient, yet its tokens still count toward the loss denominator, scaling the update down by the fraction of such groups. GPG divides the loss by the fraction of non-degenerate groups:
 
 $$
-\mathcal{L}_{\text{GPG}}(\theta) = \frac{1}{\alpha} \mathcal{L}(\theta), \qquad \alpha = \frac{\left|\left\{ i : \operatorname{std}(\mathbf{r}_i) \neq 0 \right\}\right|}{G_{\text{groups}}}
+\mathcal{L}_{\text{GPG}}(\theta) = \frac{1}{\alpha} \mathcal{L}(\theta), \qquad \alpha = \frac{\left|\left\{ i : \hat{\mathbf{A}}_i \not\equiv \text{const} \right\}\right|}{G_{\text{groups}}}
 $$
 
-where  \\( \mathbf{r}_i \\) are the rewards of group  \\( i \\). TRL already logs  \\( 1 - \alpha \\) as the `frac_reward_zero_std` metric.
+where  \\( \hat{\mathbf{A}}_i \\) are the advantages of group  \\( i \\). Invalidity is a property of the group, so the count is taken over groups rather than completions. A degenerate group is identified by its advantages carrying no spread rather than by their being zero: the two coincide in exact arithmetic, but in float every member subtracts the same group mean from the same reward and so lands on a shared rounding residual instead of on zero. Entries that are exactly zero are excluded from the spread, since they mark completions no reward function could score. TRL's `frac_reward_zero_std` metric is close to  \\( 1 - \alpha \\) but not equal: it is derived from the reward standard deviation, so a group no reward function could score has a NaN standard deviation and is counted valid although its advantages carry no spread.
+
+The paper pairs this correction with a second component that TRL does not implement: a threshold  \\( \beta_{th} \\) on the valid-group proportion, below which valid samples accumulate into the next resampled batch. See [Experimental - GPG](gpg) for what that omission costs.
 
 TRL provides an experimental implementation, see [Experimental - GPG](gpg):
 
@@ -174,7 +176,7 @@ training_args = GPGConfig(
     beta=0.0,  # no KL constraint and no reference model
     scale_rewards="none",  # mean-centered advantage, no std scaling
     loss_type="grpo",  # per-completion normalizer, which the correction cancels exactly
-    bias_correction=True,  # rescale by the fraction of completions with a non-zero advantage
+    bias_correction=True,  # rescale by the fraction of groups whose advantages carry spread
 )
 ```
 
