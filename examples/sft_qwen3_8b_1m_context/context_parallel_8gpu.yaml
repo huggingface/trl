@@ -5,8 +5,6 @@ num_processes: 8  # one 8-GPU node
 fsdp_config:
   fsdp_version: 2
   fsdp_auto_wrap_policy: TRANSFORMER_BASED_WRAP
-  fsdp_activation_checkpointing: false  # transformers does the checkpointing, see the script
   fsdp_cpu_ram_efficient_loading: true
-  fsdp_state_dict_type: FULL_STATE_DICT  # a single consolidated checkpoint instead of sharded
 parallelism_config:
   parallelism_config_cp_size: 8  # the whole node forms one context-parallel group
