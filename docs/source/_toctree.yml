@@ -45,6 +45,8 @@
     title: Speeding Up Training
   - local: distributing_training
     title: Distributing Training
+  - local: long_context_training
+    title: Long Context Training
   - local: use_model
     title: Using Trained Models
   title: How-to guides
