@@ -16,7 +16,7 @@
 # dependencies = [
 #     "trl",
 #     "trackio",
-#     "transformers>=5.16.0",  # `rope_parameters` schema, and `offload` for gradient checkpointing
+#     "transformers>=5.16.0",  # gradient checkpointing `offload`; the `rope_parameters` schema needs >=5.0
 # ]
 # ///
 
@@ -56,8 +56,8 @@ SEQ_LEN = 1_048_576
 # forwarded to `torch.utils.checkpoint.checkpoint`, which rejects it.
 if Version(transformers.__version__) < Version("5.16.0"):
     raise RuntimeError(
-        f"This example needs transformers>=5.16.0 for the `rope_parameters` schema and gradient "
-        f"checkpointing `offload`, got {transformers.__version__}."
+        f"This example needs transformers>=5.16.0 for gradient checkpointing `offload`, got "
+        f"{transformers.__version__}."
     )
 
 
@@ -87,7 +87,7 @@ def main():
         output_dir="Qwen3-8B-1M",
         max_length=SEQ_LEN,
         per_device_train_batch_size=1,
-        # One book-length sequence is one step, so the default of 500 would log nothing at all.
+        # One book-length sequence is one step, so the default of 10 would log almost nothing.
         logging_steps=1,
         # `save_model` below writes the final model; an intermediate checkpoint of an 8B model with its
         # optimizer state is another 123 GB on disk.
@@ -96,7 +96,6 @@ def main():
         pad_to_multiple_of=16,
         # `offload` holds each checkpointed layer's input in pinned host memory, freeing
         # `layers x sequence x hidden` bytes of GPU memory for a slower step.
-        gradient_checkpointing=True,
         gradient_checkpointing_kwargs={"offload": True},
         bf16=True,
         # A base model used far beyond its trained context needs RoPE scaling: without it, loss at 1M
