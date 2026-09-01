@@ -428,14 +428,28 @@ class TestGRPOTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @require_liger_kernel
-    @pytest.mark.parametrize("loss_type", ["grpo", "bnpo", "dr_grpo", "dapo", "cispo", "sapo", "luspo", "vespo"])
-    def test_liger_loss_matches_non_liger_loss(self, loss_type):
+    @pytest.mark.parametrize(
+        "loss_type, beta",
+        [
+            ("grpo", 0.0),
+            ("bnpo", 0.0),
+            ("dr_grpo", 0.0),
+            ("dapo", 0.0),
+            ("cispo", 0.0),
+            ("sapo", 0.0),
+            ("luspo", 0.0),
+            ("vespo", 0.0),
+            ("dapo", 0.1),  # non-zero beta so that the KL term is compared too
+        ],
+    )
+    def test_liger_loss_matches_non_liger_loss(self, loss_type, beta):
         # The Liger and non-Liger paths must return the same loss for the same batch. `steps_per_generation` differs
         # from `gradient_accumulation_steps` so that the per-window rescale dapo/cispo/vespo apply is non-trivial.
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
+            beta=beta,
             importance_sampling_level="sequence" if loss_type == "luspo" else "token",
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
@@ -458,11 +472,27 @@ class TestGRPOTrainer(TrlTestCase):
         trainer.current_gradient_accumulation_steps = training_args.gradient_accumulation_steps
         inputs = trainer._prepare_inputs(next(iter(trainer.get_train_dataloader())))
 
-        liger_loss = trainer.compute_loss(trainer.model, inputs)
+        raw_losses = []
+        original_forward = trainer.liger_loss.forward
+
+        def capture_raw_loss(*args, **kwargs):
+            output = original_forward(*args, **kwargs)
+            raw_losses.append(output[0])
+            return output
+
+        with patch.object(trainer.liger_loss, "forward", side_effect=capture_raw_loss):
+            liger_loss = trainer.compute_loss(trainer.model, inputs)
         trainer.use_liger_kernel = False
         loss = trainer.compute_loss(trainer.model, inputs)
 
+        assert liger_loss.abs() > 0  # the comparison below would hold vacuously for two zero losses
         torch.testing.assert_close(liger_loss, loss, rtol=1e-4, atol=1e-5)
+
+        # Both paths divide by `current_gradient_accumulation_steps`, so an error in it cancels out in the comparison
+        # above. Pin the dapo/cispo/vespo per-window rescale to a known factor: steps_per_generation (4) divided by
+        # gradient_accumulation_steps (2).
+        if loss_type == "dapo":
+            torch.testing.assert_close(liger_loss, raw_losses[0] * 2.0, rtol=1e-4, atol=1e-5)
 
         release_memory(trainer.model, trainer)
 
