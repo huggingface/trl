@@ -37,9 +37,13 @@ class TestThinkFormatReward(TrlTestCase):
             "<think>\nThis is\nmy reasoning.\n</think>\nThis is my answer.",  # Multiline reasoning
             "<think>\nThis is <some tag> my reasoning.</think>\nThis is my answer.",  # Reasoning including other tags
             "<think></think>\nThis is my answer.",  # Empty reasoning
+            # GRPO keeps generated tokens only; some templates already opened <think> in the prompt.
+            "This is my reasoning.</think>\nThis is my answer.",
+            "This is my reasoning.</think>This is my answer.",
+            "First, 2 plus 2.\n</think>\nThe answer is 4.",
         ]
         completions = [[{"content": completion}] for completion in completions]
-        expected_rewards = [1.0, 1.0, 1.0, 1.0, 1.0]  # All should be valid
+        expected_rewards = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]  # All should be valid
         rewards = think_format_reward(completions)
         assert rewards == expected_rewards
 
@@ -49,14 +53,12 @@ class TestThinkFormatReward(TrlTestCase):
             "<think>This is my reasoning.\nThis is my answer.",  # No closing </think>
             "This is my reasoning. This is my answer.",  # No <think> tags
             "This is my reasoning.\nThis is my answer.",  # No <think> tags
-            "This is my reasoning.</think>\nThis is my answer.",  # No opening <think>
-            "This is my reasoning.</think>This is my answer.",  # No opening <think>
             "This<think>is my reasoning.</think>\nThis is my answer.",  # <think> tag in the middle
             "<think>This is<think>my reasoning.</think></think>This is my answer.",  # Nested <think> tags
             "<think>This is</think>\nmy\n<think>reasoning.</think>\nThis is my answer.",  # Multiline <think>
         ]
         completions = [[{"content": completion}] for completion in completions]
-        expected_rewards = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]  # All should be invalid
+        expected_rewards = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]  # All should be invalid
         rewards = think_format_reward(completions)
         assert rewards == expected_rewards
 
