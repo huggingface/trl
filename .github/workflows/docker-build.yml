@@ -1,6 +1,9 @@
 name: Build TRL Docker image
 
 on:
+  push:
+    branches:
+      - docker-build-verify
   release:
     types: [published]
   workflow_dispatch:
@@ -27,7 +30,7 @@ jobs:
 
       - name: Get TRL version
         env:
-          TAG: ${{ inputs.version || github.event.release.tag_name }}
+          TAG: ${{ inputs.version || github.event.release.tag_name || '1.10.0' }}
         run: echo "VERSION=${TAG#v}" >> $GITHUB_ENV
 
       - name: Set up Docker Buildx
@@ -45,15 +48,14 @@ jobs:
           context: docker/trl
           build-args: |
             VERSION=${{ env.VERSION }}
-          push: true
+          push: false
+          load: true
           tags: |
-            huggingface/trl:${{ env.VERSION }}
-            huggingface/trl
+            trl-verify:${{ env.VERSION }}
 
-      - name: Post to Slack
-        if: always()
-        uses: ./.github/actions/post-slack
-        with:
-          slack_channel: ${{ env.CI_SLACK_CHANNEL }}
-          title: Build and push TRL Docker image
-          slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
+      - name: Assert the installed TRL version matches the build arg
+        run: |
+          set -euo pipefail
+          INSTALLED=$(docker run --rm trl-verify:${VERSION} python -c "import trl; print(trl.__version__)")
+          echo "tag=${VERSION} installed=${INSTALLED}"
+          test "${INSTALLED}" = "${VERSION}"
