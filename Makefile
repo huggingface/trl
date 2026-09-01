@@ -17,7 +17,7 @@ precommit:
 	pre-commit run --all-files
 
 slow_tests:
-	pytest -m "slow" tests/ $(PYTEST_ARGS)
+	pytest -m "slow" tests/ --reruns 5 --reruns-delay 1 --only-rerun '$(rerun_errors)' $(PYTEST_ARGS)
 
 test_experimental:
 	pytest -n auto -s -v tests/experimental
