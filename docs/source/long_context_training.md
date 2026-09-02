@@ -120,9 +120,9 @@ The rescaled run stays flat all the way to 160k. Over the last 20k tokens it ave
 
 With the loss chunked and the positions rescaled, one GPU takes us to 160k tokens. Then it runs out again. What is filling the card this time?
 
-<img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/long_context_profile_96k.png" alt="Memory through one step at 96k tokens, with the activation band taking most of the space above the model and optimizer"/>
+<img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/long_context_profile_96k.png" alt="Memory through one step at 96k tokens, with one red band per layer stacking up through the forward and draining through the backward"/>
 
-The model and its optimizer account for a fixed 30 GB, whatever the sequence length. Everything above that is activations: the values the forward pass computes and has to keep, because the backward pass needs them to work out the gradients.
+The model and its optimizer account for a fixed 22 GB, whatever the sequence length. Above that, each red band is one layer's saved activation, 0.47 GB apiece. They stack up as the forward writes them, sit there, and come off one at a time as the backward consumes them. The grey on top is everything recomputed and thrown away within milliseconds.
 
 TRL already reduces them for you, and it is on by default. Gradient checkpointing keeps only what goes into each layer and throws away everything the layer computes inside itself: the attention scores, the wide MLP intermediate, the norms. When the backward pass needs them it runs the layer a second time to get them back. What survives is one saved tensor per layer, `sequence x hidden` each, and at long sequence lengths that is still the largest thing on the card.
 
@@ -132,9 +132,9 @@ The useful observation is that those tensors are not needed during the forward p
 training_args = SFTConfig(..., gradient_checkpointing_kwargs={"offload": True})
 ```
 
-<img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/long_context_profile_96k_offload.png" alt="The same step with the activations offloaded, where the red band is much thinner"/>
+<img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/long_context_profile_96k_offload.png" alt="The same step with the activations offloaded, where almost no red bands remain resident"/>
 
-Same step, same length: the red band thins out and the peak drops from 59.9 GB to 48.8 GB. Which buys sequence length:
+Same step, same length: instead of 38 bands stacking up, only 4 are ever resident at once, and the peak drops from 59.9 GB to 48.8 GB. Which buys sequence length:
 
 <img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/long_context_offload.png" alt="Peak memory against sequence length with and without activation offload, the offload line running lower and reaching further"/>
 
