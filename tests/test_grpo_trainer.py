@@ -2100,6 +2100,33 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    def test_policy_loss_is_logged_without_an_entropy_bonus(self):
+        """`policy_loss` is documented as logged on every run. On `main` the append sits inside
+        `if self._entropy_bonus_enabled:`, so a run with the default `entropy_coef=0.0` logs no `policy_loss` at all;
+        the two entropy tests below never notice because both enable the bonus. Measured on `main` at 83972892:
+        `entropy_coef=0.0` logs no `policy_loss` key, `entropy_coef=0.01` does."""
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            max_steps=1,
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+        assert not trainer._entropy_bonus_enabled
+
+        trainer.train()
+
+        logged = [log["policy_loss"] for log in trainer.state.log_history if "policy_loss" in log]
+        assert logged, "no `policy_loss` was logged without an entropy bonus"
+
     def test_train_with_static_entropy(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         training_args = GRPOConfig(

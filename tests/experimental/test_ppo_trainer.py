@@ -14,6 +14,7 @@
 
 import gc
 import os
+from unittest.mock import patch
 
 import pytest
 import torch
@@ -33,6 +34,7 @@ from trl.experimental.ppo import (
     PPOConfig,
     PPOTrainer,
 )
+from trl.experimental.ppo import ppo_trainer as ppo_trainer_module
 from trl.experimental.ppo.ppo_trainer import batch_generation, masked_mean, masked_var, masked_whiten
 
 from ..testing_utils import (
@@ -744,6 +746,54 @@ class TestPPOTrainer(TrlTestCase):
 
         ratios = [log["val/ratio"] for log in trainer.state.log_history if "val/ratio" in log]
         assert ratios, "no `val/ratio` was logged, so the assertion below would pass vacuously"
+        for ratio in ratios:
+            assert ratio == pytest.approx(1.0, abs=1e-4)
+
+    def test_statistics_ignore_an_all_padding_micro_batch(self):
+        """A micro-batch whose rows are all padding has no statistic to report. Its `masked_mean` is 0 by
+        construction, and writing that 0 into the buffers made the later `.mean()` count it as an observation, so
+        `val/ratio` read 0.5 when the one real micro-batch had a ratio of 1. The slot now stays NaN and the `nanmean`
+        reductions leave it out. The all-padding row is forced by making generation emit the pad token first, so its
+        sequence length comes out as -1 and every response position is padding. The tokenizer's own pad token is used
+        as is: padding with EOS instead makes `forward` drop every EOS from the attention mask as well, and it moved
+        `val/ratio` by up to 2e-3 even without the forced row; the distinct pad token keeps the real micro-batch within
+        1e-7."""
+        tokenizer = AutoTokenizer.from_pretrained(self.model_id, padding_side="left")
+        pad_token_id = tokenizer.pad_token_id
+        real_batch_generation = ppo_trainer_module.batch_generation
+
+        def batch_generation_with_one_empty_row(model, queries, local_rollout_forward_batch_size, pad_id, config):
+            query_responses, logitss = real_batch_generation(
+                model, queries, local_rollout_forward_batch_size, pad_id, config
+            )
+            query_responses[0, queries.shape[1]] = pad_token_id
+            return query_responses, logitss
+
+        training_args = PPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=1,
+            gradient_accumulation_steps=2,
+            num_mini_batches=1,
+            num_ppo_epochs=1,
+            report_to="none",
+        )
+        trainer = PPOTrainer(
+            args=training_args,
+            processing_class=tokenizer,
+            model=self.model,
+            ref_model=self.ref_model,
+            reward_model=self.reward_model,
+            value_model=self.value_model,
+            train_dataset=self.raw_dataset["train"],
+            eval_dataset=self.raw_dataset["test"],
+        )
+        with patch.object(ppo_trainer_module, "batch_generation", batch_generation_with_one_empty_row):
+            trainer.train()
+
+        ratios = [log["val/ratio"] for log in trainer.state.log_history if "val/ratio" in log]
+        assert ratios, "no `val/ratio` was logged, so the assertion below would pass vacuously"
+        # The one real micro-batch reports a ratio of 1 (measured within 1.2e-7); counting the empty slot as a 0 halves
+        # it to 0.5.
         for ratio in ratios:
             assert ratio == pytest.approx(1.0, abs=1e-4)
 

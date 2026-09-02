@@ -237,12 +237,11 @@ class OnlineTrainerState(TrainerState):
 def masked_mean(values: torch.Tensor, mask: torch.Tensor, axis: bool | None = None) -> torch.Tensor:
     """Compute mean of tensor with a masked values."""
     # A micro-batch whose rows are all padding leaves an empty mask, and dividing by that zero returns NaN, which
-    # then poisons every metric reduced from the same buffer. Clamping the denominator reports 0 for the empty
-    # case instead, matching how the rest of the library normalizes by a mask sum.
-    if axis is not None:
-        return (values * mask).sum(axis=axis) / mask.sum(axis=axis).clamp(min=1.0)
-    else:
-        return (values * mask).sum() / mask.sum().clamp(min=1.0)
+    # would flow into the loss and from there into the weights. Only an exactly zero denominator is replaced, so the
+    # empty case reports 0 and every other mask, including a fractional one, is divided by its true sum.
+    denominator = mask.sum(axis=axis) if axis is not None else mask.sum()
+    denominator = torch.where(denominator == 0, torch.ones_like(denominator), denominator)
+    return (values * mask).sum(axis=axis) / denominator if axis is not None else (values * mask).sum() / denominator
 
 
 def masked_var(values: torch.Tensor, mask: torch.Tensor, unbiased: bool = True) -> torch.Tensor:
@@ -645,13 +644,17 @@ class PPOTrainer(_BaseTrainer):
         # written slots are all 1.0 and whose true variance is 0.
         micro_batches_per_mini_batch = math.ceil(args.local_mini_batch_size / args.per_device_train_batch_size)
         stats_shape = (args.num_ppo_epochs, args.num_mini_batches, micro_batches_per_mini_batch)
-        approxkl_stats = torch.zeros(stats_shape, device=device)
-        pg_clipfrac_stats = torch.zeros(stats_shape, device=device)
-        pg_loss_stats = torch.zeros(stats_shape, device=device)
-        vf_loss_stats = torch.zeros(stats_shape, device=device)
-        vf_clipfrac_stats = torch.zeros(stats_shape, device=device)
-        entropy_stats = torch.zeros(stats_shape, device=device)
-        ratio_stats = torch.zeros(stats_shape, device=device)
+        # A slot starts as NaN and is written only for a micro-batch that holds at least one valid token. An
+        # all-padding micro-batch has no statistic to report: writing the 0 that `masked_mean` returns for it would
+        # count as an observation and pull every mean toward 0, so its slot stays NaN and the `nanmean` reductions
+        # below leave it out.
+        approxkl_stats = torch.full(stats_shape, float("nan"), device=device)
+        pg_clipfrac_stats = torch.full(stats_shape, float("nan"), device=device)
+        pg_loss_stats = torch.full(stats_shape, float("nan"), device=device)
+        vf_loss_stats = torch.full(stats_shape, float("nan"), device=device)
+        vf_clipfrac_stats = torch.full(stats_shape, float("nan"), device=device)
+        entropy_stats = torch.full(stats_shape, float("nan"), device=device)
+        ratio_stats = torch.full(stats_shape, float("nan"), device=device)
         model.train()
 
         # trainer state initialization
@@ -871,21 +874,15 @@ class PPOTrainer(_BaseTrainer):
                                 prob_dist = torch.nn.functional.softmax(logits, dim=-1)
                                 entropy = torch.logsumexp(logits, dim=-1) - torch.sum(prob_dist * logits, dim=-1)
                                 approxkl = 0.5 * masked_mean(logprobs_diff**2, ~padding_mask[micro_batch_inds])
-                                approxkl_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = approxkl
-                                pg_clipfrac_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = (
-                                    pg_clipfrac
-                                )
-                                pg_loss_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = pg_loss
-                                vf_loss_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = vf_loss
-                                vf_clipfrac_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = (
-                                    vf_clipfrac
-                                )
-                                entropy_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = masked_mean(
-                                    entropy, ~padding_mask[micro_batch_inds]
-                                )
-                                ratio_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = masked_mean(
-                                    ratio, ~padding_mask[micro_batch_inds]
-                                )
+                                slot = (ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx)
+                                if (~padding_mask[micro_batch_inds]).any():
+                                    approxkl_stats[slot] = approxkl
+                                    pg_clipfrac_stats[slot] = pg_clipfrac
+                                    pg_loss_stats[slot] = pg_loss
+                                    vf_loss_stats[slot] = vf_loss
+                                    vf_clipfrac_stats[slot] = vf_clipfrac
+                                    entropy_stats[slot] = masked_mean(entropy, ~padding_mask[micro_batch_inds])
+                                    ratio_stats[slot] = masked_mean(ratio, ~padding_mask[micro_batch_inds])
                         gradient_accumulation_idx += 1
                     minibatch_idx += 1
                     # del everything and empty cache
@@ -914,14 +911,17 @@ class PPOTrainer(_BaseTrainer):
                 )
                 metrics["objective/rlhf_reward"] = self.accelerator.gather_for_metrics(rlhf_reward).mean().item()
                 metrics["objective/scores"] = self.accelerator.gather_for_metrics(scores.mean()).mean().item()
-                metrics["policy/approxkl_avg"] = self.accelerator.gather_for_metrics(approxkl_stats).mean().item()
-                metrics["policy/clipfrac_avg"] = self.accelerator.gather_for_metrics(pg_clipfrac_stats).mean().item()
-                metrics["loss/policy_avg"] = self.accelerator.gather_for_metrics(pg_loss_stats).mean().item()
-                metrics["loss/value_avg"] = self.accelerator.gather_for_metrics(vf_loss_stats).mean().item()
-                metrics["val/clipfrac_avg"] = self.accelerator.gather_for_metrics(vf_clipfrac_stats).mean().item()
-                metrics["policy/entropy_avg"] = self.accelerator.gather_for_metrics(entropy_stats).mean().item()
-                metrics["val/ratio"] = self.accelerator.gather_for_metrics(ratio_stats).mean().item()
-                metrics["val/ratio_var"] = self.accelerator.gather_for_metrics(ratio_stats).var().item()
+                metrics["policy/approxkl_avg"] = self.accelerator.gather_for_metrics(approxkl_stats).nanmean().item()
+                metrics["policy/clipfrac_avg"] = (
+                    self.accelerator.gather_for_metrics(pg_clipfrac_stats).nanmean().item()
+                )
+                metrics["loss/policy_avg"] = self.accelerator.gather_for_metrics(pg_loss_stats).nanmean().item()
+                metrics["loss/value_avg"] = self.accelerator.gather_for_metrics(vf_loss_stats).nanmean().item()
+                metrics["val/clipfrac_avg"] = self.accelerator.gather_for_metrics(vf_clipfrac_stats).nanmean().item()
+                metrics["policy/entropy_avg"] = self.accelerator.gather_for_metrics(entropy_stats).nanmean().item()
+                metrics["val/ratio"] = self.accelerator.gather_for_metrics(ratio_stats).nanmean().item()
+                ratio_written = self.accelerator.gather_for_metrics(ratio_stats)
+                metrics["val/ratio_var"] = ratio_written[~ratio_written.isnan()].var().item()
                 metrics["val/num_eos_tokens"] = (responses == processing_class.eos_token_id).sum().item()
                 metrics["lr"] = self.lr_scheduler.get_last_lr()[0]
                 metrics["episode"] = self.state.episode
