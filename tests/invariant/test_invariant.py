@@ -35,7 +35,8 @@ MODEL_REVISION = "7ae557604adf67be50417f59c2c2f167def9a775"
 # v3 (transformers >= 5.16 default) crashes in the backward when num_heads != num_heads_kv, see
 # https://github.com/huggingface/kernels-community/issues/1085. The pin selects the v2 branch, whose cu128 matrix
 # only covers torch 2.11 (https://github.com/huggingface/kernels-community/issues/1082), so a runner torch bump
-# fails at load with "no build variant". Drop once #1085 is fixed.
+# fails at load with "no build variant". Drop once #1085 is fixed and the cu128 stable-ABI builds are rebuilt:
+# the nightly still resolves to 48628c8, the broken one.
 FA2_KERNEL = "kernels-community/flash-attn2@v2"
 
 SFT_DATASET = "trl-lib/Capybara"
