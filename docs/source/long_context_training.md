@@ -20,7 +20,7 @@ The script fine-tunes Qwen3-8B on books from [PG-19](https://huggingface.co/data
 
 ```
 {'loss': 4.311, 'grad_norm': 29.25, 'num_tokens': 1049000.0, 'epoch': 0.25}
-  8%|▊         | 1/12 [06:20<1:09:41, 380.10s/it]
+  8%|▊ | 1/12 [06:20<1:09:41, 380.10s/it]
 ```
 
 Three numbers are worth reading:
@@ -49,7 +49,7 @@ The last layer of the decoder outputs a hidden state of shape \\( L \times H \\)
 
 Can we compute the loss without materializing the whole logits matrix? Yes, we can proceed in chunks.
 
-### Chunking the loss
+### The massive logits matrix: chunk it
 
 To cut the head off this peak, we can compute the loss in chunks. Instead of computing the logits for the whole sequence at once, we take a few hundred rows at a time, compute the loss for those, and sum the pieces. This way, we never have to hold the entire logits matrix in memory at once.
 
@@ -69,8 +69,7 @@ How far does this let us push the sequence? In memory terms, this one change alo
 
 <img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/long_context_scaling.png" alt="Peak memory against sequence length, the plain loss running out of memory far earlier than the chunked loss"/>
 
-
-### The model has never seen position 100,000
+### The model has never seen position 100,000: rescale the positions with YaRN
 
 We can fit 160k tokens in memory now. But can the model actually read them?
 
@@ -116,7 +115,7 @@ The same measurement, with the rescaled run on top:
 
 The rescaled run stays flat all the way to 160k. Over the last 20k tokens it averages 2.8 against 7.3 without the rescaling.
 
-### The activations are what is left
+### The activations are what is left: offload them
 
 With the loss chunked and the positions rescaled, one GPU takes us to 160k tokens. Then it runs out again. What is filling the card this time?
 
@@ -141,3 +140,73 @@ Same step, same length: instead of 38 bands stacking up, only 4 are ever residen
 Below 48k the two are the same, because at that length there is barely anything to move. Past it the offloaded run stays lower, and where the sequence used to stop at 160k it now reaches 256k on the same card.
 
 This one is not free. Every saved activation crosses to the host and back, and that traffic has to fit between the compute it sits next to.
+
+### One GPU is not enough: split the sequence across many
+
+Chunked loss, offloaded activations: one card now trains on 256k tokens. How to reach one million? To see what stands in the way, look inside a single layer during the backward pass (grey peaks in the above profile).
+
+Gradient checkpointing means the forward keeps almost nothing: each layer stores its input and throws the rest away. The layer is recomputed later, when the backward reaches it, and that is the moment everything exists at once. In the MLP, one line of the model,
+
+```python
+down_proj(act_fn(gate_proj(x)) * up_proj(x))
+```
+
+four tensors are built at the full intermediate width, and the standard implementation keeps all four until the backward has walked past them. At a million tokens, on a model whose MLP widens every token from 2560 to 9728:
+
+```
+gate_proj(x)                             19 GB = 1,048,576 x 9728 x 2 bytes
+act_fn(gate_proj(x))                     19 GB
+up_proj(x)                               19 GB
+act_fn(gate_proj(x)) * up_proj(x)        19 GB
+                                  total  76 GB
+```
+
+76 GB, inside one layer, on a card that has 80 and has already given 30 to the model and its optimizer.
+At this point the answer is not to store the sequence more cleverly. It is to give each GPU less of it.
+
+<img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/long_context_cp.png" alt="A sequence of tokens overflowing a single GPU and running out of memory, then the same sequence cut into four slices that each fit on one GPU"/>
+
+Give each GPU one slice of the sequence. With four of them, every GPU holds 262,144 tokens instead of 1,048,576. The four tensors shrink with it: 19 GB rather than 76, which alongside the model's 30 GB is a card that fits.
+
+**The obvious objection is attention**. Every token has to attend to every earlier token, and no GPU has the earlier tokens. So the GPUs exchange what they are missing, and what comes out is exactly what one enormous GPU would have computed.
+
+There are two ways to run that exchange, context parallelism (CP) and Ulysses sequence parallelism (SP).
+
+| | CP | SP |
+| --- | --- | --- |
+| FSDP2 | ✅ | ❌ |
+| DeepSpeed | ❌ | ✅ |
+| Setting | `cp_size` | `sp_size` |
+| What gets split | the tokens | the attention heads |
+| How far it scales | any number of GPUs | up to the number of KV heads, 8 here |
+| Attention | SDPA, causal only | SDPA or FlashAttention |
+
+**On FSDP2, CP.** Each GPU keeps its own slice, and the other slices come to it in turn, so every token eventually sees every earlier token.
+
+```yaml
+parallelism_config:
+  parallelism_config_cp_size: 4
+```
+
+**On DeepSpeed, SP.** Instead of moving slices around, it reshuffles the batch just before attention so each GPU holds every token but only a quarter of the attention heads, then shuffles back afterwards.
+
+```yaml
+parallelism_config:
+  parallelism_config_sp_size: 4
+```
+
+The two knobs do not cross over today: `cp_size` requires FSDP2 and `sp_size` only runs under DeepSpeed. Pick the backend and the method follows. The rest of this section is the FSDP2 path, which is what the example at the top of this guide uses: those four GPUs are not independent workers on four batches, they are one group sharing a single sequence.
+
+Two things change once it is on:
+
+1. Sequences have to be padded to a multiple of `cp_size * 2`, so `pad_to_multiple_of=8` (in the [`SFTConfig`]) for four GPUs.
+2. The causal-SDPA requirement rules out packing, which relies on a block-diagonal mask to keep documents from reading each other, and TRL raises if you ask for both. It also rules out models whose layers use sliding-window or chunked attention, which accelerate refuses: OpenAI GPT-OSS, Gemma 3 and 4, Qwen3.5 and later. Qwen3 and Qwen3-MoE are full attention throughout, which is why they are the models here.
+
+And that is the last of the four levers:
+
+<img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/long_context_cp_scaling.png" alt="Peak memory against sequence length on one GPU and on four with context parallelism, the four-GPU line reaching a million tokens where the single GPU stops just past 256k"/>
+
+One card stops just past 256k. Four of them take the whole million!, and land at 63.6 GB with room to spare. The sequence this guide opened with fits.
+
+> [!TIP]
+> Set `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`. At a million tokens the run above needs 63.6 GB on an 80 GB card, and still fails without it: the tensors it asks for are large and contiguous, and the allocator cannot find room for them among the blocks it already holds.
