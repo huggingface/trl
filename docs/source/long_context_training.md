@@ -65,7 +65,55 @@ The peak is gone.
 
 How to enable this in TRL? There is nothing to do: the chunked loss is the default. If you want to opt in to the plain loss, set `loss_type="nll"` in the [`SFTConfig`].
 
-How far does this let us push the sequence? On the same setup, this one change already takes us from 32k tokens to 160k.
+How far does this let us push the sequence? In memory terms, this one change alone takes us from 32k tokens to 160k.
 
 <img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/long_context_scaling.png" alt="Peak memory against sequence length, the plain loss running out of memory far earlier than the chunked loss"/>
 
+
+### The model has never seen position 100,000
+
+We can fit 160k tokens in memory now. But can the model actually read them?
+
+Qwen3-4B was trained on sequences of 40,960 tokens. The config says so:
+
+```python
+>>> from transformers import AutoConfig
+>>> AutoConfig.from_pretrained("Qwen/Qwen3-4B").max_position_embeddings
+40960
+```
+
+Every position beyond that is a position the model has never encountered. Nothing crashes, but the run just trains on tokens the model cannot place. Here is the loss on every token of a 160k-token sequence, averaged over eight of them. Each dot is one token:
+
+<img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/long_context_rope_pertoken_plain.png" alt="Per-token loss along a 160k-token sequence, flat for most of it then climbing steeply near the end"/>
+
+The model does not fall over at 40,960. It keeps going for a while, and only starts to lose the thread past 50k or so. From there it climbs steadily, ending three times worse than it started.
+
+<img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/long_context_rope_scaling.png" alt="The trained range of positions, the much longer range we ask for, and the same range rescaled to fit inside the trained one"/>
+
+Each token comes with its position, and the model learned what positions between 0 and 40,960 mean. Ask it about position 100,000 and it has nothing to go on.
+
+So instead of asking, we rescale: position 100,000 becomes position 25,000, and every position in the sequence lands back inside the range the model knows. The tokens do not change, only the position each one is given. This is what [YaRN](https://huggingface.co/papers/2309.00071) does, and the factor is simply how much further we are going: 40,960 trained, 163,840 wanted, so 4.
+
+How to enable this in TRL? Pass the RoPE configuration when the model is loaded:
+
+```python
+training_args = SFTConfig(
+    ...,
+    model_init_kwargs={
+        "rope_parameters": {
+            "rope_type": "yarn",
+            "rope_theta": 1_000_000,  # has to match what the model ships with
+            "factor": 4.0,
+            "original_max_position_embeddings": 40960,
+        },
+    },
+)
+```
+
+Does it work? The same measurement, with the rescaled run on top:
+
+<img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/long_context_rope_pertoken.png" alt="The same per-token loss with a second run using rescaled positions, which stays flat where the first one climbs"/>
+
+The rescaled run stays flat all the way to 160k. Over the last 20k tokens it averages 2.8 against 7.3 without the rescaling.
+
+Look at the dots rather than the lines and you can see what the average is made of. Early in the sequence both runs have the same shape: most tokens cheap, a few expensive. Late in the unscaled run the whole cloud has lifted, so it is not a handful of hard tokens dragging the mean up, it is the model reading worse everywhere.
