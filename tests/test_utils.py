@@ -36,6 +36,7 @@ from trl.trainer.utils import (
     adjusted_mfu,
     compute_flops_per_token,
     compute_mfu,
+    create_model_from_path,
     entropy_from_logits,
     flush_left,
     generate_model_card,
@@ -1572,6 +1573,25 @@ class TestPatchChunkedLMHead:
         chunked_grad = model_chunked.lm_head.weight.grad.clone()
 
         torch.testing.assert_close(chunked_grad, ref_grad, atol=1e-3, rtol=1e-3)
+
+
+class TestCreateModelFromPath:
+    @pytest.mark.parametrize("architectures", [None, []])
+    def test_falls_back_to_causal_lm_without_architecture_metadata(self, architectures):
+        config = PretrainedConfig()
+        config.architectures = architectures
+        expected_model = object()
+
+        with (
+            patch("trl.trainer.utils.AutoConfig.from_pretrained", return_value=config),
+            patch(
+                "trl.trainer.utils.AutoModelForCausalLM.from_pretrained", return_value=expected_model
+            ) as mock_loader,
+        ):
+            model = create_model_from_path("model-id")
+
+        assert model is expected_model
+        assert mock_loader.call_args.args == ("model-id",)
 
 
 class TestComputeFlopsPerToken(TrlTestCase):
