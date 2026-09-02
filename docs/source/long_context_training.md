@@ -8,7 +8,7 @@ The example in this guide trains on exactly one such sequence per step, on a sin
 
 ## Run it
 
-You need one node with 8 H100s (or better), and transformers 5.16 or later.
+You need one node with 8 H100s (or better), and transformers from main: the example uses gradient checkpointing's `offload`, which is not in a release yet.
 
 ```sh
 accelerate launch \
