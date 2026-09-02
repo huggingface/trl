@@ -112,10 +112,9 @@ def _chunk(h_s, w_s, b_s, s_scale, s_softcap, h_t, w_t, b_t, t_scale, t_softcap,
     # the backward, never `(chunk, V)`. ZeRO-3 shards the `lm_head`, so gather it tightly around each projection.
     # `logit_scale` (Cohere) / `final_logit_softcapping` (Gemma) are applied per model to match its full forward.
     with maybe_gather_lm_head_ctx(w_s, b_s):
-        # Project in the compute dtype and upcast only afterwards, as `"nll"` and `transformers`'
-        # `ForCausalLMLoss` do. The weight can be an fp32 master weight while the hidden states are
-        # bf16 (FSDP2 mixed precision reads the sharded weight directly, bypassing the cast its
-        # forward hooks apply), so cast it to the dtype `lm_head`'s own forward would compute in.
+        # Project in the compute dtype and upcast only for the softmax, like `"nll"` and
+        # `transformers`' own `ForCausalLMLoss` do. Matching the weight to the hidden-states dtype keeps the
+        # matmul in that dtype, which is what `lm_head`'s own forward computes in.
         student_logits = (h_s @ w_s.to(h_s.dtype).t()).float()
         if b_s is not None:
             student_logits = student_logits + b_s.float()
