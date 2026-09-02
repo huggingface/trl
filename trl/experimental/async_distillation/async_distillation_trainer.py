@@ -1061,7 +1061,6 @@ class AsyncDistillationTrainer(_BaseTrainer):
                         "names": weight_names,
                         "dtype_names": weight_dtype_names,
                         "shapes": weight_shapes,
-                        "packed": True,
                     },
                     weight_sync_timeout=self.args.weight_sync_timeout,
                 )
