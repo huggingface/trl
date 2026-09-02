@@ -32,6 +32,13 @@ from ..testing_utils import is_bf16_supported
 MODEL = "Qwen/Qwen2.5-0.5B-Instruct"
 MODEL_REVISION = "7ae557604adf67be50417f59c2c2f167def9a775"
 
+# v3 (transformers >= 5.16 default) crashes in the backward when num_heads != num_heads_kv, see
+# https://github.com/huggingface/kernels-community/issues/1085. The pin selects the v2 branch, whose cu128 matrix
+# only covers torch 2.11 (https://github.com/huggingface/kernels-community/issues/1082), so a runner torch bump
+# fails at load with "no build variant". Drop once #1085 is fixed and the cu128 stable-ABI builds are rebuilt:
+# the nightly still resolves to 48628c8, the broken one.
+FA2_KERNEL = "kernels-community/flash-attn2@v2"
+
 SFT_DATASET = "trl-lib/Capybara"
 DPO_DATASET = "trl-lib/ultrafeedback_binarized"
 
@@ -218,7 +225,7 @@ EQUIVALENCE_CLASSES: dict[str, dict] = {
                 "sft_fa2",
                 "sft",
                 SFT_DATASET,
-                attn="kernels-community/flash-attn2",  # to avoid cross-contamination between samples when padding_free=True
+                attn=FA2_KERNEL,  # to avoid cross-contamination between samples when padding_free=True
                 bf16=True,  # required for FA2 kernels, which are bfloat16-only
                 max_length=None,  # Required when padding_free=True
                 per_device_train_batch_size=2,
@@ -227,7 +234,7 @@ EQUIVALENCE_CLASSES: dict[str, dict] = {
                 "sft_fa2_padfree",
                 "sft",
                 SFT_DATASET,
-                attn="kernels-community/flash-attn2",  # to avoid cross-contamination between samples when padding_free=True
+                attn=FA2_KERNEL,  # to avoid cross-contamination between samples when padding_free=True
                 bf16=True,  # required for FA2 kernels, which are bfloat16-only
                 max_length=None,  # Required when padding_free=True
                 per_device_train_batch_size=2,
