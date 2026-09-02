@@ -1331,8 +1331,12 @@ class DPOTrainer(_BaseTrainer):
                 chosen_rewards,
                 rejected_rewards,
             ) = metrics
-        except ValueError as e:
-            if "Image features and image tokens do not match" in str(e) and self.args.max_length is not None:
+        except Exception as e:
+            if (
+                isinstance(e, ValueError)
+                and "Image features and image tokens do not match" in str(e)
+                and self.args.max_length is not None
+            ):
                 forward_error = ValueError(
                     f"The current `max_length` ({self.args.max_length}) is too short and causes image placeholder "
                     f"tokens in `input_ids` to be truncated, while the corresponding image features remain intact. "
@@ -1487,8 +1491,12 @@ class DPOTrainer(_BaseTrainer):
                     ref_tail_logps = (ref_per_token_logps * tail_mask).sum(dim=1)
                     ref_logps = ref_shared_logps + self.ld_alpha * ref_tail_logps
                 ref_chosen_logps, ref_rejected_logps = ref_logps.chunk(2, dim=0)  # batch is [chosen, rejected]
-        except ValueError as e:
-            if "Image features and image tokens do not match" in str(e) and self.args.max_length is not None:
+        except Exception as e:
+            if (
+                isinstance(e, ValueError)
+                and "Image features and image tokens do not match" in str(e)
+                and self.args.max_length is not None
+            ):
                 forward_error = ValueError(
                     f"The current `max_length` ({self.args.max_length}) is too short and causes image placeholder "
                     f"tokens in `input_ids` to be truncated, while the corresponding image features remain intact. "

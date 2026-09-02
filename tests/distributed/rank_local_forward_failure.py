@@ -43,7 +43,8 @@ from trl import DPOConfig, DPOTrainer
 # A regression here stalls rather than fails, and a stalled child would sit until the CI job's own timeout. Fail the
 # process instead, well inside any collective timeout. A signal handler cannot do this: the stalled rank sits inside a
 # C-level collective and never returns to Python bytecode, so `SIGALRM` would be delivered but never handled. A daemon
-# thread can, because the collective releases the GIL while it waits.
+# thread can, because the collective releases the GIL while it waits. The deadline is absolute, so a healthy run
+# that outlasts it is killed too; the healthy two-rank CPU run measured under 90 seconds, so 300 leaves room.
 WATCHDOG_SECONDS = 300
 
 

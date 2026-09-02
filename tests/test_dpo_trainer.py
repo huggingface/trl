@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import math
+
 import pytest
 import torch
 import transformers
@@ -435,20 +437,22 @@ class TestDPOTrainer(TrlTestCase):
         """The guard widens to `float64` before reducing, so a finite loss above `float32`'s maximum stays finite.
 
         Narrowing to `float32` first turns any finite value above roughly `3.4e38` into `inf`, which would report a
-        healthy step as non-finite and emit the warning. The loss is replaced on the evaluation path, where it is never
-        backpropagated.
+        healthy step as non-finite and emit the warning. The loss has to be large before the guard sees it, so it is
+        produced by the trainer itself rather than substituted afterwards: the model runs in `float64`, and the IPO
+        loss `(delta - 1 / (2 * beta)) ** 2` with `beta=1e-20` is about `2.5e39` whatever the log-ratios are. The
+        evaluation path is used because the value is never backpropagated there.
         """
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
 
-        class HugeFiniteLossDPOTrainer(DPOTrainer):
-            def _compute_loss(self, model, inputs, return_outputs=False):
-                result = super()._compute_loss(model, inputs, return_outputs)
-                loss = result[0] if return_outputs else result
-                huge = loss.detach().double() * 0 + 1e100
-                return (huge, result[1]) if return_outputs else huge
-
-        training_args = DPOConfig(output_dir=self.tmp_dir, max_steps=1, report_to="none")
-        trainer = HugeFiniteLossDPOTrainer(
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            max_steps=1,
+            loss_type="ipo",
+            beta=1e-20,
+            model_init_kwargs={"dtype": torch.float64},
+            report_to="none",
+        )
+        trainer = DPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             args=training_args,
             train_dataset=dataset,
@@ -457,9 +461,9 @@ class TestDPOTrainer(TrlTestCase):
 
         metrics = trainer.evaluate()
 
-        # The case is only meaningful if the value really does survive one cast and not the other.
-        assert torch.isfinite(torch.tensor(1e100, dtype=torch.float64))
-        assert not torch.isfinite(torch.tensor(1e100, dtype=torch.float64).float())
+        # The case is only meaningful if the loss really is finite and really is above what `float32` can hold.
+        assert math.isfinite(metrics["eval_loss"])
+        assert metrics["eval_loss"] > torch.finfo(torch.float32).max
         assert metrics["eval_frac_nonfinite_loss"] == 0.0
 
     @pytest.mark.parametrize("poison", [float("nan"), float("inf")])

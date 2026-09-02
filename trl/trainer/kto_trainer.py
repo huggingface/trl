@@ -1428,8 +1428,12 @@ class KTOTrainer(_BaseTrainer):
                         ref_backbone = ref_model_inner.base_model
                     ref_outputs = ref_backbone(**model_kwargs)
                     ref_lm_head = self.ref_model.get_output_embeddings()
-        except ValueError as e:
-            if "Image features and image tokens do not match" in str(e) and self.args.max_length is not None:
+        except Exception as e:
+            if (
+                isinstance(e, ValueError)
+                and "Image features and image tokens do not match" in str(e)
+                and self.args.max_length is not None
+            ):
                 forward_error = ValueError(
                     f"The current `max_length` ({self.args.max_length}) is too short and causes image placeholder "
                     f"tokens in `input_ids` to be truncated, while the corresponding image features remain intact. "
@@ -1457,27 +1461,53 @@ class KTOTrainer(_BaseTrainer):
         target = batch["input_ids"][:, 1:].clone()
         target[shift_completion_mask == 0] = -100
 
-        with maybe_gather_lm_head_ctx(lm_head.weight, lm_head.bias, ref_lm_head.weight, ref_lm_head.bias):
-            (
-                loss,
+        # The fused loss is this rank's own too, and it sits downstream of the KL gather above, so it needs an
+        # agreement of its own: a rank that raised here would leave the peers in the next metric gather.
+        forward_error = None
+        try:
+            with maybe_gather_lm_head_ctx(lm_head.weight, lm_head.bias, ref_lm_head.weight, ref_lm_head.bias):
                 (
-                    chosen_logps_sum,
-                    rejected_logps_sum,
-                    chosen_logits_sum,
-                    rejected_logits_sum,
-                    chosen_rewards_sum,
-                    rejected_rewards_sum,
-                ),
-            ) = self.liger_loss(
-                _input=outputs.last_hidden_state[:, :-1],
-                lin_weight=lm_head.weight,
-                target=target,
-                bias=lm_head.bias,
-                preference_labels=batch["label"],
-                ref_input=ref_outputs.last_hidden_state[:, :-1],
-                ref_weight=ref_lm_head.weight,
-                ref_bias=ref_lm_head.bias,
-                kl=kl,
+                    loss,
+                    (
+                        chosen_logps_sum,
+                        rejected_logps_sum,
+                        chosen_logits_sum,
+                        rejected_logits_sum,
+                        chosen_rewards_sum,
+                        rejected_rewards_sum,
+                    ),
+                ) = self.liger_loss(
+                    _input=outputs.last_hidden_state[:, :-1],
+                    lin_weight=lm_head.weight,
+                    target=target,
+                    bias=lm_head.bias,
+                    preference_labels=batch["label"],
+                    ref_input=ref_outputs.last_hidden_state[:, :-1],
+                    ref_weight=ref_lm_head.weight,
+                    ref_bias=ref_lm_head.bias,
+                    kl=kl,
+                )
+        except Exception as e:
+            if (
+                isinstance(e, ValueError)
+                and "Image features and image tokens do not match" in str(e)
+                and self.args.max_length is not None
+            ):
+                forward_error = ValueError(
+                    f"The current `max_length` ({self.args.max_length}) is too short and causes image placeholder "
+                    f"tokens in `input_ids` to be truncated, while the corresponding image features remain intact. "
+                    f"Please increase `max_length` or set it to `None` to disable truncation."
+                )
+                forward_error.__cause__ = e
+            else:
+                forward_error = e
+        failed_anywhere = torch.tensor(float(forward_error is not None), device=self.accelerator.device)
+        if self.accelerator.gather(failed_anywhere).any():
+            if forward_error is not None:
+                raise forward_error
+            raise RuntimeError(
+                "The forward pass failed on another rank. This rank raises too so the run fails together instead of "
+                "blocking in the next collective; the cause is in the failing rank's traceback."
             )
 
         self._metrics[mode]["kl"].append(kl.item())
@@ -1592,8 +1622,12 @@ class KTOTrainer(_BaseTrainer):
             per_token_logps = selective_log_softmax(shift_logits, batch["input_ids"][:, 1:])
             per_token_logps[batch["completion_mask"][:, 1:] == 0] = 0.0
             completion_logps = per_token_logps.sum(-1)
-        except ValueError as e:
-            if "Image features and image tokens do not match" in str(e) and self.args.max_length is not None:
+        except Exception as e:
+            if (
+                isinstance(e, ValueError)
+                and "Image features and image tokens do not match" in str(e)
+                and self.args.max_length is not None
+            ):
                 forward_error = ValueError(
                     f"The current `max_length` ({self.args.max_length}) is too short and causes image placeholder "
                     f"tokens in `input_ids` to be truncated, while the corresponding image features remain intact. "
@@ -1665,8 +1699,12 @@ class KTOTrainer(_BaseTrainer):
                 ref_completion_logps = ref_per_token_logps.sum(-1)
                 ref_chosen_logps = ref_completion_logps.index_select(0, chosen_idx)
                 ref_rejected_logps = ref_completion_logps.index_select(0, rejected_idx)
-        except ValueError as e:
-            if "Image features and image tokens do not match" in str(e) and self.args.max_length is not None:
+        except Exception as e:
+            if (
+                isinstance(e, ValueError)
+                and "Image features and image tokens do not match" in str(e)
+                and self.args.max_length is not None
+            ):
                 forward_error = ValueError(
                     f"The current `max_length` ({self.args.max_length}) is too short and causes image placeholder "
                     f"tokens in `input_ids` to be truncated, while the corresponding image features remain intact. "
