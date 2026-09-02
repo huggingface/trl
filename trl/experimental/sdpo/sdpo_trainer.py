@@ -1141,7 +1141,10 @@ class SDPOTrainer(_BaseTrainer):
         return self.accelerator.gather(rewards_per_func)
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
-        if return_outputs:
+        # `return_outputs` reaches every rank from the same caller, so today all of them raise together. Agree
+        # across ranks anyway: the loss path below now ends in a collective, and a raise that skips it on one rank
+        # only would leave the others waiting for a gather that never comes.
+        if self.accelerator.gather(torch.tensor(float(return_outputs), device=self.accelerator.device)).any():
             raise ValueError("The SDPOTrainer does not support returning outputs")
 
         if self.args.distillation_weight == 1.0:
@@ -1156,7 +1159,9 @@ class SDPOTrainer(_BaseTrainer):
                 # since the last log, so the curve never shows the step that failed. Report the condition here instead.
                 # Gather first, so a rank whose loss went non-finite is counted even when the other ranks are finite.
                 mode = "train" if self.model.training else "eval"
-                nonfinite = self.accelerator.gather((~torch.isfinite(loss.detach().mean())).float())
+                # Cast before the reduction: a low-precision dtype such as `float8_e5m2` has no `mean` kernel, and the
+                # cast leaves the finiteness of every other dtype unchanged.
+                nonfinite = self.accelerator.gather((~torch.isfinite(loss.detach().float().mean())).float())
                 self._metrics[mode]["frac_nonfinite_loss"].append(nonfinite.mean().item())
                 if nonfinite.any():
                     # `logging_nan_inf_filter` and the optimizer step belong to the training loop only, so each mode
@@ -1217,7 +1222,9 @@ class SDPOTrainer(_BaseTrainer):
         # the step that failed. Report the condition here instead. Gather first, so a rank whose loss went non-finite
         # is counted even when the other ranks are finite.
         mode = "train" if self.model.training else "eval"
-        nonfinite = self.accelerator.gather((~torch.isfinite(loss.detach().mean())).float())
+        # Cast before the reduction: a low-precision dtype such as `float8_e5m2` has no `mean` kernel, and the
+        # cast leaves the finiteness of every other dtype unchanged.
+        nonfinite = self.accelerator.gather((~torch.isfinite(loss.detach().float().mean())).float())
         self._metrics[mode]["frac_nonfinite_loss"].append(nonfinite.mean().item())
         if nonfinite.any():
             # `logging_nan_inf_filter` and the optimizer step belong to the training loop only, so each mode gets its
@@ -1779,9 +1786,10 @@ class SDPOTrainer(_BaseTrainer):
         self._metrics[mode][f"{metric_prefix}/distillation_loss"].append(value)
 
     def _open_eval_window(self, metric_key_prefix):
-        # `log()` drains `self._metrics` but `predict()` never calls it, so batches scored by
-        # `predict()` would survive into the next evaluation window and skew its averages. Opening the window here
-        # makes each one self-contained whichever entry point started it, and stays correct across repeated calls.
+        # `log()` drains `self._metrics` but `predict()` never calls it, so a `predict()` run leaves its batches
+        # in the buffer with nothing to drain them. `evaluate()` opens its own window below, so those leftovers
+        # cannot reach an evaluation average; what they do reach is the next `predict()` and any direct reader of
+        # `self._metrics`. Opening the window here makes each one self-contained whichever entry point started it.
         # The prefix is recorded because `log()` cannot see it, and it is not always "eval": `evaluate()` takes it as
         # an argument and `predict()` defaults it to "test". Both public entry points are hooked rather than
         # `evaluation_loop`, because `use_legacy_prediction_loop` routes to `prediction_loop` instead on the older

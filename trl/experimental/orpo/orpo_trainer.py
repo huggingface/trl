@@ -920,7 +920,9 @@ class ORPOTrainer(_BaseTrainer):
         # is counted even when the other ranks are finite. This trainer logs through `store_metrics`. Evaluation goes
         # through `prediction_step`, which never calls this method, so only training reaches here and the rate belongs
         # under training.
-        nonfinite = self.accelerator.gather((~torch.isfinite(loss.detach().mean())).float())
+        # Cast before the reduction: a low-precision dtype such as `float8_e5m2` has no `mean` kernel, and the
+        # cast leaves the finiteness of every other dtype unchanged.
+        nonfinite = self.accelerator.gather((~torch.isfinite(loss.detach().float().mean())).float())
         self.store_metrics({"frac_nonfinite_loss": nonfinite.mean().item()}, train_eval="train")
         if nonfinite.any():
             logger.warning_once(

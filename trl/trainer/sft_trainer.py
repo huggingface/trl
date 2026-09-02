@@ -1792,18 +1792,34 @@ class SFTTrainer(_BaseTrainer):
             inputs["return_token_accuracy"] = True
             inputs["use_token_scaling"] = self.args.loss_type == "dft"
 
+        # The forward pass fails on this rank's own batch, so a rank that raises here would leave the others waiting
+        # in the gather further down with no error to explain it. Agree on a path both outcomes reach: record the
+        # failure, gather it, then re-raise the original exception on the rank that saw it and point the others at
+        # that rank. Gathering before the raise does not help, because the peers are already past it by then.
+        forward_error: BaseException | None = None
+        loss, outputs = None, None
         try:
             (loss, outputs) = super().compute_loss(
                 model, inputs, return_outputs=True, num_items_in_batch=num_items_in_batch
             )
         except ValueError as e:
             if "Image features and image tokens do not match" in str(e) and self.args.max_length is not None:
-                raise ValueError(
+                forward_error = ValueError(
                     f"The current `max_length` ({self.args.max_length}) is too short and causes image placeholder "
                     f"tokens in `input_ids` to be truncated, while the corresponding image features remain intact. "
                     f"Please increase `max_length` or set it to `None` to disable truncation."
-                ) from e
-            raise
+                )
+                forward_error.__cause__ = e
+            else:
+                forward_error = e
+        failed_anywhere = torch.tensor(float(forward_error is not None), device=self.accelerator.device)
+        if self.accelerator.gather(failed_anywhere).any():
+            if forward_error is not None:
+                raise forward_error
+            raise RuntimeError(
+                "The forward pass failed on another rank. This rank raises too so the run fails together instead of "
+                "blocking in the next collective; the cause is in the failing rank's traceback."
+            )
 
         # Compute entropy
         if self.args.loss_type == "chunked_nll":
@@ -1890,7 +1906,9 @@ class SFTTrainer(_BaseTrainer):
         # own loss and logs a value derived from the losses accumulated since the last log, so the curve never shows
         # the step that failed. Report the condition here instead. Gather first, so a rank whose loss went non-finite
         # is counted even when the other ranks are finite.
-        nonfinite = self.accelerator.gather((~torch.isfinite(loss.detach().mean())).float())
+        # Cast before the reduction: a low-precision dtype such as `float8_e5m2` has no `mean` kernel, and the
+        # cast leaves the finiteness of every other dtype unchanged.
+        nonfinite = self.accelerator.gather((~torch.isfinite(loss.detach().float().mean())).float())
         self._metrics[mode]["frac_nonfinite_loss"].append(nonfinite.mean().item())
         if nonfinite.any():
             # `logging_nan_inf_filter` and the optimizer step belong to the training loop only, so each mode gets its
@@ -1927,9 +1945,10 @@ class SFTTrainer(_BaseTrainer):
         return super().prediction_step(model, inputs, prediction_loss_only, ignore_keys=ignore_keys)
 
     def _open_eval_window(self, metric_key_prefix):
-        # `log()` drains `self._metrics` but `predict()` never calls it, so batches scored by
-        # `predict()` would survive into the next evaluation window and skew its averages. Opening the window here
-        # makes each one self-contained whichever entry point started it, and stays correct across repeated calls.
+        # `log()` drains `self._metrics` but `predict()` never calls it, so a `predict()` run leaves its batches
+        # in the buffer with nothing to drain them. `evaluate()` opens its own window below, so those leftovers
+        # cannot reach an evaluation average; what they do reach is the next `predict()` and any direct reader of
+        # `self._metrics`. Opening the window here makes each one self-contained whichever entry point started it.
         # The prefix is recorded because `log()` cannot see it, and it is not always "eval": `evaluate()` takes it as
         # an argument and `predict()` defaults it to "test". Both public entry points are hooked rather than
         # `evaluation_loop`, because `use_legacy_prediction_loop` routes to `prediction_loop` instead on the older

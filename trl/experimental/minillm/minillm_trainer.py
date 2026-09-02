@@ -418,7 +418,9 @@ class MiniLLMTrainer(GRPOTrainer):
         # the step that failed. Report the condition here instead. Gather first, so a rank whose loss went non-finite
         # is counted even when the other ranks are finite.
         mode = "train" if self.model.training else "eval"
-        nonfinite = self.accelerator.gather((~torch.isfinite(loss.detach().mean())).float())
+        # Cast before the reduction: a low-precision dtype such as `float8_e5m2` has no `mean` kernel, and the
+        # cast leaves the finiteness of every other dtype unchanged.
+        nonfinite = self.accelerator.gather((~torch.isfinite(loss.detach().float().mean())).float())
         self._metrics[mode]["frac_nonfinite_loss"].append(nonfinite.mean().item())
         if nonfinite.any():
             # `logging_nan_inf_filter` and the optimizer step belong to the training loop only, so each mode gets its

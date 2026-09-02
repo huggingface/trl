@@ -130,7 +130,7 @@ While training and evaluating, we record the following metrics:
 * `mean_token_accuracy`: The proportion of non-masked tokens for which the model’s top-1 prediction matches the ground truth token.
 * `learning_rate`: The current learning rate, which may change dynamically if a scheduler is used.
 * `grad_norm`: The L2 norm of the gradients, computed before gradient clipping.
-* `frac_nonfinite_loss`: The fraction of loss computations in the logging interval whose loss was not finite (NaN or Inf), counted once per rank per gradient accumulation step, so it is a rate rather than a count of affected optimizer steps. Any non-zero value is worth investigating: `logging_nan_inf_filter` is enabled by default and substitutes a finite value for a non-finite loss in the reported `loss`, which leaves the failing step invisible in the loss curve.
+* `frac_nonfinite_loss`: The fraction of loss computations in the logging interval whose loss was not finite (NaN or Inf), counted once per rank per micro-batch, so it is a rate over loss computations rather than a count of affected optimizer steps. Any non-zero value is worth investigating: `logging_nan_inf_filter` is enabled by default and, when `is_torch_xla_available()` is false, substitutes a finite value for a non-finite loss in the reported `loss`, which leaves the failing step invisible in the loss curve.
 
 ## Customization
 

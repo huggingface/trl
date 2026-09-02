@@ -487,7 +487,10 @@ class SSDTrainer(_BaseTrainer):
     # ------------------------------------------------------------------
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
-        if return_outputs:
+        # `return_outputs` reaches every rank from the same caller, so today all of them raise together. Agree
+        # across ranks anyway: the loss path below now ends in a collective, and a raise that skips it on one rank
+        # only would leave the others waiting for a gather that never comes.
+        if self.accelerator.gather(torch.tensor(float(return_outputs), device=self.accelerator.device)).any():
             raise ValueError("The SSDTrainer does not support returning outputs")
 
         prompt_ids, prompt_mask = inputs["prompt_ids"], inputs["prompt_mask"]
@@ -521,7 +524,9 @@ class SSDTrainer(_BaseTrainer):
         # own loss and logs a value derived from the losses accumulated since the last log, so the curve never shows
         # the step that failed. Report the condition here instead. Gather first, so a rank whose loss went non-finite
         # is counted even when the other ranks are finite.
-        nonfinite = self.accelerator.gather((~torch.isfinite(loss.detach().mean())).float())
+        # Cast before the reduction: a low-precision dtype such as `float8_e5m2` has no `mean` kernel, and the
+        # cast leaves the finiteness of every other dtype unchanged.
+        nonfinite = self.accelerator.gather((~torch.isfinite(loss.detach().float().mean())).float())
         self._metrics[mode]["frac_nonfinite_loss"].append(nonfinite.mean().item())
         if nonfinite.any():
             # `logging_nan_inf_filter` and the optimizer step belong to the training loop only, so each mode gets its
@@ -561,9 +566,10 @@ class SSDTrainer(_BaseTrainer):
         return loss.detach(), None, None
 
     def _open_eval_window(self, metric_key_prefix):
-        # `log()` drains `self._metrics` but `predict()` never calls it, so batches scored by
-        # `predict()` would survive into the next evaluation window and skew its averages. Opening the window here
-        # makes each one self-contained whichever entry point started it, and stays correct across repeated calls.
+        # `log()` drains `self._metrics` but `predict()` never calls it, so a `predict()` run leaves its batches
+        # in the buffer with nothing to drain them. `evaluate()` opens its own window below, so those leftovers
+        # cannot reach an evaluation average; what they do reach is the next `predict()` and any direct reader of
+        # `self._metrics`. Opening the window here makes each one self-contained whichever entry point started it.
         # The prefix is recorded because `log()` cannot see it, and it is not always "eval": `evaluate()` takes it as
         # an argument and `predict()` defaults it to "test". Both public entry points are hooked rather than
         # `evaluation_loop`, because `use_legacy_prediction_loop` routes to `prediction_loop` instead on the older

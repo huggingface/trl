@@ -476,13 +476,15 @@ class TestSFTTrainer(TrlTestCase):
         assert "The evaluation loss is not finite" in caplog.text
 
     def test_nonfinite_loss_metric_is_a_rate_over_the_logging_window(self):
-        """The metric averages one flag per loss computation, so a single bad micro-batch out of two reads 0.5.
-        With `gradient_accumulation_steps=1` every window holds one computation and the averaging is invisible."""
+        """The metric averages one flag per loss computation, so one bad micro-batch out of four reads 0.25.
+        With `gradient_accumulation_steps=1` every window holds one computation and the averaging is invisible.
+        The split is deliberately uneven: an even one averages to 0.5 whichever way the guard's predicate points, so
+        it cannot tell `~isfinite` from `isfinite` and would pass against an inverted guard."""
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
 
         class NonFiniteLossSFTTrainer(SFTTrainer):
-            # Poison the first micro-batch of the step only. The optimizer step spans two of them, so the window the
-            # metric averages over holds one non-finite loss and one finite one.
+            # Poison the first micro-batch of the step only. The optimizer step spans four of them, so the window
+            # the metric averages over holds one non-finite loss and three finite ones.
             microbatches = 0
 
             def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
@@ -503,7 +505,7 @@ class TestSFTTrainer(TrlTestCase):
         training_args = SFTConfig(
             output_dir=self.tmp_dir,
             per_device_train_batch_size=1,
-            gradient_accumulation_steps=2,
+            gradient_accumulation_steps=4,
             max_steps=1,
             logging_steps=1,
             report_to="none",
@@ -516,7 +518,78 @@ class TestSFTTrainer(TrlTestCase):
 
         trainer.train()
 
-        assert trainer.state.log_history[0]["frac_nonfinite_loss"] == 0.5
+        assert trainer.state.log_history[0]["frac_nonfinite_loss"] == 0.25
+
+    def test_truncated_image_tokens_raise_with_the_max_length_hint(self):
+        """The forward's image-token error is re-raised with the `max_length` hint, and its cause is preserved.
+
+        `compute_loss` no longer raises directly from the `except`: it records the failure, agrees across ranks, then
+        re-raises. That keeps a rank whose forward failed from leaving the others in the metric's gather. This test
+        pins the single-process behaviour the rewrite has to preserve, since a gather over one rank is the identity.
+        """
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+
+        class ImageTokenMismatchSFTTrainer(SFTTrainer):
+            def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+                def raise_mismatch(module, args, output):
+                    raise ValueError("Image features and image tokens do not match: 3 vs 4")
+
+                handle = model.register_forward_hook(raise_mismatch)
+                try:
+                    return super().compute_loss(model, inputs, return_outputs, num_items_in_batch)
+                finally:
+                    handle.remove()
+
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            max_steps=1,
+            max_length=512,
+            report_to="none",
+        )
+        trainer = ImageTokenMismatchSFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        with pytest.raises(ValueError, match="is too short and causes image placeholder"):
+            trainer.train()
+
+    def test_unrelated_forward_error_keeps_its_own_message(self):
+        """A forward error that is not the image-token mismatch propagates unchanged.
+
+        The rewrite routes every forward exception through one gather, so this guards against the unrelated ones
+        being swallowed or relabelled on the way out.
+        """
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+
+        class UnrelatedErrorSFTTrainer(SFTTrainer):
+            def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+                def raise_unrelated(module, args, output):
+                    raise ValueError("something unrelated went wrong")
+
+                handle = model.register_forward_hook(raise_unrelated)
+                try:
+                    return super().compute_loss(model, inputs, return_outputs, num_items_in_batch)
+                finally:
+                    handle.remove()
+
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            max_steps=1,
+            max_length=512,
+            report_to="none",
+        )
+        trainer = UnrelatedErrorSFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        with pytest.raises(ValueError, match="something unrelated went wrong"):
+            trainer.train()
 
     @pytest.mark.parametrize("metric_key_prefix", ["eval", "test", "holdout"])
     def test_nonfinite_loss_metric_uses_the_callers_prefix(self, metric_key_prefix):

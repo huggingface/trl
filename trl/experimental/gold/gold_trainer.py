@@ -2461,7 +2461,14 @@ class GOLDTrainer(SFTTrainer):
             if self._teacher_processor is not None:
                 # VLM teacher: render the prompt through the teacher's own processor so image
                 # placeholders and pixel tensors match the teacher model.
-                if "_raw_images" not in inputs or "_raw_prompts" not in inputs:
+                # This reads this rank's own batch, so raising here alone would leave the other ranks in the loss
+                # path's gather with no error to explain it. Agree across ranks first, so a missing key on any rank
+                # raises on all of them. The gather sits in the condition, which is what makes every rank reach it.
+                missing_vlm_inputs = torch.tensor(
+                    float("_raw_images" not in inputs or "_raw_prompts" not in inputs),
+                    device=self.accelerator.device,
+                )
+                if self.accelerator.gather(missing_vlm_inputs).any():
                     raise ValueError(
                         "VLM ULD distillation requires `_raw_images` and `_raw_prompts` in the batch so teacher "
                         "inputs can be rendered with the teacher processor. Use the default GOLD VLM data collator "
@@ -2600,7 +2607,14 @@ class GOLDTrainer(SFTTrainer):
             student_labels = inputs["labels"]
 
             student_byte_offsets = inputs.get("byte_offsets")
-            if self.uld_loss_fn.use_extended_uld and student_byte_offsets is None:
+            # `byte_offsets` comes from the collator, so it is this rank's own batch that decides. Agree across ranks
+            # first, so a batch missing it on any rank raises on all of them rather than stranding the others in the
+            # loss path's gather. The gather sits in the condition, which is what makes every rank reach it.
+            missing_byte_offsets = torch.tensor(
+                float(self.uld_loss_fn.use_extended_uld and student_byte_offsets is None),
+                device=self.accelerator.device,
+            )
+            if self.accelerator.gather(missing_byte_offsets).any():
                 raise ValueError("Input batches must include `byte_offsets` when `use_extended_uld=True`.")
 
             loss = self.uld_loss_fn(
@@ -2641,7 +2655,9 @@ class GOLDTrainer(SFTTrainer):
         # the step that failed. Report the condition here instead. Gather first, so a rank whose loss went non-finite
         # is counted even when the other ranks are finite.
         mode = "train" if self.model.training else "eval"
-        nonfinite = self.accelerator.gather((~torch.isfinite(loss.detach().mean())).float())
+        # Cast before the reduction: a low-precision dtype such as `float8_e5m2` has no `mean` kernel, and the
+        # cast leaves the finiteness of every other dtype unchanged.
+        nonfinite = self.accelerator.gather((~torch.isfinite(loss.detach().float().mean())).float())
         self._metrics[mode]["frac_nonfinite_loss"].append(nonfinite.mean().item())
         if nonfinite.any():
             # `logging_nan_inf_filter` and the optimizer step belong to the training loop only, so each mode gets its
@@ -2851,9 +2867,10 @@ class GOLDTrainer(SFTTrainer):
         return loss
 
     def _open_eval_window(self, metric_key_prefix):
-        # `log()` drains `self._metrics` but `predict()` never calls it, so batches scored by
-        # `predict()` would survive into the next evaluation window and skew its averages. Opening the window here
-        # makes each one self-contained whichever entry point started it, and stays correct across repeated calls.
+        # `log()` drains `self._metrics` but `predict()` never calls it, so a `predict()` run leaves its batches
+        # in the buffer with nothing to drain them. `evaluate()` opens its own window below, so those leftovers
+        # cannot reach an evaluation average; what they do reach is the next `predict()` and any direct reader of
+        # `self._metrics`. Opening the window here makes each one self-contained whichever entry point started it.
         # The prefix is recorded because `log()` cannot see it, and it is not always "eval": `evaluate()` takes it as
         # an argument and `predict()` defaults it to "test". Both public entry points are hooked rather than
         # `evaluation_loop`, because `use_legacy_prediction_loop` routes to `prediction_loop` instead on the older

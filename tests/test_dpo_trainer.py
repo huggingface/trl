@@ -31,6 +31,7 @@ from .testing_utils import (
     require_kernels,
     require_liger_kernel,
     require_peft,
+    require_torch_accelerator,
     require_vision,
 )
 
@@ -431,6 +432,52 @@ class TestDPOTrainer(TrlTestCase):
             assert torch.isfinite(torch.tensor(poisoned_step["loss"]))
 
     # Special case for harmony
+    @require_torch_accelerator
+    @require_liger_kernel
+    def test_nonfinite_loss_is_visible_in_log_history_liger(self):
+        """The Liger path owns a second guard, and the test above cannot reach it.
+
+        `_compute_loss_liger` replaces `_compute_loss` when `use_liger_kernel=True`, so the test above leaves that
+        guard unexercised: inverting it alone keeps that test green. Poison the Liger path directly so the second
+        guard has its own coverage.
+        """
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+
+        class NonFiniteLossLigerDPOTrainer(DPOTrainer):
+            def _compute_loss_liger(self, model, inputs, return_outputs=False):
+                if self.state.global_step == 1:
+
+                    def poison_logits(module, args, output):
+                        output.logits = output.logits * float("nan")
+                        return output
+
+                    handle = model.register_forward_hook(poison_logits)
+                    try:
+                        return super()._compute_loss_liger(model, inputs, return_outputs)
+                    finally:
+                        handle.remove()
+                return super()._compute_loss_liger(model, inputs, return_outputs)
+
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,
+            max_steps=2,
+            logging_steps=1,
+            use_liger_kernel=True,
+            report_to="none",
+        )
+        trainer = NonFiniteLossLigerDPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        trainer.train()
+
+        healthy_step, poisoned_step = trainer.state.log_history[0], trainer.state.log_history[1]
+        assert healthy_step["frac_nonfinite_loss"] == 0.0
+        assert poisoned_step["frac_nonfinite_loss"] == 1.0
+
     def test_train_gpt_oss(self):
         dataset = load_dataset("trl-internal-testing/harmony", "preference", split="train")
 

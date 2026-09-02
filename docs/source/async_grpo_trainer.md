@@ -283,6 +283,7 @@ The gap between them is `perf/rollout_wait_s` plus the optimizer and weight-sync
 | `perf/forwarded_tok_s_fwd_bwd`, `perf/forwarded_tok_s_wall_clock` | forwarded tokens per second on each basis                                                                                                             |
 | `perf/trained_tok_s_wall_clock`                                   | the same, counting only tokens the loss saw                                                                                                           |
 | `perf/mfu_fwd_bwd`, `perf/mfu_wall_clock`                         | model FLOPs utilisation on each basis                                                                                                                 |
+| `frac_nonfinite_loss`                                             | the fraction of loss computations in the window whose loss was not finite (NaN or Inf), one flag per rank per micro-batch. `logging_nan_inf_filter` is on by default and, when `is_torch_xla_available()` is false, hides such a step from the reported loss, so any non-zero value is worth investigating |
 
 ## AsyncGRPOConfig
 
