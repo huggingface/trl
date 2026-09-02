@@ -115,3 +115,29 @@ The same measurement, with the rescaled run on top:
 <img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/long_context_rope_pertoken.png" alt="The same per-token loss with a second run using rescaled positions, which stays flat where the first one climbs"/>
 
 The rescaled run stays flat all the way to 160k. Over the last 20k tokens it averages 2.8 against 7.3 without the rescaling.
+
+### The activations are what is left
+
+With the loss chunked and the positions rescaled, one GPU takes us to 160k tokens. Then it runs out again. What is filling the card this time?
+
+<img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/long_context_profile_96k.png" alt="Memory through one step at 96k tokens, with the activation band taking most of the space above the model and optimizer"/>
+
+The model and its optimizer account for a fixed 30 GB, whatever the sequence length. Everything above that is activations: the values the forward pass computes and has to keep, because the backward pass needs them to work out the gradients.
+
+TRL already reduces them for you, and it is on by default. Gradient checkpointing keeps only what goes into each layer and throws away everything the layer computes inside itself: the attention scores, the wide MLP intermediate, the norms. When the backward pass needs them it runs the layer a second time to get them back. What survives is one saved tensor per layer, `sequence x hidden` each, and at long sequence lengths that is still the largest thing on the card.
+
+The useful observation is that those tensors are not needed during the forward pass at all. They are written, left alone, and read much later. So they do not have to sit on the GPU in the meantime: they can be moved to CPU memory and brought back when the backward pass reaches them.
+
+```python
+training_args = SFTConfig(..., gradient_checkpointing_kwargs={"offload": True})
+```
+
+<img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/long_context_profile_96k_offload.png" alt="The same step with the activations offloaded, where the red band is much thinner"/>
+
+Same step, same length: the red band thins out and the peak drops from 59.9 GB to 48.8 GB. Which buys sequence length:
+
+<img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/long_context_offload.png" alt="Peak memory against sequence length with and without activation offload, the offload line running lower and reaching further"/>
+
+Below 48k the two are the same, because at that length there is barely anything to move. Past it the offloaded run stays lower, and where the sequence used to stop at 160k it now reaches 256k on the same card.
+
+This one is not free. Every saved activation crosses to the host and back, and that traffic has to fit between the compute it sits next to.
