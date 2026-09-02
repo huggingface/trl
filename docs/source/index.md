@@ -18,8 +18,6 @@ The library is integrated with 🤗 [transformers](https://github.com/huggingfac
 
 Below is the current list of TRL trainers, organized by maturity and method type.
 
-### Stable
-
 <div style="display: flex; justify-content: space-between; width: 100%; gap: 2rem;">
 <div style="flex: 1; min-width: 0;">
 
