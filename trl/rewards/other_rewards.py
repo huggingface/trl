@@ -35,7 +35,7 @@ def get_repetition_penalty_reward(ngram_size: int = 3, max_penalty: float = -1.0
 
     Args:
         ngram_size (`int`, *optional*, defaults to `3`):
-            Size of the token n-grams to consider.
+            Size of the token n-grams to consider. Must be greater than `0`.
         max_penalty (`float`, *optional*, defaults to `-1.0`):
             Most negative penalty, applied to a fully repetitive completion. Must be non-positive.
 
@@ -54,6 +54,8 @@ def get_repetition_penalty_reward(ngram_size: int = 3, max_penalty: float = -1.0
     [0.0, -0.75]
     ```
     """
+    if ngram_size <= 0:
+        raise ValueError(f"ngram_size must be greater than 0, got {ngram_size}")
     if max_penalty > 0:
         raise ValueError(f"max_penalty {max_penalty} should not be positive")
     return _RepetitionPenalty(ngram_size, max_penalty)
