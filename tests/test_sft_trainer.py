@@ -477,9 +477,9 @@ class TestSFTTrainer(TrlTestCase):
 
     def test_nonfinite_loss_metric_is_a_rate_over_the_logging_window(self):
         """The metric averages one flag per loss computation, so one bad micro-batch out of four reads 0.25.
-        With `gradient_accumulation_steps=1` every window holds one computation and the averaging is invisible.
-        The split is deliberately uneven: an even one averages to 0.5 whichever way the guard's predicate points, so
-        it cannot tell `~isfinite` from `isfinite` and would pass against an inverted guard."""
+        With `gradient_accumulation_steps=1` every window holds one computation and the averaging is invisible. The
+        split is deliberately uneven: an even one averages to 0.5 whichever way the guard's predicate points, so it
+        cannot tell `~isfinite` from `isfinite` and would pass against an inverted guard."""
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
 
         class NonFiniteLossSFTTrainer(SFTTrainer):
@@ -559,8 +559,8 @@ class TestSFTTrainer(TrlTestCase):
     def test_unrelated_forward_error_keeps_its_own_message(self):
         """A forward error that is not the image-token mismatch propagates unchanged.
 
-        The rewrite routes every forward exception through one gather, so this guards against the unrelated ones
-        being swallowed or relabelled on the way out.
+        The rewrite routes every forward exception through one gather, so this guards against the unrelated ones being
+        swallowed or relabelled on the way out.
         """
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
 

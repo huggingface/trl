@@ -438,8 +438,8 @@ class TestDPOTrainer(TrlTestCase):
         """The Liger path owns a second guard, and the test above cannot reach it.
 
         `_compute_loss_liger` replaces `_compute_loss` when `use_liger_kernel=True`, so the test above leaves that
-        guard unexercised: inverting it alone keeps that test green. Poison the Liger path directly so the second
-        guard has its own coverage.
+        guard unexercised: inverting it alone keeps that test green. Poison the Liger path directly so the second guard
+        has its own coverage.
         """
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
 
