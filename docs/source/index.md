@@ -77,10 +77,25 @@ The documentation is organized into the following sections:
 
 <div class="mt-10">
   <div class="w-full flex flex-col space-y-4 md:space-y-0 md:grid md:grid-cols-2 md:gap-y-4 md:gap-x-5">
+    <a class="!no-underline border dark:border-gray-700 p-5 rounded-lg shadow hover:shadow-lg" href="https://huggingface.co/blog/delta-weight-sync">
+      <img src="https://raw.githubusercontent.com/huggingface/blog/main/assets/delta-weight-sync/thumbnail.png" alt="thumbnail" class="mt-0">
+      <p class="text-gray-500 text-sm">Published on May 27, 2026</p>
+      <p class="text-gray-700">Shipping a Trillion Parameters With a Hub Bucket: Delta Weight Sync in TRL</p>
+    </a>
     <a class="!no-underline border dark:border-gray-700 p-5 rounded-lg shadow hover:shadow-lg" href="https://huggingface.co/blog/trl-v1">
       <img src="https://raw.githubusercontent.com/huggingface/blog/main/assets/trl-v1/thumbnail.png" alt="thumbnail" class="mt-0">
-      <p class="text-gray-500 text-sm">Published March 27, 2026</p>
+      <p class="text-gray-500 text-sm">Published on March 31, 2026</p>
       <p class="text-gray-700">TRL v1: Post-Training Library That Holds When the Field Invalidates Its Own Assumptions</p>
+    </a>
+    <a class="!no-underline border dark:border-gray-700 p-5 rounded-lg shadow hover:shadow-lg" href="https://huggingface.co/blog/async-rl-training-landscape">
+      <img src="https://raw.githubusercontent.com/huggingface/blog/main/assets/async-rl-landscape/thumbnail.png" alt="thumbnail" class="mt-0">
+      <p class="text-gray-500 text-sm">Published on March 10, 2026</p>
+      <p class="text-gray-700">Keep the Tokens Flowing: Lessons from 16 Open-Source RL Libraries</p>
+    </a>
+    <a class="!no-underline border dark:border-gray-700 p-5 rounded-lg shadow hover:shadow-lg" href="https://huggingface.co/blog/ulysses-sp">
+      <img src="https://raw.githubusercontent.com/huggingface/blog/main/assets/ulysses/thumbnail.png" alt="thumbnail" class="mt-0">
+      <p class="text-gray-500 text-sm">Published on March 9, 2026</p>
+      <p class="text-gray-700">Ulysses Sequence Parallelism: Training with Million-Token Contexts</p>
     </a>
     <a class="!no-underline border dark:border-gray-700 p-5 rounded-lg shadow hover:shadow-lg" href="https://huggingface.co/blog/openenv">
       <img src="https://raw.githubusercontent.com/huggingface/blog/main/assets/openenv/thumbnail.png" alt="thumbnail" class="mt-0">
@@ -116,6 +131,11 @@ The documentation is organized into the following sections:
       <img src="https://raw.githubusercontent.com/huggingface/blog/main/assets/putting_rl_back_in_rlhf_with_rloo/thumbnail.png" alt="thumbnail" class="mt-0">
       <p class="text-gray-500 text-sm">Published on June 12, 2024</p>
       <p class="text-gray-700">Putting RL back in RLHF</p>
+    </a>
+    <a class="!no-underline border dark:border-gray-700 p-5 rounded-lg shadow hover:shadow-lg" href="https://huggingface.co/blog/unsloth-trl">
+      <img src="https://raw.githubusercontent.com/huggingface/blog/main/assets/hf_unsloth/thumbnail.png" alt="thumbnail" class="mt-0">
+      <p class="text-gray-500 text-sm">Published on January 10, 2024</p>
+      <p class="text-gray-700">Make LLM Fine-tuning 2x faster with Unsloth and 🤗 TRL</p>
     </a>
     <a class="!no-underline border dark:border-gray-700 p-5 rounded-lg shadow hover:shadow-lg" href="https://huggingface.co/blog/trl-ddpo">
       <img src="https://raw.githubusercontent.com/huggingface/blog/main/assets/166_trl_ddpo/thumbnail.png" alt="thumbnail" class="mt-0">
