@@ -152,6 +152,7 @@ class TestQuantizedWeightSync(TrlTestCase):
             (lambda: bnb.nn.Linear4bit(8, 8), 2, "4-bit quantized base under FSDP2"),
             # vLLM has never supported in-flight 8-bit, independent of the sharding strategy.
             (lambda: bnb.nn.Linear8bitLt(8, 8), 0, "8-bit quantization"),
+            (lambda: bnb.nn.Linear8bitLt(8, 8), 1, "8-bit quantization"),
             (lambda: bnb.nn.Linear8bitLt(8, 8), 2, "8-bit quantization"),
             # Negative controls: every other combination reaches the dequantizing push and must be accepted.
             (lambda: bnb.nn.Linear4bit(8, 8), 1, None),  # FSDP1 gathers through `summon_full_params`

@@ -41,7 +41,6 @@ from transformers import (
     PreTrainedTokenizerBase,
     ProcessorMixin,
     TrainerCallback,
-    is_bitsandbytes_available,
 )
 from transformers.models.auto.modeling_auto import MODEL_FOR_IMAGE_TEXT_TO_TEXT_MAPPING_NAMES
 from transformers.trainer_utils import EvalPrediction
@@ -56,7 +55,7 @@ from ...data_utils import (
 )
 from ...extras.profiling import profiling_context
 from ...generation.vllm_client import VLLMClient
-from ...generation.vllm_generation import _dense_param_data
+from ...generation.vllm_generation import _check_quantization_supported, _dense_param_data
 from ...import_utils import is_vllm_available
 from ...models.utils import prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
 from ...trainer.base_trainer import _BaseTrainer
@@ -67,10 +66,6 @@ from .online_dpo_config import OnlineDPOConfig
 
 if Version(transformers.__version__) >= Version("5.2.0"):
     from transformers.trainer_pt_utils import nested_gather
-
-
-if is_bitsandbytes_available():
-    import bitsandbytes as bnb
 
 
 if is_peft_available():
@@ -431,6 +426,11 @@ class OnlineDPOTrainer(_BaseTrainer):
                     "`pip install trl[vllm]` to use it."
                 )
 
+            # Both modes push dense weights at sync time (see `_dense_param_data`), so the check runs before either
+            # branch.
+            fsdp_version = self.accelerator.state.fsdp_plugin.fsdp_version if self.is_fsdp_enabled else None
+            _check_quantization_supported(model, fsdp_version)
+
             if self.vllm_mode == "server":
                 if self.accelerator.is_main_process:
                     if args.vllm_server_base_url is not None:
@@ -458,21 +458,6 @@ class OnlineDPOTrainer(_BaseTrainer):
                 # time is dequantized to the model dtype (see `_dense_param_data`), and building the engine with
                 # `quantization="bitsandbytes"` would allocate packed `[out_features, in_features // 2]` weights
                 # that reject that dense push. See https://github.com/huggingface/trl/issues/4973.
-                if is_bitsandbytes_available():
-                    fsdp_plugin = getattr(self.accelerator.state, "fsdp_plugin", None)
-                    fsdp_version = getattr(fsdp_plugin, "fsdp_version", 1) if fsdp_plugin else 1
-                    for _, module in model.named_modules():
-                        if isinstance(module, bnb.nn.Linear8bitLt):
-                            raise ValueError("vLLM does not support in-flight 8-bit quantization.")
-                        # FSDP2 syncs weights from `state_dict()`, which returns plain tensors: the bitsandbytes
-                        # `quant_state` holding the scales is gone before `_dense_param_data` can read it, so the
-                        # base cannot be dequantized for the push. Fail here rather than send packed storage to a
-                        # dense engine.
-                        if isinstance(module, bnb.nn.Linear4bit) and fsdp_version == 2:
-                            raise ValueError(
-                                "vLLM weight sync does not support a 4-bit quantized base under FSDP2. Train "
-                                "with DeepSpeed or on a single device, or load the base in full precision."
-                            )
                 vllm_kwargs = {
                     "model": model.name_or_path,
                     "tensor_parallel_size": self.vllm_tensor_parallel_size,

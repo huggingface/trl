@@ -352,6 +352,9 @@ class VLLMGeneration:
                 "`pip install trl[vllm]` to use it."
             )
 
+        # Both modes push dense weights at sync time (see `_dense_param_data`), so the check runs before either branch.
+        _check_quantization_supported(model, self._dist.fsdp_version)
+
         if self.mode == "server":
             if accelerator.is_main_process:
                 if self.server_base_url is not None:
@@ -388,8 +391,6 @@ class VLLMGeneration:
             os.environ["WORLD_SIZE"] = str(accelerator.num_processes)
             # Ensure distributed rendezvous variables are set without colliding across concurrent runs
             ensure_master_addr_port()
-
-            _check_quantization_supported(model, self._dist.fsdp_version)
 
             # Build LLM initialization kwargs
             self.llm = LLM(
