@@ -2,11 +2,7 @@ name: Slow tests (on push)
 
 on:
   push:
-    branches: [main]
-    paths:
-      # Run only when python files are modified
-      - "trl/**.py"
-      - "examples/**.py"
+    branches: [main, "ci-*"]
 env:
   CI_SLACK_CHANNEL: ${{ secrets.CI_PUSH_MAIN_CHANNEL }}
   HF_TOKEN: ${{ secrets.HF_TOKEN }}
