@@ -428,8 +428,16 @@ class TestGRPOTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @require_liger_kernel
-    @pytest.mark.parametrize("loss_type", ["bnpo", "dapo"])
-    def test_liger_logs_policy_loss(self, loss_type):
+    @pytest.mark.parametrize(
+        "loss_type, steps_per_generation",
+        [
+            ("bnpo", None),
+            # `steps_per_generation` defaults to `gradient_accumulation_steps`, which would make the DAPO
+            # normalizer exactly 1 and the capture point below unobservable. Pin it so the two differ.
+            ("dapo", 1),
+        ],
+    )
+    def test_liger_logs_policy_loss(self, loss_type, steps_per_generation):
         """`compute_loss` sends Liger runs to `compute_liger_loss` and returns, so they never reach the
         `policy_loss` append in `_compute_loss`. Both loss types are covered because the two paths capture the metric
         at different points: DAPO divides the normalizer in while building the loss, the others capture before the
@@ -442,6 +450,7 @@ class TestGRPOTrainer(TrlTestCase):
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=32,  # reduce the completion length to reduce memory usage
             gradient_accumulation_steps=2,  # exercise the accumulation rescale the metric has to match
+            steps_per_generation=steps_per_generation,
             loss_type=loss_type,
             use_liger_kernel=True,
             report_to="none",
@@ -453,11 +462,68 @@ class TestGRPOTrainer(TrlTestCase):
             train_dataset=dataset,
         )
 
-        trainer.train()
+        # `compute_liger_loss` returns `loss / normalizer`, so the logged metric pins the capture point: the DAPO
+        # family divides the normalizer in before capturing and must match that return exactly, while the other
+        # loss types capture beforehand and must come out `normalizer` times larger. Swapping the two branches
+        # leaves both values finite, so comparing the ratio is what makes an inverted ternary detectable.
+        # GRPO advantages are centred within each group, so with `old_per_token_logps` unset the policy ratio is
+        # exactly 1 and the fused loss is mathematically zero. A zero loss satisfies both branches of the
+        # capture-point ternary, leaving the comparison below vacuous. Offset the fused loss by a constant so it is
+        # observably nonzero; the autograd graph and therefore the gradients are unchanged.
+        loss_offset = 2.0
+        unoffset_liger_loss = trainer.liger_loss
+
+        def offset_liger_loss(*args, **kwargs):
+            loss, metrics = unoffset_liger_loss(*args, **kwargs)
+            return loss + loss_offset, metrics
+
+        trainer.liger_loss = offset_liger_loss
+
+        pairs = []
+        original = trainer.compute_liger_loss
+
+        def capture(*args, **kwargs):
+            out = original(*args, **kwargs)
+            # `log()` averages each metric over the whole logging window, so the value that reaches
+            # `log_history` is a mean over every call and not this one's. Read the append the call just made,
+            # otherwise the ratio below compares a window mean against a single loss and happens to agree only
+            # when every call returns the same number. `current_gradient_accumulation_steps` counts the
+            # micro-batches prefetched for the current optimizer step, so it can fall to a shorter epoch remainder
+            # on the last one when the dataloader length is not divisible by `gradient_accumulation_steps`. Record
+            # it here, where `compute_liger_loss` read it, rather than after `train()` returns.
+            pairs.append(
+                (
+                    out.detach().clone(),
+                    trainer._metrics["train"]["policy_loss"][-1],
+                    trainer.current_gradient_accumulation_steps,
+                )
+            )
+            return out
+
+        with patch.object(trainer, "compute_liger_loss", side_effect=capture):
+            trainer.train()
 
         logged = [log["policy_loss"] for log in trainer.state.log_history if "policy_loss" in log]
         assert logged, "the Liger path logged no `policy_loss`"
         assert all(value == value for value in logged), "`policy_loss` is NaN"
+
+        assert pairs, "`compute_liger_loss` was never called"
+        distinguishing = 0
+        for returned_loss, recorded, accumulation_steps in pairs:
+            if loss_type in ["cispo", "dapo", "vespo"]:
+                normalizer = accumulation_steps / trainer.args.steps_per_generation
+                expected = returned_loss.item()
+            else:
+                normalizer = accumulation_steps
+                expected = returned_loss.item() * normalizer
+            # If the offset above stopped taking effect the loss would return to zero, where every comparison
+            # here holds for either capture point. Fail on that rather than reporting a vacuous pass.
+            assert abs(returned_loss.item()) > 1e-6, "the Liger loss is ~0, so the capture point cannot be checked"
+            assert recorded == pytest.approx(expected, rel=1e-4)
+            # The two capture points differ only when the normalizer does, so the last optimizer step of an epoch,
+            # which can prefetch a single micro-batch, cannot tell them apart. Require that some call could.
+            distinguishing += normalizer != 1
+        assert distinguishing, "every call normalized by 1, so none can distinguish the capture points"
 
     def test_train_with_eval(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")

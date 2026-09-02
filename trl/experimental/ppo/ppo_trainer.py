@@ -236,10 +236,13 @@ class OnlineTrainerState(TrainerState):
 
 def masked_mean(values: torch.Tensor, mask: torch.Tensor, axis: bool | None = None) -> torch.Tensor:
     """Compute mean of tensor with a masked values."""
+    # A micro-batch whose rows are all padding leaves an empty mask, and dividing by that zero returns NaN, which
+    # then poisons every metric reduced from the same buffer. Clamping the denominator reports 0 for the empty
+    # case instead, matching how the rest of the library normalizes by a mask sum.
     if axis is not None:
-        return (values * mask).sum(axis=axis) / mask.sum(axis=axis)
+        return (values * mask).sum(axis=axis) / mask.sum(axis=axis).clamp(min=1.0)
     else:
-        return (values * mask).sum() / mask.sum()
+        return (values * mask).sum() / mask.sum().clamp(min=1.0)
 
 
 def masked_var(values: torch.Tensor, mask: torch.Tensor, unbiased: bool = True) -> torch.Tensor:
@@ -629,10 +632,17 @@ class PPOTrainer(_BaseTrainer):
         accelerator.print("===training policy===")
         start_time = time.time()
         # The micro-batch loop below runs `range(0, local_mini_batch_size, per_device_train_batch_size)` and resets
-        # `gradient_accumulation_idx` for every minibatch, so it writes that many slots per minibatch, not
-        # `gradient_accumulation_steps` of them. Sizing the axis by the latter left the unwritten slots at zero and
-        # every statistic below is reduced with `.mean()`, which then averaged those zeros in: each metric came out
-        # scaled by exactly 1 / num_mini_batches, and was only correct at the default `num_mini_batches=1`.
+        # `gradient_accumulation_idx` for every minibatch, so it writes `ceil(local_mini_batch_size /
+        # per_device_train_batch_size)` slots per minibatch, not `gradient_accumulation_steps` of them. The `ceil` is
+        # not redundant: `exact_div` above only requires `num_mini_batches` to divide `per_device_train_batch_size *
+        # gradient_accumulation_steps`, so `per_device_train_batch_size` need not divide `local_mini_batch_size` and
+        # the last micro-batch of a minibatch can be short. Sizing the axis by `gradient_accumulation_steps` left the
+        # unwritten slots at zero. The mean-reduced statistics below averaged those zeros in, so each came out scaled
+        # by `ceil(gradient_accumulation_steps / num_mini_batches) / gradient_accumulation_steps`. That is
+        # `1 / num_mini_batches` only when `num_mini_batches` divides `gradient_accumulation_steps`, and `1` at the
+        # default `num_mini_batches=1`. `val/ratio_var` is the exception: it is reduced with `.var()`, where the zeros
+        # do not scale the result but manufacture spread that is not there, reporting 0.3333 for a buffer whose
+        # written slots are all 1.0 and whose true variance is 0.
         micro_batches_per_mini_batch = math.ceil(args.local_mini_batch_size / args.per_device_train_batch_size)
         stats_shape = (args.num_ppo_epochs, args.num_mini_batches, micro_batches_per_mini_batch)
         approxkl_stats = torch.zeros(stats_shape, device=device)
