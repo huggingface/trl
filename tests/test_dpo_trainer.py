@@ -384,8 +384,8 @@ class TestDPOTrainer(TrlTestCase):
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
 
         class NonFiniteLossDPOTrainer(DPOTrainer):
-            # Only NaN is injected here. The guard runs inside the loss computation, so the poison has to land
-            # upstream of it, on the logits or the log-probabilities, and the poisoned values meet each other on the
+            # Only NaN is injected here. The poison has to land upstream of the guard, on the logits or the
+            # log-probabilities, and the poisoned values meet each other on the
             # way in, where `inf - inf` and `inf / inf` are both NaN. An injected `inf` therefore arrives at the loss
             # as NaN, so this test cannot tell `~isfinite` from an `isnan` implementation. The trainers whose poison
             # reaches the loss as a distinct Inf are parametrized over both values instead.
@@ -430,6 +430,37 @@ class TestDPOTrainer(TrlTestCase):
             assert not torch.isfinite(torch.tensor(poisoned_step["loss"]))
         else:
             assert torch.isfinite(torch.tensor(poisoned_step["loss"]))
+
+    def test_a_large_finite_loss_is_not_reported_as_non_finite(self):
+        """The guard widens to `float64` before reducing, so a finite loss above `float32`'s maximum stays finite.
+
+        Narrowing to `float32` first turns any finite value above roughly `3.4e38` into `inf`, which would report a
+        healthy step as non-finite and emit the warning. The loss is replaced on the evaluation path, where it is never
+        backpropagated.
+        """
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+
+        class HugeFiniteLossDPOTrainer(DPOTrainer):
+            def _compute_loss(self, model, inputs, return_outputs=False):
+                result = super()._compute_loss(model, inputs, return_outputs)
+                loss = result[0] if return_outputs else result
+                huge = loss.detach().double() * 0 + 1e100
+                return (huge, result[1]) if return_outputs else huge
+
+        training_args = DPOConfig(output_dir=self.tmp_dir, max_steps=1, report_to="none")
+        trainer = HugeFiniteLossDPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset,
+            eval_dataset=dataset,
+        )
+
+        metrics = trainer.evaluate()
+
+        # The case is only meaningful if the value really does survive one cast and not the other.
+        assert torch.isfinite(torch.tensor(1e100, dtype=torch.float64))
+        assert not torch.isfinite(torch.tensor(1e100, dtype=torch.float64).float())
+        assert metrics["eval_frac_nonfinite_loss"] == 0.0
 
     # Special case for harmony
     @require_torch_accelerator

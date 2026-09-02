@@ -1493,42 +1493,6 @@ class KTOTrainer(_BaseTrainer):
                 self._metrics[mode]["rewards/chosen"][-1] - self._metrics[mode]["rewards/rejected"][-1]
             )
 
-        # A non-finite training loss can pass through the logs as a plausible number. When `logging_nan_inf_filter` is
-        # enabled, which is the default, and `is_torch_xla_available()` is false, `transformers` discards the step's
-        # own loss and logs a value derived from the losses accumulated since the last log, so the curve never shows
-        # the step that failed. Report the condition here instead. Gather first, so a rank whose loss went non-finite
-        # is counted even when the other ranks are finite.
-        # Cast before the reduction: a low-precision dtype such as `float8_e5m2` has no `mean` kernel, and the
-        # cast leaves the finiteness of every other dtype unchanged.
-        nonfinite = self.accelerator.gather((~torch.isfinite(loss.detach().float().mean())).float())
-        self._metrics[mode]["frac_nonfinite_loss"].append(nonfinite.mean().item())
-        if nonfinite.any():
-            # `logging_nan_inf_filter` and the optimizer step belong to the training loop only, so each mode gets its
-            # own message. `warning_once` keys its cache on the message text, so the two do not suppress each other and
-            # an evaluation warning cannot stop a later training warning from being emitted.
-            if mode == "train":
-                logger.warning_once(
-                    "The training loss is not finite (NaN or Inf) for at least one step. The logged loss may not show "
-                    "it: when `logging_nan_inf_filter` is enabled, which is the default, and "
-                    "`is_torch_xla_available()` is false, `transformers` discards the step's own loss and logs a "
-                    "value derived from the losses accumulated since the last training log. The backward pass still "
-                    "runs on the non-finite value; whether that ultimately produces a parameter update depends on the "
-                    "resulting gradients and the configured scaler, optimizer and backend. `frac_nonfinite_loss` "
-                    "reports the fraction of ranks whose loss was non-finite, averaged over every loss computation "
-                    "since the last log, so it is a rate rather than a count of affected optimizer steps."
-                )
-            else:
-                logger.warning_once(
-                    "The evaluation loss is not finite (NaN or Inf) for at least one batch. It is neither "
-                    "backpropagated nor used for an optimizer step, so it does not itself change the weights, but any "
-                    "metric derived from it may be affected, including the reported evaluation loss and anything "
-                    "downstream of it such as best-model selection, early stopping and metric-driven schedulers. "
-                    "`frac_nonfinite_loss` reports the fraction of ranks whose loss was non-finite, averaged over "
-                    "this evaluation. It records one flag per rank per loss computation, while the reported loss is "
-                    "gathered per sample with padded positions trimmed, so the two can disagree. Only `evaluate()` "
-                    "logs it, never `predict()`."
-                )
-
         return loss
 
     def _compute_loss(self, model, inputs, return_outputs):
@@ -1722,42 +1686,6 @@ class KTOTrainer(_BaseTrainer):
             loss = loss + self.router_aux_loss_coef * aux_loss
             self._metrics[mode]["aux_loss"].append(self.accelerator.gather_for_metrics(aux_loss).mean().item())
 
-        # A non-finite training loss can pass through the logs as a plausible number. When `logging_nan_inf_filter` is
-        # enabled, which is the default, and `is_torch_xla_available()` is false, `transformers` discards the step's
-        # own loss and logs a value derived from the losses accumulated since the last log, so the curve never shows
-        # the step that failed. Report the condition here instead. Gather first, so a rank whose loss went non-finite
-        # is counted even when the other ranks are finite.
-        # Cast before the reduction: a low-precision dtype such as `float8_e5m2` has no `mean` kernel, and the
-        # cast leaves the finiteness of every other dtype unchanged.
-        nonfinite = self.accelerator.gather((~torch.isfinite(loss.detach().float().mean())).float())
-        self._metrics[mode]["frac_nonfinite_loss"].append(nonfinite.mean().item())
-        if nonfinite.any():
-            # `logging_nan_inf_filter` and the optimizer step belong to the training loop only, so each mode gets its
-            # own message. `warning_once` keys its cache on the message text, so the two do not suppress each other and
-            # an evaluation warning cannot stop a later training warning from being emitted.
-            if mode == "train":
-                logger.warning_once(
-                    "The training loss is not finite (NaN or Inf) for at least one step. The logged loss may not show "
-                    "it: when `logging_nan_inf_filter` is enabled, which is the default, and "
-                    "`is_torch_xla_available()` is false, `transformers` discards the step's own loss and logs a "
-                    "value derived from the losses accumulated since the last training log. The backward pass still "
-                    "runs on the non-finite value; whether that ultimately produces a parameter update depends on the "
-                    "resulting gradients and the configured scaler, optimizer and backend. `frac_nonfinite_loss` "
-                    "reports the fraction of ranks whose loss was non-finite, averaged over every loss computation "
-                    "since the last log, so it is a rate rather than a count of affected optimizer steps."
-                )
-            else:
-                logger.warning_once(
-                    "The evaluation loss is not finite (NaN or Inf) for at least one batch. It is neither "
-                    "backpropagated nor used for an optimizer step, so it does not itself change the weights, but any "
-                    "metric derived from it may be affected, including the reported evaluation loss and anything "
-                    "downstream of it such as best-model selection, early stopping and metric-driven schedulers. "
-                    "`frac_nonfinite_loss` reports the fraction of ranks whose loss was non-finite, averaged over "
-                    "this evaluation. It records one flag per rank per loss computation, while the reported loss is "
-                    "gathered per sample with padded positions trimmed, so the two can disagree. Only `evaluate()` "
-                    "logs it, never `predict()`."
-                )
-
         return (loss, outputs) if return_outputs else loss
 
     def evaluate(
@@ -1833,6 +1761,14 @@ class KTOTrainer(_BaseTrainer):
         )
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+        mode = "train" if self.model.training else "eval"
+
+        # The forward pass fails on this rank's own batch, so a rank that raises here would leave the others waiting
+        # in the gather further down with no error to explain it. Agree on a path both outcomes reach: record the
+        # failure, gather it, then re-raise the original exception on the rank that saw it and point the others at
+        # that rank. Gathering before the raise does not help, because the peers are already past it by then.
+        forward_error: BaseException | None = None
+        result = None
         try:
             if self.use_liger_kernel:
                 # Under ZeRO-3, `lm_head.weight` is sharded and the fused loss reads it directly (bypassing the
@@ -1842,19 +1778,72 @@ class KTOTrainer(_BaseTrainer):
                 is_zero3 = deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3
                 unwrapped_model = self.accelerator.unwrap_model(model)
                 if is_zero3 or self.is_fsdp_enabled:
-                    return self._forward_redirection(
+                    result = self._forward_redirection(
                         model, unwrapped_model, self._compute_loss_liger, unwrapped_model, inputs, return_outputs
                     )
-                return self._compute_loss_liger(unwrapped_model, inputs, return_outputs)
-            return self._compute_loss(model, inputs, return_outputs)
+                else:
+                    result = self._compute_loss_liger(unwrapped_model, inputs, return_outputs)
+            else:
+                result = self._compute_loss(model, inputs, return_outputs)
         except ValueError as e:
             if "Image features and image tokens do not match" in str(e) and self.args.max_length is not None:
-                raise ValueError(
+                forward_error = ValueError(
                     f"The current `max_length` ({self.args.max_length}) is too short and causes image placeholder "
                     f"tokens in `input_ids` to be truncated, while the corresponding image features remain intact. "
                     f"Please increase `max_length` or set it to `None` to disable truncation."
-                ) from e
-            raise
+                )
+                forward_error.__cause__ = e
+            else:
+                forward_error = e
+        failed_anywhere = torch.tensor(float(forward_error is not None), device=self.accelerator.device)
+        if self.accelerator.gather(failed_anywhere).any():
+            if forward_error is not None:
+                raise forward_error
+            raise RuntimeError(
+                "The forward pass failed on another rank. This rank raises too so the run fails together instead of "
+                "blocking in the next collective; the cause is in the failing rank's traceback."
+            )
+
+        # Unlike the other trainers, the guard sits in `compute_loss` rather than in the two loss methods it calls.
+        # Its gather has to run downstream of the failure agreement above, and both of those methods run upstream of
+        # it, so guarding inside them would pair one rank's guard with another rank's failure flag.
+        loss = result[0] if return_outputs else result
+        # A non-finite training loss can pass through the logs as a plausible number. When `logging_nan_inf_filter` is
+        # enabled, which is the default, and `is_torch_xla_available()` is false, `transformers` discards the step's
+        # own loss and logs a value derived from the losses accumulated since the last log, so the curve never shows
+        # the step that failed. Report the condition here instead. Gather first, so a rank whose loss went non-finite
+        # is counted even when the other ranks are finite.
+        # Widen before the reduction: a low-precision dtype such as `float8_e5m2` has no `mean` kernel, and
+        # narrowing instead would report a finite `float64` loss above `float32`'s maximum as non-finite.
+        nonfinite = self.accelerator.gather((~torch.isfinite(loss.detach().double().mean())).float())
+        self._metrics[mode]["frac_nonfinite_loss"].append(nonfinite.mean().item())
+        if nonfinite.any():
+            # `logging_nan_inf_filter` and the optimizer step belong to the training loop only, so each mode gets its
+            # own message. `warning_once` keys its cache on the message text, so the two do not suppress each other and
+            # an evaluation warning cannot stop a later training warning from being emitted.
+            if mode == "train":
+                logger.warning_once(
+                    "The training loss is not finite (NaN or Inf) for at least one step. The logged loss may not show "
+                    "it: when `logging_nan_inf_filter` is enabled, which is the default, and "
+                    "`is_torch_xla_available()` is false, `transformers` discards the step's own loss and logs a "
+                    "value derived from the losses accumulated since the last training log. The backward pass still "
+                    "runs on the non-finite value; whether that ultimately produces a parameter update depends on the "
+                    "resulting gradients and the configured scaler, optimizer and backend. `frac_nonfinite_loss` "
+                    "reports the fraction of ranks whose loss was non-finite, averaged over every loss computation "
+                    "since the last log, so it is a rate rather than a count of affected optimizer steps."
+                )
+            else:
+                logger.warning_once(
+                    "The evaluation loss is not finite (NaN or Inf) for at least one batch. It is neither "
+                    "backpropagated nor used for an optimizer step, so it does not itself change the weights, but any "
+                    "metric derived from it may be affected, including the reported evaluation loss and anything "
+                    "downstream of it such as best-model selection, early stopping and metric-driven schedulers. "
+                    "`frac_nonfinite_loss` reports the fraction of ranks whose loss was non-finite, averaged over "
+                    "this evaluation. It records one flag per rank per loss computation, while the reported loss is "
+                    "gathered per sample with padded positions trimmed, so the two can disagree. Only `evaluate()` "
+                    "logs it, never `predict()`."
+                )
+        return result
 
     # Override training step to add activation offloading context.
     def training_step(self, *args, **kwargs):

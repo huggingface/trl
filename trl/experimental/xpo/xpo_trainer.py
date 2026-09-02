@@ -513,9 +513,9 @@ class XPOTrainer(OnlineDPOTrainer):
         # is counted even when the other ranks are finite. This trainer computes the loss in `training_step` and logs
         # through `self.stats`. Evaluation goes through `prediction_step`, which never reaches this code, so only
         # training arrives here and the rate belongs under training.
-        # Cast before the reduction: a low-precision dtype such as `float8_e5m2` has no `mean` kernel, and the
-        # cast leaves the finiteness of every other dtype unchanged.
-        nonfinite = self.accelerator.gather((~torch.isfinite(loss.detach().float().mean())).float())
+        # Widen before the reduction: a low-precision dtype such as `float8_e5m2` has no `mean` kernel, and
+        # narrowing instead would report a finite `float64` loss above `float32`'s maximum as non-finite.
+        nonfinite = self.accelerator.gather((~torch.isfinite(loss.detach().double().mean())).float())
         self.stats["frac_nonfinite_loss"].append(nonfinite.mean().item())
         if nonfinite.any():
             logger.warning_once(
