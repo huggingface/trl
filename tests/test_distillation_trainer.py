@@ -136,10 +136,7 @@ class TestChunkedDivergenceLoss(TrlTestCase):
         assert n_valid.item() == int(mask.sum().item())
 
     def test_bf16_hidden_fp32_weight(self):
-        """bf16 hidden states against fp32 `lm_head` weights, as an FSDP2 master weight gathered outside the forward.
-
-        Both projections are covered: the student's and the teacher's, which the loss computes per chunk.
-        """
+        """A bf16 hidden state against an fp32 `lm_head` weight projects without a dtype mismatch."""
         sh, th, sw, tw, mask = self._inputs()
         loss, _, _ = _chunked_divergence_loss(sh.bfloat16(), th.bfloat16(), sw, tw, mask, beta=0.5, chunk_size=4)
         expected = _reference_chunked_divergence(sh.bfloat16().float(), th.bfloat16().float(), sw, tw, mask, beta=0.5)

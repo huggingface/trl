@@ -2740,7 +2740,7 @@ class TestChunkedCrossEntropyLoss:
         assert n_valid_c.item() == expected_n_valid.item()
 
     def test_bf16_hidden_fp32_weight(self):
-        """A bf16 `h` against an fp32 `w` projects without a dtype mismatch, whatever the caller's autocast state."""
+        """A bf16 hidden state against an fp32 `lm_head` weight projects without a dtype mismatch."""
         hidden, weight, labels = self._inputs()
         loss_c, *_ = _chunked_cross_entropy_loss(hidden.bfloat16(), weight, self.CHUNK_SIZE, labels)
         loss_r, *_ = self._reference(hidden.bfloat16().float(), weight, labels)
