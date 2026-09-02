@@ -83,6 +83,9 @@ class AsyncDistillationConfig(_BaseConfig):
             `teacher_id` of `"math"` or `"code"` per row.
         request_timeout (`int`, *optional*, defaults to `600`):
             Timeout in seconds for individual HTTP requests to any vLLM server.
+        weight_sync_timeout (`int`, *optional*, defaults to `1800`):
+            Timeout in seconds for a weight transfer to the student's vLLM server. A transfer that does not complete
+            within this time raises instead of hanging the run.
 
         > Parameters that control the distillation loss
 
@@ -256,6 +259,13 @@ class AsyncDistillationConfig(_BaseConfig):
     request_timeout: int = field(
         default=600,
         metadata={"help": "Timeout in seconds for individual HTTP requests to any vLLM server."},
+    )
+    weight_sync_timeout: int = field(
+        default=1800,
+        metadata={
+            "help": "Timeout in seconds for a weight transfer to the student's vLLM server. A transfer that does not "
+            "complete within this time raises instead of hanging the run."
+        },
     )
 
     # Parameters that control the distillation loss

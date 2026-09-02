@@ -1,39 +1,26 @@
-name: Build TRL Docker image
+name: Build TRL dev Docker image
 
 on:
-  release:
-    types: [published]
+  push:
+    branches:
+      - main
   workflow_dispatch:
 
 concurrency:
-  group: docker-image-builds
+  group: docker-image-build-dev
   cancel-in-progress: false
 
 env:
   CI_SLACK_CHANNEL: ${{ secrets.CI_PUSH_MAIN_CHANNEL }}
 
 jobs:
-  trl:
-    name: "Build and push TRL Docker image"
+  trl-dev:
+    name: "Build and push TRL Dev Docker image"
     runs-on:
       group: aws-general-8-plus
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-
-      - name: Get TRL version from PyPI
-        run: |
-          set -euo pipefail
-          VERSION=$(curl --fail --silent --show-error https://pypi.org/pypi/trl/json | jq -r .info.version)
-          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([a-zA-Z0-9._-]*)?$ ]]; then
-            echo "Invalid version format: $VERSION"
-            exit 1
-          fi
-          if [[ ${#VERSION} -gt 50 ]]; then
-            echo "Version string too long: $VERSION"
-            exit 1
-          fi
-          echo "VERSION=$VERSION" >> $GITHUB_ENV
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e  # v4.3.0
@@ -47,16 +34,15 @@ jobs:
       - name: Build and Push
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a  # v7.3.0
         with:
-          context: docker/trl
+          context: docker/trl-dev
           push: true
           tags: |
-            huggingface/trl:${{ env.VERSION }}
-            huggingface/trl
+            huggingface/trl:dev
 
       - name: Post to Slack
         if: always()
         uses: ./.github/actions/post-slack
         with:
           slack_channel: ${{ env.CI_SLACK_CHANNEL }}
-          title: Build and push TRL Docker image
+          title: Build and push TRL Dev Docker image
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
