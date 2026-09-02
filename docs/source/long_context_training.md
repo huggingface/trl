@@ -180,6 +180,7 @@ There are two ways to run that exchange, context parallelism (CP) and Ulysses se
 | What gets split | the tokens | the attention heads |
 | How far it scales | any number of GPUs | up to the number of KV heads, 8 here |
 | Attention | SDPA, causal only | SDPA or FlashAttention |
+| Requires | accelerate 1.11 | accelerate 1.12, DeepSpeed 0.18.1 |
 
 **On FSDP2, CP.** Each GPU keeps its own slice, and the other slices come to it in turn, so every token eventually sees every earlier token.
 
@@ -202,6 +203,8 @@ Two things change once it is on:
 1. Sequences have to be padded to a multiple of `cp_size * 2`, so `pad_to_multiple_of=8` (in the [`SFTConfig`]) for four GPUs.
 2. The causal-SDPA requirement rules out packing, which relies on a block-diagonal mask to keep documents from reading each other, and TRL raises if you ask for both. It also rules out models whose layers use sliding-window or chunked attention, which accelerate refuses: OpenAI GPT-OSS, Gemma 3 and 4, Qwen3.5 and later. Qwen3 and Qwen3-MoE are full attention throughout, which is why they are the models here.
 
+Passing the slices around costs less than you would expect. At 131k tokens on one node, a step takes 34.6 s across two GPUs, 17.8 s across four and 9.5 s across eight. Each doubling of the group nearly halves the step, and two to eight recovers 3.7x of a possible 4x.
+
 And that is the last of the four levers:
 
 <img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/long_context_cp_scaling.png" alt="Peak memory against sequence length on one GPU and on four with context parallelism, the four-GPU line reaching a million tokens where the single GPU stops just past 256k"/>
@@ -210,3 +213,9 @@ One card stops just past 256k. Four of them take the whole million!, and land at
 
 > [!TIP]
 > Set `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`. At a million tokens the run above needs 63.6 GB on an 80 GB card, and still fails without it: the tensors it asks for are large and contiguous, and the allocator cannot find room for them among the blocks it already holds.
+
+## Further reading
+
+- [Context parallelism](https://huggingface.co/docs/accelerate/concept_guides/context_parallelism), the accelerate guide to `cp_size` and the device mesh it builds.
+- [Ulysses and ring attention](https://huggingface.co/blog/exploding-gradients/ulysses-ring-attention), on how the two exchanges differ and what each costs to communicate.
+- [YaRN](https://huggingface.co/papers/2309.00071), the position rescaling used in the RoPE section.
