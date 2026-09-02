@@ -232,12 +232,14 @@ def _chunked_divergence_loss(
     # gradient-checkpointed chunk loop causes FSDP2 to re-gather it once per chunk during backward recomputation.
     # full_tensor() converts it to a plain tensor once; all chunks reference that tensor, so only one all-gather occurs
     # (in full_tensor()'s backward). Done per model since the student and teacher have their own heads.
+    # Under mixed precision the gathered weight is the fp32 master copy, so cast it to the hidden-states dtype here:
+    # the projection needs it in that dtype, and doing it once beats rebuilding a vocab-sized copy per chunk.
     if isinstance(student_lm_head_weight, torch.distributed.tensor.DTensor):
-        student_lm_head_weight = student_lm_head_weight.full_tensor()
+        student_lm_head_weight = student_lm_head_weight.full_tensor().to(student_hidden_states.dtype)
         if student_lm_head_bias is not None:
             student_lm_head_bias = student_lm_head_bias.full_tensor()
     if isinstance(teacher_lm_head_weight, torch.distributed.tensor.DTensor):
-        teacher_lm_head_weight = teacher_lm_head_weight.full_tensor()
+        teacher_lm_head_weight = teacher_lm_head_weight.full_tensor().to(teacher_hidden_states.dtype)
         if teacher_lm_head_bias is not None:
             teacher_lm_head_bias = teacher_lm_head_bias.full_tensor()
 
