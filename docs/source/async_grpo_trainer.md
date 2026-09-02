@@ -78,6 +78,25 @@ CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen3-4B \
 CUDA_VISIBLE_DEVICES=1 accelerate launch train_async_grpo.py
 ```
 
+## Vision-language models
+
+Vision-language models (Qwen3.5, Qwen3.6, Qwen3-VL, …) can be trained on **text-only** datasets. Pass the model id as usual; nothing else changes:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen3.5-2B \
+    --max-model-len 4096 \
+    --logprobs-mode processed_logprobs \
+    --weight-transfer-config '{"backend":"nccl"}'
+```
+
+**The vision tower is frozen.** A text-only dataset never produces image tokens, so the tower is never exercised by the forward pass. Everything outside the text tower (vision tower, multimodal projector) has `requires_grad=False`: it gets no gradients and no optimizer state, and weight sync skips it entirely — the server keeps the values it loaded from the checkpoint. The tower is still loaded, so it costs GPU memory for its weights.
+
+> [!WARNING]
+> **Images are not supported yet.** Prompts containing images are not passed to the vLLM server or to the training forward pass. Multimodal training also needs the padding-free packing path to build 3D M-RoPE positions from the image grid, which is not implemented here.
+
+> [!WARNING]
+> **Hybrid models (Qwen3.5, Qwen3.6) need `flash-linear-attention` installed**, or their gated-DeltaNet layers silently fall back to a pure-PyTorch scan that costs ~20x (measured on Qwen3.5-2B: 1046 vs 52 µs/token). Those layers also carry recurrent state across a padding-free packed row, which the trainer does not reset at sample boundaries, so their training log-probs drift from what the server generated as more sequences are packed per row.
+
 ## Design philosophy
 
 This trainer is intentionally kept minimal and is not meant to grow into a general-purpose solution. If you need a feature that is not supported, we recommend cloning the repository and adapting the trainer to your needs directly. New features will only be considered when there is significant community demand.
