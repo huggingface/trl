@@ -120,7 +120,7 @@ The rescaled run stays flat all the way to 160k. Over the last 20k tokens it ave
 
 With the loss chunked and the positions rescaled, one GPU takes us to 160k tokens. Then it runs out again. What is filling the card this time?
 
-<img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/long_context_profile_layers_plain.png" alt="Memory through one step at 96k tokens, with one red band per layer stacking up through the forward and draining through the backward"/>
+<img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/profile_layers_plain.png" alt="Memory through one step at 96k tokens, with one red band per layer stacking up through the forward and draining through the backward"/>
 
 The model and its optimizer account for a fixed 22 GB, whatever the sequence length. Above that, each red band is one layer's saved activation, 0.47 GB apiece. They stack up as the forward writes them, sit there, and come off one at a time as the backward consumes them. The grey on top is everything recomputed and thrown away within milliseconds.
 
@@ -132,7 +132,7 @@ The useful observation is that those tensors are not needed during the forward p
 training_args = SFTConfig(..., gradient_checkpointing_kwargs={"offload": True})
 ```
 
-<img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/long_context_profile_layers_offload.png" alt="The same step with the activations offloaded, where almost no red bands remain resident"/>
+<img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/profile_layers_offload.png" alt="The same step with the activations offloaded, where almost no red bands remain resident"/>
 
 Same step, same length: instead of 38 bands stacking up, only 4 are ever resident at once, and the peak drops from 59.9 GB to 48.8 GB. Which buys sequence length:
 
