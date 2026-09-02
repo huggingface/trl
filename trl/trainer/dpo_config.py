@@ -62,6 +62,9 @@ class DPOConfig(_BaseConfig):
             Whether to perform forward passes without padding by flattening all sequences in the batch into a single
             continuous sequence. This reduces memory usage by eliminating padding overhead. Currently, this is only
             supported with the FlashAttention 2 or 3, which can efficiently handle the flattened batch structure.
+            Temporarily unavailable since the DPO refactor in [#3906](https://github.com/huggingface/trl/pull/3906):
+            setting it to `True` logs a warning and falls back to standard padding. It is planned to return in a future
+            update.
         pad_to_multiple_of (`int`, *optional*):
             If set, the sequences will be padded to a multiple of this value.
         precompute_ref_log_probs (`bool`, *optional*, defaults to `False`):
@@ -207,7 +210,8 @@ class DPOConfig(_BaseConfig):
             "help": "Whether to perform forward passes without padding by flattening all sequences in the batch into "
             "a single continuous sequence. This reduces memory usage by eliminating padding overhead. Currently, this "
             "is only supported with the FlashAttention 2 or 3, which can efficiently handle the flattened batch "
-            "structure."
+            "structure. Temporarily unavailable since the DPO refactor in #3906: setting it to `True` logs a warning "
+            "and falls back to standard padding. It is planned to return in a future update."
         },
     )
     pad_to_multiple_of: int | None = field(
