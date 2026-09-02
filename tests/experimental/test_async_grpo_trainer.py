@@ -20,6 +20,7 @@ import multiprocessing as mp
 import os
 import queue
 from collections import defaultdict
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -1185,3 +1186,105 @@ class TestEpochStop(TrlTestCase):
         # steps for the same 2 epochs. If forks leaked into the epoch count, the forked run would instead
         # stop in FEWER prompt-passes (the pre-fix bug).
         assert forked.state.global_step > no_fork.state.global_step
+
+
+class TestUnscorableTokenLogprobs(TrlTestCase):
+    """vLLM can return a NaN logprob for a token it could not score (see GH-6166); its response model
+    serializes NaN as JSON null, so the rollout worker receives None. These cover the whole path:
+    ingestion maps null -> NaN, the collator tensorizes NaN rows, and the loss neutralizes them."""
+
+    def _make_loop(self):
+        loop = object.__new__(worker._AsyncRolloutLoop)
+        loop.model_name = "test-model"
+        loop.max_tokens = 8
+        loop.temperature = 1.0
+        loop.top_p = 1.0
+        loop.top_k = -1
+        loop.repetition_penalty = 1.0
+        loop.min_p = None
+        loop.request_timeout = 1
+        return loop
+
+    def test_generate_one_turn_maps_null_logprobs_to_nan(self):
+        loop = self._make_loop()
+
+        async def fake_post(path, payload, timeout, max_retries=3):
+            return {"choices": [{"token_ids": [5, 6, 7], "logprobs": {"token_logprobs": [-0.5, None, -0.7]}}]}
+
+        loop._post = fake_post
+        token_ids, logprobs = asyncio.run(loop._generate_one_turn([1, 2]))
+
+        assert token_ids == [5, 6, 7]
+        assert logprobs[0] == -0.5 and logprobs[2] == -0.7
+        # The null slot arrives as a real float NaN, not None (torch.tensor(None) raises)
+        assert isinstance(logprobs[1], float) and math.isnan(logprobs[1])
+
+    def test_collator_tensorizes_nan_old_log_probs(self):
+        sample = _rollout_sample(4, advantage=1.0)
+        sample["old_log_probs"] = [0.0, -0.5, float("nan"), -0.7]
+        collator = DataCollatorForRollout(pad_token_id=0, num_processes=1)
+
+        batch = collator.torch_call([[[sample]]])
+
+        old = batch["old_log_probs"]
+        assert old.shape == (1, 4)
+        assert torch.isnan(old[0, 2]) and not torch.isnan(old[0, 1])
+
+    def test_compute_loss_neutralizes_nan_old_log_probs(self):
+        # Drive the real compute_loss with a stub model and single-process accelerator: a NaN generator
+        # logprob must not poison the loss (pre-fix it turned the whole loss NaN, which the logger's
+        # nan/inf filter then hides, see GH-6702).
+        class _Identity:
+            num_processes = 1
+
+            @staticmethod
+            def reduce(t, reduction="sum"):
+                return t
+
+            @staticmethod
+            def gather(t):
+                return t
+
+        T = 6  # 1 prompt token + 5 completion tokens
+        log_probs = torch.full((1, T - 1), -0.4, requires_grad=True)
+
+        class _StubModel:
+            def __call__(self, **kwargs):
+                return {"log_probs": log_probs, "entropy": torch.full((1, T - 1), 0.3)}
+
+        stub = SimpleNamespace(
+            epsilon_low=0.2,
+            epsilon_high=0.2,
+            accelerator=_Identity(),
+            current_gradient_accumulation_steps=1,
+            aux_loss_enabled=False,
+            _metrics={"train": defaultdict(list)},
+            _last_forward_time_s=0.0,
+            _step_forward_tokens=0.0,
+            _step_trained_tokens=0.0,
+            _step_seq_len_weighted=0.0,
+            _step_samples=0.0,
+            _step_forward_s=0.0,
+        )
+        old = torch.full((1, T), -0.5)
+        old[0, 3] = float("nan")  # one unscorable completion token
+        inputs = {
+            "attention_mask": torch.ones(1, T, dtype=torch.long),
+            "input_ids": torch.arange(T).unsqueeze(0),
+            "completion_mask": torch.tensor([[0] + [1] * (T - 1)]),
+            "old_log_probs": old,
+            "position_ids": torch.arange(T).unsqueeze(0),
+            "advantages": torch.ones(1, T),
+            "global_n_tokens": torch.tensor([float(T - 1)]),
+            "global_n_forward_tokens": torch.tensor([float(T)]),
+            "mean_seq_len": torch.tensor([float(T)]),
+        }
+
+        loss = AsyncGRPOTrainer.compute_loss(stub, _StubModel(), inputs)
+
+        assert torch.isfinite(loss), f"loss is not finite: {loss}"
+        loss.backward()
+        assert torch.isfinite(log_probs.grad).all(), "NaN leaked into gradients"
+        # The neutralized token trains as plain on-policy policy gradient (ratio exactly 1), so the KL
+        # metric stays finite too.
+        assert math.isfinite(stub._metrics["train"]["kl"][-1])
