@@ -1569,12 +1569,12 @@ class IWOPDTrainer(_BaseTrainer):
 
         if self.use_liger_loss:
             loss = self._compute_liger_loss(model, inputs, num_items_in_batch=num_items_in_batch)
+            mode = "train" if self.model.training else "eval"
             # A non-finite training loss can pass through the logs as a plausible number. When `logging_nan_inf_filter`
             # is enabled, which is the default, and `is_torch_xla_available()` is false, `transformers` discards the
             # step's own loss and logs a value derived from the losses accumulated since the last log, so the curve
             # never shows the step that failed. Report the condition here instead. Gather first, so a rank whose loss
             # went non-finite is counted even when the other ranks are finite.
-            mode = "train" if self.model.training else "eval"
             # Widen before the reduction: a low-precision dtype such as `float8_e5m2` has no `mean` kernel, and
             # narrowing instead would report a finite `float64` loss above `float32`'s maximum as non-finite.
             nonfinite = self.accelerator.gather((~torch.isfinite(loss.detach().double().mean())).float())
@@ -1753,12 +1753,12 @@ class IWOPDTrainer(_BaseTrainer):
                     num_items_in_batch=num_items_in_batch,
                 )
 
+        mode = "train" if self.model.training else "eval"
         # A non-finite training loss can pass through the logs as a plausible number. When `logging_nan_inf_filter` is
         # enabled, which is the default, and `is_torch_xla_available()` is false, `transformers` discards the step's
         # own loss and logs a value derived from the losses accumulated since the last log, so the curve never shows
         # the step that failed. Report the condition here instead. Gather first, so a rank whose loss went non-finite
         # is counted even when the other ranks are finite.
-        mode = "train" if self.model.training else "eval"
         # Widen before the reduction: a low-precision dtype such as `float8_e5m2` has no `mean` kernel, and
         # narrowing instead would report a finite `float64` loss above `float32`'s maximum as non-finite.
         nonfinite = self.accelerator.gather((~torch.isfinite(loss.detach().double().mean())).float())

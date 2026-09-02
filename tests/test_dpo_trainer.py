@@ -462,31 +462,37 @@ class TestDPOTrainer(TrlTestCase):
         assert not torch.isfinite(torch.tensor(1e100, dtype=torch.float64).float())
         assert metrics["eval_frac_nonfinite_loss"] == 0.0
 
-    # Special case for harmony
+    @pytest.mark.parametrize("poison", [float("nan"), float("inf")])
     @require_torch_accelerator
     @require_liger_kernel
-    def test_nonfinite_loss_is_visible_in_log_history_liger(self):
+    def test_nonfinite_loss_is_visible_in_log_history_liger(self, poison):
         """The Liger path owns a second guard, and the test above cannot reach it.
 
         `_compute_loss_liger` replaces `_compute_loss` when `use_liger_kernel=True`, so the test above leaves that
         guard unexercised: inverting it alone keeps that test green. Poison the Liger path directly so the second guard
         has its own coverage.
+
+        The poison replaces the fused loss rather than the model output. A forward hook cannot be used here: the Liger
+        path calls the backbone and reads `last_hidden_state`, never the wrapper whose output carries `logits`, so a
+        hook registered on the model it is handed would never fire. Poisoning the loss directly also means an injected
+        `inf` arrives as a distinct `inf` rather than collapsing to NaN, so both values are worth covering.
         """
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
 
         class NonFiniteLossLigerDPOTrainer(DPOTrainer):
             def _compute_loss_liger(self, model, inputs, return_outputs=False):
                 if self.state.global_step == 1:
+                    healthy_liger_loss = self.liger_loss
 
-                    def poison_logits(module, args, output):
-                        output.logits = output.logits * float("nan")
-                        return output
+                    def poisoned_liger_loss(*args, **kwargs):
+                        loss, metrics = healthy_liger_loss(*args, **kwargs)
+                        return loss + poison, metrics
 
-                    handle = model.register_forward_hook(poison_logits)
+                    self.liger_loss = poisoned_liger_loss
                     try:
                         return super()._compute_loss_liger(model, inputs, return_outputs)
                     finally:
-                        handle.remove()
+                        self.liger_loss = healthy_liger_loss
                 return super()._compute_loss_liger(model, inputs, return_outputs)
 
         training_args = DPOConfig(
@@ -509,6 +515,7 @@ class TestDPOTrainer(TrlTestCase):
         assert healthy_step["frac_nonfinite_loss"] == 0.0
         assert poisoned_step["frac_nonfinite_loss"] == 1.0
 
+    # Special case for harmony
     def test_train_gpt_oss(self):
         dataset = load_dataset("trl-internal-testing/harmony", "preference", split="train")
 

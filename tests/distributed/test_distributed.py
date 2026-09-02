@@ -519,3 +519,21 @@ class TestDistributed(TrlTestCase):
             os.environ.copy(),
         )
         # fmt: on
+
+    def test_rank_local_forward_failure(self, get_config_path):
+        # A rank whose own forward fails has to make the other ranks raise too. They are already inside the loss
+        # path, which runs sixteen metric gathers before ending in the `frac_nonfinite_loss` gather, so a rank-local
+        # raise leaves them waiting in the first of those and the run stalls instead of reporting the failure. Only a
+        # multi-process run can check that: with one rank the gather is the identity and the sole rank is also the
+        # failing one, so the raise happens either way. The child fails the forward on the last rank and asserts, on
+        # every rank, that the run ended in an exception. It is not named `test_*.py` so pytest does not collect it
+        # here.
+        # fmt: off
+        run_command(
+            [
+                "accelerate", "launch", "--config_file", get_config_path("ddp"),
+                "tests/distributed/rank_local_forward_failure.py",
+            ],
+            os.environ.copy(),
+        )
+        # fmt: on

@@ -3073,6 +3073,9 @@ def test_on_policy_vlm_vllm_does_not_duplicate_repeated_sampler_batch(monkeypatc
 
 def test_vlm_uld_custom_collator_missing_raw_fields_raises_clear_error():
     trainer = GOLDTrainer.__new__(GOLDTrainer)
+    # The missing-field check agrees across ranks before raising, so it reads `accelerator`; a single-process gather
+    # is the identity.
+    trainer.accelerator = SimpleNamespace(device=torch.device("cpu"), gather=lambda tensor: tensor)
     trainer.use_uld_loss = True
     trainer.teacher_tokenizer = object()
     trainer._teacher_processor = object()
