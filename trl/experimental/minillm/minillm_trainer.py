@@ -330,24 +330,20 @@ class MiniLLMTrainer(GRPOTrainer):
         rewards = teacher_log_probs_on_labels - student_log_probs_on_labels  # (batch_size, sequence_length)
 
         if self.gamma > 0.0:
-            # advantages_t = sum_{i>=t} gamma^(i-t) R_i, computed by the reverse recurrence
-            # a_t = R_t + gamma * a_{t+1} (a_T = 0). The previous implementation weighted by gamma^i (the
-            # absolute index), which scaled every advantage by an extra gamma^t and underflowed to 0.0 in
-            # float32 on long completions, giving 0/0 = nan under length normalization. The recurrence never
-            # materializes gamma^i, so it is exact and stable at any length. See issue #6626.
-            advantages = torch.zeros_like(rewards)
-            running_advantage = torch.zeros_like(rewards[:, 0])
-            for t in range(response_length - 1, -1, -1):
-                running_advantage = rewards[:, t] + self.gamma * running_advantage
-                advantages[:, t] = running_advantage
+            # advantages_t = sum_{i>=t} gamma^(i-t) R_i. Weighting the rewards by gamma^i (the absolute index) and
+            # reverse-cumsumming scaled every advantage by an extra gamma^t, and gamma^i underflowed to 0.0 in float32
+            # on long completions, giving 0/0 = nan under length normalization (issue #6626). A discount matrix
+            # D[i, t] = gamma^(i-t) for i >= t needs no division: a far-apart pair underflows to 0, which is its true
+            # size, and the sum is one matmul. D holds T x T values, so a 4096-token completion costs 64 MB in float32.
+            dtype = torch.promote_types(rewards.dtype, torch.float32)
+            positions = torch.arange(response_length, device=rewards.device)
+            lag = (positions[:, None] - positions[None, :]).clamp(min=0).to(dtype)
+            discount = torch.tril(torch.pow(self.gamma, lag))
+            advantages = rewards.to(dtype) @ discount
 
             if self.length_normalization:
                 mask = torch.where(mask < 0.5, 1e-4, mask)
-                lengths = torch.zeros_like(mask)
-                running_length = torch.zeros_like(mask[:, 0])
-                for t in range(response_length - 1, -1, -1):
-                    running_length = mask[:, t] + self.gamma * running_length
-                    lengths[:, t] = running_length
+                lengths = mask.to(dtype) @ discount
                 advantages = advantages / lengths
         else:
             advantages = rewards
