@@ -1323,6 +1323,26 @@ class TestSFTTrainer(TrlTestCase):
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
             )
 
+    @pytest.mark.parametrize(
+        "attn_implementation, expect_warning",
+        [
+            ("kernels-community/flash-attn2", False),
+            ("kernels-community/flash-attn2@v2", False),
+            ("eager", True),
+        ],
+    )
+    def test_padding_free_warns_only_for_unsupported_attention(self, attn_implementation, expect_warning, caplog):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train[:2]")
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
+        # Only the config value matters here: the warning is emitted at init, so no attention kernel is ever loaded.
+        model.config._attn_implementation = attn_implementation
+        training_args = SFTConfig(output_dir=self.tmp_dir, padding_free=True, max_length=None, report_to="none")
+
+        with caplog.at_level("WARNING", logger="trl.trainer.sft_trainer"):
+            SFTTrainer(model=model, args=training_args, train_dataset=dataset)
+
+        assert ("supported Flash Attention variant" in caplog.text) == expect_warning
+
     def test_train_with_iterable_dataset(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train", streaming=True)
 
