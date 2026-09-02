@@ -1,10 +1,10 @@
 # Training Beyond 1M Tokens
 
-An agent is capable of working a task for hours: reading files, running commands, and carrying every turn of the session forward. That accumulated session runs to hundreds of thousands of tokens, which is why frontier models are now quoted with million-token context windows.
+An agent is capable of working on a task for hours: reading files, running commands, and carrying every turn of the session forward. That accumulated session runs to hundreds of thousands of tokens, which is why frontier models now advertise million-token context windows.
 
-Making a model good over that much context means training it on sequences that long, and that is where it gets difficult: a million-token sequence does not fit on a GPU, and it does not fit on eight of them either, not without help.
+Making a model good at that much context means training it on sequences that long, and that is where it gets difficult: a million-token sequence does not fit on a GPU, and it does not fit on eight of them either, not without help.
 
-This guide trains on exactly one such sequence per step, on a single 8-GPU node.
+The example in this guide trains on exactly one such sequence per step, on a single 8-GPU node.
 
 ## Run it
 
@@ -27,7 +27,7 @@ Three numbers are worth reading:
 
 - **`num_tokens` is 1.049e6.** That is one sequence, not a batch of short ones. Every token attends to every earlier token, across the whole million.
 - **Loss starts at 4.3**, which is a normal starting loss. A run that is subtly misconfigured for long context starts around 10 instead, and we will come back to why.
-- **380 s per step.** One step is one sequence, so that is a little over six minutes per book.
+- **380 s per step.** One step is one sequence, so that is a little over six minutes per sequence.
 
 Naively, this sequence needs 288 GB per GPU. The rest of this guide is how it gets to 56.
 
@@ -37,7 +37,7 @@ Everything below builds up from a setup we already know: one GPU, a few thousand
 
 ### The loss is the first thing to break
 
-Take Qwen3-0.6B on a single 80 GB card and grow the sequence. The first thing to cause the OOM is not the model. It is the loss. Check the memory profile.
+Take Qwen3-4B on a single 80 GB card and grow the sequence. The first thing to run out of memory is not the model. It is the loss. Check the memory profile.
 
 <img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/long_context_profile_plain.png" alt="Memory through one training step, with a large block of memory between the forward and backward passes"/>
 
@@ -45,12 +45,13 @@ The peak is between the forward and backward passes, which is where the loss is 
 
 <img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/long_context_plain_loss.png" alt="Hidden states times the lm_head weights giving a logits matrix of sequence by vocabulary, then the per-token loss"/>
 
-The last layer of the decoder outputs a hidden state of shape \\( L \times H \\), where \\( L \\) is the sequence length and \\( H \\) is the hidden size. This hidden state is then multiplied by the language modeling head weights to produce a logits matrix of shape \\( L \times V \\), where \\( V \\) is the vocabulary size. This matrix is huge, because the sequence is long and the vocabulary is large (over a hundred thousand entries). The loss is then computed with a cross entropy function from this huge logits matrix and the target labels. And the peak is precisely the materialization of this huge logits matrix.
+The last layer of the decoder outputs a hidden state of shape \\( L \times H \\), where \\( L \\) is the sequence length and \\( H \\) is the hidden size. This hidden state is then multiplied by the language modeling head weights to produce a logits matrix of shape \\( L \times V \\), where \\( V \\) is the vocabulary size. This matrix is huge, because the sequence is long and the vocabulary is large (over a hundred thousand entries). The loss is then computed with a cross entropy function from that matrix and the target labels, and materializing it is precisely what the peak is.
+
 Can we compute the loss without materializing the whole logits matrix? Yes, we can proceed in chunks.
 
 ### Chunking the loss
 
-To cut the head off this peak, we can compute the loss in chunks. Instead of computing the logits for the entire sequence at once, we can compute them for smaller segments of the sequence, calculate the loss for each segment, and then sum these losses to get the total loss. This way, we never have to hold the entire logits matrix in memory at once.
+To cut the head off this peak, we can compute the loss in chunks. Instead of computing the logits for the whole sequence at once, we take a few hundred rows at a time, compute the loss for those, and sum the pieces. This way, we never have to hold the entire logits matrix in memory at once.
 
 <img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/long_context_chunked_loss.png" alt="The same computation one chunk of rows at a time, each chunk freed before the next, summing into the same loss"/>
 
@@ -62,9 +63,9 @@ The new profile looks like this.
 
 The peak is gone.
 
-How to enable this in TRL? There is nothing to do, the chunked loss is the default. If you want to opt-in for the plain loss, you can set `loss_type="nll"` in the [`SFTConfig`].
+How to enable this in TRL? There is nothing to do: the chunked loss is the default. If you want to opt in to the plain loss, set `loss_type="nll"` in the [`SFTConfig`].
 
-How far does it allow to scale the sequence? On the same setup, we can already go to nearly 400k tokens, with this simple trick.
+How far does this let us push the sequence? On the same setup, this one change already takes us to SCALING_REACH.
 
-<img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/long_context_scaling.png" alt="Peak memory against sequence length, the plain loss failing at 48k tokens and the chunked loss reaching 512k"/>
+<img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/long_context_scaling.png" alt="Peak memory against sequence length, the plain loss running out of memory far earlier than the chunked loss"/>
 
