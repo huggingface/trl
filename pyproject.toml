@@ -258,4 +258,12 @@ filterwarnings = [
     # Upstream issue: https://github.com/pytorch/pytorch/issues/175484
     # Remove once: no supported torch version emits it
     "ignore:TensorFloat32 tensor cores for float32 matrix multiplication available but not enabled:UserWarning",
+
+    # torch's DataParallel warns that it is gathering the per-replica scalar losses into a vector, since scalars have
+    # to be unsqueezed first (upstream, not actionable in TRL: the gather happens entirely inside nn.DataParallel)
+    # Triggered by the SFT slow tests since the multi-GPU CI job moved to a runner with two visible devices:
+    # transformers' Trainer wraps the model in nn.DataParallel whenever n_gpu > 1 and no distributed launcher is used
+    # Tracking issue: https://github.com/huggingface/trl/issues/7018
+    # Remove once: the multi-GPU CI no longer exercises nn.DataParallel (https://github.com/huggingface/trl/issues/6836)
+    "ignore:Was asked to gather along dimension 0, but all input tensors were scalars:UserWarning",
 ]
