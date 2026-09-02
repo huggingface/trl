@@ -16,42 +16,78 @@ The library is integrated with 🤗 [transformers](https://github.com/huggingfac
 
 ## Taxonomy
 
-Below is the current list of TRL trainers, organized by method type (⚡️ = vLLM support; 🧪 = experimental).
+Below is the current list of TRL trainers, organized by maturity and method type.
+
+### Stable
 
 <div style="display: flex; justify-content: space-between; width: 100%; gap: 2rem;">
 <div style="flex: 1; min-width: 0;">
 
-### Online methods
+#### Online methods
 
-- [`GRPOTrainer`](grpo_trainer) ⚡️
-- [`RLOOTrainer`](rloo_trainer) ⚡️
-- [`OnlineDPOTrainer`](online_dpo_trainer) 🧪 ⚡️
-- [`NashMDTrainer`](nash_md_trainer) 🧪 ⚡️
-- [`PPOTrainer`](ppo_trainer) 🧪
-- [`XPOTrainer`](xpo_trainer) 🧪 ⚡️
+- [`GRPOTrainer`](grpo_trainer)
+- [`RLOOTrainer`](rloo_trainer)
 
-### Reward modeling
+#### Reward modeling
 
 - [`RewardTrainer`](reward_trainer)
-- [`PRMTrainer`](prm_trainer) 🧪
 
 </div>
 <div style="flex: 1; min-width: 0;">
 
-### Offline methods
+#### Offline methods
 
 - [`SFTTrainer`](sft_trainer)
 - [`DPOTrainer`](dpo_trainer)
 - [`KTOTrainer`](kto_trainer)
-- [`BCOTrainer`](bco_trainer) 🧪
-- [`CPOTrainer`](cpo_trainer) 🧪
-- [`ORPOTrainer`](orpo_trainer) 🧪
 
-### Knowledge distillation
+#### Knowledge distillation
 
-- [`DistillationTrainer`](distillation_trainer) ⚡️
-- [`GKDTrainer`](gkd_trainer) 🧪
-- [`MiniLLMTrainer`](minillm_trainer) 🧪
+- [`DistillationTrainer`](distillation_trainer)
+
+</div>
+</div>
+
+### Experimental
+
+<div style="display: flex; justify-content: space-between; width: 100%; gap: 2rem;">
+<div style="flex: 1; min-width: 0;">
+
+#### Online methods
+
+- [`A2POTrainer`](a2po_trainer)
+- [`AsyncGRPOTrainer`](async_grpo_trainer)
+- [`GMPOTrainer`](gmpo)
+- [`GRPOWithReplayBufferTrainer`](grpo_with_replay_buffer)
+- [GSPO-token](gspo_token)
+- [`NashMDTrainer`](nash_md_trainer)
+- [`OnlineDPOTrainer`](online_dpo_trainer)
+- [`PPOTrainer`](ppo_trainer)
+- [`TPOTrainer`](tpo_trainer)
+- [`XPOTrainer`](xpo_trainer)
+
+#### Reward modeling
+
+- [`PRMTrainer`](prm_trainer)
+
+</div>
+<div style="flex: 1; min-width: 0;">
+
+#### Offline methods
+
+- [`BCOTrainer`](bco_trainer)
+- [`CPOTrainer`](cpo_trainer)
+- [`ORPOTrainer`](orpo_trainer)
+
+#### Knowledge distillation
+
+- [`AsyncDistillationTrainer`](async_distillation_trainer)
+- [`GKDTrainer`](gkd_trainer)
+- [`GOLDTrainer`](gold_trainer)
+- [`MiniLLMTrainer`](minillm_trainer)
+- [`SDFTTrainer`](sdft_trainer)
+- [`SDPOTrainer`](sdpo_trainer)
+- [`SSDTrainer`](ssd_trainer)
 
 </div>
 </div>
