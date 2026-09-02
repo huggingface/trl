@@ -65,7 +65,7 @@ The peak is gone.
 
 How to enable this in TRL? There is nothing to do: the chunked loss is the default. If you want to opt in to the plain loss, set `loss_type="nll"` in the [`SFTConfig`].
 
-How far does this let us push the sequence? On the same setup, this one change already takes us to SCALING_REACH.
+How far does this let us push the sequence? On the same setup, this one change already takes us from 32k tokens to 128k.
 
 <img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/long_context_scaling.png" alt="Peak memory against sequence length, the plain loss running out of memory far earlier than the chunked loss"/>
 
