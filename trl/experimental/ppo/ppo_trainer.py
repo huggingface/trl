@@ -644,17 +644,6 @@ class PPOTrainer(_BaseTrainer):
         # written slots are all 1.0 and whose true variance is 0.
         micro_batches_per_mini_batch = math.ceil(args.local_mini_batch_size / args.per_device_train_batch_size)
         stats_shape = (args.num_ppo_epochs, args.num_mini_batches, micro_batches_per_mini_batch)
-        # A slot starts as NaN and is written only for a micro-batch that holds at least one valid token. An
-        # all-padding micro-batch has no statistic to report: writing the 0 that `masked_mean` returns for it would
-        # count as an observation and pull every mean toward 0, so its slot stays NaN and the `nanmean` reductions
-        # below leave it out.
-        approxkl_stats = torch.full(stats_shape, float("nan"), device=device)
-        pg_clipfrac_stats = torch.full(stats_shape, float("nan"), device=device)
-        pg_loss_stats = torch.full(stats_shape, float("nan"), device=device)
-        vf_loss_stats = torch.full(stats_shape, float("nan"), device=device)
-        vf_clipfrac_stats = torch.full(stats_shape, float("nan"), device=device)
-        entropy_stats = torch.full(stats_shape, float("nan"), device=device)
-        ratio_stats = torch.full(stats_shape, float("nan"), device=device)
         model.train()
 
         # trainer state initialization
@@ -816,6 +805,19 @@ class PPOTrainer(_BaseTrainer):
                 advantages = masked_whiten(advantages, ~padding_mask)
                 advantages = torch.masked_fill(advantages, padding_mask, 0)
                 empty_cache()
+
+            # A slot starts as NaN and is written only for a micro-batch that holds at least one valid token. An
+            # all-padding micro-batch has no statistic to report: writing the 0 that `masked_mean` returns for it would
+            # count as an observation and pull every mean toward 0, so its slot stays NaN and the `nanmean` reductions
+            # below leave it out. The buffers are fresh for every update, so a slot that stays NaN cannot carry the
+            # previous update's value into this one's averages.
+            approxkl_stats = torch.full(stats_shape, float("nan"), device=device)
+            pg_clipfrac_stats = torch.full(stats_shape, float("nan"), device=device)
+            pg_loss_stats = torch.full(stats_shape, float("nan"), device=device)
+            vf_loss_stats = torch.full(stats_shape, float("nan"), device=device)
+            vf_clipfrac_stats = torch.full(stats_shape, float("nan"), device=device)
+            entropy_stats = torch.full(stats_shape, float("nan"), device=device)
+            ratio_stats = torch.full(stats_shape, float("nan"), device=device)
 
             # Do multiple epochs of PPO training, with a fresh random shuffle in each epoch
             for ppo_epoch_idx in range(args.num_ppo_epochs):

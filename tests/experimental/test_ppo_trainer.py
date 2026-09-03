@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import gc
+import math
 import os
 from unittest.mock import patch
 
@@ -796,6 +797,66 @@ class TestPPOTrainer(TrlTestCase):
         # it to 0.5.
         for ratio in ratios:
             assert ratio == pytest.approx(1.0, abs=1e-4)
+
+    def test_statistics_do_not_carry_over_from_the_previous_update(self):
+        """The statistic buffers are NaN-initialised and a slot is written only for a micro-batch with a valid token.
+        Allocated once for the whole run, a slot skipped in one update kept the value the previous update wrote there,
+        and `nanmean` folded that stale number into the current update's averages. The buffers are now fresh for every
+        update. The oracle: the first update has two real micro-batches, the second has one all-padding and one real.
+        With fresh buffers the second update has a single written ratio slot, so `val/ratio_var`, the unbiased variance
+        over the written slots, is NaN; a stale first-update slot makes it a finite number. An update with no valid
+        token at all is not a reachable state, `masked_whiten` refuses it, so the padding is confined to one row."""
+        tokenizer = AutoTokenizer.from_pretrained(self.model_id, padding_side="left")
+        pad_token_id = tokenizer.pad_token_id
+        real_batch_generation = ppo_trainer_module.batch_generation
+        calls = []
+
+        def batch_generation_with_an_empty_row_in_the_second_update(
+            model, queries, local_rollout_forward_batch_size, pad_id, config
+        ):
+            query_responses, logitss = real_batch_generation(
+                model, queries, local_rollout_forward_batch_size, pad_id, config
+            )
+            calls.append(len(calls))
+            if (
+                len(calls) == 2
+            ):  # row 0 of the second update starts with the pad token: sequence length -1, all padding
+                query_responses[0, queries.shape[1]] = pad_token_id
+            return query_responses, logitss
+
+        training_args = PPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=1,
+            gradient_accumulation_steps=2,
+            num_mini_batches=1,
+            num_ppo_epochs=1,
+            total_episodes=6,  # three updates of two episodes each
+            report_to="none",
+        )
+        trainer = PPOTrainer(
+            args=training_args,
+            processing_class=tokenizer,
+            model=self.model,
+            ref_model=self.ref_model,
+            reward_model=self.reward_model,
+            value_model=self.value_model,
+            train_dataset=self.raw_dataset["train"],
+            eval_dataset=self.raw_dataset["test"],
+        )
+        with patch.object(
+            ppo_trainer_module, "batch_generation", batch_generation_with_an_empty_row_in_the_second_update
+        ):
+            trainer.train()
+
+        logs = [log for log in trainer.state.log_history if "val/ratio_var" in log]
+        assert len(logs) == 3, f"expected one PPO log per update, got {len(logs)}"
+        for log in logs:
+            assert log["val/ratio"] == pytest.approx(1.0, abs=1e-4)
+        assert not math.isnan(logs[0]["val/ratio_var"]), "two real micro-batches give a finite variance"
+        assert math.isnan(logs[1]["val/ratio_var"]), (
+            f"one written slot must give a NaN variance, got {logs[1]['val/ratio_var']}: a stale slot was counted"
+        )
+        assert not math.isnan(logs[2]["val/ratio_var"])
 
     def test_basic_training(self):
         """Test basic PPO training configuration and verify model updates."""
