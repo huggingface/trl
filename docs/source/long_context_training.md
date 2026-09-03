@@ -51,11 +51,11 @@ Can we compute the loss without materializing the whole logits matrix? Yes, we c
 
 ### The massive logits matrix: chunk it
 
-Instead of computing the logits for the whole sequence at once, we take a few hundred rows at a time, compute the loss for those, and sum the pieces. The entire logits matrix is never held in memory at once.
+Instead of computing the logits for the whole sequence at once, we take a few hundred rows at a time, compute the loss for those, and sum the pieces. The entire logits matrix is never held in memory at once. Rows are the dimension that splits cleanly: the loss is a sum over rows, and the softmax inside it runs along the vocabulary of one row, so a chunk of rows carries everything its own loss needs.
 
 <img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/long_context_chunked_loss.png" alt="The same computation one chunk of rows at a time, each chunk freed before the next, summing into the same loss"/>
 
-One big multiplication becomes several smaller ones, and the memory saving is large enough that the loss is never the peak again.
+One big multiplication becomes several smaller ones, and the memory saving is large enough that the loss is never the peak again. TRL uses 256 rows per chunk, which keeps each multiplication big enough to use the GPU well.
 
 The new profile looks like this.
 
