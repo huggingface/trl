@@ -61,6 +61,10 @@ class TrainingCommand(Command):
         *_, config_remaining, cli_remaining = parser.parse_args_and_config(
             all_args, return_remaining_strings=True, separate_remaining_strings=True
         )
+        # Honor TrlParser's documented command-line precedence for this launcher-only argument.
+        if "--accelerate_config" in cli_remaining and "--accelerate_config" in config_remaining:
+            config_index = config_remaining.index("--accelerate_config")
+            del config_remaining[config_index : config_index + 2]
         launch_args = resolve_accelerate_config_argument(config_remaining + cli_remaining)
         training_script_args = _subtract_subsequence(all_args, cli_remaining)
 
