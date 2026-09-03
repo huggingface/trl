@@ -29,7 +29,7 @@ Three numbers are worth reading:
 - **Loss starts at 4.3**, which is a normal starting loss. A run that is subtly misconfigured for long context starts around 10 instead, and we will come back to why.
 - **380 s per step.** One step is one sequence, so that is a little over six minutes per sequence.
 
-Naively, this sequence needs 288 GB per GPU. The rest of this guide is how it gets to 56.
+Naively, this sequence needs 288 GB per GPU. The rest of this guide is the story of how that comes down to 56.
 
 ## What just happened
 
