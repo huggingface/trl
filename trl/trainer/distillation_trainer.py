@@ -826,6 +826,10 @@ class DistillationTrainer(_BaseTrainer):
 
         # Metrics & Logging
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
+        # Each entry is a running `(total, count)` pair of on-device tensors, summed in `compute_loss` with no
+        # collective and no host sync. `log()` reduces the pairs across ranks in a single collective and divides,
+        # so every metric is weighted by whatever its count counts (tokens, batches).
+        self._metric_stats = {"train": defaultdict(int), "eval": defaultdict(int)}
         self._total_train_tokens = 0
         self._current_train_step_time = 0.0
         self.log_completions = args.log_completions
@@ -1852,15 +1856,14 @@ class DistillationTrainer(_BaseTrainer):
             model, unwrapped_student, self._compute_loss, unwrapped_student, inputs, num_items_in_batch
         )
 
-        # Log the mean per-token student entropy (in nats). The reduction runs here, after `_forward_redirection`
-        # returns, so the `gather_for_metrics` collective does not run inside the DDP/FSDP-wrapped forward (a hang/
-        # ordering risk). The Liger path produces no entropy, so it logs none. Mirrors `SFTTrainer.compute_loss`.
+        # Log the mean per-token student entropy (in nats). Accumulated as per-rank running sums; the cross-rank
+        # reduction happens in `log()`, once per logging window, so no collective runs inside the DDP/FSDP-wrapped
+        # forward. The Liger path produces no entropy, so it logs none. Mirrors `SFTTrainer.compute_loss`.
         if entropy_sum is not None:
             mode = "train" if self.model.training else "eval"
-            num_valid_tokens = self.accelerator.gather_for_metrics(num_valid_tokens).sum()
-            entropy_sum = self.accelerator.gather_for_metrics(entropy_sum).sum()
-            entropy = (entropy_sum / num_valid_tokens).item() if num_valid_tokens > 0 else 0.0
-            self._metrics[mode]["entropy"].append(entropy)
+            self._metric_stats[mode]["entropy"] += torch.stack(
+                [entropy_sum.detach(), num_valid_tokens.detach().float()]
+            )
 
         return (loss, None) if return_outputs else loss
 
@@ -2019,6 +2022,15 @@ class DistillationTrainer(_BaseTrainer):
             valid = [v for v in val if not math.isnan(v)]
             metrics[key] = sum(valid) / len(valid) if valid else None
 
+        # Sum every `(total, count)` pair across ranks in a single collective, then divide. Keys are sorted so that
+        # all ranks stack them in the same order.
+        stats = self._metric_stats[mode]
+        if stats:
+            keys = sorted(stats)
+            values = torch.stack([stats[key].double() for key in keys])
+            totals = dict(zip(keys, self.accelerator.reduce(values, reduction="sum").tolist(), strict=True))
+            metrics.update({key: total / count if count > 0 else 0.0 for key, (total, count) in totals.items()})
+
         # This method can be called both in training and evaluation. When called in evaluation, the keys in `logs`
         # start with "eval_". We need to add the prefix "eval_" to the keys in `metrics` to match the format.
         if mode == "eval":
@@ -2027,6 +2039,7 @@ class DistillationTrainer(_BaseTrainer):
         logs.update(metrics)
         super().log(logs, start_time)
         self._metrics[mode].clear()
+        self._metric_stats[mode].clear()
 
         if self.accelerator.is_main_process and self.log_completions:
             if is_rich_available():

@@ -945,7 +945,10 @@ class KTOTrainer(_BaseTrainer):
                 disable_dropout_in_model(self.ref_model)
 
         # Initialize the metrics
-        self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
+        # Each entry is a running `(total, count)` pair of on-device tensors, summed in `compute_loss` with no
+        # collective and no host sync. `log()` reduces the pairs across ranks in a single collective and divides,
+        # so every metric is weighted by whatever its count counts (tokens, pairs, batches).
+        self._metric_stats = {"train": defaultdict(int), "eval": defaultdict(int)}
         self._total_train_tokens = 0
 
         # Gradient accumulation requires scaled loss. Normally, loss scaling in the parent class depends on whether the
@@ -1449,43 +1452,23 @@ class KTOTrainer(_BaseTrainer):
                 kl=kl,
             )
 
-        self._metrics[mode]["kl"].append(kl.item())
+        stats = self._metric_stats[mode]
+        # `kl` is already global here (the gather above is required by the loss), so only the window average is left
+        # for `log()` to compute.
+        kl_total = kl.detach().sum()
+        stats["kl"] += torch.stack([kl_total, torch.ones_like(kl_total)])
 
         # Number of tokens
         if mode == "train":
-            num_tokens_in_batch = self.accelerator.gather_for_metrics(batch["attention_mask"].sum()).sum().item()
-            self._total_train_tokens += num_tokens_in_batch
-        self._metrics[mode]["num_tokens"] = [self._total_train_tokens]
+            num_tokens_in_batch = batch["attention_mask"].sum()
+            stats["num_tokens"] += torch.stack([num_tokens_in_batch, torch.ones_like(num_tokens_in_batch)])
 
-        all_num_chosen = self.accelerator.gather_for_metrics(num_chosen).sum().item()
-        all_num_rejected = self.accelerator.gather_for_metrics(num_rejected).sum().item()
-
-        if all_num_chosen > 0:
-            self._metrics[mode]["rewards/chosen"].append(
-                self.accelerator.gather_for_metrics(chosen_rewards_sum.nansum()).nansum().item() / all_num_chosen
-            )
-            self._metrics[mode]["logps/chosen"].append(
-                self.accelerator.gather_for_metrics(chosen_logps_sum.nansum()).nansum().item() / all_num_chosen
-            )
-            self._metrics[mode]["logits/chosen"].append(
-                self.accelerator.gather_for_metrics(chosen_logits_sum.nansum()).nansum().item() / all_num_chosen
-            )
-
-        if all_num_rejected > 0:
-            self._metrics[mode]["rewards/rejected"].append(
-                self.accelerator.gather_for_metrics(rejected_rewards_sum.nansum()).nansum().item() / all_num_rejected
-            )
-            self._metrics[mode]["logps/rejected"].append(
-                self.accelerator.gather_for_metrics(rejected_logps_sum.nansum()).nansum().item() / all_num_rejected
-            )
-            self._metrics[mode]["logits/rejected"].append(
-                self.accelerator.gather_for_metrics(rejected_logits_sum.nansum()).nansum().item() / all_num_rejected
-            )
-
-        if all_num_chosen > 0 and all_num_rejected > 0:
-            self._metrics[mode]["rewards/margins"].append(
-                self._metrics[mode]["rewards/chosen"][-1] - self._metrics[mode]["rewards/rejected"][-1]
-            )
+        stats["rewards/chosen"] += torch.stack([chosen_rewards_sum.nansum().detach(), num_chosen.float()])
+        stats["logps/chosen"] += torch.stack([chosen_logps_sum.nansum().detach(), num_chosen.float()])
+        stats["logits/chosen"] += torch.stack([chosen_logits_sum.nansum().detach(), num_chosen.float()])
+        stats["rewards/rejected"] += torch.stack([rejected_rewards_sum.nansum().detach(), num_rejected.float()])
+        stats["logps/rejected"] += torch.stack([rejected_logps_sum.nansum().detach(), num_rejected.float()])
+        stats["logits/rejected"] += torch.stack([rejected_logits_sum.nansum().detach(), num_rejected.float()])
 
         return loss
 
@@ -1605,25 +1588,21 @@ class KTOTrainer(_BaseTrainer):
             0,
         )
 
-        self._metrics[mode]["kl"].append(kl.item())
+        stats = self._metric_stats[mode]
+        # `kl` is already global here (the gather above is required by the loss), so only the window average is left
+        # for `log()` to compute.
+        kl_total = kl.detach().sum()
+        stats["kl"] += torch.stack([kl_total, torch.ones_like(kl_total)])
 
         # Entropy
         per_token_entropy = entropy_from_logits(shift_logits.detach())
         mask = batch["completion_mask"][:, 1:]
-        entropy_sum = (per_token_entropy * mask).sum()
-        total_tokens = mask.sum()
-
-        # Gather counts across ranks and weight-average
-        entropy_sum = self.accelerator.gather_for_metrics(entropy_sum).sum()
-        total_tokens = self.accelerator.gather_for_metrics(total_tokens).sum()
-        entropy = (entropy_sum / total_tokens).item() if total_tokens > 0 else 0.0
-        self._metrics[mode]["entropy"].append(entropy)
+        stats["entropy"] += torch.stack([(per_token_entropy * mask).sum(), mask.sum().float()])
 
         # Number of tokens
         if mode == "train":
-            num_tokens_in_batch = self.accelerator.gather_for_metrics(batch["attention_mask"].sum()).sum().item()
-            self._total_train_tokens += num_tokens_in_batch
-        self._metrics[mode]["num_tokens"] = [self._total_train_tokens]
+            num_tokens_in_batch = batch["attention_mask"].sum()
+            stats["num_tokens"] += torch.stack([num_tokens_in_batch, torch.ones_like(num_tokens_in_batch)])
 
         # Average logits for chosen and rejected completions
         shift_completion_mask = batch["completion_mask"][:, 1:]
@@ -1631,48 +1610,23 @@ class KTOTrainer(_BaseTrainer):
         rejected_logits = shift_logits.detach().index_select(0, rejected_idx)
         chosen_mask = shift_completion_mask.index_select(0, chosen_idx)
         rejected_mask = shift_completion_mask.index_select(0, rejected_idx)
-        total_chosen_logits = chosen_logits[chosen_mask.bool()].mean(-1).sum()
-        total_chosen_tokens = chosen_mask.sum()
-        total_rejected_logits = rejected_logits[rejected_mask.bool()].mean(-1).sum()
-        total_rejected_tokens = rejected_mask.sum()
-        total_chosen_logits = self.accelerator.gather_for_metrics(total_chosen_logits).sum().item()
-        total_chosen_tokens = self.accelerator.gather_for_metrics(total_chosen_tokens).sum().item()
-        total_rejected_logits = self.accelerator.gather_for_metrics(total_rejected_logits).sum().item()
-        total_rejected_tokens = self.accelerator.gather_for_metrics(total_rejected_tokens).sum().item()
-        if total_chosen_tokens > 0:
-            self._metrics[mode]["logits/chosen"].append(total_chosen_logits / total_chosen_tokens)
-        if total_rejected_tokens > 0:
-            self._metrics[mode]["logits/rejected"].append(total_rejected_logits / total_rejected_tokens)
+        stats["logits/chosen"] += torch.stack(
+            [chosen_logits[chosen_mask.bool()].mean(-1).sum(), chosen_mask.sum().float()]
+        )
+        stats["logits/rejected"] += torch.stack(
+            [rejected_logits[rejected_mask.bool()].mean(-1).sum(), rejected_mask.sum().float()]
+        )
 
-        all_num_chosen = self.accelerator.gather_for_metrics(num_chosen).sum().item()
-        all_num_rejected = self.accelerator.gather_for_metrics(num_rejected).sum().item()
-
-        if all_num_chosen > 0:
-            self._metrics[mode]["rewards/chosen"].append(
-                self.accelerator.gather_for_metrics(chosen_rewards.nansum()).nansum().item() / all_num_chosen
-            )
-            self._metrics[mode]["logps/chosen"].append(
-                self.accelerator.gather_for_metrics(chosen_logps.nansum()).nansum().item() / all_num_chosen
-            )
-
-        if all_num_rejected > 0:
-            self._metrics[mode]["rewards/rejected"].append(
-                self.accelerator.gather_for_metrics(rejected_rewards.nansum()).nansum().item() / all_num_rejected
-            )
-            self._metrics[mode]["logps/rejected"].append(
-                self.accelerator.gather_for_metrics(rejected_logps.nansum()).nansum().item() / all_num_rejected
-            )
-
-        if all_num_chosen > 0 and all_num_rejected > 0:
-            self._metrics[mode]["rewards/margins"].append(
-                self._metrics[mode]["rewards/chosen"][-1] - self._metrics[mode]["rewards/rejected"][-1]
-            )
+        stats["rewards/chosen"] += torch.stack([chosen_rewards.nansum(), num_chosen.float()])
+        stats["logps/chosen"] += torch.stack([chosen_logps.detach().nansum(), num_chosen.float()])
+        stats["rewards/rejected"] += torch.stack([rejected_rewards.nansum(), num_rejected.float()])
+        stats["logps/rejected"] += torch.stack([rejected_logps.detach().nansum(), num_rejected.float()])
 
         loss = losses.nanmean()
         if self.aux_loss_enabled:
             aux_loss = outputs.aux_loss
             loss = loss + self.router_aux_loss_coef * aux_loss
-            self._metrics[mode]["aux_loss"].append(self.accelerator.gather_for_metrics(aux_loss).mean().item())
+            stats["aux_loss"] += torch.stack([aux_loss.detach(), torch.ones_like(aux_loss)])
 
         return (loss, outputs) if return_outputs else loss
 
@@ -1775,14 +1729,33 @@ class KTOTrainer(_BaseTrainer):
 
     def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
         mode = "train" if self.model.training else "eval"
-        metrics = {key: sum(val) / len(val) for key, val in self._metrics[mode].items()}  # average the metrics
+
+        # Sum every `(total, count)` pair across ranks in a single collective, then divide. Keys are sorted so that
+        # all ranks stack them in the same order.
+        metrics = {}
+        stats = self._metric_stats[mode]
+        if stats:
+            keys = sorted(stats)
+            values = torch.stack([stats[key].double() for key in keys])
+            totals = dict(zip(keys, self.accelerator.reduce(values, reduction="sum").tolist(), strict=True))
+            metrics = {key: total / count if count > 0 else 0.0 for key, (total, count) in totals.items()}
+            # KTO sees chosen and rejected completions in separate, independently sized groups, so the margin is a
+            # difference of the two window means rather than a metric with a count of its own.
+            if totals["rewards/chosen"][1] > 0 and totals["rewards/rejected"][1] > 0:
+                metrics["rewards/margins"] = metrics["rewards/chosen"] - metrics["rewards/rejected"]
+            # `num_tokens` is a running total, so it takes the pair's total instead of the ratio. It only advances
+            # on a train-mode log, so an eval log in between can lag by up to one logging window.
+            if mode == "train" and "num_tokens" in totals:
+                self._total_train_tokens += int(totals["num_tokens"][0])
+            metrics["num_tokens"] = self._total_train_tokens
+
         # This method can be called both in training and evaluation. When called in evaluation, the keys in `logs`
         # start with "eval_". We need to add the prefix "eval_" to the keys in `metrics` to match the format.
         if mode == "eval":
             metrics = {f"eval_{key}": val for key, val in metrics.items()}
         logs.update(metrics)
         super().log(logs, start_time)
-        self._metrics[mode].clear()
+        self._metric_stats[mode].clear()
 
     # During eval, Trainer calls prediction_step. If no labels are present in the inputs, it only runs forward and
     # returns logits. We override prediction_step to force compute_loss, because this trainer doesn't involve labels.

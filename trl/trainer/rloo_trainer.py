@@ -67,8 +67,6 @@ from .utils import (
     get_callable_name,
     get_config_model_id,
     identity,
-    nanmax,
-    nanmin,
     nanstd,
     pad,
     print_prompt_completions_sample,
@@ -626,6 +624,13 @@ class RLOOTrainer(_BaseTrainer):
 
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
+        # `_metric_stats` entries are running `(total, count)` pairs and `_metric_mins`/`_metric_maxs` are running
+        # extrema, all on-device: they only receive local tensors (no collective, no host sync), and `log()`
+        # aggregates them across ranks in one collective per kind. `_metrics` above keeps plain floats for values
+        # that are already identical on every rank.
+        self._metric_stats = {"train": defaultdict(int), "eval": defaultdict(int)}
+        self._metric_mins = {"train": {}, "eval": {}}
+        self._metric_maxs = {"train": {}, "eval": {}}
         self._total_train_tokens = 0
         self._current_train_step_time = 0.0
         self.log_completions = args.log_completions
@@ -1617,10 +1622,9 @@ class RLOOTrainer(_BaseTrainer):
 
         # Calculate and log the mean KL divergence between current and reference model
         if self.beta != 0.0:
-            kl_stats = self.accelerator.reduce(
-                torch.stack([(per_token_kl * completion_mask).sum(), completion_mask.sum().float()]), reduction="sum"
+            self._metric_stats[mode]["kl"] += torch.stack(
+                [(per_token_kl * completion_mask).sum().detach(), completion_mask.sum().float()]
             )
-            self._metrics[mode]["kl"].append((kl_stats[0] / kl_stats[1].clamp(min=1.0)).item())
 
         # Calculate mean reward per function, but only for samples where the function was applied (non-NaN values)
         for i, reward_func_name in enumerate(self.reward_func_names):
@@ -1648,14 +1652,14 @@ class RLOOTrainer(_BaseTrainer):
             self._logs["extra"][column].extend(gather_object(self._pending_extra_logs[column]))
         self._pending_extra_logs.clear()
 
-        # Flush user-logged metrics (from log_metric), averaging across processes.
-        # Keys must be sorted so that all ranks call accelerator.gather in the same order, otherwise values
-        # get mis-attributed across metrics (dict insertion order may differ between processes).
-        for name in sorted(self._pending_metrics):
+        # Flush user-logged metrics (from log_metric), accumulated locally and averaged across processes at `log()`
+        # time. Every rank must log the same metric names, otherwise the log-time aggregation mismatches ranks
+        # (the same requirement the previous per-step gather had).
+        for name in self._pending_metrics:
             values = self._pending_metrics[name]
             local_mean = sum(values) / len(values)
-            global_mean = self.accelerator.gather(torch.tensor(local_mean, device=device)).mean().item()
-            self._metrics[mode][name].append(global_mean)
+            local_mean = torch.tensor(local_mean, device=device)
+            self._metric_stats[mode][name] += torch.stack([local_mean, torch.ones_like(local_mean)])
         self._pending_metrics.clear()
 
         if images is not None and self.log_multimodal:
@@ -1744,26 +1748,30 @@ class RLOOTrainer(_BaseTrainer):
         # RLOO returns an unscaled loss (the HF Trainer divides by gradient accumulation), so add the aux term unscaled
         if self.aux_loss_enabled:
             loss = loss + self.router_aux_loss_coef * aux_loss
-            self._metrics[mode]["aux_loss"].append(self.accelerator.gather_for_metrics(aux_loss).mean().item())
+            detached_aux_loss = aux_loss.detach()
+            self._metric_stats[mode]["aux_loss"] += torch.stack(
+                [detached_aux_loss, torch.ones_like(detached_aux_loss)]
+            )
 
         # Entropy
-        entropy_stats = self.accelerator.reduce(
-            torch.stack([(entropies * completion_mask).sum(), completion_mask.sum().float()]), reduction="sum"
+        self._metric_stats[mode]["entropy"] += torch.stack(
+            [(entropies * completion_mask).sum().detach(), completion_mask.sum().float()]
         )
-        self._metrics[mode]["entropy"].append((entropy_stats[0] / entropy_stats[1].clamp(min=1.0)).item())
 
         # Compute the clipped probability ratios
+        stats = self._metric_stats[mode]
+        mins, maxs = self._metric_mins[mode], self._metric_maxs[mode]
         is_low_clipped = (coef_1 < 1 - self.epsilon_low) & (advantages < 0)
         is_high_clipped = (coef_1 > 1 + self.epsilon_high) & (advantages > 0)
         is_region_clipped = is_low_clipped | is_high_clipped
-        gathered_low_clip = self.accelerator.gather(is_low_clipped.float())
-        self._metrics[mode]["clip_ratio/low_mean"].append(gathered_low_clip.nanmean().item())
-        self._metrics[mode]["clip_ratio/low_min"].append(nanmin(gathered_low_clip).item())
-        gathered_high_clip = self.accelerator.gather(is_high_clipped.float())
-        self._metrics[mode]["clip_ratio/high_mean"].append(gathered_high_clip.nanmean().item())
-        self._metrics[mode]["clip_ratio/high_max"].append(nanmax(gathered_high_clip).item())
-        gathered_clip_ratio = self.accelerator.gather(is_region_clipped.float())
-        self._metrics[mode]["clip_ratio/region_mean"].append(gathered_clip_ratio.nanmean().item())
+        clip_count = torch.tensor(float(is_low_clipped.numel()), device=is_low_clipped.device)
+        stats["clip_ratio/low_mean"] += torch.stack([is_low_clipped.float().sum(), clip_count])
+        low_min = is_low_clipped.float().min()
+        mins["clip_ratio/low_min"] = torch.minimum(mins.get("clip_ratio/low_min", low_min), low_min)
+        stats["clip_ratio/high_mean"] += torch.stack([is_high_clipped.float().sum(), clip_count])
+        high_max = is_high_clipped.float().max()
+        maxs["clip_ratio/high_max"] = torch.maximum(maxs.get("clip_ratio/high_max", high_max), high_max)
+        stats["clip_ratio/region_mean"] += torch.stack([is_region_clipped.float().sum(), clip_count])
         return loss
 
     # During eval, Trainer calls prediction_step. If no labels are present in the inputs, it only runs forward and
@@ -1788,6 +1796,24 @@ class RLOOTrainer(_BaseTrainer):
             valid = [v for v in val if not math.isnan(v)]
             metrics[key] = sum(valid) / len(valid) if valid else None
 
+        # Sum every `(total, count)` pair across ranks in a single collective, then divide. Keys are sorted so that
+        # all ranks stack them in the same order.
+        stats = self._metric_stats[mode]
+        if stats:
+            keys = sorted(stats)
+            values = torch.stack([stats[key].double() for key in keys])
+            totals = dict(zip(keys, self.accelerator.reduce(values, reduction="sum").tolist(), strict=True))
+            metrics.update({key: total / count if count > 0 else 0.0 for key, (total, count) in totals.items()})
+        # Running extrema take the min/max across ranks, one collective each (min(x) is computed as -max(-x)). A
+        # rank with no data contributed +/-inf sentinels; a window with no data at all logs None.
+        for extrema, sign in ((self._metric_mins[mode], -1.0), (self._metric_maxs[mode], 1.0)):
+            if extrema:
+                keys = sorted(extrema)
+                values = torch.stack([sign * extrema[key].double() for key in keys])
+                reduced = sign * self.accelerator.reduce(values, reduction="max")
+                for key, value in zip(keys, reduced.tolist(), strict=True):
+                    metrics[key] = value if math.isfinite(value) else None
+
         # This method can be called both in training and evaluation. When called in evaluation, the keys in `logs`
         # start with "eval_". We need to add the prefix "eval_" to the keys in `metrics` to match the format.
         if mode == "eval":
@@ -1796,6 +1822,9 @@ class RLOOTrainer(_BaseTrainer):
         logs.update(metrics)
         super().log(logs, start_time)
         self._metrics[mode].clear()
+        self._metric_stats[mode].clear()
+        self._metric_mins[mode].clear()
+        self._metric_maxs[mode].clear()
 
         if self.accelerator.is_main_process and self.log_completions:
             if is_rich_available():

@@ -1627,6 +1627,22 @@ class TestSFTTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    def test_log_averages_over_the_window_weighted_by_count(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
+
+        # Two steps in one logging window: 1 token with entropy 3.0, then 9 tokens with entropy 1.0. The logged
+        # value must weight them by their token counts (12 / 10), not average the per-step ratios ((3 + 1) / 2).
+        trainer.model.train()
+        trainer._metric_stats["train"]["entropy"] = torch.tensor([3.0 + 9.0, 1.0 + 9.0], device=torch_device)
+        logs = {}
+        trainer.log(logs)
+
+        assert logs["entropy"] == pytest.approx(1.2)
+
     def test_train_with_eval(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling")
 

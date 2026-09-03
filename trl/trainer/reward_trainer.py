@@ -15,6 +15,7 @@
 import contextlib
 import json
 import logging
+import math
 import os
 import re
 import warnings
@@ -601,8 +602,12 @@ class RewardTrainer(_BaseTrainer):
         else:
             self.maybe_activation_offload_context = contextlib.nullcontext()
 
-        # Initialize the metrics
-        self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
+        # `_metric_stats` entries are running `(total, count)` pairs and `_metric_mins`/`_metric_maxs` are running
+        # extrema, all on-device: `compute_loss` only adds local tensors here (no collective, no host sync), and
+        # `log()` aggregates them across ranks in one collective per kind.
+        self._metric_stats = {"train": defaultdict(int), "eval": defaultdict(int)}
+        self._metric_mins = {"train": {}, "eval": {}}
+        self._metric_maxs = {"train": {}, "eval": {}}
         self._total_train_tokens = 0
 
         # Gradient accumulation requires scaled loss. Normally, loss scaling in the parent class depends on whether the
@@ -699,8 +704,10 @@ class RewardTrainer(_BaseTrainer):
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Filtering {dataset_name} >{args.max_length} tokens"
                 dataset = dataset.filter(
-                    lambda example: len(example["chosen_ids"]) <= args.max_length
-                    and len(example["rejected_ids"]) <= args.max_length,
+                    lambda example: (
+                        len(example["chosen_ids"]) <= args.max_length
+                        and len(example["rejected_ids"]) <= args.max_length
+                    ),
                     **map_kwargs,
                 )
 
@@ -760,24 +767,28 @@ class RewardTrainer(_BaseTrainer):
             loss += self.args.center_rewards_coefficient * torch.mean((rewards_chosen + rewards_rejected) ** 2)
 
         if mode == "train":
-            num_tokens_in_batch = self.accelerator.gather_for_metrics(inputs["attention_mask"].sum()).sum().item()
-            self._total_train_tokens += num_tokens_in_batch
-        self._metrics[mode]["num_tokens"] = [self._total_train_tokens]
+            num_tokens_in_batch = inputs["attention_mask"].sum()
+            self._metric_stats[mode]["num_tokens"] += torch.stack(
+                [num_tokens_in_batch, torch.ones_like(num_tokens_in_batch)]
+            )
 
         # Compute min, mean, max, accuracy and margin
         with torch.no_grad():
-            all_rewards = self.accelerator.gather(outputs.logits)
-            self._metrics[mode]["min_reward"].append(all_rewards.min().item())
-            self._metrics[mode]["mean_reward"].append(all_rewards.mean().item())
-            self._metrics[mode]["max_reward"].append(all_rewards.max().item())
+            stats = self._metric_stats[mode]
+            mins, maxs = self._metric_mins[mode], self._metric_maxs[mode]
+            rewards = outputs.logits.detach()
+            num_pairs = torch.tensor(float(rewards_chosen.numel()), device=rewards.device)
+            stats["mean_reward"] += torch.stack(
+                [rewards.sum(), torch.tensor(float(rewards.numel()), device=rewards.device)]
+            )
+            min_reward = rewards.min()
+            mins["min_reward"] = torch.minimum(mins.get("min_reward", min_reward), min_reward)
+            max_reward = rewards.max()
+            maxs["max_reward"] = torch.maximum(maxs.get("max_reward", max_reward), max_reward)
 
-            mean_accuracy = (rewards_chosen > rewards_rejected).float().mean()
-            mean_accuracy = self.accelerator.gather_for_metrics(mean_accuracy).mean().item()
-            self._metrics[mode]["accuracy"].append(mean_accuracy)
+            stats["accuracy"] += torch.stack([(rewards_chosen > rewards_rejected).float().sum(), num_pairs])
 
-            mean_margin = (rewards_chosen - rewards_rejected).mean()
-            mean_margin = self.accelerator.gather_for_metrics(mean_margin).mean()
-            self._metrics[mode]["margin"].append(mean_margin.item())
+            stats["margin"] += torch.stack([(rewards_chosen - rewards_rejected).sum(), num_pairs])
 
         return (loss, outputs) if return_outputs else loss
 
@@ -788,7 +799,30 @@ class RewardTrainer(_BaseTrainer):
 
     def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
         mode = "train" if self.model.training else "eval"
-        metrics = {key: sum(val) / len(val) for key, val in self._metrics[mode].items()}  # average the metrics
+
+        # Sum every `(total, count)` pair across ranks in a single collective, then divide. Keys are sorted so that
+        # all ranks stack them in the same order.
+        metrics = {}
+        stats = self._metric_stats[mode]
+        if stats:
+            keys = sorted(stats)
+            values = torch.stack([stats[key].double() for key in keys])
+            totals = dict(zip(keys, self.accelerator.reduce(values, reduction="sum").tolist(), strict=True))
+            metrics = {key: total / count if count > 0 else 0.0 for key, (total, count) in totals.items()}
+            # `num_tokens` is a running total, so it takes the pair's total instead of the ratio. It only advances
+            # on a train-mode log, so an eval log in between can lag by up to one logging window.
+            if mode == "train" and "num_tokens" in totals:
+                self._total_train_tokens += int(totals["num_tokens"][0])
+            metrics["num_tokens"] = self._total_train_tokens
+        # Running extrema take the min/max across ranks, one collective each (min(x) is computed as -max(-x)). A
+        # rank with no data contributed +/-inf sentinels; a window with no data at all logs None.
+        for extrema, sign in ((self._metric_mins[mode], -1.0), (self._metric_maxs[mode], 1.0)):
+            if extrema:
+                keys = sorted(extrema)
+                values = torch.stack([sign * extrema[key].double() for key in keys])
+                reduced = sign * self.accelerator.reduce(values, reduction="max")
+                for key, value in zip(keys, reduced.tolist(), strict=True):
+                    metrics[key] = value if math.isfinite(value) else None
 
         # This method can be called both in training and evaluation. When called in evaluation, the keys in `logs`
         # start with "eval_". We need to add the prefix "eval_" to the keys in `metrics` to match the format.
@@ -797,7 +831,9 @@ class RewardTrainer(_BaseTrainer):
 
         logs.update(metrics)
         super().log(logs, start_time)
-        self._metrics[mode].clear()
+        self._metric_stats[mode].clear()
+        self._metric_mins[mode].clear()
+        self._metric_maxs[mode].clear()
 
     # Ensure the model card is saved along with the checkpoint
     def _save_checkpoint(self, model, trial):

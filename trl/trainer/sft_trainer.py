@@ -1417,8 +1417,10 @@ class SFTTrainer(_BaseTrainer):
             text_config.output_router_logits = self.aux_loss_enabled
             text_config.router_aux_loss_coef = self.args.router_aux_loss_coef
 
-        # Initialize the metrics
-        self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
+        # Initialize the metrics. Each entry is a running `(total, count)` pair of on-device tensors, summed in
+        # `compute_loss` with no collective and no host sync. `log()` reduces the pairs across ranks in a single
+        # collective and divides, so every metric is weighted by whatever its count counts (tokens, batches).
+        self._metric_stats = {"train": defaultdict(int), "eval": defaultdict(int)}
         self._total_train_tokens = 0
 
         # Add tags to the model
@@ -1807,10 +1809,8 @@ class SFTTrainer(_BaseTrainer):
             # PEFT (PromptTuning, P-Tuning) prepends `-100`-padded virtual tokens before delegating into the patched
             # forward, so the valid-token count over the padded labels can differ from the un-padded `labels[..., 1:]`
             # count by up to one per sequence; using the patched output keeps numerator and denominator aligned.
-            num_valid = self.accelerator.gather_for_metrics(outputs.num_valid_tokens).sum()
-            entropy_sum = self.accelerator.gather_for_metrics(outputs.entropy_sum).sum()
-            entropy = (entropy_sum / num_valid).item() if num_valid > 0 else 0.0
-            self._metrics[mode]["entropy"].append(entropy)
+            num_valid = outputs.num_valid_tokens.detach().float()
+            self._metric_stats[mode]["entropy"] += torch.stack([outputs.entropy_sum.detach(), num_valid])
         elif not self.args.use_liger_kernel:  # liger doesn't return logits
             with torch.no_grad():
                 if "shift_labels" in inputs:
@@ -1836,39 +1836,38 @@ class SFTTrainer(_BaseTrainer):
                 total_tokens = mask.sum()
                 correct_predictions = (predictions == shift_labels) & mask
                 correct_tokens = correct_predictions.sum()
-
-                # Gather counts across ranks and weight-average
-                entropy_sum = self.accelerator.gather_for_metrics(entropy_sum).sum()
-                total_tokens = self.accelerator.gather_for_metrics(total_tokens).sum()
-                correct_tokens = self.accelerator.gather_for_metrics(correct_tokens)
-                entropy = (entropy_sum / total_tokens).item() if total_tokens > 0 else 0.0
-
-                total_sum = total_tokens.sum()
-                accuracy = (correct_tokens.sum() / total_sum).item() if total_sum > 0 else 0.0
-            self._metrics[mode]["entropy"].append(entropy)
-            self._metrics[mode]["mean_token_accuracy"].append(accuracy)
+            self._metric_stats[mode]["entropy"] += torch.stack([entropy_sum, total_tokens.float()])
+            self._metric_stats[mode]["mean_token_accuracy"] += torch.stack(
+                [correct_tokens.float(), total_tokens.float()]
+            )
 
         if mode == "train":
             # When using padding-free, the attention_mask is not present in the inputs, instead we have cu_seq_lens_q,
             # cu_seq_lens_k, and max_length_k, max_length_q and position_ids.
             if "attention_mask" in inputs:
-                num_tokens_in_batch = self.accelerator.gather_for_metrics(inputs["attention_mask"].sum()).sum().item()
+                num_tokens_in_batch = inputs["attention_mask"].sum()
             elif "position_ids" in inputs:
-                local_num_tokens = torch.tensor(inputs["position_ids"].size(1), device=inputs["position_ids"].device)
-                num_tokens_in_batch = self.accelerator.gather_for_metrics(local_num_tokens).sum().item()
+                num_tokens_in_batch = torch.tensor(
+                    inputs["position_ids"].size(1), device=inputs["position_ids"].device
+                )
             else:
                 raise ValueError("Expected 'attention_mask' or 'position_ids' in inputs.")
-            self._total_train_tokens += num_tokens_in_batch
-        self._metrics[mode]["num_tokens"] = [self._total_train_tokens]
+            # `num_tokens` is a running total rather than a window average, so `log()` uses the pair's total and
+            # ignores its count.
+            self._metric_stats[mode]["num_tokens"] += torch.stack(
+                [num_tokens_in_batch, torch.ones_like(num_tokens_in_batch)]
+            )
 
         if self.args.loss_type == "chunked_nll":
-            correct = self.accelerator.gather_for_metrics(outputs.num_correct_tokens).sum()
-            accuracy = (correct / num_valid).item() if num_valid > 0 else 0.0
-            self._metrics[mode]["mean_token_accuracy"].append(accuracy)
+            self._metric_stats[mode]["mean_token_accuracy"] += torch.stack(
+                [outputs.num_correct_tokens.detach(), num_valid]
+            )
         elif self.args.use_liger_kernel:
             if hasattr(outputs, "token_accuracy") and outputs.token_accuracy is not None:
-                token_accuracy = self.accelerator.gather_for_metrics(outputs.token_accuracy).mean().item()
-                self._metrics[mode]["mean_token_accuracy"].append(token_accuracy)
+                token_accuracy = outputs.token_accuracy.detach()
+                self._metric_stats[mode]["mean_token_accuracy"] += torch.stack(
+                    [token_accuracy, torch.ones_like(token_accuracy)]
+                )
             else:
                 warnings.warn(
                     "liger-kernel did not return token_accuracy when requested. The mean_token_accuracy metric will "
@@ -1877,9 +1876,8 @@ class SFTTrainer(_BaseTrainer):
                 )
         # Log auxiliary loss if enabled (applies to both Liger and non-Liger)
         if self.aux_loss_enabled:
-            aux_loss = outputs.aux_loss
-            aux_loss = self.accelerator.gather_for_metrics(aux_loss).mean().item()
-            self._metrics[mode]["aux_loss"].append(aux_loss)
+            aux_loss = outputs.aux_loss.detach()
+            self._metric_stats[mode]["aux_loss"] += torch.stack([aux_loss, torch.ones_like(aux_loss)])
 
         return (loss, outputs) if return_outputs else loss
 
@@ -1895,7 +1893,21 @@ class SFTTrainer(_BaseTrainer):
 
     def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
         mode = "train" if self.model.training else "eval"
-        metrics = {key: sum(val) / len(val) for key, val in self._metrics[mode].items()}  # average the metrics
+
+        # Sum every `(total, count)` pair across ranks in a single collective, then divide. Keys are sorted so that
+        # all ranks stack them in the same order.
+        metrics = {}
+        stats = self._metric_stats[mode]
+        if stats:
+            keys = sorted(stats)
+            values = torch.stack([stats[key].double() for key in keys])
+            totals = dict(zip(keys, self.accelerator.reduce(values, reduction="sum").tolist(), strict=True))
+            metrics = {key: total / count if count > 0 else 0.0 for key, (total, count) in totals.items()}
+            # `num_tokens` is a running total, so it takes the pair's total instead of the ratio. It only advances
+            # on a train-mode log, so an eval log in between can lag by up to one logging window.
+            if mode == "train" and "num_tokens" in totals:
+                self._total_train_tokens += int(totals["num_tokens"][0])
+            metrics["num_tokens"] = self._total_train_tokens
 
         # This method can be called both in training and evaluation. When called in evaluation, the keys in `logs`
         # start with "eval_". We need to add the prefix "eval_" to the keys in `metrics` to match the format.
@@ -1904,7 +1916,7 @@ class SFTTrainer(_BaseTrainer):
 
         logs.update(metrics)
         super().log(logs, start_time)
-        self._metrics[mode].clear()
+        self._metric_stats[mode].clear()
 
     # Ensure the model card is saved along with the checkpoint
     def _save_checkpoint(self, model, trial):

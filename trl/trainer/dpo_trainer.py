@@ -933,7 +933,10 @@ class DPOTrainer(_BaseTrainer):
                 disable_dropout_in_model(self.ref_model)
 
         # Initialize the metrics
-        self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
+        # Each entry is a running `(total, count)` pair of on-device tensors, summed in `compute_loss` with no
+        # collective and no host sync. `log()` reduces the pairs across ranks in a single collective and divides,
+        # so every metric is weighted by whatever its count counts (tokens, pairs, batches).
+        self._metric_stats = {"train": defaultdict(int), "eval": defaultdict(int)}
         self._total_train_tokens = 0
 
         # Gradient accumulation requires scaled loss. Normally, loss scaling in the parent class depends on whether the
@@ -1319,31 +1322,26 @@ class DPOTrainer(_BaseTrainer):
             rejected_rewards,
         ) = metrics
 
+        stats = self._metric_stats[mode]
         if mode == "train":
-            num_tokens_in_batch = self.accelerator.gather_for_metrics(inputs["attention_mask"].sum()).sum().item()
-            self._total_train_tokens += num_tokens_in_batch
-        self._metrics[mode]["num_tokens"] = [self._total_train_tokens]
+            num_tokens_in_batch = inputs["attention_mask"].sum()
+            stats["num_tokens"] += torch.stack([num_tokens_in_batch, torch.ones_like(num_tokens_in_batch)])
 
-        avg_chosen_logits = self.accelerator.gather_for_metrics(chosen_logits_mean).mean().item()
-        avg_rejected_logits = self.accelerator.gather_for_metrics(rejected_logits_mean).mean().item()
-        self._metrics[mode]["logits/chosen"].append(avg_chosen_logits)
-        self._metrics[mode]["logits/rejected"].append(avg_rejected_logits)
+        stats["logits/chosen"] += torch.stack([chosen_logits_mean.detach(), torch.ones_like(chosen_logits_mean)])
+        stats["logits/rejected"] += torch.stack([rejected_logits_mean.detach(), torch.ones_like(rejected_logits_mean)])
 
-        agg_chosen_rewards = self.accelerator.gather(chosen_rewards)
-        agg_rejected_rewards = self.accelerator.gather(rejected_rewards)
-        self._metrics[mode]["rewards/chosen"].append(agg_chosen_rewards.mean().item())
-        self._metrics[mode]["rewards/rejected"].append(agg_rejected_rewards.mean().item())
+        num_pairs = torch.tensor(float(chosen_rewards.numel()), device=chosen_rewards.device)
+        stats["rewards/chosen"] += torch.stack([chosen_rewards.detach().sum(), num_pairs])
+        stats["rewards/rejected"] += torch.stack([rejected_rewards.detach().sum(), num_pairs])
 
         reward_accuracies = (chosen_rewards > rejected_rewards).float()
-        agg_reward_accuracies = self.accelerator.gather(reward_accuracies)
-        self._metrics[mode]["rewards/accuracies"].append(agg_reward_accuracies.mean().item())
+        stats["rewards/accuracies"] += torch.stack([reward_accuracies.sum(), num_pairs])
 
         margins = chosen_rewards - rejected_rewards
-        agg_margins = self.accelerator.gather(margins)
-        self._metrics[mode]["rewards/margins"].append(agg_margins.mean().item())
+        stats["rewards/margins"] += torch.stack([margins.detach().sum(), num_pairs])
 
-        self._metrics[mode]["logps/chosen"].append(self.accelerator.gather(chosen_logps).mean().item())
-        self._metrics[mode]["logps/rejected"].append(self.accelerator.gather(rejected_logps).mean().item())
+        stats["logps/chosen"] += torch.stack([chosen_logps.detach().sum(), num_pairs])
+        stats["logps/rejected"] += torch.stack([rejected_logps.detach().sum(), num_pairs])
 
         return loss
 
@@ -1601,77 +1599,56 @@ class DPOTrainer(_BaseTrainer):
         if self.aux_loss_enabled:
             aux_loss = outputs.aux_loss
             loss = loss + self.router_aux_loss_coef * aux_loss
-            self._metrics[mode]["aux_loss"].append(self.accelerator.gather_for_metrics(aux_loss).mean().item())
+            self._metric_stats[mode]["aux_loss"] += torch.stack([aux_loss.detach(), torch.ones_like(aux_loss)])
 
         # Log the metrics
+        stats = self._metric_stats[mode]
+
         # Entropy
         per_token_entropy = entropy_from_logits(shift_logits.detach())
         mask = shift_completion_mask
-        entropy_sum = (per_token_entropy * mask).sum()
-        total_tokens = mask.sum()
-
-        # Gather counts across ranks and weight-average
-        entropy_sum = self.accelerator.gather_for_metrics(entropy_sum).sum()
-        total_tokens = self.accelerator.gather_for_metrics(total_tokens).sum()
-        entropy = (entropy_sum / total_tokens).item() if total_tokens > 0 else 0.0
-        self._metrics[mode]["entropy"].append(entropy)
+        stats["entropy"] += torch.stack([(per_token_entropy * mask).sum(), mask.sum().float()])
 
         # Number of tokens
         if mode == "train":
-            num_tokens_in_batch = self.accelerator.gather_for_metrics(inputs["attention_mask"].sum()).sum().item()
-            self._total_train_tokens += num_tokens_in_batch
-        self._metrics[mode]["num_tokens"] = [self._total_train_tokens]
+            num_tokens_in_batch = inputs["attention_mask"].sum()
+            stats["num_tokens"] += torch.stack([num_tokens_in_batch, torch.ones_like(num_tokens_in_batch)])
 
         # Average logits for chosen and rejected completions
         chosen_logits, rejected_logits = shift_logits.detach().chunk(2, dim=0)
         chosen_mask, rejected_mask = shift_completion_mask.chunk(2, dim=0)
-        total_chosen_logits = chosen_logits[chosen_mask.bool()].mean(-1).sum()
-        total_chosen_tokens = chosen_mask.sum()
-        total_rejected_logits = rejected_logits[rejected_mask.bool()].mean(-1).sum()
-        total_rejected_tokens = rejected_mask.sum()
-        total_chosen_logits = self.accelerator.gather_for_metrics(total_chosen_logits).sum().item()
-        total_chosen_tokens = self.accelerator.gather_for_metrics(total_chosen_tokens).sum().item()
-        total_rejected_logits = self.accelerator.gather_for_metrics(total_rejected_logits).sum().item()
-        total_rejected_tokens = self.accelerator.gather_for_metrics(total_rejected_tokens).sum().item()
-        avg_chosen_logits = total_chosen_logits / total_chosen_tokens if total_chosen_tokens > 0 else 0.0
-        avg_rejected_logits = total_rejected_logits / total_rejected_tokens if total_rejected_tokens > 0 else 0.0
-        self._metrics[mode]["logits/chosen"].append(avg_chosen_logits)
-        self._metrics[mode]["logits/rejected"].append(avg_rejected_logits)
+        stats["logits/chosen"] += torch.stack(
+            [chosen_logits[chosen_mask.bool()].mean(-1).sum(), chosen_mask.sum().float()]
+        )
+        stats["logits/rejected"] += torch.stack(
+            [rejected_logits[rejected_mask.bool()].mean(-1).sum(), rejected_mask.sum().float()]
+        )
 
         # Token accuracy for the chosen completions
         predictions = chosen_logits.argmax(dim=-1)
         chosen_mask = shift_completion_mask[: len(shift_completion_mask) // 2].bool()
         chosen_labels = shift_labels[: len(shift_labels) // 2]
         correct_predictions = (predictions == chosen_labels) & chosen_mask
-        total_tokens = chosen_mask.sum()
-        correct_tokens = correct_predictions.sum()
-        correct_tokens = self.accelerator.gather_for_metrics(correct_tokens)
-        total_tokens = self.accelerator.gather_for_metrics(total_tokens)
-        total_sum = total_tokens.sum()
-        accuracy = (correct_tokens.sum() / total_sum).item() if total_sum > 0 else 0.0
-        self._metrics[mode]["mean_token_accuracy"].append(accuracy)
+        stats["mean_token_accuracy"] += torch.stack([correct_predictions.sum(), chosen_mask.sum()])
 
         # Rewards for chosen and rejected completions
         chosen_rewards = self.beta * chosen_logratios.detach()
         rejected_rewards = self.beta * rejected_logratios.detach()
-        agg_chosen_rewards = self.accelerator.gather(chosen_rewards)
-        agg_rejected_rewards = self.accelerator.gather(rejected_rewards)
-        self._metrics[mode]["rewards/chosen"].append(agg_chosen_rewards.mean().item())
-        self._metrics[mode]["rewards/rejected"].append(agg_rejected_rewards.mean().item())
+        num_pairs = torch.tensor(float(chosen_rewards.numel()), device=chosen_rewards.device)
+        stats["rewards/chosen"] += torch.stack([chosen_rewards.sum(), num_pairs])
+        stats["rewards/rejected"] += torch.stack([rejected_rewards.sum(), num_pairs])
 
         # Reward accuracy
         reward_accuracies = (chosen_rewards > rejected_rewards).float()
-        agg_reward_accuracies = self.accelerator.gather(reward_accuracies)
-        self._metrics[mode]["rewards/accuracies"].append(agg_reward_accuracies.mean().item())
+        stats["rewards/accuracies"] += torch.stack([reward_accuracies.sum(), num_pairs])
 
         # Reward margins
         margins = chosen_rewards - rejected_rewards
-        agg_margins = self.accelerator.gather(margins)
-        self._metrics[mode]["rewards/margins"].append(agg_margins.mean().item())
+        stats["rewards/margins"] += torch.stack([margins.sum(), num_pairs])
 
         # Average log probabilities for chosen and rejected completions
-        self._metrics[mode]["logps/chosen"].append(self.accelerator.gather(chosen_logps).mean().item())
-        self._metrics[mode]["logps/rejected"].append(self.accelerator.gather(rejected_logps).mean().item())
+        stats["logps/chosen"] += torch.stack([chosen_logps.detach().sum(), num_pairs])
+        stats["logps/rejected"] += torch.stack([rejected_logps.detach().sum(), num_pairs])
 
         return (loss, outputs) if return_outputs else loss
 
@@ -1774,14 +1751,29 @@ class DPOTrainer(_BaseTrainer):
 
     def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
         mode = "train" if self.model.training else "eval"
-        metrics = {key: sum(val) / len(val) for key, val in self._metrics[mode].items()}  # average the metrics
+
+        # Sum every `(total, count)` pair across ranks in a single collective, then divide. Keys are sorted so that
+        # all ranks stack them in the same order.
+        metrics = {}
+        stats = self._metric_stats[mode]
+        if stats:
+            keys = sorted(stats)
+            values = torch.stack([stats[key].double() for key in keys])
+            totals = dict(zip(keys, self.accelerator.reduce(values, reduction="sum").tolist(), strict=True))
+            metrics = {key: total / count if count > 0 else 0.0 for key, (total, count) in totals.items()}
+            # `num_tokens` is a running total, so it takes the pair's total instead of the ratio. It only advances
+            # on a train-mode log, so an eval log in between can lag by up to one logging window.
+            if mode == "train" and "num_tokens" in totals:
+                self._total_train_tokens += int(totals["num_tokens"][0])
+            metrics["num_tokens"] = self._total_train_tokens
+
         # This method can be called both in training and evaluation. When called in evaluation, the keys in `logs`
         # start with "eval_". We need to add the prefix "eval_" to the keys in `metrics` to match the format.
         if mode == "eval":
             metrics = {f"eval_{key}": val for key, val in metrics.items()}
         logs.update(metrics)
         super().log(logs, start_time)
-        self._metrics[mode].clear()
+        self._metric_stats[mode].clear()
 
     # During eval, Trainer calls prediction_step. If no labels are present in the inputs, it only runs forward and
     # returns logits. We override prediction_step to force compute_loss, because this trainer doesn't involve labels.
