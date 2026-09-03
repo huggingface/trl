@@ -1231,7 +1231,7 @@ class GRPOTrainer(_BaseTrainer):
             # transforming the stream instead (see `repeat_iterable_dataset`). The full permutation done by
             # RepeatSampler becomes a buffered shuffle here.
             if self.shuffle_dataset:
-                dataset = dataset.shuffle(seed=self.args.seed)
+                dataset = dataset.shuffle(seed=self._sampler_seed)
             dataset = repeat_iterable_dataset(
                 dataset,
                 mini_repeat_count=self.num_generations,
@@ -1335,7 +1335,7 @@ class GRPOTrainer(_BaseTrainer):
                     "`accelerator_config`. Please set it to `False`."
                 )
             self.accelerator.dataloader_config.dispatch_batches = False
-            eval_dataset = eval_dataset.shuffle(seed=self.args.seed)
+            eval_dataset = eval_dataset.shuffle(seed=self._sampler_seed)
             eval_dataset = repeat_iterable_dataset(eval_dataset, mini_repeat_count=self.num_generations_eval)
             # Force a single worker for this loader only, without persisting the change
             num_workers = self.args.dataloader_num_workers
