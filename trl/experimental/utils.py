@@ -15,6 +15,7 @@
 # This file contains utility classes and functions that are used across more than one experimental trainer or feature.
 
 import inspect
+import json
 import logging
 from copy import deepcopy
 from dataclasses import dataclass
@@ -278,6 +279,14 @@ class DataCollatorForChatML:
     max_length: int = None
     prompt_key: str = "prompt"
     messages_key: str = "messages"
+    # Forward the raw prompt message lists as `"prompt"` (and the raw example dicts as `"reset_kwargs"`) in the batch.
+    # GOLD sets this when training with tools so the on-policy path can re-render prompts with tool schemas and
+    # environment observations before generation, and pass per-rollout kwargs to `environment.reset`.
+    forward_prompt_messages: bool = False
+    # Chat template override for every render in this collator. GOLD sets this to the prefix-preserving training
+    # template when training with tools and the tokenizer's own template is not prefix-preserving (e.g. Qwen3 drops
+    # historical `<think>` blocks, which would shift the incremental tool-span scan in `_tool_byte_ranges`).
+    chat_template: str | None = None
 
     def __post_init__(self):
         if self.tokenizer.pad_token_id is None:
@@ -293,19 +302,58 @@ class DataCollatorForChatML:
         prompt_attention_mask = []
         labels = []
         byte_offsets: list[list[tuple[int, int]]] = []
+        prompt_messages: list[list[dict]] = []
 
         for example in examples:
-            formatted_prompt = example.get(self.prompt_key, example.get("original_prompt_text", None))
-            if formatted_prompt is None:
-                prompt = example[self.messages_key][:-1]
-                formatted_prompt = self.tokenizer.apply_chat_template(
-                    prompt, add_generation_prompt=True, tokenize=False
+            tools = example.get("tools")
+            tools = json.loads(tools) if isinstance(tools, str) else tools
+            example_tool_ranges: list[tuple[int, int]] = []
+
+            # With tools, the completion spans every assistant/tool turn (multi-turn tool calling), so the prompt is
+            # everything up to the first assistant turn — not just `messages[:-1]`. Tool-result messages inside the
+            # completion are masked below.
+            if tools is not None and self.messages_key in example:
+                messages = example[self.messages_key]
+                first_assistant = next(
+                    (i for i, m in enumerate(messages) if m.get("role") == "assistant"), max(len(messages) - 1, 0)
                 )
+                formatted_prompt = self.tokenizer.apply_chat_template(
+                    messages[:first_assistant],
+                    tools=tools,
+                    add_generation_prompt=True,
+                    tokenize=False,
+                    chat_template=self.chat_template,
+                )
+            else:
+                first_assistant = None
+                formatted_prompt = example.get(self.prompt_key, example.get("original_prompt_text", None))
+                if formatted_prompt is None:
+                    prompt = example[self.messages_key][:-1]
+                    formatted_prompt = self.tokenizer.apply_chat_template(
+                        prompt, add_generation_prompt=True, tokenize=False, chat_template=self.chat_template
+                    )
+
+            if self.forward_prompt_messages:
+                if self.messages_key in example:
+                    messages = example[self.messages_key]
+                    boundary = first_assistant if first_assistant is not None else len(messages) - 1
+                    prompt_messages.append(messages[:boundary])
+                elif isinstance(example.get(self.prompt_key), list):
+                    prompt_messages.append(example[self.prompt_key])
+                else:
+                    raise ValueError(
+                        "Forwarding prompt messages requires conversational examples: a `messages` column or a "
+                        "conversational `prompt` column (list of messages)."
+                    )
 
             if "input_ids" not in example:
                 message = example[self.messages_key]
                 formatted_message = self.tokenizer.apply_chat_template(
-                    message, add_generation_prompt=False, tokenize=False
+                    message,
+                    tools=tools,
+                    add_generation_prompt=False,
+                    tokenize=False,
+                    chat_template=self.chat_template,
                 )
                 if is_byte_level_tokenizer(self.tokenizer.backend_tokenizer):
                     [(message_input_ids_full, full_offs)] = encode_with_byte_offsets(
@@ -352,6 +400,16 @@ class DataCollatorForChatML:
                 completion_offs = [(s - base, e - base) for s, e in kept_completion_offs]
                 sample_offs = [(0, 0)] * current_prompt_len + completion_offs
 
+                # Completion-relative byte spans of tool-result messages, used to mask the tool-result tokens out of
+                # the labels below.
+                if first_assistant is not None:
+                    if not is_byte_level_tokenizer(self.tokenizer.backend_tokenizer):
+                        raise NotImplementedError(
+                            "Tool masking in DataCollatorForChatML requires a ByteLevel tokenizer (needed for "
+                            "byte-offset alignment). The provided tokenizer is not ByteLevel."
+                        )
+                    example_tool_ranges = self._tool_byte_ranges(messages, first_assistant, tools, prompt_byte_len)
+
                 input_ids.append(sample_ids)
                 attention_mask.append([1] * len(sample_ids))
                 current_prompt_ids = sample_ids[:current_prompt_len]
@@ -389,6 +447,21 @@ class DataCollatorForChatML:
 
             label = [self.ignore_index] * len(sample_ids)
             label[len(current_prompt_ids) :] = sample_ids[len(current_prompt_ids) :]
+            # Mask tool-result tokens: a completion token is a tool result when its byte span overlaps any
+            # tool-message range. `sample_offs` holds completion-relative byte spans (prompt zeroed); tool ranges are
+            # only computed in the raw-messages branch, where `sample_offs` is defined.
+            if example_tool_ranges:
+                for pos in range(len(current_prompt_ids), len(sample_ids)):
+                    start, end = sample_offs[pos]
+                    if any(start < r_end and end > r_start for r_start, r_end in example_tool_ranges):
+                        label[pos] = self.ignore_index
+            # Pretokenized path: the tool-result mask was precomputed during dataset prep (byte offsets aren't
+            # recomputed here). `tool_mask[pos] == 0` marks a tool-result token to drop from the loss.
+            example_tool_mask = example.get("tool_mask")
+            if example_tool_mask is not None:
+                for pos in range(len(current_prompt_ids), len(sample_ids)):
+                    if not example_tool_mask[pos]:
+                        label[pos] = self.ignore_index
             labels.append(label)
 
         input_ids = pad(
@@ -428,7 +501,45 @@ class DataCollatorForChatML:
         if "original_prompt_text" in examples[0] and "original_completion_text" in examples[0]:
             out["original_prompt_text"] = [ex["original_prompt_text"] for ex in examples]
             out["original_completion_text"] = [ex["original_completion_text"] for ex in examples]
+        if self.forward_prompt_messages:
+            out["prompt"] = prompt_messages
+            # Forward the raw example dicts so the on-policy tool path can pass them to `environment.reset(**kwargs)`
+            # per-rollout, mirroring the VLM path and GRPO. The environment `reset` protocol accepts `**kwargs`.
+            out["reset_kwargs"] = list(examples)
         return out
+
+    def _tool_byte_ranges(
+        self, messages: list[dict], first_assistant: int, tools: Any, prompt_byte_len: int
+    ) -> list[tuple[int, int]]:
+        """Completion-relative UTF-8 byte spans of tool-result (`role == "tool"`) messages.
+
+        Locates each tool message's rendered span via incremental prefix rendering (requires a prefix-preserving chat
+        template), then rebases to completion bytes by subtracting the prompt byte length.
+        """
+        ranges: list[tuple[int, int]] = []
+        prev_len = len(
+            self.tokenizer.apply_chat_template(
+                messages[:first_assistant],
+                tools=tools,
+                add_generation_prompt=False,
+                tokenize=False,
+                chat_template=self.chat_template,
+            ).encode("utf-8")
+        )
+        for k in range(first_assistant, len(messages)):
+            cur_len = len(
+                self.tokenizer.apply_chat_template(
+                    messages[: k + 1],
+                    tools=tools,
+                    add_generation_prompt=False,
+                    tokenize=False,
+                    chat_template=self.chat_template,
+                ).encode("utf-8")
+            )
+            if messages[k].get("role") == "tool":
+                ranges.append((prev_len - prompt_byte_len, cur_len - prompt_byte_len))
+            prev_len = cur_len
+        return ranges
 
 
 @dataclass
@@ -466,6 +577,16 @@ class DataCollatorForVisionLanguageChatML(DataCollatorMixin):
     processor: ProcessorMixin
     max_length: int | None = None
     return_tensors: str = "pt"
+    # Tool schemas/callables rendered into the prompt and used when re-rendering multi-turn tool completions. Set by
+    # GOLDTrainer when training with tools.
+    tools: list | None = None
+    # Chat template override for every render in this collator. Set by GOLDTrainer to the prefix-preserving training
+    # template when training with tools and the processor's own template is not prefix-preserving (which would shift
+    # the incremental tool-span scan in `_tool_token_ranges`).
+    chat_template: str | None = None
+    # Extra kwargs for every render in this collator. Synced from `GOLDTrainer.chat_template_kwargs` at collation
+    # time so the loss is computed on the same rendering the generation paths use.
+    chat_template_kwargs: dict | None = None
 
     def torch_call(self, examples: list[dict[str, Any]]) -> dict[str, Any]:
         if "prompt" not in examples[0] or "completion" not in examples[0]:
@@ -509,12 +630,25 @@ class DataCollatorForVisionLanguageChatML(DataCollatorMixin):
         raw_prompt_texts = [_raw_text_from_messages(example["prompt"]) for example in examples]
         raw_completion_texts = [_raw_text_from_messages(example["completion"]) for example in examples]
 
-        # Apply chat template for conversational data
+        # Apply chat template for conversational data. Multi-turn tool completions (containing `tool`-role messages)
+        # keep a reference to their structured messages so the tool-result spans can be masked below.
+        completion_messages: list[tuple[list[dict], list[dict]] | None] = [None] * len(examples)
         if is_conversational(examples[0]):
-            for example in examples:
+            for i, example in enumerate(examples):
                 example["prompt"] = prepare_multimodal_messages(example["prompt"], images=example["images"])
                 example["completion"] = prepare_multimodal_messages(example["completion"])
-            examples = [apply_chat_template(example, self.processor) for example in examples]
+                if any(message.get("role") == "tool" for message in example["completion"]):
+                    completion_messages[i] = (example["prompt"], example["completion"])
+            examples = [
+                apply_chat_template(
+                    example,
+                    self.processor,
+                    tools=self.tools,
+                    chat_template=self.chat_template,
+                    **(self.chat_template_kwargs or {}),
+                )
+                for example in examples
+            ]
 
         prompts = [example["prompt"] for example in examples]
         completions = [example["completion"] for example in examples]
@@ -606,6 +740,17 @@ class DataCollatorForVisionLanguageChatML(DataCollatorMixin):
         labels[attention_mask == 0] = -100
         labels[completion_mask == 0] = -100
 
+        # Mask tool-result tokens for multi-turn tool completions. Ranges are indices among the completion tokens,
+        # whose relative order survives flush_left and truncation, so they can be applied through `completion_mask`.
+        for row, captured in enumerate(completion_messages):
+            if captured is None:
+                continue
+            prompt_msgs, completion_msgs = captured
+            tool_ranges = self._tool_token_ranges(prompt_msgs, completion_msgs, examples[row]["prompt"])
+            completion_positions = completion_mask[row].nonzero(as_tuple=True)[0]
+            for start, end in tool_ranges:
+                labels[row, completion_positions[start:end]] = -100
+
         # Completion-relative byte offsets for cross-tokenizer ULD. Computed from the final input_ids/labels
         # via per-token piece byte length (the same primitive the on-policy / teacher path uses), so it is
         # layout-agnostic after flush_left/truncation and shares the teacher's byte coordinate system.
@@ -655,6 +800,32 @@ class DataCollatorForVisionLanguageChatML(DataCollatorMixin):
         output["original_completion_text"] = raw_completion_texts
 
         return output
+
+    def _tool_token_ranges(
+        self, prompt_messages: list[dict], completion_messages: list[dict], rendered_prompt: str
+    ) -> list[tuple[int, int]]:
+        """Token-index ranges, in completion-token order, covering tool-result (`role == "tool"`) messages.
+
+        Renders each completion-message prefix (requires a prefix-preserving chat template) and counts its tokens, so
+        the ranges live in the same tokenization space as the collated completion tokens and can be applied through
+        `completion_mask` regardless of flush_left/truncation.
+        """
+        ranges: list[tuple[int, int]] = []
+        prev_tokens = 0
+        for k in range(len(completion_messages)):
+            rendered = self.processor.apply_chat_template(
+                prompt_messages + completion_messages[: k + 1],
+                tools=self.tools,
+                tokenize=False,
+                chat_template=self.chat_template,
+                **(self.chat_template_kwargs or {}),
+            )
+            continuation = rendered[len(rendered_prompt) :]
+            num_tokens = len(self.processor(text=[continuation], add_special_tokens=False)["input_ids"][0])
+            if completion_messages[k].get("role") == "tool":
+                ranges.append((prev_tokens, num_tokens))
+            prev_tokens = num_tokens
+        return ranges
 
 
 def truncate_right(
