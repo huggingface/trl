@@ -294,27 +294,25 @@ class TestSFTTrainer(TrlTestCase):
 
     @require_torch_accelerator
     def test_warns_when_string_model_loads_fp32_under_mixed_precision(self, caplog):
-        # With mixed precision enabled and no explicit dtype, a string model loads in float32 under autocast
-        # (issue #5138). The warning is emitted at construction time, by the helper in trl.trainer.utils.
-        # The helper fires on bf16 OR fp16, so pick whichever the accelerator supports: `bf16=True` needs Ampere
-        # or newer and would raise "Your setup doesn't support bf16/gpu" on the pre-Ampere GPUs used in CI.
+        # With bf16 enabled and no explicit dtype, a string model loads in float32 under autocast (issue #5138). The
+        # warning is emitted at construction time, by the helper in trl.trainer.utils. It fires for bf16 only, and
+        # `bf16=True` needs Ampere or newer: on a pre-Ampere GPU the config itself raises, so the test skips there.
+        if not is_bf16_supported():
+            pytest.skip("bf16 training is not supported on this accelerator")
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
-        bf16 = is_bf16_supported()
-        args = SFTConfig(output_dir=self.tmp_dir, bf16=bf16, fp16=not bf16, report_to="none")
+        args = SFTConfig(output_dir=self.tmp_dir, bf16=True, report_to="none")
         with caplog.at_level("WARNING", logger="trl.trainer.utils"):
             SFTTrainer(model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=args, train_dataset=dataset)
         assert "float32" in caplog.text
 
     @require_torch_accelerator
     def test_no_fp32_warning_when_dtype_is_explicit(self, caplog):
-        # Passing an explicit dtype is a deliberate choice and must not trigger the #5138 warning. Mixed precision
-        # must still be ON, otherwise the assertion below would hold vacuously; see the note on bf16/fp16 above.
+        # Passing an explicit dtype is a deliberate choice and must not trigger the #5138 warning. bf16 must still be
+        # ON, otherwise the assertion below would hold vacuously; see the note on bf16 support above.
+        if not is_bf16_supported():
+            pytest.skip("bf16 training is not supported on this accelerator")
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
-        bf16 = is_bf16_supported()
-        dtype = "bfloat16" if bf16 else "float16"
-        args = SFTConfig(
-            output_dir=self.tmp_dir, bf16=bf16, fp16=not bf16, model_init_kwargs={"dtype": dtype}, report_to="none"
-        )
+        args = SFTConfig(output_dir=self.tmp_dir, bf16=True, model_init_kwargs={"dtype": "bfloat16"}, report_to="none")
         with caplog.at_level("WARNING", logger="trl.trainer.utils"):
             SFTTrainer(model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=args, train_dataset=dataset)
         assert "float32" not in caplog.text

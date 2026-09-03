@@ -42,6 +42,7 @@ from ...trainer.utils import (
     get_config_model_id,
     pad,
     selective_log_softmax,
+    warn_if_fp32_with_mixed_precision,
 )
 from .tpo_config import TPOConfig
 
@@ -325,6 +326,8 @@ class TPOTrainer(_BaseTrainer):
             if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 model_init_kwargs["device_map"] = None
             model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
+            # Warn if the model will load in fp32 under mixed precision (see warn_if_fp32_with_mixed_precision)
+            warn_if_fp32_with_mixed_precision(args, model_init_kwargs)
             model = create_model_from_path(model, **model_init_kwargs)
         else:
             if args.model_init_kwargs is not None:

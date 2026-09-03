@@ -1196,49 +1196,51 @@ def create_model_from_path(
 
 
 def warn_if_fp32_with_mixed_precision(args, model_init_kwargs: dict | None) -> None:
-    """Warn when a string model would be loaded in float32 while mixed-precision training is enabled.
+    """Warn when a string model would be loaded in float32 while bf16 mixed-precision training is enabled.
 
     When a model is passed as a path/identifier, it is loaded via [`create_model_from_path`], which defaults `dtype` to
-    `"float32"` unless the user sets it explicitly in `model_init_kwargs`. If bf16 or fp16 (mixed precision) training
-    is also enabled, the result is float32 master weights with autocast, which can differ noticeably from pure
-    low-precision training. This is silent and easy to miss, so emit a hint pointing to `model_init_kwargs={"dtype":
-    ...}`.
+    `"float32"` unless the user sets it explicitly in `model_init_kwargs`. If bf16 (mixed precision) training is also
+    enabled, the result is float32 master weights with autocast, which can differ noticeably from pure bf16 training.
+    This is silent and easy to miss, so emit a hint pointing to `model_init_kwargs={"dtype": "bfloat16"}`.
+
+    fp16 is left alone on purpose: fp16 mixed precision runs a `GradScaler`, which refuses to unscale float16
+    parameters ("Attempting to unscale FP16 gradients"), so float32 master weights are the only working setup there and
+    a hint to load in float16 would break full fine-tuning.
 
     The warning keys on the dtype the model will actually load in, not on whether the caller spelled the key out. Every
     TRL script forwards `ModelConfig.dtype`, which defaults to `"float32"`, so a check for the key's absence would stay
-    silent on exactly the command-line runs this warning exists for. `"auto"` and the low-precision dtypes are
-    deliberate choices and stay silent. It is applied only to the trainable (policy) model load; reference models are
-    frozen and not optimized, so loading them in float32 raises no mixed-precision training concern.
+    silent on exactly the command-line runs this warning exists for. `"auto"` and `None` defer to the checkpoint and
+    the low-precision dtypes are deliberate choices, so all of them stay silent. It is applied only to the trainable
+    (policy) model load; reference models are frozen and not optimized, so loading them in float32 raises no
+    mixed-precision training concern.
 
     Quantized loads are skipped as well. Under a `quantization_config` the weights are stored in the quantized format
     (nf4 for a 4-bit QLoRA load, say) rather than in `dtype`, and the compute precision comes from the quantization
     config itself (`bnb_4bit_compute_dtype`), so both the "loaded in float32" diagnosis and the suggested `dtype` fix
-    would be wrong there.
+    would be wrong there. Only a `quantization_config` passed through `model_init_kwargs` is seen; a checkpoint that is
+    quantized through its own `config.json` still gets the warning.
 
     Args:
-        args ([`SFTConfig`], [`DPOConfig`], [`GRPOConfig`], [`RLOOConfig`], or [`RewardConfig`]):
-            The trainer configuration. Read for `bf16` / `fp16` flags.
+        args ([`~transformers.TrainingArguments`]):
+            The trainer configuration. Read for the `bf16` flag.
         model_init_kwargs (`dict`, *optional*):
             The keyword arguments that will be forwarded to the model loader. Inspected for `dtype` and for a
             `quantization_config`.
     """
-    mixed_precision = bool(args.bf16) or bool(args.fp16)
     kwargs = model_init_kwargs or {}
-    quantized = "quantization_config" in kwargs
+    quantized = kwargs.get("quantization_config") is not None
     # Key on the dtype the model will actually load in, not on whether the caller spelled the key out. Every TRL
     # script forwards `ModelConfig.dtype`, which defaults to "float32", so keying on the key's absence would stay
-    # silent on exactly the CLI runs this warning exists for. "auto" and the low-precision dtypes are real choices
-    # and stay silent; a missing key also lands in float32, because that is what `create_model_from_path` defaults to.
+    # silent on exactly the CLI runs this warning exists for. "auto" and None defer to the checkpoint and the
+    # low-precision dtypes are real choices, so they stay silent; a missing key lands in float32, because that is what
+    # `create_model_from_path` defaults to.
     dtype = kwargs.get("dtype", "float32")
     loads_in_fp32 = dtype in ("float32", torch.float32)
-    if mixed_precision and loads_in_fp32 and not quantized:
-        precision = "bf16" if args.bf16 else "fp16"
-        suggested_dtype = "bfloat16" if args.bf16 else "float16"
+    if bool(args.bf16) and loads_in_fp32 and not quantized:
         logger.warning(
-            f"The model will be loaded in float32 while {precision} mixed-precision training is enabled. This "
-            "keeps float32 master weights under autocast, which can differ from pure low-precision training. To "
-            "load the model directly in low precision, pass "
-            f'e.g. `model_init_kwargs={{"dtype": "{suggested_dtype}"}}` in the trainer config.'
+            "The model will be loaded in float32 while bf16 mixed-precision training is enabled. This keeps float32 "
+            "master weights under autocast, which can differ from pure bf16 training. To load the model directly in "
+            'bf16, pass e.g. `model_init_kwargs={"dtype": "bfloat16"}` in the trainer config.'
         )
 
 

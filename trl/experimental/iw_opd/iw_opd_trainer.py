@@ -46,7 +46,14 @@ from ...import_utils import is_vllm_available
 from ...models import prepare_deepspeed
 from ...models.utils import _ForwardRedirection, unwrap_model_for_generation
 from ...trainer.base_trainer import _BaseTrainer
-from ...trainer.utils import RepeatSampler, create_model_from_path, disable_dropout_in_model, pad, split_tensor_dict
+from ...trainer.utils import (
+    RepeatSampler,
+    create_model_from_path,
+    disable_dropout_in_model,
+    pad,
+    split_tensor_dict,
+    warn_if_fp32_with_mixed_precision,
+)
 from .iw_opd_config import IWOPDConfig
 
 
@@ -429,6 +436,8 @@ class IWOPDTrainer(_BaseTrainer):
             # Distributed training requires device_map=None ("auto" fails)
             if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 model_init_kwargs["device_map"] = None
+            # Warn if the model will load in fp32 under mixed precision (see warn_if_fp32_with_mixed_precision)
+            warn_if_fp32_with_mixed_precision(args, model_init_kwargs)
             model = create_model_from_path(model, **model_init_kwargs)
         else:
             model_name_or_path = model.config._name_or_path if model is not None else None

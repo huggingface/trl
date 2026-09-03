@@ -27,7 +27,7 @@ import transformers
 from accelerate import PartialState
 from datasets import IterableDataset
 from packaging.version import Version
-from transformers import AutoConfig, AutoModelForCausalLM, PretrainedConfig
+from transformers import AutoConfig, AutoModelForCausalLM, BitsAndBytesConfig, PretrainedConfig
 from transformers.testing_utils import torch_device
 from transformers.utils import is_peft_available
 
@@ -1681,7 +1681,9 @@ class TestWarnIfFp32WithMixedPrecision(TrlTestCase):
         ("bf16", "fp16", "model_init_kwargs", "should_warn"),
         [
             (True, False, {}, True),  # bf16 on, no dtype set → silent fp32 + autocast → warn
-            (False, True, {}, True),  # fp16 on, no dtype set → warn
+            # fp16 mixed precision runs a GradScaler, which refuses float16 parameters, so float32 master weights are
+            # the only working setup there and the warning stays silent.
+            (False, True, {}, False),
             (True, False, None, True),  # model_init_kwargs is None counts as "no dtype set"
             # Every TRL script forwards `ModelConfig.dtype`, whose default is "float32", so this is what
             # the command-line runs the warning exists for actually look like. Keying on the key's
@@ -1690,10 +1692,12 @@ class TestWarnIfFp32WithMixedPrecision(TrlTestCase):
             (True, False, {"dtype": torch.float32}, True),  # the same choice spelled as a torch dtype
             (True, False, {"dtype": "bfloat16"}, False),  # already low precision, nothing to warn about
             (True, False, {"dtype": "auto"}, False),  # "auto" defers to the checkpoint, not to float32
+            (True, False, {"dtype": None}, False),  # so does None: the loader passes it through untouched
             (False, False, {}, False),  # no mixed precision → nothing to warn about
             # A quantized load stores the weights in the quantized format, not in `dtype`, and takes its compute
             # precision from the quantization config, so neither the diagnosis nor the suggested fix would apply.
-            (True, False, {"quantization_config": object()}, False),
+            (True, False, {"quantization_config": BitsAndBytesConfig(load_in_4bit=True)}, False),
+            (True, False, {"quantization_config": None}, True),  # the key alone is not a quantized load
         ],
     )
     def test_warns_only_on_silent_fp32(self, caplog, bf16, fp16, model_init_kwargs, should_warn):
@@ -1713,18 +1717,11 @@ class TestWarnIfFp32WithMixedPrecision(TrlTestCase):
             warn_if_fp32_with_mixed_precision(args, {})
         assert "model_init_kwargs" in caplog.text and "dtype" in caplog.text
 
-    # The suggested `dtype` must match the enabled precision, otherwise the hint steers an fp16 user
-    # toward bfloat16 (or vice versa). Each case is (bf16, fp16, expected_dtype).
-    @pytest.mark.parametrize(
-        ("bf16", "fp16", "expected_dtype"),
-        [
-            (True, False, "bfloat16"),
-            (False, True, "float16"),
-        ],
-    )
-    def test_suggested_dtype_matches_precision(self, caplog, bf16, fp16, expected_dtype):
+    def test_suggested_dtype_is_bfloat16(self, caplog):
+        # bf16 is the only precision the warning fires for, so bfloat16 is the only dtype it may suggest.
         PartialState()
-        args = SimpleNamespace(bf16=bf16, fp16=fp16)
+        args = SimpleNamespace(bf16=True, fp16=False)
         with caplog.at_level("WARNING", logger="trl.trainer.utils"):
             warn_if_fp32_with_mixed_precision(args, {})
-        assert f'"dtype": "{expected_dtype}"' in caplog.text
+        assert '"dtype": "bfloat16"' in caplog.text
+        assert "float16" not in caplog.text.replace("bfloat16", "")
