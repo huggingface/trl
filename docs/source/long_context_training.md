@@ -55,7 +55,7 @@ Instead of computing the logits for the whole sequence at once, we take a few hu
 
 <img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/long_context_chunked_loss.png" alt="The same computation one chunk of rows at a time, each chunk freed before the next, summing into the same loss"/>
 
-Instead of one big multiplication, we do several smaller ones. The memory saving is large enough that the loss will never be the peak again.
+One big multiplication becomes several smaller ones, and the memory saving is large enough that the loss is never the peak again.
 
 The new profile looks like this.
 
