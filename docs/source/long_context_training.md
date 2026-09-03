@@ -209,7 +209,7 @@ And that is the last of the four levers:
 
 <img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/long_context_cp_scaling.png" alt="Peak memory against sequence length on one GPU and on four with context parallelism, the four-GPU line reaching a million tokens where the single GPU stops just past 256k"/>
 
-One card stops just past 256k. Four of them take the whole million!, and land at 63.6 GB with room to spare. The sequence this guide opened with fits.
+One card stops just past 256k. Four of them take the whole million!, landing at 63.6 GB with room to spare. The sequence this guide opened with fits.
 
 > [!TIP]
 > Set `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`. At a million tokens the run above needs 63.6 GB on an 80 GB card, and still fails without it: the tensors it asks for are large and contiguous, and the allocator cannot find room for them among the blocks it already holds.
