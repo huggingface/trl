@@ -22,5 +22,8 @@ claude:
 	rm -rf .claude/skills
 	ln -snf ../.agents/skills .claude/skills
 
+# The `.agents/skills` line removes a leftover symlink from the old `make codex` setup; the tracked
+# directory is left alone.
 clean-ai:
+	[ -L .agents/skills ] && rm .agents/skills || true
 	rm -rf .claude/skills
