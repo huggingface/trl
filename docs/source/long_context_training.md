@@ -196,7 +196,7 @@ parallelism_config:
   parallelism_config_sp_size: 4
 ```
 
-The two knobs do not cross over today: `cp_size` requires FSDP2 and `sp_size` only runs under DeepSpeed. Pick the backend and the method follows. The rest of this section is the FSDP2 path, which is what the example at the top of this guide uses: those four GPUs are not independent workers on four batches, they are one group sharing a single sequence.
+The two knobs do not cross over today: `cp_size` requires FSDP2 and `sp_size` only runs under DeepSpeed. Pick the backend and the method follows. The rest of this section follows the FSDP2 path, which is what the example at the top of this guide uses: its GPUs are not independent workers on separate batches, they are one group sharing a single sequence.
 
 Two things change once it is on:
 
