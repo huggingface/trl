@@ -53,9 +53,10 @@ from ...data_utils import (
     maybe_apply_chat_template,
     prepare_multimodal_messages,
 )
+from ...distributed import DistributedBackend
 from ...extras.profiling import profiling_context
-from ...generation.vllm_client import VLLMClient
-from ...generation.vllm_generation import _check_quantization_supported, _dense_param_data
+from ...generation.vllm_client import VLLMClient, _dense_param_data
+from ...generation.vllm_generation import _check_quantization_supported
 from ...import_utils import is_vllm_available
 from ...models.utils import prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
 from ...trainer.base_trainer import _BaseTrainer
@@ -427,11 +428,14 @@ class OnlineDPOTrainer(_BaseTrainer):
                 )
 
             # Both modes push dense weights at sync time (see `_dense_param_data`), so the check runs before either
-            # branch.
-            fsdp_plugin = self.accelerator.state.fsdp_plugin if self.is_fsdp_enabled else None
-            fsdp_version = fsdp_plugin.fsdp_version if fsdp_plugin else None
-            fsdp_use_orig_params = fsdp_plugin.use_orig_params if fsdp_plugin else None
-            _check_quantization_supported(model, fsdp_version, fsdp_use_orig_params)
+            # branch. Only colocate mode builds the engine from `model.name_or_path`, where a checkpoint saved already
+            # quantized makes vLLM allocate packed weights; `hf_quantizer.pre_quantized` records whether the checkpoint
+            # was one.
+            dist = DistributedBackend(self.accelerator)
+            pre_quantized = (
+                self.vllm_mode == "colocate" and model.hf_quantizer is not None and model.hf_quantizer.pre_quantized
+            )
+            _check_quantization_supported(model, dist.fsdp_version, dist.fsdp_use_orig_params, pre_quantized)
 
             if self.vllm_mode == "server":
                 if self.accelerator.is_main_process:

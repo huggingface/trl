@@ -36,7 +36,7 @@ from ..distributed import DistributedBackend
 from ..extras.profiling import ProfilingContext
 from ..import_utils import is_vllm_available
 from ..trainer.utils import ensure_master_addr_port
-from .vllm_client import VLLMClient
+from .vllm_client import VLLMClient, _dense_param_data
 
 
 if is_vllm_available():
@@ -108,37 +108,15 @@ if is_bitsandbytes_available():
     import bitsandbytes as bnb
 
 
-def _dense_param_data(param: nn.Parameter) -> torch.Tensor:
-    """
-    Return a parameter's data as a dense tensor, dequantizing bitsandbytes 4-bit weights.
-
-    vLLM's weight loader expects a dense `[out_features, in_features]` tensor in the model dtype. A bitsandbytes 4-bit
-    base instead stores a flat packed `uint8` buffer whose scales live in `quant_state`, and reading `.data` drops that
-    `quant_state`. Pushing it unchanged therefore both mismatches the shape vLLM allocated and loses the scales
-    entirely. See https://github.com/huggingface/trl/issues/4973.
-
-    Args:
-        param (`torch.nn.Parameter`):
-            Parameter to read. Must be the parameter object rather than its `.data`, since `.data` has already
-            discarded the quantization state.
-
-    Returns:
-        `torch.Tensor`: the dense weight, dequantized when the parameter is 4-bit.
-    """
-    if is_bitsandbytes_available() and isinstance(param, bnb.nn.Params4bit):
-        return bnb.functional.dequantize_4bit(param.data, param.quant_state)
-    return param.data
-
-
 def _check_quantization_supported(
-    model: nn.Module, fsdp_version: int | None, fsdp_use_orig_params: bool | None
+    model: nn.Module, fsdp_version: int | None, fsdp_use_orig_params: bool | None, pre_quantized: bool
 ) -> None:
     """
     Raise when the model's quantization cannot survive the dense weight push into vLLM.
 
     The engine is built dense on purpose: the base may be 4-bit, but every weight is dequantized to the model dtype on
     the way out (see `_dense_param_data`), and building with `quantization="bitsandbytes"` would allocate packed
-    `[out_features, in_features // 2]` weights that reject that push. Three combinations cannot be served that way and
+    `[out_features, in_features // 2]` weights that reject that push. Four combinations cannot be served that way and
     are refused here rather than at the first sync. See https://github.com/huggingface/trl/issues/4973.
 
     Args:
@@ -153,16 +131,29 @@ def _check_quantization_supported(
             `summon_full_params`, which exposes the original `Params4bit` with its `quant_state` only when this is
             `True`; with Accelerate's default of `False` it exposes plain tensors, and the packed storage would be
             pushed as if it were the dense weight. Measured on one H100: `(16, 1)` pushed for an `(8, 8)` layer.
+        pre_quantized (`bool`):
+            Whether the engine is built from a checkpoint that was saved already quantized. vLLM reads
+            `quantization_config` from the checkpoint at `name_or_path` and then allocates the packed weights the dense
+            push cannot fill, so such a checkpoint cannot be served in colocate mode. In server mode the trainer does
+            not know what the server was started from, so callers pass `False` there.
 
     Raises:
         `ValueError`: if the model holds 8-bit layers, or 4-bit layers while `fsdp_version` is 2, or 4-bit layers while
-        `fsdp_version` is 1 and `fsdp_use_orig_params` is not `True`.
+        `fsdp_version` is 1 and `fsdp_use_orig_params` is not `True`, or 4-bit layers while `pre_quantized` is `True`.
     """
     if not is_bitsandbytes_available():
         return
     for _, module in model.named_modules():
         if isinstance(module, bnb.nn.Linear8bitLt):
             raise ValueError("vLLM does not support in-flight 8-bit quantization.")
+        if isinstance(module, bnb.nn.Linear4bit) and pre_quantized:
+            raise ValueError(
+                "vLLM colocate mode cannot serve a checkpoint that was saved already quantized with bitsandbytes: "
+                "vLLM reads `quantization_config` from the checkpoint and allocates packed weights that reject the "
+                "dense push at sync time. Load the unquantized checkpoint with "
+                "`quantization_config=BitsAndBytesConfig(load_in_4bit=True)` instead, or use server mode with a "
+                "server started from the unquantized checkpoint."
+            )
         if isinstance(module, bnb.nn.Linear4bit) and fsdp_version == 2:
             raise ValueError(
                 "vLLM weight sync does not support a 4-bit quantized base under FSDP2. Train with DeepSpeed or on a "
@@ -367,7 +358,10 @@ class VLLMGeneration:
             )
 
         # Both modes push dense weights at sync time (see `_dense_param_data`), so the check runs before either branch.
-        _check_quantization_supported(model, self._dist.fsdp_version, self._dist.fsdp_use_orig_params)
+        # Only colocate mode builds the engine from `model.name_or_path`, where a checkpoint saved already quantized
+        # makes vLLM allocate packed weights; `hf_quantizer.pre_quantized` records whether the checkpoint was one.
+        pre_quantized = self.mode == "colocate" and model.hf_quantizer is not None and model.hf_quantizer.pre_quantized
+        _check_quantization_supported(model, self._dist.fsdp_version, self._dist.fsdp_use_orig_params, pre_quantized)
 
         if self.mode == "server":
             if accelerator.is_main_process:

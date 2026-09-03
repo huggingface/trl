@@ -16,6 +16,9 @@
 
 from contextlib import contextmanager
 
+import accelerate
+from packaging.version import Version
+
 
 class DistributedBackend:
     """Abstracts distributed backend specifics (DeepSpeed ZeRO, FSDP) behind a uniform API.
@@ -42,10 +45,17 @@ class DistributedBackend:
         ds_plugin = accelerator.state.deepspeed_plugin
         fsdp_plugin = getattr(accelerator.state, "fsdp_plugin", None)
         self.zero_stage = ds_plugin.zero_stage if ds_plugin else 0
-        self.fsdp_version = getattr(fsdp_plugin, "fsdp_version", None) if fsdp_plugin else None
+        if fsdp_plugin is None:
+            self.fsdp_version = None
+        elif Version(accelerate.__version__) < Version("1.6.0"):
+            # The plugin gained `fsdp_version` together with FSDP2 support in Accelerate 1.6.0; before that FSDP1 was
+            # the only version it could configure.
+            self.fsdp_version = 1
+        else:
+            self.fsdp_version = fsdp_plugin.fsdp_version
         # FSDP1 only: whether `summon_full_params` exposes the original parameter objects (Accelerate's default is
         # `False`, which yields plain tensors and drops the bitsandbytes `quant_state`).
-        self.fsdp_use_orig_params = getattr(fsdp_plugin, "use_orig_params", None) if fsdp_plugin else None
+        self.fsdp_use_orig_params = fsdp_plugin.use_orig_params if fsdp_plugin else None
 
     @property
     def is_zero3(self) -> bool:

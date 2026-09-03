@@ -23,8 +23,9 @@ from torch import nn
 from transformers import AutoModelForCausalLM, AutoProcessor, AutoTokenizer, is_bitsandbytes_available
 from transformers.testing_utils import torch_device
 
-from trl.generation.vllm_client import VLLMClient, parse_logprobs
-from trl.generation.vllm_generation import _check_quantization_supported, _dense_param_data, extract_logprobs
+from trl.distributed import DistributedBackend
+from trl.generation.vllm_client import VLLMClient, _dense_param_data, parse_logprobs
+from trl.generation.vllm_generation import _check_quantization_supported, extract_logprobs
 from trl.import_utils import is_vllm_available
 
 from .testing_utils import (
@@ -164,41 +165,100 @@ class TestQuantizedWeightSync(TrlTestCase):
         assert out is dense
         assert calls == [(packed.data_ptr(), quant_state)]
 
+    def test_update_model_params_sends_dense_tensors_with_dense_metadata(self):
+        # `update_model_params` must describe and send the dequantized weight, not the packed `(16, 1)` uint8 storage
+        # a `Params4bit` holds. The kernel is replaced by a stand-in as above; the server call is captured.
+        packed = torch.zeros(16, 1, dtype=torch.uint8)
+        dense = torch.randn(4, 8)
+        model = nn.Module()
+        model.weight = bnb.nn.Params4bit(packed, requires_grad=False, quant_state=object())
+        model.bias = nn.Parameter(torch.zeros(4))
+        client = VLLMClient.__new__(VLLMClient)
+        sent = {}
+
+        def fake_update_named_params(metadata, named_params):
+            sent["metadata"] = metadata
+            sent["params"] = list(named_params)
+
+        with (
+            patch.object(bnb.functional, "dequantize_4bit", lambda data, state: dense),
+            patch.object(client, "update_named_params", fake_update_named_params),
+        ):
+            client.update_model_params(model)
+
+        assert sent["metadata"] == [("weight", "float32", [4, 8]), ("bias", "float32", [4])]
+        assert sent["params"][0][0] == "weight" and sent["params"][0][1] is dense
+        assert sent["params"][1][0] == "bias" and sent["params"][1][1].data_ptr() == model.bias.data.data_ptr()
+
     @pytest.mark.parametrize(
-        ("module_factory", "fsdp_version", "fsdp_use_orig_params", "expected_message"),
+        ("module_factory", "fsdp_version", "fsdp_use_orig_params", "pre_quantized", "expected_message"),
         [
             # A 4-bit base under FSDP2 cannot be dequantized: FSDP2 reads weights from `state_dict()`, which returns
             # plain tensors, so the `quant_state` holding the scales is already gone. Refuse it at build time.
-            (lambda: bnb.nn.Linear4bit(8, 8), 2, None, "4-bit quantized base under FSDP2"),
+            (lambda: bnb.nn.Linear4bit(8, 8), 2, None, False, "4-bit quantized base under FSDP2"),
             # Under FSDP1, `summon_full_params` keeps the `Params4bit` and its `quant_state` only with
             # `use_orig_params=True`; with Accelerate's default `False` (or the unresolved `None`) it exposes the packed
             # storage as a plain tensor, and that is what the sync would push.
-            (lambda: bnb.nn.Linear4bit(8, 8), 1, False, "FSDP1 with `use_orig_params=False`"),
-            (lambda: bnb.nn.Linear4bit(8, 8), 1, None, "FSDP1 with `use_orig_params=False`"),
+            (lambda: bnb.nn.Linear4bit(8, 8), 1, False, False, "FSDP1 with `use_orig_params=False`"),
+            (lambda: bnb.nn.Linear4bit(8, 8), 1, None, False, "FSDP1 with `use_orig_params=False`"),
             # vLLM has never supported in-flight 8-bit, independent of the sharding strategy.
-            (lambda: bnb.nn.Linear8bitLt(8, 8), 0, None, "8-bit quantization"),
-            (lambda: bnb.nn.Linear8bitLt(8, 8), 1, True, "8-bit quantization"),
-            (lambda: bnb.nn.Linear8bitLt(8, 8), 2, None, "8-bit quantization"),
+            (lambda: bnb.nn.Linear8bitLt(8, 8), 0, None, False, "8-bit quantization"),
+            (lambda: bnb.nn.Linear8bitLt(8, 8), 1, True, False, "8-bit quantization"),
+            (lambda: bnb.nn.Linear8bitLt(8, 8), 2, None, False, "8-bit quantization"),
+            # A checkpoint saved already quantized makes colocated vLLM read its `quantization_config` and allocate
+            # packed weights, so the dense push cannot fill them whatever the sharding is.
+            (lambda: bnb.nn.Linear4bit(8, 8), None, None, True, "saved already quantized"),
+            (lambda: bnb.nn.Linear4bit(8, 8), 1, True, True, "saved already quantized"),
             # Negative controls: every other combination reaches the dequantizing push and must be accepted.
-            (lambda: bnb.nn.Linear4bit(8, 8), 1, True, None),  # FSDP1 with the original params exposed
-            (lambda: bnb.nn.Linear4bit(8, 8), 0, None, None),  # no FSDP at all
-            (lambda: nn.Linear(8, 8), 2, None, None),  # dense base under FSDP2
-            (lambda: nn.Linear(8, 8), 1, False, None),  # dense base under FSDP1, default setting
-            (lambda: nn.Linear(8, 8), 0, None, None),  # dense base, no FSDP
+            (lambda: bnb.nn.Linear4bit(8, 8), 1, True, False, None),  # FSDP1 with the original params exposed
+            (lambda: bnb.nn.Linear4bit(8, 8), 0, None, False, None),  # no FSDP at all
+            (lambda: nn.Linear(8, 8), 2, None, False, None),  # dense base under FSDP2
+            (lambda: nn.Linear(8, 8), 1, False, False, None),  # dense base under FSDP1, default setting
+            (lambda: nn.Linear(8, 8), 0, None, False, None),  # dense base, no FSDP
+            (lambda: nn.Linear(8, 8), None, None, True, None),  # no bitsandbytes layer, so nothing to refuse
             # `DistributedBackend.fsdp_version` is `None`, not `0`, when FSDP is off, so these are the values the
             # guard actually receives in production. The `0` cases above only cover the documented sentinel.
-            (lambda: bnb.nn.Linear8bitLt(8, 8), None, None, "8-bit quantization"),
-            (lambda: bnb.nn.Linear4bit(8, 8), None, None, None),
-            (lambda: nn.Linear(8, 8), None, None, None),
+            (lambda: bnb.nn.Linear8bitLt(8, 8), None, None, False, "8-bit quantization"),
+            (lambda: bnb.nn.Linear4bit(8, 8), None, None, False, None),
+            (lambda: nn.Linear(8, 8), None, None, False, None),
         ],
     )
-    def test_check_quantization_supported(self, module_factory, fsdp_version, fsdp_use_orig_params, expected_message):
+    def test_check_quantization_supported(
+        self, module_factory, fsdp_version, fsdp_use_orig_params, pre_quantized, expected_message
+    ):
         model = nn.Sequential(module_factory())
         if expected_message is None:
-            _check_quantization_supported(model, fsdp_version, fsdp_use_orig_params)  # must not raise
+            _check_quantization_supported(model, fsdp_version, fsdp_use_orig_params, pre_quantized)  # must not raise
         else:
             with pytest.raises(ValueError, match=expected_message):
-                _check_quantization_supported(model, fsdp_version, fsdp_use_orig_params)
+                _check_quantization_supported(model, fsdp_version, fsdp_use_orig_params, pre_quantized)
+
+
+class TestDistributedBackendFsdpVersion(TrlTestCase):
+    """`fsdp_version` was added to Accelerate's FSDP plugin in 1.6.0; older plugins can only configure FSDP1."""
+
+    @staticmethod
+    def _accelerator(fsdp_plugin):
+        state = SimpleNamespace(deepspeed_plugin=None, fsdp_plugin=fsdp_plugin)
+        return SimpleNamespace(state=state)
+
+    def test_reads_fsdp_version_from_a_current_plugin(self):
+        plugin = SimpleNamespace(fsdp_version=2, use_orig_params=None)
+        with patch("trl.distributed.accelerate.__version__", "1.6.0"):
+            backend = DistributedBackend(self._accelerator(plugin))
+        assert backend.fsdp_version == 2 and backend.is_fsdp
+
+    def test_reports_fsdp1_for_a_plugin_that_predates_the_attribute(self):
+        # Accelerate < 1.6.0 exposes no `fsdp_version`; reading it would raise, and treating its absence as
+        # "no FSDP" would let a 4-bit base slip past the guard under FSDP1.
+        plugin = SimpleNamespace(use_orig_params=False)
+        with patch("trl.distributed.accelerate.__version__", "1.5.0"):
+            backend = DistributedBackend(self._accelerator(plugin))
+        assert backend.fsdp_version == 1 and backend.fsdp_use_orig_params is False
+
+    def test_reports_no_fsdp_without_a_plugin(self):
+        backend = DistributedBackend(self._accelerator(None))
+        assert backend.fsdp_version is None and backend.fsdp_use_orig_params is None and not backend.is_fsdp
 
 
 @pytest.mark.slow
