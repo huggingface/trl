@@ -744,8 +744,9 @@ class TestDPOTrainer(TrlTestCase):
         for n, param in token_ref_params.items():
             assert not torch.equal(param, model.get_parameter(n)), f"Ref token delta {n} has not changed."
 
+    @pytest.mark.parametrize("sync_ref_model", [True, False])
     @require_peft
-    def test_train_with_sync_ref_model_and_peft_bias(self):
+    def test_train_with_sync_ref_model_and_peft_bias(self, sync_ref_model):
         # A LoRA config with `bias != "none"` trains bias terms that live in the base model, so disabling the adapter
         # does not give a fixed reference, and PEFT permits only one such adapter per model, so no "ref" copy can be
         # made either. The trainer rejects the config at construction, with or without `sync_ref_model`.
@@ -754,7 +755,7 @@ class TestDPOTrainer(TrlTestCase):
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
-            sync_ref_model=True,
+            sync_ref_model=sync_ref_model,
             ref_model_sync_steps=2,  # reduce sync steps to ensure a sync happens
             report_to="none",
         )

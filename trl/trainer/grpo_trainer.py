@@ -449,21 +449,21 @@ class GRPOTrainer(_BaseTrainer):
             # model is the reference. That equivalence only holds while the reference stays fixed: with
             # `sync_ref_model=True` the reference has to track the policy, which requires parameters of its own to
             # move. So in that case create the "ref" adapter here as well.
-            needs_ref_adapter = args.sync_ref_model and args.beta != 0.0
+            uses_peft_reference = args.beta != 0.0
+            needs_ref_adapter = args.sync_ref_model and uses_peft_reference
 
         elif is_peft_model(model) and args.beta != 0.0:
+            uses_peft_reference = True
             needs_ref_adapter = True
 
         else:
+            uses_peft_reference = False
             needs_ref_adapter = False
 
-        if needs_ref_adapter:
-            # If the model is a PEFT model with a pretrained adapter, we need to create a "ref" adapter that is a copy
-            # of the "default" adapter, so that we can use it as the reference model during GRPO training. Before PEFT
-            # 0.20.0, only one adapter per model was supported when the LoRA config uses `target_parameters` (see
-            # peft#3340, fixed in peft#3350), so in that case we skip the "ref" adapter and compute the reference log
-            # probs with adapters disabled, i.e. with the base model. The fix only allows adapters targeting the same
-            # parameters, which holds here since the "ref" adapter reuses the "default" config.
+        if uses_peft_reference:
+            # The reference is the base model with the adapter disabled, or a frozen copy of the adapter. Neither is
+            # fixed when the LoRA config trains bias terms: those live in the base model, so the reference moves with
+            # the policy whether or not it is synced. Refuse the configuration on both paths.
             default_config = model.peft_config["default"]
             if isinstance(default_config, LoraConfig) and default_config.bias != "none":
                 raise ValueError(
@@ -473,7 +473,16 @@ class GRPOTrainer(_BaseTrainer):
                     "only 1 adapter with bias`), so no frozen 'ref' copy can be created either. Set `bias='none'` to "
                     "train against a copy of your adapter."
                 )
-            elif (
+
+        if needs_ref_adapter:
+            # If the model is a PEFT model with a pretrained adapter, we need to create a "ref" adapter that is a copy
+            # of the "default" adapter, so that we can use it as the reference model during GRPO training. Before PEFT
+            # 0.20.0, only one adapter per model was supported when the LoRA config uses `target_parameters` (see
+            # peft#3340, fixed in peft#3350), so in that case we skip the "ref" adapter and compute the reference log
+            # probs with adapters disabled, i.e. with the base model. The fix only allows adapters targeting the same
+            # parameters, which holds here since the "ref" adapter reuses the "default" config.
+            default_config = model.peft_config["default"]
+            if (
                 isinstance(default_config, LoraConfig)
                 and default_config.target_parameters
                 and Version(peft.__version__) < Version("0.20.0")
