@@ -266,10 +266,18 @@ class VLLMClient:
                 attempt and then gives up, so that attempt is still bounded by `retry_interval` rather than by the
                 deadline.
             retry_interval (`float`, *optional*, defaults to `2.0`):
-                Interval in seconds between retries, and the upper bound on how long any single attempt may take.
+                Interval in seconds between retries, and the upper bound on how long any single attempt may take. Must
+                be positive. `requests` applies it to the connect and to each read separately, so a server that keeps
+                sending bytes can hold one attempt past it.
         """
+        if retry_interval <= 0.0:
+            raise ValueError(f"`retry_interval` must be positive, got {retry_interval}: it bounds every attempt.")
         url = f"{self.base_url}/health"
         start_time = time.monotonic()  # Deadlines use the monotonic clock so a system clock change cannot move them
+        not_ready = (
+            f"The vLLM server at {self.base_url} was not ready within {total_timeout} seconds. Make sure the server "
+            "is running by running `vllm serve`, and that it has finished loading."
+        )
 
         while True:
             # Bound each probe by the retry interval so a server that accepts the connection and then stalls cannot
@@ -296,15 +304,16 @@ class VLLMClient:
             # branch is what bounds that case.
             elapsed_time = time.monotonic() - start_time
             if elapsed_time >= total_timeout:
-                raise ConnectionError(
-                    f"The vLLM server at {self.base_url} was not ready within {total_timeout} seconds. Make sure "
-                    "the server is running by running `vllm serve`, and that it has finished loading."
-                ) from cause
+                raise ConnectionError(not_ready) from cause
 
-            # Retry logic: wait before trying again, never past the deadline
+            # Retry logic: wait before trying again, never past the deadline. The sleep can still land on the
+            # deadline, and a probe started then would run for a full `retry_interval` and could accept a server that
+            # came up after the budget, so check once more before probing.
             delay = min(retry_interval, total_timeout - elapsed_time)
             logger.info(f"Server is not up yet. Retrying in {delay} seconds...")
             time.sleep(delay)
+            if time.monotonic() - start_time >= total_timeout:
+                raise ConnectionError(not_ready) from cause
 
     def get_world_size(self) -> int:
         """

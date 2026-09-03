@@ -137,10 +137,12 @@ class TestCheckServerHealthProbe(TrlTestCase):
     """`check_server` must give up after `total_timeout` whenever the server is not up, however it fails."""
 
     # A retry interval far larger than the deadline: every guard that must clamp to the remaining budget shows up
-    # as the difference between finishing near TOTAL_TIMEOUT and finishing near RETRY_INTERVAL. Asserting against
-    # RETRY_INTERVAL / 2 keeps the bound derived from these two values rather than a hand-picked constant.
+    # as the difference between finishing near TOTAL_TIMEOUT and finishing near RETRY_INTERVAL. The bound is the
+    # deadline plus an allowance for socket setup on a loaded runner, so a probe that ignored the deadline and used
+    # any fixed timeout of a second or more fails it as well.
     TOTAL_TIMEOUT = 0.1
     RETRY_INTERVAL = 5.0
+    ALLOWANCE = 0.5
 
     @staticmethod
     def _client_for(port: int) -> VLLMClient:
@@ -150,10 +152,19 @@ class TestCheckServerHealthProbe(TrlTestCase):
         return client
 
     @staticmethod
-    def _serve(status: int) -> tuple[socketserver.TCPServer, threading.Thread]:
-        # Parameterised over the status code so the healthy and the not-ready cases share one server.
+    def _serve(*statuses: int, delay_before_last: float = 0.0) -> tuple[socketserver.TCPServer, threading.Thread]:
+        # One status per request in order, the last one repeated; the last one can be held back by a delay so a test
+        # can place a healthy answer after the deadline.
+        remaining = list(statuses)
+
         class Handler(http.server.BaseHTTPRequestHandler):
             def do_GET(self):
+                if len(remaining) > 1:
+                    status = remaining.pop(0)
+                else:
+                    status = remaining[0]
+                    time.sleep(delay_before_last)
+                self.server.requests_seen += 1
                 self.send_response(status)
                 self.end_headers()
 
@@ -161,6 +172,7 @@ class TestCheckServerHealthProbe(TrlTestCase):
                 pass
 
         httpd = socketserver.TCPServer(("127.0.0.1", 0), Handler)
+        httpd.requests_seen = 0
         thread = threading.Thread(target=httpd.serve_forever, daemon=True)
         thread.start()
         return httpd, thread
@@ -178,7 +190,7 @@ class TestCheckServerHealthProbe(TrlTestCase):
             with pytest.raises(requests.exceptions.ConnectionError):
                 client.check_server(total_timeout=self.TOTAL_TIMEOUT, retry_interval=self.RETRY_INTERVAL)
             elapsed = time.time() - start
-            assert elapsed < self.RETRY_INTERVAL / 2, (
+            assert elapsed < self.TOTAL_TIMEOUT + self.ALLOWANCE, (
                 f"check_server took {elapsed:.3f}s against a stalled server: the probe is bounded by the retry "
                 f"interval instead of the {self.TOTAL_TIMEOUT}s deadline"
             )
@@ -195,7 +207,7 @@ class TestCheckServerHealthProbe(TrlTestCase):
             with pytest.raises(requests.exceptions.ConnectionError):
                 client.check_server(total_timeout=self.TOTAL_TIMEOUT, retry_interval=self.RETRY_INTERVAL)
             elapsed = time.time() - start
-            assert elapsed < self.RETRY_INTERVAL / 2, (
+            assert elapsed < self.TOTAL_TIMEOUT + self.ALLOWANCE, (
                 f"check_server took {elapsed:.3f}s against a server answering 503: it slept the full retry "
                 f"interval instead of stopping at the {self.TOTAL_TIMEOUT}s deadline"
             )
@@ -213,6 +225,40 @@ class TestCheckServerHealthProbe(TrlTestCase):
             httpd.shutdown()
             httpd.server_close()
             thread.join(timeout=5.0)
+
+    def test_server_that_becomes_ready_is_accepted_on_retry(self):
+        # 503 once, then 200 within the budget: the loop must retry rather than give up on the first non-200, which
+        # is the case a single-attempt implementation gets wrong.
+        httpd, thread = self._serve(503, 200)
+        try:
+            client = self._client_for(httpd.server_address[1])
+            client.check_server(total_timeout=5.0, retry_interval=0.05)  # must return without raising
+            assert httpd.requests_seen == 2
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+            thread.join(timeout=5.0)
+
+    def test_no_probe_starts_after_the_deadline(self):
+        # 503 once, then a 200 held back until after the deadline but inside one retry interval. The retry sleep is
+        # clamped to the deadline, so the second probe would start right on it; a probe started there runs for a
+        # full `retry_interval` and accepts the late 200. The deadline must be checked again before probing.
+        httpd, thread = self._serve(503, 200, delay_before_last=0.15)
+        try:
+            client = self._client_for(httpd.server_address[1])
+            with pytest.raises(requests.exceptions.ConnectionError):
+                client.check_server(total_timeout=self.TOTAL_TIMEOUT, retry_interval=0.2)
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+            thread.join(timeout=5.0)
+
+    def test_non_positive_retry_interval_is_rejected(self):
+        # `retry_interval` bounds every attempt, so zero cannot bound anything; `requests` would raise its own
+        # `ValueError` about a zero timeout from inside the loop otherwise.
+        client = self._client_for(9)
+        with pytest.raises(ValueError, match="retry_interval"):
+            client.check_server(total_timeout=self.TOTAL_TIMEOUT, retry_interval=0.0)
 
 
 @pytest.mark.slow
