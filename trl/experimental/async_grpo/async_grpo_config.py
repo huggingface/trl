@@ -58,7 +58,9 @@ class AsyncGRPOConfig(_BaseConfig):
         max_completion_length (`int`, *optional*, defaults to `2048`):
             Maximum length of the generated completion.
         temperature (`float`, *optional*, defaults to `1.0`):
-            Temperature for sampling. The higher the temperature, the more random the completions.
+            Temperature for sampling. The higher the temperature, the more random the completions. Any positive value
+            below `0.01` is raised to `0.01` by vLLM while the trainer keeps the requested value, which biases the
+            importance ratio, so a warning is raised for it.
         top_p (`float`, *optional*, defaults to `1.0`):
             Float that controls the cumulative probability of the top tokens to consider. Must be in (0, 1]. Set to 1.0
             to consider all tokens. Moving it off 1.0 biases the importance ratio: the server TRL prescribes runs with
@@ -245,7 +247,11 @@ class AsyncGRPOConfig(_BaseConfig):
     )
     temperature: float = field(
         default=1.0,
-        metadata={"help": "Temperature for sampling. The higher the temperature, the more random the completions."},
+        metadata={
+            "help": "Temperature for sampling. The higher the temperature, the more random the completions. Any positive "
+            "value below 0.01 is raised to 0.01 by vLLM while the trainer keeps the requested value, which biases the "
+            "importance ratio, so a warning is raised for it."
+        },
     )
     top_p: float = field(
         default=1.0,
@@ -408,11 +414,22 @@ class AsyncGRPOConfig(_BaseConfig):
         # min_p truncate the support and renormalize, so the ratio reads the surviving mass S; `repetition_penalty`
         # rescales the logits of already-seen tokens without truncating anything, so it moves the ratio by the rescaling
         # instead. Unlike GRPO there is no importance-sampling correction to turn off, so the only lever is the
-        # sampling parameters themselves. `temperature` is excluded: the trainer scales its own logits by it, so it
-        # cancels, except below vLLM's greedy threshold (1e-5 in its `SamplingParams`), where vLLM skips temperature
-        # scaling altogether while the trainer still divides; that constant belongs to vLLM, so it is not checked. One
-        # more limit: `top_k` at or above the vocabulary size is disabled by vLLM but still warns here, since the config
-        # does not know the vocabulary size.
+        # sampling parameters themselves. `temperature` cancels as long as both sides use the same value: the trainer
+        # scales its own logits by it, and so does vLLM. vLLM's `SamplingParams` raises any `0 < temperature < 0.01`
+        # to 0.01 and treats anything below 1e-5 as greedy, while the trainer keeps dividing by the requested value, so
+        # in that band the two sides disagree on every token and the ratio is biased again. That band is checked
+        # separately below; the two vLLM constants are copied here, not imported, since vLLM is not a dependency of
+        # this config. One more limit: `top_k` at or above the vocabulary size is disabled by vLLM but still warns
+        # here, since the config does not know the vocabulary size.
+        if 0.0 < self.temperature < 0.01:
+            warnings.warn(
+                f"`temperature={self.temperature}` is below 0.01, which vLLM raises to 0.01 (and treats as greedy below "
+                "1e-5) while the trainer keeps dividing its logits by the requested value. The two sides then disagree "
+                "on every token and the importance ratio `exp(log_probs - old_log_probs)` is biased for an unchanged "
+                "policy. Use `temperature >= 0.01`.",
+                UserWarning,
+                stacklevel=3,
+            )
         reshaping = [
             name
             for name, active in (
