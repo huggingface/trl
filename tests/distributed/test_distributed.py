@@ -509,7 +509,7 @@ class TestDistributed(TrlTestCase):
         # Perf-regression guard for the PR #6077 class: a chunked cross-entropy path must NOT re-gather the
         # sharded `lm_head.weight` once per token chunk under FSDP2 (correct loss, silently slow, invisible
         # to a pass/fail test). The companion worker runs one SFT `chunked_nll` step under a 2-process FSDP2
-        # group (reshard_after_forward=True — the condition that triggers the bug) and counts the all-gather
+        # group (reshard_after_forward=True, the condition that triggers the bug) and counts the all-gather
         # collectives during that step from a counting-only `TorchDispatchMode` (required because under FSDP2
         # the parameter unshard is driven by autograd hooks / c10d collectives, not by
         # `DTensor.full_tensor()`).
@@ -548,9 +548,10 @@ class TestDistributed(TrlTestCase):
             )
             return json.loads(lines[0][len(prefix) :].strip())
 
-        # Baseline run: one token chunk => regression signal = 0, so `all_gathers` is the pure FSDP2 unshard
-        # baseline B. B is chunk-independent (set by the model's parameter/sharding structure), so it is also
-        # the count the fixed probe run should land on. Measuring it — rather than assuming it — is what makes
+        # Baseline run: one token chunk => regression signal = 0, so `all_gathers` is the baseline B: FSDP2's
+        # parameter unshards plus the trainer's metric gathers. B is chunk-independent (set by the model's
+        # parameter/sharding structure and the fixed metric code), so it is also the count the fixed probe run
+        # should land on. Measuring it, rather than assuming it, is what makes
         # the regression bound sound even when B is large relative to the token-chunk count.
         baseline = _run("baseline")
         assert baseline["loss_finite"], f"baseline chunked_nll loss not finite under FSDP2: {baseline}"
@@ -558,14 +559,15 @@ class TestDistributed(TrlTestCase):
             f"baseline run was expected to execute exactly one token chunk (regression signal = 0): {baseline}"
         )
         baseline_gathers = baseline["all_gathers"]
-        # Instrument-liveness guard. The bound below compares the probe against this baseline, so if the counter
-        # observed nothing — a blind probe, or a model that never actually got sharded — both runs would report 0,
-        # the excess would be 0, and the regression assertion would pass without exercising the failure mode at all.
-        # FSDP2 must unshard the parameters at least once per forward/backward, so a genuinely sharded run always
-        # records some all-gathers (10 on the 2xH100 reference run).
-        assert baseline_gathers > 0, (
-            f"no all-gather collectives observed in the baseline run, so the regression bound would be vacuous: the "
-            f"probe is not seeing FSDP2's parameter unshard (is the model actually sharded?): {baseline}"
+        # Sharding guard. The bound below compares the probe against this baseline, so if the model never got
+        # sharded both runs would report the same count, the excess would be 0, and the regression assertion
+        # would pass without exercising the failure mode at all. The all-gather count cannot stand in for this
+        # check: `SFTTrainer.compute_loss` gathers its token metrics with `gather_for_metrics`, so a run with no
+        # sharded parameter still records all-gathers. The worker therefore reports how many parameters FSDP2
+        # turned into DTensors, and that is what must be non-zero.
+        assert baseline["sharded_params"] > 0, (
+            f"no parameter was sharded in the baseline run, so the regression bound would be vacuous (is FSDP2 "
+            f"actually wrapping the model?): {baseline}"
         )
 
         # Probe run: shrink the chunk size so many token chunks run. A per-chunk `lm_head.weight` re-gather
@@ -579,13 +581,13 @@ class TestDistributed(TrlTestCase):
         # token chunks. If only one chunk ran, a regression would gather exactly once too and the test would
         # pass for the wrong reason. Require a comfortably multi-chunk run.
         assert n_chunks > 4, (
-            f"test is vacuous — only {n_chunks} token chunk(s) ran in the probe, so a per-chunk regression "
+            f"test is vacuous: only {n_chunks} token chunk(s) ran in the probe, so a per-chunk regression "
             f"could not be observed; increase batch/length or shrink chunk_size: {probe}"
         )
         # Regression check. A per-chunk regather would do ~n_chunks all-gathers of lm_head.weight ON TOP of the
         # baseline B; the fixed path stays at ~B regardless of the chunk count. Comparing the probe's count
         # against the MEASURED baseline (not against n_chunks directly) removes the chunk-independent FSDP2
-        # unshards from the comparison — which is exactly what makes the bound non-vacuous when B is large. The
+        # unshards from the comparison, which is what makes the bound non-vacuous when B is large. The
         # excess over baseline must stay far below the regression magnitude; bound it by n_chunks // 4 so the
         # ceiling tracks the token/chunk arithmetic rather than any hardcoded collective count.
         excess = observed - baseline_gathers

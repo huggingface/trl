@@ -16,13 +16,13 @@
 
 Launched under ``accelerate launch --config_file <fsdp2_reshard>`` by ``test_distributed.py``. It runs a single SFT
 ``chunked_nll`` training step on an FSDP2-sharded tiny model and counts how many all-gather collectives occur during
-that step, so a regression that re-gathers ``lm_head.weight`` once per token chunk (the PR #6077 failure mode — correct
+that step, so a regression that re-gathers ``lm_head.weight`` once per token chunk (the PR #6077 failure mode: correct
 loss, silently slow) is caught by a bounded assertion.
 
 ``_chunked_cross_entropy_loss`` chunks over *valid tokens* (``for start in range(0, n_valid, chunk_size)``), so the
 regression scales with ``ceil(n_valid / chunk_size)`` and only shows up when more than one token chunk runs. The zen
 test data is tiny, so this worker shrinks the chunk size (see ``_TEST_CHUNK_SIZE``) to force many token chunks, and
-derives the regression threshold from the exact ``n_valid`` captured from inside the loss path — never from vocab size.
+derives the regression threshold from the exact ``n_valid`` captured from inside the loss path, never from vocab size.
 
 Why count real collectives and not ``DTensor.full_tensor()``: under FSDP2 the parameter unshard is driven by autograd
 pre-hooks / c10d collectives, not by explicit ``full_tensor()`` calls, so a ``full_tensor`` counter is blind to it. We
@@ -53,18 +53,24 @@ MODEL_ID = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
 RESULT_PREFIX = "CHUNKED_NLL_ALLGATHER_RESULT"
 
 
+# Op namespaces that carry the process-group collectives. `fsdp.all_gather_copy_in` / `fsdp.all_gather_copy_out`
+# live in the `fsdp` namespace and only pack/unpack the staging buffer around a gather, so a bare substring match
+# on "all_gather" would count them as collectives and inflate the total.
+_COLLECTIVE_NAMESPACES = ("c10d", "_c10d_functional", "_c10d_functional_autograd")
+
+
 def _count_all_gathers(comm_counts: dict) -> int:
     """Sum the all-gather collectives from an ``_AllGatherCounter.comm_counts`` dict.
 
-    The counter keys by op name. FSDP2's parameter unshard shows up as ``funcol.all_gather_into_tensor`` (and the
-    ``_allgather_base_`` / ``allgather_`` c10d variants), so we match on the op's string name containing ``all_gather``
-    / ``allgather`` and total those. This observes the autograd-hook-driven gathers that ``DTensor.full_tensor()`` is
-    blind to.
+    The counter keys by op name. FSDP2's parameter unshard shows up as ``_c10d_functional.all_gather_into_tensor`` (and
+    the ``c10d._allgather_base_`` / ``c10d.allgather_`` variants), so we keep the ops whose namespace is one of
+    ``_COLLECTIVE_NAMESPACES`` and whose name contains ``all_gather`` / ``allgather``, and total those. This observes
+    the autograd-hook-driven gathers that ``DTensor.full_tensor()`` is blind to.
     """
     total = 0
     for op, n in comm_counts.items():
-        name = str(op).lower()
-        if "all_gather" in name or "allgather" in name:
+        namespace, _, name = str(op).lower().partition(".")
+        if namespace in _COLLECTIVE_NAMESPACES and ("all_gather" in name or "allgather" in name):
             total += int(n)
     return total
 
@@ -114,15 +120,20 @@ class _MeasuringSFTTrainer(SFTTrainer):
     """
 
     comm_counts: dict | None = None
+    sharded_params: int | None = None
 
-    def training_step(self, *args, **kwargs):
+    def training_step(self, model, *args, **kwargs):
         # Only measure the first step (with max_steps=1 there is exactly one); guard anyway so the counts
         # reflect a single step even if the caller raises max_steps later.
         if self.comm_counts is not None:
-            return super().training_step(*args, **kwargs)
+            return super().training_step(model, *args, **kwargs)
+        # `model` is the FSDP-wrapped module here, so this is where sharding is observable: FSDP2 turns every
+        # sharded parameter into a DTensor. Recorded so the launcher can check the model really was sharded
+        # instead of inferring it from the all-gather count, which metric gathers also feed.
+        self.sharded_params = sum(isinstance(p, DTensor) for p in model.parameters())
         counter = _AllGatherCounter()
         with counter:
-            loss = super().training_step(*args, **kwargs)
+            loss = super().training_step(model, *args, **kwargs)
         self.comm_counts = dict(counter.comm_counts)
         return loss
 
@@ -134,7 +145,7 @@ _MAX_LENGTH = 64
 
 # Probe run. The chunked-CE loop chunks over *valid tokens*, not vocab: `for start in range(0, n_valid,
 # chunk_size)` in `_chunked_cross_entropy_loss`. So a per-chunk `lm_head.weight` re-gather regression scales
-# with ceil(n_valid / chunk_size) — the TOKEN-chunk count — and is only observable when more than one chunk
+# with ceil(n_valid / chunk_size), the TOKEN-chunk count, and is only observable when more than one chunk
 # runs (n_valid > chunk_size). The zen test data is tiny (~120 valid tokens total), so with the default chunk
 # size of 256 only a single chunk would run and a regression would be invisible. We therefore shrink the chunk
 # size for this run so the tiny batch genuinely exercises many token-chunks.
@@ -144,7 +155,7 @@ _TEST_CHUNK_SIZE = 4
 # per-chunk regather signal is zero by construction and the measured all-gather count is the pure FSDP2
 # parameter-unshard baseline B (one unshard per sharded param per fwd/bwd, independent of the chunk count).
 # `per_device_train_batch_size * max_length` is the hard upper bound on valid tokens, so it guarantees a single
-# chunk without over-allocating logits. Derived from the config above — never a magic collective count.
+# chunk without over-allocating logits. Derived from the config above, never a magic collective count.
 _BASELINE_CHUNK_SIZE = _PER_DEVICE_TRAIN_BATCH_SIZE * _MAX_LENGTH
 
 
@@ -205,7 +216,7 @@ def main() -> None:
 
     n_valid = captured.get("n_valid", 0)
     chunk_size = captured.get("chunk_size", _TEST_CHUNK_SIZE)
-    n_chunks = -(-n_valid // chunk_size) if n_valid else 0  # ceil(n_valid / chunk_size) — TOKEN chunks
+    n_chunks = -(-n_valid // chunk_size) if n_valid else 0  # ceil(n_valid / chunk_size), TOKEN chunks
 
     last = trainer.state.log_history[-1] if trainer.state.log_history else {}
     train_loss = last.get("train_loss")
@@ -217,6 +228,7 @@ def main() -> None:
         "chunk_size": int(chunk_size),
         "n_chunks_if_regressed": int(n_chunks),
         "all_gathers": int(all_gathers),
+        "sharded_params": int(trainer.sharded_params or 0),
         "dispatched_ops_total": int(comm_total),
         "loss_finite": train_loss is not None and math.isfinite(train_loss),
     }
