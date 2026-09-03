@@ -106,10 +106,10 @@ class TestGSPOTokenTrainer(TrlTestCase):
             [[1.0, -1.0, 1.0, -1.0, 0.0, 0.0], [-1.0, 1.0, -1.0, 0.0, 0.0, 0.0]], device=device
         )
 
-        def loss_and_grad(level, advantages):
+        def loss_and_grad(level, advantages, batch=inputs):
             trainer.importance_sampling_level = level
             trainer.model.zero_grad()
-            loss = trainer._compute_loss(trainer.model, {**inputs, "advantages": advantages})
+            loss = trainer._compute_loss(trainer.model, {**batch, "advantages": advantages})
             loss.backward()
             grad = torch.cat([p.grad.flatten() for p in trainer.model.parameters() if p.grad is not None])
             return loss.detach(), grad
@@ -126,6 +126,15 @@ class TestGSPOTokenTrainer(TrlTestCase):
         tok_loss, tok_grad = loss_and_grad("sequence_token", per_token_advantages)
         torch.testing.assert_close(tok_loss, seq_loss)
         assert not torch.allclose(tok_grad, seq_grad), "sequence_token gradient collapsed to the sequence-level one"
+
+        # Ground truth rather than a level-versus-level relation: with old_per_token_logps equal to the live log-probs
+        # the sequence weight is exactly 1 and must carry no gradient, so sequence_token has to reproduce the
+        # token-level gradient (advantage at t times the gradient of log-prob t) exactly. A missing stop-gradient on
+        # the sequence weight adds the gradient of the sequence log-ratio to every token and breaks this equality.
+        exact = {**inputs, "old_per_token_logps": baseline_logps}
+        _, token_grad = loss_and_grad("token", per_token_advantages, exact)
+        _, tok_grad = loss_and_grad("sequence_token", per_token_advantages, exact)
+        torch.testing.assert_close(tok_grad, token_grad)
 
     @pytest.mark.parametrize("eval_dataset_type", ["dataset", "dataset_dict", "dict_of_dataset", "none"])
     def test_init_with_eval_dataset(self, eval_dataset_type):
