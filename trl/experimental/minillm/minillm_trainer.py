@@ -337,16 +337,20 @@ class MiniLLMTrainer(GRPOTrainer):
             # size, and the sum is one matmul. D holds T x T values, 64 MB in float32 for a 4096-token completion, and
             # the lag, its clamp and the powers each hold another T x T while D is built, so the peak is a few times that.
             # Building the positions in the working dtype keeps every intermediate at that size rather than int64.
+            # `compute_loss` runs under the trainer's autocast context when mixed precision is on, and a matmul is
+            # autocast-eligible, so without disabling it here the sum would come back in bfloat16 or float16 with the
+            # rounding the float32 promotion was meant to avoid.
             dtype = torch.promote_types(rewards.dtype, torch.float32)
-            positions = torch.arange(response_length, device=rewards.device, dtype=dtype)
-            lag = (positions[:, None] - positions[None, :]).clamp(min=0)
-            discount = torch.tril(torch.pow(self.gamma, lag))
-            advantages = rewards.to(dtype) @ discount
+            with torch.autocast(device_type=rewards.device.type, enabled=False):
+                positions = torch.arange(response_length, device=rewards.device, dtype=dtype)
+                lag = (positions[:, None] - positions[None, :]).clamp(min=0)
+                discount = torch.tril(torch.pow(self.gamma, lag))
+                advantages = rewards.to(dtype) @ discount
 
-            if self.length_normalization:
-                mask = torch.where(mask < 0.5, 1e-4, mask)
-                lengths = mask.to(dtype) @ discount
-                advantages = advantages / lengths
+                if self.length_normalization:
+                    mask = torch.where(mask < 0.5, 1e-4, mask)
+                    lengths = mask.to(dtype) @ discount
+                    advantages = advantages / lengths
         else:
             advantages = rewards
 
