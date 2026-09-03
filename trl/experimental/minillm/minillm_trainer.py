@@ -334,10 +334,12 @@ class MiniLLMTrainer(GRPOTrainer):
             # reverse-cumsumming scaled every advantage by an extra gamma^t, and gamma^i underflowed to 0.0 in float32
             # on long completions, giving 0/0 = nan under length normalization (issue #6626). A discount matrix
             # D[i, t] = gamma^(i-t) for i >= t needs no division: a far-apart pair underflows to 0, which is its true
-            # size, and the sum is one matmul. D holds T x T values, so a 4096-token completion costs 64 MB in float32.
+            # size, and the sum is one matmul. D holds T x T values, 64 MB in float32 for a 4096-token completion, and
+            # the lag, its clamp and the powers each hold another T x T while D is built, so the peak is a few times that.
+            # Building the positions in the working dtype keeps every intermediate at that size rather than int64.
             dtype = torch.promote_types(rewards.dtype, torch.float32)
-            positions = torch.arange(response_length, device=rewards.device)
-            lag = (positions[:, None] - positions[None, :]).clamp(min=0).to(dtype)
+            positions = torch.arange(response_length, device=rewards.device, dtype=dtype)
+            lag = (positions[:, None] - positions[None, :]).clamp(min=0)
             discount = torch.tril(torch.pow(self.gamma, lag))
             advantages = rewards.to(dtype) @ discount
 
