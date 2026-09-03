@@ -113,7 +113,7 @@ The same measurement, with the rescaled run on top:
 
 <img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/long_context_rope_pertoken.png" alt="The same per-token loss with a second run using rescaled positions, which stays flat where the first one climbs"/>
 
-The rescaled run stays flat all the way to 160k. Over the last 20k tokens it averages 2.8 against 7.3 without the rescaling.
+The rescaled run stays flat all the way to 160k. Over the last 20k tokens it averages a loss of 2.8, against 7.3 without the rescaling.
 
 ### The activations are what is left: offload them
 
