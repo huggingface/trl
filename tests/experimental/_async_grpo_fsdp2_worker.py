@@ -46,6 +46,8 @@ from trl.experimental.async_grpo.async_rollout_worker import RolloutSample
 # model (`head_size=32`) below, rather than the usual `tiny-*` one (`head_size=2`).
 MODEL_ID = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
 RESULT_PREFIX = "ASYNC_GRPO_FSDP2_RESULT"
+# Reported alongside the measured step count so the launcher can require the whole loop to have run.
+_MAX_STEPS = 2
 
 
 def dummy_reward_func(completions, **kwargs):
@@ -82,7 +84,10 @@ class _StubRolloutWorker:
             prompt_completion_ids = tokenizer.apply_chat_template(
                 prompt_completions, tokenize=True, add_generation_prompt=False, return_dict=False
             )
-            rewards = np.array(dummy_reward_func(completions))
+            # Distinct rewards by construction. Hash-derived rewards can collide within a group under a randomized
+            # PYTHONHASHSEED, which makes `rewards.std()` zero and the advantages NaN, so a run would fail for a reason
+            # unrelated to FSDP2.
+            rewards = np.linspace(0.0, 1.0, num_generations)
             advantages = (rewards - rewards.mean()) / rewards.std()
             for idx in range(num_generations):
                 completion_ids = prompt_completion_ids[idx][len(prompt_ids) :]
@@ -155,7 +160,7 @@ def main() -> None:
         # max_model_len lookup. A positive budget starves here: the stub's samples are short enough
         # that 2 rank-rows never fill, so TokenBudgetBatcher would never emit a micro-batch.
         token_budget=0,
-        max_steps=2,
+        max_steps=_MAX_STEPS,
         vllm_server_timeout=5.0,
         report_to="none",
     )
@@ -195,6 +200,7 @@ def main() -> None:
     train_loss = last.get("train_loss")
     result = {
         "steps": trainer.state.global_step,
+        "max_steps": _MAX_STEPS,
         "params_changed": changed,
         "train_loss_finite": train_loss is not None and bool(np.isfinite(train_loss)),
     }

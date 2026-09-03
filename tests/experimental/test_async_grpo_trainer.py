@@ -19,6 +19,7 @@ import math
 import multiprocessing as mp
 import os
 import queue
+import signal
 import subprocess
 from collections import defaultdict
 from pathlib import Path
@@ -335,19 +336,25 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         # Bound the child: the trainer's rollout consumer blocks indefinitely on an empty queue (it only
         # calls `check_health`, which this stub implements as a no-op), so a starved run would hang the
         # pytest process rather than fail it. The timeout turns that into a readable failure.
+        # `accelerate launch` starts each rank through torch elastic, which puts the workers in their own session
+        # (`start_new_session=True`), so a plain `subprocess.run(timeout=...)` would kill only the launcher and leave
+        # the ranks running. Put the launcher in a fresh process group and kill the whole group on timeout.
+        proc = subprocess.Popen(
+            ["accelerate", "launch", "--config_file", str(_FSDP2_CONFIG), str(_FSDP2_WORKER)],
+            env=env,
+            cwd=ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
+        )
         try:
-            result = subprocess.run(
-                ["accelerate", "launch", "--config_file", str(_FSDP2_CONFIG), str(_FSDP2_WORKER)],
-                env=env,
-                cwd=ROOT,
-                capture_output=True,
-                text=True,
-                timeout=900,
-            )
-        except subprocess.TimeoutExpired as exc:
-            stdout = exc.stdout.decode() if isinstance(exc.stdout, bytes) else (exc.stdout or "")
-            stderr = exc.stderr.decode() if isinstance(exc.stderr, bytes) else (exc.stderr or "")
-            pytest.fail(f"FSDP2 worker timed out after {exc.timeout}s:\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}")
+            stdout, stderr = proc.communicate(timeout=900)
+        except subprocess.TimeoutExpired:
+            os.killpg(proc.pid, signal.SIGKILL)
+            stdout, stderr = proc.communicate()
+            pytest.fail(f"FSDP2 worker timed out after 900s:\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}")
+        result = subprocess.CompletedProcess(proc.args, proc.returncode, stdout, stderr)
         assert result.returncode == 0, f"FSDP2 worker failed:\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
 
         result_lines = [ln for ln in result.stdout.splitlines() if ln.startswith(_FSDP2_RESULT_PREFIX)]
@@ -355,7 +362,10 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         measured = json.loads(result_lines[0][len(_FSDP2_RESULT_PREFIX) :].strip())
 
         # Training actually ran under FSDP2, produced a finite loss, and updated the parameters.
-        assert measured["steps"] >= 1, f"no training steps ran: {measured}"
+        # The worker configures more than one step so the optimizer loop runs repeatedly under FSDP2; accepting fewer
+        # would let an early stop after step 1 pass.
+        assert measured["max_steps"] > 1, f"worker must configure more than one step: {measured}"
+        assert measured["steps"] == measured["max_steps"], f"not every configured step ran: {measured}"
         assert measured["train_loss_finite"], f"train loss not finite under FSDP2: {measured}"
         assert measured["params_changed"], f"parameters did not change under FSDP2: {measured}"
 
