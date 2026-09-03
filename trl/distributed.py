@@ -43,6 +43,9 @@ class DistributedBackend:
         fsdp_plugin = getattr(accelerator.state, "fsdp_plugin", None)
         self.zero_stage = ds_plugin.zero_stage if ds_plugin else 0
         self.fsdp_version = getattr(fsdp_plugin, "fsdp_version", None) if fsdp_plugin else None
+        # FSDP1 only: whether `summon_full_params` exposes the original parameter objects (Accelerate's default is
+        # `False`, which yields plain tensors and drops the bitsandbytes `quant_state`).
+        self.fsdp_use_orig_params = getattr(fsdp_plugin, "use_orig_params", None) if fsdp_plugin else None
 
     @property
     def is_zero3(self) -> bool:

@@ -130,13 +130,15 @@ def _dense_param_data(param: nn.Parameter) -> torch.Tensor:
     return param.data
 
 
-def _check_quantization_supported(model: nn.Module, fsdp_version: int | None) -> None:
+def _check_quantization_supported(
+    model: nn.Module, fsdp_version: int | None, fsdp_use_orig_params: bool | None
+) -> None:
     """
     Raise when the model's quantization cannot survive the dense weight push into vLLM.
 
     The engine is built dense on purpose: the base may be 4-bit, but every weight is dequantized to the model dtype on
     the way out (see `_dense_param_data`), and building with `quantization="bitsandbytes"` would allocate packed
-    `[out_features, in_features // 2]` weights that reject that push. Two combinations cannot be served that way and
+    `[out_features, in_features // 2]` weights that reject that push. Three combinations cannot be served that way and
     are refused here rather than at the first sync. See https://github.com/huggingface/trl/issues/4973.
 
     Args:
@@ -144,12 +146,17 @@ def _check_quantization_supported(model: nn.Module, fsdp_version: int | None) ->
             Model whose modules are inspected for bitsandbytes layers.
         fsdp_version (`int`, *optional*):
             FSDP major version in use, `None` when FSDP is not enabled, which is what `DistributedBackend` reports.
-            Only version 2 is refused with a 4-bit base, because it reads weights from `state_dict()`, which returns
-            plain tensors whose `quant_state` is already gone by the time `_dense_param_data` runs. FSDP1 reads through
-            `summon_full_params` and keeps it.
+            Version 2 is refused with a 4-bit base because it reads weights from `state_dict()`, which returns plain
+            tensors whose `quant_state` is already gone by the time `_dense_param_data` runs.
+        fsdp_use_orig_params (`bool`, *optional*):
+            FSDP1's `use_orig_params` setting, `None` when FSDP is not enabled. FSDP1 reads through
+            `summon_full_params`, which exposes the original `Params4bit` with its `quant_state` only when this is
+            `True`; with Accelerate's default of `False` it exposes plain tensors, and the packed storage would be
+            pushed as if it were the dense weight. Measured on one H100: `(16, 1)` pushed for an `(8, 8)` layer.
 
     Raises:
-        `ValueError`: if the model holds 8-bit layers, or 4-bit layers while `fsdp_version` is 2.
+        `ValueError`: if the model holds 8-bit layers, or 4-bit layers while `fsdp_version` is 2, or 4-bit layers while
+        `fsdp_version` is 1 and `fsdp_use_orig_params` is not `True`.
     """
     if not is_bitsandbytes_available():
         return
@@ -160,6 +167,13 @@ def _check_quantization_supported(model: nn.Module, fsdp_version: int | None) ->
             raise ValueError(
                 "vLLM weight sync does not support a 4-bit quantized base under FSDP2. Train with DeepSpeed or on a "
                 "single device, or load the base in full precision."
+            )
+        if isinstance(module, bnb.nn.Linear4bit) and fsdp_version == 1 and not fsdp_use_orig_params:
+            raise ValueError(
+                "vLLM weight sync does not support a 4-bit quantized base under FSDP1 with `use_orig_params=False` "
+                "(Accelerate's default): `summon_full_params` then exposes the packed storage without its "
+                "`quant_state`, and that packed tensor is what would be pushed. Set `fsdp_use_orig_params: true` in "
+                "the FSDP config, train with DeepSpeed or on a single device, or load the base in full precision."
             )
 
 
@@ -353,7 +367,7 @@ class VLLMGeneration:
             )
 
         # Both modes push dense weights at sync time (see `_dense_param_data`), so the check runs before either branch.
-        _check_quantization_supported(model, self._dist.fsdp_version)
+        _check_quantization_supported(model, self._dist.fsdp_version, self._dist.fsdp_use_orig_params)
 
         if self.mode == "server":
             if accelerator.is_main_process:

@@ -428,8 +428,10 @@ class OnlineDPOTrainer(_BaseTrainer):
 
             # Both modes push dense weights at sync time (see `_dense_param_data`), so the check runs before either
             # branch.
-            fsdp_version = self.accelerator.state.fsdp_plugin.fsdp_version if self.is_fsdp_enabled else None
-            _check_quantization_supported(model, fsdp_version)
+            fsdp_plugin = self.accelerator.state.fsdp_plugin if self.is_fsdp_enabled else None
+            fsdp_version = fsdp_plugin.fsdp_version if fsdp_plugin else None
+            fsdp_use_orig_params = fsdp_plugin.use_orig_params if fsdp_plugin else None
+            _check_quantization_supported(model, fsdp_version, fsdp_use_orig_params)
 
             if self.vllm_mode == "server":
                 if self.accelerator.is_main_process:

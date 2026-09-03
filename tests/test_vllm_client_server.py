@@ -145,34 +145,40 @@ class TestQuantizedWeightSync(TrlTestCase):
         assert out.shape == (4, 8)
 
     @pytest.mark.parametrize(
-        ("module_factory", "fsdp_version", "expected_message"),
+        ("module_factory", "fsdp_version", "fsdp_use_orig_params", "expected_message"),
         [
             # A 4-bit base under FSDP2 cannot be dequantized: FSDP2 reads weights from `state_dict()`, which returns
             # plain tensors, so the `quant_state` holding the scales is already gone. Refuse it at build time.
-            (lambda: bnb.nn.Linear4bit(8, 8), 2, "4-bit quantized base under FSDP2"),
+            (lambda: bnb.nn.Linear4bit(8, 8), 2, None, "4-bit quantized base under FSDP2"),
+            # Under FSDP1, `summon_full_params` keeps the `Params4bit` and its `quant_state` only with
+            # `use_orig_params=True`; with Accelerate's default `False` (or the unresolved `None`) it exposes the packed
+            # storage as a plain tensor, and that is what the sync would push.
+            (lambda: bnb.nn.Linear4bit(8, 8), 1, False, "FSDP1 with `use_orig_params=False`"),
+            (lambda: bnb.nn.Linear4bit(8, 8), 1, None, "FSDP1 with `use_orig_params=False`"),
             # vLLM has never supported in-flight 8-bit, independent of the sharding strategy.
-            (lambda: bnb.nn.Linear8bitLt(8, 8), 0, "8-bit quantization"),
-            (lambda: bnb.nn.Linear8bitLt(8, 8), 1, "8-bit quantization"),
-            (lambda: bnb.nn.Linear8bitLt(8, 8), 2, "8-bit quantization"),
+            (lambda: bnb.nn.Linear8bitLt(8, 8), 0, None, "8-bit quantization"),
+            (lambda: bnb.nn.Linear8bitLt(8, 8), 1, True, "8-bit quantization"),
+            (lambda: bnb.nn.Linear8bitLt(8, 8), 2, None, "8-bit quantization"),
             # Negative controls: every other combination reaches the dequantizing push and must be accepted.
-            (lambda: bnb.nn.Linear4bit(8, 8), 1, None),  # FSDP1 gathers through `summon_full_params`
-            (lambda: bnb.nn.Linear4bit(8, 8), 0, None),  # no FSDP at all
-            (lambda: nn.Linear(8, 8), 2, None),  # dense base under FSDP2
-            (lambda: nn.Linear(8, 8), 0, None),  # dense base, no FSDP
+            (lambda: bnb.nn.Linear4bit(8, 8), 1, True, None),  # FSDP1 with the original params exposed
+            (lambda: bnb.nn.Linear4bit(8, 8), 0, None, None),  # no FSDP at all
+            (lambda: nn.Linear(8, 8), 2, None, None),  # dense base under FSDP2
+            (lambda: nn.Linear(8, 8), 1, False, None),  # dense base under FSDP1, default setting
+            (lambda: nn.Linear(8, 8), 0, None, None),  # dense base, no FSDP
             # `DistributedBackend.fsdp_version` is `None`, not `0`, when FSDP is off, so these are the values the
             # guard actually receives in production. The `0` cases above only cover the documented sentinel.
-            (lambda: bnb.nn.Linear8bitLt(8, 8), None, "8-bit quantization"),
-            (lambda: bnb.nn.Linear4bit(8, 8), None, None),
-            (lambda: nn.Linear(8, 8), None, None),
+            (lambda: bnb.nn.Linear8bitLt(8, 8), None, None, "8-bit quantization"),
+            (lambda: bnb.nn.Linear4bit(8, 8), None, None, None),
+            (lambda: nn.Linear(8, 8), None, None, None),
         ],
     )
-    def test_check_quantization_supported(self, module_factory, fsdp_version, expected_message):
+    def test_check_quantization_supported(self, module_factory, fsdp_version, fsdp_use_orig_params, expected_message):
         model = nn.Sequential(module_factory())
         if expected_message is None:
-            _check_quantization_supported(model, fsdp_version)  # must not raise
+            _check_quantization_supported(model, fsdp_version, fsdp_use_orig_params)  # must not raise
         else:
             with pytest.raises(ValueError, match=expected_message):
-                _check_quantization_supported(model, fsdp_version)
+                _check_quantization_supported(model, fsdp_version, fsdp_use_orig_params)
 
 
 @pytest.mark.slow
