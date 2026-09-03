@@ -13,7 +13,10 @@
 # limitations under the License.
 
 import contextvars
+import itertools
+import json
 import math
+import os
 import queue
 import textwrap
 import threading
@@ -32,6 +35,7 @@ from torch.distributed._tensor import DTensor
 from torch.utils.data import DataLoader
 from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenizerBase, TrainerCallback
 from transformers.data.data_collator import DataCollatorMixin
+from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR
 
 from ...models.utils import _ForwardRedirection
 from ...trainer.base_trainer import _BaseTrainer
@@ -268,11 +272,12 @@ def _jsd_loss_chunk(
         if teacher_id_idx_chunk is not None:
             stats = []
             for idx in range(num_teachers):
+                # A teacher absent from this chunk selects nothing; an empty masked selection sums to a 0 scalar on
+                # the right device, so no `teacher_mask.any()` guard is needed.
                 teacher_mask = teacher_id_idx_chunk == idx
-                has_any = teacher_mask.any()
                 stats.append(teacher_mask.sum().float())
-                stats.append(per_token_jsd[teacher_mask].sum() if has_any else jsd.new_zeros(()))
-                stats.append(per_token_teacher_entropy[teacher_mask].sum() if has_any else jsd.new_zeros(()))
+                stats.append(per_token_jsd[teacher_mask].sum())
+                stats.append(per_token_teacher_entropy[teacher_mask].sum())
             chunk_per_teacher_stats = torch.stack(stats)
 
     return chunk_loss, chunk_jsd_sum, chunk_entropy_sum, chunk_teacher_entropy_sum, chunk_per_teacher_stats
@@ -493,8 +498,10 @@ class _OptimizerTimeCallback(TrainerCallback):
         self._trainer._step_optimizer_s += time.perf_counter() - self._t0
 
 
-class _InitialWeightSyncCallback(TrainerCallback):
-    """Idempotent: NCCL group setup + cold weight sync to vLLM on train begin."""
+class _TrainBeginCallback(TrainerCallback):
+    """Idempotent train-begin setup: NCCL group setup + cold weight sync to vLLM, then start the rollout worker.
+    The weight sync must complete before the worker starts, which the ordering here guarantees.
+    """
 
     def __init__(self, trainer: "AsyncDistillationTrainer"):
         self._trainer = trainer
@@ -507,21 +514,30 @@ class _InitialWeightSyncCallback(TrainerCallback):
         if self._trainer.accelerator.is_main_process and self._trainer.weight_transfer is not None:
             self._trainer.weight_transfer.init_weight_transfer()
         self._trainer._sync_weight()
-
-
-class _StartRolloutWorkerCallback(TrainerCallback):
-    """Idempotent: starts the rollout worker. Must be registered AFTER `_InitialWeightSyncCallback`."""
-
-    def __init__(self, trainer: "AsyncDistillationTrainer"):
-        self._trainer = trainer
-        self._fired = False
-
-    def on_train_begin(self, _args, _state, _control, **_kwargs):
-        if self._fired:
-            return
-        self._fired = True
         if self._trainer.accelerator.is_main_process and self._trainer.rollout_worker is not None:
             self._trainer.rollout_worker.start()
+
+
+class _EpochStopCallback(TrainerCallback):
+    """Stop after `num_train_epochs` full passes over the prompt dataset.
+
+    An epoch is counted in distinct prompts actually trained (accumulated in the collator, which runs on the main
+    process just before the model forward). Where [`~trl.experimental.async_grpo.async_grpo_trainer`] counts
+    prompt-groups, one prompt here yields exactly one training sample, so a prompt and a group are the same thing. Only
+    the main process collates (`dispatch_batches=True`), so the stop decision is reduced across ranks to keep
+    data-parallel workers in lockstep.
+    """
+
+    def __init__(self, trainer: "AsyncDistillationTrainer", target_prompts: int):
+        self._trainer = trainer
+        self._target = target_prompts
+
+    def on_step_end(self, _args, _state, control, **_kwargs):
+        acc = self._trainer.accelerator
+        trained = self._trainer._prompts_before_resume + len(self._trainer._trained_prompts)
+        reached = torch.tensor(int(trained >= self._target), device=acc.device)
+        if int(acc.reduce(reached, reduction="sum").item()) >= 1:
+            control.should_training_stop = True
 
 
 def log_rollout_traces(samples: list[RolloutSample], step: int, report_to: list[str], max_traces: int = 16) -> None:
@@ -671,6 +687,7 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
                 "teacher_topk_ids": sample.teacher_topk_ids,
                 "teacher_topk_logprobs": sample.teacher_topk_logprobs,
                 "teacher_id": sample.teacher_id,
+                "prompt_id": sample.prompt_id,  # counted by the collator, never sent to the model
                 "metrics": sample.metrics,  # per-sample scalars a custom worker stamped; aggregated by the collator
             }
 
@@ -708,6 +725,9 @@ class DataCollatorForRollout(DataCollatorMixin):
             Maps each configured `teacher_server_urls` key to a stable integer index, packed per-position (like every
             other per-token field) as `teacher_id_idx` so `compute_loss` can break `jsd`/`entropy`/ `teacher_entropy`
             down per teacher (MOPD). `None` when there's only one teacher (no breakdown needed).
+        prompts_trained (`set[int]`, *optional*):
+            The trainer's set of distinct prompt ids trained so far, shared by reference and updated with this
+            micro-batch's prompts; read by [`_EpochStopCallback`] to decide when an epoch target is met.
         metrics (`dict[str, list]`, *optional*):
             The trainer's metric sink, appended to with this micro-batch's sample and packing metrics.
         token_budget (`int`, *optional*, defaults to `0`):
@@ -719,7 +739,9 @@ class DataCollatorForRollout(DataCollatorMixin):
     num_processes: int = 1
     teacher_id_to_idx: dict[str, int] | None = None
     return_tensors: str = "pt"
-    # The trainer's metric sink, shared by reference.
+    # Distinct prompts trained so far, shared by reference with the trainer.
+    prompts_trained: set[int] = field(default_factory=set)
+    # The trainer's metric sink, shared by reference (like `prompts_trained`).
     metrics: dict[str, list] = field(default_factory=lambda: defaultdict(list))
     # Per-row token cap of the planner,
     token_budget: int = 0
@@ -773,6 +795,7 @@ class DataCollatorForRollout(DataCollatorMixin):
         teacher_topk_logprobs = pad(teacher_topk_logprobs, padding_value=float("-inf"))
 
         all_examples = [example for group in groups for example in group]
+        self.prompts_trained.update(example["prompt_id"] for example in all_examples)
 
         # Total valid completion tokens across the micro-batch. Repeated per rank so that DataLoaderDispatcher
         # (dispatch_batches=True) slices correctly on dim=0.
@@ -940,6 +963,7 @@ class AsyncDistillationTrainer(_BaseTrainer):
         model_name = model
         model_init_kwargs = args.model_init_kwargs or {}
         model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
+        model_init_kwargs.setdefault("dtype", args.dtype)
         # FlashAttention is required: training runs in padding-free mode, where sequences are concatenated into a
         # single row and attention is derived from `position_ids` resets. SDPA/eager can't handle this. Unlike
         # AsyncGRPOTrainer, the student's own lm_head is NOT patched (via `patch_chunked_lm_head`) to a chunked
@@ -950,7 +974,6 @@ class AsyncDistillationTrainer(_BaseTrainer):
         model = AutoModelForCausalLM.from_pretrained(
             model_name,
             device_map=None,
-            dtype=torch.float32,
             attn_implementation="kernels-community/flash-attn3",
             **model_init_kwargs,
         )
@@ -979,25 +1002,34 @@ class AsyncDistillationTrainer(_BaseTrainer):
         # self.model_accepts_loss_kwargs to False to enable scaling.
         self.model_accepts_loss_kwargs = False
 
-        # Infer max_steps from dataset size when not explicitly set. This must happen after super().__init__() so
-        # that self.accelerator.num_processes is available for the correct calculation. The training dataloader is
-        # driven by the async rollout queue (an IterableDataset with no __len__), so max_steps must be set explicitly
-        # for transformers.Trainer's step-counting to work, unlike AsyncGRPOTrainer, there is no num_generations
-        # multiplier here: each dataset row yields exactly one training sample, not a group of them.
+        # Epoch handling: stop after num_train_epochs full passes over the PROMPT dataset, counted as distinct
+        # prompts trained. Unlike AsyncGRPOTrainer there is no num_generations multiplier and no forking: each dataset
+        # row yields exactly one training sample, not a group of them.
+        self._trained_prompts: set[int] = set()
+        # Tracks restart to match `num_train_epochs`
+        self._prompts_before_resume = 0
+        self._epoch_stop_prompts: int | None = None
+        # This must happen after super().__init__() so that self.accelerator.num_processes is available. The training
+        # dataloader is driven by the async rollout queue (an IterableDataset with no __len__), so max_steps must be
+        # set explicitly for transformers.Trainer's step-counting to work.
         samples_per_step = (
             self.args.per_device_train_batch_size
             * self.args.gradient_accumulation_steps
             * self.accelerator.num_processes
         )
-        # Known limitation, shared verbatim with AsyncGRPOTrainer: this assumes `samples_per_step` samples per step,
-        # which only holds under `FixedCountBatcher`. Under `TokenBudgetBatcher` (the default once `token_budget` is
-        # set, see below), the number of samples per micro-batch is dynamic — driven by sequence lengths, not
-        # `per_device_train_batch_size` — so an inferred `max_steps`/`num_train_epochs` no longer corresponds exactly
-        # to the requested number of dataset passes. Fixing this requires touching AsyncGRPOTrainer's identical
-        # derivation too, out of scope for this PR.
         if self.args.max_steps <= 0 and train_dataset is not None and hasattr(train_dataset, "__len__"):
+            self._epoch_stop_prompts = math.ceil(self.args.num_train_epochs * len(train_dataset))
+            # max_steps is a safety ceiling, left uninflated unlike AsyncGRPOTrainer's: `lr_scheduler_type` defaults
+            # to `linear` here, so its value also sets the decay horizon. Under `TokenBudgetBatcher` (the default once
+            # `token_budget` is set, see below) a step consumes more samples than assumed here, so the run reaches the
+            # prompt count first; sequences near the whole budget consume fewer and stop short of it.
             samples_per_epoch = len(train_dataset)
             self.args.max_steps = math.ceil(self.args.num_train_epochs * samples_per_epoch / samples_per_step)
+            logger.info(
+                f"Epoch-driven stop: {self._epoch_stop_prompts} prompts "
+                f"({self.args.num_train_epochs} epochs x {len(train_dataset)} prompts); "
+                f"max_steps={self.args.max_steps} is a safety ceiling."
+            )
 
         # Infer max_inflight_tasks when not explicitly set. Generating more samples than the trainer can consume
         # before they become stale is wasteful. The useful upper bound is max_staleness * samples_per_step, floored
@@ -1015,6 +1047,15 @@ class AsyncDistillationTrainer(_BaseTrainer):
         # and FSDP keeps the student's sharded parameters materialized for the projection. Mirrors
         # `DistillationTrainer`'s identical need for its own chunked JSD path.
         self._forward_redirection = _ForwardRedirection()
+
+        # The base Trainer's data-skip replay loop doesn't apply to AsyncDistillation's live rollout queue;
+        # force it off regardless of what the user passed.
+        if not self.args.ignore_data_skip:
+            logger.warning(
+                "`ignore_data_skip` is forced to `True` for AsyncDistillation because the base Trainer's "
+                "skip-and-replay loop does not apply to a live rollout queue."
+            )
+        self.args.ignore_data_skip = True
 
         # The metric sink. Values are floats, or `(numerator, denominator)` pairs for rates
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
@@ -1051,7 +1092,11 @@ class AsyncDistillationTrainer(_BaseTrainer):
                 # DTensor.shape returns the global shape without triggering any all-gather.
                 weight_names, weight_dtype_names, weight_shapes = [], [], []
                 for name, param in model.named_parameters():
-                    name = name.removeprefix("module.")  # DDP/FSDP1 wrapping
+                    # Frozen parameters never change, so they are never sent.
+                    if not param.requires_grad:
+                        continue
+                    # DDP/FSDP1 wrapping and gradient checkpointing, avoids vllm module not exist error
+                    name = name.removeprefix("module.").replace("_checkpoint_wrapped_module.", "")
                     weight_names.append(name)
                     weight_dtype_names.append(str(param.dtype).split(".")[-1])
                     weight_shapes.append(list(param.shape))
@@ -1063,6 +1108,7 @@ class AsyncDistillationTrainer(_BaseTrainer):
                         "shapes": weight_shapes,
                         "packed": True,
                     },
+                    weight_sync_timeout=self.args.weight_sync_timeout,
                 )
 
             if rollout_worker is not None:
@@ -1098,12 +1144,13 @@ class AsyncDistillationTrainer(_BaseTrainer):
             self.vllm_client = None
             self.weight_transfer = None
 
-        # Add callbacks. Registration order matters: weight sync first, then worker start.
+        # Add callbacks. Cold weight sync + worker start on train begin, then periodic weight syncs.
         self.add_callback(_OptimizerTimeCallback(self))
-        self.add_callback(_InitialWeightSyncCallback(self))
-        self.add_callback(_StartRolloutWorkerCallback(self))
+        self.add_callback(_TrainBeginCallback(self))
         self.add_callback(StepIntervalCallback(self._sync_weight, self.args.weight_sync_steps))
         self.add_callback(StepIntervalCallback(self._log_step_metrics, 1))
+        if self._epoch_stop_prompts is not None:
+            self.add_callback(_EpochStopCallback(self, self._epoch_stop_prompts))
 
     def get_train_dataloader(self) -> DataLoader:
         num_processes = self.accelerator.num_processes
@@ -1144,6 +1191,7 @@ class AsyncDistillationTrainer(_BaseTrainer):
                     self.args.teacher_top_k,
                     num_processes,
                     self._teacher_id_to_idx if len(self._teacher_ids) > 1 else None,
+                    prompts_trained=self._trained_prompts,
                     metrics=self._metrics["train"],
                     # `or 0` because only rank 0 fills an unset budget from the vLLM server above; the other ranks
                     # construct the collator (and never use it) while `token_budget` is still `None`.
@@ -1264,10 +1312,11 @@ class AsyncDistillationTrainer(_BaseTrainer):
             if lm_head_bias is not None:
                 lm_head_bias = lm_head_bias.full_tensor()
         # NOTE(@aminediro): supporting Cohere2 models (mirrors `patch_chunked_lm_head`'s own handling).
-        # Read through `get_text_config()` like [`~trl.trainer.DistillationTrainer`] does: on VLMs the logit
-        # post-processing lives on `text_config`. Muse Glimmer applies the same pre-softcap multiplier under the name
-        # `output_multiplier`, and a real `logit_scale` of 0.0 is kept as-is and applied faithfully.
+        # On VLMs the logit post-processing lives on `text_config`, so read it through `get_text_config()`.
         config = unwrapped_model.config.get_text_config()
+        # `logit_scale` is None on models that don't scale (e.g. MPT); read that as unscaled (1.0). A real 0.0 is kept
+        # as-is and applied faithfully. Muse Glimmer applies the same pre-softcap multiplier under the name
+        # `output_multiplier`.
         logit_scale = getattr(config, "logit_scale", None)
         if logit_scale is None:
             logit_scale = getattr(config, "output_multiplier", None)
@@ -1409,7 +1458,7 @@ class AsyncDistillationTrainer(_BaseTrainer):
         ## `_wall_clock` divides by `perf/step_s`: the whole step, rollout waits included  and says what fraction of the allocation actually became training.
         if self._step_forward_tokens > 0:
             mean_seq_len = self._step_seq_len_weighted / self._step_forward_tokens
-            flops_per_token = compute_flops_per_token(self.model.config, int(mean_seq_len))
+            flops_per_token = compute_flops_per_token(self.model.config.get_text_config(), int(mean_seq_len))
             world_size = self.accelerator.num_processes
             metrics["perf/forwarded_tok_s_fwd_bwd"].append((self._step_forward_tokens, fwd_bwd_s))
             metrics["perf/mfu_fwd_bwd"].append(
@@ -1460,7 +1509,10 @@ class AsyncDistillationTrainer(_BaseTrainer):
         # FSDP ranks, then frees it once the generator advances, avoiding materializing the full model in memory.
         device = self.accelerator.device
         for name, param in self.model.named_parameters():
-            name = name.removeprefix("module.")  # DDP/FSDP1 wrapping
+            if not param.requires_grad:
+                continue
+            # DDP/FSDP1 wrapping and gradient checkpointing, avoids vllm module not exist error
+            name = name.removeprefix("module.").replace("_checkpoint_wrapped_module.", "")
             full = param.full_tensor() if isinstance(param, DTensor) else param.detach()
             if full.device != device:
                 full = full.to(device)
@@ -1503,7 +1555,45 @@ class AsyncDistillationTrainer(_BaseTrainer):
         self._metrics["train"]["perf/weight_sync_transfer_s"].append(t_transfer - t_barrier)
         logger.info(f"Weight sync: done. Total {weight_sync_s:.1f}s")
 
+    def _save_checkpoint(self, model, trial):
+        if self.accelerator.is_main_process and isinstance(self.rollout_worker, AsyncRolloutWorker):
+            checkpoint_folder = f"{PREFIX_CHECKPOINT_DIR}-{self.state.global_step}"
+            checkpoint_dir = os.path.join(self._get_output_dir(trial=trial), checkpoint_folder)
+            os.makedirs(checkpoint_dir, exist_ok=True)
+            trained = self._trained_prompts
+            first_untrained = next(p for p in itertools.count() if p not in trained)
+            prompt_index = self.rollout_worker._loop_kwargs["dataset_start_index"] + first_untrained
+            rollout_state = {"prompt_index": prompt_index}
+            with open(os.path.join(checkpoint_dir, "rollout_state.json"), "w") as f:
+                json.dump(rollout_state, f)
+        super()._save_checkpoint(model, trial)
+
     def _inner_training_loop(self, *args, **kwargs):
+        # When resuming, pass the saved prompt position to the worker before _TrainBeginCallback fires.
+        # Skipped for IterableDataset since len() isn't available on streaming datasets.
+        # Always reset first so a stale value from a prior train() call is never carried over. The trained ids are
+        # cleared whatever the worker, since the collator fills them regardless and the worker's `prompt_id` restarts
+        # at 0, so leftovers from an earlier run would collide with this one's.
+        self._trained_prompts.clear()
+        if isinstance(self.rollout_worker, AsyncRolloutWorker):
+            self.rollout_worker._loop_kwargs["dataset_start_index"] = 0
+            self._prompts_before_resume = 0
+            resume_from_checkpoint = kwargs.get("resume_from_checkpoint")
+            if resume_from_checkpoint is not None:
+                rollout_state_file = os.path.join(resume_from_checkpoint, "rollout_state.json")
+                # IterableDataset is skipped deliberately: streaming datasets have no len() and can't be repositioned.
+                if not os.path.isfile(rollout_state_file):
+                    logger.warning(
+                        "rollout_state.json not found in the checkpoint; "
+                        "the rollout worker will restart from prompt 0."
+                    )
+                elif not isinstance(self.train_dataset, Dataset):
+                    logger.warning("Resuming with an IterableDataset; the rollout worker will restart from prompt 0.")
+                else:
+                    with open(rollout_state_file) as f:
+                        rollout_state = json.load(f)
+                    self.rollout_worker._loop_kwargs["dataset_start_index"] = rollout_state["prompt_index"]
+                    self._prompts_before_resume = rollout_state["prompt_index"]
         try:
             return super()._inner_training_loop(*args, **kwargs)
         finally:
