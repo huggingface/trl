@@ -1465,7 +1465,8 @@ class _ChunkedLogProbFunction(torch.autograd.Function):
 def patch_chunked_lm_head(
     model: torch.nn.Module, chunk_size: int, temperature: float, output_router_logits: bool = False
 ) -> None:
-    final_logit_softcapping = getattr(model.config, "final_logit_softcapping", None)
+    text_config = model.config.get_text_config()
+    final_logit_softcapping = getattr(text_config, "final_logit_softcapping", None)
 
     def _chunked_forward(
         self: torch.nn.Module,
@@ -1483,7 +1484,7 @@ def patch_chunked_lm_head(
             input_ids=input_ids, attention_mask=attention_mask, use_cache=use_cache, **decoder_kwargs, **kwargs
         )
         # NOTE(@aminediro): supporting Cohere2 models
-        logit_scale = getattr(self.config, "logit_scale", 1.0)
+        logit_scale = getattr(text_config, "logit_scale", 1.0)
         hidden_states = outputs.last_hidden_state  # [B, S+1, H]
 
         # Shift: predict next token
@@ -1534,13 +1535,13 @@ def patch_chunked_lm_head(
                 num_experts_per_tok = self.num_experts_per_tok
             else:
                 # Upstream bug AttributeError: 'GptOssConfig' object has no attribute 'num_experts'; see #5754
-                if self.config.model_type == "gpt_oss" and Version("5.0.0") <= Version(
+                if text_config.model_type == "gpt_oss" and Version("5.0.0") <= Version(
                     transformers.__version__
                 ) < Version("5.6.0"):
                     num_experts = self.num_experts
                 else:
-                    num_experts = self.config.num_experts
-                num_experts_per_tok = self.config.num_experts_per_tok
+                    num_experts = text_config.num_experts
+                num_experts_per_tok = text_config.num_experts_per_tok
             # Padding-free packs all real tokens into a single row, so `attention_mask` is None and every token counts.
             aux_loss = load_balancing_loss_func(
                 outputs.router_logits, num_experts, num_experts_per_tok, attention_mask
