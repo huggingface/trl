@@ -391,6 +391,52 @@ class TestGRPOTrainer(TrlTestCase):
         assert GRPOConfig(output_dir=self.tmp_dir).kl_log_ratio_clip is None
         assert GRPOConfig(output_dir=self.tmp_dir, kl_log_ratio_clip=10.0).kl_log_ratio_clip == 10.0
 
+    @pytest.mark.parametrize("use_bias_correction_kl", [True, False])
+    def test_kl_log_ratio_clip_keeps_the_gradient_toward_the_reference(self, use_bias_correction_kl):
+        # A clipped token must still pull the policy back toward the reference. With a plain clamp the K3 term
+        # loses its slope, and with the bias correction the surviving `K3(clip) * ratio` pushes the policy the other
+        # way (the ratio's gradient rewards a lower log-prob). The clip is straight-through, so the gradient of the
+        # loss with respect to the clipped token's log-prob has to stay negative: raising the log-prob lowers the loss.
+        trainer, inputs = self._kl_clip_setup()
+        trainer.args.use_bias_correction_kl = use_bias_correction_kl
+        trainer.args.kl_log_ratio_clip = 10.0
+        inputs["advantages"] = torch.zeros_like(inputs["advantages"])  # keep only the KL term in the loss
+        inputs["ref_per_token_logps"] = inputs["ref_per_token_logps"] + 20.0  # every token sits above the clip
+        # Hand the loss a leaf log-prob tensor in place of the model's, so its gradient is what the KL term sees. The
+        # loss also logs the entropies it asked for, so hand it zeros of the same shape.
+        per_token_logps = inputs["old_per_token_logps"].clone().requires_grad_(True)
+        entropies = torch.zeros_like(per_token_logps)
+        with patch.object(
+            trainer, "_get_per_token_logps_and_entropies", return_value=(per_token_logps, entropies, None)
+        ):
+            loss = trainer._compute_loss(trainer.model, inputs)
+        loss.backward()
+
+        assert torch.isfinite(loss)
+        assert (per_token_logps.grad < 0).all(), (
+            "the clipped KL term pushes the policy away from the reference: "
+            f"d(loss)/d(log-prob) = {per_token_logps.grad.flatten().tolist()}"
+        )
+
+    def test_kl_log_ratio_clip_keeps_the_kl_term_non_negative(self):
+        # With zero advantages the loss is `beta` times the mean K3 term, which is non-negative by construction
+        # (`exp(x) - x - 1 >= 0`); a clipped `x` must keep it that way, and finite.
+        trainer, inputs = self._kl_clip_setup()
+        trainer.args.kl_log_ratio_clip = 10.0
+        inputs["advantages"] = torch.zeros_like(inputs["advantages"])
+        inputs["ref_per_token_logps"] = inputs["ref_per_token_logps"] + 20.0
+
+        loss = trainer._compute_loss(trainer.model, inputs)
+
+        assert torch.isfinite(loss) and loss > 0
+
+    @pytest.mark.parametrize("value", [0.0, -1.0, float("-inf"), float("inf"), float("nan")])
+    def test_kl_log_ratio_clip_rejects_non_positive_or_non_finite_values(self, value):
+        # A non-positive clip invents KL at an exact match, and a non-finite one either disables the clip or brings
+        # back the `inf` it exists to prevent, which the trainer's overflow guard does not catch for `-inf`.
+        with pytest.raises(ValueError, match="kl_log_ratio_clip"):
+            GRPOConfig(output_dir=self.tmp_dir, kl_log_ratio_clip=value)
+
     @pytest.mark.parametrize(
         "model_id",
         [

@@ -114,6 +114,10 @@ class GMPOTrainer(GRPOTrainer):
             # `exp`; a large negative one underflows to zero and leaves K3 finite, so clamping that side would
             # shrink an already correct estimate. A clip whose own exponential overflows the working dtype cannot
             # keep the term finite, so reject it instead of returning `inf`. No-op when the clip is None.
+            # The clip is straight-through: the value is clamped but the gradient passes as if it were not, so a
+            # clipped token still pulls the policy back toward the reference with the slope at the clip. A plain clamp
+            # would zero that slope, and with the bias correction below the term would then reduce to
+            # `K3(clip) * ratio`, whose gradient pushes the policy further away from the reference.
             if self.args.kl_log_ratio_clip is not None:
                 clip = torch.tensor(self.args.kl_log_ratio_clip, dtype=kl_log_ratio.dtype, device=kl_log_ratio.device)
                 if not torch.isfinite(torch.exp(clip)):
@@ -123,7 +127,7 @@ class GMPOTrainer(GRPOTrainer):
                         f"Lower it until `torch.exp(torch.tensor(kl_log_ratio_clip, dtype={kl_log_ratio.dtype}))` "
                         f"is finite."
                     )
-                kl_log_ratio = kl_log_ratio.clamp(max=self.args.kl_log_ratio_clip)
+                kl_log_ratio = kl_log_ratio + (kl_log_ratio.clamp(max=clip) - kl_log_ratio).detach()
             per_token_kl = torch.exp(kl_log_ratio) - kl_log_ratio - 1
             seq_kl = (per_token_kl * mask).sum(-1) / mask.sum(-1).clamp(min=1.0)  # (B,)
             per_sequence_loss = per_sequence_loss + self.beta * seq_kl
