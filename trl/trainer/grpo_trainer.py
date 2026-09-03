@@ -1107,6 +1107,7 @@ class GRPOTrainer(_BaseTrainer):
                 enable_sleep_mode=args.vllm_enable_sleep_mode,
                 model_impl=args.vllm_model_impl,
                 trust_remote_code=args.trust_remote_code,
+                seed=args.seed,
                 # Generation configuration
                 repetition_penalty=self.repetition_penalty,
                 temperature=self.temperature,
@@ -1280,7 +1281,7 @@ class GRPOTrainer(_BaseTrainer):
             batch_size=self.args.generation_batch_size // self.num_generations,
             repeat_count=self.num_iterations * self.args.steps_per_generation,
             shuffle=self.shuffle_dataset,
-            seed=self.args.seed,
+            seed=self._sampler_seed,
         )
 
     def _get_eval_sampler(self, eval_dataset) -> Sampler:
@@ -1288,8 +1289,15 @@ class GRPOTrainer(_BaseTrainer):
         return RepeatSampler(
             data_source=eval_dataset,
             mini_repeat_count=self.num_generations_eval,
-            seed=self.args.seed,
+            seed=self._sampler_seed,
         )
+
+    @property
+    def _sampler_seed(self) -> int:
+        # Same convention as `transformers.Trainer`: `data_seed` controls the data samplers when it is set, and
+        # falls back to `seed` otherwise. This allows changing `seed` (e.g. to decorrelate sampling between
+        # processes) without changing the order in which prompts are visited.
+        return self.args.seed if self.args.data_seed is None else self.args.data_seed
 
     # This method overrides `Trainer.get_eval_dataloader` to wrap iterable eval datasets, reproducing the
     # RepeatSampler ordering that can't be attached to them (see `get_train_dataloader`). Map-style datasets keep the

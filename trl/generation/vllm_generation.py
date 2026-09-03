@@ -210,6 +210,9 @@ class VLLMGeneration:
             Additional generation parameters to pass to the vLLM `SamplingParams`. This can include parameters like
             `seed`, `frequency_penalty`, etc. If it contains keys that conflict with the other parameters, they will
             override them.
+        seed (`int`, *optional*, defaults to `0`):
+            Seed of the colocated vLLM engine (typically `args.seed`). Combined with the tensor-parallel group index
+            so that all ranks of a TP group sample identically while different seeds give different rollouts.
 
     """
 
@@ -235,6 +238,7 @@ class VLLMGeneration:
         enable_sleep_mode: bool = False,
         model_impl: str = "auto",
         trust_remote_code: bool = False,
+        seed: int = 0,
         # Generation configuration
         repetition_penalty: float = 1.0,
         temperature: float = 1.0,
@@ -269,6 +273,7 @@ class VLLMGeneration:
         self.enable_sleep_mode = enable_sleep_mode
         self.model_impl = model_impl
         self.trust_remote_code = trust_remote_code
+        self.seed = seed
 
         # Generation configuration
         self.repetition_penalty = repetition_penalty
@@ -353,8 +358,10 @@ class VLLMGeneration:
                 enable_sleep_mode=self.enable_sleep_mode,
                 model_impl=self.model_impl,
                 distributed_executor_backend="external_launcher",
-                # Feed identical seed for tp groups to ensure sampling results are the same across workers
-                seed=accelerator.process_index // self.tensor_parallel_size,
+                # All ranks of a TP group get the same seed so that their sampling results agree; `self.seed`
+                # (`args.seed`) is mixed in so that two runs with different seeds do not produce identical rollouts.
+                # The multiplier keeps the seeds of different runs from overlapping across TP groups.
+                seed=self.seed * 1009 + accelerator.process_index // self.tensor_parallel_size,
                 # Latest vLLM v1 memory profiler is misled by the high default value (i.e., 32768) - thinking there's not enough memory
                 max_num_batched_tokens=4096,
                 # Important so temperature scaling/logit tweaking affects the TIS log probs
