@@ -48,12 +48,18 @@ class TestRLOOTrainer(TrlTestCase):
             train_dataset=dataset,
         )
 
-    def test_train_logs_policy_loss(self):
+    @pytest.mark.parametrize(
+        "model_id",
+        ["trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", "trl-internal-testing/tiny-Qwen3MoeForCausalLM"],
+    )
+    def test_train_logs_policy_loss(self, model_id):
         # Issue #7005: `policy_loss` was never logged. It is captured before the Mixture-of-Experts auxiliary loss is
         # added, so with a MoE model every loss the trainer returns must equal `policy_loss + router_aux_loss_coef *
-        # aux_loss` (`aux_loss` is logged unscaled). Capturing after the addition would make the two sides differ by
-        # exactly that term. The returned losses are recorded directly: the `loss` in `log_history` is not a usable
-        # witness, since transformers < 5 rounds it to 4 decimals.
+        # aux_loss` (`aux_loss` is logged unscaled), and with a dense model it must equal the returned loss itself.
+        # Capturing after the addition would make the MoE sides differ by exactly that term. The returned losses are
+        # recorded directly: the `loss` in `log_history` is not a usable witness, since transformers < 5 rounds it to
+        # 4 decimals. Two iterations per generation make the second step's ratio differ from 1, so the surrogate is
+        # not identically zero and a hardcoded `policy_loss` cannot satisfy the identity.
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
 
         training_args = RLOOConfig(
@@ -63,6 +69,7 @@ class TestRLOOTrainer(TrlTestCase):
             per_device_eval_batch_size=6,  # must be a multiple of num_generations
             num_generations=3,
             max_completion_length=8,
+            num_iterations=2,
             max_steps=2,
             logging_steps=1,
             eval_strategy="steps",
@@ -70,13 +77,13 @@ class TestRLOOTrainer(TrlTestCase):
             report_to="none",
         )
         trainer = RLOOTrainer(
-            model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            model=model_id,
             reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
             args=training_args,
             train_dataset=dataset["train"],
             eval_dataset=dataset["test"],
         )
-        assert trainer.aux_loss_enabled
+        assert trainer.aux_loss_enabled == ("Moe" in model_id)
 
         original_compute_loss = trainer._compute_loss
         returned_losses = {"train": [], "eval": []}
@@ -97,8 +104,13 @@ class TestRLOOTrainer(TrlTestCase):
         assert len(returned_losses["train"]) == len(train_logs)
         for log, returned in zip(train_logs, returned_losses["train"], strict=True):
             assert "policy_loss" in log, f"`policy_loss` missing from {log}"
-            assert log["policy_loss"] + coef * log["aux_loss"] == pytest.approx(returned, rel=1e-4)
-            assert log["aux_loss"] != 0.0
+            if trainer.aux_loss_enabled:
+                assert log["policy_loss"] + coef * log["aux_loss"] == pytest.approx(returned, rel=1e-4)
+                assert log["aux_loss"] != 0.0
+            else:
+                assert "aux_loss" not in log
+                assert log["policy_loss"] == pytest.approx(returned, rel=1e-4)
+        assert any(log["policy_loss"] != 0.0 for log in train_logs)
 
         # The eval metrics are means over the eval batches, so the identity holds against the mean returned loss.
         eval_logs = [log for log in trainer.state.log_history if "eval_loss" in log]
@@ -106,9 +118,8 @@ class TestRLOOTrainer(TrlTestCase):
         assert returned_losses["eval"]
         eval_log = eval_logs[0]
         mean_eval_loss = sum(returned_losses["eval"]) / len(returned_losses["eval"])
-        assert eval_log["eval_policy_loss"] + coef * eval_log["eval_aux_loss"] == pytest.approx(
-            mean_eval_loss, rel=1e-4
-        )
+        eval_aux = coef * eval_log["eval_aux_loss"] if trainer.aux_loss_enabled else 0.0
+        assert eval_log["eval_policy_loss"] + eval_aux == pytest.approx(mean_eval_loss, rel=1e-4)
 
     @pytest.mark.parametrize(
         "model_id",

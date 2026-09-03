@@ -115,13 +115,15 @@ class TestGMPOTrainer(TrlTestCase):
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
-    def test_train_logs_policy_loss(self):
+    @pytest.mark.parametrize("beta", [0.0, 0.1])
+    def test_train_logs_policy_loss(self, beta):
         # Issue #7005: the override never logged `policy_loss`. GMPO divides the returned loss by
         # `current_gradient_accumulation_steps` itself, so with two accumulation steps each step returns two
         # half-losses, and `policy_loss` (the mean of the two captured values) must equal their sum; capturing it after
         # the rescale would report half of that. In eval there is no rescale. The returned losses are recorded
         # directly: the `loss` in `log_history` is not a usable witness, since transformers < 5 rounds it to 4
-        # decimals.
+        # decimals. With `beta != 0` the KL term is folded into the loss before the capture, so the identity only holds
+        # for a capture after that fold; the `beta=0.0` row alone cannot tell the two apart.
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
 
         training_args = GMPOConfig(
@@ -132,7 +134,7 @@ class TestGMPOTrainer(TrlTestCase):
             gradient_accumulation_steps=2,
             num_generations=3,
             max_completion_length=8,
-            beta=0.0,
+            beta=beta,
             max_steps=2,
             logging_steps=1,
             eval_strategy="steps",
