@@ -23,6 +23,7 @@ from transformers.utils import is_peft_available
 
 from trl.experimental.bco import BCOConfig, BCOTrainer
 from trl.experimental.bco.bco_trainer import _process_tokens, _tokenize
+from trl.experimental.utils import DPODataCollatorWithPadding
 
 from ..testing_utils import TrlTestCase, require_no_wandb, require_peft, require_sklearn
 
@@ -142,6 +143,43 @@ class TestBCOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             if param.sum() != 0:  # ignore 0 biases
                 assert not torch.equal(param.cpu(), new_param.cpu())
+
+    def test_collator_pads_answer_and_embedding_ids_with_pad_token(self):
+        # The training tests only show that an encoder-decoder run completes. This pins the padding value itself:
+        # `answer_*` and `embedding_*` ids get the pad token, their masks get 0, and the completion labels keep
+        # -100, on a ragged batch. Before the collator accepted these keys it raised `ValueError("Unexpected key")`.
+        collator = DPODataCollatorWithPadding(pad_token_id=7, is_encoder_decoder=True)
+        features = [
+            {
+                "prompt_input_ids": [1, 2, 3],
+                "prompt_attention_mask": [1, 1, 1],
+                "completion_labels": [4, 5],
+                "completion_attention_mask": [1, 1],
+                "answer_input_ids": [8, 9],
+                "answer_attention_mask": [1, 1],
+                "embedding_input_ids": [10],
+                "embedding_attention_mask": [1],
+            },
+            {
+                "prompt_input_ids": [1],
+                "prompt_attention_mask": [1],
+                "completion_labels": [4, 5, 6],
+                "completion_attention_mask": [1, 1, 1],
+                "answer_input_ids": [8, 9, 11, 12],
+                "answer_attention_mask": [1, 1, 1, 1],
+                "embedding_input_ids": [10, 13],
+                "embedding_attention_mask": [1, 1],
+            },
+        ]
+
+        batch = collator(features)
+
+        assert batch["prompt_input_ids"].tolist() == [[1, 2, 3], [1, 7, 7]]
+        assert batch["answer_input_ids"].tolist() == [[8, 9, 7, 7], [8, 9, 11, 12]]
+        assert batch["answer_attention_mask"].tolist() == [[1, 1, 0, 0], [1, 1, 1, 1]]
+        assert batch["embedding_input_ids"].tolist() == [[10, 7], [10, 13]]
+        assert batch["embedding_attention_mask"].tolist() == [[1, 0], [1, 1]]
+        assert batch["completion_labels"].tolist() == [[4, 5, -100], [4, 5, 6]]
 
     @pytest.mark.parametrize(
         "eval_dataset_type",

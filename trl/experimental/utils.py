@@ -82,7 +82,8 @@ class DPODataCollatorWithPadding:
                         padding_value = 0
                     elif k.startswith(("chosen", "rejected", "completion")) or ("decoder" in k):
                         # On this path the completion reaches the model as labels, so these are padded to be ignored
-                        # by the loss rather than to be fed as tokens.
+                        # by the loss. The `*_decoder_input_ids` keys share the rule but are only produced when a
+                        # model is passed to the tokenizing step, which no trainer does, so they never reach a model.
                         padding_value = -100
                     elif k.endswith("_input_ids"):
                         # Every remaining token sequence: the prompt, and the `answer_*` and `embedding_*` columns
