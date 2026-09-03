@@ -35,6 +35,15 @@ class AsyncDistillationConfig(_BaseConfig):
         model_init_kwargs (`dict[str, Any]` or `str`, *optional*):
             Keyword arguments for [`~transformers.AutoModelForCausalLM.from_pretrained`], used when instantiating the
             student model from a path.
+        dtype (`str`, *optional*, defaults to `"float32"`):
+            Data type to load the student model under, one of `"auto"`, `"bfloat16"`, `"float16"` or `"float32"`. It
+            defaults to `"float32"` because the training-inference mismatch the async trainers are measured against
+            ([Defeating the Training-Inference Mismatch via FP16](https://huggingface.co/papers/2510.26788), walked
+            through for them in [Defeating the trainer-generator precision mismatch in
+            TRL](https://huggingface.co/spaces/aminediroHF/trainer-generator-bf16-mismatch)) is sensitive to the
+            trainer's own precision. Closing that gap end to end also requires serving the student's vLLM server in the
+            same dtype (`vllm serve --dtype`). A `dtype` in `model_init_kwargs` takes precedence. Teacher servers are
+            unaffected: they are never updated.
         trust_remote_code (`bool`, *optional*, defaults to `False`):
             Whether to allow loading models and tokenizers that ship custom Python code from the Hub. Forwarded to
             [`~transformers.AutoModelForCausalLM.from_pretrained`] and [`~transformers.AutoTokenizer.from_pretrained`].
@@ -83,6 +92,9 @@ class AsyncDistillationConfig(_BaseConfig):
             `teacher_id` of `"math"` or `"code"` per row.
         request_timeout (`int`, *optional*, defaults to `600`):
             Timeout in seconds for individual HTTP requests to any vLLM server.
+        weight_sync_timeout (`int`, *optional*, defaults to `1800`):
+            Timeout in seconds for a weight transfer to the student's vLLM server. A transfer that does not complete
+            within this time raises instead of hanging the run.
 
         > Parameters that control the distillation loss
 
@@ -157,10 +169,13 @@ class AsyncDistillationConfig(_BaseConfig):
         num_completions_to_print (`int`, *optional*):
             Number of completions to print with `rich`. If `None`, all completions are logged.
 
-    > [!NOTE] > These parameters have default values different from [`~transformers.TrainingArguments`]: > -
-    `logging_steps`: Defaults to `1` instead of `500`. > - `gradient_checkpointing`: Defaults to `True` instead of
-    `False`. > - `bf16`: Defaults to `True` if `fp16` is not set, instead of `False`. > - `learning_rate`: Defaults to
-    `1e-6` instead of `5e-5`.
+    > [!NOTE]
+    > These parameters have default values different from [`~transformers.TrainingArguments`]:
+    > - `logging_steps`: Defaults to `1` instead of `500`.
+    > - `gradient_checkpointing`: Defaults to `True` instead of `False`.
+    > - `bf16`: Defaults to `True` if `fp16` is not set, instead of `False`.
+    > - `learning_rate`: Defaults to `1e-6` instead of `5e-5`.
+    > - `ignore_data_skip`: Defaults to `True` instead of `False`; the base Trainer's skip-and-replay loop does not apply to the async rollout queue.
     """
 
     _VALID_DICT_FIELDS = _BaseConfig._VALID_DICT_FIELDS + ["model_init_kwargs", "teacher_server_urls"]
@@ -171,6 +186,22 @@ class AsyncDistillationConfig(_BaseConfig):
         metadata={
             "help": "Keyword arguments for `transformers.AutoModelForCausalLM.from_pretrained`, used when "
             "instantiating the student model from a path."
+        },
+    )
+    dtype: str = field(
+        default="float32",
+        metadata={
+            "help": "Dtype to load the student model under. Defaults to 'float32', the precision the "
+            "training-inference mismatch results the async trainers are measured against were obtained at. A `dtype` "
+            "in `model_init_kwargs` takes precedence.",
+            "choices": ["auto", "bfloat16", "float16", "float32"],
+        },
+    )
+    ignore_data_skip: bool = field(
+        default=True,
+        metadata={
+            "help": "Always `True` for AsyncDistillation; the base Trainer's skip-and-replay loop does not apply to a "
+            "live rollout queue."
         },
     )
     trust_remote_code: bool = field(
@@ -256,6 +287,13 @@ class AsyncDistillationConfig(_BaseConfig):
     request_timeout: int = field(
         default=600,
         metadata={"help": "Timeout in seconds for individual HTTP requests to any vLLM server."},
+    )
+    weight_sync_timeout: int = field(
+        default=1800,
+        metadata={
+            "help": "Timeout in seconds for a weight transfer to the student's vLLM server. A transfer that does not "
+            "complete within this time raises instead of hanging the run."
+        },
     )
 
     # Parameters that control the distillation loss
