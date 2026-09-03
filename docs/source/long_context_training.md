@@ -203,7 +203,7 @@ Two things change once it is on:
 1. Sequences have to be padded to a multiple of `cp_size * 2`, so `pad_to_multiple_of=8` (in the [`SFTConfig`]) for four GPUs.
 2. The causal-SDPA requirement rules out packing, which relies on a block-diagonal mask to keep documents from reading each other, and TRL raises if you ask for both. It also rules out models whose layers use sliding-window or chunked attention, which accelerate refuses: OpenAI GPT-OSS, Gemma 3 and 4, Qwen3.5 and later. Qwen3 and Qwen3-MoE are full attention throughout, which is why they are the models here.
 
-Passing the slices around costs less than you would expect. At 131k tokens on one node, a step takes 34.6 s across two GPUs, 17.8 s across four and 9.5 s across eight. Each doubling of the group nearly halves the step, and two to eight recovers 3.7x of a possible 4x.
+Passing the slices around costs less than you might expect. At 131k tokens on one node, a step takes 34.6 s across two GPUs, 17.8 s across four and 9.5 s across eight. Each doubling of the group nearly halves the step time, and going from two to eight recovers 3.7x of a possible 4x.
 
 And that is the last of the four levers:
 
