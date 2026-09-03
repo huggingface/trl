@@ -1805,8 +1805,12 @@ class SFTTrainer(_BaseTrainer):
             (loss, outputs) = super().compute_loss(
                 model, inputs, return_outputs=True, num_items_in_batch=num_items_in_batch
             )
-        except ValueError as e:
-            if "Image features and image tokens do not match" in str(e) and self.args.max_length is not None:
+        except Exception as e:
+            if (
+                isinstance(e, ValueError)
+                and "Image features and image tokens do not match" in str(e)
+                and self.args.max_length is not None
+            ):
                 forward_error = ValueError(
                     f"The current `max_length` ({self.args.max_length}) is too short and causes image placeholder "
                     f"tokens in `input_ids` to be truncated, while the corresponding image features remain intact. "
