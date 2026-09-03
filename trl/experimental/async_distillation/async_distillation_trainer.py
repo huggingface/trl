@@ -493,8 +493,10 @@ class _OptimizerTimeCallback(TrainerCallback):
         self._trainer._step_optimizer_s += time.perf_counter() - self._t0
 
 
-class _InitialWeightSyncCallback(TrainerCallback):
-    """Idempotent: NCCL group setup + cold weight sync to vLLM on train begin."""
+class _TrainBeginCallback(TrainerCallback):
+    """Idempotent train-begin setup: NCCL group setup + cold weight sync to vLLM, then start the rollout worker.
+    The weight sync must complete before the worker starts, which the ordering here guarantees.
+    """
 
     def __init__(self, trainer: "AsyncDistillationTrainer"):
         self._trainer = trainer
@@ -507,19 +509,6 @@ class _InitialWeightSyncCallback(TrainerCallback):
         if self._trainer.accelerator.is_main_process and self._trainer.weight_transfer is not None:
             self._trainer.weight_transfer.init_weight_transfer()
         self._trainer._sync_weight()
-
-
-class _StartRolloutWorkerCallback(TrainerCallback):
-    """Idempotent: starts the rollout worker. Must be registered AFTER `_InitialWeightSyncCallback`."""
-
-    def __init__(self, trainer: "AsyncDistillationTrainer"):
-        self._trainer = trainer
-        self._fired = False
-
-    def on_train_begin(self, _args, _state, _control, **_kwargs):
-        if self._fired:
-            return
-        self._fired = True
         if self._trainer.accelerator.is_main_process and self._trainer.rollout_worker is not None:
             self._trainer.rollout_worker.start()
 
@@ -1016,6 +1005,15 @@ class AsyncDistillationTrainer(_BaseTrainer):
         # `DistillationTrainer`'s identical need for its own chunked JSD path.
         self._forward_redirection = _ForwardRedirection()
 
+        # The base Trainer's data-skip replay loop doesn't apply to AsyncDistillation's live rollout queue;
+        # force it off regardless of what the user passed.
+        if not self.args.ignore_data_skip:
+            logger.warning(
+                "`ignore_data_skip` is forced to `True` for AsyncDistillation because the base Trainer's "
+                "skip-and-replay loop does not apply to a live rollout queue."
+            )
+        self.args.ignore_data_skip = True
+
         # The metric sink. Values are floats, or `(numerator, denominator)` pairs for rates
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
         # MOPD (multi-teacher on-policy distillation): a stable teacher_id -> index mapping so compute_loss can
@@ -1099,10 +1097,9 @@ class AsyncDistillationTrainer(_BaseTrainer):
             self.vllm_client = None
             self.weight_transfer = None
 
-        # Add callbacks. Registration order matters: weight sync first, then worker start.
+        # Add callbacks. Cold weight sync + worker start on train begin, then periodic weight syncs.
         self.add_callback(_OptimizerTimeCallback(self))
-        self.add_callback(_InitialWeightSyncCallback(self))
-        self.add_callback(_StartRolloutWorkerCallback(self))
+        self.add_callback(_TrainBeginCallback(self))
         self.add_callback(StepIntervalCallback(self._sync_weight, self.args.weight_sync_steps))
         self.add_callback(StepIntervalCallback(self._log_step_metrics, 1))
 
@@ -1350,6 +1347,13 @@ class AsyncDistillationTrainer(_BaseTrainer):
                 per_teacher_stats = self.accelerator.reduce(local_per_teacher_stats, reduction="sum")
                 for i, teacher_id in enumerate(self._teacher_ids):
                     t_count, t_jsd_sum, t_teacher_entropy_sum = per_teacher_stats[3 * i : 3 * i + 3]
+                    # Logged as a `(numerator, denominator)` rate so the window reduces to the true share of tokens
+                    # each teacher scored, rather than a mean of per-step shares that micro-batches of unequal size
+                    # would skew. A teacher that scored nothing this step gets a real 0 share, not the NaN the
+                    # averages below use, since zero tokens is itself the answer here.
+                    self._metrics["train"][f"teacher_token_frac/{teacher_id}"].append(
+                        (t_count.item(), global_count.item())
+                    )
                     if t_count > 0:
                         self._metrics["train"][f"teacher_jsd/{teacher_id}"].append((t_jsd_sum / t_count).item())
                         self._metrics["train"][f"teacher_entropy/{teacher_id}"].append(

@@ -164,7 +164,7 @@ class AsyncGRPOConfig(_BaseConfig):
     >   decaying schedule together with an explicit `max_steps`.
     """
 
-    _VALID_DICT_FIELDS = _BaseConfig._VALID_DICT_FIELDS + ["model_init_kwargs"]
+    _VALID_DICT_FIELDS = _BaseConfig._VALID_DICT_FIELDS + ["model_init_kwargs", "chat_template_kwargs"]
 
     # Parameters that control the model
     model_init_kwargs: dict[str, Any] | str | None = field(
@@ -270,7 +270,7 @@ class AsyncGRPOConfig(_BaseConfig):
             "to repeat tokens."
         },
     )
-    chat_template_kwargs: dict | None = field(
+    chat_template_kwargs: dict | str | None = field(
         default=None,
         metadata={
             "help": "Additional keyword arguments to pass to the `apply_chat_template` function when generating "
