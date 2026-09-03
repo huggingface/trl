@@ -2783,6 +2783,11 @@ class TestGRPOTrainer(TrlTestCase):
             ({"top_p": 0.9}, {"top_p": 1.0}, False),  # the override restores the default, so nothing reshapes
             ({}, {"temperature": 0.5}, True),  # vLLM samples at 0.5 while the trainer divides by 1.0
             ({}, {"temperature": 1.0}, False),  # same value on both sides, the cancellation holds
+            ({"temperature": 0.5}, {}, False),  # the field alone moves both sides, so nothing to warn about
+            ({"temperature": 0.5}, {"temperature": 0.5}, False),  # an override equal to the field is no override
+            ({"temperature": 0.001}, {}, True),  # vLLM raises it to 0.01 while the trainer divides by 0.001
+            ({}, {"temperature": 0.005}, True),  # the same band reached through the override
+            ({"temperature": 0.01}, {}, False),  # vLLM's floor itself is sampled as requested
         ],
     )
     def test_warning_reads_generation_kwargs_overrides(self, field_kwargs, generation_kwargs, should_warn):
@@ -2825,6 +2830,21 @@ class TestGRPOTrainer(TrlTestCase):
                 output_dir=self.tmp_dir,
                 use_vllm=True,
                 vllm_importance_sampling_correction=False,
+                top_p=0.9,
+                report_to="none",
+            )
+
+        assert not any("biases `sampling/sampling_logp_difference`" in str(w.message) for w in caught)
+
+    def test_no_truncation_warning_without_vllm(self):
+        """Without vLLM there are no returned logprobs to bias, whatever the consumers say."""
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            GRPOConfig(
+                output_dir=self.tmp_dir,
+                use_vllm=False,
+                vllm_importance_sampling_correction=True,
+                off_policy_mask_threshold=0.1,
                 top_p=0.9,
                 report_to="none",
             )
