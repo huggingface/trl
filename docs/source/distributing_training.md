@@ -294,7 +294,7 @@ training_args = SFTConfig(
     # to get the most out of SP
     max_length=4096,
     packing=True,
-    attn_implementation="flash_attention_2",
+    model_init_kwargs={"attn_implementation": "flash_attention_2"},
     per_device_train_batch_size=1,
     ...
 )
