@@ -140,10 +140,13 @@ class SDFTConfig(_BaseConfig):
         vllm_model_impl (`str`, *optional*, defaults to `"vllm"`):
             Model implementation to use for vLLM. Must be one of `transformers` or `vllm`. `transformers`: Use the
             `transformers` backend for model implementation. `vllm`: Use the `vllm` library for model implementation.
-        vllm_llm_kwargs (`str`, `dict[str, Any]`, *optional*):
-            Additional keyword arguments for the vLLM `LLM` constructor, used when `vllm_mode` is `"colocate"`. Useful
-            for engine arguments TRL does not expose a field for, such as `hf_overrides`. Keys that conflict with the
-            arguments TRL sets will override them.
+        vllm_llm_kwargs (`dict[str, Any]` or `str`, *optional*):
+            Additional keyword arguments for the vLLM `LLM` constructor, used only when `vllm_mode` is `"colocate"`,
+            where TRL builds the engine. Useful for engine arguments TRL does not expose a field for, such as
+            `hf_overrides`. Keys that conflict with the arguments TRL sets override them, except the keys TRL reads
+            back after building the engine (`model`, `tensor_parallel_size`, `distributed_executor_backend`, `seed`,
+            `logprobs_mode`, `quantization`, `enable_sleep_mode`), which raise. If you are using `vllm_mode="server"`,
+            pass these arguments when launching the server instead.
         vllm_enable_sleep_mode (`bool`, *optional*, defaults to `False`):
             Enable vLLM sleep mode to offload weights/cache during the optimizer step. Keeps GPU memory usage low, but
             waking the engine adds host–device transfer latency.
@@ -323,9 +326,12 @@ class SDFTConfig(_BaseConfig):
     vllm_llm_kwargs: dict[str, Any] | str | None = field(
         default=None,
         metadata={
-            "help": "Additional keyword arguments for the vLLM `LLM` constructor, used when `vllm_mode` is "
-            "`colocate`. Useful for engine arguments TRL does not expose a field for, such as `hf_overrides`. Keys "
-            "that conflict with the arguments TRL sets will override them."
+            "help": "Additional keyword arguments for the vLLM `LLM` constructor, used only when `vllm_mode` is "
+            "`colocate`, where TRL builds the engine. Useful for engine arguments TRL does not expose a field for, "
+            "such as `hf_overrides`. Keys that conflict with the arguments TRL sets override them, except the keys "
+            "TRL reads back after building the engine (`model`, `tensor_parallel_size`, "
+            "`distributed_executor_backend`, `seed`, `logprobs_mode`, `quantization`, `enable_sleep_mode`), which "
+            "raise. If you are using `vllm_mode='server'`, pass these arguments when launching the server instead."
         },
     )
     vllm_enable_sleep_mode: bool = field(

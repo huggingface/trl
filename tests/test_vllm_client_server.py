@@ -23,7 +23,7 @@ from transformers.testing_utils import torch_device
 
 from trl.generation import vllm_generation
 from trl.generation.vllm_client import VLLMClient, parse_logprobs
-from trl.generation.vllm_generation import extract_logprobs
+from trl.generation.vllm_generation import RESERVED_LLM_KWARGS, extract_logprobs
 from trl.import_utils import is_vllm_available
 
 from .testing_utils import (
@@ -182,10 +182,10 @@ class TestVLLMGenerationLLMKwargs(TrlTestCase):
         # 0.3 is passed explicitly above, so a surviving 0.55 shows the user value wins over TRL's own default.
         assert captured["gpu_memory_utilization"] == 0.55
 
-    @pytest.mark.parametrize("key", ["tensor_parallel_size", "enable_sleep_mode"])
+    @pytest.mark.parametrize("key", sorted(RESERVED_LLM_KWARGS))
     def test_reserved_keys_are_rejected(self, monkeypatch, key):
-        # TRL reads these back to build the TP process group and drive the sleep/wake cycle, so overriding only the
-        # engine side would silently desynchronize the two.
+        # TRL reads each of these back after building the engine, or the weight sync relies on it, so overriding only
+        # the engine side would silently desynchronize the two. The table is the source of truth for the list.
         with pytest.raises(ValueError, match=f"`{key}` cannot be set in `vllm_llm_kwargs`"):
             self._build(monkeypatch, {key: 2})
 
