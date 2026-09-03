@@ -115,6 +115,50 @@ class TestGMPOTrainer(TrlTestCase):
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
+    def test_train_logs_policy_loss(self):
+        # Issue #7005: the override never logged `policy_loss`. GRPOTrainer disables the HF Trainer's own accumulation
+        # rescale (it sets `compute_loss_func`) and divides the returned loss by `current_gradient_accumulation_steps`
+        # itself, so with two accumulation steps the reported `loss` is the sum of two half-losses, which equals the
+        # mean of the two captured values. `policy_loss` must therefore equal `loss`; capturing it after the rescale
+        # would report half of that. In eval there is no rescale, so the two coincide there as well.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
+
+        training_args = GMPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,
+            per_device_train_batch_size=3,
+            per_device_eval_batch_size=6,
+            gradient_accumulation_steps=2,
+            num_generations=3,
+            max_completion_length=8,
+            beta=0.0,
+            max_steps=2,
+            logging_steps=1,
+            eval_strategy="steps",
+            eval_steps=2,
+            report_to="none",
+        )
+        trainer = GMPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset["train"],
+            eval_dataset=dataset["test"],
+        )
+        trainer.train()
+
+        train_logs = [log for log in trainer.state.log_history if "loss" in log]
+        assert len(train_logs) == 2
+        for log in train_logs:
+            assert "policy_loss" in log, f"`policy_loss` missing from {log}"
+            assert log["policy_loss"] == pytest.approx(log["loss"], rel=1e-4)
+
+        # The eval set holds 2 prompts, so a batch of 6 evaluates them in one step. With several eval batches the HF
+        # loop weights `eval_loss` per example while TRL averages its metrics per batch, and the two no longer agree.
+        eval_logs = [log for log in trainer.state.log_history if "eval_loss" in log]
+        assert len(eval_logs) == 1
+        assert eval_logs[0]["eval_policy_loss"] == pytest.approx(eval_logs[0]["eval_loss"], rel=1e-4)
+
     def test_train_with_kl(self):
         # GMPO sequence-averages the KL when beta > 0; exercise that path.
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")

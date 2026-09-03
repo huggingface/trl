@@ -1741,6 +1741,11 @@ class RLOOTrainer(_BaseTrainer):
         # Log the metrics
         mode = "train" if self.model.training else "eval"
 
+        # RLOO folds the KL penalty into the reward rather than the loss, so `policy_loss` is the clipped surrogate
+        # alone. It is captured before the MoE auxiliary loss is added below; the HF Trainer applies the accumulation
+        # rescale after `compute_loss` returns, so there is no normalizer to exclude here.
+        self._metrics[mode]["policy_loss"].append(self.accelerator.gather(loss.detach()).nanmean().item())
+
         # RLOO returns an unscaled loss (the HF Trainer divides by gradient accumulation), so add the aux term unscaled
         if self.aux_loss_enabled:
             loss = loss + self.router_aux_loss_coef * aux_loss

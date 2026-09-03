@@ -48,6 +48,54 @@ class TestRLOOTrainer(TrlTestCase):
             train_dataset=dataset,
         )
 
+    def test_train_logs_policy_loss(self):
+        # Issue #7005: `policy_loss` was never logged. It is captured before the Mixture-of-Experts auxiliary loss is
+        # added, so with a MoE model the reported `loss` must equal `policy_loss + router_aux_loss_coef * aux_loss`
+        # (`aux_loss` is logged unscaled). Capturing after the addition would make the two sides differ by exactly
+        # that term. RLOO applies no accumulation rescale of its own, and the HF Trainer's rescale is a no-op at one
+        # accumulation step, so the identity holds in both train and eval.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
+
+        training_args = RLOOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,
+            per_device_train_batch_size=3,
+            per_device_eval_batch_size=6,
+            num_generations=3,
+            max_completion_length=8,
+            max_steps=2,
+            logging_steps=1,
+            eval_strategy="steps",
+            eval_steps=2,
+            report_to="none",
+        )
+        trainer = RLOOTrainer(
+            model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset["train"],
+            eval_dataset=dataset["test"],
+        )
+        assert trainer.aux_loss_enabled
+        trainer.train()
+
+        coef = training_args.router_aux_loss_coef
+        train_logs = [log for log in trainer.state.log_history if "loss" in log]
+        assert len(train_logs) == 2
+        for log in train_logs:
+            assert "policy_loss" in log, f"`policy_loss` missing from {log}"
+            assert log["policy_loss"] + coef * log["aux_loss"] == pytest.approx(log["loss"], rel=1e-4)
+            assert log["aux_loss"] != 0.0
+
+        # The eval set holds 2 prompts, so a batch of 6 evaluates them in one step. With several eval batches the HF
+        # loop weights `eval_loss` per example while TRL averages its metrics per batch, and the two no longer agree.
+        eval_logs = [log for log in trainer.state.log_history if "eval_loss" in log]
+        assert len(eval_logs) == 1
+        eval_log = eval_logs[0]
+        assert eval_log["eval_policy_loss"] + coef * eval_log["eval_aux_loss"] == pytest.approx(
+            eval_log["eval_loss"], rel=1e-4
+        )
+
     @pytest.mark.parametrize(
         "model_id",
         [

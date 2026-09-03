@@ -119,9 +119,14 @@ class GMPOTrainer(GRPOTrainer):
         mode = "train" if self.model.training else "eval"
         loss = per_sequence_loss.mean()
         normalizer = self.current_gradient_accumulation_steps if mode == "train" else 1.0  # no accum in eval
+        policy_loss = loss.detach()
         loss = loss / normalizer
 
         # Log the metrics
+        # `policy_loss` is captured before the accumulation rescale, after the KL term is folded in above, so with
+        # `beta != 0` it carries that too. GMPO has no entropy bonus, so nothing else is excluded.
+        self._metrics[mode]["policy_loss"].append(self.accelerator.gather(policy_loss).nanmean().item())
+
         def masked_seq_mean(x):
             if x.shape[1] == 1:  # when importance_sampling_level == "sequence": already one value per sequence
                 return x.squeeze(1)
