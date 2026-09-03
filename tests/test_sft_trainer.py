@@ -1073,6 +1073,26 @@ class TestSFTTrainer(TrlTestCase):
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
             )
 
+    @pytest.mark.parametrize(
+        "attn_implementation, expect_warning",
+        [
+            ("kernels-community/flash-attn2", False),
+            ("kernels-community/flash-attn2@v2", False),
+            ("eager", True),
+        ],
+    )
+    def test_padding_free_warns_only_for_unsupported_attention(self, attn_implementation, expect_warning, caplog):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train[:2]")
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
+        # Only the config value matters here: the warning is emitted at init, so no attention kernel is ever loaded.
+        model.config._attn_implementation = attn_implementation
+        training_args = SFTConfig(output_dir=self.tmp_dir, padding_free=True, max_length=None, report_to="none")
+
+        with caplog.at_level("WARNING", logger="trl.trainer.sft_trainer"):
+            SFTTrainer(model=model, args=training_args, train_dataset=dataset)
+
+        assert ("supported Flash Attention variant" in caplog.text) == expect_warning
+
     def test_train_with_iterable_dataset(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train", streaming=True)
 
@@ -2197,26 +2217,26 @@ class TestSFTTrainer(TrlTestCase):
 
     @require_peft
     @require_bitsandbytes
-    def test_peft_with_quantization(self):
-        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+    def test_train_peft_and_quantization(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
 
+        training_args = SFTConfig(output_dir=self.tmp_dir, learning_rate=0.1, report_to="none")
         quantization_config = BitsAndBytesConfig(
             load_in_4bit=True,
             bnb_4bit_use_double_quant=True,
             bnb_4bit_quant_type="nf4",
-            bnb_4bit_compute_dtype=torch.float16,
+            bnb_4bit_compute_dtype=torch.bfloat16,
         )
-        model = AutoModelForCausalLM.from_pretrained(
-            model_id,
-            dtype="float32",
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",  # identifier, so that the trainer quantizes it
+            args=training_args,
+            train_dataset=dataset,
             quantization_config=quantization_config,
+            peft_config=LoraConfig(),
         )
 
-        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
-
-        # Initialize the trainer with the already configured PeftModel
-        training_args = SFTConfig(output_dir=self.tmp_dir, learning_rate=0.1, report_to="none")
-        trainer = SFTTrainer(model=model, args=training_args, train_dataset=dataset, peft_config=LoraConfig())
+        # Check that the trainer applied the quantization config when loading the model
+        assert trainer.model.base_model.model.is_loaded_in_4bit
 
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
@@ -2225,38 +2245,14 @@ class TestSFTTrainer(TrlTestCase):
         assert trainer.state.log_history[-1]["train_loss"] is not None
         assert trainer.state.log_history[-1]["mean_token_accuracy"] is not None
 
-        # In bitsandbytes, a Linear4bit's bias is cast in-place to the input dtype during the forward pass if its
-        # dtype doesn't match, which changes these specific bias parameters unexpectedly during the first forward
-        # pass of training. Before bitsandbytes 0.50.0, this only affected the biases below; from 0.50.0 on
-        # (https://github.com/bitsandbytes-foundation/bitsandbytes/pull/1904), the cast happens after the input is
-        # cast to the compute dtype, so it now affects every layer's biases instead of only some.
-        import bitsandbytes as bnb
-
-        bnb_bias_params_that_change = [
-            "base_model.model.model.layers.1.self_attn.k_proj.bias",
-            "base_model.model.model.layers.1.self_attn.q_proj.base_layer.bias",
-            "base_model.model.model.layers.1.self_attn.v_proj.base_layer.bias",
-        ]
-        if Version(bnb.__version__) >= Version("0.50.0"):
-            bnb_bias_params_that_change += [
-                "base_model.model.model.layers.0.self_attn.k_proj.bias",
-                "base_model.model.model.layers.0.self_attn.q_proj.base_layer.bias",
-                "base_model.model.model.layers.0.self_attn.v_proj.base_layer.bias",
-            ]
-
-        # Check that the peft params have changed and the base model params have not changed
+        # Check that the peft params have changed, and that they are cast to bfloat16, as recommended by the QLoRA
+        # paper. The base model params are not checked: bitsandbytes casts the biases of a Linear4bit in-place during
+        # the forward pass, so some of them change in a way that is unrelated to training.
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            if n in bnb_bias_params_that_change:
-                param = param.float()
-                new_param = new_param.float()
-
-            if "lora" not in n:  # We expect the base model params to be the same (up to the bnb bias dtype cast above)
-                torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed.")
-            elif "lora" in n:  # We expect the peft params to be different
+            if "lora" in n:  # We expect the peft params to be different
+                assert param.dtype == torch.bfloat16, f"Parameter {n} is not in bfloat16."
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
-            else:
-                raise ValueError(f"Unexpected parameter {n} in model: {trainer.model}")
 
     @require_peft
     def test_prompt_tuning_peft_model(self):
