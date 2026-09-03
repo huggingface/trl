@@ -26,6 +26,7 @@ from trl.trainer.dpo_trainer import DataCollatorForPreference, DataCollatorForVi
 
 from .testing_utils import (
     TrlTestCase,
+    assert_processing_class_revision,
     is_ampere_or_newer,
     require_bitsandbytes,
     require_kernels,
@@ -167,6 +168,16 @@ class TestDataCollatorForVisionPreference(TrlTestCase):
 
 
 class TestDPOTrainer(TrlTestCase):
+    def test_init_auto_processing_class_uses_model_revision(self):
+        # The automatically created processing_class must be loaded from the same revision as the model
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        with assert_processing_class_revision("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", "main"):
+            DPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                args=DPOConfig(output_dir=self.tmp_dir, model_init_kwargs={"revision": "main"}),
+                train_dataset=dataset,
+            )
+
     @pytest.mark.parametrize(
         "model_id",
         [

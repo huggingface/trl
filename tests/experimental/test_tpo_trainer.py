@@ -20,7 +20,7 @@ from transformers.utils import is_peft_available
 from trl.experimental.tpo import TPOConfig, TPOTrainer
 from trl.experimental.tpo.tpo_trainer import DataCollatorForTriplePreference
 
-from ..testing_utils import TrlTestCase, require_peft
+from ..testing_utils import TrlTestCase, assert_processing_class_revision, require_peft
 
 
 if is_peft_available():
@@ -103,6 +103,17 @@ class TestDataCollatorForTriplePreference(TrlTestCase):
 
 
 class TestTPOTrainer(TrlTestCase):
+    def test_init_auto_processing_class_uses_model_revision(self):
+        # The automatically created processing_class must be loaded from the same revision as the model
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        dataset = dataset.map(_add_reference_column)
+        with assert_processing_class_revision("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", "main"):
+            TPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                args=TPOConfig(output_dir=self.tmp_dir, model_init_kwargs={"revision": "main"}),
+                train_dataset=dataset,
+            )
+
     def test_train(self):
         # Get the dataset and synthesize a reference (gold) completion
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")

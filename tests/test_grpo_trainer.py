@@ -41,6 +41,7 @@ from trl.import_utils import is_liger_kernel_available
 
 from .testing_utils import (
     TrlTestCase,
+    assert_processing_class_revision,
     is_ampere_or_newer,
     require_bitsandbytes,
     require_liger_kernel,
@@ -282,6 +283,17 @@ class TestGRPOTrainer(TrlTestCase):
             reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
             train_dataset=dataset,
         )
+
+    def test_init_auto_processing_class_uses_model_revision(self):
+        # The automatically created processing_class must be loaded from the same revision as the model
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        with assert_processing_class_revision("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", "main"):
+            GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=GRPOConfig(output_dir=self.tmp_dir, model_init_kwargs={"revision": "main"}),
+                train_dataset=dataset,
+            )
 
     @pytest.mark.parametrize(
         "model_id",

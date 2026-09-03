@@ -16,11 +16,22 @@ import functools
 import signal
 import warnings
 from collections.abc import Callable
+from contextlib import ExitStack, contextmanager
+from unittest.mock import patch
 
 import psutil
 import pytest
 import torch
-from transformers import is_bitsandbytes_available, is_comet_available, is_sklearn_available, is_wandb_available
+from transformers import (
+    AutoProcessor,
+    AutoTokenizer,
+    PreTrainedTokenizerBase,
+    ProcessorMixin,
+    is_bitsandbytes_available,
+    is_comet_available,
+    is_sklearn_available,
+    is_wandb_available,
+)
 from transformers.testing_utils import backend_device_count, torch_device
 from transformers.utils import (
     is_kernels_available,
@@ -157,6 +168,61 @@ def ignore_warnings(message: str = None, category: type[Warning] = Warning) -> C
         return wrapper
 
     return decorator
+
+
+def wrap_classmethod_from_pretrained(original_classmethod, before):
+    """
+    Re-wrap a `from_pretrained` classmethod so it can be monkeypatched without breaking dispatch logic that introspects
+    the class (e.g. `AutoProcessor`/`AutoTokenizer` picking a concrete implementation based on the repository content).
+    `before` is called with `(cls, pretrained_model_name_or_path, kwargs)` before delegating to the original
+    implementation.
+
+    Patching a classmethod naively (`cls.from_pretrained = new_value`, restored later from a `getattr`-captured
+    original) freezes `cls` to whatever class was patched: `getattr` returns the classmethod already bound, so
+    restoring it that way binds every subclass's later call back to the patched class instead of the subclass. Callers
+    must patch and restore through the raw `__dict__` entry instead, e.g. via `unittest.mock.patch.object`, which reads
+    `cls.__dict__` directly and keeps the classmethod descriptor's per-subclass binding intact.
+    """
+    original_func = original_classmethod.__func__
+
+    @functools.wraps(original_func)
+    def wrapper(cls, pretrained_model_name_or_path, *args, **kwargs):
+        before(cls, pretrained_model_name_or_path, kwargs)
+        return original_func(cls, pretrained_model_name_or_path, *args, **kwargs)
+
+    return classmethod(wrapper)
+
+
+@contextmanager
+def assert_processing_class_revision(model_id, expected_revision):
+    """
+    Assert that the `processing_class` a trainer auto-loads for `model_id` inside this block is fetched with
+    `revision=expected_revision`.
+
+    Patches at every layer a `processing_class` can be resolved from (`AutoProcessor`, `AutoTokenizer`, and the base
+    classes they eventually dispatch to) so the assertion holds regardless of which of those a given trainer calls
+    directly. Calls for other repos (e.g. a reward model's own tokenizer) are observed but ignored, since only
+    `model_id`'s processing_class is expected to follow the model's revision.
+    """
+    seen_revisions = []
+
+    def record(cls, pretrained_model_name_or_path, kwargs):
+        if pretrained_model_name_or_path == model_id:
+            seen_revisions.append(kwargs.get("revision"))
+
+    classes = [AutoProcessor, AutoTokenizer, PreTrainedTokenizerBase, ProcessorMixin]
+    with ExitStack() as stack:
+        for cls in classes:
+            stack.enter_context(
+                patch.object(cls, "from_pretrained", wrap_classmethod_from_pretrained(cls.from_pretrained, record))
+            )
+        yield
+
+    assert seen_revisions, f"no processing_class `from_pretrained` call for {model_id!r} was observed"
+    assert all(revision == expected_revision for revision in seen_revisions), (
+        f"expected every processing_class `from_pretrained` call for {model_id!r} to use revision="
+        f"{expected_revision!r}, got {seen_revisions!r}"
+    )
 
 
 def kill_process(process):

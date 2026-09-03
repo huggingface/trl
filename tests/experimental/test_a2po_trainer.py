@@ -18,7 +18,7 @@ from datasets import Dataset, DatasetDict
 
 from trl.experimental.a2po import A2POConfig, A2POTrainer
 
-from ..testing_utils import TrlTestCase
+from ..testing_utils import TrlTestCase, assert_processing_class_revision
 
 
 def completion_parity_reward(completions, **kwargs):
@@ -27,6 +27,17 @@ def completion_parity_reward(completions, **kwargs):
 
 
 class TestA2POTrainer(TrlTestCase):
+    def test_init_auto_processing_class_uses_model_revision(self):
+        # The automatically created processing_class must be loaded from the same revision as the model
+        dataset = Dataset.from_dict({"prompt": ["The capital of France is", "Two plus two equals"]})
+        with assert_processing_class_revision("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", "main"):
+            A2POTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs=completion_parity_reward,
+                args=A2POConfig(output_dir=self.tmp_dir, report_to="none", model_init_kwargs={"revision": "main"}),
+                train_dataset=dataset,
+            )
+
     def test_trust_remote_code(self):
         dataset = Dataset.from_dict({"prompt": ["The capital of France is", "Two plus two equals"]})
         model_id = "trl-internal-testing/tiny-RemoteForCausalLM"

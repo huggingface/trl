@@ -24,7 +24,7 @@ from transformers.utils import is_peft_available
 from trl import RewardConfig, RewardTrainer
 from trl.trainer.reward_trainer import DataCollatorForPreference
 
-from .testing_utils import TrlTestCase, require_bitsandbytes, require_peft
+from .testing_utils import TrlTestCase, assert_processing_class_revision, require_bitsandbytes, require_peft
 
 
 if is_peft_available():
@@ -108,6 +108,16 @@ class TestDataCollatorForPreference(TrlTestCase):
 
 
 class TestRewardTrainer(TrlTestCase):
+    def test_init_auto_processing_class_uses_model_revision(self):
+        # The automatically created processing_class must be loaded from the same revision as the model
+        dataset = load_dataset("trl-internal-testing/zen", "standard_implicit_prompt_preference", split="train")
+        with assert_processing_class_revision("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", "main"):
+            RewardTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                args=RewardConfig(output_dir=self.tmp_dir, model_init_kwargs={"revision": "main"}),
+                train_dataset=dataset,
+            )
+
     def test_raises_error_when_model_num_labels_not_one(self):
         """Test that RewardTrainer raises ValueError when model doesn't have num_labels=1."""
         model = AutoModelForSequenceClassification.from_pretrained(
