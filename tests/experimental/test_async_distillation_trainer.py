@@ -14,15 +14,18 @@
 
 import asyncio
 import itertools
+import json
 import math
 import multiprocessing as mp
+import os
 import queue
 import types
 from collections import defaultdict
+from unittest.mock import MagicMock, patch
 
 import pytest
 import torch
-from datasets import load_dataset
+from datasets import Dataset, load_dataset
 from transformers import AutoTokenizer
 from transformers.testing_utils import torch_device
 from transformers.utils import is_torch_xla_available
@@ -35,11 +38,13 @@ from trl.experimental.async_distillation.async_distillation_trainer import (
     TokenBudgetBatcher,
     _add_tail_bucket,
     _balance_by_squared_length,
+    _EpochStopCallback,
     _jsd_divergence,
     _narrow_top1_actual_support,
     _reduce_metric,
 )
 from trl.experimental.async_distillation.async_rollout_worker import (
+    AsyncRolloutWorker,
     RolloutSample,
     _AsyncRolloutLoop,
     _parse_teacher_logprobs_at_position,
@@ -47,6 +52,7 @@ from trl.experimental.async_distillation.async_rollout_worker import (
 from trl.experimental.server_distillation.server_distillation_trainer import (
     _jsd_divergence as _reference_jsd_divergence,
 )
+from trl.trainer.base_trainer import _BaseTrainer
 
 from ..testing_utils import TrlTestCase, is_ampere_or_newer
 
@@ -114,6 +120,7 @@ class _StubRolloutWorker:
                 teacher_topk_logprobs=[[] for _ in prompt_ids] + teacher_topk_logprobs,
                 model_version=self._model_version,
                 teacher_id="default",
+                prompt_id=idx,  # `itertools.cycle` keeps counting across epochs, like the real `_repeat_iterator`
                 metrics={},
             )
 
@@ -155,7 +162,7 @@ class _StubWeightTransfer:
         pass
 
 
-def _rollout_sample(length: int, top_k: int = TEACHER_TOP_K, teacher_id: str = "default") -> dict:
+def _rollout_sample(length: int, top_k: int = TEACHER_TOP_K, teacher_id: str = "default", prompt_id: int = 0) -> dict:
     # First token is a prompt token (completion_mask 0, empty teacher candidates); the rest are completion tokens.
     teacher_topk_ids = [[]] + [list(range(top_k))] * (length - 1)
     teacher_topk_logprobs = [[]] + [[-float(i) - 0.1 for i in range(top_k)]] * (length - 1)
@@ -165,6 +172,7 @@ def _rollout_sample(length: int, top_k: int = TEACHER_TOP_K, teacher_id: str = "
         "teacher_topk_ids": teacher_topk_ids,
         "teacher_topk_logprobs": teacher_topk_logprobs,
         "teacher_id": teacher_id,
+        "prompt_id": prompt_id,
         "metrics": {},
     }
 
@@ -221,8 +229,8 @@ class TestPackingAwareBatching:
 
     def test_collator_pads_unequal_rows(self):
         collator = DataCollatorForRollout(pad_token_id=0, teacher_top_k=TEACHER_TOP_K, num_processes=2)
-        a = _rollout_sample(3)  # input_ids [0, 1, 2]
-        b = _rollout_sample(2)  # input_ids [0, 1]
+        a = _rollout_sample(3, prompt_id=7)  # input_ids [0, 1, 2]
+        b = _rollout_sample(2, prompt_id=8)  # input_ids [0, 1]
 
         batch = collator([[[a], [b]]])
 
@@ -242,6 +250,9 @@ class TestPackingAwareBatching:
         assert collator.metrics["batch/row_imbalance"] == [9 / 6.5]  # Σ Lᵢ² of 9 and 4, against their mean
         assert collator.metrics["batch/pad_frac"] == [(1, 6)]  # the one slot row b was padded with
         assert "batch/row_fill_frac" not in collator.metrics  # no budget passed, so nothing to fill
+
+        # The prompts behind this micro-batch, accumulated for `_EpochStopCallback` to count epochs with.
+        assert collator.prompts_trained == {7, 8}
 
     def test_collator_packs_teacher_id_per_token_for_mopd(self):
         # Packing concatenates samples from different teachers into one row, so compute_loss can only attribute a
@@ -431,7 +442,7 @@ class TestMultiTeacherRouting:
             {"prompt": [{"role": "user", "content": "hi"}], **({} if tid is None else {"teacher_id": tid})}
             for tid in teacher_ids
         ]
-        samples = [asyncio.run(loop._generate_and_score_one(row)) for row in rows]
+        samples = [asyncio.run(loop._generate_and_score_one(i, row)) for i, row in enumerate(rows)]
         return samples, requests
 
     @pytest.mark.parametrize("teacher_id", ["whatever", None])
@@ -798,6 +809,46 @@ class TestAsyncDistillationTrainer(TrlTestCase):
         else:
             assert torch.isfinite(torch.tensor(poisoned_step["loss"]))
 
+    def test_resume_from_checkpoint(self):
+        # Checks that ignore_data_skip is True and that resume doesn't crash. The stub worker is not an
+        # AsyncRolloutWorker, so the checkpoint-write and resume-read paths stay inert here — those are covered by
+        # TestRolloutStateCheckpoint.
+        # Qwen3 rather than the Qwen2.5 model the tests above use: that one has head_dim=2, which flash-attn rejects
+        # ("head_size should be a multiple of 8") on some of its kernels, and this test happens to select one of them.
+        model_id = "trl-internal-testing/tiny-Qwen3ForCausalLM"
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+
+        def build_trainer(**overrides):
+            args = AsyncDistillationConfig(
+                output_dir=self.tmp_dir,
+                per_device_train_batch_size=3,
+                teacher_top_k=TEACHER_TOP_K,
+                max_completion_length=8,
+                token_budget=-1,  # FixedCountBatcher, so a step consumes a fixed, predictable number of samples
+                vllm_server_timeout=5.0,
+                report_to="none",
+                **overrides,
+            )
+            return AsyncDistillationTrainer(
+                model=model_id,
+                args=args,
+                train_dataset=dataset,
+                rollout_worker=_StubRolloutWorker(tokenizer, dataset, vocab_size=len(tokenizer)),
+                weight_transfer=_StubWeightTransfer(),
+            )
+
+        # First run: train for 2 steps, which saves a checkpoint at step 1.
+        trainer = build_trainer(max_steps=2, save_steps=1)
+        assert trainer.args.ignore_data_skip is True
+        trainer.train()
+
+        checkpoint_dir = os.path.join(self.tmp_dir, "checkpoint-1")
+        assert os.path.isfile(os.path.join(checkpoint_dir, "trainer_state.json"))
+
+        # Second run: resume from the step-1 checkpoint.
+        build_trainer(max_steps=3).train(resume_from_checkpoint=checkpoint_dir)
+
     @pytest.mark.parametrize("beta", [0.25, 0.5, 0.75, 1.0])
     def test_train_with_nonzero_beta(self, beta):
         # Adapted from ServerDistillationTrainer's own `test_reverse_kl_finite_grad_with_ragged_batch`: a real
@@ -832,3 +883,128 @@ class TestAsyncDistillationTrainer(TrlTestCase):
         for record in log_history:
             assert math.isfinite(record["grad_norm"]), f"grad_norm={record['grad_norm']} leaked -inf into backward"
             assert math.isfinite(record["loss"])
+
+
+class TestEpochStop:
+    """`num_train_epochs` stops after N full passes over the PROMPTS, counted as distinct prompt ids.
+
+    The count spans a resume: the worker restarts `prompt_id` at 0, so the prompts trained before the checkpoint ride
+    in `_prompts_before_resume` and are added back here, or a resumed run would train `num_train_epochs` more passes on
+    top of the ones already done.
+    """
+
+    @pytest.mark.parametrize(
+        ("trained", "before_resume", "should_stop"),
+        [
+            ({0, 1, 2}, 0, False),
+            ({0, 1, 2, 3}, 0, True),
+            ({0, 1}, 2, True),  # a resumed run reaches the target counting the checkpoint's prompts
+            (set(), 4, True),  # ... and reaches it having trained nothing of its own
+        ],
+    )
+    def test_stops_once_the_prompt_target_is_reached(self, trained, before_resume, should_stop):
+        trainer = types.SimpleNamespace(
+            # Single process, so the cross-rank reduce is the identity.
+            accelerator=types.SimpleNamespace(device="cpu", reduce=lambda tensor, reduction: tensor),
+            _trained_prompts=trained,
+            _prompts_before_resume=before_resume,
+        )
+        control = types.SimpleNamespace(should_training_stop=False)
+
+        _EpochStopCallback(trainer, target_prompts=4).on_step_end(None, None, control)
+
+        assert control.should_training_stop is should_stop
+
+
+class TestRolloutStateCheckpoint(TrlTestCase):
+    """Prompt-index checkpoint/resume logic — no GPU or vLLM required."""
+
+    def _stub_trainer_for_save(self, trained_prompts, dataset_start_index=0, prompts_before_resume=0):
+        trainer = AsyncDistillationTrainer.__new__(AsyncDistillationTrainer)  # __new__ skips __init__ (needs a GPU)
+        trainer.accelerator = MagicMock()
+        trainer.accelerator.is_main_process = True
+        trainer.rollout_worker = MagicMock(spec=AsyncRolloutWorker)
+        trainer.rollout_worker._loop_kwargs = {"dataset_start_index": dataset_start_index}
+        trainer._trained_prompts = trained_prompts
+        trainer._prompts_before_resume = prompts_before_resume
+        trainer.state = MagicMock()
+        trainer.state.global_step = 5
+        trainer._get_output_dir = lambda trial: self.tmp_dir
+        return trainer
+
+    @pytest.mark.parametrize(
+        ("trained_prompts", "dataset_start_index", "expected"),
+        [
+            ({0, 1, 2, 3, 4}, 10, 15),  # dataset_start_index(10) + first_untrained(5)
+            # Prompt 2 was never trained (its rollout was dropped as stale), so the cursor stops there: it gets
+            # re-generated on resume instead of being silently skipped.
+            ({0, 1, 3, 4, 5}, 0, 2),
+        ],
+    )
+    def test_save_checkpoint_writes_rollout_state(self, trained_prompts, dataset_start_index, expected):
+        trainer = self._stub_trainer_for_save(trained_prompts, dataset_start_index=dataset_start_index)
+
+        with patch.object(_BaseTrainer, "_save_checkpoint"):
+            trainer._save_checkpoint(MagicMock(), None)
+
+        with open(os.path.join(self.tmp_dir, "checkpoint-5", "rollout_state.json")) as f:
+            assert json.load(f)["prompt_index"] == expected
+
+    def test_save_checkpoint_writes_rollout_state_before_the_hub_push(self):
+        # `super()._save_checkpoint` is what uploads the checkpoint folder under `hub_strategy="checkpoint"`, so the
+        # file has to exist by the time it runs. Writing it from an `on_save` callback would not: `Trainer` fires
+        # `on_save` only after `_save_checkpoint` returns, leaving the Hub copy without it.
+        trainer = self._stub_trainer_for_save({0, 1})
+        written_before_super = []
+
+        def record(*_args, **_kwargs):
+            written_before_super.append(
+                os.path.isfile(os.path.join(self.tmp_dir, "checkpoint-5", "rollout_state.json"))
+            )
+
+        with patch.object(_BaseTrainer, "_save_checkpoint", side_effect=record):
+            trainer._save_checkpoint(MagicMock(), None)
+
+        assert written_before_super == [True]
+
+    def test_rollout_loop_skips_to_start_index(self):
+        ctx = mp.get_context("spawn")
+        loop = _AsyncRolloutLoop(
+            model_name="test",
+            dataset=Dataset.from_dict({"prompt": [f"row_{i}" for i in range(10)]}),
+            processing_class=MagicMock(),
+            rollout_buffer=ctx.Queue(),
+            model_version_value=ctx.Value("i", 0),
+            heartbeat_value=ctx.Value("d", 0.0),
+            failed_event=ctx.Event(),
+            exception_info_queue=ctx.Queue(),
+            metrics_queue=ctx.Queue(),
+            dataset_start_index=3,
+        )
+        _prompt_id, row = next(loop._repeat_iterator())
+        assert row["prompt"] == "row_3"
+
+    def test_inner_training_loop_sets_dataset_start_index_from_file(self):
+        checkpoint_dir = os.path.join(self.tmp_dir, "checkpoint-10")
+        os.makedirs(checkpoint_dir)
+        with open(os.path.join(checkpoint_dir, "rollout_state.json"), "w") as f:
+            json.dump({"prompt_index": 77}, f)
+
+        trainer = AsyncDistillationTrainer.__new__(AsyncDistillationTrainer)  # __new__ skips __init__ (needs a GPU)
+        trainer.rollout_worker = MagicMock(spec=AsyncRolloutWorker)
+        trainer.rollout_worker._loop_kwargs = {}
+        trainer.train_dataset = Dataset.from_dict({"prompt": list(range(100))})
+        trainer.accelerator = MagicMock()
+        trainer.accelerator.is_main_process = False  # skip finally-block teardown
+        trainer._prompts_before_resume = 0
+        trainer._trained_prompts = {1, 2, 3}  # a prior run's ids, which the reset has to drop
+
+        with patch.object(_BaseTrainer, "_inner_training_loop", return_value=None):
+            trainer._inner_training_loop(resume_from_checkpoint=checkpoint_dir)
+
+        assert trainer.rollout_worker._loop_kwargs["dataset_start_index"] == 77
+        # Epochs are counted in prompts trained, so a resumed run has to pick that count up too, or it would train
+        # `num_train_epochs` more passes on top of the ones already done.
+        assert trainer._prompts_before_resume == 77
+        # The worker restarts `prompt_id` at 0, so ids left over from an earlier run would collide with this one's.
+        assert trainer._trained_prompts == set()
