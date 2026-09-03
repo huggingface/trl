@@ -27,7 +27,7 @@ import transformers
 from accelerate import PartialState
 from datasets import IterableDataset
 from packaging.version import Version
-from transformers import AutoConfig, AutoModelForCausalLM
+from transformers import AutoConfig, AutoModelForCausalLM, PretrainedConfig
 from transformers.testing_utils import torch_device
 from transformers.utils import is_peft_available
 
@@ -1371,7 +1371,7 @@ class _FakeCausalLM(nn.Module):
 
     def __init__(self, hidden_size, vocab_size):
         super().__init__()
-        self.config = type("Config", (), {})()
+        self.config = PretrainedConfig()
         self.model = _FakeTransformerModel(hidden_size)
         self.lm_head = nn.Linear(hidden_size, vocab_size, bias=False)
 
