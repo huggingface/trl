@@ -45,7 +45,8 @@ class GRPOConfig(_BaseConfig):
         router_aux_loss_coef (`float`, *optional*, defaults to `0.001`):
             Coefficient of the load-balancing auxiliary loss. Only has an effect when training a Mixture-of-Experts
             (MoE) model; for other models it does nothing. The auxiliary loss is added to the training loss with this
-            weight. Set to `0.0` to disable it.
+            weight. Set to `0.0` to disable it. The auxiliary loss is not supported with the Liger kernel; set this
+            value to `0.0` when `use_liger_kernel=True`.
         disable_dropout (`bool`, *optional*, defaults to `False`):
             Whether to disable dropout in the model. This is useful for training with a reference model, as it prevents
             the model from generating different logprobs for the same input.
@@ -444,7 +445,8 @@ class GRPOConfig(_BaseConfig):
         metadata={
             "help": "Coefficient of the load-balancing auxiliary loss. Only has an effect when training a "
             "Mixture-of-Experts (MoE) model; for other models it does nothing. The auxiliary loss is added to the "
-            "training loss with this weight. Set to `0.0` to disable it."
+            "training loss with this weight. Set to `0.0` to disable it. The auxiliary loss is not supported when "
+            "`use_liger_kernel=True`."
         },
     )
     disable_dropout: bool = field(
