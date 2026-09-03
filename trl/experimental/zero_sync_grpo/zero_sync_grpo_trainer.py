@@ -573,6 +573,10 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         # and activations; the engine's own default claims most of the free memory.
         cb_kwargs.setdefault("max_memory_percent", 0.2)
         if self.tp_size > 1:
+            # step() runs prepare, compute and update back to back, so the async double-buffer has nothing to overlap
+            # there, and the engine does not bootstrap it in step mode (requests finish with no tokens). The thread
+            # mode used at tp_size == 1 keeps the engine's default.
+            cb_kwargs["use_async_batching"] = False
             # The engine turns NCCL's graph-mixing support off, which fits a pure-decode server but slows the
             # training collectives here (measured 3.62 against 3.71 s/step at batch 128). The trainer strictly
             # alternates generation and training, so captured and eager collectives are never in flight together
