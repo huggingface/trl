@@ -176,12 +176,10 @@ class VLLMClient:
          'logprob_token_ids': [[[2980], [498], [1492], [752], [448], [264], [13027], [8645], [30], [358], [2776], [4460], [311], [3270], [264], [2025]],
                                [[911], [98072], [2142], [624], [45], [51426], [2142], [374], [279], [16396], [429], [4302], [702], [36988], [7290], [476]]]}
 
-        >>> import torch
         >>> from transformers import AutoModelForCausalLM
 
-        >>> device = torch.accelerator.current_accelerator()
-        >>> model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-7B", device_map=device)
-        >>> client.init_communicator(device=device)
+        >>> model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-7B", device_map="cuda")
+        >>> client.init_communicator(device="cuda")
         >>> client.update_model_params(model)
         ```
 
@@ -841,8 +839,7 @@ class VLLMClient:
 # Example usage
 if __name__ == "__main__":
     client = VLLMClient()
-    device = torch.accelerator.current_accelerator()
-    client.init_communicator(device=device)
+    client.init_communicator(device="cuda")
 
     # Generate completions
     responses = client.generate(["Hello, AI!", "Tell me a joke"], n=4, max_tokens=32)
@@ -851,5 +848,5 @@ if __name__ == "__main__":
     # Update model weights
     from transformers import AutoModelForCausalLM
 
-    model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-7B").to(device)
+    model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-7B").to("cuda")
     client.update_model_params(model)
