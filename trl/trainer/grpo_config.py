@@ -102,7 +102,10 @@ class GRPOConfig(_BaseConfig):
             Additional keyword arguments to pass to [`~transformers.GenerationConfig`] (if using transformers) or
             `SamplingParams` (if using vLLM) when sampling completions. This can be used to further customize the
             generation behavior, such as setting `suppress_tokens`, `num_beams`, etc. If it contains keys that conflict
-            with the other generation parameters (like `min_p`, `top_p`, etc.), they will override them.
+            with the other generation parameters (like `min_p`, `top_p`, etc.), they will override them. With vLLM, any
+            sampler-side modifier passed here (`logit_bias`, `bad_words`, `frequency_penalty`, ...) reshapes the logits
+            vLLM computes its logprobs from and biases `sampling/sampling_logp_difference` the same way `top_p` does;
+            only `top_p`, `top_k`, `min_p`, `repetition_penalty` and a `temperature` override are checked for it.
         chat_template_kwargs (`dict[str, Any]`, *optional*):
             Additional keyword arguments to pass to the `apply_chat_template` function when generating completions.
         repetition_penalty (`float`, *optional*, defaults to `1.0`):
@@ -1134,7 +1137,13 @@ class GRPOConfig(_BaseConfig):
             )
             self.vllm_importance_sampling_clip_max = self.vllm_importance_sampling_cap
 
-        if self.use_vllm and self.vllm_importance_sampling_correction:
+        # The trainer always asks vLLM for the logprobs of the sampled tokens; two paths consume them: the importance
+        # sampling correction and the off-policy mask, which reads `sampling_per_token_logps` whenever
+        # `off_policy_mask_threshold` is set, correction or not.
+        consumes_vllm_logprobs = self.use_vllm and (
+            self.vllm_importance_sampling_correction or self.off_policy_mask_threshold is not None
+        )
+        if consumes_vllm_logprobs:
             # vLLM is asked for `processed_logprobs`, which the sampler computes after it has reshaped the logits,
             # while the trainer takes a full-vocab log-softmax of the unreshaped ones. Their difference therefore
             # carries that reshaping on top of the train/inference mismatch the correction exists to measure.
@@ -1142,26 +1151,50 @@ class GRPOConfig(_BaseConfig):
             # the surviving mass; measured on one H100, `sampling/sampling_logp_difference/mean` reads |log(top_p)|
             # exactly, i.e. 0.105 at top_p=0.9 and 0.223 at top_p=0.8 against 0.001 at top_p=1.0. `repetition_penalty`
             # is applied by the same sampler pass, before those logprobs are computed, so it biases them too.
-            # `temperature` is excluded: the trainer already divides its own logits by it, so it cancels.
-            reshaping = [
+            # `temperature` cancels as long as vLLM samples at the trainer's value: the trainer divides its own logits
+            # by it. A `generation_kwargs` override of `temperature` breaks that, so it is checked; a value below
+            # vLLM's greedy threshold (1e-5 in its `SamplingParams`) is not, because vLLM then skips temperature
+            # scaling altogether while the trainer still divides, and that constant belongs to vLLM.
+            # `generation_kwargs` is merged over these fields when the request is built, so the effective values are
+            # what vLLM sees. Two limits: `top_k` at or above the vocabulary size is disabled by vLLM but still warns
+            # here, since the config does not know the vocabulary size; and other sampler-side modifiers passed
+            # through `generation_kwargs` (`logit_bias`, `bad_words`, `frequency_penalty`, ...) reshape the logits
+            # the same way but are not checked.
+            overrides = self.generation_kwargs or {}
+            effective = {
+                name: overrides.get(name, value)
+                for name, value in (
+                    ("top_p", self.top_p),
+                    ("top_k", self.top_k),
+                    ("min_p", self.min_p),
+                    ("repetition_penalty", self.repetition_penalty),
+                    ("temperature", self.temperature),
+                )
+            }
+            biasing = [
                 name
                 for name, active in (
-                    ("top_p", self.top_p < 1.0),
-                    ("top_k", self.top_k > 0),
-                    ("min_p", self.min_p is not None and self.min_p > 0.0),
-                    ("repetition_penalty", self.repetition_penalty != 1.0),
+                    ("top_p", effective["top_p"] < 1.0),
+                    ("top_k", effective["top_k"] > 0),
+                    ("min_p", effective["min_p"] is not None and effective["min_p"] > 0.0),
+                    ("repetition_penalty", effective["repetition_penalty"] != 1.0),
+                    ("temperature", effective["temperature"] != self.temperature),
                 )
                 if active
             ]
-            if reshaping:
+            if biasing:
+                quoted = [f"`{name}`" for name in biasing]
+                names = quoted[0] if len(quoted) == 1 else ", ".join(quoted[:-1]) + " and " + quoted[-1]
                 warnings.warn(
-                    f"{' and '.join(reshaping)} reshapes the sampled distribution, which biases "
-                    "`sampling/sampling_logp_difference` and the importance-sampling ratio derived from it: vLLM "
-                    "computes its logprobs from the reshaped logits while the trainer normalizes over the full "
-                    "vocabulary, so their difference includes that reshaping rather than the train/inference "
-                    "mismatch alone. Set `vllm_importance_sampling_correction=False`, or keep the sampling defaults "
-                    "(`top_p=1.0`, `top_k=0`, `min_p=None`, `repetition_penalty=1.0`), until the correction accounts "
-                    "for it. See https://github.com/huggingface/trl/issues/6789.",
+                    f"Setting {names} (through the config field or a `generation_kwargs` override) biases "
+                    "`sampling/sampling_logp_difference` and what is derived from it, the importance-sampling ratio "
+                    "and the off-policy mask: vLLM computes the logprobs it returns after the sampler has applied "
+                    "these settings, while the trainer normalizes over the full vocabulary and divides by the "
+                    "configured `temperature` only, so their difference includes that reshaping rather than the "
+                    "train/inference mismatch alone. Keep the sampling defaults (`top_p=1.0`, `top_k=0`, "
+                    "`min_p=None`, `repetition_penalty=1.0`, `temperature` not overridden) until the correction "
+                    "accounts for it, or disable both consumers with `vllm_importance_sampling_correction=False` and "
+                    "`off_policy_mask_threshold=None`. See https://github.com/huggingface/trl/issues/6789.",
                     UserWarning,
                     stacklevel=3,
                 )
