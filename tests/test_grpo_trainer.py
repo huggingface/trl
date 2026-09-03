@@ -2681,6 +2681,85 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert torch.equal(param, new_param), f"Parameter {n} has changed."
 
+    def test_eos_token_ids_from_generation_config(self):
+        """
+        Models such as Phi-3.5, Qwen3 or Gemma-3-it declare several EOS ids in `generation_config.eos_token_id`, and
+        their chat template ends a turn with one of the secondary ids. The trainer must treat all of them as EOS.
+        """
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        model = AutoModelForCausalLM.from_pretrained(model_id)
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        extra_eos_id = 151644  # <|im_start|>; any id other than tokenizer.eos_token_id (151645) works here
+        model.generation_config.eos_token_id = [tokenizer.eos_token_id, extra_eos_id]
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        training_args = GRPOConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = GRPOTrainer(
+            model=model,
+            processing_class=tokenizer,
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        assert trainer.eos_token_ids == [tokenizer.eos_token_id, extra_eos_id]
+        # The transformers generation path must stop on any of them as well
+        assert trainer.generation_config.eos_token_id == [tokenizer.eos_token_id, extra_eos_id]
+
+    @patch("transformers.generation.utils.GenerationMixin.generate")
+    def test_train_completions_ending_on_secondary_eos_are_not_truncated(self, mock_generate):
+        """
+        A completion that ends on a secondary EOS id (declared in `generation_config.eos_token_id` but different from
+        `tokenizer.eos_token_id`) must be masked after that token and must not be counted as truncated.
+        """
+        extra_eos_id = 151644  # <|im_start|>; tokenizer.eos_token_id = 151645, pad_token_id = 151643
+
+        def fake_generate(input_ids, **kwargs):
+            completion_ids = torch.tensor(
+                [
+                    [9, 10, 11, extra_eos_id, 12, 13, 14, 15],  # ends on the secondary EOS, then garbage
+                    [9, 10, 11, 12, 13, 14, 15, extra_eos_id],  # secondary EOS generated just within the limit
+                    [9, 10, 11, 151645, 151643, 151643, 151643, 151643],  # ends on the tokenizer's EOS
+                ],
+                device=input_ids.device,
+            )
+            return torch.cat([input_ids, completion_ids], dim=1)
+
+        mock_generate.side_effect = fake_generate
+
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        model = AutoModelForCausalLM.from_pretrained(model_id)
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        model.generation_config.eos_token_id = [tokenizer.eos_token_id, extra_eos_id]
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            max_steps=2,
+            logging_steps=1,
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model=model,
+            processing_class=tokenizer,
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        trainer.train()
+
+        logs = [log for log in trainer.state.log_history if "completions/clipped_ratio" in log]
+        assert logs, "no completion metrics were logged"
+        for log in logs:
+            # None of the completions is truncated: they all end on one of the EOS ids
+            assert log["completions/clipped_ratio"] == 0.0
+            # Everything after the (secondary) EOS is masked out: lengths are 4, 8 and 4 tokens
+            assert log["completions/mean_length"] == pytest.approx((4 + 8 + 4) / 3)
+
     def test_warning_raised_all_rewards_none(self, caplog):
         """Test that a proper warning is raised when all rewards are None."""
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")

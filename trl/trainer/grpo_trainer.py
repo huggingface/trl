@@ -392,6 +392,14 @@ class GRPOTrainer(_BaseTrainer):
         if self._tokenizer.pad_token is None:
             self._tokenizer.pad_token = self._tokenizer.eos_token
 
+        # Some models declare several end-of-sequence tokens in `generation_config.eos_token_id` (e.g. Phi-3.5:
+        # [32007, 32001, 32000], Qwen3: [151645, 151643], Gemma-3-it: [1, 106]) and their chat template ends a turn
+        # with one of the secondary ids (`<|end|>`, `<end_of_turn>`, ...) rather than with `tokenizer.eos_token_id`.
+        # Generation stops on any of them, so the EOS mask, the truncation metric and `mask_truncated_completions`
+        # must accept all of them. Otherwise a completion that ends on a secondary EOS is reported as truncated and
+        # everything generated after that stop token is kept in the loss.
+        self.eos_token_ids = self._get_eos_token_ids(model)
+
         # Resolve vision placeholder token IDs once. Used by the forward pass to rebuild mm_token_type_ids
         # when tool responses inject images into the completion (see _generate forward_kwargs block).
         self._image_pad_token_id = None
@@ -1124,7 +1132,7 @@ class GRPOTrainer(_BaseTrainer):
                 "do_sample": True,
                 "pad_token_id": self._tokenizer.pad_token_id,
                 "bos_token_id": self._tokenizer.bos_token_id,
-                "eos_token_id": self._tokenizer.eos_token_id,
+                "eos_token_id": self.eos_token_ids or None,
                 "temperature": self.temperature,
                 "top_p": self.top_p,
                 "top_k": self.top_k,
@@ -1244,6 +1252,19 @@ class GRPOTrainer(_BaseTrainer):
             sampler_fn=self._get_train_sampler,
             is_training=True,
         )
+
+    def _get_eos_token_ids(self, model) -> list[int]:
+        """
+        EOS token ids used for EOS masking and truncation detection: the tokenizer's EOS id followed by any extra
+        EOS id declared in the model's generation config (Phi-3.5, Qwen3, Gemma-3-it, ...).
+        """
+        eos_token_ids = [] if self._tokenizer.eos_token_id is None else [self._tokenizer.eos_token_id]
+        generation_config_eos = getattr(getattr(model, "generation_config", None), "eos_token_id", None)
+        if generation_config_eos is not None:
+            if isinstance(generation_config_eos, int):
+                generation_config_eos = [generation_config_eos]
+            eos_token_ids.extend(token_id for token_id in generation_config_eos if token_id not in eos_token_ids)
+        return eos_token_ids
 
     def _get_train_sampler(self, dataset: Dataset | None = None) -> Sampler:
         # Returns a sampler that
@@ -1913,8 +1934,8 @@ class GRPOTrainer(_BaseTrainer):
             prompt_length = generate_inputs["input_ids"].size(1)
             completion_ids = prompt_completion_ids[:, prompt_length:]
 
-            # Mask everything after the first EOS token
-            is_eos = completion_ids == self._tokenizer.eos_token_id
+            # Mask everything after the first EOS token (any of the model's EOS ids)
+            is_eos = torch.isin(completion_ids, torch.tensor(self.eos_token_ids, device=completion_ids.device))
             eos_idx = torch.full((is_eos.size(0),), is_eos.size(1), dtype=torch.long, device=device)
             eos_idx[is_eos.any(dim=1)] = is_eos.int().argmax(dim=1)[is_eos.any(dim=1)]
             sequence_indices = torch.arange(is_eos.size(1), device=device).expand(is_eos.size(0), -1)
@@ -1970,7 +1991,7 @@ class GRPOTrainer(_BaseTrainer):
         # When we compute `suffix_ids` by slicing `full_ids`, we must align the slicing boundary to
         # EOS (not EOS + newline). Templates that don't use EOS as end-of-turn (e.g. Gemma uses
         # <turn|>) skip this trimming.
-        eos_positions = [i for i, tok_id in enumerate(prefix_ids) if tok_id == self._tokenizer.eos_token_id]
+        eos_positions = [i for i, tok_id in enumerate(prefix_ids) if tok_id in self.eos_token_ids]
         if eos_positions:
             prefix_ids = prefix_ids[: eos_positions[-1] + 1]
 
@@ -2317,7 +2338,7 @@ class GRPOTrainer(_BaseTrainer):
         self._metrics[mode]["completions/max_length"].append(agg_completion_lengths.float().max().item())
 
         # Identify sequences that terminated with EOS and log their lengths
-        eos_and_pad = [self._tokenizer.eos_token_id, self._tokenizer.pad_token_id]
+        eos_and_pad = self.eos_token_ids + [self._tokenizer.pad_token_id]
         is_truncated = torch.tensor([ids[-1] not in eos_and_pad for ids in completion_ids], device=device)
         agg_is_truncated = self.accelerator.gather(is_truncated)
         self._metrics[mode]["completions/clipped_ratio"].append(agg_is_truncated.float().mean().item())
@@ -2504,7 +2525,7 @@ class GRPOTrainer(_BaseTrainer):
 
         # If mask_truncated_completions is enabled, zero out truncated completions for attention and loss masking
         if self.mask_truncated_completions:
-            eos_and_pad = [self._tokenizer.eos_token_id, self._tokenizer.pad_token_id]
+            eos_and_pad = self.eos_token_ids + [self._tokenizer.pad_token_id]
             is_truncated = torch.tensor([ids[-1] not in eos_and_pad for ids in completion_ids_list], device=device)
             # Mask completion_mask for attention masking
             completion_mask = completion_mask * (~is_truncated).unsqueeze(1).int()
