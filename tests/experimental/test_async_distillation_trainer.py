@@ -761,7 +761,9 @@ class TestAsyncDistillationTrainer(TrlTestCase):
         # Checks that ignore_data_skip is True and that resume doesn't crash. The stub worker is not an
         # AsyncRolloutWorker, so the checkpoint-write and resume-read paths stay inert here — those are covered by
         # TestRolloutStateCheckpoint.
-        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        # Qwen3 rather than the Qwen2.5 model the tests above use: that one has head_dim=2, which flash-attn rejects
+        # ("head_size should be a multiple of 8") on some of its kernels, and this test happens to select one of them.
+        model_id = "trl-internal-testing/tiny-Qwen3ForCausalLM"
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
         tokenizer = AutoTokenizer.from_pretrained(model_id)
 
@@ -771,9 +773,7 @@ class TestAsyncDistillationTrainer(TrlTestCase):
                 per_device_train_batch_size=3,
                 teacher_top_k=TEACHER_TOP_K,
                 max_completion_length=8,
-                # FixedCountBatcher: the tiny test model has head_dim=2, which flash-attn rejects on the longer rows
-                # TokenBudgetBatcher packs.
-                token_budget=-1,
+                token_budget=-1,  # FixedCountBatcher, so a step consumes a fixed, predictable number of samples
                 vllm_server_timeout=5.0,
                 report_to="none",
                 **overrides,
