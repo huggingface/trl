@@ -426,3 +426,7 @@ This repository keeps AI-agent configuration in `.ai/` and skills in `.agents/sk
 `AGENTS.md`, `CLAUDE.md`, and `.cursor/BUGBOT.md` all point to `.ai/AGENTS.md`. Cursor reads `AGENTS.md` and Bugbot reads `.cursor/BUGBOT.md`.
 
 Codex, Cursor and Gemini CLI read `.agents/skills/` directly. Claude Code reads `.claude/skills/`, so run `make claude` to symlink it to `.agents/skills/` (and `make clean-ai` to remove it).
+
+`.agents/skills/` holds contributor skills maintained by the repository. Personal skills belong in `~/.agents/skills`, which Codex, Cursor, Gemini CLI and Copilot all read as user scope; for a personal skill that has to be repo-scoped, `.agents/skills/local-*/` is git-ignored.
+
+A skill that describes a workflow is updated in the PR that changes that workflow, the same rule that applies to `paper_index.md`.
