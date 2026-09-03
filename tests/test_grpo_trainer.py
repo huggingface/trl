@@ -1562,9 +1562,9 @@ class TestGRPOTrainer(TrlTestCase):
 
     @require_peft
     def test_train_with_sync_ref_model_and_peft_bias(self):
-        # A LoRA config with `bias != "none"` trains bias terms shared with the base model, and PEFT permits only one
-        # such adapter per model. No "ref" adapter can be created, and the base model is a fixed reference that cannot
-        # track the policy, so asking for both is rejected rather than silently training against a frozen reference.
+        # A LoRA config with `bias != "none"` trains bias terms that live in the base model, so disabling the adapter
+        # does not give a fixed reference, and PEFT permits only one such adapter per model, so no "ref" copy can be
+        # made either. The trainer rejects the config at construction, with or without `sync_ref_model`.
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         training_args = GRPOConfig(
@@ -1578,7 +1578,7 @@ class TestGRPOTrainer(TrlTestCase):
             ref_model_sync_steps=2,  # reduce sync steps to ensure a sync happens
             report_to="none",
         )
-        with pytest.raises(NotImplementedError, match="bias"):
+        with pytest.raises(ValueError, match="bias"):
             GRPOTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
                 reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",

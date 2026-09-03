@@ -756,8 +756,9 @@ class OnlineDPOTrainer(_BaseTrainer):
             # Skip PEFT layers: they don’t exist in vLLM, and they are merged already.
             if is_peft_model(module) and module.prefix in name:
                 continue
-            # When module to save, remove its prefix and discard the original module
-            if "original_module" in name:
+            # When module to save, remove its prefix and discard the original module, as well as the copies held by
+            # other adapters (such as the frozen "ref" one); vLLM sees only the "default" copy
+            if "original_module" in name or (".modules_to_save." in name and ".modules_to_save.default." not in name):
                 continue
             name = self._fix_param_name_to_vllm(name, extra_prefixes=["modules_to_save.default."])
 
@@ -825,8 +826,11 @@ class OnlineDPOTrainer(_BaseTrainer):
                         # Skip PEFT layers: they don’t exist in vLLM, and they are merged already.
                         if self.model.prefix in name:
                             continue
-                        # When module to save, remove its prefix and discard the original module
-                        if "original_module" in name:
+                        # When module to save, remove its prefix and discard the original module, as well as the copies
+                        # held by other adapters (such as the frozen "ref" one); vLLM sees only the "default" copy
+                        if "original_module" in name or (
+                            ".modules_to_save." in name and ".modules_to_save.default." not in name
+                        ):
                             continue
                         name = self._fix_param_name_to_vllm(name, extra_prefixes=["modules_to_save.default."])
 

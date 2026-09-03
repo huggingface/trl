@@ -692,6 +692,7 @@ class TestDPOTrainer(TrlTestCase):
         assert "ref" in model.peft_config  # the EMA target the callback syncs into
         previous_ref_params = {n: param.clone() for n, param in model.named_parameters() if ".ref." in n}
         assert previous_ref_params  # guard against the loop below vacuously passing
+        batch = next(iter(trainer.get_train_dataloader()))
 
         trainer.train()
 
@@ -701,6 +702,15 @@ class TestDPOTrainer(TrlTestCase):
         for n, param in previous_ref_params.items():
             new_param = model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Ref adapter parameter {n} has not changed."
+        # The trainer's own reference path has to read the synced adapter: a fresh "ref" adapter is a zero-initialized
+        # copy of "default" and reproduces the base model exactly, so once the sync has moved it the reference log probs
+        # must differ from the base model's, taken with adapters disabled at the same moment.
+        ref_logps = [t for t in trainer.compute_ref_log_probs(model, batch) if t is not None]
+        with model.disable_adapter():
+            base_logps = [t for t in trainer.compute_ref_log_probs(model, batch) if t is not None]
+        assert not all(torch.equal(r, b) for r, b in zip(ref_logps, base_logps, strict=True)), (
+            "the reference log probs equal the base model's, so the reference path is not reading the synced adapter"
+        )
 
     @require_peft
     def test_train_with_sync_ref_model_and_peft_trainable_tokens(self):
@@ -736,9 +746,9 @@ class TestDPOTrainer(TrlTestCase):
 
     @require_peft
     def test_train_with_sync_ref_model_and_peft_bias(self):
-        # A LoRA config with `bias != "none"` trains bias terms shared with the base model, and PEFT permits only one
-        # such adapter per model. Creating a "ref" adapter would raise, so the trainer falls back to the base model as
-        # the reference instead of failing to construct.
+        # A LoRA config with `bias != "none"` trains bias terms that live in the base model, so disabling the adapter
+        # does not give a fixed reference, and PEFT permits only one such adapter per model, so no "ref" copy can be
+        # made either. The trainer rejects the config at construction, with or without `sync_ref_model`.
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
 
         training_args = DPOConfig(
@@ -748,9 +758,7 @@ class TestDPOTrainer(TrlTestCase):
             ref_model_sync_steps=2,  # reduce sync steps to ensure a sync happens
             report_to="none",
         )
-        # No "ref" adapter can be created, and the base model is a fixed reference that cannot track the policy, so
-        # asking for both is rejected rather than silently training against a frozen reference.
-        with pytest.raises(NotImplementedError, match="bias"):
+        with pytest.raises(ValueError, match="bias"):
             DPOTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
                 args=training_args,

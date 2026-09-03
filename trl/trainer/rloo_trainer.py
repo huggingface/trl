@@ -362,7 +362,7 @@ class RLOOTrainer(_BaseTrainer):
             # model is the reference. That equivalence only holds while the reference stays fixed: with
             # `sync_ref_model=True` the reference has to track the policy, which requires parameters of its own to
             # move. So in that case create the "ref" adapter here as well.
-            needs_ref_adapter = args.sync_ref_model
+            needs_ref_adapter = args.sync_ref_model and args.beta != 0.0
 
         elif is_peft_model(model):
             needs_ref_adapter = True
@@ -379,12 +379,12 @@ class RLOOTrainer(_BaseTrainer):
             # parameters, which holds here since the "ref" adapter reuses the "default" config.
             default_config = model.peft_config["default"]
             if isinstance(default_config, LoraConfig) and default_config.bias != "none":
-                logger.warning(
-                    f"A LoRA config with `bias={default_config.bias!r}` trains bias terms that are shared with the "
-                    "base model rather than owned by the adapter, and PEFT allows only one such adapter per model "
-                    "(`LoraModel supports only 1 adapter with bias`). The reference log probs are therefore computed "
-                    "from the base model (adapters disabled). Set `bias='none'` to train against a copy of your "
-                    "adapter instead."
+                raise ValueError(
+                    f"A LoRA config with `bias={default_config.bias!r}` trains bias terms that live in the base model "
+                    "rather than in the adapter, so disabling the adapter does not recover a fixed reference: the "
+                    "trained biases stay in it. PEFT also allows only one such adapter per model (`LoraModel supports "
+                    "only 1 adapter with bias`), so no frozen 'ref' copy can be created either. Set `bias='none'` to "
+                    "train against a copy of your adapter."
                 )
             elif (
                 isinstance(default_config, LoraConfig)
@@ -760,12 +760,10 @@ class RLOOTrainer(_BaseTrainer):
             if is_peft_model(model) and "ref" not in model.peft_config:
                 raise NotImplementedError(
                     "You passed `sync_ref_model=True` while using a PEFT model whose reference adapter could not be "
-                    "created, so there is nothing to synchronize. The adapter is skipped when the LoRA config sets "
-                    "`bias` to anything other than `'none'`, because PEFT allows only one bias-bearing adapter per "
-                    "model, and with `peft<0.20.0` when the config uses `target_parameters` (peft#3340). In both "
-                    "cases the reference log probs come from the base model with adapters disabled, which is fixed "
-                    "and cannot track the policy. Set `bias='none'`, upgrade to `peft>=0.20.0`, or use "
-                    "`sync_ref_model=False`."
+                    "created, so there is nothing to synchronize. The adapter is skipped with `peft<0.20.0` when the "
+                    "LoRA config uses `target_parameters` (peft#3340); the reference log probs then come from the base "
+                    "model with adapters disabled, which is fixed and cannot track the policy. Upgrade to "
+                    "`peft>=0.20.0` or use `sync_ref_model=False`."
                 )
             self.add_callback(SyncRefModelCallback(ref_model=self.ref_model, accelerator=self.accelerator))
 

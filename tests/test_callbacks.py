@@ -250,11 +250,13 @@ class TestSyncRefModelCallbackAdapterPairing(TrlTestCase):
 
         # A base model owning both a parameter and a submodule literally called "default". PEFT reserves neither, so
         # the adapter parameters here read `...default.proj.lora_A.default.weight`, with a base component and an
-        # adapter component of the same name, and the base parameter reads `...default` with no component after it.
+        # adapter component of the same name, and the base parameter reads `...default.default` with no component
+        # after it: its parent is a plain module, not an adapter dict, so the predicate must leave it alone.
         class Inner(torch.nn.Module):
             def __init__(self):
                 super().__init__()
                 self.proj = torch.nn.Linear(2, 2)
+                self.register_parameter("default", torch.nn.Parameter(torch.ones(2)))
 
             def forward(self, x):
                 return self.proj(x)
@@ -275,10 +277,15 @@ class TestSyncRefModelCallbackAdapterPairing(TrlTestCase):
 
     def test_base_module_and_parameter_named_default_are_not_paired(self):
         model = self._peft_model_with_base_parameter_named_default()
-        adapter_names = [n for n, _ in model.named_parameters() if n.split(".").count("default") == 2]
+        adapter_names = [n for n, _ in model.named_parameters() if "lora_" in n and n.split(".").count("default") == 2]
         assert adapter_names, "the fixture must produce a path with both a base and an adapter 'default' component"
+        base_param = model.get_parameter("base_model.model.default.default")
+        base_before = base_param.clone()
 
         SyncRefModelCallback._sync_ref_adapter(model, alpha=1.0)  # must not raise
+
+        # The base parameter ends in "default" too, but its parent is a plain module, so it is not an adapter slot.
+        assert torch.equal(base_param, base_before)
 
         # Only the adapter component may be rewritten; the base module keeps its name.
         for name in adapter_names:
