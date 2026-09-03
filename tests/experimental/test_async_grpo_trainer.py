@@ -31,6 +31,7 @@ from transformers import AutoTokenizer, PreTrainedModel
 from transformers.testing_utils import torch_device
 
 import trl.experimental.async_grpo.async_rollout_worker as worker
+from trl.experimental.api import ForwardBackwardOutput
 from trl.experimental.async_grpo import AsyncGRPOConfig, AsyncGRPOTrainer
 from trl.experimental.async_grpo.async_grpo_trainer import (
     DataCollatorForRollout,
@@ -148,6 +149,57 @@ class _StubWeightTransfer:
 
     def destroy(self):
         pass
+
+
+class TestTrainingClientIntegration:
+    def test_compute_loss_uses_shifted_mask_for_per_sequence_metrics(self):
+        trainer = AsyncGRPOTrainer.__new__(AsyncGRPOTrainer)
+        trainer.accelerator = MagicMock()
+        trainer.accelerator.num_processes = 1
+        trainer.accelerator.reduce.side_effect = lambda tensor, reduction: tensor
+        trainer.accelerator.gather.side_effect = lambda tensor: tensor
+
+        def forward_backward(model, input_ids, position_ids, completion_mask, loss_fn, aux_loss_coef=0.0):
+            log_probs = torch.tensor([[0.0, -1.0, 0.0, 1.0, 0.0]], requires_grad=True)
+            return ForwardBackwardOutput(
+                loss=loss_fn(log_probs),
+                log_probs=log_probs.detach(),
+                entropy=torch.zeros_like(log_probs),
+            )
+
+        trainer.training_client = MagicMock()
+        trainer.training_client.forward_backward.side_effect = forward_backward
+        trainer.epsilon_low = 0.2
+        trainer.epsilon_high = 0.2
+        trainer.current_gradient_accumulation_steps = 1
+        trainer.aux_loss_enabled = False
+        trainer.router_aux_loss_coef = 0.0
+        trainer._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
+        trainer._step_forward_tokens = 0.0
+        trainer._step_trained_tokens = 0.0
+        trainer._step_seq_len_weighted = 0.0
+        trainer._step_samples = 0.0
+        trainer._step_forward_s = 0.0
+
+        inputs = {
+            "input_ids": torch.tensor([[1, 2, 3, 4, 5, 6]]),
+            "attention_mask": torch.ones(1, 6, dtype=torch.long),
+            "completion_mask": torch.tensor([[0, 0, 1, 0, 1, 1]]),
+            "old_log_probs": torch.zeros(1, 6),
+            "position_ids": torch.tensor([[0, 1, 2, 0, 1, 2]]),
+            "advantages": torch.tensor([[0.0, 0.0, -1.0, 0.0, 1.0, 1.0]]),
+            "global_n_tokens": torch.tensor([3]),
+            "global_n_forward_tokens": torch.tensor([6]),
+            "mean_seq_len": torch.tensor([3.0]),
+        }
+
+        loss = trainer.compute_loss(model=None, inputs=inputs)
+
+        assert loss.ndim == 0
+        assert trainer._metrics["train"]["clip_ratio/low_mean"] == [pytest.approx(1 / 3)]
+        assert trainer._metrics["train"]["clip_ratio/high_mean"] == [pytest.approx(1 / 3)]
+        assert trainer._metrics["train"]["clip_ratio/low_min"] == [0.0]
+        assert trainer._metrics["train"]["clip_ratio/high_max"] == [0.5]
 
 
 @pytest.mark.skipif(

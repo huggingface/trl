@@ -49,6 +49,7 @@ from ...trainer.utils import (
     pad,
     patch_chunked_lm_head,
 )
+from ..api import LocalTrainingClient, TrainingClientProtocol
 from .async_grpo_config import AsyncGRPOConfig
 from .async_rollout_worker import AsyncRolloutWorker, RolloutSample
 from .vllm_client import VLLMClient
@@ -761,6 +762,11 @@ class AsyncGRPOTrainer(_BaseTrainer):
             [`WeightTransferClient`] is created that streams the trainer's weights into the config's vLLM server over
             NCCL. This is independent of `rollout_worker`: a custom rollout worker still gets weight sync. Pass a no-op
             implementation to disable trainer-side weight sync.
+        training_client (`TrainingClientProtocol`, *optional*):
+            Custom training-compute backend implementing [`TrainingClientProtocol`]. If `None`, a default
+            [`LocalTrainingClient`] is created, which runs the model in this process. Pass a custom client to run the
+            forward and backward passes elsewhere (another process, another set of GPUs, or a remote service). The loss
+            stays here either way; only the model compute moves.
     """
 
     _tag_names = ["trl", "async-grpo"]
@@ -791,6 +797,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
         environment_factory: EnvironmentFactory | dict[str, EnvironmentFactory] | None = None,
         rollout_worker: RolloutWorkerProtocol | None = None,
         weight_transfer: WeightTransferProtocol | None = None,
+        training_client: TrainingClientProtocol | None = None,
     ):
         # Args
         if args is None:
@@ -952,6 +959,9 @@ class AsyncGRPOTrainer(_BaseTrainer):
         self._step_samples = 0.0
         self._last_groups_trained = 0
         self.model_version = 0
+        # Unlike the rollout and weight-sync backends, this one sits in the forward/backward path, so every rank
+        # needs it.
+        self.training_client = training_client if training_client is not None else LocalTrainingClient()
         # Create worker and queue on rank 0
         if self.accelerator.is_main_process:
             # Weight sync and the token-budget query target the vLLM server from the config; the client is the single
@@ -1116,46 +1126,58 @@ class AsyncGRPOTrainer(_BaseTrainer):
         position_ids = inputs["position_ids"][mask_bool].unsqueeze(0)
         advantages = inputs["advantages"][mask_bool].unsqueeze(0)
 
-        forward_start = time.time()
-        outputs = model(
-            input_ids=input_ids,
-            position_ids=position_ids,
-            labels=input_ids,
-            completion_mask=completion_mask,
-            use_cache=False,
-        )
-        log_probs, entropy = outputs["log_probs"], outputs["entropy"]
-        self._last_forward_time_s = time.time() - forward_start
-
-        completion_mask = completion_mask[:, 1:]
-        old_log_probs = old_log_probs[:, 1:]
-        advantages = advantages[:, 1:]
-        log_ratio = log_probs - old_log_probs
-        coef_1 = torch.exp(log_ratio)
-        coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
-        per_token_loss1 = coef_1 * advantages
-        per_token_loss2 = coef_2 * advantages
-        per_token_loss = -torch.min(per_token_loss1, per_token_loss2)
-
-        # DDP/FSDP averages gradients across ranks (world_size).
-        # To get correct per-token normalization we scale by 1/tokens_per_rank
-        # = world_size / global_n_tokens, so after DDP averaging the effective
-        loss = (per_token_loss * completion_mask).sum()
         global_n_tokens = inputs["global_n_tokens"][0]
         world_size = self.accelerator.num_processes
         tokens_per_rank = (global_n_tokens / world_size).clamp(min=1.0)
-        loss = loss / tokens_per_rank.to(torch.float32)
-        # For DAPO, we would scale like this instead:
-        # loss = loss / max(per_token_loss.size(0), 1)
-        loss = loss / self.current_gradient_accumulation_steps
 
-        # The policy loss above is scaled for gradient accumulation (HF auto-scaling is off here), so scale aux too
-        if self.aux_loss_enabled:
-            aux_loss = outputs["aux_loss"]
-            loss = loss + self.router_aux_loss_coef * aux_loss / self.current_gradient_accumulation_steps
+        # Log probs cover target tokens, so everything the loss and the metrics compare them against drops the first
+        # position. `completion_mask` itself is passed to the client unshifted, since the model needs the full row.
+        shifted_completion_mask = completion_mask[:, 1:]
+        shifted_old_log_probs = old_log_probs[:, 1:]
+        shifted_advantages = advantages[:, 1:]
+
+        def loss_fn(log_probs):
+            # The client calls this on the log probs it just produced. In-process that keeps `loss` attached to the
+            # model; off-process the client differentiates it here and ships the gradient. Either way GRPO stays on
+            # this side of the boundary and the client never learns what algorithm it is running.
+            coef_1 = torch.exp(log_probs - shifted_old_log_probs)
+            coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
+            per_token_loss1 = coef_1 * shifted_advantages
+            per_token_loss2 = coef_2 * shifted_advantages
+            per_token_loss = -torch.min(per_token_loss1, per_token_loss2)
+
+            # DDP/FSDP averages gradients across ranks (world_size).
+            # To get correct per-token normalization we scale by 1/tokens_per_rank
+            # = world_size / global_n_tokens, so after DDP averaging the effective
+            loss = (per_token_loss * shifted_completion_mask).sum()
+            loss = loss / tokens_per_rank.to(torch.float32)
+            # For DAPO, we would scale like this instead:
+            # loss = loss / max(per_token_loss.size(0), 1)
+            return loss / self.current_gradient_accumulation_steps
+
+        forward_start = time.time()
+        outputs = self.training_client.forward_backward(
+            model,
+            input_ids=input_ids,
+            position_ids=position_ids,
+            completion_mask=completion_mask,
+            loss_fn=loss_fn,
+            # The policy loss is scaled for gradient accumulation (HF auto-scaling is off here), so scale aux too.
+            # The client adds `aux_loss_coef * aux_loss` to what it back-propagates, and reports the same total.
+            aux_loss_coef=self.router_aux_loss_coef / self.current_gradient_accumulation_steps
+            if self.aux_loss_enabled
+            else 0.0,
+        )
+        self._last_forward_time_s = time.time() - forward_start
+        loss, log_probs, entropy = outputs.loss, outputs.log_probs, outputs.entropy
 
         with torch.no_grad():
-            valid_mask = completion_mask > 0
+            # Recomputed from the detached log probs rather than threaded out of `loss_fn`, which keeps the loss a
+            # plain function of its input. Two elementwise ops on a tensor that is already resident.
+            log_ratio = log_probs - shifted_old_log_probs
+            coef_1 = torch.exp(log_ratio)
+
+            valid_mask = shifted_completion_mask > 0
             local_count = valid_mask.sum().float()
 
             # Empty masked selections sum to a 0 scalar on the right device, so no valid_mask.any() guard is needed.
@@ -1165,8 +1187,8 @@ class AsyncGRPOTrainer(_BaseTrainer):
             local_entropy_sum = entropy[valid_mask].sum()
 
             # Compute the clipped probability ratios
-            is_low_clipped = (coef_1 < 1 - self.epsilon_low) & (advantages < 0)
-            is_high_clipped = (coef_1 > 1 + self.epsilon_high) & (advantages > 0)
+            is_low_clipped = (coef_1 < 1 - self.epsilon_low) & (shifted_advantages < 0)
+            is_high_clipped = (coef_1 > 1 + self.epsilon_high) & (shifted_advantages > 0)
             is_region_clipped = is_low_clipped | is_high_clipped
             local_low_clip_sum = is_low_clipped[valid_mask].float().sum()
             local_high_clip_sum = is_high_clipped[valid_mask].float().sum()
@@ -1204,7 +1226,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
             seq_ids = (position_ids[0] == 0).cumsum(0)[1:] - 1  # (T-1,) completion index per (shifted) token
             n_completions = (position_ids == 0).sum()  # number of packed completions in this rank's row
             num_seq = int(n_completions)
-            comp_mask = completion_mask[0].float()  # (T-1,) valid completion-token mask
+            comp_mask = shifted_completion_mask[0].float()  # (T-1,) valid completion-token mask
 
             def seg_sum(vals):  # per-completion segment sum over the packed row
                 return torch.zeros(num_seq, device=comp_mask.device).index_add_(0, seq_ids, vals)
@@ -1220,7 +1242,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
             self._metrics["train"]["clip_ratio/high_max"].append(nanmax(gathered_high_max).item())
 
             if self.aux_loss_enabled:
-                gathered_aux = self.accelerator.reduce(aux_loss.detach().to(torch.float32), reduction="sum")
+                gathered_aux = self.accelerator.reduce(outputs.aux_loss.to(torch.float32), reduction="sum")
                 self._metrics["train"]["aux_loss"].append((gathered_aux / world_size).item())
 
         # Per-step accounting, accumulated across the micro-batches of one optimizer step and flushed in
