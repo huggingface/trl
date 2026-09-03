@@ -166,7 +166,7 @@ At this point the answer is not to store the sequence more cleverly. It is to gi
 
 <img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/long_context_cp.png" alt="A sequence of tokens overflowing a single GPU and running out of memory, then the same sequence cut into four slices that each fit on one GPU"/>
 
-Give each GPU one slice of the sequence. With four of them, every GPU holds 262,144 tokens instead of 1,048,576. The four tensors shrink with it: 19 GB rather than 76, which alongside the model's 30 GB is a card that fits.
+Give each GPU one slice of the sequence. With four of them, every GPU holds 262,144 tokens instead of 1,048,576. The four tensors shrink with it: 19 GB rather than 76, which alongside the model's 30 GB fits on the card.
 
 **The obvious objection is attention**. Every token has to attend to every earlier token, and no GPU has the earlier tokens. So the GPUs exchange what they are missing, and what comes out is exactly what one enormous GPU would have computed.
 
