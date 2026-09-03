@@ -15,6 +15,7 @@
 import os
 import subprocess
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 import torch
@@ -143,6 +144,25 @@ class TestQuantizedWeightSync(TrlTestCase):
         out = _dense_param_data(param)
         assert out.data_ptr() == param.data.data_ptr()
         assert out.shape == (4, 8)
+
+    def test_dense_param_data_dequantizes_a_4bit_parameter_with_its_quant_state(self):
+        # The fix itself: a `Params4bit` must go through `dequantize_4bit` with its own `quant_state`, and the packed
+        # buffer must never be what comes back. The kernel needs a GPU, so it is replaced by a stand-in that records
+        # its arguments and returns a dense tensor of the unpacked shape.
+        packed = torch.zeros(16, 1, dtype=torch.uint8)
+        quant_state = object()
+        param = bnb.nn.Params4bit(packed, requires_grad=False, quant_state=quant_state)
+        dense = torch.randn(4, 8)
+        calls = []
+
+        def fake_dequantize_4bit(data, state):
+            calls.append((data.data_ptr(), state))
+            return dense
+
+        with patch.object(bnb.functional, "dequantize_4bit", fake_dequantize_4bit):
+            out = _dense_param_data(param)
+        assert out is dense
+        assert calls == [(packed.data_ptr(), quant_state)]
 
     @pytest.mark.parametrize(
         ("module_factory", "fsdp_version", "fsdp_use_orig_params", "expected_message"),

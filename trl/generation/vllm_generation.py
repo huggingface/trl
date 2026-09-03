@@ -144,11 +144,11 @@ def _check_quantization_supported(
     Args:
         model (`torch.nn.Module`):
             Model whose modules are inspected for bitsandbytes layers.
-        fsdp_version (`int`, *optional*):
+        fsdp_version (`int` or `None`):
             FSDP major version in use, `None` when FSDP is not enabled, which is what `DistributedBackend` reports.
             Version 2 is refused with a 4-bit base because it reads weights from `state_dict()`, which returns plain
             tensors whose `quant_state` is already gone by the time `_dense_param_data` runs.
-        fsdp_use_orig_params (`bool`, *optional*):
+        fsdp_use_orig_params (`bool` or `None`):
             FSDP1's `use_orig_params` setting, `None` when FSDP is not enabled. FSDP1 reads through
             `summon_full_params`, which exposes the original `Params4bit` with its `quant_state` only when this is
             `True`; with Accelerate's default of `False` it exposes plain tensors, and the packed storage would be
@@ -483,6 +483,8 @@ class VLLMGeneration:
 
             if param.is_cpu:
                 param = param.to(self.accelerator.device)
+            # No `_dense_param_data` here: `state_dict()` already dropped any `quant_state`, so a 4-bit base cannot be
+            # served on this path and `_check_quantization_supported` refuses it up front.
             param = param.full_tensor()
 
             yield name, param

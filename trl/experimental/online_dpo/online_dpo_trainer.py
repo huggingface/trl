@@ -751,7 +751,7 @@ class OnlineDPOTrainer(_BaseTrainer):
         for name, param in module.state_dict().items():
             # When using PEFT, we need to recover the original parameter name
             name = name.removeprefix("base_model.model.").replace(".base_layer", "")
-            # Skip PEFT layers: they don’t exist in vLLM, and they are merged already.
+            # Skip PEFT layers: they don't exist in vLLM, and they are merged already.
             if is_peft_model(module) and module.prefix in name:
                 continue
             # When module to save, remove its prefix and discard the original module
@@ -761,6 +761,8 @@ class OnlineDPOTrainer(_BaseTrainer):
 
             if param.is_cpu:
                 param = param.to(self.accelerator.device)
+            # No `_dense_param_data` here: `state_dict()` already dropped any `quant_state`, so a 4-bit base cannot be
+            # served on this path and `_check_quantization_supported` refuses it up front.
             param = param.full_tensor()
 
             if self.vllm_mode == "server" and self.accelerator.is_main_process:
@@ -820,7 +822,7 @@ class OnlineDPOTrainer(_BaseTrainer):
                     for name, param in self.model.named_parameters():
                         # When using PEFT, we need to recover the original parameter name
                         name = name.removeprefix("base_model.model.").replace(".base_layer", "")
-                        # Skip PEFT layers: they don’t exist in vLLM, and they are merged already.
+                        # Skip PEFT layers: they don't exist in vLLM, and they are merged already.
                         if self.model.prefix in name:
                             continue
                         # When module to save, remove its prefix and discard the original module
