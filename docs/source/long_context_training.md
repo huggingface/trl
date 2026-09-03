@@ -189,7 +189,7 @@ parallelism_config:
   parallelism_config_cp_size: 4
 ```
 
-**On DeepSpeed, SP.** Instead of moving slices around, it reshuffles the batch just before attention so each GPU holds every token but only a quarter of the attention heads, then shuffles back afterwards.
+**On DeepSpeed, use SP.** Instead of moving slices around, it reshuffles the batch just before attention so each GPU holds every token but only a quarter of the attention heads, then shuffles back afterwards.
 
 ```yaml
 parallelism_config:
