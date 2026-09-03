@@ -207,8 +207,7 @@ class ZeroSyncGRPOConfig(_BaseConfig):
             "that memory, and reallocate it before generating again. Only with `tp_size > 1`, where the trainer owns "
             "the engine and generation is quiescent during the step. The rollouts in flight lose their cache and "
             "re-prefill when they are next scheduled, so this buys room to train on longer completions or larger "
-            "batches at the cost of paying for those prefills again. Requires `use_async_batching=False` in "
-            "`continuous_batching_config`."
+            "batches at the cost of paying for those prefills again."
         },
     )
 
