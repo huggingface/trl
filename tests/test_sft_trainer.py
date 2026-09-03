@@ -288,6 +288,31 @@ class TestDataCollatorForLanguageModeling(TrlTestCase):
 
 
 class TestSFTTrainer(TrlTestCase):
+    def test_evaluate_prepares_each_split_of_a_dict_once(self):
+        """`evaluate` prepares a dict of raw eval datasets split by split. Handing the prepared dict to
+        `Trainer.evaluate` made it call `self.evaluate` again per split, re-entering this override on data it had
+        already prepared: the tokenizing steps skip an already-tokenized split, but `packing` re-packs it. The override
+        now runs `super().evaluate` once per split itself, so each split is prepared exactly once and the metrics carry
+        the per-split prefix `Trainer.evaluate` would have produced."""
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling")
+        training_args = SFTConfig(output_dir=self.tmp_dir, max_steps=1, report_to="none")
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset["train"]
+        )
+        prepare = trainer._prepare_dataset
+        prepared_splits = []
+
+        def counting_prepare(dataset, processing_class, args, packing, formatting_func, dataset_name):
+            prepared_splits.append(dataset_name)
+            return prepare(dataset, processing_class, args, packing, formatting_func, dataset_name)
+
+        trainer._prepare_dataset = counting_prepare
+
+        metrics = trainer.evaluate({"first": dataset["test"], "second": dataset["test"]})
+
+        assert prepared_splits == ["first", "second"], f"each split must be prepared once, got {prepared_splits}"
+        assert "eval_first_loss" in metrics and "eval_second_loss" in metrics
+
     def test_init_with_training_arguments(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
         args = TrainingArguments(output_dir=self.tmp_dir, report_to="none")

@@ -1752,6 +1752,21 @@ class SFTTrainer(_BaseTrainer):
             else {}
         )
         self._reject_skip_prepare_without_labels(eval_datasets, self.data_collator)
+        # Call `super().evaluate()` once per split ourselves instead of handing the whole dict to it: `Trainer.evaluate`
+        # would otherwise recurse into `self.evaluate` per split, re-entering this override on an already-prepared
+        # dataset and, with `packing`, packing it a second time.
+        if isinstance(eval_dataset, dict):
+            metrics = {}
+            for name, dataset in eval_dataset.items():
+                # Each split is its own evaluation window, and `super().evaluate` does not re-enter this override, so
+                # open the window per split with that split's prefix.
+                self._open_eval_window(f"{metric_key_prefix}_{name}")
+                metrics.update(
+                    super().evaluate(
+                        eval_dataset=dataset, ignore_keys=ignore_keys, metric_key_prefix=f"{metric_key_prefix}_{name}"
+                    )
+                )
+            return metrics
         return super().evaluate(
             eval_dataset=eval_dataset, ignore_keys=ignore_keys, metric_key_prefix=metric_key_prefix
         )

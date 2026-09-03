@@ -1883,9 +1883,9 @@ class KTOTrainer(_BaseTrainer):
         metric_key_prefix: str = "eval",
     ) -> dict[str, float]:
         # When a dataset is passed directly to `evaluate` (e.g. a held-out test set), preprocess it the same way
-        # `__init__` does, so that `evaluate` accepts the same dataset types as the trainer. `_prepare_dataset` is
-        # idempotent: it skips datasets that are already tokenized. A `str` selects a dataset that was already prepared
-        # at init time, so it's left untouched.
+        # `__init__` does, so that `evaluate` accepts the same dataset types as the trainer. `_prepare_dataset` tokenizes
+        # from the text columns, so it has to receive the raw dataset, never one it already prepared. A `str` selects a
+        # dataset that was already prepared at init time, so it's left untouched.
         if not self._is_vision_dataset and eval_dataset is not None and not isinstance(eval_dataset, str):
             # Full fine-tuning with no `ref_model` uses `self.model` as the reference, which is only valid before
             # training. After a step (`global_step > 0`) it's the trained policy, so we can't precompute a correct

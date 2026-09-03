@@ -819,9 +819,9 @@ class TPOTrainer(_BaseTrainer):
         # shadow this one and skip its dataset preparation.
         self._open_eval_window(metric_key_prefix)
         # When a dataset is passed directly to `evaluate` (e.g. a held-out test set), preprocess it the same way
-        # `__init__` does, so that `evaluate` accepts the same dataset types as the trainer. `_prepare_dataset` is
-        # idempotent: it skips datasets that are already tokenized. A `str` selects a dataset that was already prepared
-        # at init time, so it's left untouched.
+        # `__init__` does, so that `evaluate` accepts the same dataset types as the trainer. `_prepare_dataset` tokenizes
+        # from the text columns, so it has to receive the raw dataset, never one it already prepared. A `str` selects a
+        # dataset that was already prepared at init time, so it's left untouched.
         if eval_dataset is not None and not isinstance(eval_dataset, str):
             if isinstance(eval_dataset, dict):
                 eval_dataset = {
