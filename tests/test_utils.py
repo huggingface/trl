@@ -1695,12 +1695,17 @@ class TestWarnIfFp32WithMixedPrecision(TrlTestCase):
             (True, False, {"dtype": None}, False),  # so does None: the loader passes it through untouched
             (False, False, {}, False),  # no mixed precision → nothing to warn about
             # A quantized load stores the weights in the quantized format, not in `dtype`, and takes its compute
-            # precision from the quantization config, so neither the diagnosis nor the suggested fix would apply.
-            (True, False, {"quantization_config": BitsAndBytesConfig(load_in_4bit=True)}, False),
+            # precision from the quantization config, so neither the diagnosis nor the suggested fix would apply. The
+            # config is built inside the test: constructing it at collection time needs bitsandbytes on transformers
+            # 4.56.2, which would break collection of the whole file where it is not installed.
+            (True, False, {"quantization_config": "4bit"}, False),
             (True, False, {"quantization_config": None}, True),  # the key alone is not a quantized load
         ],
     )
     def test_warns_only_on_silent_fp32(self, caplog, bf16, fp16, model_init_kwargs, should_warn):
+        if model_init_kwargs and model_init_kwargs.get("quantization_config") == "4bit":
+            pytest.importorskip("bitsandbytes")
+            model_init_kwargs = {"quantization_config": BitsAndBytesConfig(load_in_4bit=True)}
         # The accelerate-backed logger in `trl.trainer.utils` requires the distributed state to
         # exist before it emits, exactly as it does once a trainer has been constructed.
         PartialState()
