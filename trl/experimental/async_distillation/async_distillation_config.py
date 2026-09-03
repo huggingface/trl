@@ -42,8 +42,8 @@ class AsyncDistillationConfig(_BaseConfig):
             through for them in [Defeating the trainer-generator precision mismatch in
             TRL](https://huggingface.co/spaces/aminediroHF/trainer-generator-bf16-mismatch)) is sensitive to the
             trainer's own precision. Closing that gap end to end also requires serving the student's vLLM server in the
-            same dtype (`vllm serve --dtype`); a mismatch is logged as a warning at train start. A `dtype` in
-            `model_init_kwargs` takes precedence. Teacher servers are unaffected: they are never updated.
+            same dtype (`vllm serve --dtype`). A `dtype` in `model_init_kwargs` takes precedence. Teacher servers are
+            unaffected: they are never updated.
         trust_remote_code (`bool`, *optional*, defaults to `False`):
             Whether to allow loading models and tokenizers that ship custom Python code from the Hub. Forwarded to
             [`~transformers.AutoModelForCausalLM.from_pretrained`] and [`~transformers.AutoTokenizer.from_pretrained`].
