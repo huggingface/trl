@@ -213,7 +213,7 @@ class _TrainBeginCallback(TrainerCallback):
         self._fired = False
 
     def on_train_begin(self, _args, _state, _control, **_kwargs):
-        if self._fired:
+        if self._fired or _control.should_training_stop:
             return
         self._fired = True
         if self._trainer.accelerator.is_main_process and self._trainer.weight_transfer is not None:
@@ -237,12 +237,18 @@ class _EpochStopCallback(TrainerCallback):
         self._trainer = trainer
         self._target = target_groups
 
-    def on_step_end(self, _args, _state, control, **_kwargs):
+    def _check_target(self, control):
         acc = self._trainer.accelerator
         trained = self._trainer._groups_before_resume + len(self._trainer._trained_groups)
         reached = torch.tensor(int(trained >= self._target), device=acc.device)
         if int(acc.reduce(reached, reduction="sum").item()) >= 1:
             control.should_training_stop = True
+
+    def on_train_begin(self, _args, _state, control, **_kwargs):
+        self._check_target(control)
+
+    def on_step_end(self, _args, _state, control, **_kwargs):
+        self._check_target(control)
 
 
 def log_rollout_traces(samples: list[RolloutSample], step: int, report_to: list[str], max_traces: int = 16) -> None:
@@ -1023,11 +1029,12 @@ class AsyncGRPOTrainer(_BaseTrainer):
 
         # Add callbacks. Cold weight sync + worker start on train begin, then periodic weight syncs.
         self.add_callback(_OptimizerTimeCallback(self))
+        # Check resumed progress before _TrainBeginCallback starts the rollout worker.
+        if self._epoch_stop_groups is not None:
+            self.add_callback(_EpochStopCallback(self, self._epoch_stop_groups))
         self.add_callback(_TrainBeginCallback(self))
         self.add_callback(StepIntervalCallback(self._sync_weight, self.args.weight_sync_steps))
         self.add_callback(StepIntervalCallback(self._log_step_metrics, 1))
-        if self._epoch_stop_groups is not None:
-            self.add_callback(_EpochStopCallback(self, self._epoch_stop_groups))
 
     def get_train_dataloader(self) -> DataLoader:
         num_processes = self.accelerator.num_processes
@@ -1386,6 +1393,12 @@ class AsyncGRPOTrainer(_BaseTrainer):
             with open(os.path.join(checkpoint_dir, "rollout_state.json"), "w") as f:
                 json.dump(rollout_state, f)
         super()._save_checkpoint(model, trial)
+
+    def _run_epoch(self, *args, **kwargs):
+        # Trainer checks this flag only after _run_epoch returns, so honor a train-begin stop before the first batch.
+        if self.control.should_training_stop:
+            return
+        return super()._run_epoch(*args, **kwargs)
 
     def _inner_training_loop(self, *args, **kwargs):
         # When resuming, pass the saved prompt position to the worker before _StartRolloutWorkerCallback fires.
