@@ -37,6 +37,7 @@ from trl.experimental.async_distillation.async_distillation_trainer import (
     TokenBudgetBatcher,
     _add_tail_bucket,
     _balance_by_squared_length,
+    _EpochStopCallback,
     _jsd_divergence,
     _narrow_top1_actual_support,
     _reduce_metric,
@@ -770,7 +771,9 @@ class TestAsyncDistillationTrainer(TrlTestCase):
                 per_device_train_batch_size=3,
                 teacher_top_k=TEACHER_TOP_K,
                 max_completion_length=8,
-                token_budget=256,
+                # FixedCountBatcher: the tiny test model has head_dim=2, which flash-attn rejects on the longer rows
+                # TokenBudgetBatcher packs.
+                token_budget=-1,
                 vllm_server_timeout=5.0,
                 report_to="none",
                 **overrides,
@@ -830,54 +833,35 @@ class TestAsyncDistillationTrainer(TrlTestCase):
             assert math.isfinite(record["loss"])
 
 
-@pytest.mark.skipif(
-    not is_ampere_or_newer() and torch_device != "xpu",
-    reason="Flash Attention 2 requires Ampere or newer GPU, or XPU",
-)
-class TestEpochStop(TrlTestCase):
+class TestEpochStop:
     """`num_train_epochs` stops after N full passes over the PROMPTS, counted as distinct prompt ids.
 
-    `max_steps` is derived assuming a fixed number of samples per step, which `TokenBudgetBatcher` (the default) does
-    not honour: it packs however many samples fit the budget, so the requested epochs are reached well before the step
-    ceiling. Without the callback the run would keep going to `max_steps` and train more epochs than asked for, so the
-    run is driven end-to-end through the real trainer (stub worker + real forward/backward) under that batcher.
+    The count spans a resume: the worker restarts `prompt_id` at 0, so the prompts trained before the checkpoint ride
+    in `_prompts_before_resume` and are added back here, or a resumed run would train `num_train_epochs` more passes on
+    top of the ones already done.
     """
 
-    def test_epoch_stop_ends_training_before_max_steps(self):
-        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
-        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
-        tokenizer = AutoTokenizer.from_pretrained(model_id)
-        num_train_epochs = 2
-        args = AsyncDistillationConfig(
-            output_dir=self.tmp_dir,
-            num_train_epochs=num_train_epochs,  # epoch-driven: no explicit max_steps
-            per_device_train_batch_size=3,
-            teacher_top_k=TEACHER_TOP_K,
-            max_completion_length=8,
-            # Packs several of these short samples per row, so a step consumes more prompts than `max_steps` assumed.
-            token_budget=256,
-            vllm_server_timeout=5.0,
-            report_to="none",
+    @pytest.mark.parametrize(
+        ("trained", "before_resume", "should_stop"),
+        [
+            ({0, 1, 2}, 0, False),
+            ({0, 1, 2, 3}, 0, True),
+            ({0, 1}, 2, True),  # a resumed run reaches the target counting the checkpoint's prompts
+            (set(), 4, True),  # ... and reaches it having trained nothing of its own
+        ],
+    )
+    def test_stops_once_the_prompt_target_is_reached(self, trained, before_resume, should_stop):
+        trainer = types.SimpleNamespace(
+            # Single process, so the cross-rank reduce is the identity.
+            accelerator=types.SimpleNamespace(device="cpu", reduce=lambda tensor, reduction: tensor),
+            _trained_prompts=trained,
+            _prompts_before_resume=before_resume,
         )
-        trainer = AsyncDistillationTrainer(
-            model=model_id,
-            args=args,
-            train_dataset=dataset,
-            # Packing consumes prompts faster than the default stub refills, so hand it a deeper buffer.
-            rollout_worker=_StubRolloutWorker(
-                tokenizer, dataset, vocab_size=len(tokenizer), samples_per_weight_sync=24
-            ),
-            weight_transfer=_StubWeightTransfer(),
-        )
-        trainer.train()
+        control = types.SimpleNamespace(should_training_stop=False)
 
-        # The requested passes over the prompts, plus at most the final step's overshoot. (HF's own state.epoch is
-        # meaningless here: it's global_step/max_steps over an infinite IterableDataset, so epochs are judged by
-        # distinct prompts trained, which is what the callback targets.)
-        num_prompts = len(dataset)
-        assert num_train_epochs * num_prompts <= len(trainer._trained_prompts) < (num_train_epochs + 1) * num_prompts
-        # The callback ended it, not the step ceiling — the point of counting prompts rather than steps.
-        assert trainer.state.global_step < trainer.args.max_steps
+        _EpochStopCallback(trainer, target_prompts=4).on_step_end(None, None, control)
+
+        assert control.should_training_stop is should_stop
 
 
 class TestRolloutStateCheckpoint(TrlTestCase):
