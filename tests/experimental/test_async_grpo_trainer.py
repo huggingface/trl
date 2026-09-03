@@ -75,6 +75,22 @@ def dummy_reward_func(completions, **kwargs):
     return [float(hash(c[0]["content"]) % 100) / 100.0 for c in completions]
 
 
+def _descendant_pids(pid: int) -> list[int]:
+    """Every process below `pid` in the /proc tree, so a timeout can kill ranks that torch elastic detached into their
+    own sessions."""
+    found, stack = [], [pid]
+    while stack:
+        parent = stack.pop()
+        try:
+            children = Path(f"/proc/{parent}/task/{parent}/children").read_text().split()
+        except OSError:
+            children = []
+        for child in map(int, children):
+            found.append(child)
+            stack.append(child)
+    return found
+
+
 class _StubRolloutWorker:
     """Minimal rollout worker stub for testing the trainer in isolation."""
 
@@ -336,9 +352,11 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         # Bound the child: the trainer's rollout consumer blocks indefinitely on an empty queue (it only
         # calls `check_health`, which this stub implements as a no-op), so a starved run would hang the
         # pytest process rather than fail it. The timeout turns that into a readable failure.
-        # `accelerate launch` starts each rank through torch elastic, which puts the workers in their own session
-        # (`start_new_session=True`), so a plain `subprocess.run(timeout=...)` would kill only the launcher and leave
-        # the ranks running. Put the launcher in a fresh process group and kill the whole group on timeout.
+        # `accelerate launch` starts each rank through torch elastic, which puts every worker in its own session
+        # (`start_new_session=True`), so neither `subprocess.run(timeout=...)` nor a kill of the launcher's process
+        # group reaches the ranks: they would keep the GPUs and hold the stdout pipe open, and the read after the
+        # timeout would never return. Collect the descendants from /proc while the launcher is still their parent
+        # and kill the whole tree.
         proc = subprocess.Popen(
             ["accelerate", "launch", "--config_file", str(_FSDP2_CONFIG), str(_FSDP2_WORKER)],
             env=env,
@@ -346,12 +364,15 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            start_new_session=True,
         )
         try:
             stdout, stderr = proc.communicate(timeout=900)
         except subprocess.TimeoutExpired:
-            os.killpg(proc.pid, signal.SIGKILL)
+            for pid in [proc.pid, *_descendant_pids(proc.pid)]:
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
             stdout, stderr = proc.communicate()
             pytest.fail(f"FSDP2 worker timed out after 900s:\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}")
         result = subprocess.CompletedProcess(proc.args, proc.returncode, stdout, stderr)
