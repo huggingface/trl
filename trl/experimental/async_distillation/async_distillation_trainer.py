@@ -1571,7 +1571,10 @@ class AsyncDistillationTrainer(_BaseTrainer):
     def _inner_training_loop(self, *args, **kwargs):
         # When resuming, pass the saved prompt position to the worker before _TrainBeginCallback fires.
         # Skipped for IterableDataset since len() isn't available on streaming datasets.
-        # Always reset first so a stale value from a prior train() call is never carried over.
+        # Always reset first so a stale value from a prior train() call is never carried over. The trained ids are
+        # cleared whatever the worker, since the collator fills them regardless and the worker's `prompt_id` restarts
+        # at 0, so leftovers from an earlier run would collide with this one's.
+        self._trained_prompts.clear()
         if isinstance(self.rollout_worker, AsyncRolloutWorker):
             self.rollout_worker._loop_kwargs["dataset_start_index"] = 0
             self._prompts_before_resume = 0

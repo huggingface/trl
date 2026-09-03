@@ -961,6 +961,7 @@ class TestRolloutStateCheckpoint(TrlTestCase):
         trainer.accelerator = MagicMock()
         trainer.accelerator.is_main_process = False  # skip finally-block teardown
         trainer._prompts_before_resume = 0
+        trainer._trained_prompts = {1, 2, 3}  # a prior run's ids, which the reset has to drop
 
         with patch.object(_BaseTrainer, "_inner_training_loop", return_value=None):
             trainer._inner_training_loop(resume_from_checkpoint=checkpoint_dir)
@@ -969,3 +970,5 @@ class TestRolloutStateCheckpoint(TrlTestCase):
         # Epochs are counted in prompts trained, so a resumed run has to pick that count up too, or it would train
         # `num_train_epochs` more passes on top of the ones already done.
         assert trainer._prompts_before_resume == 77
+        # The worker restarts `prompt_id` at 0, so ids left over from an earlier run would collide with this one's.
+        assert trainer._trained_prompts == set()
