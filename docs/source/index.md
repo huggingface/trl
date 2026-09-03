@@ -61,7 +61,6 @@ Below is the current list of TRL trainers.
 - [`NashMDTrainer`](nash_md_trainer)
 - [`OnlineDPOTrainer`](online_dpo_trainer)
 - [`PPOTrainer`](ppo_trainer)
-- [`TPOTrainer`](tpo_trainer)
 - [`XPOTrainer`](xpo_trainer)
 
 #### Reward modeling
@@ -76,6 +75,7 @@ Below is the current list of TRL trainers.
 - [`BCOTrainer`](bco_trainer)
 - [`CPOTrainer`](cpo_trainer)
 - [`ORPOTrainer`](orpo_trainer)
+- [`TPOTrainer`](tpo_trainer)
 
 #### Knowledge distillation
 
