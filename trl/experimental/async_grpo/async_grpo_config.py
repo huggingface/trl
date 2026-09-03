@@ -75,7 +75,8 @@ class AsyncGRPOConfig(_BaseConfig):
         repetition_penalty (`float`, *optional*, defaults to `1.0`):
             Float that penalizes new tokens based on whether they appear in the prompt and the generated text so far.
             Values > 1.0 encourage the model to use new tokens, while values < 1.0 encourage the model to repeat
-            tokens.
+            tokens. Biases the importance ratio too: vLLM applies the penalty before computing the logprobs kept as
+            `old_log_probs`, while the trainer scores the unpenalized logits.
         chat_template_kwargs (`dict[str, Any]`, *optional*):
             Additional keyword arguments to pass to the `apply_chat_template` function when generating completions.
         max_tool_calling_iterations (`int`, *optional*):
@@ -403,10 +404,15 @@ class AsyncGRPOConfig(_BaseConfig):
         # the denominator of `coef_1 = exp(log_probs - old_log_probs)`. TRL prescribes serving with
         # `--logprobs-mode processed_logprobs` (see `trl.scripts.vllm_serve.build_command`), so those logprobs come
         # from the reshaped logits while the trainer takes a full-vocab log-softmax. For an unchanged policy the ratio
-        # then reads the surviving mass S instead of 1.0, which also shifts it against the `epsilon_low`/`epsilon_high`
-        # clip range. Unlike GRPO there is no importance-sampling correction to turn off, so the only lever is the
+        # then departs from 1.0, which also shifts it against the `epsilon_low`/`epsilon_high` clip range: top_p/top_k/
+        # min_p truncate the support and renormalize, so the ratio reads the surviving mass S; `repetition_penalty`
+        # rescales the logits of already-seen tokens without truncating anything, so it moves the ratio by the rescaling
+        # instead. Unlike GRPO there is no importance-sampling correction to turn off, so the only lever is the
         # sampling parameters themselves. `temperature` is excluded: the trainer scales its own logits by it, so it
-        # cancels.
+        # cancels, except below vLLM's greedy threshold (1e-5 in its `SamplingParams`), where vLLM skips temperature
+        # scaling altogether while the trainer still divides; that constant belongs to vLLM, so it is not checked. One
+        # more limit: `top_k` at or above the vocabulary size is disabled by vLLM but still warns here, since the config
+        # does not know the vocabulary size.
         reshaping = [
             name
             for name, active in (
@@ -418,13 +424,16 @@ class AsyncGRPOConfig(_BaseConfig):
             if active
         ]
         if reshaping:
+            quoted = [f"`{name}`" for name in reshaping]
+            names = quoted[0] if len(quoted) == 1 else ", ".join(quoted[:-1]) + " and " + quoted[-1]
             warnings.warn(
-                f"{' and '.join(reshaping)} reshapes the sampled distribution, which biases the importance ratio "
+                f"Setting {names} reshapes the sampled distribution, which biases the importance ratio "
                 "`exp(log_probs - old_log_probs)`: on a server started with `--logprobs-mode processed_logprobs`, as "
                 "TRL prescribes, vLLM computes the logprobs kept as `old_log_probs` from the reshaped logits while "
                 "the trainer normalizes over the full vocabulary. The ratio then departs from 1.0 for an unchanged "
-                "policy, by an amount that grows as the kept mass shrinks, and can cross the clip range. Keep the "
-                "sampling defaults (`top_p=1.0`, `top_k=0`, `min_p=None`, `repetition_penalty=1.0`) to avoid it.",
+                "policy (by the mass that survives truncation for `top_p`, `top_k` and `min_p`, by the rescaling for "
+                "`repetition_penalty`) and can cross the clip range. Keep the sampling defaults (`top_p=1.0`, "
+                "`top_k=0`, `min_p=None`, `repetition_penalty=1.0`) to avoid it.",
                 UserWarning,
                 stacklevel=3,
             )

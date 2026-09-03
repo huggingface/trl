@@ -158,7 +158,7 @@ class TestAsyncGRPOConfig(TrlTestCase):
     @pytest.mark.parametrize(
         ("top_p", "top_k", "min_p", "repetition_penalty", "should_warn"),
         [
-            (1.0, 0, None, 1.0, False),  # defaults: nothing reshapes the logits, the ratio is unbiased
+            (1.0, 0, None, 1.0, False),  # defaults: nothing reshapes the logits, only the real mismatch remains
             (0.9, 0, None, 1.0, True),
             (1.0, 50, None, 1.0, True),
             (1.0, 0, 0.05, 1.0, True),
