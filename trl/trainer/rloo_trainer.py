@@ -1811,9 +1811,14 @@ class RLOOTrainer(_BaseTrainer):
 
             logging_backends = []
             if self.args.report_to and "wandb" in self.args.report_to and wandb.run is not None:
-                logging_backends.append(wandb)
+                table_key = (
+                    f"completions_step={self.state.global_step}"
+                    if self.args.wandb_log_completions_by_step
+                    else "completions"
+                )
+                logging_backends.append((wandb, table_key))
             if self.args.report_to and "trackio" in self.args.report_to:
-                logging_backends.append(trackio)
+                logging_backends.append((trackio, "completions"))
 
             table = {
                 "step": [self.state.global_step] * len(self._logs["prompt"]),
@@ -1827,7 +1832,7 @@ class RLOOTrainer(_BaseTrainer):
             df_base = pd.DataFrame(table)
             images_raw = self._logs["images"] or []
 
-            for logging_backend in logging_backends:
+            for logging_backend, table_key in logging_backends:
                 if images_raw:
                     images = []
                     for image_list in self._logs["images"]:
@@ -1843,7 +1848,7 @@ class RLOOTrainer(_BaseTrainer):
                 if self.log_unique_prompts:
                     df = df.drop_duplicates(subset=["prompt"])
 
-                logging_backend.log({"completions": logging_backend.Table(dataframe=df)})
+                logging_backend.log({table_key: logging_backend.Table(dataframe=df)})
 
     # Ensure the model card is saved along with the checkpoint
     def _save_checkpoint(self, model, trial):

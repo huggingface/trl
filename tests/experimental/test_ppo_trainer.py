@@ -14,6 +14,10 @@
 
 import gc
 import os
+import sys
+from contextlib import nullcontext
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 import pytest
 import torch
@@ -685,6 +689,67 @@ class TestCore(TrlTestCase):
         whiten_masked = masked_whiten(self.test_input, self.test_mask)[1:3]
         diffs = (whiten_unmasked - whiten_masked).sum()
         assert abs(diffs.item()) < 0.00001
+
+
+class TestPPOCompletionLogging(TrlTestCase):
+    def test_wandb_log_completions_by_step_defaults_to_false(self):
+        config = PPOConfig(output_dir=self.tmp_dir)
+
+        assert config.wandb_log_completions_by_step is False
+
+    @pytest.mark.parametrize(
+        ("wandb_log_completions_by_step", "expected_key"),
+        [(False, "completions"), (True, "completions_step=7")],
+    )
+    def test_wandb_completion_table_key(self, wandb_log_completions_by_step, expected_key):
+        trainer = object.__new__(PPOTrainer)
+        trainer.eval_dataset = object()
+        trainer.eval_dataloader = [{"input_ids": torch.tensor([[1, 2]])}]
+        trainer.args = SimpleNamespace(
+            response_length=1,
+            ds3_gather_for_generation=False,
+            report_to=["wandb", "comet_ml"],
+            wandb_log_completions_by_step=wandb_log_completions_by_step,
+        )
+        trainer.processing_class = SimpleNamespace(
+            pad_token_id=0,
+            batch_decode=MagicMock(side_effect=[["query"], ["response"]]),
+        )
+        trainer.model = object()
+        trainer.reward_model = object()
+        trainer.stop_token_id = None
+        trainer.state = SimpleNamespace(global_step=7)
+        trainer.accelerator = SimpleNamespace(
+            is_main_process=True,
+            gather_for_metrics=lambda tensor: tensor,
+        )
+
+        wandb_mock = MagicMock()
+        wandb_mock.run = object()
+        comet_mock = MagicMock()
+        with (
+            patch.dict(sys.modules, {"wandb": wandb_mock}),
+            patch(
+                "trl.experimental.ppo.ppo_trainer.unwrap_model_for_generation",
+                return_value=nullcontext(SimpleNamespace(policy=object())),
+            ),
+            patch(
+                "trl.experimental.ppo.ppo_trainer.batch_generation",
+                return_value=(torch.tensor([[1, 2, 3]]), None),
+            ),
+            patch(
+                "trl.experimental.ppo.ppo_trainer.get_reward",
+                return_value=(None, torch.tensor([1.0]), None),
+            ),
+            patch("trl.experimental.ppo.ppo_trainer.gather_object", side_effect=lambda value: value),
+            patch("trl.experimental.ppo.ppo_trainer.is_rich_available", return_value=False),
+            patch("trl.experimental.ppo.ppo_trainer.log_table_to_comet_experiment", comet_mock),
+        ):
+            trainer.generate_completions(sampling=True)
+
+        assert set(wandb_mock.log.call_args.args[0]) == {expected_key}
+        comet_mock.assert_called_once()
+        assert comet_mock.call_args.kwargs["name"] == "completions.csv"
 
 
 class TestPPOTrainer(TrlTestCase):
