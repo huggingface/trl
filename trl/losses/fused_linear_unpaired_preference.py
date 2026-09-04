@@ -55,16 +55,14 @@ class FusedLinearUnpairedPreferenceBase(torch.autograd.Function):
         **loss_kwargs,
     ):
         """
-        Base class for fused linear layer with unpaired preference loss like KTO
-        Expects _input to be stacked with chosen and rejected inputs on the batch dimension.
+        Base class for fused linear layer with unpaired preference loss like KTO Expects _input to be stacked with
+        chosen and rejected inputs on the batch dimension.
 
         The mental model is:
 
-        forward()
-        ├── Loop over chunks
+        forward() ├── Loop over chunks
             └── compute_loss()
-                ├── chunk_forward()  # Compute logits and log probs
-                └── prefer_loss()    # Calculate preference loss
+                ├── chunk_forward() # Compute logits and log probs └── prefer_loss() # Calculate preference loss
 
         Args:
             _input (torch.Tensor): Input tensor. Shape: (batch_size, seq_len, hidden_size).
@@ -296,6 +294,7 @@ class FusedLinearUnpairedPreferenceBase(torch.autograd.Function):
     ):
         """
         Compute the total loss for a chunk of input and target, while using an alignment/preference loss function.
+
         Args:
             preference_loss_fn (callable): Loss function to compute the loss on a chunk of input/target.
             input_chunk (torch.Tensor): Chunk of input tensor. Shape: (2 * chunk_size, sequence_length, hidden_size).

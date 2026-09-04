@@ -46,9 +46,8 @@ def get_gamma_weights(
 ) -> torch.Tensor:
     """VESPO gamma weighting: phi(w) = e^lambda * w^k * e^{-lambda*w} (normalized so phi(1)=1).
 
-    Computed in log space and detached (via ``@torch.no_grad``) so ``phi_seq`` acts purely
-    as a gradient-scaling coefficient. Returns a (B, 1) tensor.
-    TRL reference: ``trl.trainer.grpo_trainer.GRPOTrainer.get_gamma_weights``.
+    Computed in log space and detached (via ``@torch.no_grad``) so ``phi_seq`` acts purely as a gradient-scaling
+    coefficient. Returns a (B, 1) tensor. TRL reference: ``trl.trainer.grpo_trainer.GRPOTrainer.get_gamma_weights``.
     """
     lower_clamp = math.log(1e-8)
 
@@ -74,11 +73,11 @@ def get_gamma_weights(
 def sapo_loss_fn(importance_ratio: torch.Tensor, temperature: float) -> torch.Tensor:
     """SAPO (Soft Adaptive Policy Optimization) loss function.
 
-    Replaces hard clipping with a smooth, temperature-controlled gate that
-    adaptively attenuates off-policy updates while preserving useful learning signals.
+    Replaces hard clipping with a smooth, temperature-controlled gate that adaptively attenuates off-policy updates
+    while preserving useful learning signals.
 
-    Reference: https://huggingface.co/papers/2511.20347
-    TRL implementation: https://github.com/huggingface/trl/blob/1bd2a52ec2d8344050af736d60cdc735181ae4b8/trl/trainer/grpo_trainer.py#L1913
+    Reference: https://huggingface.co/papers/2511.20347 TRL implementation:
+    https://github.com/huggingface/trl/blob/1bd2a52ec2d8344050af736d60cdc735181ae4b8/trl/trainer/grpo_trainer.py#L1913
 
     Args:
         importance_ratio: The importance sampling ratio (pi_theta / pi_old).
@@ -324,6 +323,7 @@ class FusedLinearGRPOFunction(FusedLinearPPOBase):
     ):
         """
         Fused linear layer with GRPO loss.
+
         Args:
             _input (torch.Tensor): Input tensor. Shape: (batch_size * seq_len, hidden_size)
             weight (torch.Tensor): Weight tensor. Shape: (vocab_size, hidden_size)
@@ -332,22 +332,26 @@ class FusedLinearGRPOFunction(FusedLinearPPOBase):
             advantages (torch.Tensor): Advantages tensor. Shape: (batch_size,)
             bias (torch.Tensor, optional): Bias tensor. Shape: (vocab_size,)
             ref_per_token_logps:  Reference model log probs per token tensor. Shape:(batch_size, seq_len)
-            ref_input (torch.Tensor, optional): Reference model input tensor. Shape: (batch_size * seq_len, hidden_size)
+            ref_input (torch.Tensor, optional):
+                Reference model input tensor. Shape: (batch_size * seq_len, hidden_size)
             ref_weight (torch.Tensor, optional): Reference model weight tensor. Shape: (vocab_size, hidden_size)
             ref_bias (torch.Tensor, optional): Reference model bias tensor. Shape: (vocab_size,)
             beta (float): Weight for the KL penalty
             loss_type (str): Type of loss calculation ("grpo", "bnpo", "dr_grpo", "dapo", "cispo", "sapo", "luspo").
                 Defaults to "dapo".
-            max_completion_length (int, optional): Maximum completion length, required for "dr_grpo". Defaults to None.
-            importance_sampling_level (str): Level of importance sampling ("token" or "sequence"). Defaults to "token".
+            max_completion_length (int, optional):
+                Maximum completion length, required for "dr_grpo". Defaults to None.
+            importance_sampling_level (str):
+                Level of importance sampling ("token" or "sequence"). Defaults to "token".
             sapo_temperature_pos (float): Temperature for positive advantages in SAPO. Defaults to 1.0.
             sapo_temperature_neg (float): Temperature for negative advantages in SAPO. Defaults to 1.05.
             temperature (float): Temperature for the logits
             compiled (bool): Whether to use torch compile
             use_ref_model (bool): Whether to use a reference model
             chunk_size (int): Size of chunks for processing.
-            vllm_is_ratio (torch.Tensor, optional): vLLM importance sampling ratio (batch_size, seq_len) or (batch_size, 1) or None.
-                Used to correct for distribution mismatch when using vLLM for generation.
+            vllm_is_ratio (torch.Tensor, optional):
+                vLLM importance sampling ratio (batch_size, seq_len) or (batch_size, 1) or None. Used to correct for
+                distribution mismatch when using vLLM for generation.
         Returns:
             torch.Tensor: Computed loss
         """
@@ -468,10 +472,12 @@ class FusedLinearGRPOLoss(torch.nn.Module):
             epsilon_low (float): Lower bound for the importance sampling ratio.
             epsilon_high (float): Upper bound for the importance sampling ratio.
             loss_type (str): Type of loss calculation ("grpo", "bnpo", "dr_grpo", "dapo", "cispo", "sapo", "luspo").
-                Defaults to "dapo". For "cispo", epsilon_high is typically larger (e.g. 5.0) and
-                epsilon_low is unused. For "sapo", uses soft gating instead of hard clipping.
-            max_completion_length (int, optional): Maximum completion length, required for "dr_grpo". Defaults to None.
-            importance_sampling_level (str): Level of importance sampling ("token" or "sequence"). Defaults to "token".
+                Defaults to "dapo". For "cispo", epsilon_high is typically larger (e.g. 5.0) and epsilon_low is unused.
+                For "sapo", uses soft gating instead of hard clipping.
+            max_completion_length (int, optional):
+                Maximum completion length, required for "dr_grpo". Defaults to None.
+            importance_sampling_level (str):
+                Level of importance sampling ("token" or "sequence"). Defaults to "token".
             sapo_temperature_pos (float): Temperature for positive advantages in SAPO. Defaults to 1.0.
             sapo_temperature_neg (float): Temperature for negative advantages in SAPO. Defaults to 1.05.
             temperature (float): Temperature for the logits.

@@ -41,8 +41,8 @@ def _selective_logprob_forward(
 ):
     """Compute selective log-probabilities by streaming over sequence and vocab chunks.
 
-    Dual chunking (sequence × vocab) bounds peak temporary memory to
-    ``seq_chunk_size × vocab_chunk_size`` regardless of total N or V.
+    Dual chunking (sequence × vocab) bounds peak temporary memory to ``seq_chunk_size × vocab_chunk_size`` regardless
+    of total N or V.
     """
     device = hidden.device
     n_rows, _ = hidden.shape
@@ -143,8 +143,8 @@ def _selective_logprob_backward(hidden, weight, targets, bias, log_z, grad_logpr
 class _ChunkedSelectiveLogProbFunction(torch.autograd.Function):
     """Custom autograd function for memory-efficient selective logprob.
 
-    Forward: streams over vocab chunks, only stores hidden/weight/targets/log_z.
-    Backward: recomputes logits per chunk instead of storing all intermediates.
+    Forward: streams over vocab chunks, only stores hidden/weight/targets/log_z. Backward: recomputes logits per chunk
+    instead of storing all intermediates.
     """
 
     @staticmethod
@@ -227,8 +227,8 @@ class FusedLinearPPOBase(torch.autograd.Function):
     ):
         """Chunked forward pass for PPO loss computation.
 
-        Hybrid approach: chunk_forward (custom autograd, memory-efficient) runs OUTSIDE
-        torch.compile; only the loss math (ppo_loss_fn) is compiled.
+        Hybrid approach: chunk_forward (custom autograd, memory-efficient) runs OUTSIDE torch.compile; only the loss
+        math (ppo_loss_fn) is compiled.
         """
         if use_ref_model:
             assert ref_per_token_logps is not None or ref_input is not None, (
@@ -462,12 +462,10 @@ class FusedLinearPPOBase(torch.autograd.Function):
     def _compute_dapo_normalizer(attention_mask, num_items_in_batch=None):
         """Per-process normalizer for DAPO/CISPO/VESPO.
 
-        When ``num_items_in_batch`` is provided it is used directly, matching
-        TRL's ``num_items_in_batch / num_processes`` — the total active tokens
-        across the entire generation batch (all grad-accum micro-batches × all
-        processes). Falling back to the current micro-batch's mask biases the
-        per-token weight by micro-batch size when grad-accum steps have
-        unequal completion lengths.
+        When ``num_items_in_batch`` is provided it is used directly, matching TRL's ``num_items_in_batch /
+        num_processes`` — the total active tokens across the entire generation batch (all grad-accum micro-batches ×
+        all processes). Falling back to the current micro-batch's mask biases the per-token weight by micro-batch size
+        when grad-accum steps have unequal completion lengths.
         """
         world_size = 1
         if torch.distributed.is_available() and torch.distributed.is_initialized():
@@ -552,8 +550,8 @@ class FusedLinearPPOBase(torch.autograd.Function):
     def chunk_forward(input_chunk, weight, selected_token_ids, bias=None, temperature=1.0):
         """Compute selected-token log probabilities without materializing full vocab logits.
 
-        Uses _ChunkedSelectiveLogProbFunction for memory-efficient custom backward
-        (recomputes logits per vocab chunk instead of storing all intermediates).
+        Uses _ChunkedSelectiveLogProbFunction for memory-efficient custom backward (recomputes logits per vocab chunk
+        instead of storing all intermediates).
         """
         batch_size, seq_len, hidden_size = input_chunk.shape
         hidden = input_chunk.reshape(batch_size * seq_len, hidden_size).contiguous()

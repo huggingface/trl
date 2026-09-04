@@ -38,9 +38,9 @@ class GKDConfig(SFTConfig):
             beta is `0.0`, the loss is the KL divergence. When beta is `1.0`, the loss is the Inverse KL Divergence.
         use_fused_linear_loss (`bool`, *optional*, defaults to `False`):
             Whether to compute the loss with the fused linear JSD loss: the `lm_head` projection and the loss are
-            computed together, one chunk of sequences at a time, so the full `(batch_size, seq_len, vocab_size)`
-            logits are never materialized. This reduces peak memory for large vocabularies. Setting
-            `use_liger_kernel=True` also enables it, which is deprecated.
+            computed together, one chunk of sequences at a time, so the full `(batch_size, seq_len, vocab_size)` logits
+            are never materialized. This reduces peak memory for large vocabularies. Setting `use_liger_kernel=True`
+            also enables it, which is deprecated.
         max_new_tokens (`int`, *optional*, defaults to `128`):
             Maximum number of tokens to generate per completion.
         teacher_model_name_or_path (`str`, *optional*):

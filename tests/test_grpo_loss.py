@@ -34,8 +34,8 @@ set_seed(42)
 def sapo_loss_fn(importance_ratio: torch.Tensor, temperature: float) -> torch.Tensor:
     """SAPO (Soft Adaptive Policy Optimization) loss function for torch reference.
 
-    Reference: https://huggingface.co/papers/2511.20347
-    TRL implementation: https://github.com/huggingface/trl/blob/1bd2a52ec2d8344050af736d60cdc735181ae4b8/trl/trainer/grpo_trainer.py#L1913
+    Reference: https://huggingface.co/papers/2511.20347 TRL implementation:
+    https://github.com/huggingface/trl/blob/1bd2a52ec2d8344050af736d60cdc735181ae4b8/trl/trainer/grpo_trainer.py#L1913
     """
     if temperature <= 0:
         raise ValueError("sapo_temperature must be > 0.")
@@ -679,11 +679,10 @@ def test_correctness(
 def test_correctness_with_bias_correction_kl(loss_type, importance_sampling_level, dtype, atol, rtol):
     """Test use_bias_correction_kl (importance-sampling-corrected KL from DeepSeek-V3.2).
 
-    Covers both ``importance_sampling_level`` values: TRL multiplies ``per_token_kl``
-    by ``coef_1`` whose shape mirrors the importance-sampling level (token: (B, T);
-    sequence: (B, 1)). The fused loss must do the same — historically it always recomputed a
-    token-level ratio, which silently miscomputed the bias-corrected KL when
-    sequence-level importance sampling was selected.
+    Covers both ``importance_sampling_level`` values: TRL multiplies ``per_token_kl`` by ``coef_1`` whose shape mirrors
+    the importance-sampling level (token: (B, T); sequence: (B, 1)). The fused loss must do the same — historically it
+    always recomputed a token-level ratio, which silently miscomputed the bias-corrected KL when sequence-level
+    importance sampling was selected.
     """
     set_seed(42)
     B, T, H, V = 3, 47, 31, 123
@@ -829,16 +828,15 @@ def test_correctness_with_vllm_is_ratio(loss_type, beta):
 def test_num_items_in_batch_normalizer(loss_type):
     """``num_items_in_batch`` overrides the dapo/cispo/vespo normalizer.
 
-    TRL's ``compute_loss`` for these loss types divides by ``num_items_in_batch /
-    num_processes`` — the total active tokens across the entire generation batch
-    (all gradient-accumulation micro-batches × all processes). The fused loss default
-    falls back to the current micro-batch's mask, which biases per-token weights
-    by micro-batch size when grad-accum micro-batches have unequal lengths.
+    TRL's ``compute_loss`` for these loss types divides by ``num_items_in_batch / num_processes`` — the total active
+    tokens across the entire generation batch (all gradient-accumulation micro-batches × all processes). The fused loss
+    default falls back to the current micro-batch's mask, which biases per-token weights by micro-batch size when
+    grad-accum micro-batches have unequal lengths.
 
     This test verifies, in single-process world:
     1. Passing ``num_items_in_batch=mask.sum()`` matches the default normalizer.
-    2. Doubling ``num_items_in_batch`` halves both loss and input gradients
-       (linear in the normalizer, no other dependence).
+    2. Doubling ``num_items_in_batch`` halves both loss and input gradients (linear in the normalizer, no other
+       dependence).
     """
     set_seed(42)
     torch.compiler.reset()
@@ -885,8 +883,8 @@ def test_num_items_in_batch_normalizer(loss_type):
 def test_num_items_in_batch_matches_trl_formula(loss_type):
     """The fused loss with ``num_items_in_batch=N`` matches TRL's ``sum / (N / num_processes)``.
 
-    Reproduces TRL's exact formula in single-process world (num_processes=1):
-    ``loss = (per_token_loss * mask).sum() / num_items_in_batch``.
+    Reproduces TRL's exact formula in single-process world (num_processes=1): ``loss = (per_token_loss * mask).sum() /
+    num_items_in_batch``.
     """
     set_seed(42)
     torch.compiler.reset()

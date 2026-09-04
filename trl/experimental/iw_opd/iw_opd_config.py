@@ -58,9 +58,9 @@ class IWOPDConfig(_BaseConfig):
             JSD.
         use_fused_linear_loss (`bool`, *optional*, defaults to `False`):
             Whether to compute the loss with the fused linear JSD loss: the `lm_head` projection and the loss are
-            computed together, one chunk of sequences at a time, so the full `(batch_size, seq_len, vocab_size)`
-            logits are never materialized. This reduces peak memory for large vocabularies. Setting
-            `use_liger_kernel=True` also enables it, which is deprecated.
+            computed together, one chunk of sequences at a time, so the full `(batch_size, seq_len, vocab_size)` logits
+            are never materialized. This reduces peak memory for large vocabularies. Setting `use_liger_kernel=True`
+            also enables it, which is deprecated.
         distillation_objective (`str`, *optional*, defaults to `"iw_opd"`):
             Objective to optimize. `"iw_opd"` uses the sampled-token Importance-Weighted On-Policy Distillation
             objective. `"jsd"` keeps the generalized JSD/KL objective.

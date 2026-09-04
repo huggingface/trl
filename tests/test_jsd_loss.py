@@ -54,6 +54,7 @@ class HFJSDLoss(HFDistillationLoss):
     def distillation_loss(self, student_logits, teacher_logits, target=None, ignore_index=-100, beta=0.5):
         """
         Compute JSD loss (Jensen-Shannon Divergence Loss).
+
         Args:
             student_logits (torch.Tensor): Logits of student tokens. Shape: (batch_size * seq_len, vocab_size).
             teacher_logits (torch.Tensor): Logits of teacher tokens. Shape: (batch_size * seq_len, vocab_size).
@@ -93,11 +94,8 @@ class HFJSDLoss(HFDistillationLoss):
 
 class TorchLMHeadJSD(torch.nn.Module):
     """Ground truth implementation of the linear fused with torch based jsd loss.
-    :param H: hidden size
-    :param V: vocab size
-    :param temperature: softmax temperature
-    :param weight_hard_loss: weight_hard_loss
-    :param weight_soft_loss: weight_soft_loss
+    :param H: hidden size :param V: vocab size :param temperature: softmax temperature :param weight_hard_loss:
+    weight_hard_loss :param weight_soft_loss: weight_soft_loss
     """
 
     def __init__(
@@ -140,8 +138,8 @@ class TorchLMHeadJSD(torch.nn.Module):
 
     def backward_with_grad_and_value(self, student_input, teacher_input, target):
         """
-        Compute gradients using grad_and_value on NPU to match the fused implementation.
-        This method is used in tests on NPU devices to ensure consistency.
+        Compute gradients using grad_and_value on NPU to match the fused implementation. This method is used in tests
+        on NPU devices to ensure consistency.
         """
         # Use grad_and_value to compute gradients and loss
         if self.student_lin.bias is not None:

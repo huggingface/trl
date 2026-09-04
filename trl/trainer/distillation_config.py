@@ -138,9 +138,9 @@ class DistillationConfig(_BaseConfig):
             divergence itself; there is no reference-model KL penalty.
         use_fused_linear_loss (`bool`, *optional*, defaults to `False`):
             Whether to compute the loss with the fused linear JSD loss: the `lm_head` projection and the loss are
-            computed together, one chunk of sequences at a time, so the full `(batch_size, seq_len, vocab_size)`
-            logits are never materialized. This reduces peak memory for large vocabularies. Setting
-            `use_liger_kernel=True` also enables it, which is deprecated.
+            computed together, one chunk of sequences at a time, so the full `(batch_size, seq_len, vocab_size)` logits
+            are never materialized. This reduces peak memory for large vocabularies. Setting `use_liger_kernel=True`
+            also enables it, which is deprecated.
         max_tool_calling_iterations (`int`, *optional*):
             Maximum number of tool-calling turns when training an agent. If `None`, there is no limit and generation
             stops when the model generates a response turn with no tool calls or when the total response length reaches

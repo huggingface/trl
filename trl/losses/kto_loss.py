@@ -37,20 +37,15 @@ class FusedLinearKTOFunction(FusedLinearUnpairedPreferenceBase):
         kl=None,
     ):
         """
-        Implements the Kahneman-Tversky Optimization (KTO) loss function.
-        Paper: "KTO: Model Alignment as Prospect Theory-Guided Optimization"
-        https://arxiv.org/abs/2402.01306
+        Implements the Kahneman-Tversky Optimization (KTO) loss function. Paper: "KTO: Model Alignment as Prospect
+        Theory-Guided Optimization" https://arxiv.org/abs/2402.01306
 
-        KTO loss is inspired by prospect theory (https://en.wikipedia.org/wiki/Prospect_theory)
-        from behavioral economics, which models how humans make decisions under uncertainty.
-        The loss function is asymmetric, treating gains and losses differently, similar to
-        human decision-making patterns.
+        KTO loss is inspired by prospect theory (https://en.wikipedia.org/wiki/Prospect_theory) from behavioral
+        economics, which models how humans make decisions under uncertainty. The loss function is asymmetric, treating
+        gains and losses differently, similar to human decision-making patterns.
 
-        Formula:
-        When y is chosen:
-        L_KTO = 1 - σ(β * (log[π(x)/π₀(x)] - KL(π||π₀)_y))
-        When y is rejected:
-        L_KTO = 1 - σ(β * (KL(π||π₀)_y - log[π(x)/π₀(x)]))
+        Formula: When y is chosen: L_KTO = 1 - σ(β * (log[π(x)/π₀(x)] - KL(π||π₀)_y)) When y is rejected: L_KTO = 1 -
+        σ(β * (KL(π||π₀)_y - log[π(x)/π₀(x)]))
 
         Where:
         - σ: Sigmoid function
@@ -70,7 +65,9 @@ class FusedLinearKTOFunction(FusedLinearUnpairedPreferenceBase):
             full_target: Non chunked full target tensor
             ref_log_prob_chunk: Reference log probs for the chunk (batch_size,)
             beta: Weight for the KTO loss
-            kl: KL divergence between the policy model and the reference model for the chosen responses. Shape: (batch_size,)
+            kl:
+                KL divergence between the policy model and the reference model for the chosen responses. Shape:
+                (batch_size,)
         Returns:
             - loss: The KTO loss value
         """
@@ -112,13 +109,15 @@ class FusedLinearKTOFunction(FusedLinearUnpairedPreferenceBase):
     ):
         """
         Fused linear layer with KTO loss.
+
         Args:
             _input (torch.Tensor): Input tensor. Shape: (batch_size * seq_len, hidden_size)
             weight (torch.Tensor): Weight tensor. Shape: (vocab_size, hidden_size)
             target (torch.LongTensor): Target tensor. Shape: (batch_size * seq_len,)
             preference_labels (torch.Tensor): Preference labels tensor. Shape: (batch_size,)
             bias (torch.Tensor, optional): Bias tensor. Shape: (vocab_size,)
-            ref_input (torch.Tensor, optional): Reference model input tensor. Shape: (batch_size * seq_len, hidden_size)
+            ref_input (torch.Tensor, optional):
+                Reference model input tensor. Shape: (batch_size * seq_len, hidden_size)
             ref_weight (torch.Tensor, optional): Reference model weight tensor. Shape: (vocab_size, hidden_size)
             ref_bias (torch.Tensor, optional): Reference model bias tensor. Shape: (vocab_size,)
             kl (torch.Tensor, optional): KL divergence tensor. Shape: (batch_size,)

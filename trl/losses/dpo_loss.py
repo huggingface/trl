@@ -42,8 +42,7 @@ class FusedLinearDPOFunction(FusedLinearPreferenceBase):
         """
         Paper: https://arxiv.org/pdf/2305.18290
 
-        Formula:
-        L_DPO = -E[ log_sigmoid( β * (log(π(y_w|x)/π_ref(y_w|x)) - log(π(y_l|x)/π_ref(y_l|x))) ) ]
+        Formula: L_DPO = -E[ log_sigmoid( β * (log(π(y_w|x)/π_ref(y_w|x)) - log(π(y_l|x)/π_ref(y_l|x))) ) ]
 
         Where:
         - π(y|x): Policy (model) probability
@@ -201,12 +200,14 @@ class FusedLinearDPOFunction(FusedLinearPreferenceBase):
     ):
         """
         Fused linear layer with DPO loss.
+
         Args:
             _input (torch.Tensor): Input tensor. Shape: (batch_size * seq_len, hidden_size)
             weight (torch.Tensor): Weight tensor. Shape: (vocab_size, hidden_size)
             target (torch.LongTensor): Target tensor. Shape: (batch_size * seq_len,)
             bias (torch.Tensor, optional): Bias tensor. Shape: (vocab_size,)
-            ref_input (torch.Tensor, optional): Reference model input tensor. Shape: (batch_size * seq_len, hidden_size)
+            ref_input (torch.Tensor, optional):
+                Reference model input tensor. Shape: (batch_size * seq_len, hidden_size)
             ref_weight (torch.Tensor, optional): Reference model weight tensor. Shape: (vocab_size, hidden_size)
             ref_bias (torch.Tensor, optional): Reference model bias tensor. Shape: (vocab_size,)
             ignore_index (int): Index to ignore in loss computation
@@ -295,8 +296,8 @@ class FusedLinearDPOLoss(torch.nn.Module):
             average_log_prob (bool): Whether to average the log probability per non-masked token.
             chunk_size (int): Size of chunks for processing.
             loss_type (str): Variant of DPO loss to compute. One of:
-                "sigmoid", "hinge", "exo_pair", "nca_pair", "robust", "bco_pair",
-                "sppo_hard", "apo_zero", "apo_down", "discopop".
+                "sigmoid", "hinge", "exo_pair", "nca_pair", "robust", "bco_pair", "sppo_hard", "apo_zero", "apo_down",
+                "discopop".
             label_smoothing (float): Label smoothing for "robust" / "exo_pair" / cDPO.
             discopop_tau (float): Temperature for the DiscoPOP modulation term.
         """

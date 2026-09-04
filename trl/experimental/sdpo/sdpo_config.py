@@ -152,9 +152,9 @@ class SDPOConfig(_BaseConfig):
             Temperature for sampling. The higher the temperature, the more random the completions.
         use_fused_linear_loss (`bool`, *optional*, defaults to `False`):
             Whether to compute the loss with the fused linear JSD loss: the `lm_head` projection and the loss are
-            computed together, one chunk of sequences at a time, so the full `(batch_size, seq_len, vocab_size)`
-            logits are never materialized. This reduces peak memory for large vocabularies. Setting
-            `use_liger_kernel=True` also enables it, which is deprecated.
+            computed together, one chunk of sequences at a time, so the full `(batch_size, seq_len, vocab_size)` logits
+            are never materialized. This reduces peak memory for large vocabularies. Setting `use_liger_kernel=True`
+            also enables it, which is deprecated.
         top_p (`float`, *optional*, defaults to `1.0`):
             Float that controls the cumulative probability of the top tokens to consider. Must be in (0, 1]. Set to 1.0
             to consider all tokens.

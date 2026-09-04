@@ -32,8 +32,7 @@ set_seed(42)
 
 class HFDPOLoss(HFAlignmentLoss):
     """
-    Implementation of the Direct Preference Optimization (DPO) loss,
-    adapted from Hugging Face's implementation.
+    Implementation of the Direct Preference Optimization (DPO) loss, adapted from Hugging Face's implementation.
     Reference: https://github.com/huggingface/trl/blob/main/trl/trainer/dpo_trainer.py
     """
 
@@ -59,9 +58,11 @@ class HFDPOLoss(HFAlignmentLoss):
         ref_rejected_logps: torch.FloatTensor,
     ):
         """Compute DPO loss for a batch of policy log probabilities.
+
         Args:
             policy_chosen_logps: Log probabilities of the policy model for the chosen responses. Shape: (batch_size,)
-            policy_rejected_logps: Log probabilities of the policy model for the rejected responses. Shape: (batch_size,)
+            policy_rejected_logps:
+                Log probabilities of the policy model for the rejected responses. Shape: (batch_size,)
 
         Returns:
             The losses tensor contains the DPO loss for each example in the batch.
@@ -80,8 +81,7 @@ class HFDPOLoss(HFAlignmentLoss):
 
 class HFAPOZeroLoss(HFAlignmentLoss):
     """
-    Implementation of the APO-zero loss.
-    Reference: https://huggingface.co/papers/2408.06266
+    Implementation of the APO-zero loss. Reference: https://huggingface.co/papers/2408.06266
     """
 
     def __init__(
@@ -106,9 +106,11 @@ class HFAPOZeroLoss(HFAlignmentLoss):
         ref_rejected_logps: torch.FloatTensor,
     ):
         """Compute APO-zero loss for a batch of policy log probabilities.
+
         Args:
             policy_chosen_logps: Log probabilities of the policy model for the chosen responses. Shape: (batch_size,)
-            policy_rejected_logps: Log probabilities of the policy model for the rejected responses. Shape: (batch_size,)
+            policy_rejected_logps:
+                Log probabilities of the policy model for the rejected responses. Shape: (batch_size,)
 
         Returns:
             The losses tensor contains the APO-zero loss for each example in the batch.
@@ -130,8 +132,7 @@ class HFAPOZeroLoss(HFAlignmentLoss):
 
 class HFAPODownLoss(HFAlignmentLoss):
     """
-    Implementation of the APO-down loss.
-    Reference: https://huggingface.co/papers/2408.06266
+    Implementation of the APO-down loss. Reference: https://huggingface.co/papers/2408.06266
     """
 
     def __init__(
@@ -156,9 +157,11 @@ class HFAPODownLoss(HFAlignmentLoss):
         ref_rejected_logps: torch.FloatTensor,
     ):
         """Compute APO-down loss for a batch of policy log probabilities.
+
         Args:
             policy_chosen_logps: Log probabilities of the policy model for the chosen responses. Shape: (batch_size,)
-            policy_rejected_logps: Log probabilities of the policy model for the rejected responses. Shape: (batch_size,)
+            policy_rejected_logps:
+                Log probabilities of the policy model for the rejected responses. Shape: (batch_size,)
 
         Returns:
             The losses tensor contains the APO-down loss for each example in the batch.
@@ -1332,8 +1335,8 @@ def test_invalid_loss_type():
 @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
 def test_alpha_scales_nll_loss(dtype):
     """
-    Verify that alpha is actually forwarded and scales the NLL component.
-    With compute_nll_loss=True, loss(alpha=2) should differ from loss(alpha=1).
+    Verify that alpha is actually forwarded and scales the NLL component. With compute_nll_loss=True, loss(alpha=2)
+    should differ from loss(alpha=1).
     """
     B, T, H, V = 4, 16, 32, 64
     atol = 1e-4 if dtype == torch.float32 else 5e-2
@@ -1369,12 +1372,10 @@ def test_functional_positional_arg_contract():
     """
     Pin the positional-argument contract of the public functional alias.
 
-    `alpha` is appended at the *end* of `FusedLinearDPOFunction.forward` (not
-    inserted mid-list) precisely so that existing positional `.apply()` /
-    `FusedLinearDPOFunction.apply` callers don't silently shift every later argument by
-    one slot. This test exercises the pre-PR positional list (no `alpha`) and
-    asserts it produces the same result as the keyword-driven `nn.Module` wrapper.
-    If a future param insertion shifts the positional slots, this diverges.
+    `alpha` is appended at the *end* of `FusedLinearDPOFunction.forward` (not inserted mid-list) precisely so that
+    existing positional `.apply()` / `FusedLinearDPOFunction.apply` callers don't silently shift every later argument
+    by one slot. This test exercises the pre-PR positional list (no `alpha`) and asserts it produces the same result as
+    the keyword-driven `nn.Module` wrapper. If a future param insertion shifts the positional slots, this diverges.
     """
     B, T, H, V = 4, 8, 16, 32
     dtype = torch.float32

@@ -37,9 +37,12 @@ class FusedLinearDistillationBase(torch.autograd.Function):
     ):
         """
         Compute distillation loss.
+
         Args:
-            student_logits (torch.Tensor): Raw (temperature-scaled) logits of student tokens. Shape: (batch_size * seq_len, vocab_size).
-            teacher_logits (torch.Tensor): Raw (temperature-scaled) logits of teacher tokens. Shape: (batch_size * seq_len, vocab_size).
+            student_logits (torch.Tensor):
+                Raw (temperature-scaled) logits of student tokens. Shape: (batch_size * seq_len, vocab_size).
+            teacher_logits (torch.Tensor):
+                Raw (temperature-scaled) logits of teacher tokens. Shape: (batch_size * seq_len, vocab_size).
         Returns:
             torch.Tensor: Sum of distillation losses for the chunk. The class will handle
                 converting this to mean loss by dividing by the full batch size * sequence length in _compute_loss.
@@ -102,6 +105,7 @@ class FusedLinearDistillationBase(torch.autograd.Function):
     ):
         """
         Compute the total loss for a chunk of input and target, while using an knowledge distillation loss function.
+
         Args:
             distillation_loss_fn (callable): Loss function to compute the loss on a chunk of input/target.
             student_input_chunk (torch.Tensor): Chunk of input tensor. Shape: (chunk_size, student_hidden_size).
@@ -116,7 +120,8 @@ class FusedLinearDistillationBase(torch.autograd.Function):
             weight_hard_loss (float): Weight for hard loss.
             weight_soft_loss (float): Weight for soft loss.
             compute_ce_loss (bool): Whether to compute CE loss.
-            temperature (float): Temperature to control the input probability distribution. Default: `1.0` (i.e. no scale)
+            temperature (float):
+                Temperature to control the input probability distribution. Default: `1.0` (i.e. no scale)
             loss_kwargs (dict): Additional arguments for the loss function.
         """
         (
@@ -189,8 +194,7 @@ class FusedLinearDistillationBase(torch.autograd.Function):
         **loss_kwargs,
     ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
-        Base class for fused linear layer with distillation loss.
-        Only need to compute gradients for student model.
+        Base class for fused linear layer with distillation loss. Only need to compute gradients for student model.
 
         Args:
             student_input (torch.Tensor): Student input tensor. Shape: (batch_size * seq_len, student_hidden_size).
@@ -207,7 +211,8 @@ class FusedLinearDistillationBase(torch.autograd.Function):
             weight_soft_loss (float): Weight for soft/distillation loss.
             beta (float): Interpolation coefficient between 0 and 1 (default: 0.5).
             compute_ce_loss (bool): Whether to compute CE loss.
-            temperature (float): Temperature to control the input probability distribution. Default: `1.0` (i.e. no scale)
+            temperature (float):
+                Temperature to control the input probability distribution. Default: `1.0` (i.e. no scale)
             compiled (bool): Whether to use torch compile for chunk accumulation.
             return_soft_hard_loss (bool): Whether to return soft and hard losses separately. Default: False.
             loss_kwargs (dict): Other possible arguments that a loss function might need

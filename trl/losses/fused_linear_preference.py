@@ -58,16 +58,14 @@ class FusedLinearPreferenceBase(torch.autograd.Function):
         **loss_kwargs,
     ):
         """
-        Base class for fused linear layer with preference loss.
-        Expects _input to be stacked with chosen and rejected inputs on the batch dimension.
+        Base class for fused linear layer with preference loss. Expects _input to be stacked with chosen and rejected
+        inputs on the batch dimension.
 
         The mental model is:
 
-        forward()
-        ├── Loop over chunks
+        forward() ├── Loop over chunks
             └── compute_loss()
-                ├── chunk_forward()  # Compute logits and log probs
-                └── prefer_loss()    # Calculate preference loss
+                ├── chunk_forward() # Compute logits and log probs └── prefer_loss() # Calculate preference loss
 
         Args:
             _input (torch.Tensor): Input tensor. Shape: (batch_size, seq_len, hidden_size).
@@ -80,7 +78,8 @@ class FusedLinearPreferenceBase(torch.autograd.Function):
             alpha (float): Weight for the NLL loss.
             beta (float): Weight for the preference loss.
             compute_nll_loss (bool): Whether to compute NLL loss.
-            nll_target (torch.Tensor, optional): Target tensor for NLL loss. Shape: (batch_size, seq_len). If not provided the target is used.
+            nll_target (torch.Tensor, optional):
+                Target tensor for NLL loss. Shape: (batch_size, seq_len). If not provided the target is used.
             compiled (bool): Whether to use torch compile for chunk accumulation.
             use_ref_model (bool): Whether to use a reference model for the alignment loss.
             ref_weight (torch.Tensor): Reference weight tensor. Shape: (vocab_size, hidden_size).
@@ -370,6 +369,7 @@ class FusedLinearPreferenceBase(torch.autograd.Function):
     ):
         """
         Compute the total loss for a chunk of input and target, while using an alignment/preference loss function.
+
         Args:
             preference_loss_fn (callable): Loss function to compute the loss on a chunk of input/target.
             input_chunk (torch.Tensor): Chunk of input tensor. Shape: (2 * chunk_size, sequence_length, hidden_size).
@@ -384,8 +384,11 @@ class FusedLinearPreferenceBase(torch.autograd.Function):
             use_ref_model (bool): Whether to use a reference model for the alignment loss.
             ref_weight (torch.Tensor): Reference weight tensor. Shape: (vocab_size, hidden_size).
             ref_bias (torch.Tensor, optional): Reference bias tensor. Shape: (vocab_size,).
-            full_nll_target (torch.Tensor, optional): Full target tensor for NLL loss. Shape: (batch_size, sequence_length).
-            chosen_nll_target_chunk (torch.Tensor, optional): Target tensor for NLL loss. Shape: (chunk_size, sequence_length) If not provided the target_chunk is used.
+            full_nll_target (torch.Tensor, optional):
+                Full target tensor for NLL loss. Shape: (batch_size, sequence_length).
+            chosen_nll_target_chunk (torch.Tensor, optional):
+                Target tensor for NLL loss. Shape: (chunk_size, sequence_length) If not provided the target_chunk is
+                used.
             average_log_prob (bool): Whether to average log probabilities or the sum.
             loss_kwargs (dict): Additional arguments for the loss function.
         """

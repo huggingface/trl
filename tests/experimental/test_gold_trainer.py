@@ -3413,8 +3413,8 @@ _TINY_LLAMA = "trl-internal-testing/tiny-LlamaForCausalLM-3.2"
 def test_jsd_fused_linear_loss_text_train_step_smoke(tmp_path):
     """Text same-family (tiny Llama → tiny Llama) runs one off-policy JSD step with the fused linear loss.
 
-    Exercises the `FusedLinearJSDLoss` path end-to-end (`_fused_backbone` student + teacher forwards, fused
-    lm_head matmul) and asserts the resulting training loss is finite.
+    Exercises the `FusedLinearJSDLoss` path end-to-end (`_fused_backbone` student + teacher forwards, fused lm_head
+    matmul) and asserts the resulting training loss is finite.
     """
     from datasets import load_dataset
 

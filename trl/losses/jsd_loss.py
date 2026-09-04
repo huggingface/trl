@@ -33,6 +33,7 @@ class FusedLinearJSDFunction(FusedLinearDistillationBase):
     def distillation_loss_fn(student_logits, teacher_logits, beta=0.5, target=None, ignore_index=-100):
         """
         Compute JSD loss (Jensen-Shannon Divergence Loss).
+
         Args:
             student_logits (torch.Tensor): Logits of student tokens. Shape: (batch_size * seq_len,).
             teacher_logits (torch.Tensor): Logits of teacher tokens. Shape: (batch_size * seq_len,).
@@ -97,6 +98,7 @@ class FusedLinearJSDFunction(FusedLinearDistillationBase):
     ):
         """
         Fused linear layer with JSD distillation loss.
+
         Args:
             student_input (torch.Tensor): Student input tensor. Shape: (batch_size * seq_len, hidden_size_student)
             student_weight (torch.Tensor): Student weight tensor. Shape: (vocab_size, hidden_size_student)
@@ -212,8 +214,8 @@ class FusedLinearJSDLoss(torch.nn.Module):
 
         Returns:
             torch.Tensor or Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-                If return_soft_hard_loss is False: Computed combined loss
-                If return_soft_hard_loss is True: Tuple of (combined_loss, soft_loss, hard_loss)
+                If return_soft_hard_loss is False: Computed combined loss If return_soft_hard_loss is True: Tuple of
+                (combined_loss, soft_loss, hard_loss)
         """
         return FusedLinearJSDFunction.apply(
             student_input,

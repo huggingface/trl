@@ -363,9 +363,9 @@ class GRPOConfig(_BaseConfig):
             `"sequence"` a sequence-level weight is broadcast onto the per-token KL.
         use_fused_linear_loss (`bool`, *optional*, defaults to `False`):
             Whether to compute the loss with the fused linear GRPO loss: the `lm_head` projection and the loss are
-            computed together, one chunk of sequences at a time, so the full `(batch_size, seq_len, vocab_size)`
-            logits are never materialized. This reduces peak memory for large vocabularies. Setting
-            `use_liger_kernel=True` also enables it, which is deprecated.
+            computed together, one chunk of sequences at a time, so the full `(batch_size, seq_len, vocab_size)` logits
+            are never materialized. This reduces peak memory for large vocabularies. Setting `use_liger_kernel=True`
+            also enables it, which is deprecated.
 
         > Parameters that control the logging
 

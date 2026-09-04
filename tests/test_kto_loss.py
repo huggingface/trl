@@ -32,8 +32,7 @@ set_seed(0)
 
 class HFKTOLoss(HFAlignmentLoss):
     """
-    Implementation of the Kahneman-Tversky Optimization (KTO) loss,
-    adapted from Hugging Face's implementation.
+    Implementation of the Kahneman-Tversky Optimization (KTO) loss, adapted from Hugging Face's implementation.
     Reference: https://github.com/huggingface/trl/blob/main/trl/trainer/kto_trainer.py
     """
 
@@ -60,11 +59,14 @@ class HFKTOLoss(HFAlignmentLoss):
         kl: torch.FloatTensor = None,
     ):
         """Compute KTO loss for a batch of policy log probabilities.
+
         Args:
             policy_chosen_logps: Log probabilities of the policy model for the chosen responses. Shape: (batch_size,)
-            policy_rejected_logps: Log probabilities of the policy model for the rejected responses. Shape: (batch_size,)
+            policy_rejected_logps:
+                Log probabilities of the policy model for the rejected responses. Shape: (batch_size,)
             ref_chosen_logps: Log probabilities of the reference model for the chosen responses. Shape: (batch_size,)
-            ref_rejected_logps: Log probabilities of the reference model for the rejected responses. Shape: (batch_size,)
+            ref_rejected_logps:
+                Log probabilities of the reference model for the rejected responses. Shape: (batch_size,)
         Returns:
             The losses tensor contains the KTO loss for each example in the batch.
         """
