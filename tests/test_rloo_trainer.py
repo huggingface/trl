@@ -35,7 +35,8 @@ from .testing_utils import TrlTestCase, require_bitsandbytes, require_peft, requ
 
 if is_peft_available():
     import peft
-    from peft import LoraConfig, get_peft_model
+    from peft import LoraConfig, PromptTuningConfig, get_peft_model
+    from peft.utils import TaskType
 
 
 class TestRLOOTrainer(TrlTestCase):
@@ -1111,6 +1112,36 @@ class TestRLOOTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
             new_ref_param = trainer.ref_model.get_parameter(n)
             assert not torch.equal(previous_ref_params[n], new_ref_param), f"Ref Parameter {n} has not changed."
+
+    @require_peft
+    def test_sync_ref_model_seeds_prompt_learning_ref_adapter(self):
+        # Prompt-learning adapters live in `PeftModel.prompt_encoder`, not in a tuner layer or a `modules_to_save`
+        # wrapper. The "ref" adapter must still be seeded from "default", otherwise the EMA reference starts from a
+        # freshly initialized prompt instead of the policy's.
+        dataset = Dataset.from_dict({"prompt": ["What is 2+2?", "Name a color.", "Say hello."]})
+
+        training_args = RLOOConfig(
+            output_dir=self.tmp_dir,
+            sync_ref_model=True,
+            num_generations=3,
+            per_device_train_batch_size=3,
+            use_cpu=True,
+            report_to="none",
+        )
+        trainer = RLOOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+            peft_config=PromptTuningConfig(task_type=TaskType.CAUSAL_LM, num_virtual_tokens=8),
+        )
+
+        model = trainer.accelerator.unwrap_model(trainer.model)
+        assert "ref" in model.peft_config
+        ref_params = dict(model.prompt_encoder["ref"].named_parameters())
+        assert ref_params  # guard against the loop below vacuously passing
+        for name, param in model.prompt_encoder["default"].named_parameters():
+            assert torch.equal(param, ref_params[name]), f"prompt parameter {name} was not copied into the ref adapter"
 
     @require_peft
     def test_train_with_sync_ref_model_and_peft(self):

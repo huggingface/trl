@@ -670,6 +670,32 @@ class TestDPOTrainer(TrlTestCase):
             assert not torch.equal(previous_ref_params[n], new_ref_param), f"Ref Parameter {n} has not changed."
 
     @require_peft
+    def test_sync_ref_model_seeds_prompt_learning_ref_adapter(self):
+        # Prompt-learning adapters live in `PeftModel.prompt_encoder`, not in a tuner layer or a `modules_to_save`
+        # wrapper. The "ref" adapter must still be seeded from "default", otherwise the EMA reference starts from a
+        # freshly initialized prompt instead of the policy's.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            sync_ref_model=True,
+            report_to="none",
+        )
+        trainer = DPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset,
+            peft_config=PromptTuningConfig(task_type=TaskType.CAUSAL_LM, num_virtual_tokens=8),
+        )
+
+        model = trainer.accelerator.unwrap_model(trainer.model)
+        assert "ref" in model.peft_config
+        ref_params = dict(model.prompt_encoder["ref"].named_parameters())
+        assert ref_params  # guard against the loop below vacuously passing
+        for name, param in model.prompt_encoder["default"].named_parameters():
+            assert torch.equal(param, ref_params[name]), f"prompt parameter {name} was not copied into the ref adapter"
+
+    @require_peft
     def test_train_with_sync_ref_model_and_peft(self):
         # With PEFT there is no standalone `ref_model`; the reference lives in a frozen "ref" adapter inside the
         # policy model. Check that `sync_ref_model=True` creates that adapter and that it tracks the policy.
