@@ -25,7 +25,7 @@ from transformers.testing_utils import torch_device
 
 from trl.distributed import DistributedBackend
 from trl.generation.vllm_client import VLLMClient, _dense_param_data, parse_logprobs
-from trl.generation.vllm_generation import _check_quantization_supported, extract_logprobs
+from trl.generation.vllm_generation import VLLMGeneration, _check_quantization_supported, extract_logprobs
 from trl.import_utils import is_vllm_available
 
 from .testing_utils import (
@@ -133,6 +133,47 @@ class TestExtractLogprobs(TrlTestCase):
 
         assert all_logprobs is None
         assert all_token_ids is None
+
+
+class TestVLLMGenerationQuantization:
+    @pytest.mark.parametrize(
+        ("hf_quantizer", "expected"), [(None, False), (SimpleNamespace(pre_quantized=True), True)]
+    )
+    def test_pre_quantized_detection_in_colocate_mode(self, hf_quantizer, expected):
+        model = nn.Linear(8, 8)
+        model.name_or_path = "dummy"
+        if hf_quantizer is not None:
+            model.hf_quantizer = hf_quantizer
+        accelerator = SimpleNamespace(
+            num_processes=1,
+            process_index=0,
+            local_process_index=0,
+            wait_for_everyone=lambda: None,
+        )
+        generation = SimpleNamespace(
+            model=model,
+            accelerator=accelerator,
+            _dist=SimpleNamespace(fsdp_version=None, fsdp_use_orig_params=None),
+            mode="colocate",
+            tensor_parallel_size=1,
+            gpu_memory_utilization=0.9,
+            max_model_length=None,
+            max_num_seqs=None,
+            enable_sleep_mode=False,
+            model_impl="auto",
+            trust_remote_code=False,
+        )
+
+        with (
+            patch.dict(os.environ),
+            patch("trl.generation.vllm_generation.is_vllm_available", return_value=True),
+            patch("trl.generation.vllm_generation._check_quantization_supported") as check_quantization_supported,
+            patch("trl.generation.vllm_generation.ensure_master_addr_port"),
+            patch("trl.generation.vllm_generation.LLM", return_value=SimpleNamespace(), create=True),
+        ):
+            VLLMGeneration._init_vllm(generation)
+
+        check_quantization_supported.assert_called_once_with(model, None, None, expected)
 
 
 @require_bitsandbytes

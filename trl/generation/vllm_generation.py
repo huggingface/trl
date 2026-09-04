@@ -360,7 +360,9 @@ class VLLMGeneration:
         # Both modes push dense weights at sync time (see `_dense_param_data`), so the check runs before either branch.
         # Only colocate mode builds the engine from `model.name_or_path`, where a checkpoint saved already quantized
         # makes vLLM allocate packed weights; `hf_quantizer.pre_quantized` records whether the checkpoint was one.
-        pre_quantized = self.mode == "colocate" and model.hf_quantizer is not None and model.hf_quantizer.pre_quantized
+        # Transformers sets `hf_quantizer` only when a quantizer ran (see modeling_utils.py:1515).
+        hf_quantizer = getattr(model, "hf_quantizer", None)
+        pre_quantized = self.mode == "colocate" and hf_quantizer is not None and hf_quantizer.pre_quantized
         _check_quantization_supported(model, self._dist.fsdp_version, self._dist.fsdp_use_orig_params, pre_quantized)
 
         if self.mode == "server":

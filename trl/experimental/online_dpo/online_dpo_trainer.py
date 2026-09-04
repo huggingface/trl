@@ -432,9 +432,9 @@ class OnlineDPOTrainer(_BaseTrainer):
             # quantized makes vLLM allocate packed weights; `hf_quantizer.pre_quantized` records whether the checkpoint
             # was one.
             dist = DistributedBackend(self.accelerator)
-            pre_quantized = (
-                self.vllm_mode == "colocate" and model.hf_quantizer is not None and model.hf_quantizer.pre_quantized
-            )
+            # Transformers sets `hf_quantizer` only when a quantizer ran (see modeling_utils.py:1515).
+            hf_quantizer = getattr(model, "hf_quantizer", None)
+            pre_quantized = self.vllm_mode == "colocate" and hf_quantizer is not None and hf_quantizer.pre_quantized
             _check_quantization_supported(model, dist.fsdp_version, dist.fsdp_use_orig_params, pre_quantized)
 
             if self.vllm_mode == "server":
