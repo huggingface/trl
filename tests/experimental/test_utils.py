@@ -197,7 +197,7 @@ class TestReferenceModel(TrlTestCase):
         self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=1)
         self.layer_format = "transformer.h.{layer}.attn.c_attn.weight"
 
-    def test_independent_reference(self):
+    def test_independent_reference_models_are_equal(self):
         layer_0 = self.layer_format.format(layer=0)
         layer_1 = self.layer_format.format(layer=1)
 
