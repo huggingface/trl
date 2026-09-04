@@ -1453,7 +1453,7 @@ class KTOTrainer(_BaseTrainer):
 
         # Number of tokens
         if mode == "train":
-            num_tokens_in_batch = self.accelerator.gather_for_metrics(batch["attention_mask"].sum(dim=1)).sum().item()
+            num_tokens_in_batch = self.accelerator.gather_for_metrics(batch["attention_mask"].sum()).sum().item()
             self._total_train_tokens += num_tokens_in_batch
         self._metrics[mode]["num_tokens"] = [self._total_train_tokens]
 
@@ -1621,7 +1621,7 @@ class KTOTrainer(_BaseTrainer):
 
         # Number of tokens
         if mode == "train":
-            num_tokens_in_batch = self.accelerator.gather_for_metrics(batch["attention_mask"].sum(dim=1)).sum().item()
+            num_tokens_in_batch = self.accelerator.gather_for_metrics(batch["attention_mask"].sum()).sum().item()
             self._total_train_tokens += num_tokens_in_batch
         self._metrics[mode]["num_tokens"] = [self._total_train_tokens]
 

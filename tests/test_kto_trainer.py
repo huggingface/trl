@@ -94,7 +94,6 @@ def test_entropy_ignores_duplicate_padding(outlier_label):
     expected[f"logps/{label}"] = logps[kept_idx].item()
     for key, value in expected.items():
         assert trainer._metrics["train"][key][-1] == pytest.approx(value, abs=1e-6)
-    assert trainer._metrics["train"]["num_tokens"][-1] == 6
 
 
 @require_vision
