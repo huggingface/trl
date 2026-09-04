@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import pytest
+import torch
 from datasets import Dataset, DatasetDict, features, load_dataset
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
 from transformers.utils import is_peft_available, is_vision_available
@@ -169,6 +170,44 @@ class TestOnlineDPOTrainer(TrlTestCase):
         trainer.train()
 
         assert "train_loss" in trainer.state.log_history[-1]
+
+    def test_objective_metrics_ignore_padding(self, monkeypatch):
+        training_args = OnlineDPOConfig(output_dir=self.tmp_dir, beta=1.0, report_to="none")
+        dataset = Dataset.from_dict({"prompt": ["What is 2 + 2?"]})
+
+        trainer = OnlineDPOTrainer(
+            model=self.model,
+            ref_model=self.ref_model,
+            reward_funcs=lambda prompts, **kwargs: [0.5] * len(prompts),
+            args=training_args,
+            train_dataset=dataset,
+            processing_class=self.tokenizer,
+        )
+        completion_mask = torch.tensor([[1, 0], [1, 1]])
+        monkeypatch.setattr(
+            trainer,
+            "_generate",
+            lambda model, prompts, images: (
+                torch.tensor([[1]]),
+                torch.tensor([[1]]),
+                torch.tensor([[2, 0], [3, 4]]),
+                completion_mask,
+            ),
+        )
+        logprobs = iter(
+            [
+                torch.tensor([[-1.0, -10.0], [-2.0, -3.0]], requires_grad=True),
+                torch.tensor([[-0.5, -4.0], [-1.0, -1.0]]),
+            ]
+        )
+        monkeypatch.setattr(trainer, "_forward", lambda *args, **kwargs: next(logprobs))
+
+        trainer.training_step(trainer.model, {"prompt": ["What is 2 + 2?"]})
+
+        assert trainer.stats["objective/kl"] == pytest.approx([-1.75])
+        assert trainer.stats["objective/non_score_reward"] == pytest.approx([1.75])
+        assert trainer.stats["objective/rlhf_reward"] == pytest.approx([2.25])
+        assert trainer.stats["objective/entropy"] == pytest.approx([3.0])
 
     def test_ref_model_is_model(self):
         training_args = OnlineDPOConfig(
