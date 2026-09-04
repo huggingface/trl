@@ -827,6 +827,11 @@ class KTOTrainer(_BaseTrainer):
                     "to recover the logits from the forward pass, but the fused linear loss does not materialize "
                     "logits."
                 )
+            if self.desirable_weight != 1.0 or self.undesirable_weight != 1.0:
+                raise ValueError(
+                    "The fused linear KTO loss does not support `desirable_weight` or `undesirable_weight` other than "
+                    "1.0. Either keep the default weights or set `use_fused_linear_loss` to False."
+                )
             if self.precompute_ref_logps:
                 raise ValueError(
                     "The fused linear KTO loss does not support precomputing reference log probabilities. Either "
@@ -977,7 +982,7 @@ class KTOTrainer(_BaseTrainer):
 
         # The fused linear loss is built here, because it needs `self.ref_model`
         if self.use_fused_linear_loss:
-            self.fused_linear_loss = FusedLinearKTOLoss(beta=self.beta, use_ref_model=(self.ref_model is not None))
+            self.fused_linear_loss = FusedLinearKTOLoss(beta=self.beta, use_ref_model=True)
             # Redirect the model.module forward to the model forward to ensure pre-forward hooks are called, so that
             # under ZeRO-3 the parameter coordinator gathers/reduces `lm_head.weight` around the fused loss.
             self._forward_redirection = _ForwardRedirection()

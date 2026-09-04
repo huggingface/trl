@@ -82,8 +82,8 @@ class FusedLinearKTOFunction(FusedLinearUnpairedPreferenceBase):
             losses = 1 - F.sigmoid(beta * logratios_chunk * multiplier_chunk)
 
         rewards = beta * logratios_chunk
-        chosen_rewards_sum = (rewards * preference_labels_chunk.unsqueeze(1)).sum()
-        rejected_rewards_sum = (rewards * (~preference_labels_chunk).unsqueeze(1)).sum()
+        chosen_rewards_sum = (rewards * preference_labels_chunk).sum()
+        rejected_rewards_sum = (rewards * ~preference_labels_chunk).sum()
 
         return losses.sum() / (full_target.shape[0]), chosen_rewards_sum, rejected_rewards_sum
 
