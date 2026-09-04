@@ -74,7 +74,8 @@ def to_openai_messages(messages: list[dict]) -> list[dict]:
     """
     messages = copy.deepcopy(messages)
     for message in messages:
-        if isinstance(message["content"], list):
+        # An assistant message that only carries `tool_calls` has no `content` key at all, and must pass through.
+        if isinstance(message.get("content"), list):
             for idx, part in enumerate(message["content"]):
                 key = "image" if part["type"] == "image" else "image_pil" if part["type"] == "image_pil" else None
                 if key is not None:
