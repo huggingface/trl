@@ -263,8 +263,12 @@ class XPOTrainer(OnlineDPOTrainer):
 
         # Apply EOS penalty if needed
         if self.args.missing_eos_penalty is not None:
-            model_contain_eos = torch.any(model_data["input_ids"] == self.processing_class.eos_token_id, dim=-1)
-            ref_contain_eos = torch.any(ref_data["input_ids"] == self.processing_class.eos_token_id, dim=-1)
+            model_contain_eos = torch.any(
+                model_data["input_ids"][:, context_length:] == self.processing_class.eos_token_id, dim=-1
+            )
+            ref_contain_eos = torch.any(
+                ref_data["input_ids"][:, context_length:] == self.processing_class.eos_token_id, dim=-1
+            )
             model_scores[~model_contain_eos] -= self.args.missing_eos_penalty
             ref_scores[~ref_contain_eos] -= self.args.missing_eos_penalty
 
