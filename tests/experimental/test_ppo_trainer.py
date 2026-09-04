@@ -791,6 +791,55 @@ def test_uneven_micro_batch_stats_are_pooled(tmp_path, monkeypatch):
     assert metrics["val/ratio"] == pytest.approx(logprobs_diff.exp().mean().item(), abs=1e-6)
 
 
+def test_ratio_var_ignores_unwritten_stats(tmp_path):
+    model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+    model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
+    ref_model = AutoModelForCausalLM.from_pretrained(model_id)
+    tokenizer = AutoTokenizer.from_pretrained(model_id, padding_side="left")
+    tokenizer.add_special_tokens({"pad_token": "[PAD]"})
+    reward_model_id = "trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5"
+    value_model = AutoModelForSequenceClassification.from_pretrained(reward_model_id, num_labels=1)
+    reward_model = AutoModelForSequenceClassification.from_pretrained(reward_model_id, num_labels=1)
+    tokenized = tokenizer("Hello world")
+    train_dataset = Dataset.from_dict(
+        {
+            "input_ids": [tokenized["input_ids"]] * 12,
+            "attention_mask": [tokenized["attention_mask"]] * 12,
+        }
+    )
+    training_args = PPOConfig(
+        output_dir=tmp_path,
+        learning_rate=0.0,
+        per_device_train_batch_size=4,
+        gradient_accumulation_steps=3,
+        num_mini_batches=2,
+        num_ppo_epochs=1,
+        total_episodes=12,
+        response_length=4,
+        num_sample_generations=0,
+        use_cpu=True,
+        bf16=False,
+        gradient_checkpointing=False,
+        disable_tqdm=True,
+        save_strategy="no",
+        report_to="none",
+    )
+    trainer = PPOTrainer(
+        args=training_args,
+        processing_class=tokenizer,
+        model=model,
+        ref_model=ref_model,
+        reward_model=reward_model,
+        value_model=value_model,
+        train_dataset=train_dataset,
+        eval_dataset=train_dataset,
+    )
+
+    trainer.train()
+
+    assert trainer.state.log_history[-1]["val/ratio_var"] == pytest.approx(0.0, abs=1e-12)
+
+
 class TestPPOTrainer(TrlTestCase):
     def setup_method(self):
         # Set up the models and tokenizer using the test model

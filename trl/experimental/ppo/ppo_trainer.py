@@ -926,7 +926,8 @@ class PPOTrainer(_BaseTrainer):
                 metrics["objective/scores"] = self.accelerator.gather_for_metrics(scores.mean()).mean().item()
                 padding_count = self.accelerator.gather_for_metrics(padding_count_stats).sum()
                 padding_p1_count = self.accelerator.gather_for_metrics(padding_p1_count_stats).sum()
-                micro_batch_size = self.accelerator.gather_for_metrics(micro_batch_size_stats).sum()
+                micro_batch_size_stats = self.accelerator.gather_for_metrics(micro_batch_size_stats)
+                micro_batch_size = micro_batch_size_stats.sum()
                 metrics["policy/approxkl_avg"] = (
                     self.accelerator.gather_for_metrics(approxkl_stats).sum() / micro_batch_size
                 ).item()
@@ -948,7 +949,8 @@ class PPOTrainer(_BaseTrainer):
                 metrics["val/ratio"] = (
                     self.accelerator.gather_for_metrics(ratio_stats).sum() / micro_batch_size
                 ).item()
-                metrics["val/ratio_var"] = self.accelerator.gather_for_metrics(ratio_mean_stats).var().item()
+                ratio_mean = self.accelerator.gather_for_metrics(ratio_mean_stats)
+                metrics["val/ratio_var"] = ratio_mean[micro_batch_size_stats > 0].var().item()
                 metrics["val/num_eos_tokens"] = (responses == processing_class.eos_token_id).sum().item()
                 metrics["lr"] = self.lr_scheduler.get_last_lr()[0]
                 metrics["episode"] = self.state.episode
