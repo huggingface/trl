@@ -17,7 +17,7 @@ from unittest.mock import patch
 import pytest
 import torch
 import transformers
-from datasets import DatasetDict, IterableDatasetDict, load_dataset
+from datasets import Dataset, DatasetDict, IterableDatasetDict, load_dataset
 from packaging.version import Version
 from transformers import (
     AutoModelForCausalLM,
@@ -35,7 +35,8 @@ from .testing_utils import TrlTestCase, require_bitsandbytes, require_peft, requ
 
 if is_peft_available():
     import peft
-    from peft import LoraConfig, get_peft_model
+    from peft import LoraConfig, PromptTuningConfig, get_peft_model
+    from peft.utils import TaskType
 
 
 class TestRLOOTrainer(TrlTestCase):
@@ -1111,6 +1112,178 @@ class TestRLOOTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
             new_ref_param = trainer.ref_model.get_parameter(n)
             assert not torch.equal(previous_ref_params[n], new_ref_param), f"Ref Parameter {n} has not changed."
+
+    @require_peft
+    def test_sync_ref_model_seeds_prompt_learning_ref_adapter(self):
+        # Prompt-learning adapters live in `PeftModel.prompt_encoder`, not in a tuner layer or a `modules_to_save`
+        # wrapper. The "ref" adapter must still be seeded from "default", otherwise the EMA reference starts from a
+        # freshly initialized prompt instead of the policy's.
+        dataset = Dataset.from_dict({"prompt": ["What is 2+2?", "Name a color.", "Say hello."]})
+
+        training_args = RLOOConfig(
+            output_dir=self.tmp_dir,
+            sync_ref_model=True,
+            num_generations=3,
+            per_device_train_batch_size=3,
+            use_cpu=True,
+            report_to="none",
+        )
+        trainer = RLOOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+            peft_config=PromptTuningConfig(task_type=TaskType.CAUSAL_LM, num_virtual_tokens=8),
+        )
+
+        model = trainer.accelerator.unwrap_model(trainer.model)
+        assert "ref" in model.peft_config
+        ref_params = dict(model.prompt_encoder["ref"].named_parameters())
+        assert ref_params  # guard against the loop below vacuously passing
+        for name, param in model.prompt_encoder["default"].named_parameters():
+            assert torch.equal(param, ref_params[name]), f"prompt parameter {name} was not copied into the ref adapter"
+
+    @require_peft
+    def test_train_with_sync_ref_model_and_peft(self):
+        # With PEFT there is no standalone `ref_model`; the reference lives in a frozen "ref" adapter inside the
+        # policy model. Check that `sync_ref_model=True` creates that adapter and that it tracks the policy.
+        dataset = Dataset.from_dict(
+            {"prompt": ["What is 2+2?", "Name a color.", "Say hello.", "What is 1+1?", "Name a pet.", "Say bye."]}
+        )
+
+        training_args = RLOOConfig(
+            output_dir=self.tmp_dir,
+            beta=0.1,  # ensure the reference is used so sync has an effect
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            sync_ref_model=True,
+            ref_model_sync_steps=2,  # reduce sync steps to ensure a sync happens
+            report_to="none",
+            use_cpu=True,
+        )
+        trainer = RLOOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+            peft_config=LoraConfig(),
+        )
+
+        assert trainer.ref_model is None  # PEFT keeps the reference as an adapter, not a separate model
+        model = trainer.accelerator.unwrap_model(trainer.model)
+        assert "ref" in model.peft_config  # the EMA target the callback syncs into
+        previous_ref_params = {n: param.clone() for n, param in model.named_parameters() if ".ref." in n}
+        assert previous_ref_params  # guard against the loop below vacuously passing
+        with torch.no_grad():
+            for name, param in model.named_parameters():
+                if ".lora_B.default." in name:
+                    param.add_(0.1)
+        batch = next(iter(trainer.get_train_dataloader()))
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the reference adapter has tracked the policy
+        assert any(not torch.equal(param, model.get_parameter(name)) for name, param in previous_ref_params.items())
+        # The KL logged by the generation path must use the synced adapter. Recompute it from that adapter on the
+        # exact generated tokens and compare it with the value the trainer consumed.
+        generated = trainer._generate_and_score_completions(batch)
+        input_ids = torch.cat([generated["prompt_ids"], generated["completion_ids"]], dim=1)
+        attention_mask = torch.cat([generated["prompt_mask"], generated["completion_mask"]], dim=1)
+        previous_adapter = model.active_adapter
+        model.set_adapter("ref")
+        try:
+            with torch.no_grad():
+                ref_logps, _, _ = trainer._get_per_token_logps_and_entropies(
+                    trainer.model, input_ids, attention_mask, generated["completion_ids"].size(1)
+                )
+        finally:
+            model.set_adapter(previous_adapter)
+        with model.disable_adapter(), torch.no_grad():
+            base_logps, _, _ = trainer._get_per_token_logps_and_entropies(
+                trainer.model, input_ids, attention_mask, generated["completion_ids"].size(1)
+            )
+        completion_mask = generated["completion_mask"]
+
+        def sequence_kl(reference_logps):
+            return (
+                (generated["old_logps"] - (reference_logps * completion_mask).sum(1)).sum() / completion_mask.sum()
+            ).item()
+
+        logged_kl = trainer._metrics["train"]["kl"][-1]
+        # The trainer scores the reference in `batch_size` chunks while this recomputation runs the whole batch at once,
+        # so float32 reduction order alone moves a KL of order 1e-7 by a few 1e-8; the tolerance must sit above that
+        # noise and below the gap to the base model, which the second assertion pins.
+        assert logged_kl == pytest.approx(sequence_kl(ref_logps), abs=1e-6)
+        assert abs(logged_kl - sequence_kl(base_logps)) > 1e-6
+
+    @require_peft
+    def test_train_with_sync_ref_model_and_peft_trainable_tokens(self):
+        # `trainable_token_indices` stores its deltas in a `ParameterDict` keyed by adapter, so those parameter names
+        # END in ".default" with no component after it. Pairing "default" with "ref" by substring would skip them and
+        # leave the reference copy of the token deltas frozen at its initial value while the policy moves.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        training_args = RLOOConfig(
+            output_dir=self.tmp_dir,
+            beta=0.1,  # ensure the reference is used so sync has an effect
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            sync_ref_model=True,
+            ref_model_sync_steps=2,  # reduce sync steps to ensure a sync happens
+            report_to="none",
+        )
+        trainer = RLOOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+            peft_config=LoraConfig(trainable_token_indices=[0, 1]),
+        )
+
+        model = trainer.accelerator.unwrap_model(trainer.model)
+        token_ref_params = {
+            n: param.clone() for n, param in model.named_parameters() if "trainable_tokens_delta" in n and "ref" in n
+        }
+        assert token_ref_params  # the config must actually produce token deltas, or the loop below passes vacuously
+
+        trainer.train()
+
+        for n, param in token_ref_params.items():
+            assert not torch.equal(param, model.get_parameter(n)), f"Ref token delta {n} has not changed."
+
+    @pytest.mark.parametrize("sync_ref_model", [True, False])
+    @require_peft
+    def test_train_with_sync_ref_model_and_peft_bias(self, sync_ref_model):
+        # A LoRA config with `bias != "none"` trains bias terms that live in the base model, so disabling the adapter
+        # does not give a fixed reference, and PEFT permits only one such adapter per model, so no "ref" copy can be
+        # made either. The trainer rejects the config at construction, with or without `sync_ref_model`.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        training_args = RLOOConfig(
+            output_dir=self.tmp_dir,
+            beta=0.1,  # ensure the reference is used so sync has an effect
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            sync_ref_model=sync_ref_model,
+            ref_model_sync_steps=2,  # reduce sync steps to ensure a sync happens
+            report_to="none",
+        )
+        with pytest.raises(ValueError, match="bias"):
+            RLOOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
+                peft_config=LoraConfig(bias="all"),
+            )
 
     def test_train_beta_zero(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")

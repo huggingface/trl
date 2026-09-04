@@ -86,7 +86,9 @@ from .utils import (
 
 if is_peft_available():
     import peft
-    from peft import LoraConfig, PeftConfig, PeftModel, get_peft_model
+    from peft import AdaLoraConfig, LoraConfig, PeftConfig, PeftModel, get_peft_model
+    from peft.tuners.tuners_utils import BaseTunerLayer
+    from peft.utils.other import ModulesToSaveWrapper
 
 
 if is_trackio_available():
@@ -358,8 +360,36 @@ class RLOOTrainer(_BaseTrainer):
             ):
                 get_peft_model_kwargs["autocast_adapter_dtype"] = False
             model = get_peft_model(model, peft_config, **get_peft_model_kwargs)
+            # A freshly created adapter is zero-initialized, so disabling it recovers the base model, and that base
+            # model is the reference. That equivalence only holds while the reference stays fixed: with
+            # `sync_ref_model=True` the reference has to track the policy, which requires parameters of its own to
+            # move. So in that case create the "ref" adapter here as well.
+            uses_peft_reference = args.beta != 0.0
+            needs_ref_adapter = args.sync_ref_model and uses_peft_reference
 
         elif is_peft_model(model):
+            uses_peft_reference = True
+            needs_ref_adapter = True
+
+        else:
+            uses_peft_reference = False
+            needs_ref_adapter = False
+
+        if uses_peft_reference:
+            # The reference is the base model with the adapter disabled, or a frozen copy of the adapter. Neither is
+            # fixed when the LoRA config trains bias terms: those live in the base model, so the reference moves with
+            # the policy whether or not it is synced. Refuse the configuration on both paths.
+            default_config = model.peft_config["default"]
+            if isinstance(default_config, LoraConfig) and default_config.bias != "none":
+                raise ValueError(
+                    f"A LoRA config with `bias={default_config.bias!r}` trains bias terms that live in the base model "
+                    "rather than in the adapter, so disabling the adapter does not recover a fixed reference: the "
+                    "trained biases stay in it. PEFT also allows only one such adapter per model (`LoraModel supports "
+                    "only 1 adapter with bias`), so no frozen 'ref' copy can be created either. Set `bias='none'` to "
+                    "train against a copy of your adapter."
+                )
+
+        if needs_ref_adapter:
             # If the model is a PEFT model with a pretrained adapter, we need to create a "ref" adapter that is a copy
             # of the "default" adapter, so that we can use it as the reference model during the training. Before PEFT
             # 0.20.0, only one adapter per model was supported when the LoRA config uses `target_parameters` (see
@@ -369,8 +399,8 @@ class RLOOTrainer(_BaseTrainer):
             default_config = model.peft_config["default"]
             if (
                 isinstance(default_config, LoraConfig)
+                and Version("0.17.0") <= Version(peft.__version__) < Version("0.20.0")
                 and default_config.target_parameters
-                and Version(peft.__version__) < Version("0.20.0")
             ):
                 logger.warning(
                     "PEFT<0.20.0 can't add a frozen reference adapter alongside one that uses `target_parameters` "
@@ -380,13 +410,35 @@ class RLOOTrainer(_BaseTrainer):
                     "deliberately (pretrained adapter or custom init), note that the base model matches your adapter "
                     "only when it's freshly zero-initialized. If it is, this warning is safe to ignore."
                 )
+            elif isinstance(default_config, AdaLoraConfig):
+                raise ValueError(
+                    "`sync_ref_model=True` is not supported with an AdaLoRA adapter: `AdaLoraModel` allows a single "
+                    "trainable adapter, so no frozen 'ref' copy can be added. Disable `sync_ref_model` to train against "
+                    "the base model with the adapter disabled."
+                )
             else:
                 model.add_adapter("ref", default_config)
                 for name, param in model.named_parameters():
-                    if ".default." in name:
-                        ref_name = name.replace(".default.", ".ref.")
-                        ref_param = model.get_parameter(ref_name)
-                        ref_param.data.copy_(param.data)
+                    parts = name.split(".")
+                    # PEFT keys adapter parameters by adapter name inside a `ModuleDict` (LoRA matrices, `modules_to_save`, and
+                    # `prompt_encoder`) or a `ParameterDict` (`trainable_token_indices` deltas), and the key is not always the
+                    # last "default" component: `modules_to_save` wraps a module that may itself contain one. Scan the candidates
+                    # from the end and take the first whose container also holds a "ref" key. Names where none qualifies belong
+                    # to the base model, even when a module or parameter there happens to be called "default".
+                    for index in (i for i in reversed(range(len(parts))) if parts[i] == "default"):
+                        parent = model.get_submodule(".".join(parts[:index])) if index else model
+                        owner = model.get_submodule(".".join(parts[: index - 1])) if index > 1 else model
+                        if (
+                            isinstance(parent, (torch.nn.ModuleDict, torch.nn.ParameterDict))
+                            and (
+                                isinstance(owner, (BaseTunerLayer, ModulesToSaveWrapper))
+                                or (isinstance(owner, PeftModel) and parent is owner.prompt_encoder)
+                            )
+                            and "ref" in parent
+                        ):
+                            ref_param = model.get_parameter(".".join(parts[:index] + ["ref"] + parts[index + 1 :]))
+                            ref_param.data.copy_(param.data)
+                            break
 
         # PEFT + DeepSpeed ZeRO-3 requires reentrant checkpointing. For more details, see
         # https://github.com/huggingface/trl/issues/2514#issuecomment-2692152703.
@@ -730,14 +782,13 @@ class RLOOTrainer(_BaseTrainer):
                     "during training. Consequently, RLOOTrainer does not create a `ref_model` instance, and there is "
                     "nothing to synchronize. Please set `sync_ref_model=False`, or set `beta` to a non-zero value."
                 )
-            if is_peft_model(model):
+            if is_peft_model(model) and "ref" not in model.peft_config:
                 raise NotImplementedError(
-                    "You passed `sync_ref_model=True` while using a PEFT model, which is currently not supported. "
-                    "With PEFT, RLOOTrainer does not keep a separate reference model in memory; instead, it recovers "
-                    "reference behavior by temporarily disabling the adapter. As a result, there is no standalone "
-                    "`ref_model` instance to synchronize. Use `sync_ref_model=False`, or opt for full fine-tuning if "
-                    "you need a synced reference model. If you need `sync_ref_model` to work with PEFT, please open a "
-                    "feature request at https://github.com/huggingface/trl/issues."
+                    "You passed `sync_ref_model=True` while using a PEFT model whose reference adapter could not be "
+                    "created, so there is nothing to synchronize. The adapter is skipped with `peft<0.20.0` when the "
+                    "LoRA config uses `target_parameters` (peft#3340); the reference log probs then come from the base "
+                    "model with adapters disabled, which is fixed and cannot track the policy. Upgrade to "
+                    "`peft>=0.20.0` or use `sync_ref_model=False`."
                 )
             self.add_callback(SyncRefModelCallback(ref_model=self.ref_model, accelerator=self.accelerator))
 

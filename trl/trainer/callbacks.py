@@ -18,7 +18,7 @@ import pandas as pd
 import torch
 from accelerate import Accelerator
 from accelerate.state import AcceleratorState
-from accelerate.utils import gather_object, is_wandb_available
+from accelerate.utils import gather_object, is_peft_model, is_wandb_available
 from transformers import (
     GenerationConfig,
     PreTrainedModel,
@@ -30,7 +30,7 @@ from transformers import (
     TrainingArguments,
 )
 from transformers.trainer_utils import has_length
-from transformers.utils import is_rich_available
+from transformers.utils import is_peft_available, is_rich_available
 
 from ..data_utils import maybe_apply_chat_template
 from ..import_utils import is_weave_available
@@ -49,6 +49,12 @@ if is_rich_available():
 
 if is_wandb_available():
     import wandb
+
+
+if is_peft_available():
+    from peft import PeftModel
+    from peft.tuners.tuners_utils import BaseTunerLayer
+    from peft.utils.other import ModulesToSaveWrapper
 
 
 if is_weave_available():
@@ -133,13 +139,59 @@ class SyncRefModelCallback(TrainerCallback):
         else:
             SyncRefModelCallback._sync_target_model(model, target_model, alpha)
 
+    @staticmethod
+    def _sync_ref_adapter(model, alpha):
+        # With PEFT the reference is not a separate module but a second adapter inside the policy model, so
+        # `_sync_target_model`'s parameter-wise zip of two modules does not apply. Pair each `"default"` parameter with
+        # its `"ref"` counterpart by name instead; this is the same mapping used to initialize the `"ref"` adapter.
+        for name, param in model.named_parameters():
+            parts = name.split(".")
+            # PEFT keys adapter parameters by adapter name inside a `ModuleDict` (LoRA matrices, `modules_to_save`, and
+            # `prompt_encoder`) or a `ParameterDict` (`trainable_token_indices` deltas), and the key is not always the
+            # last "default" component: `modules_to_save` wraps a module that may itself contain one. Scan the candidates
+            # from the end and take the first whose container also holds a "ref" key. Names where none qualifies belong
+            # to the base model, even when a module or parameter there happens to be called "default".
+            for index in (i for i in reversed(range(len(parts))) if parts[i] == "default"):
+                parent = model.get_submodule(".".join(parts[:index])) if index else model
+                owner = model.get_submodule(".".join(parts[: index - 1])) if index > 1 else model
+                if (
+                    isinstance(parent, (torch.nn.ModuleDict, torch.nn.ParameterDict))
+                    and (
+                        isinstance(owner, (BaseTunerLayer, ModulesToSaveWrapper))
+                        or (isinstance(owner, PeftModel) and parent is owner.prompt_encoder)
+                    )
+                    and "ref" in parent
+                ):
+                    ref_param = model.get_parameter(".".join(parts[:index] + ["ref"] + parts[index + 1 :]))
+                    ref_param.data.mul_(1.0 - alpha).add_(param.data, alpha=alpha)
+                    break
+
+    @staticmethod
+    def sync_ref_adapter(model, alpha):
+        deepspeed_plugin = AcceleratorState().deepspeed_plugin
+        if deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3:
+            import deepspeed
+
+            with deepspeed.zero.GatheredParameters(list(model.parameters()), modifier_rank=0):
+                if deepspeed.comm.get_rank() == 0:
+                    SyncRefModelCallback._sync_ref_adapter(model, alpha)
+        else:
+            SyncRefModelCallback._sync_ref_adapter(model, alpha)
+
     def on_step_end(self, args, state, control, **kwargs):
         model: PreTrainedModel = kwargs["model"]
 
-        if self.ref_model is not None and state.global_step % args.ref_model_sync_steps == 0:
-            if self.accelerator:
-                model = self.accelerator.unwrap_model(model)
+        if state.global_step % args.ref_model_sync_steps != 0:
+            return
+
+        if self.accelerator:
+            model = self.accelerator.unwrap_model(model)
+
+        if self.ref_model is not None:
             self.sync_target_model(model, self.ref_model, args.ref_model_mixup_alpha)
+        elif is_peft_model(model) and "ref" in model.peft_config:
+            # PEFT keeps the reference as a frozen `"ref"` adapter rather than a standalone `ref_model`.
+            self.sync_ref_adapter(model, args.ref_model_mixup_alpha)
 
 
 class RichProgressCallback(TrainerCallback):

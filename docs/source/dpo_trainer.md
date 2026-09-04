@@ -154,7 +154,7 @@ Some argument combinations are intentionally restricted in the current [`DPOTrai
   * only a single `loss_type` is supported,
   * `compute_metrics` is not supported,
   * `precompute_ref_log_probs=True` is not supported.
-* `sync_ref_model=True` is not supported when training with PEFT models that do not keep a standalone `ref_model`.
+* `sync_ref_model=True` with a PEFT model syncs a frozen `"ref"` adapter copy instead of a standalone `ref_model`. It is not supported with `peft<0.20.0` when the LoRA config uses `target_parameters`, or together with a standalone `ref_model`; a LoRA `bias` other than `"none"` is rejected with or without it, because the trained biases live in the base model and the reference cannot stay fixed.
 * `sync_ref_model=True` cannot be combined with `precompute_ref_log_probs=True`.
 * `precompute_ref_log_probs=True` is not supported with `IterableDataset` (train or eval).
 

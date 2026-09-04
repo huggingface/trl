@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from unittest.mock import PropertyMock, patch
+
 import pytest
 import torch
 import transformers
@@ -37,7 +39,7 @@ from .testing_utils import (
 
 if is_peft_available():
     import peft
-    from peft import LoraConfig, PromptTuningConfig, get_peft_model
+    from peft import AdaLoraConfig, LoraConfig, PromptTuningConfig, get_peft_model
     from peft.utils import TaskType
 
 
@@ -666,6 +668,184 @@ class TestDPOTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
             new_ref_param = trainer.ref_model.get_parameter(n)
             assert not torch.equal(previous_ref_params[n], new_ref_param), f"Ref Parameter {n} has not changed."
+
+    @require_peft
+    def test_sync_ref_model_seeds_prompt_learning_ref_adapter(self):
+        # Prompt-learning adapters live in `PeftModel.prompt_encoder`, not in a tuner layer or a `modules_to_save`
+        # wrapper. The "ref" adapter must still be seeded from "default", otherwise the EMA reference starts from a
+        # freshly initialized prompt instead of the policy's.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            sync_ref_model=True,
+            report_to="none",
+        )
+        trainer = DPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset,
+            peft_config=PromptTuningConfig(task_type=TaskType.CAUSAL_LM, num_virtual_tokens=8),
+        )
+
+        model = trainer.accelerator.unwrap_model(trainer.model)
+        assert "ref" in model.peft_config
+        ref_params = dict(model.prompt_encoder["ref"].named_parameters())
+        assert ref_params  # guard against the loop below vacuously passing
+        for name, param in model.prompt_encoder["default"].named_parameters():
+            assert torch.equal(param, ref_params[name]), f"prompt parameter {name} was not copied into the ref adapter"
+
+    @require_peft
+    def test_train_with_sync_ref_model_and_peft(self):
+        # With PEFT there is no standalone `ref_model`; the reference lives in a frozen "ref" adapter inside the
+        # policy model. Check that `sync_ref_model=True` creates that adapter and that it tracks the policy.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            sync_ref_model=True,
+            ref_model_sync_steps=2,  # reduce sync steps to ensure a sync happens
+            report_to="none",
+        )
+        trainer = DPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset,
+            peft_config=LoraConfig(),
+        )
+
+        assert trainer.ref_model is None  # PEFT keeps the reference as an adapter, not a separate model
+        model = trainer.accelerator.unwrap_model(trainer.model)
+        assert "ref" in model.peft_config  # the EMA target the callback syncs into
+        previous_ref_params = {n: param.clone() for n, param in model.named_parameters() if ".ref." in n}
+        assert previous_ref_params  # guard against the loop below vacuously passing
+        batch = next(iter(trainer.get_train_dataloader()))
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the reference adapter has tracked the policy
+        for n, param in previous_ref_params.items():
+            new_param = model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Ref adapter parameter {n} has not changed."
+        # The trainer's own reference path has to read the synced adapter: a fresh "ref" adapter is a zero-initialized
+        # copy of "default" and reproduces the base model exactly, so once the sync has moved it the reference log probs
+        # must differ from the base model's, taken with adapters disabled at the same moment.
+        ref_logps = [t for t in trainer.compute_ref_log_probs(model, batch) if t is not None]
+        with model.disable_adapter():
+            base_logps = [t for t in trainer.compute_ref_log_probs(model, batch) if t is not None]
+        assert not all(torch.equal(r, b) for r, b in zip(ref_logps, base_logps, strict=True)), (
+            "the reference log probs equal the base model's, so the reference path is not reading the synced adapter"
+        )
+
+    @require_peft
+    def test_init_with_sync_ref_model_rejects_adalora(self):
+        dataset = Dataset.from_dict({"prompt": ["a"], "chosen": [" b"], "rejected": [" c"]})
+        training_args = DPOConfig(output_dir=self.tmp_dir, sync_ref_model=True, report_to="none", use_cpu=True)
+
+        # `AdaLoraModel` allows a single trainable adapter, so a frozen "ref" copy cannot be added; refuse up front rather
+        # than failing inside PEFT.
+        with pytest.raises(ValueError, match="AdaLoRA"):
+            DPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                args=training_args,
+                train_dataset=dataset,
+                peft_config=AdaLoraConfig(target_modules=["q_proj"], total_step=10),
+            )
+
+    @require_peft
+    def test_init_with_sync_ref_model_before_target_parameters(self):
+        model = get_peft_model(
+            AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"),
+            LoraConfig(target_modules=["q_proj"]),
+        )
+        original_add_adapter = model.add_adapter
+
+        def add_adapter(adapter_name, peft_config):
+            # The installed PEFT still reads this newer field internally, so expose it only after the trainer's
+            # compatibility check, where PEFT 0.10 did not have it.
+            with patch.object(LoraConfig, "target_parameters", None):
+                original_add_adapter(adapter_name, peft_config)
+
+        model.add_adapter = add_adapter
+        dataset = Dataset.from_dict({"prompt": ["a"], "chosen": [" b"], "rejected": [" c"]})
+        training_args = DPOConfig(output_dir=self.tmp_dir, sync_ref_model=True, report_to="none", use_cpu=True)
+
+        with (
+            patch.object(peft, "__version__", "0.10.0"),
+            patch.object(
+                LoraConfig,
+                "target_parameters",
+                new_callable=PropertyMock,
+                side_effect=AttributeError("target_parameters is unavailable"),
+            ),
+        ):
+            trainer = DPOTrainer(model=model, args=training_args, train_dataset=dataset)
+
+        assert "ref" in trainer.model.peft_config
+
+    def test_sync_ref_model_help_describes_peft_support(self):
+        help_text = DPOConfig.__dataclass_fields__["sync_ref_model"].metadata["help"]
+
+        assert 'frozen `"ref"` adapter' in help_text
+        assert "not yet compatible with PEFT" not in help_text
+
+    @require_peft
+    def test_train_with_sync_ref_model_and_peft_trainable_tokens(self):
+        # `trainable_token_indices` stores its deltas in a `ParameterDict` keyed by adapter, so those parameter names
+        # END in ".default" with no component after it. Pairing "default" with "ref" by substring would skip them and
+        # leave the reference copy of the token deltas frozen at its initial value while the policy moves.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            sync_ref_model=True,
+            ref_model_sync_steps=2,  # reduce sync steps to ensure a sync happens
+            report_to="none",
+        )
+        trainer = DPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset,
+            peft_config=LoraConfig(trainable_token_indices=[0, 1]),
+        )
+
+        model = trainer.accelerator.unwrap_model(trainer.model)
+        token_ref_params = {
+            n: param.clone() for n, param in model.named_parameters() if "trainable_tokens_delta" in n and "ref" in n
+        }
+        assert token_ref_params  # the config must actually produce token deltas, or the loop below passes vacuously
+
+        trainer.train()
+
+        for n, param in token_ref_params.items():
+            assert not torch.equal(param, model.get_parameter(n)), f"Ref token delta {n} has not changed."
+
+    @pytest.mark.parametrize("sync_ref_model", [True, False])
+    @require_peft
+    def test_train_with_sync_ref_model_and_peft_bias(self, sync_ref_model):
+        # A LoRA config with `bias != "none"` trains bias terms that live in the base model, so disabling the adapter
+        # does not give a fixed reference, and PEFT permits only one such adapter per model, so no "ref" copy can be
+        # made either. The trainer rejects the config at construction, with or without `sync_ref_model`.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            sync_ref_model=sync_ref_model,
+            ref_model_sync_steps=2,  # reduce sync steps to ensure a sync happens
+            report_to="none",
+        )
+        with pytest.raises(ValueError, match="bias"):
+            DPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                args=training_args,
+                train_dataset=dataset,
+                peft_config=LoraConfig(bias="all"),
+            )
 
     def test_train_model_dtype(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
