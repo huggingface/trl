@@ -12,7 +12,7 @@ The library is integrated with 🤗 [transformers](https://github.com/huggingfac
 
 ## 🎉 What's New
 
-**⚗️ DistillationTrainer is now stable:** [`DistillationTrainer`](distillation_trainer) graduates to the stable API — on-policy knowledge distillation that matches a teacher's full next-token distribution with a memory-efficient chunked JSD loss and vLLM-powered generation.
+**📜 Training beyond 1M tokens:** A new [long context guide](long_context_training) walks through the four things that break as sequences grow — the loss, the positions, the activations and the memory of a single GPU — and ends on an example that trains Qwen3-8B on million-token sequences on one 8-GPU node.
 
 ## Taxonomy
 
