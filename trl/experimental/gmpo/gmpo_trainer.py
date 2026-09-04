@@ -37,6 +37,8 @@ class GMPOTrainer(GRPOTrainer):
         if args is None:
             model_name = model if isinstance(model, str) else get_config_model_id(model.config)
             args = GMPOConfig(f"{model_name.split('/')[-1]}-GMPO")
+        if args.use_liger_kernel:
+            raise NotImplementedError("Liger kernel is not supported by GMPOTrainer.")
 
         super().__init__(model, reward_funcs, args=args, **kwargs)
 
@@ -50,16 +52,19 @@ class GMPOTrainer(GRPOTrainer):
         mask = completion_mask if "tool_mask" not in inputs else completion_mask * inputs["tool_mask"]
 
         # Compute the per_token_logps and the entropy at each position in the completion
-        per_token_logps, entropies, _ = self._get_per_token_logps_and_entropies(
+        per_token_logps, entropies, aux_loss = self._get_per_token_logps_and_entropies(
             model,
             input_ids,
             attention_mask,
             logits_to_keep,
             compute_entropy=True,
+            compute_aux_loss=self.aux_loss_enabled,
             pixel_values=inputs.get("pixel_values"),
             image_grid_thw=inputs.get("image_grid_thw"),
             num_images=inputs.get("num_images"),
             pixel_attention_mask=inputs.get("pixel_attention_mask"),
+            spatial_shapes=inputs.get("spatial_shapes"),
+            num_tiles=inputs.get("num_tiles"),
             image_sizes=inputs.get("image_sizes"),
             token_type_ids=inputs.get("token_type_ids"),
             mm_token_type_ids=inputs.get("mm_token_type_ids"),
@@ -118,8 +123,75 @@ class GMPOTrainer(GRPOTrainer):
         # already lives inside the geometric mean.
         mode = "train" if self.model.training else "eval"
         loss = per_sequence_loss.mean()
+        policy_loss = loss.detach()
         normalizer = self.current_gradient_accumulation_steps if mode == "train" else 1.0  # no accum in eval
         loss = loss / normalizer
+
+        # Entropy bonus: add entropy regularization to encourage exploration. _entropy_bonus_enabled is set
+        # whenever a non-zero static coef is set OR adaptive mode is enabled (adaptive stays enabled even when
+        # entropy_coef has been decremented to entropy_coef_min so it can recover once entropy drops again).
+        if self._entropy_bonus_enabled:
+            # When top_entropy_quantile < 1.0, entropy_mask restricts policy gradients to high-entropy
+            # tokens. Use the same effective mask for the entropy bonus so it acts on the same tokens.
+            effective_mask = mask if entropy_mask is None else mask * entropy_mask
+            # Entropy bonus = mean per-token entropy H (the documented objective L = L_policy - coef * H), so
+            # H does not depend on how each loss type normalizes its policy term. The bonus is a mean over the
+            # tokens it acts on (effective_mask), scaled only for gradient accumulation, never by a loss-type-
+            # specific policy normalizer. (The adaptive controller below tracks a window-global token-weighted mean,
+            # which can differ from this per-micro-batch mean when token counts vary across micro-batches.)
+            accumulation_factor = self.current_gradient_accumulation_steps if mode == "train" else 1.0
+            entropy_loss = (
+                (entropies * effective_mask).sum() / effective_mask.sum().clamp(min=1.0) / accumulation_factor
+            )
+
+            # Apply the coefficient and gating from the end of the previous optimizer step, so that every
+            # micro-batch in the current accumulation window applies the same entropy bonus. The adaptive
+            # update below only takes effect on the next step.
+            if self.use_adaptive_entropy:
+                apply_coef = self.entropy_coef if self._last_world_entropy <= self.args.entropy_target else 0.0
+            else:
+                apply_coef = self.entropy_coef
+
+            loss = loss - apply_coef * entropy_loss
+            self._metrics[mode]["policy_loss"].append(self.accelerator.gather(policy_loss).nanmean().item())
+
+            # Adaptive update. Gated on train mode so evaluation cannot mutate the entropy controller state.
+            if self.use_adaptive_entropy and mode == "train":
+                # Accumulate the entropy sum and active-token count of every micro-batch into a running window
+                # buffer, so the controller measures the exact window-global entropy rather than just the last
+                # micro-batch (which would be a 1 / gradient_accumulation_steps subsample).
+                stats = torch.stack([(entropies * effective_mask).sum(), effective_mask.sum()]).detach()
+                if self._entropy_window_stats is None:
+                    self._entropy_window_stats = stats
+                else:
+                    self._entropy_window_stats = self._entropy_window_stats + stats
+                # At the optimizer-step boundary, reduce the window totals across ranks (sum and token count
+                # jointly, for a true global mean unbiased when ranks have different completion lengths),
+                # update the coefficient for the next step, then reset the window buffer.
+                if self.accelerator.sync_gradients:
+                    window_stats = self.accelerator.reduce(self._entropy_window_stats, reduction="sum")
+                    world_entropy = (window_stats[0] / window_stats[1].clamp(min=1.0)).item()
+                    if world_entropy <= self.args.entropy_target:
+                        self.entropy_coef = min(
+                            self.entropy_coef + self.args.entropy_coef_delta, self.args.entropy_coef_max
+                        )
+                    else:
+                        self.entropy_coef = max(
+                            self.entropy_coef - self.args.entropy_coef_delta, self.args.entropy_coef_min
+                        )
+                    self._last_world_entropy = world_entropy
+                    self._entropy_window_stats = None
+
+            # Log entropy_coef on train optimizer-step boundaries (constant for static control; updated just
+            # above for adaptive control). sync_gradients is always True in eval (no accumulation context).
+            if mode == "train" and self.accelerator.sync_gradients:
+                self._metrics[mode]["entropy_coef"].append(self.entropy_coef)
+
+        # The policy loss above is scaled for gradient accumulation (HF auto-scaling is off here), so scale aux too
+        if self.aux_loss_enabled:
+            normalizer = self.current_gradient_accumulation_steps if mode == "train" else 1.0
+            loss = loss + self.router_aux_loss_coef * aux_loss / normalizer
+            self._metrics[mode]["aux_loss"].append(self.accelerator.gather_for_metrics(aux_loss).mean().item())
 
         # Log the metrics
         def masked_seq_mean(x):
