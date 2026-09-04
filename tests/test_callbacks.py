@@ -382,16 +382,16 @@ class TestSyncRefModelCallbackAdapterPairing(TrlTestCase):
             "a modules_to_save parameter was skipped because the adapter key was not the last 'default' component"
         )
 
-    def test_base_module_dict_without_a_ref_key_is_not_paired(self):
+    def test_base_module_dict_with_adapter_named_keys_is_not_paired(self):
         from peft import LoraConfig, get_peft_model
 
-        # A `ModuleDict` in the base model may hold a "default" key that PEFT knows nothing about, so there is no
-        # "ref" counterpart to pair it with.
+        # A `ModuleDict` in the base model may use both adapter names for unrelated modules. Container membership does
+        # not make those modules PEFT adapter parameters.
         class Model(torch.nn.Module):
             def __init__(self):
                 super().__init__()
                 self.proj = torch.nn.Linear(4, 4)
-                self.heads = torch.nn.ModuleDict({"default": torch.nn.Linear(4, 4)})
+                self.heads = torch.nn.ModuleDict({"default": torch.nn.Linear(4, 4), "ref": torch.nn.Linear(4, 4)})
 
             def forward(self, x):
                 return self.heads["default"](self.proj(x))
@@ -399,8 +399,12 @@ class TestSyncRefModelCallbackAdapterPairing(TrlTestCase):
         config = LoraConfig(target_modules=["proj"])
         model = get_peft_model(Model(), config)
         model.add_adapter("ref", config)
-        head = model.get_parameter("base_model.model.heads.default.weight").clone()
+        default_head = model.get_parameter("base_model.model.heads.default.weight")
+        ref_head = model.get_parameter("base_model.model.heads.ref.weight")
+        with torch.no_grad():
+            default_head.fill_(7.0)
+            ref_head.fill_(3.0)
 
-        SyncRefModelCallback._sync_ref_adapter(model, alpha=1.0)  # must not raise
+        SyncRefModelCallback._sync_ref_adapter(model, alpha=1.0)
 
-        assert torch.equal(model.get_parameter("base_model.model.heads.default.weight"), head)
+        assert torch.equal(ref_head, torch.full_like(ref_head, 3.0))

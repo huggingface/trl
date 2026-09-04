@@ -1556,7 +1556,9 @@ class TestGRPOTrainer(TrlTestCase):
     def test_train_with_sync_ref_model_and_peft(self):
         # With PEFT there is no standalone `ref_model`; the reference lives in a frozen "ref" adapter inside the
         # policy model. Check that `sync_ref_model=True` creates that adapter and that it tracks the policy.
-        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        dataset = Dataset.from_dict(
+            {"prompt": ["What is 2+2?", "Name a color.", "Say hello.", "What is 1+1?", "Name a pet.", "Say bye."]}
+        )
 
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
@@ -1568,6 +1570,7 @@ class TestGRPOTrainer(TrlTestCase):
             sync_ref_model=True,
             ref_model_sync_steps=2,  # reduce sync steps to ensure a sync happens
             report_to="none",
+            use_cpu=True,
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
@@ -1582,15 +1585,28 @@ class TestGRPOTrainer(TrlTestCase):
         assert "ref" in model.peft_config  # the EMA target the callback syncs into
         previous_ref_params = {n: param.clone() for n, param in model.named_parameters() if ".ref." in n}
         assert previous_ref_params  # guard against the loop below vacuously passing
+        with torch.no_grad():
+            for name, param in model.named_parameters():
+                if ".lora_B.default." in name:
+                    param.add_(0.1)
+        batch = next(iter(trainer.get_train_dataloader()))
 
         trainer.train()
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the reference adapter has tracked the policy
-        for n, param in previous_ref_params.items():
-            new_param = model.get_parameter(n)
-            assert not torch.equal(param, new_param), f"Ref adapter parameter {n} has not changed."
+        assert any(not torch.equal(param, model.get_parameter(name)) for name, param in previous_ref_params.items())
+        # The generated reference log probs must come from the synced adapter, not from the base model with adapters
+        # disabled. Recompute the latter on the exact generated tokens to make the distinction observable.
+        generated = trainer._generate_and_score_completions(batch)
+        input_ids = torch.cat([generated["prompt_ids"], generated["completion_ids"]], dim=1)
+        attention_mask = torch.cat([generated["prompt_mask"], generated["completion_mask"]], dim=1)
+        with model.disable_adapter(), torch.no_grad():
+            base_logps, _, _ = trainer._get_per_token_logps_and_entropies(
+                trainer.model, input_ids, attention_mask, generated["completion_ids"].size(1)
+            )
+        assert not torch.equal(generated["ref_per_token_logps"], base_logps)
 
     @require_peft
     def test_train_with_sync_ref_model_and_peft_trainable_tokens(self):

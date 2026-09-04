@@ -73,8 +73,9 @@ if is_liger_kernel_available():
 
 if is_peft_available():
     import peft
-    from peft import LoraConfig, PeftConfig, PeftModel, PromptLearningConfig, get_peft_model
+    from peft import AdaLoraConfig, LoraConfig, PeftConfig, PeftModel, PromptLearningConfig, get_peft_model
     from peft.tuners.tuners_utils import BaseTunerLayer
+    from peft.utils.other import ModulesToSaveWrapper
 
 
 logger = get_logger(__name__)
@@ -680,8 +681,8 @@ class DPOTrainer(_BaseTrainer):
             default_config = model.peft_config["default"]
             if (
                 isinstance(default_config, LoraConfig)
+                and Version("0.17.0") <= Version(peft.__version__) < Version("0.20.0")
                 and default_config.target_parameters
-                and Version(peft.__version__) < Version("0.20.0")
             ):
                 logger.warning(
                     "PEFT<0.20.0 can't add a frozen reference adapter alongside one that uses `target_parameters` "
@@ -690,6 +691,12 @@ class DPOTrainer(_BaseTrainer):
                     "model only to apply LoRA, pass a `peft_config` to the trainer instead; if you wrapped it "
                     "deliberately (pretrained adapter or custom init), note that the base model matches your adapter "
                     "only when it's freshly zero-initialized. If it is, this warning is safe to ignore."
+                )
+            elif isinstance(default_config, AdaLoraConfig):
+                raise ValueError(
+                    "`sync_ref_model=True` is not supported with an AdaLoRA adapter: `AdaLoraModel` allows a single "
+                    "trainable adapter, so no frozen 'ref' copy can be added. Disable `sync_ref_model` to train against "
+                    "the base model with the adapter disabled."
                 )
             else:
                 model.add_adapter("ref", default_config)
@@ -702,7 +709,12 @@ class DPOTrainer(_BaseTrainer):
                     # a module or parameter there happens to be called "default".
                     for index in (i for i in reversed(range(len(parts))) if parts[i] == "default"):
                         parent = model.get_submodule(".".join(parts[:index])) if index else model
-                        if isinstance(parent, (torch.nn.ModuleDict, torch.nn.ParameterDict)) and "ref" in parent:
+                        owner = model.get_submodule(".".join(parts[: index - 1])) if index > 1 else model
+                        if (
+                            isinstance(parent, (torch.nn.ModuleDict, torch.nn.ParameterDict))
+                            and isinstance(owner, (BaseTunerLayer, ModulesToSaveWrapper))
+                            and "ref" in parent
+                        ):
                             ref_param = model.get_parameter(".".join(parts[:index] + ["ref"] + parts[index + 1 :]))
                             ref_param.data.copy_(param.data)
                             break

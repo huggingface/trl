@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from unittest.mock import PropertyMock, patch
+
 import pytest
 import torch
 import transformers
@@ -37,7 +39,7 @@ from .testing_utils import (
 
 if is_peft_available():
     import peft
-    from peft import LoraConfig, PromptTuningConfig, get_peft_model
+    from peft import AdaLoraConfig, LoraConfig, PromptTuningConfig, get_peft_model
     from peft.utils import TaskType
 
 
@@ -711,6 +713,58 @@ class TestDPOTrainer(TrlTestCase):
         assert not all(torch.equal(r, b) for r, b in zip(ref_logps, base_logps, strict=True)), (
             "the reference log probs equal the base model's, so the reference path is not reading the synced adapter"
         )
+
+    @require_peft
+    def test_init_with_sync_ref_model_rejects_adalora(self):
+        dataset = Dataset.from_dict({"prompt": ["a"], "chosen": [" b"], "rejected": [" c"]})
+        training_args = DPOConfig(output_dir=self.tmp_dir, sync_ref_model=True, report_to="none", use_cpu=True)
+
+        # `AdaLoraModel` allows a single trainable adapter, so a frozen "ref" copy cannot be added; refuse up front rather
+        # than failing inside PEFT.
+        with pytest.raises(ValueError, match="AdaLoRA"):
+            DPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                args=training_args,
+                train_dataset=dataset,
+                peft_config=AdaLoraConfig(target_modules=["q_proj"], total_step=10),
+            )
+
+    @require_peft
+    def test_init_with_sync_ref_model_before_target_parameters(self):
+        model = get_peft_model(
+            AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"),
+            LoraConfig(target_modules=["q_proj"]),
+        )
+        original_add_adapter = model.add_adapter
+
+        def add_adapter(adapter_name, peft_config):
+            # The installed PEFT still reads this newer field internally, so expose it only after the trainer's
+            # compatibility check, where PEFT 0.10 did not have it.
+            with patch.object(LoraConfig, "target_parameters", None):
+                original_add_adapter(adapter_name, peft_config)
+
+        model.add_adapter = add_adapter
+        dataset = Dataset.from_dict({"prompt": ["a"], "chosen": [" b"], "rejected": [" c"]})
+        training_args = DPOConfig(output_dir=self.tmp_dir, sync_ref_model=True, report_to="none", use_cpu=True)
+
+        with (
+            patch.object(peft, "__version__", "0.10.0"),
+            patch.object(
+                LoraConfig,
+                "target_parameters",
+                new_callable=PropertyMock,
+                side_effect=AttributeError("target_parameters is unavailable"),
+            ),
+        ):
+            trainer = DPOTrainer(model=model, args=training_args, train_dataset=dataset)
+
+        assert "ref" in trainer.model.peft_config
+
+    def test_sync_ref_model_help_describes_peft_support(self):
+        help_text = DPOConfig.__dataclass_fields__["sync_ref_model"].metadata["help"]
+
+        assert 'frozen `"ref"` adapter' in help_text
+        assert "not yet compatible with PEFT" not in help_text
 
     @require_peft
     def test_train_with_sync_ref_model_and_peft_trainable_tokens(self):

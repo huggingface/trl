@@ -118,8 +118,8 @@ class DPOConfig(_BaseConfig):
         sync_ref_model (`bool`, *optional*, defaults to `False`):
             Whether to synchronize the reference model with the active model every `ref_model_sync_steps` steps, using
             the `ref_model_mixup_alpha` parameter. This synchronization originates from the
-            [TR-DPO](https://huggingface.co/papers/2404.09656) paper. `sync_ref_model=True` is not yet compatible with
-            PEFT or `precompute_ref_log_probs=True`.
+            [TR-DPO](https://huggingface.co/papers/2404.09656) paper. With PEFT, this synchronizes a frozen `"ref"`
+            adapter. It is not compatible with `precompute_ref_log_probs=True`.
         ref_model_mixup_alpha (`float`, *optional*, defaults to `0.6`):
             α parameter from the TR-DPO paper, which controls the mix between the current policy and the previous
             reference policy during updates. The reference policy is updated according to the equation: `π_ref = α *
@@ -319,8 +319,8 @@ class DPOConfig(_BaseConfig):
         metadata={
             "help": "Whether to synchronize the reference model with the active model every `ref_model_sync_steps` "
             "steps, using the `ref_model_mixup_alpha` parameter. This synchronization originates from the "
-            "[TR-DPO](https://huggingface.co/papers/2404.09656) paper. `sync_ref_model=True` is not yet compatible "
-            "with PEFT or `precompute_ref_log_probs=True`."
+            '[TR-DPO](https://huggingface.co/papers/2404.09656) paper. With PEFT, this synchronizes a frozen `"ref"` '
+            "adapter. It is not compatible with `precompute_ref_log_probs=True`."
         },
     )
     ref_model_mixup_alpha: float = field(

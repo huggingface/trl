@@ -398,6 +398,19 @@ class VLLMGeneration:
                 for param_name, param in module.named_parameters():
                     full_name = f"{prefix}.{param_name}" if prefix else param_name
                     full_name = self._fix_param_name_to_vllm(full_name, extra_prefixes=["_fsdp_wrapped_module."])
+                    full_name = full_name.removeprefix("base_model.model.").replace(".base_layer", "")
+                    # When module to save, remove its prefix and discard the original module, as well as the copies
+                    # held by other adapters (such as the frozen "ref" one); vLLM sees only the "default" copy
+                    if "original_module" in full_name or (
+                        ".modules_to_save." in full_name and ".modules_to_save.default." not in full_name
+                    ):
+                        continue
+                    # Trainable token deltas are already merged into the embedding weight and do not exist in vLLM.
+                    if ".trainable_tokens_delta." in full_name:
+                        continue
+                    full_name = self._fix_param_name_to_vllm(
+                        full_name, extra_prefixes=["modules_to_save.default.", "token_adapter."]
+                    )
 
                     if full_name in visited:
                         continue  # skip FSDP subtrees already traversed
@@ -418,7 +431,10 @@ class VLLMGeneration:
             # other adapters (such as the frozen "ref" one); vLLM sees only the "default" copy
             if "original_module" in name or (".modules_to_save." in name and ".modules_to_save.default." not in name):
                 continue
-            name = self._fix_param_name_to_vllm(name, extra_prefixes=["modules_to_save.default."])
+            # Trainable token deltas are already merged into the embedding weight and do not exist in vLLM.
+            if ".trainable_tokens_delta." in name:
+                continue
+            name = self._fix_param_name_to_vllm(name, extra_prefixes=["modules_to_save.default.", "token_adapter."])
 
             if param.is_cpu:
                 param = param.to(self.accelerator.device)
@@ -466,7 +482,12 @@ class VLLMGeneration:
                             ".modules_to_save." in name and ".modules_to_save.default." not in name
                         ):
                             continue
-                        name = self._fix_param_name_to_vllm(name, extra_prefixes=["modules_to_save.default."])
+                        # Trainable token deltas are already merged into the embedding weight and do not exist in vLLM.
+                        if ".trainable_tokens_delta." in name:
+                            continue
+                        name = self._fix_param_name_to_vllm(
+                            name, extra_prefixes=["modules_to_save.default.", "token_adapter."]
+                        )
 
                         yield name, param.data
                 # Unmerge adapters while parameters are still gathered

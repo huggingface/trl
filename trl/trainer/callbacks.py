@@ -30,7 +30,7 @@ from transformers import (
     TrainingArguments,
 )
 from transformers.trainer_utils import has_length
-from transformers.utils import is_rich_available
+from transformers.utils import is_peft_available, is_rich_available
 
 from ..data_utils import maybe_apply_chat_template
 from ..import_utils import is_weave_available
@@ -49,6 +49,11 @@ if is_rich_available():
 
 if is_wandb_available():
     import wandb
+
+
+if is_peft_available():
+    from peft.tuners.tuners_utils import BaseTunerLayer
+    from peft.utils.other import ModulesToSaveWrapper
 
 
 if is_weave_available():
@@ -147,7 +152,12 @@ class SyncRefModelCallback(TrainerCallback):
             # a module or parameter there happens to be called "default".
             for index in (i for i in reversed(range(len(parts))) if parts[i] == "default"):
                 parent = model.get_submodule(".".join(parts[:index])) if index else model
-                if isinstance(parent, (torch.nn.ModuleDict, torch.nn.ParameterDict)) and "ref" in parent:
+                owner = model.get_submodule(".".join(parts[: index - 1])) if index > 1 else model
+                if (
+                    isinstance(parent, (torch.nn.ModuleDict, torch.nn.ParameterDict))
+                    and isinstance(owner, (BaseTunerLayer, ModulesToSaveWrapper))
+                    and "ref" in parent
+                ):
                     ref_param = model.get_parameter(".".join(parts[:index] + ["ref"] + parts[index + 1 :]))
                     ref_param.data.mul_(1.0 - alpha).add_(param.data, alpha=alpha)
                     break

@@ -14,24 +14,33 @@
 
 import os
 import subprocess
+from contextlib import nullcontext
 from types import SimpleNamespace
 
 import pytest
+import torch
+from torch import nn
 from transformers import AutoModelForCausalLM, AutoProcessor, AutoTokenizer
 from transformers.testing_utils import torch_device
+from transformers.utils import is_peft_available
 
 from trl.generation.vllm_client import VLLMClient, parse_logprobs
-from trl.generation.vllm_generation import extract_logprobs
+from trl.generation.vllm_generation import VLLMGeneration, extract_logprobs
 from trl.import_utils import is_vllm_available
 
 from .testing_utils import (
     TrlTestCase,
     kill_process,
     require_3_accelerators,
+    require_peft,
     require_torch_multi_accelerator,
     require_vision,
     require_vllm,
 )
+
+
+if is_peft_available():
+    from peft import LoraConfig, get_peft_model
 
 
 if is_vllm_available():
@@ -125,6 +134,59 @@ class TestExtractLogprobs(TrlTestCase):
 
         assert all_logprobs is None
         assert all_token_ids is None
+
+
+@require_peft
+class TestVLLMGenerationParameterIteration(TrlTestCase):
+    def test_trainable_token_wrapper_emits_merged_embedding(self):
+        class DistributedBackend:
+            is_fsdp = False
+
+            @staticmethod
+            def gather_params(params):
+                return nullcontext()
+
+        model = get_peft_model(
+            AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"),
+            LoraConfig(target_modules=["q_proj"], trainable_token_indices=[0, 1]),
+        )
+        ref_config = LoraConfig(target_modules=["q_proj"], trainable_token_indices=[0, 1], inference_mode=True)
+        model.add_adapter("ref", ref_config)
+        expected = model.get_input_embeddings().token_adapter.get_merged_weights(["default"]).detach().clone()
+
+        generation = object.__new__(VLLMGeneration)
+        generation.model = model
+        generation._dist = DistributedBackend()
+        parameters = dict(generation._iter_named_params())
+
+        torch.testing.assert_close(parameters["model.embed_tokens.weight"], expected)
+        assert not any("trainable_tokens_delta" in name for name in parameters)
+
+    def test_fsdp1_filters_reference_modules_to_save(self, monkeypatch):
+        class FakeFSDP(nn.Module):
+            @staticmethod
+            def summon_full_params(module, recurse=False, writeback=False):
+                return nullcontext()
+
+        class Model(FakeFSDP):
+            def __init__(self):
+                super().__init__()
+                self.base_model = nn.Module()
+                self.base_model.model = nn.Module()
+                self.base_model.model.lm_head = nn.Module()
+                self.base_model.model.lm_head.modules_to_save = nn.ModuleDict(
+                    {
+                        "default": nn.Linear(2, 2, bias=False),
+                        "ref": nn.Linear(2, 2, bias=False),
+                    }
+                )
+
+        monkeypatch.setattr("trl.generation.vllm_generation.FSDP", FakeFSDP)
+        generation = object.__new__(VLLMGeneration)
+
+        parameters = dict(generation._iter_fsdp1_params(Model()))
+
+        assert set(parameters) == {"lm_head.weight"}
 
 
 @pytest.mark.slow

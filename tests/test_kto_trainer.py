@@ -794,6 +794,12 @@ class TestKTOTrainer(TrlTestCase):
             "the reference log probs equal the base model's, so the reference path is not reading the synced adapter"
         )
 
+    def test_sync_ref_model_help_describes_peft_support(self):
+        help_text = KTOConfig.__dataclass_fields__["sync_ref_model"].metadata["help"]
+
+        assert 'frozen `"ref"` adapter' in help_text
+        assert "not yet compatible with PEFT" not in help_text
+
     @require_peft
     def test_train_with_sync_ref_model_and_peft_trainable_tokens(self):
         # `trainable_token_indices` stores its deltas in a `ParameterDict` keyed by adapter, so those parameter names

@@ -17,7 +17,7 @@ from unittest.mock import patch
 import pytest
 import torch
 import transformers
-from datasets import DatasetDict, IterableDatasetDict, load_dataset
+from datasets import Dataset, DatasetDict, IterableDatasetDict, load_dataset
 from packaging.version import Version
 from transformers import (
     AutoModelForCausalLM,
@@ -1116,7 +1116,9 @@ class TestRLOOTrainer(TrlTestCase):
     def test_train_with_sync_ref_model_and_peft(self):
         # With PEFT there is no standalone `ref_model`; the reference lives in a frozen "ref" adapter inside the
         # policy model. Check that `sync_ref_model=True` creates that adapter and that it tracks the policy.
-        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        dataset = Dataset.from_dict(
+            {"prompt": ["What is 2+2?", "Name a color.", "Say hello.", "What is 1+1?", "Name a pet.", "Say bye."]}
+        )
 
         training_args = RLOOConfig(
             output_dir=self.tmp_dir,
@@ -1128,6 +1130,7 @@ class TestRLOOTrainer(TrlTestCase):
             sync_ref_model=True,
             ref_model_sync_steps=2,  # reduce sync steps to ensure a sync happens
             report_to="none",
+            use_cpu=True,
         )
         trainer = RLOOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
@@ -1142,15 +1145,49 @@ class TestRLOOTrainer(TrlTestCase):
         assert "ref" in model.peft_config  # the EMA target the callback syncs into
         previous_ref_params = {n: param.clone() for n, param in model.named_parameters() if ".ref." in n}
         assert previous_ref_params  # guard against the loop below vacuously passing
+        with torch.no_grad():
+            for name, param in model.named_parameters():
+                if ".lora_B.default." in name:
+                    param.add_(0.1)
+        batch = next(iter(trainer.get_train_dataloader()))
 
         trainer.train()
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the reference adapter has tracked the policy
-        for n, param in previous_ref_params.items():
-            new_param = model.get_parameter(n)
-            assert not torch.equal(param, new_param), f"Ref adapter parameter {n} has not changed."
+        assert any(not torch.equal(param, model.get_parameter(name)) for name, param in previous_ref_params.items())
+        # The KL logged by the generation path must use the synced adapter. Recompute it from that adapter on the
+        # exact generated tokens and compare it with the value the trainer consumed.
+        generated = trainer._generate_and_score_completions(batch)
+        input_ids = torch.cat([generated["prompt_ids"], generated["completion_ids"]], dim=1)
+        attention_mask = torch.cat([generated["prompt_mask"], generated["completion_mask"]], dim=1)
+        previous_adapter = model.active_adapter
+        model.set_adapter("ref")
+        try:
+            with torch.no_grad():
+                ref_logps, _, _ = trainer._get_per_token_logps_and_entropies(
+                    trainer.model, input_ids, attention_mask, generated["completion_ids"].size(1)
+                )
+        finally:
+            model.set_adapter(previous_adapter)
+        with model.disable_adapter(), torch.no_grad():
+            base_logps, _, _ = trainer._get_per_token_logps_and_entropies(
+                trainer.model, input_ids, attention_mask, generated["completion_ids"].size(1)
+            )
+        completion_mask = generated["completion_mask"]
+
+        def sequence_kl(reference_logps):
+            return (
+                (generated["old_logps"] - (reference_logps * completion_mask).sum(1)).sum() / completion_mask.sum()
+            ).item()
+
+        logged_kl = trainer._metrics["train"]["kl"][-1]
+        # The trainer scores the reference in `batch_size` chunks while this recomputation runs the whole batch at once,
+        # so float32 reduction order alone moves a KL of order 1e-7 by a few 1e-8; the tolerance must sit above that
+        # noise and below the gap to the base model, which the second assertion pins.
+        assert logged_kl == pytest.approx(sequence_kl(ref_logps), abs=1e-6)
+        assert abs(logged_kl - sequence_kl(base_logps)) > 1e-6
 
     @require_peft
     def test_train_with_sync_ref_model_and_peft_trainable_tokens(self):
