@@ -336,10 +336,10 @@ class MiniLLMTrainer(GRPOTrainer):
             advantages = advantages.flip(1).cumsum(dim=1).flip(1)
 
             if self.length_normalization:
-                mask = torch.where(mask < 0.5, 1e-4, mask)
-                lengths = mask * gamma_pow
-                lengths = lengths.flip(1).cumsum(dim=1).flip(1)
-                advantages = advantages / lengths
+                # Only unmasked positions count toward the discounted length, so the advantage of a completion does
+                # not depend on how much padding the batch carries. The clamp keeps a fully masked row finite.
+                lengths = (mask * gamma_pow).flip(1).cumsum(dim=1).flip(1)
+                advantages = advantages / lengths.clamp(min=1e-4)
         else:
             advantages = rewards
 
@@ -380,7 +380,9 @@ class MiniLLMTrainer(GRPOTrainer):
             teacher_log_probs, dim=-1, index=shifted_labels.unsqueeze(-1)
         ).squeeze(-1)
 
-        mask = shifted_labels != -100
+        # `input_ids` never holds -100; the padding fill lives in `labels`, so the mask has to come from there. The
+        # gather above keeps indexing `input_ids`, since -100 is not a valid index.
+        mask = labels[:, prompt_lengths:] != -100
 
         if self.rkl_advantage:
             reverse_kl_advantage = self._compute_advantage(

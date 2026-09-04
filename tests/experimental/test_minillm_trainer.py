@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import types
+
 import pytest
 import torch
 from datasets import DatasetDict, load_dataset
@@ -80,3 +82,58 @@ class TestMiniLLMTrainer(TrlTestCase):
             assert set(trainer.eval_dataset.keys()) == {"data1", "data2"}
         else:
             assert trainer.eval_dataset is eval_dataset
+
+
+class TestMiniLLMComputeAdvantage:
+    def test_length_normalization_ignores_padding(self):
+        """A constant reward of 1.0 with gamma=1.0 must give an advantage of exactly 1.0 at every valid position,
+        however long the batch is padded. Counting padded slots toward the length, as the old 1e-4 fill did, lowers the
+        first position of a short completion (0.9514 for a single valid token padded to 512)."""
+        stub = types.SimpleNamespace(gamma=1.0, length_normalization=True)
+        for length in (1, 128, 512):
+            mask = torch.zeros(1, 512)
+            mask[0, :length] = 1
+            advantages = MiniLLMTrainer._compute_advantage(stub, torch.zeros(1, 512), torch.ones(1, 512), mask)
+            torch.testing.assert_close(advantages[0, :length], torch.ones(length))
+            torch.testing.assert_close(advantages[0, length:], torch.zeros(512 - length))
+
+        advantages = MiniLLMTrainer._compute_advantage(stub, torch.zeros(1, 8), torch.ones(1, 8), torch.zeros(1, 8))
+        assert torch.isfinite(advantages).all()
+        torch.testing.assert_close(advantages, torch.zeros(1, 8))
+
+
+class TestMiniLLMComputeLossMask:
+    def test_advantage_mask_excludes_padded_completion_tokens(self, monkeypatch):
+        """The mask handed to `_compute_advantage` must come from the -100 fill in `labels`; built from `input_ids`
+        it was all ones, so padded slots kept a reward and leaked into every earlier advantage."""
+
+        class DummyModel:
+            def eval(self):
+                return self
+
+            def __call__(self, input_ids, attention_mask, use_cache):
+                return types.SimpleNamespace(logits=torch.zeros(*input_ids.shape, 10))
+
+        trainer = object.__new__(MiniLLMTrainer)
+        trainer.teacher_model = DummyModel()
+        trainer.kd_temperature = 1.0
+        trainer.rkl_advantage = True
+
+        completion_mask = torch.tensor([[1, 1, 0, 0], [1, 1, 1, 1]])
+        inputs = {
+            "prompt_ids": torch.randint(1, 10, (2, 3)),
+            "prompt_mask": torch.ones(2, 3, dtype=torch.long),
+            "completion_ids": torch.randint(1, 10, (2, 4)),
+            "completion_mask": completion_mask,
+        }
+
+        class AdvantageCaptured(Exception):
+            pass
+
+        def spy(**kwargs):
+            assert torch.equal(kwargs["mask"], completion_mask.bool())
+            raise AdvantageCaptured
+
+        monkeypatch.setattr(trainer, "_compute_advantage", spy)
+        with pytest.raises(AdvantageCaptured):
+            trainer.compute_loss(DummyModel(), inputs)
