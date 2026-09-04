@@ -35,16 +35,19 @@ if is_vision_available():
     from transformers import AutoModelForImageTextToText, AutoProcessor
 
 
-def test_generate_vllm_server_with_mixed_image_batch(monkeypatch):
+def test_training_step_prepares_mixed_image_batch_for_vllm_server(monkeypatch):
+    class StopAfterGeneration(Exception):
+        pass
+
     class DummyProcessor:
         def __call__(self, **kwargs):
             self.text = kwargs["text"]
-            return {"input_ids": torch.tensor([[1], [2]])}
+            return {"input_ids": torch.tensor([[1], [2], [3]])}
 
     class DummyClient:
         def chat(self, messages, **kwargs):
             self.messages = messages
-            return {"completion_ids": [[3], [4], [5], [6]]}
+            return {"completion_ids": [[4], [5], [6], [7], [8], [9]]}
 
     monkeypatch.setattr(
         online_dpo_trainer,
@@ -59,8 +62,9 @@ def test_generate_vllm_server_with_mixed_image_batch(monkeypatch):
     trainer = OnlineDPOTrainer.__new__(OnlineDPOTrainer)
     trainer.state = SimpleNamespace(global_step=0)
     trainer._move_model_to_vllm = lambda: None
+    trainer._tokenizer = SimpleNamespace(eos_token_id=0, pad_token_id=0)
     trainer.processing_class = DummyProcessor()
-    trainer.accelerator = SimpleNamespace(is_main_process=True, process_index=0)
+    trainer.accelerator = SimpleNamespace(is_main_process=True, process_index=0, device="cpu")
     trainer.num_generations = 2
     trainer.repetition_penalty = 1.0
     trainer.temperature = 1.0
@@ -68,20 +72,111 @@ def test_generate_vllm_server_with_mixed_image_batch(monkeypatch):
     trainer.top_k = None
     trainer.min_p = None
     trainer.generation_config = SimpleNamespace(max_tokens=16)
-    trainer.args = SimpleNamespace(generation_kwargs=None)
+    trainer.args = SimpleNamespace(generation_kwargs=None, use_vllm=True)
     trainer.vllm_client = DummyClient()
+    trainer.vllm_mode = "server"
 
     image = object()
+    embedded_image = object()
     prompts = [
-        [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "Describe it"}]}],
-        [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "Say hello"}]}],
+        [{"role": "user", "content": "Describe it"}],
+        [{"role": "user", "content": "Say hello"}],
+        [
+            {
+                "role": "user",
+                "content": [{"type": "image", "image": embedded_image}, {"type": "text", "text": "Embedded"}],
+            }
+        ],
     ]
+    generated_prompts = None
+    generate = trainer._generate_vllm
 
-    trainer._generate_vllm_server(prompts, images=[image, None])
+    def generate_then_stop(prompts, images):
+        nonlocal generated_prompts
+        generated_prompts = prompts
+        generate(prompts, images)
+        raise StopAfterGeneration
+
+    trainer._generate_vllm = generate_then_stop
+
+    with pytest.raises(StopAfterGeneration):
+        trainer.training_step(SimpleNamespace(train=lambda: None), {"prompt": prompts, "image": [image, None, None]})
+
+    assert generated_prompts[0][0]["content"][0] == {"type": "image", "image": image}
+    assert generated_prompts[1][0]["content"] == [{"type": "text", "text": "Say hello"}]
+    assert generated_prompts[2][0]["content"][0] == {"type": "image", "image": embedded_image}
+    assert prompts[0][0]["content"] == "Describe it"
+    assert prompts[1][0]["content"] == "Say hello"
 
     assert trainer.vllm_client.messages[0][0]["content"][0] == {"type": "image", "image": image}
     assert trainer.vllm_client.messages[1][0]["content"] == [{"type": "text", "text": "Say hello"}]
-    assert trainer.processing_class.text == ["image text", "text"]
+    assert trainer.vllm_client.messages[2][0]["content"][0] == {"type": "image", "image": embedded_image}
+    assert trainer.processing_class.text == ["image text", "text", "image text"]
+
+
+def test_generate_transformers_with_mixed_image_batch(monkeypatch):
+    class StopAtProcessor(Exception):
+        pass
+
+    class DummyProcessor:
+        def __call__(self, **kwargs):
+            self.images = kwargs["images"]
+            raise StopAtProcessor
+
+    monkeypatch.setattr(
+        online_dpo_trainer, "maybe_apply_chat_template", lambda example, processor: {"prompt": "prompt"}
+    )
+
+    trainer = OnlineDPOTrainer.__new__(OnlineDPOTrainer)
+    trainer._tokenizer = SimpleNamespace(eos_token_id=0, pad_token_id=0)
+    trainer.processing_class = DummyProcessor()
+    trainer.image_token = None
+    image = object()
+
+    with pytest.raises(StopAtProcessor):
+        trainer._generate(torch.nn.Linear(1, 1), ["image prompt", "text prompt"], [[image], []])
+
+    assert trainer.processing_class.images == [[image], []]
+
+
+def test_generate_vllm_colocate_with_mixed_image_batch(monkeypatch):
+    class DummyLLM:
+        def generate(self, inputs, generation_config, use_tqdm):
+            self.inputs = inputs
+            return [
+                SimpleNamespace(
+                    outputs=[SimpleNamespace(token_ids=[3]), SimpleNamespace(token_ids=[4])], prompt_token_ids=[1]
+                ),
+                SimpleNamespace(
+                    outputs=[SimpleNamespace(token_ids=[5]), SimpleNamespace(token_ids=[6])], prompt_token_ids=[2]
+                ),
+            ]
+
+    monkeypatch.setattr(
+        online_dpo_trainer,
+        "apply_chat_template",
+        lambda example, processor: {
+            "prompt": " ".join(part["type"] for message in example["prompt"] for part in message["content"])
+        },
+    )
+
+    trainer = OnlineDPOTrainer.__new__(OnlineDPOTrainer)
+    trainer.args = SimpleNamespace(vllm_enable_sleep_mode=False)
+    trainer.state = SimpleNamespace(global_step=0)
+    trainer._last_loaded_step = 0
+    trainer.processing_class = object()
+    trainer.llm = DummyLLM()
+    trainer.generation_config = object()
+    image = object()
+    prompts = [
+        [{"role": "user", "content": [{"type": "image", "image": image}, {"type": "text", "text": "Image"}]}],
+        [{"role": "user", "content": [{"type": "text", "text": "Text"}]}],
+    ]
+
+    trainer._generate_vllm_colocate(prompts, images=[image, None])
+
+    assert trainer.llm.inputs[0] == {"prompt": "image text", "multi_modal_data": {"image": image}}
+    assert trainer.llm.inputs[1] == "text"
 
 
 class TestOnlineDPOTrainer(TrlTestCase):
