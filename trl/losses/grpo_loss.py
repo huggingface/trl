@@ -237,7 +237,7 @@ class FusedLinearGRPOFunction(FusedLinearPPOBase):
             per_token_loss = per_token_loss + beta * kl_div
 
         # Note: We normalize by the number of tokens in the batch (using full_attention_mask),
-        # which is consistent with the DAPO loss implementation (https://arxiv.org/html/2503.14476v1)
+        # which is consistent with the DAPO loss implementation (https://huggingface.co/papers/2503.14476)
         # and TRL GRPO implementation
         # (https://github.com/huggingface/trl/blob/e751a16df56e70190fb94bed4a2035eec3303777/trl/trainer/grpo_trainer.py#L966)
         if loss_type == "grpo" or loss_type == "sapo":
