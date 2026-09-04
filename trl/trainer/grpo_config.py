@@ -129,6 +129,13 @@ class GRPOConfig(_BaseConfig):
             Model implementation to use for vLLM. Must be one of `"transformers"` or `"vllm"`. `"transformers"`: Use
             the `transformers` backend for model implementation. `"vllm"`: Use the `vllm` library for model
             implementation.
+        vllm_llm_kwargs (`dict[str, Any]` or `str`, *optional*):
+            Additional keyword arguments for the vLLM `LLM` constructor, used only when `vllm_mode` is `"colocate"`,
+            where TRL builds the engine. Useful for engine arguments TRL does not expose a field for, such as
+            `hf_overrides`. Keys that conflict with the arguments TRL sets override them, except the keys TRL reads
+            back after building the engine (`model`, `tensor_parallel_size`, `distributed_executor_backend`, `seed`,
+            `logprobs_mode`, `quantization`, `enable_sleep_mode`), which raise. If you are using `vllm_mode="server"`,
+            pass these arguments when launching the server instead.
         vllm_structured_outputs_regex (`str`, *optional*):
             Regex for vLLM structured outputs. If `None` (default), structured outputs is disabled.
 
@@ -415,6 +422,7 @@ class GRPOConfig(_BaseConfig):
         "transformers_continuous_batching_config",
         "generation_kwargs",
         "chat_template_kwargs",
+        "vllm_llm_kwargs",
     ]
 
     # Parameters whose default values are overridden from TrainingArguments
@@ -600,6 +608,17 @@ class GRPOConfig(_BaseConfig):
             "help": "Model implementation to use for vLLM. Must be one of `transformers` or `vllm`. `transformers`: "
             "Use the `transformers` backend for model implementation. `vllm`: Use the `vllm` library for "
             "model implementation."
+        },
+    )
+    vllm_llm_kwargs: dict[str, Any] | str | None = field(
+        default=None,
+        metadata={
+            "help": "Additional keyword arguments for the vLLM `LLM` constructor, used only when `vllm_mode` is "
+            "`colocate`, where TRL builds the engine. Useful for engine arguments TRL does not expose a field for, "
+            "such as `hf_overrides`. Keys that conflict with the arguments TRL sets override them, except the keys "
+            "TRL reads back after building the engine (`model`, `tensor_parallel_size`, "
+            "`distributed_executor_backend`, `seed`, `logprobs_mode`, `quantization`, `enable_sleep_mode`), which "
+            "raise. If you are using `vllm_mode='server'`, pass these arguments when launching the server instead."
         },
     )
     vllm_enable_sleep_mode: bool = field(

@@ -871,6 +871,7 @@ def test_gold_trainer_init_defaults_vllm_max_model_length_to_max_length(monkeypa
         vllm_max_model_length=None,
         vllm_enable_sleep_mode=False,
         vllm_model_impl="vllm",
+        vllm_llm_kwargs=None,
         vllm_sync_frequency=1,
     )
 
@@ -2461,6 +2462,7 @@ def test_gold_trainer_vlm_vllm_init_uses_identity_collator(monkeypatch):
         vllm_max_model_length=None,
         vllm_enable_sleep_mode=False,
         vllm_model_impl="vllm",
+        vllm_llm_kwargs=None,
         vllm_sync_frequency=1,
     )
 
@@ -2553,6 +2555,7 @@ def _make_vlm_trainer_args(use_vllm=False):
         vllm_max_model_length=None,
         vllm_enable_sleep_mode=False,
         vllm_model_impl="vllm",
+        vllm_llm_kwargs=None,
         vllm_sync_frequency=1,
         # ULD-specific defaults (needed when use_uld_loss=True)
         uld_crossentropy_weight=0.5,

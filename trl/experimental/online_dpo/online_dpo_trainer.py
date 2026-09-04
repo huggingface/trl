@@ -56,6 +56,7 @@ from ...data_utils import (
 )
 from ...extras.profiling import profiling_context
 from ...generation.vllm_client import VLLMClient
+from ...generation.vllm_generation import _check_llm_kwargs
 from ...import_utils import is_vllm_available
 from ...models.utils import prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
 from ...trainer.base_trainer import _BaseTrainer
@@ -430,6 +431,9 @@ class OnlineDPOTrainer(_BaseTrainer):
                     "`pip install trl[vllm]` to use it."
                 )
 
+            # Refused in either mode, since a reserved key is a misuse whichever mode ends up building the engine
+            vllm_llm_kwargs = _check_llm_kwargs(args.vllm_llm_kwargs)
+
             if self.vllm_mode == "server":
                 if self.accelerator.is_main_process:
                     if args.vllm_server_base_url is not None:
@@ -476,6 +480,8 @@ class OnlineDPOTrainer(_BaseTrainer):
                     "enable_sleep_mode": self.args.vllm_enable_sleep_mode,
                     "quantization": vllm_quantization,
                 }
+                # Any key set here overrides the corresponding default above; the reserved keys were refused above
+                vllm_kwargs.update(vllm_llm_kwargs)
 
                 # vLLM requires the environment variables to be set for distributed training.
                 os.environ["RANK"] = str(self.accelerator.process_index)

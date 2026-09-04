@@ -92,6 +92,13 @@ class OnlineDPOConfig(_BaseConfig):
             Model implementation to use for vLLM. Must be one of `"transformers"` or `"vllm"`. `"transformers"`: Use
             the `transformers` backend for model implementation. `"vllm"`: Use the `vllm` library for model
             implementation.
+        vllm_llm_kwargs (`dict[str, Any]` or `str`, *optional*):
+            Additional keyword arguments for the vLLM `LLM` constructor, used only when `vllm_mode` is `"colocate"`,
+            where TRL builds the engine. Useful for engine arguments TRL does not expose a field for, such as
+            `hf_overrides`. Keys that conflict with the arguments TRL sets override them, except the keys TRL reads
+            back after building the engine (`model`, `tensor_parallel_size`, `distributed_executor_backend`, `seed`,
+            `logprobs_mode`, `quantization`, `enable_sleep_mode`), which raise. If you are using `vllm_mode="server"`,
+            pass these arguments when launching the server instead.
         vllm_mode (`str`, *optional*, defaults to `"colocate"`):
             Mode to use for vLLM integration when `use_vllm` is set to `True`. Must be one of `"server"` or
             `"colocate"`.
@@ -160,7 +167,7 @@ class OnlineDPOConfig(_BaseConfig):
     > - `remove_unused_columns`: Defaults to `False` instead of `True`.
     """
 
-    _VALID_DICT_FIELDS = _BaseConfig._VALID_DICT_FIELDS + ["model_init_kwargs"]
+    _VALID_DICT_FIELDS = _BaseConfig._VALID_DICT_FIELDS + ["model_init_kwargs", "vllm_llm_kwargs"]
 
     # Parameters whose default values are overridden from TrainingArguments
     learning_rate: float = field(
@@ -275,6 +282,17 @@ class OnlineDPOConfig(_BaseConfig):
             "help": "Model implementation to use for vLLM. Must be one of `transformers` or `vllm`. `transformers`: "
             "Use the `transformers` backend for model implementation. `vllm`: Use the `vllm` library for "
             "model implementation."
+        },
+    )
+    vllm_llm_kwargs: dict[str, Any] | str | None = field(
+        default=None,
+        metadata={
+            "help": "Additional keyword arguments for the vLLM `LLM` constructor, used only when `vllm_mode` is "
+            "`colocate`, where TRL builds the engine. Useful for engine arguments TRL does not expose a field for, "
+            "such as `hf_overrides`. Keys that conflict with the arguments TRL sets override them, except the keys "
+            "TRL reads back after building the engine (`model`, `tensor_parallel_size`, "
+            "`distributed_executor_backend`, `seed`, `logprobs_mode`, `quantization`, `enable_sleep_mode`), which "
+            "raise. If you are using `vllm_mode='server'`, pass these arguments when launching the server instead."
         },
     )
     vllm_structured_outputs_regex: str | None = field(
