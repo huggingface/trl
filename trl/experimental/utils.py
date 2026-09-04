@@ -78,7 +78,17 @@ class DPODataCollatorWithPadding:
                 if self.is_encoder_decoder:
                     to_pad = [torch.LongTensor(ex[k]) for ex in features]
 
-                    if (k.startswith("prompt")) and (k.endswith("input_ids")):
+                    if k.endswith("_attention_mask"):
+                        padding_value = 0
+                    elif k.startswith(("chosen", "rejected", "completion")) or ("decoder" in k):
+                        # On this path the completion reaches the model as labels, so these are padded to be ignored
+                        # by the loss. The `*_decoder_input_ids` keys share the rule but are only produced when a
+                        # model is passed to the tokenizing step, which no trainer does, so they never reach a model.
+                        padding_value = -100
+                    elif k.endswith("_input_ids"):
+                        # Every remaining token sequence: the prompt, and the `answer_*` and `embedding_*` columns
+                        # that `_tokenize` adds. Matching on the suffix rather than listing prefixes keeps this in
+                        # step with the decoder-only branch below, which pads them all the same way.
                         if self.pad_token_id is None:
                             raise ValueError(
                                 "Padding is enabled, but the tokenizer is not configured with a padding token."
@@ -86,10 +96,6 @@ class DPODataCollatorWithPadding:
                                 " before calling the trainer."
                             )
                         padding_value = self.pad_token_id
-                    elif k.endswith("_attention_mask"):
-                        padding_value = 0
-                    elif k.startswith(("chosen", "rejected", "completion")) or ("decoder" in k):
-                        padding_value = -100
                     else:
                         raise ValueError(f"Unexpected key in batch '{k}'")
                     padded_batch[k] = pad_sequence(to_pad, batch_first=True, padding_value=padding_value)
