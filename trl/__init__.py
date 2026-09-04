@@ -50,6 +50,8 @@ _import_structure = {
     "scripts": ["DatasetMixtureConfig", "ScriptArguments", "TrlParser", "get_dataset", "init_zero_verbose"],
     "trainer": [
         "BEMACallback",
+        "DistillationConfig",
+        "DistillationTrainer",
         "DPOConfig",
         "DPOTrainer",
         "GRPOConfig",
@@ -67,7 +69,6 @@ _import_structure = {
         "SFTTrainer",
         "SyncRefModelCallback",
         "WeaveCallback",
-        "get_kbit_device_map",
         "get_peft_config",
         "get_quantization_config",
     ],
@@ -98,6 +99,8 @@ if TYPE_CHECKING:
     from .scripts import DatasetMixtureConfig, ScriptArguments, TrlParser, get_dataset, init_zero_verbose
     from .trainer import (
         BEMACallback,
+        DistillationConfig,
+        DistillationTrainer,
         DPOConfig,
         DPOTrainer,
         GRPOConfig,
@@ -115,7 +118,6 @@ if TYPE_CHECKING:
         SFTTrainer,
         SyncRefModelCallback,
         WeaveCallback,
-        get_kbit_device_map,
         get_peft_config,
         get_quantization_config,
     )

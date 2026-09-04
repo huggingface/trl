@@ -29,14 +29,13 @@ from trl.experimental.sdft.loss_utils import (
     compute_sampled_token_self_distillation_loss,
     compute_topk_self_distillation_loss,
 )
+from trl.experimental.sdft.teacher_sync import PEFTAdapterEMACallback
 
 from ..testing_utils import TrlTestCase
 
 
 if is_peft_available():
     from peft import LoraConfig, get_peft_model, get_peft_model_state_dict
-
-    from trl.experimental.sdft.teacher_sync import PEFTAdapterEMACallback
 
 
 class TestSelfDistillationTrainerBehavior(TrlTestCase):

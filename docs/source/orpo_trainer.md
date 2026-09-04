@@ -83,20 +83,6 @@ ORPO requires a [preference dataset](dataset_formats#preference). The [`experime
 
 Although the [`experimental.orpo.ORPOTrainer`] supports both explicit and implicit prompts, we recommend using explicit prompts. If provided with an implicit prompt dataset, the trainer will automatically extract the prompt from the `"chosen"` and `"rejected"` columns. For more information, refer to the [preference style](dataset_formats#preference) section.
 
-## Example script
-
-We provide an example script to train a model using the ORPO method. The script is available in [`examples/scripts/orpo.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/orpo.py)
-
-To test the ORPO script with the [Qwen2 0.5B model](https://huggingface.co/Qwen/Qwen2-0.5B-Instruct) on the [UltraFeedback dataset](https://huggingface.co/datasets/trl-lib/ultrafeedback_binarized), run the following command:
-
-```bash
-accelerate launch examples/scripts/orpo.py \
-    --model_name_or_path Qwen/Qwen2-0.5B-Instruct \
-    --dataset_name trl-lib/ultrafeedback_binarized \
-    --num_train_epochs 1 \
-    --output_dir Qwen2-0.5B-ORPO
-```
-
 ## Usage tips
 
 ### For Mixture of Experts Models: Enabling the auxiliary loss
@@ -109,7 +95,7 @@ To scale how much the auxiliary loss contributes to the total loss, use the hype
 
 ## Logged metrics
 
-While training and evaluating, we record the following reward metrics:
+While training and evaluating, we record the following metrics:
 
 - `rewards/chosen`: the mean log probabilities of the policy model for the chosen responses scaled by beta
 - `rewards/rejected`: the mean log probabilities of the policy model for the rejected responses scaled by beta

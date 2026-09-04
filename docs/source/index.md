@@ -12,9 +12,7 @@ The library is integrated with 🤗 [transformers](https://github.com/huggingfac
 
 ## 🎉 What's New
 
-**TRL v1:** We released TRL v1 — a major milestone that marks a real shift in what TRL is. Read the [blog post](https://huggingface.co/blog/trl-v1) to learn more.
-
-**🚢 Harbor:** We now support [Harbor](harbor) — train agents against sandboxed task suites (instruction + sandbox image + in-sandbox verifier) via [`GRPOTrainer`]'s `environment_factory`.
+**📜 Training beyond 1M tokens:** A new [long context guide](long_context_training) walks through the four things that break as sequences grow — the loss, the positions, the activations and the memory of a single GPU — and ends on an example that trains Qwen3-8B on million-token sequences on one 8-GPU node.
 
 ## Taxonomy
 
@@ -29,7 +27,6 @@ Below is the current list of TRL trainers, organized by method type (⚡️ = vL
 - [`RLOOTrainer`](rloo_trainer) ⚡️
 - [`OnlineDPOTrainer`](online_dpo_trainer) 🧪 ⚡️
 - [`NashMDTrainer`](nash_md_trainer) 🧪 ⚡️
-- [`PPOTrainer`](ppo_trainer) 🧪
 - [`XPOTrainer`](xpo_trainer) 🧪 ⚡️
 
 ### Reward modeling
@@ -44,13 +41,14 @@ Below is the current list of TRL trainers, organized by method type (⚡️ = vL
 
 - [`SFTTrainer`](sft_trainer)
 - [`DPOTrainer`](dpo_trainer)
+- [`KTOTrainer`](kto_trainer)
 - [`BCOTrainer`](bco_trainer) 🧪
 - [`CPOTrainer`](cpo_trainer) 🧪
-- [`KTOTrainer`](kto_trainer) 🧪
 - [`ORPOTrainer`](orpo_trainer) 🧪
 
 ### Knowledge distillation
 
+- [`DistillationTrainer`](distillation_trainer) ⚡️
 - [`GKDTrainer`](gkd_trainer) 🧪
 - [`MiniLLMTrainer`](minillm_trainer) 🧪
 

@@ -20,6 +20,7 @@ from typing import Any
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from accelerate.logging import get_logger
 from datasets import Dataset
 from transformers import (
     AutoModelForCausalLM,
@@ -43,11 +44,15 @@ from ..utils import DataCollatorForChatML, empty_cache
 from .gkd_config import GKDConfig
 
 
+if is_liger_kernel_available():
+    from liger_kernel.chunked_loss import LigerFusedLinearJSDLoss
+
+
 if is_peft_available():
     from peft import PeftConfig
 
-if is_liger_kernel_available():
-    from liger_kernel.chunked_loss import LigerFusedLinearJSDLoss
+
+logger = get_logger(__name__)
 
 
 class GKDTrainer(SFTTrainer):
@@ -145,7 +150,7 @@ class GKDTrainer(SFTTrainer):
         if args.use_liger_kernel:
             # Match the non-Liger path: pure JSD (no hard CE component) and no temperature
             # scaling, since `generalized_jsd_loss` is called without a `temperature` argument.
-            self.liger_jsd_loss = LigerFusedLinearJSDLoss(
+            self.liger_loss = LigerFusedLinearJSDLoss(
                 beta=args.beta,
                 ignore_index=-100,
                 compiled=False,
@@ -188,6 +193,16 @@ class GKDTrainer(SFTTrainer):
             teacher_model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
             teacher_model = AutoModelForCausalLM.from_pretrained(teacher_model, **teacher_model_init_kwargs)
 
+        student_vocab_size = self.model.config.get_text_config().vocab_size
+        teacher_vocab_size = teacher_model.config.get_text_config().vocab_size
+        if student_vocab_size != teacher_vocab_size:
+            raise ValueError(
+                f"The student model has vocab_size {student_vocab_size} but the teacher model has "
+                f"vocab_size {teacher_vocab_size}. GKD compares the teacher's full next-token "
+                f"distribution, which requires a shared vocabulary. Use a teacher with the same vocab_size, or "
+                f"GOLD for cross-tokenizer distillation."
+            )
+
         # Disable dropout in the model
         if args.disable_dropout:
             disable_dropout_in_model(self.model)
@@ -202,11 +217,26 @@ class GKDTrainer(SFTTrainer):
         self.temperature = args.temperature
         self.seq_kd = args.seq_kd
 
+        # With `lmbda=1.0` training is fully on-policy and `seq_kd` is never reached, and with `temperature=1.0` the
+        # sampling temperature matches the one `DistillationTrainer` also applies to the divergence. In that setting,
+        # `DistillationTrainer` covers this run and additionally supports vLLM generation and a chunked loss that
+        # never materializes the full logits.
+        if self.lmbda == 1.0 and self.temperature == 1.0:
+            logger.warning(
+                "This GKD configuration (`lmbda=1.0`, `temperature=1.0`) is fully covered by `DistillationTrainer`, "
+                "which is maintained in the main codebase and supports vLLM generation and a memory-efficient "
+                "chunked loss. Consider migrating: replace `GKDConfig`/`GKDTrainer` with "
+                "`DistillationConfig`/`DistillationTrainer`, `max_new_tokens` with `max_completion_length`, and set "
+                f"`beta={self.beta}` explicitly (`beta` means the same in both, but defaults to 0.5 here and 1.0 "
+                "there)."
+            )
+
         generation_kwargs = {
             "max_new_tokens": args.max_new_tokens,
             "temperature": args.temperature,
             "do_sample": True,
             "top_k": 0,
+            "top_p": 1.0,
             "use_cache": False if args.gradient_checkpointing else True,
             "pad_token_id": self.processing_class.pad_token_id,
         }
@@ -357,7 +387,7 @@ class GKDTrainer(SFTTrainer):
             teacher_head = unwrapped_teacher.get_output_embeddings()
 
             # liger fused jsd loss
-            loss = self.liger_jsd_loss(
+            loss = self.liger_loss(
                 student_input=student_hidden,
                 student_weight=student_head.weight,
                 teacher_input=teacher_hidden,
@@ -434,30 +464,44 @@ class GKDTrainer(SFTTrainer):
         )
 
     @staticmethod
-    def generate_on_policy_outputs(model, inputs, generation_config, pad_token_id=None):
+    def generate_on_policy_outputs(model, inputs, generation_config):
         # Generate output with respect to the prompt-only
         generated_outputs = model.generate(
             input_ids=inputs["prompts"],
-            attention_mask=inputs.get("prompt_attention_mask", None),
+            attention_mask=inputs["prompt_attention_mask"],
             generation_config=generation_config,
             return_dict_in_generate=True,
         )
 
         # Get the generated token IDs
         generated_tokens = generated_outputs.sequences
-        # Calculate new attention mask
-        new_attention_mask = torch.ones_like(generated_tokens)
-        new_labels = generated_tokens.clone()
+        device = generated_tokens.device
+        prompt_mask = inputs["prompt_attention_mask"]
+        prompt_length = inputs["prompts"].shape[1]
+        completion_ids = generated_tokens[:, prompt_length:]
 
-        # If there's pad_token_id, set attention mask to 0 for padding tokens
-        if pad_token_id is not None:
-            new_labels[new_labels == pad_token_id] = -100
-            new_attention_mask[generated_tokens == pad_token_id] = 0
+        # Mask everything after the first EOS token. eos_token_id can be a list of stop tokens (Llama 3),
+        # so match with torch.isin; with no eos id nothing stops early, so keep the whole completion.
+        if generation_config.eos_token_id is None:
+            completion_mask = torch.ones_like(completion_ids)
+        else:
+            is_eos = torch.isin(completion_ids, torch.tensor(generation_config.eos_token_id, device=device))
+            eos_idx = torch.full((is_eos.size(0),), is_eos.size(1), dtype=torch.long, device=device)
+            eos_idx[is_eos.any(dim=1)] = is_eos.int().argmax(dim=1)[is_eos.any(dim=1)]
+            sequence_indices = torch.arange(is_eos.size(1), device=device).expand(is_eos.size(0), -1)
+            completion_mask = (sequence_indices <= eos_idx.unsqueeze(1)).int()
+
+        # Pad ids can appear inside real prompt text, so use the prompt mask instead of matching ids
+        new_attention_mask = torch.ones_like(generated_tokens)
+        new_attention_mask[:, prompt_length:] = completion_mask
+        new_attention_mask[:, :prompt_length] = prompt_mask
+
+        new_labels = generated_tokens.clone()
+        new_labels[new_attention_mask == 0] = -100
 
         # Mask the prompt so only the generated completion contributes to the loss. `generate` echoes
         # the prompt back as the first `prompt_length` columns, so masking them with -100 matches the
         # collator convention (`labels[:len(prompt)] = -100`) that `compute_loss` relies on.
-        prompt_length = inputs["prompts"].shape[1]
         new_labels[:, :prompt_length] = -100
 
         return generated_tokens, new_attention_mask, new_labels
@@ -481,7 +525,7 @@ class GKDTrainer(SFTTrainer):
                 ) as unwrapped_model
             ):
                 new_input_ids, new_attention_mask, new_labels = self.generate_on_policy_outputs(
-                    unwrapped_model, inputs, self.generation_config, self.processing_class.pad_token_id
+                    unwrapped_model, inputs, self.generation_config
                 )
             inputs["input_ids"] = new_input_ids
             inputs["attention_mask"] = new_attention_mask
@@ -495,7 +539,7 @@ class GKDTrainer(SFTTrainer):
                 ) as unwrapped_model
             ):
                 new_input_ids, new_attention_mask, new_labels = self.generate_on_policy_outputs(
-                    unwrapped_model, inputs, self.generation_config, self.processing_class.pad_token_id
+                    unwrapped_model, inputs, self.generation_config
                 )
             inputs["input_ids"] = new_input_ids
             inputs["attention_mask"] = new_attention_mask

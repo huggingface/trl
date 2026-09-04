@@ -13,6 +13,8 @@
 # limitations under the License.
 
 import asyncio
+import copy
+import functools
 import hashlib
 import importlib.resources as pkg_resources
 import os
@@ -20,8 +22,8 @@ import random
 import socket
 import threading
 import types
-from collections.abc import Mapping, Sequence, Sized
-from contextlib import contextmanager
+from collections.abc import Callable, Mapping, Sequence, Sized
+from contextlib import contextmanager, nullcontext
 from importlib.metadata import version
 from itertools import accumulate
 from typing import TypeVar
@@ -33,6 +35,7 @@ import torch.nn.functional as F
 import transformers
 from accelerate import PartialState
 from accelerate.logging import get_logger
+from datasets import IterableDataset
 from huggingface_hub import ModelCard, ModelCardData
 from packaging.version import Version
 from torch.utils.data import Sampler
@@ -47,13 +50,17 @@ from transformers import (
     is_trackio_available,
 )
 from transformers.models.auto.auto_factory import _BaseAutoModelClass
-from transformers.utils import (
-    is_peft_available,
-    is_rich_available,
-    is_torch_xpu_available,
-)
+from transformers.utils import is_peft_available, is_rich_available
 
 from ..trainer.model_config import ModelConfig
+
+
+if is_comet_available():
+    import comet_ml
+
+
+if is_peft_available():
+    from peft import LoraConfig, PeftConfig, PeftModel
 
 
 if is_rich_available():
@@ -61,12 +68,6 @@ if is_rich_available():
     from rich.panel import Panel
     from rich.table import Table
     from rich.text import Text
-
-if is_comet_available():
-    import comet_ml
-
-if is_peft_available():
-    from peft import LoraConfig, PeftConfig, PeftModel
 
 
 logger = get_logger(__name__)
@@ -185,6 +186,53 @@ def disable_dropout_in_model(model: torch.nn.Module) -> None:
             module.p = 0
 
 
+def maybe_gather_lm_head_ctx(*params: torch.nn.Parameter):
+    """
+    Context manager that allgathers ZeRO-3 partitioned `lm_head` weight/bias for a fused loss.
+
+    Fused losses (e.g. Liger) read `lm_head.weight` directly and hand it to the kernel without ever calling the
+    `lm_head` module. Under DeepSpeed ZeRO-3 every parameter is sharded to `numel 0` and only re-materialized inside
+    its owning module's forward hook, so the head's gather hook never fires and the kernel receives an empty weight.
+    This gathers the given parameters for the duration of the forward, so the fused matmul sees the full weight. The
+    weight gradient is computed and stashed during this forward, so the parameters need not stay gathered for the
+    backward — but the backward's gradient reduction relies on the ZeRO-3 pre-forward hooks being armed, so the caller
+    must run the fused loss inside the model's forward (e.g. via `_ForwardRedirection`).
+
+    Returns a null context when ZeRO-3 is not enabled, or when the parameters are already gathered — with tied
+    embeddings `embed_tokens` keeps the weight `AVAILABLE`, and re-partitioning it on exit would collide with
+    `embed_tokens`' active-submodule tracking.
+
+    Args:
+        *params (`torch.nn.Parameter`):
+            Parameters to gather (e.g. `lm_head.weight` and `lm_head.bias`). `None` values are ignored.
+    """
+    from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
+
+    if not is_deepspeed_zero3_enabled():
+        return nullcontext()
+
+    import deepspeed
+    from deepspeed.runtime.zero.partition_parameters import ZeroParamStatus
+
+    # Deduplicate by identity: with a shared reference (e.g. PEFT with no separate `ref_model`, or tied embeddings)
+    # the same parameter is passed more than once, and ZeRO-3 mishandles duplicate entries in the gather list.
+    to_gather = {id(p): p for p in params if p is not None and p.ds_status != ZeroParamStatus.AVAILABLE}
+    if not to_gather:
+        return nullcontext()
+    return deepspeed.zero.GatheredParameters(list(to_gather.values()))
+
+
+def get_callable_name(func: Callable) -> str:
+    """
+    Return a display name for a callable, supporting the picklable reward forms: module-level functions,
+    [`functools.partial`](https://docs.python.org/3/library/functools.html#functools.partial) (unwrapped to the wrapped
+    function's name), and callable class instances (which fall back to their class name).
+    """
+    while isinstance(func, functools.partial):
+        func = func.func
+    return getattr(func, "__name__", type(func).__name__)
+
+
 def get_quantization_config(model_args: ModelConfig) -> BitsAndBytesConfig | None:
     if model_args.load_in_4bit:
         quantization_config = BitsAndBytesConfig(
@@ -202,13 +250,6 @@ def get_quantization_config(model_args: ModelConfig) -> BitsAndBytesConfig | Non
         quantization_config = None
 
     return quantization_config
-
-
-def get_kbit_device_map() -> dict[str, int] | None:
-    if torch.cuda.is_available() or is_torch_xpu_available():
-        return {"": PartialState().local_process_index}
-    else:
-        return None
 
 
 def get_peft_config(model_args: ModelConfig) -> "PeftConfig | None":
@@ -524,7 +565,7 @@ def print_prompt_completions_sample(
     prompts: list,
     completions: list,
     rewards: dict[str, list[float]],
-    advantages: list[float],
+    advantages: list[float] | None,
     step: int,
     num_samples: int = None,
     extra: dict[str, list] | None = None,
@@ -542,8 +583,9 @@ def print_prompt_completions_sample(
             List of completions corresponding to the prompts. Can be either strings or lists of messages.
         rewards (`dict[str, list[float]]`):
             Dictionary where keys are reward names and values are lists of rewards.
-        advantages (`list[float]`):
-            List of advantages corresponding to the prompts and completions.
+        advantages (`list[float]` or `None`):
+            List of advantages corresponding to the prompts and completions. If `None`, the advantage column is omitted
+            (e.g. for distillation, which has no advantages).
         step (`int`):
             Current training step number, used in the output title.
         num_samples (`int`, *optional*):
@@ -589,7 +631,8 @@ def print_prompt_completions_sample(
     table.add_column("Completion", style="bright_green")
     for reward_name in rewards.keys():
         table.add_column(reward_name, style="bold cyan", justify="right")
-    table.add_column("Advantage", style="bold magenta", justify="right")
+    if advantages is not None:
+        table.add_column("Advantage", style="bold magenta", justify="right")
     for extra_name in extra.keys():
         table.add_column(extra_name, style="bright_white")
 
@@ -633,19 +676,18 @@ def print_prompt_completions_sample(
         prompts = [prompts[i] for i in indices]
         completions = [completions[i] for i in indices]
         rewards = {key: [val[i] for i in indices] for key, val in rewards.items()}
-        advantages = [advantages[i] for i in indices]
+        if advantages is not None:
+            advantages = [advantages[i] for i in indices]
         extra = {key: [val[i] for i in indices] for key, val in extra.items()}
 
     for i in range(len(prompts)):
         reward_values = [f"{rewards[key][i]:.2f}" for key in rewards.keys()]  # 2 decimals
         extra_values = [format_entry(extra[key][i]) for key in extra.keys()]
-        table.add_row(
-            format_entry(prompts[i]),
-            format_entry(completions[i]),
-            *reward_values,
-            f"{advantages[i]:.2f}",
-            *extra_values,
-        )
+        row = [format_entry(prompts[i]), format_entry(completions[i]), *reward_values]
+        if advantages is not None:
+            row.append(f"{advantages[i]:.2f}")
+        row.extend(extra_values)
+        table.add_row(*row)
         table.add_section()  # Adds a separator between rows
 
     panel = Panel(table, expand=False, title=f"Step {step}", border_style="bold white")
@@ -746,6 +788,71 @@ class RepeatSampler(Sampler):
 
     def __len__(self) -> int:
         return (self.num_samples // self.batch_size) * self.batch_size * self.mini_repeat_count * self.repeat_count
+
+
+def repeat_iterable_dataset(
+    dataset: IterableDataset, mini_repeat_count: int, batch_size: int = 1, repeat_count: int = 1
+):
+    """
+    Streaming counterpart of [`RepeatSampler`] for [`~datasets.IterableDataset`].
+
+    An [`~datasets.IterableDataset`] cannot be indexed, so a sampler cannot be attached to it. Instead of reordering
+    indices, this reorders the *stream* itself with [`~datasets.IterableDataset.map`], producing records in exactly the
+    same order that [`RepeatSampler`] yields indices for a map-style dataset with the same arguments. Because the
+    transform stays chained to `dataset`, `set_epoch` propagates to an upstream [`~datasets.IterableDataset.shuffle`]
+    and the order is reshuffled every epoch, as [`RepeatSampler`] does.
+
+    Shuffling is intentionally left out: it is handled upstream via [`~datasets.IterableDataset.shuffle`] (buffered
+    shuffling), the streaming equivalent of the full permutation done by [`RepeatSampler`].
+
+    Args:
+        dataset (`datasets.IterableDataset`):
+            Dataset to stream from.
+        mini_repeat_count (`int`):
+            Number of times to repeat each record per batch.
+        batch_size (`int`, *optional*, defaults to `1`):
+            Number of unique records per batch.
+        repeat_count (`int`, *optional*, defaults to `1`):
+            Number of times to repeat the full batch.
+
+    Returns:
+        `datasets.IterableDataset`: Dataset yielding the records of `dataset`, repeated and reordered.
+
+    Example:
+    ```python
+    >>> from datasets import IterableDataset
+
+    >>> dataset = IterableDataset.from_generator(lambda: ({"x": i} for i in range(7)))
+    >>> repeated = repeat_iterable_dataset(dataset, mini_repeat_count=2, batch_size=3, repeat_count=4)
+    >>> [record["x"] for record in repeated]
+    [0, 0, 1, 1, 2, 2,
+     0, 0, 1, 1, 2, 2,
+     0, 0, 1, 1, 2, 2,
+     0, 0, 1, 1, 2, 2,
+     3, 3, 4, 4, 5, 5,
+     3, 3, 4, 4, 5, 5,
+     3, 3, 4, 4, 5, 5,
+     3, 3, 4, 4, 5, 5]
+    ```
+    """
+
+    def repeat_batch(batch: dict) -> dict:
+        # `batch` maps each column to a list of `batch_size` values (fewer for the trailing batch, which is dropped to
+        # match RepeatSampler). Transpose it back to records, repeating them as RepeatSampler repeats indices. Records
+        # are deep-copied so repeats stay independent, matching the map-style path where the dataset re-materializes a
+        # fresh object per access.
+        keys = list(batch)
+        if len(batch[keys[0]]) < batch_size:
+            return {key: [] for key in keys}
+        repeated = {key: [] for key in keys}
+        for _ in range(repeat_count):
+            for values in zip(*(batch[key] for key in keys), strict=True):
+                for _ in range(mini_repeat_count):
+                    for key, value in zip(keys, values, strict=True):
+                        repeated[key].append(copy.deepcopy(value))
+        return repeated
+
+    return dataset.map(repeat_batch, batched=True, batch_size=batch_size)
 
 
 # torch.nanstd doesn't exist, so we define it here
@@ -893,7 +1000,10 @@ def split_pixel_values_by_grid(batch: dict[str, torch.Tensor]) -> dict[str, torc
 
     For models with `image_grid_thw` (e.g. Qwen), the grid dimensions determine how many rows of `pixel_values` belong
     to each image. For models with `image_position_ids` instead (e.g. Gemma), `pixel_values` is indexed directly by
-    image count. For models with `spatial_shapes` (e.g. LFM2-VL), tile-indexed tensors are split using `num_tiles`.
+    image count. For models with `spatial_shapes` (e.g. LFM2-VL) or with `num_tiles` alone (e.g. InternVL),
+    tile-indexed tensors are split using `num_tiles`. Models with none of these store `pixel_values` either flat, one
+    row per image (e.g. LLaVA), in which case it is split by image count, or already padded to one row per sample (e.g.
+    Idefics), in which case it is left as is.
     """
     if "pixel_values" not in batch or "num_images" not in batch:
         return batch
@@ -935,6 +1045,18 @@ def split_pixel_values_by_grid(batch: dict[str, torch.Tensor]) -> dict[str, torc
             "spatial_shapes": split_spatial_shapes,
         }
 
+    if "num_tiles" in batch:
+        num_tiles = batch["num_tiles"]
+        return {**batch, "pixel_values": list(torch.split(pixel_values, num_tiles, dim=0))}
+
+    # Models without extra metadata store pixel_values either flat, one row per image (e.g. LLaVA), or already
+    # padded to one row per sample (e.g. Idefics, SmolVLM). Only the flat layout needs splitting.
+    if pixel_values.size(0) != sum(num_images):
+        return batch
+
+    batch = {**batch, "pixel_values": list(torch.split(pixel_values, num_images, dim=0))}
+    if "image_sizes" in batch:
+        batch = {**batch, "image_sizes": list(torch.split(batch["image_sizes"], num_images, dim=0))}
     return batch
 
 
@@ -967,6 +1089,11 @@ def unsplit_pixel_values_by_grid(batch: dict[str, torch.Tensor | list[torch.Tens
     if isinstance(spatial_shapes, list):
         merged = torch.cat(spatial_shapes, dim=0)
         batch = {**batch, "spatial_shapes": merged}
+
+    image_sizes = batch.get("image_sizes")
+    if isinstance(image_sizes, list):
+        merged = torch.cat(image_sizes, dim=0)
+        batch = {**batch, "image_sizes": merged}
 
     return batch
 
@@ -1046,7 +1173,10 @@ def create_model_from_path(
             "Invalid `dtype` passed to the config. Expected either 'auto' or a string representing "
             f"a valid `torch.dtype` (e.g., 'float32'), but got {dtype}."
         )
-    kwargs["device_map"] = kwargs.get("device_map", "auto")
+    # Respect CPU-only execution: device_map="auto" dispatches the model to the GPU even when the user requested
+    # use_cpu=True, which later splits models across devices (e.g. a teacher placed on CPU vs. a student on GPU).
+    if "device_map" not in kwargs:
+        kwargs["device_map"] = None if PartialState().device.type == "cpu" else "auto"
     if architecture is None:
         # Best effort to infer architecture from config, but we fall back to AutoModelForCausalLM if we can't find it
         config = AutoConfig.from_pretrained(model_id, trust_remote_code=kwargs.get("trust_remote_code", False))
@@ -1200,6 +1330,10 @@ class _ChunkedLogProbFunction(torch.autograd.Function):
         final_logit_softcapping: float | None = None,
         logit_scale: float = 1.0,
     ) -> tuple[torch.Tensor, torch.Tensor]:
+        # entropy is often computed for logging only (no grad required); without this, autograd would
+        # materialize its incoming gradient as zeros and backward would waste compute on a no-op term
+        ctx.set_materialize_grads(False)
+
         device = last_hidden.device
         N, _ = last_hidden.shape
         vocab, _ = weight.shape
@@ -1251,7 +1385,7 @@ class _ChunkedLogProbFunction(torch.autograd.Function):
         logprobs = target_logit - log_z
         entropy = log_z - x_sum_exp / sum_exp
 
-        ctx.save_for_backward(last_hidden, weight, targets, log_z)
+        ctx.save_for_backward(last_hidden, weight, targets, log_z, entropy)
         ctx.temperature = temperature
         ctx.chunk_size = chunk_size
         ctx.logit_scale = logit_scale
@@ -1260,8 +1394,8 @@ class _ChunkedLogProbFunction(torch.autograd.Function):
         return logprobs, entropy
 
     @staticmethod
-    def backward(ctx, grad_logprobs: torch.Tensor, grad_entropy: torch.Tensor):  # type: ignore
-        hidden, weight, labels, log_z = ctx.saved_tensors
+    def backward(ctx, grad_logprobs: torch.Tensor | None, grad_entropy: torch.Tensor | None):  # type: ignore
+        hidden, weight, labels, log_z, entropy = ctx.saved_tensors
         temperature: float = ctx.temperature
         chunk_size: int = ctx.chunk_size
         logit_scale: float = ctx.logit_scale
@@ -1279,7 +1413,8 @@ class _ChunkedLogProbFunction(torch.autograd.Function):
         mm_buf = torch.empty((N, chunk_size), device=hidden.device, dtype=hidden.dtype)
         logits_buf = torch.empty((N, chunk_size), device=hidden.device, dtype=torch.float32)
 
-        g = grad_logprobs.to(torch.float32)  # [N]
+        g = grad_logprobs.to(torch.float32) if grad_logprobs is not None else None  # [N]
+        g_entropy = grad_entropy.to(torch.float32) if grad_entropy is not None else None  # [N]
         row_idx = torch.arange(N, device=hidden.device)
 
         for start in range(0, vocab, chunk_size):
@@ -1299,13 +1434,21 @@ class _ChunkedLogProbFunction(torch.autograd.Function):
             logits_chunk.mul_(inv_t)  # [N, C]
             probs = torch.exp(logits_chunk - log_z.unsqueeze(-1))  # [N, C]
 
-            # dL/d(logits) = g * (1_[label] - p)
-            grad_logits = (-g).unsqueeze(-1) * probs  # [N, C]
+            if g is not None:
+                # dL/d(logits) = g * (1_[label] - p)
+                grad_logits = (-g).unsqueeze(-1) * probs  # [N, C]
 
-            in_chunk_cond = (labels >= start) & (labels < end)
-            local_idx = torch.clamp(labels - start, 0, end - start - 1)
-            # If label in chunk add g to grad else it stays the same
-            grad_logits[row_idx, local_idx] += g * in_chunk_cond
+                in_chunk_cond = (labels >= start) & (labels < end)
+                local_idx = torch.clamp(labels - start, 0, end - start - 1)
+                # If label in chunk add g to grad else it stays the same
+                grad_logits[row_idx, local_idx] += g * in_chunk_cond
+            else:
+                grad_logits = torch.zeros_like(probs)
+
+            if g_entropy is not None:
+                # d(entropy)/d(logits_j) = -p_j * (log_p_j + entropy), entropy = -sum_k p_k * log_p_k
+                log_p_chunk = logits_chunk - log_z.unsqueeze(-1)  # [N, C]
+                grad_logits += (-g_entropy).unsqueeze(-1) * probs * (log_p_chunk + entropy.unsqueeze(-1))
 
             grad_logits = grad_logits * inv_t
             if final_logit_softcapping is not None:
@@ -1322,7 +1465,8 @@ class _ChunkedLogProbFunction(torch.autograd.Function):
 def patch_chunked_lm_head(
     model: torch.nn.Module, chunk_size: int, temperature: float, output_router_logits: bool = False
 ) -> None:
-    final_logit_softcapping = getattr(model.config, "final_logit_softcapping", None)
+    text_config = model.config.get_text_config()
+    final_logit_softcapping = getattr(text_config, "final_logit_softcapping", None)
 
     def _chunked_forward(
         self: torch.nn.Module,
@@ -1340,7 +1484,7 @@ def patch_chunked_lm_head(
             input_ids=input_ids, attention_mask=attention_mask, use_cache=use_cache, **decoder_kwargs, **kwargs
         )
         # NOTE(@aminediro): supporting Cohere2 models
-        logit_scale = getattr(self.config, "logit_scale", 1.0)
+        logit_scale = getattr(text_config, "logit_scale", 1.0)
         hidden_states = outputs.last_hidden_state  # [B, S+1, H]
 
         # Shift: predict next token
@@ -1391,13 +1535,13 @@ def patch_chunked_lm_head(
                 num_experts_per_tok = self.num_experts_per_tok
             else:
                 # Upstream bug AttributeError: 'GptOssConfig' object has no attribute 'num_experts'; see #5754
-                if self.config.model_type == "gpt_oss" and Version("5.0.0") <= Version(
+                if text_config.model_type == "gpt_oss" and Version("5.0.0") <= Version(
                     transformers.__version__
                 ) < Version("5.6.0"):
                     num_experts = self.num_experts
                 else:
-                    num_experts = self.config.num_experts
-                num_experts_per_tok = self.config.num_experts_per_tok
+                    num_experts = text_config.num_experts
+                num_experts_per_tok = text_config.num_experts_per_tok
             # Padding-free packs all real tokens into a single row, so `attention_mask` is None and every token counts.
             aux_loss = load_balancing_loss_func(
                 outputs.router_logits, num_experts, num_experts_per_tok, attention_mask
@@ -1435,7 +1579,9 @@ def compute_flops_per_token(config: PretrainedConfig, seq_len: int) -> int:
     V = config.vocab_size
     n_heads = config.num_attention_heads
     n_kv_heads = config.num_key_value_heads
-    head_dim = config.head_dim
+    # `head_dim` is optional on configs: Llama and Mistral declare it, Qwen2 doesn't. Derive it when missing, like
+    # transformers' own modeling code does.
+    head_dim = getattr(config, "head_dim", None) or h // n_heads
 
     # Attention: Q/K/V/O projections + attention score (Q·Kᵀ and attn·V).
     qkv_flops = 2 * h * (n_heads * head_dim + 2 * n_kv_heads * head_dim)
@@ -1521,5 +1667,6 @@ def adjusted_mfu(mfu: float, config: PretrainedConfig, seq_len: int) -> float:
     """
     flops_full = compute_flops_per_token(config, seq_len)
     # Half of the attention-score FLOPs (Q·Kᵀ and attn·V), per layer, ×3 for fwd+bwd.
-    half_attn_score = config.num_hidden_layers * 3 * 2 * config.num_attention_heads * config.head_dim * seq_len
+    head_dim = getattr(config, "head_dim", None) or config.hidden_size // config.num_attention_heads
+    half_attn_score = config.num_hidden_layers * 3 * 2 * config.num_attention_heads * head_dim * seq_len
     return mfu * (flops_full - half_attn_score) / flops_full

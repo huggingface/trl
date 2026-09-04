@@ -19,7 +19,7 @@ jobs:
   tests_transformers_branch:
     name: Tests with Transformers ${{ inputs.transformers_ref }}
     runs-on:
-      group: aws-g4dn-2xlarge
+      group: aws-g6e-4xlarge
     container:
       image: pytorch/pytorch:2.8.0-cuda12.8-cudnn9-devel
       options: --gpus all
@@ -28,10 +28,10 @@ jobs:
         shell: bash
     steps:
       - name: Git checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Set up Python 3.12
-        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
           python-version: '3.12'
 
@@ -40,7 +40,7 @@ jobs:
           apt-get update && apt-get install -y make git curl
 
       - name: Install uv
-        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # v8.2.0
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
 
       - name: Create Python virtual environment
         run: |
@@ -63,11 +63,10 @@ jobs:
 
       - name: Post to Slack
         if: github.ref == 'refs/heads/main' && always()
-        uses: huggingface/hf-workflows/.github/actions/post-slack@main
+        uses: ./.github/actions/post-slack
         with:
           slack_channel: ${{ env.CI_SLACK_CHANNEL }}
-          title: Results with Transformers ${{ inputs.transformers_ref }}
-          status: ${{ job.status }}
+          title: Tests with Transformers ${{ inputs.transformers_ref }}
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
 
   distributed_smoke:
@@ -84,10 +83,10 @@ jobs:
       CUDA_VISIBLE_DEVICES: "0,1"
     steps:
       - name: Git checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Set up Python 3.12
-        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
           python-version: '3.12'
 
@@ -96,7 +95,7 @@ jobs:
           apt-get update && apt-get install -y make git curl
 
       - name: Install uv
-        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # v8.2.0
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
 
       - name: Create Python virtual environment
         run: |
@@ -119,9 +118,8 @@ jobs:
 
       - name: Post to Slack
         if: github.ref == 'refs/heads/main' && always()
-        uses: huggingface/hf-workflows/.github/actions/post-slack@main
+        uses: ./.github/actions/post-slack
         with:
           slack_channel: ${{ env.CI_SLACK_CHANNEL }}
-          title: Results of distributed smoke tests with Transformers ${{ inputs.transformers_ref }}
-          status: ${{ job.status }}
+          title: Distributed smoke tests with Transformers ${{ inputs.transformers_ref }}
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}

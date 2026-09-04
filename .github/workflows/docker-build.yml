@@ -1,14 +1,20 @@
 name: Build TRL Docker image
 
 on:
-  push:
-    branches:
-      - main
+  release:
+    types: [published]
   workflow_dispatch:
+    inputs:
+      version:
+        description: "TRL version to build, for example 1.10.0"
+        required: true
 
 concurrency:
   group: docker-image-builds
   cancel-in-progress: false
+
+env:
+  CI_SLACK_CHANNEL: ${{ secrets.CI_PUSH_MAIN_CHANNEL }}
 
 jobs:
   trl:
@@ -17,36 +23,28 @@ jobs:
       group: aws-general-8-plus
     steps:
       - name: Checkout code
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
-      - name: Get TRL version from PyPI
-        run: |
-          VERSION=$(curl -s https://pypi.org/pypi/trl/json | jq -r .info.version)
-          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([a-zA-Z0-9._-]*)?$ ]]; then
-            echo "Invalid version format: $VERSION"
-            exit 1
-          fi
-          if [[ ${#VERSION} -gt 50 ]]; then
-            echo "Version string too long: $VERSION"
-            exit 1
-          fi
-          echo "VERSION=$VERSION" >> $GITHUB_ENV
+      - name: Get TRL version
+        env:
+          TAG: ${{ inputs.version || github.event.release.tag_name }}
+        run: echo "VERSION=${TAG#v}" >> $GITHUB_ENV
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5  # v4.1.0
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e  # v4.3.0
 
       - name: Login to DockerHub
-        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee  # v4.2.0
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f  # v4.6.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_PASSWORD }}
 
       - name: Build and Push
-        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf  # v7.2.0
-        env:
-          VERSION: ${{ env.VERSION }}
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a  # v7.3.0
         with:
           context: docker/trl
+          build-args: |
+            VERSION=${{ env.VERSION }}
           push: true
           tags: |
             huggingface/trl:${{ env.VERSION }}
@@ -54,43 +52,8 @@ jobs:
 
       - name: Post to Slack
         if: always()
-        uses: huggingface/hf-workflows/.github/actions/post-slack@a88e7fa2eaee28de5a4d6142381b1fb792349b67  # main
+        uses: ./.github/actions/post-slack
         with:
-          slack_channel: ${{ secrets.CI_DOCKER_CHANNEL }}
-          title: 🤗 Results of the TRL Dev Docker Image build
-          status: ${{ job.status }}
-          slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
-
-  trl-dev:
-    name: "Build and push TRL Dev Docker image"
-    runs-on:
-      group: aws-general-8-plus
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5  # v4.1.0
-
-      - name: Login to DockerHub
-        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee  # v4.2.0
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_PASSWORD }}
-
-      - name: Build and Push
-        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf  # v7.2.0
-        with:
-          context: docker/trl-dev
-          push: true
-          tags: |
-            huggingface/trl:dev
-
-      - name: Post to Slack
-        if: always()
-        uses: huggingface/hf-workflows/.github/actions/post-slack@a88e7fa2eaee28de5a4d6142381b1fb792349b67  # main
-        with:
-          slack_channel: ${{ secrets.CI_DOCKER_CHANNEL }}
-          title: 🤗 Results of the TRL Dev Docker Image build
-          status: ${{ job.status }}
+          slack_channel: ${{ env.CI_SLACK_CHANNEL }}
+          title: Build and push TRL Docker image
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}

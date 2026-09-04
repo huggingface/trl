@@ -27,9 +27,12 @@ from transformers.utils import (
     is_peft_available,
     is_rich_available,
     is_torch_available,
+    is_torch_bf16_gpu_available,
+    is_torch_xla_available,
     is_vision_available,
 )
 
+from trl.chat_template_utils import _SUPPORTS_RESPONSE_TEMPLATE
 from trl.import_utils import (
     is_harbor_available,
     is_jmespath_available,
@@ -45,13 +48,18 @@ from trl.import_utils import (
 require_bitsandbytes = pytest.mark.skipif(not is_bitsandbytes_available(), reason="test requires bitsandbytes")
 require_comet = pytest.mark.skipif(not is_comet_available(), reason="test requires comet_ml")
 require_harbor = pytest.mark.skipif(not is_harbor_available(), reason="test requires harbor")
-require_jmespath = pytest.mark.skipif(not is_jmespath_available(), reason="test requires jmespath")
 require_kernels = pytest.mark.skipif(not is_kernels_available(), reason="test requires kernels")
 require_liger_kernel = pytest.mark.skipif(not is_liger_kernel_available(), reason="test requires liger-kernel")
 require_math_latex = pytest.mark.skipif(not is_math_verify_available(), reason="test requires math_verify")
 require_mergekit = pytest.mark.skipif(not is_mergekit_available(), reason="test requires mergekit")
 require_openreward = pytest.mark.skipif(not is_openreward_available(), reason="test requires openreward")
 require_peft = pytest.mark.skipif(not is_peft_available(), reason="test requires peft")
+# Response parsing needs jmespath only on transformers < 5.13, which ships the legacy `response_schema` parser; the
+# new-style `response_template` parser doesn't use it. See `_SUPPORTS_RESPONSE_TEMPLATE`.
+require_response_parsing = pytest.mark.skipif(
+    not _SUPPORTS_RESPONSE_TEMPLATE and not is_jmespath_available(),
+    reason="test requires jmespath for response parsing on transformers below 5.13.0",
+)
 require_rich = pytest.mark.skipif(not is_rich_available(), reason="test requires rich")
 require_sklearn = pytest.mark.skipif(
     not (is_sklearn_available() and is_joblib_available()), reason="test requires sklearn"
@@ -70,20 +78,12 @@ require_3_accelerators = pytest.mark.skipif(
     not (getattr(torch, torch_device, torch.cuda).device_count() >= 3),
     reason=f"test requires at least 3 {torch_device}s",
 )
-
-
-def is_bitsandbytes_multi_backend_available() -> bool:
-    if is_bitsandbytes_available():
-        import bitsandbytes as bnb
-
-        return "multi_backend" in getattr(bnb, "features", set())
-    return False
-
-
-# Function ported from transformers.testing_utils before transformers#41283
-require_torch_gpu_if_bnb_not_multi_backend_enabled = pytest.mark.skipif(
-    not is_bitsandbytes_multi_backend_available() and not torch_device == "cuda",
-    reason="test requires bitsandbytes multi-backend enabled or 'cuda' torch device",
+# `Trainer` wraps the model in `nn.DataParallel` whenever more than one accelerator is visible and no distributed
+# launcher is used. TRL trainers don't support it: they rewire `forward` on a single module instance, which
+# `DataParallel` breaks by replicating the module and scattering the inputs across devices.
+xfail_data_parallel = pytest.mark.xfail(
+    is_torch_available() and backend_device_count(torch_device) > 1,
+    reason="TRL trainers do not support nn.DataParallel (https://github.com/huggingface/trl/issues/6836)",
 )
 
 
@@ -99,6 +99,20 @@ def is_ampere_or_newer(device_index=0):
     major, minor = torch.cuda.get_device_capability(device_index)
     # Ampere starts at compute capability 8.0 (e.g., A100 = 8.0, RTX 30xx = 8.6)
     return (major, minor) >= (8, 0)
+
+
+def is_bf16_supported() -> bool:
+    """Whether the current device has hardware bf16 support for `bf16=True` training.
+
+    `is_torch_bf16_gpu_available` already covers CUDA (Ampere or newer), XPU, HPU, NPU, etc., and XLA devices are added
+    via `is_torch_xla_available`. On a CPU or a pre-Ampere GPU (e.g. T4), `bf16=True` raises "Your setup doesn't
+    support bf16/gpu", so tests should pass `bf16=is_bf16_supported()` instead of a hard-coded `True`.
+
+    `transformers`' `TrainingArguments` validation also accepts `bf16=True` when `use_cpu=True` (CPU training is an
+    explicit opt-in). This helper deliberately does not treat that as supported, since it reports hardware bf16
+    capability; tests setting `use_cpu=True` should not rely on it.
+    """
+    return is_torch_bf16_gpu_available() or is_torch_xla_available()
 
 
 class TrlTestCase:

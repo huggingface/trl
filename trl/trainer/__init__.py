@@ -25,6 +25,8 @@ _import_structure = {
         "SyncRefModelCallback",
         "WeaveCallback",
     ],
+    "distillation_config": ["DistillationConfig"],
+    "distillation_trainer": ["DistillationTrainer"],
     "dpo_config": ["DPOConfig"],
     "dpo_trainer": ["DPOTrainer"],
     "grpo_config": ["GRPOConfig"],
@@ -41,7 +43,6 @@ _import_structure = {
     "utils": [
         "disable_dropout_in_model",
         "ensure_master_addr_port",
-        "get_kbit_device_map",
         "get_peft_config",
         "get_quantization_config",
         "patch_chunked_lm_head",
@@ -56,6 +57,8 @@ if TYPE_CHECKING:
         SyncRefModelCallback,
         WeaveCallback,
     )
+    from .distillation_config import DistillationConfig
+    from .distillation_trainer import DistillationTrainer
     from .dpo_config import DPOConfig
     from .dpo_trainer import DPOTrainer
     from .grpo_config import GRPOConfig
@@ -72,7 +75,6 @@ if TYPE_CHECKING:
     from .utils import (
         disable_dropout_in_model,
         ensure_master_addr_port,
-        get_kbit_device_map,
         get_peft_config,
         get_quantization_config,
         patch_chunked_lm_head,

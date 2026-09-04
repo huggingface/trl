@@ -21,7 +21,6 @@ from .base_config import _BaseConfig
 
 @dataclass
 class DPOConfig(_BaseConfig):
-    # docstyle-ignore
     r"""
     Configuration class for the [`DPOTrainer`].
 
@@ -41,8 +40,11 @@ class DPOConfig(_BaseConfig):
             argument of the [`DPOTrainer`] is provided as a string.
         trust_remote_code (`bool`, *optional*, defaults to `False`):
             Whether to allow loading models and tokenizers that ship custom Python code from the Hub. Forwarded to
-            [`~transformers.AutoModelForCausalLM.from_pretrained`] and
-            [`~transformers.AutoProcessor.from_pretrained`].
+            [`~transformers.AutoModelForCausalLM.from_pretrained`] and [`~transformers.AutoProcessor.from_pretrained`].
+        router_aux_loss_coef (`float`, *optional*, defaults to `0.001`):
+            Coefficient of the load-balancing auxiliary loss. Only has an effect when training a Mixture-of-Experts
+            (MoE) model; for other models it does nothing. The auxiliary loss is added to the training loss with this
+            weight. Set to `0.0` to disable it.
         disable_dropout (`bool`, *optional*, defaults to `True`):
             Whether to disable dropout in the model and reference model.
 
@@ -54,12 +56,14 @@ class DPOConfig(_BaseConfig):
             Maximum length of the tokenized sequence. Sequences longer than `max_length` are truncated from the left or
             right depending on the `truncation_mode`. If `None`, no truncation is applied.
         truncation_mode (`str`, *optional*, defaults to `"keep_start"`):
-            Truncation mode to use when the sequence exceeds `max_length`. The only supported value is
-            `"keep_start"`. The `"keep_end"` value is deprecated and will be removed in v2.0.0.
+            Truncation mode to use when the sequence exceeds `max_length`. The only supported value is `"keep_start"`.
+            The `"keep_end"` value is deprecated and will be removed in v2.0.0.
         padding_free (`bool`, *optional*, defaults to `False`):
             Whether to perform forward passes without padding by flattening all sequences in the batch into a single
             continuous sequence. This reduces memory usage by eliminating padding overhead. Currently, this is only
             supported with the FlashAttention 2 or 3, which can efficiently handle the flattened batch structure.
+            Temporarily unavailable: since the DPO refactor, setting it to `True` warns and falls back to standard
+            padding. It is planned to return in a future update.
         pad_to_multiple_of (`int`, *optional*):
             If set, the sequences will be padded to a multiple of this value.
         precompute_ref_log_probs (`bool`, *optional*, defaults to `False`):
@@ -88,7 +92,10 @@ class DPOConfig(_BaseConfig):
             tokens beyond shared lengths.
         f_divergence_type (`str`, *optional*, defaults to `"reverse_kl"`):
             f-divergence regularizer between policy and reference (f-DPO paper). Possible values are: `reverse_kl`
-            (default), `forward_kl`, `js_divergence`, `alpha_divergence`.
+            (default), `forward_kl`, `js_divergence`, `alpha_divergence`. Only the loss types built on the
+            chosen-rejected reward difference support a non-default value: `'sigmoid'`, `'sigmoid_norm'`, `'hinge'`,
+            `'ipo'`, `'exo_pair'`, `'robust'`, `'discopop'`, `'sft'`. The other loss types have no valid f-divergence
+            generalization and are rejected with a non-default value.
         f_alpha_divergence_coef (`float`, *optional*, defaults to `0.5`):
             α coefficient for the α-divergence u^-α regularizer, used only when `f_divergence_type='alpha_divergence'`.
         label_smoothing (`float`, *optional*, defaults to `0.0`):
@@ -163,6 +170,14 @@ class DPOConfig(_BaseConfig):
             "Forwarded to `AutoModelForCausalLM.from_pretrained` and `AutoProcessor.from_pretrained`."
         },
     )
+    router_aux_loss_coef: float = field(
+        default=0.001,
+        metadata={
+            "help": "Coefficient of the load-balancing auxiliary loss. Only has an effect when training a "
+            "Mixture-of-Experts (MoE) model; for other models it does nothing. The auxiliary loss is added to the "
+            "training loss with this weight. Set to `0.0` to disable it."
+        },
+    )
     disable_dropout: bool = field(
         default=True,
         metadata={"help": "Whether to disable dropout in the model and reference model."},
@@ -194,7 +209,8 @@ class DPOConfig(_BaseConfig):
             "help": "Whether to perform forward passes without padding by flattening all sequences in the batch into "
             "a single continuous sequence. This reduces memory usage by eliminating padding overhead. Currently, this "
             "is only supported with the FlashAttention 2 or 3, which can efficiently handle the flattened batch "
-            "structure."
+            "structure. Temporarily unavailable: since the DPO refactor, setting it to True warns and falls back to "
+            "standard padding. It is planned to return in a future update."
         },
     )
     pad_to_multiple_of: int | None = field(
@@ -249,7 +265,10 @@ class DPOConfig(_BaseConfig):
         default="reverse_kl",
         metadata={
             "help": "f-divergence regularizer between policy and reference (f-DPO paper). Possible values are: "
-            "`reverse_kl` (default), `forward_kl`, `js_divergence`, `alpha_divergence`.",
+            "`reverse_kl` (default), `forward_kl`, `js_divergence`, `alpha_divergence`. Only the loss types built on "
+            "the chosen-rejected reward difference support a non-default value: `'sigmoid'`, `'sigmoid_norm'`, "
+            "`'hinge'`, `'ipo'`, `'exo_pair'`, `'robust'`, `'discopop'`, `'sft'`. The other loss types have no valid "
+            "f-divergence generalization and are rejected with a non-default value.",
         },
     )
     f_alpha_divergence_coef: float = field(

@@ -48,15 +48,28 @@ from transformers.trainer_utils import EvalPrediction
 from transformers.training_args import OptimizerNames
 from transformers.utils import is_peft_available, is_sagemaker_mp_enabled
 
-from ...data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
+from ...data_utils import (
+    apply_chat_template,
+    is_conversational,
+    maybe_apply_chat_template,
+    prepare_multimodal_messages,
+)
 from ...extras.profiling import profiling_context
 from ...generation.vllm_client import VLLMClient
 from ...import_utils import is_vllm_available
 from ...models.utils import prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
 from ...trainer.base_trainer import _BaseTrainer
-from ...trainer.utils import disable_dropout_in_model, ensure_master_addr_port, get_config_model_id
+from ...trainer.utils import disable_dropout_in_model, ensure_master_addr_port, get_callable_name, get_config_model_id
 from ..utils import DPODataCollatorWithPadding, create_reference_model, empty_cache, prepare_peft_model, truncate_right
 from .online_dpo_config import OnlineDPOConfig
+
+
+if Version(transformers.__version__) >= Version("5.2.0"):
+    from transformers.trainer_pt_utils import nested_gather
+
+
+if is_bitsandbytes_available():
+    import bitsandbytes as bnb
 
 
 if is_peft_available():
@@ -72,18 +85,13 @@ else:
     IS_SAGEMAKER_MP_POST_1_10 = False
 
 
-if Version(transformers.__version__) >= Version("5.2.0"):
-    from transformers.trainer_pt_utils import nested_gather
-
-
 if is_vllm_available():
     from vllm import LLM, SamplingParams
     from vllm.sampling_params import StructuredOutputsParams
 
-if is_bitsandbytes_available():
-    import bitsandbytes as bnb
 
 logger = get_logger(__name__)
+
 
 # A reward function can be a string, interpreted as a model ID and loaded as a pretrained model, a pretrained model, or
 # a callable that returns a list of floats (the rewards). The callable receives prompts, completions, and additional
@@ -214,7 +222,7 @@ class OnlineDPOTrainer(_BaseTrainer):
             if isinstance(reward_funcs[i], nn.Module):
                 self.reward_func_names.append(get_config_model_id(reward_funcs[i].config).split("/")[-1])
             else:
-                self.reward_func_names.append(reward_funcs[i].__name__)
+                self.reward_func_names.append(get_callable_name(reward_funcs[i]))
         self.reward_funcs = reward_funcs
 
         # Handle reward processing classes for reward_funcs
@@ -645,50 +653,49 @@ class OnlineDPOTrainer(_BaseTrainer):
         # Gather all prompts to main process
         all_prompts = gather_object(prompts_text)
         if has_images:
-            all_images = gather_object(images)
+            # The server can't take images alongside text prompts, so multimodal prompts are sent as messages, with
+            # the images inlined in place of their placeholders.
+            messages = [
+                prepare_multimodal_messages(prompt, images=[image] if image is not None else None)
+                for prompt, image in zip(prompts, images, strict=True)
+            ]
+            all_messages = gather_object(messages)
 
         if self.accelerator.is_main_process:
-            # Since 'prompts' contains 'num_generations' duplicates, we first take unique prompts, and generate
-            # num_generations outputs for each one. This is faster than generating outputs for each duplicate
-            # prompt individually.
-            ordered_set_of_prompts = all_prompts[:: self.num_generations]
-            if has_images:
-                ordered_set_of_images = [
-                    [img] if img is not None else None for img in all_images[:: self.num_generations]
-                ]
-            else:
-                ordered_set_of_images = None
-            completion_ids = self.vllm_client.generate(
-                prompts=ordered_set_of_prompts,
-                images=ordered_set_of_images,
-                n=self.num_generations,
-                repetition_penalty=self.repetition_penalty,
-                temperature=self.temperature,
-                top_p=self.top_p,
-                top_k=-1 if self.top_k is None else self.top_k,
-                min_p=0.0 if self.min_p is None else self.min_p,
-                max_tokens=self.generation_config.max_tokens,
-                structured_outputs_regex=self.structured_outputs_regex
+            sampling_kwargs = {
+                "n": self.num_generations,
+                "repetition_penalty": self.repetition_penalty,
+                "temperature": self.temperature,
+                "top_p": self.top_p,
+                "top_k": -1 if self.top_k is None else self.top_k,
+                "min_p": 0.0 if self.min_p is None else self.min_p,
+                "max_tokens": self.generation_config.max_tokens,
+                "structured_outputs_regex": self.structured_outputs_regex
                 if hasattr(self, "structured_outputs_regex")
                 else None,
-                generation_kwargs=self.args.generation_kwargs,
-            )["completion_ids"]
-            # Flatten: each prompt generates 2 completions
-            completion_ids = [[comp_id] for prompt_completions in completion_ids for comp_id in prompt_completions]
+                "generation_kwargs": self.args.generation_kwargs,
+            }
+            if has_images:
+                completion_ids = self.vllm_client.chat(messages=all_messages, **sampling_kwargs)["completion_ids"]
+            else:
+                completion_ids = self.vllm_client.generate(prompts=all_prompts, **sampling_kwargs)["completion_ids"]
         else:
             completion_ids = [None] * (len(all_prompts) * 2)
 
         # Broadcast completions to all processes
         completion_ids = broadcast_object_list(completion_ids, from_process=0)
 
-        # Each process takes its slice
+        # Slice to keep only the local part of the data
         process_slice = slice(
             self.accelerator.process_index * len(prompts) * 2,
             (self.accelerator.process_index + 1) * len(prompts) * 2,
         )
         completion_ids = completion_ids[process_slice]
+        # Reorder to block layout ([p0c0, p1c0, ..., p0c1, p1c1, ...]) to match the colocate and transformers
+        # generation paths, which is what the loss expects (`rewards.split(batch_size)`).
+        completion_ids = completion_ids[0::2] + completion_ids[1::2]
 
-        # Create prompt_ids by tokenizing locally
+        # Create prompt_ids by tokenizing locally, in the same block layout (2 copies per prompt)
         prompt_inputs = self.processing_class(
             text=prompts_text,
             return_tensors="pt",
@@ -696,9 +703,8 @@ class OnlineDPOTrainer(_BaseTrainer):
             padding_side="left",
             add_special_tokens=False,
         )
-        prompt_ids = []
-        for prompt_tokens in prompt_inputs["input_ids"]:
-            prompt_ids.extend([prompt_tokens.tolist(), prompt_tokens.tolist()])  # 2 copies for 2 completions
+        prompt_ids = [prompt_tokens.tolist() for prompt_tokens in prompt_inputs["input_ids"]]
+        prompt_ids = prompt_ids + prompt_ids  # 2 copies for 2 completions
         return completion_ids, prompt_ids
 
     def _generate_vllm_colocate(self, prompts, images=None):
@@ -756,7 +762,7 @@ class OnlineDPOTrainer(_BaseTrainer):
             name = self._fix_param_name_to_vllm(name, extra_prefixes=["modules_to_save.default."])
 
             if param.is_cpu:
-                param = param.to(torch.device("cuda"))
+                param = param.to(self.accelerator.device)
             param = param.full_tensor()
 
             if self.vllm_mode == "server" and self.accelerator.is_main_process:
@@ -766,6 +772,22 @@ class OnlineDPOTrainer(_BaseTrainer):
                 llm_model.load_weights([(name, param)])
 
     def _move_model_to_vllm(self):
+        if self.vllm_mode == "server" and self.accelerator.is_main_process:
+            # Announce one weight update for the whole model: the server prepares and finalizes it once, rather than
+            # once per tensor pushed below. Only the main process holds a client; the other ranks only take part in
+            # the parameter gathers below.
+            with self.vllm_client.weight_update():
+                self._move_model_to_vllm_inner()
+        else:
+            self._move_model_to_vllm_inner()
+
+        # Reset cache on vLLM
+        if self.vllm_mode == "server" and self.accelerator.is_main_process:
+            self.vllm_client.reset_prefix_cache()
+        elif self.vllm_mode == "colocate":
+            self.llm.reset_prefix_cache()
+
+    def _move_model_to_vllm_inner(self):
         # For DeepSpeed ZeRO-3 and FSDP, we need to gather all parameters before operations
         deepspeed_plugin = self.accelerator.state.deepspeed_plugin
         zero_stage_3 = deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3
@@ -834,12 +856,6 @@ class OnlineDPOTrainer(_BaseTrainer):
                         elif self.vllm_mode == "colocate":
                             llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
                             llm_model.load_weights([(name, param.data)])
-
-        # Reset cache on vLLM
-        if self.vllm_mode == "server" and self.accelerator.is_main_process:
-            self.vllm_client.reset_prefix_cache()
-        elif self.vllm_mode == "colocate":
-            self.llm.reset_prefix_cache()
 
     def _sync_fsdp1_params_to_vllm(self, module: nn.Module, prefix: str = "", visited=None):
         """Memory-efficient post-order traversal of FSDP modules to extract full parameters and sync with vLLM."""
