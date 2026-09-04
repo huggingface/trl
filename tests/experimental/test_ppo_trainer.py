@@ -14,6 +14,8 @@
 
 import gc
 import os
+from contextlib import nullcontext
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -33,10 +35,12 @@ from trl.experimental.ppo import (
     PPOConfig,
     PPOTrainer,
 )
+from trl.experimental.ppo import ppo_trainer as ppo_trainer_module
 from trl.experimental.ppo.ppo_trainer import batch_generation, masked_mean, masked_var, masked_whiten
 
 from ..testing_utils import (
     TrlTestCase,
+    drop_last_for_metrics,
     require_bitsandbytes,
     require_peft,
     require_torch_gpu_if_bnb_not_multi_backend_enabled,
@@ -685,6 +689,124 @@ class TestCore(TrlTestCase):
         whiten_masked = masked_whiten(self.test_input, self.test_mask)[1:3]
         diffs = (whiten_unmasked - whiten_masked).sum()
         assert abs(diffs.item()) < 0.00001
+
+
+class TestPPOMetrics:
+    def test_objective_metrics_ignore_duplicate_padding(self, monkeypatch):
+        policy_token_logits = torch.tensor([[0.0, 0.0], [0.0, 1.0], [0.0, -10.0]])
+        ref_token_logits = torch.tensor([[0.0, -1.0], [0.0, 0.0], [0.0, 0.0]])
+        scores = torch.tensor([1.0, 2.0, 100.0])
+        query_responses = torch.ones(3, 2, dtype=torch.long)
+        policy_logits = torch.cat((policy_token_logits.unsqueeze(1), torch.zeros(3, 1, 2)), dim=1)
+        ref_logits = torch.cat((ref_token_logits.unsqueeze(1), torch.zeros(3, 1, 2)), dim=1)
+
+        ref_policy = object()
+        reward_model = object()
+        model = SimpleNamespace(policy=object(), value_model=object(), train=lambda: None)
+
+        def fake_forward(current_model, query_response, pad_token_id):
+            if current_model is ref_policy:
+                return SimpleNamespace(logits=ref_logits)
+            return SimpleNamespace(logits=policy_logits), torch.zeros(3, 2, 1)
+
+        def fake_get_reward(current_model, query_response, pad_token_id, context_length):
+            if current_model is model.value_model:
+                return torch.zeros(3, 2, 1), torch.zeros(3), None
+            return None, scores, None
+
+        monkeypatch.setattr(
+            ppo_trainer_module,
+            "batch_generation",
+            lambda *args, **kwargs: (query_responses, policy_token_logits.unsqueeze(1)),
+        )
+        monkeypatch.setattr(ppo_trainer_module, "forward", fake_forward)
+        monkeypatch.setattr(ppo_trainer_module, "get_reward", fake_get_reward)
+        monkeypatch.setattr(
+            ppo_trainer_module, "unwrap_model_for_generation", lambda *args, **kwargs: nullcontext(model)
+        )
+        monkeypatch.setattr(ppo_trainer_module, "empty_cache", lambda: None)
+
+        def gather_for_metrics(tensor):
+            return drop_last_for_metrics(tensor) if tensor.ndim == 1 else tensor
+
+        accelerator = SimpleNamespace(
+            device=torch.device("cpu"),
+            print=lambda *args: None,
+            gather_for_metrics=gather_for_metrics,
+            unwrap_model=lambda current_model: current_model,
+            accumulate=lambda current_model: nullcontext(),
+            backward=lambda loss: None,
+        )
+        optimizer = SimpleNamespace(step=lambda: None, zero_grad=lambda: None)
+        scheduler = SimpleNamespace(step=lambda: None, get_last_lr=lambda: [0.0])
+        control = SimpleNamespace(should_save=False)
+        callback_handler = SimpleNamespace(
+            on_train_begin=lambda args, state, current_control: current_control,
+            on_step_end=lambda args, state, current_control: current_control,
+            on_train_end=lambda args, state, current_control: current_control,
+        )
+        logged_metrics = []
+        trainer = SimpleNamespace(
+            args=SimpleNamespace(
+                response_length=1,
+                temperature=1.0,
+                local_rollout_forward_batch_size=3,
+                ds3_gather_for_generation=False,
+                missing_eos_penalty=None,
+                kl_estimator="k1",
+                kl_coef=0.1,
+                whiten_rewards=False,
+                gamma=1.0,
+                lam=0.95,
+                num_ppo_epochs=2,
+                num_mini_batches=1,
+                gradient_accumulation_steps=1,
+                local_batch_size=3,
+                local_mini_batch_size=3,
+                per_device_train_batch_size=3,
+                cliprange_value=0.2,
+                cliprange=0.2,
+                vf_coef=0.1,
+                num_total_batches=1,
+                total_episodes=3,
+                batch_size=3,
+                logging_steps=None,
+                eval_steps=None,
+                save_steps=None,
+                num_sample_generations=0,
+            ),
+            accelerator=accelerator,
+            optimizer=optimizer,
+            lr_scheduler=scheduler,
+            model=model,
+            ref_model=ref_policy,
+            reward_model=reward_model,
+            processing_class=SimpleNamespace(pad_token_id=0, eos_token_id=1),
+            dataloader=[{"input_ids": torch.ones(3, 1, dtype=torch.long)}],
+            state=SimpleNamespace(),
+            control=control,
+            callback_handler=callback_handler,
+            is_deepspeed_enabled=False,
+            stop_token_id=None,
+            train_dataset_len=3,
+            log=lambda metrics: logged_metrics.append(metrics),
+        )
+
+        PPOTrainer.train(trainer)
+
+        logprobs = torch.log_softmax(policy_token_logits, dim=-1)[:, 1]
+        ref_logprobs = torch.log_softmax(ref_token_logits, dim=-1)[:, 1]
+        kl = logprobs - ref_logprobs
+        non_score_reward = -trainer.args.kl_coef * kl
+        expected = {
+            "objective/kl": kl,
+            "objective/entropy": -logprobs,
+            "objective/non_score_reward": non_score_reward,
+            "objective/rlhf_reward": non_score_reward + scores,
+            "objective/scores": scores,
+        }
+        for key, values in expected.items():
+            assert logged_metrics[-1][key] == pytest.approx(values[:-1].mean().item(), abs=1e-6)
 
 
 class TestPPOTrainer(TrlTestCase):

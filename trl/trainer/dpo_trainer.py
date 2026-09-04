@@ -1607,10 +1607,14 @@ class DPOTrainer(_BaseTrainer):
         # Entropy
         per_token_entropy = entropy_from_logits(shift_logits.detach())
         mask = shift_completion_mask
-        entropy_sum = (per_token_entropy * mask).sum()
-        total_tokens = mask.sum()
+        entropy_sum = (per_token_entropy * mask).sum(dim=1)
+        total_tokens = mask.sum(dim=1)
 
-        # Gather counts across ranks and weight-average
+        # `gather_for_metrics` de-duplicates examples, but the batch stacks chosen and rejected rows.
+        entropy_sum = entropy_sum.view(2, -1).sum(0)
+        total_tokens = total_tokens.view(2, -1).sum(0)
+
+        # Gather per-example sums and counts across ranks, then weight-average
         entropy_sum = self.accelerator.gather_for_metrics(entropy_sum).sum()
         total_tokens = self.accelerator.gather_for_metrics(total_tokens).sum()
         entropy = (entropy_sum / total_tokens).item() if total_tokens > 0 else 0.0

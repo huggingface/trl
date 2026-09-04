@@ -12,6 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from collections import defaultdict
+from types import SimpleNamespace
+
 import multiprocess
 import pytest
 import torch
@@ -24,13 +27,57 @@ from transformers.utils import is_peft_available
 from trl import KTOConfig, KTOTrainer
 from trl.trainer.kto_trainer import DataCollatorForUnpairedPreference, DataCollatorForVisionUnpairedPreference
 
-from .testing_utils import TrlTestCase, require_bitsandbytes, require_liger_kernel, require_peft, require_vision
+from .testing_utils import (
+    TrlTestCase,
+    drop_last_for_metrics,
+    require_bitsandbytes,
+    require_liger_kernel,
+    require_peft,
+    require_vision,
+)
 
 
 if is_peft_available():
     import peft
     from peft import LoraConfig, PromptTuningConfig, get_peft_model
     from peft.utils import TaskType
+
+
+def test_entropy_ignores_duplicate_padding():
+    shift_logits = torch.tensor(
+        [
+            [[10.0, 0.0], [10.0, 0.0]],
+            [[10.0, 0.0], [10.0, 0.0]],
+            [[0.0, 0.0], [0.0, 0.0]],
+        ]
+    )
+    logits = torch.cat((shift_logits, torch.zeros(3, 1, 2)), dim=1)
+    trainer = SimpleNamespace(
+        model=SimpleNamespace(training=False),
+        accelerator=SimpleNamespace(device=torch.device("cpu"), gather_for_metrics=drop_last_for_metrics),
+        _compute_kl_logps=lambda model, batch: torch.zeros(3),
+        aux_loss_enabled=False,
+        precompute_ref_logps=True,
+        calculate_KL=False,
+        loss_type="kto",
+        beta=0.1,
+        desirable_weight=1.0,
+        undesirable_weight=1.0,
+        _metrics={"eval": defaultdict(list)},
+        _total_train_tokens=0,
+    )
+    inputs = {
+        "input_ids": torch.zeros(3, 3, dtype=torch.long),
+        "attention_mask": torch.ones(3, 3, dtype=torch.long),
+        "completion_mask": torch.ones(3, 3, dtype=torch.long),
+        "label": torch.tensor([True, False, False]),
+        "ref_logps": torch.zeros(3),
+    }
+
+    KTOTrainer._compute_loss(trainer, lambda **kwargs: SimpleNamespace(logits=logits), inputs, False)
+
+    expected_entropy = torch.distributions.Categorical(logits=shift_logits[:-1]).entropy().mean().item()
+    assert trainer._metrics["eval"]["entropy"][-1] == pytest.approx(expected_entropy, abs=1e-6)
 
 
 @require_vision

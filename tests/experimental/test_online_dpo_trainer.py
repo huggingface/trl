@@ -48,6 +48,8 @@ def test_objective_metrics_ignore_duplicate_padding():
     model = torch.nn.Linear(1, 1)
     ref_model = torch.nn.Linear(1, 1)
     completion_ids = torch.ones(2 * batch_size, 2, dtype=torch.long)
+    completion_ids[batch_size - 1] = 0
+    completion_ids[-1] = 0
     completion_mask = torch.ones_like(completion_ids)
     logprobs = torch.tensor(
         [[-1.0, -1.0], [-2.0, -2.0], [-30.0, -30.0], [-3.0, -3.0], [-4.0, -4.0], [-40.0, -40.0]],
@@ -104,6 +106,10 @@ def test_objective_metrics_ignore_duplicate_padding():
         "objective/non_score_reward": non_score_reward.view(2, batch_size).mean(0),
         "objective/rlhf_reward": (rewards + non_score_reward).view(2, batch_size).mean(0),
         "objective/entropy": -logprobs.sum(1).view(2, batch_size).mean(0),
+        "val/contain_eos_token": torch.any(completion_ids == trainer._tokenizer.eos_token_id, dim=-1)
+        .float()
+        .view(2, batch_size)
+        .mean(0),
     }
     for key, values in expected.items():
         assert trainer.stats[key][-1] == values[:-1].mean().item()

@@ -43,12 +43,13 @@ def test_log_statistics_metrics_ignore_duplicate_padding():
         alpha=0.1,
         processing_class=SimpleNamespace(eos_token_id=0),
     )
-    data = {"input_ids": torch.ones(3, 2, dtype=torch.long)}
+    model_data = {"input_ids": torch.tensor([[1, 0], [1, 0], [1, 1]])}
+    ref_data = {"input_ids": torch.tensor([[1, 0], [1, 0], [1, 1]])}
 
     XPOTrainer._log_statistics(
         trainer,
-        data,
-        data,
+        model_data,
+        ref_data,
         model_model,
         model_ref,
         ref_ref,
@@ -80,6 +81,8 @@ def test_log_statistics_metrics_ignore_duplicate_padding():
         "objective/entropy": (-model_model.sum(1) - model_ref.sum(1)) / 2,
         "rewards/margins": chosen_rewards - rejected_rewards,
         "rewards/accuracies": (chosen_rewards > rejected_rewards).float(),
+        "val/model_contain_eos_token": torch.tensor([1.0, 1.0, 0.0]),
+        "val/ref_contain_eos_token": torch.tensor([1.0, 1.0, 0.0]),
     }
     for key, values in expected.items():
         assert trainer.stats[key][-1] == values[:-1].mean().item()

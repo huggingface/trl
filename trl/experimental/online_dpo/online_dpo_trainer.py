@@ -1265,7 +1265,10 @@ class OnlineDPOTrainer(_BaseTrainer):
             )
             mean_rewards = rewards.view(2, batch_size).mean(dim=0)
             self.stats["objective/scores"].append(self.accelerator.gather_for_metrics(mean_rewards).mean().item())
-        self.stats["val/contain_eos_token"].append(contain_eos_token.float().mean().item())
+        mean_contain_eos_token = contain_eos_token.float().view(2, batch_size).mean(dim=0)
+        self.stats["val/contain_eos_token"].append(
+            self.accelerator.gather_for_metrics(mean_contain_eos_token).mean().item()
+        )
         self.stats["logps/chosen"].append(self.accelerator.gather_for_metrics(chosen_logprobs_sum).mean().item())
         self.stats["logps/rejected"].append(self.accelerator.gather_for_metrics(rejected_logprobs_sum).mean().item())
 
