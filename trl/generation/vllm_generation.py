@@ -214,11 +214,6 @@ class VLLMGeneration:
             - "terratorch" will use the TerraTorch model implementation.
         trust_remote_code (`bool`, *optional*, defaults to `False`):
             Trust remote code (e.g., from HuggingFace) when downloading the model and tokenizer.
-        llm_kwargs (`dict`, *optional*):
-            Additional keyword arguments for the vLLM `LLM` constructor, used only in colocate mode, where TRL builds
-            the engine. Useful for engine arguments TRL does not expose, such as `hf_overrides`. Keys that conflict
-            with the arguments TRL sets override them, except the keys in `RESERVED_LLM_KWARGS`, which raise.
-
         > Parameters for generation:
 
         repetition_penalty (`float`, *optional*, defaults to `1.0`):
@@ -249,6 +244,11 @@ class VLLMGeneration:
             `seed`, `frequency_penalty`, etc. If it contains keys that conflict with the other parameters, they will
             override them.
 
+        llm_kwargs (`dict`, *optional*):
+            Additional keyword arguments for the vLLM `LLM` constructor, used only in colocate mode, where TRL builds
+            the engine. Useful for engine arguments TRL does not expose, such as `hf_overrides`. Keys that conflict
+            with the arguments TRL sets override them, except the keys in `RESERVED_LLM_KWARGS`, which raise.
+
     """
 
     def __init__(
@@ -273,7 +273,6 @@ class VLLMGeneration:
         enable_sleep_mode: bool = False,
         model_impl: str = "auto",
         trust_remote_code: bool = False,
-        llm_kwargs: dict | None = None,
         # Generation configuration
         repetition_penalty: float = 1.0,
         temperature: float = 1.0,
@@ -283,6 +282,8 @@ class VLLMGeneration:
         max_completion_length: int = 16,
         logprobs: int | None = 0,
         generation_kwargs: dict | None = None,
+        # Extra `LLM()` arguments, kept last so callers that pass the older parameters by position are unaffected
+        llm_kwargs: dict | None = None,
     ):
         self.model = model
         self.accelerator = accelerator

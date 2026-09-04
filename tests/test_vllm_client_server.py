@@ -161,6 +161,11 @@ class TestVLLMGenerationLLMKwargs(TrlTestCase):
             name_or_path="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", named_modules=lambda: []
         )
 
+        # `VLLMGeneration` writes these three straight into `os.environ`; registering them with monkeypatch first makes
+        # the fixture put the original values back, so the test leaves no distributed state behind for later tests.
+        for key in ("RANK", "LOCAL_RANK", "WORLD_SIZE"):
+            monkeypatch.setitem(os.environ, key, os.environ.get(key, ""))
+
         vllm_generation.VLLMGeneration(
             model=model,
             accelerator=accelerator,
@@ -171,21 +176,56 @@ class TestVLLMGenerationLLMKwargs(TrlTestCase):
         )
         return captured
 
-    def test_llm_kwargs_reach_the_llm_constructor(self, monkeypatch):
-        captured = self._build(monkeypatch, {"hf_overrides": {"architectures": ["Qwen2ForCausalLM"]}})
+    # Two distinct values per test: a constructor call that hardcodes the one value a single case checks would pass
+    # that case, so the second case is what makes each test an oracle for the passthrough.
+    @pytest.mark.parametrize(
+        "hf_overrides", [{"architectures": ["Qwen2ForCausalLM"]}, {"rope_scaling": {"type": "linear", "factor": 2.0}}]
+    )
+    def test_llm_kwargs_reach_the_llm_constructor(self, monkeypatch, hf_overrides):
+        captured = self._build(monkeypatch, {"hf_overrides": hf_overrides})
 
-        assert captured["hf_overrides"] == {"architectures": ["Qwen2ForCausalLM"]}
+        assert captured["hf_overrides"] == hf_overrides
 
-    def test_llm_kwargs_override_the_defaults_trl_sets(self, monkeypatch):
-        captured = self._build(monkeypatch, {"gpu_memory_utilization": 0.55})
+    @pytest.mark.parametrize("gpu_memory_utilization", [0.55, 0.65])
+    def test_llm_kwargs_override_the_defaults_trl_sets(self, monkeypatch, gpu_memory_utilization):
+        captured = self._build(monkeypatch, {"gpu_memory_utilization": gpu_memory_utilization})
 
-        # 0.3 is passed explicitly above, so a surviving 0.55 shows the user value wins over TRL's own default.
-        assert captured["gpu_memory_utilization"] == 0.55
+        # 0.3 is passed explicitly above, so a surviving user value shows it wins over TRL's own default.
+        assert captured["gpu_memory_utilization"] == gpu_memory_utilization
 
-    @pytest.mark.parametrize("key", sorted(RESERVED_LLM_KWARGS))
+    # Spelled out rather than read from `RESERVED_LLM_KWARGS`: a test derived from the table would lose its case the
+    # moment a reservation is deleted, instead of failing.
+    RESERVED_KEYS = [
+        "distributed_executor_backend",
+        "enable_sleep_mode",
+        "logprobs_mode",
+        "model",
+        "quantization",
+        "seed",
+        "tensor_parallel_size",
+    ]
+
+    def test_build_leaves_the_distributed_environment_unchanged(self, monkeypatch):
+        # Start from an environment without the three keys, restored by the fixture, so the values the constructor
+        # writes cannot coincide with values already present on a launcher that exports them.
+        keys = ("RANK", "LOCAL_RANK", "WORLD_SIZE")
+        for key in keys:
+            monkeypatch.delenv(key, raising=False)
+        inner = pytest.MonkeyPatch()
+        try:
+            self._build(inner, {})
+        finally:
+            inner.undo()
+
+        assert {key: os.environ.get(key) for key in keys} == dict.fromkeys(keys)
+
+    def test_reserved_table_matches_the_pinned_list(self):
+        assert sorted(RESERVED_LLM_KWARGS) == self.RESERVED_KEYS
+
+    @pytest.mark.parametrize("key", RESERVED_KEYS)
     def test_reserved_keys_are_rejected(self, monkeypatch, key):
         # TRL reads each of these back after building the engine, or the weight sync relies on it, so overriding only
-        # the engine side would silently desynchronize the two. The table is the source of truth for the list.
+        # the engine side would silently desynchronize the two.
         with pytest.raises(ValueError, match=f"`{key}` cannot be set in `vllm_llm_kwargs`"):
             self._build(monkeypatch, {key: 2})
 
