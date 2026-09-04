@@ -390,6 +390,7 @@ class TestGetDataset:
         [
             ([0.0, 0.0], "must be greater than zero"),
             ([-0.5, 1.5], "must be non-negative"),
+            ([1.5, -0.5], "must be non-negative"),
         ],
     )
     def test_dataset_fraction_invalid_raises_error_before_loading(self, fractions, error_message):

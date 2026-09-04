@@ -65,7 +65,7 @@ class DatasetConfig:
             datasets, and the mixture size is capped so that no dataset is oversampled: the first `round(fraction * N)`
             rows of each dataset are kept, where `N` is the largest mixture size that avoids oversampling. Must be set
             for either all datasets in the mixture or none of them. Not supported for streaming datasets. When unset,
-            the full datasets are concatenated.
+            the full datasets are concatenated. Values must be non-negative and their sum must be greater than zero.
     """
 
     path: str
