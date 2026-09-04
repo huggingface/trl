@@ -18,8 +18,8 @@ Full fine-tune GLM-4.5-Air (110B) — every parameter, no LoRA — on 64 H100s a
 `DistributedConfig(tp_size=32, fsdp_size=2, enable_expert_parallel=True)` shards the experts across
 32 GPUs and everything else across 2; parameters, gradients, and optimizer state all divide by the
 mesh, which is what makes full fine-tuning of a 110B model peak at 41 GB per GPU. Measured:
-3.7 s/step at sequence length 2048, loss 3.35 -> 2.13 in 20 steps on tulu-3 chat data; the final
-`save_model` gathers and writes the full 206 GiB checkpoint in standard HF format (~19 minutes).
+3.0 s/step at sequence length 2048, loss 3.9 -> 1.2 in 20 steps on tulu-3 chat data; the final
+`save_model` gathers and writes the full 206 GiB checkpoint in standard HF format (~15 minutes).
 
 This config reproduces the measured run above as-is. For the throughput levers on top of it
 (packing, gradient accumulation, batch sizing), see "Making it fast" in
