@@ -1,368 +1,221 @@
 # Training Beyond 1M Tokens
 
-Training on sequences of hundreds of thousands to millions of tokens needs more than a bigger GPU: the sequence itself has to be split across devices, and the activations that survive that split have to be kept small. This guide covers both.
+An agent is capable of working on a task for hours: reading files, running commands, and carrying every turn of the session forward. That accumulated session runs to hundreds of thousands of tokens, which is why frontier models now advertise million-token context windows.
 
-## Sequence and Context Parallelism
+Making a model good at that much context means training it on sequences that long, and that is where it gets difficult: a million-token sequence does not fit on a GPU, and it does not fit on eight of them either, not without help.
 
-Splitting the sequence dimension across GPUs lets you train on sequences longer than one GPU can hold: each GPU keeps a slice of the sequence, and the ranks exchange what attention needs to stay exact. TRL supports two techniques that do this, Context Parallelism and Sequence Parallelism, which are not the same thing.
+The example in this guide trains on exactly one such sequence per step, on a single 8-GPU node.
 
-> [!NOTE]
-> **Terminology clarification:** This section describes parallelism techniques for splitting sequences to enable longer context training:
-> - **Context Parallelism (CP)**: Splits sequences across GPUs (implemented as Ring Attention with FSDP2)
-> - **Sequence Parallelism (SP)**: Another form of sequence splitting (implemented as ALST/Ulysses with DeepSpeed)
->
-> Both CP and SP are different from traditional Sequence Parallelism used with Tensor Parallelism (TP+SP) to reduce activation memory. With the techniques here, parallelism dimensions multiply: `TP=2` and `CP=2` would require 4 GPUs (2×2), whereas traditional `TP+SP=2` only needs 2 GPUs as they share the same ranks.
->
-> In Accelerate's `ParallelismConfig`:
-> - Use `cp_size` with `cp_backend="torch"` for Ring Attention (FSDP2)
-> - Use `sp_size` with `sp_backend="deepspeed"` for ALST/Ulysses (DeepSpeed)
+## Run it
 
-Splitting the sequence is particularly useful when:
+You need one node with 8 H100s (or better), and transformers from main: the example uses gradient checkpointing's `offload`, which is not in a release yet.
 
-- You want to train with very long sequences (>32k tokens)
-- Single GPU memory is insufficient for your desired sequence length
-- You need to maintain sequence coherence across the full context
-
-### Available Implementations
-
-TRL supports two implementations, each with different characteristics:
-
-1. **Ring Attention (FSDP2)** - Uses ring-based communication for memory-efficient processing of extremely long sequences
-2. **ALST/Ulysses (DeepSpeed)** - Uses attention head parallelism for faster training with high-bandwidth interconnects
-
-> [!IMPORTANT]
-> **Sequence Length Terminology:** When using Context Parallelism, the sequence is split across GPUs, introducing two concepts:
-> - **Global sequence length**: The full sequence length before splitting across GPUs
-> - **Micro sequence length**: The sequence length per GPU after splitting
->
-> In TRL, `max_seq_length` (or `max_length`) refers to the **global sequence length**. The framework automatically handles splitting into micro sequences:
-> - **Ring Attention (FSDP2)**: Uses `cp_size` to split sequences. With `max_seq_length=8192` and `cp_size=4`, each GPU processes 2048 tokens.
-> - **ALST/Ulysses (DeepSpeed)**: Uses `sp_size` (with `sp_backend="deepspeed"`) to split sequences. With `max_seq_length=8192` and `sp_size=2`, each GPU processes 4096 tokens.
->
-> The Trainer automatically accounts for context parallelism when calculating batch sizes and training metrics.
-
-### Choosing Between Ring Attention and Ulysses
-
-The comparison table below highlights the key differences between the two approaches:
-
-| Feature | Ring Attention (FSDP2) | ALST/Ulysses (DeepSpeed) |
-|---------|----------|-------------------------|
-| **Method** | Ring Self-Attention | Attention Head Parallelism |
-| **Backend** | PyTorch FSDP2 | DeepSpeed ZeRO |
-| **Attention** | SDPA only | Flash Attention 2 or SDPA |
-| **Minimum Accelerate** | 1.11.0+ | 1.12.0+ |
-| **Minimum DeepSpeed** | N/A | 0.18.1+ |
-| **Sequence Divisibility** | `cp_size * 2` | `sp_size` |
-| **Zero Stage** | N/A | ZeRO Stage 1/2/3 |
-
-**Ring Attention is better when:**
-- You need to handle extremely long sequences (1M+ tokens)
-- The model has limited attention heads (Ring Attention is not constrained by head count)
-- You want flexibility in scaling to any sequence length
-- Network topology is limited (Ring Attention works with simple P2P ring communication)
-
-**Ulysses is better when:**
-- You have high-bandwidth, low-latency interconnects (NVLink, InfiniBand)
-- The model has many attention heads that can be split across GPUs
-- You want lower communication volume
-- You want faster training speed for moderate sequence lengths (up to ~500k tokens)
-
-**Key Trade-offs:**
-- **Communication Volume:** Ulysses has lower communication volume, making it more efficient with good interconnects. Ring Attention has higher communication volume but is more flexible with different network topologies.
-- **Attention Head Constraints:** Ulysses is limited by the number of attention heads (requires `num_heads >= sp_size`). Ring Attention scales with sequence length regardless of model architecture.
-- **Network Sensitivity:** Ulysses all-to-all communication is sensitive to network latency. Ring Attention uses P2P ring communication which is more tolerant of varying network conditions.
-
-For a detailed comparison, see the [Ulysses and Ring Attention blog post](https://huggingface.co/blog/exploding-gradients/ulysses-ring-attention).
-
-### Ring Attention Implementation (FSDP2)
-
-Ring Attention uses a ring-like communication pattern where each GPU processes a portion of the sequence and passes information to the next GPU in the ring.
-
-#### Requirements and Limitations
-
-1. **Accelerate 1.11.0 or higher** is required for Ring Attention / Context Parallelism support
-2. **FSDP2 (PyTorch FSDP v2)** is required as the distributed training backend
-3. **SDPA attention** - Flash Attention is currently not supported
-4. **Sequence length divisibility** - sequences must be divisible by `cp_size * 2`. This is automatically handled using the `pad_to_multiple_of` parameter in the data collator.
-
-#### Configuration
-
-##### Accelerate Configuration
-
-Use one of the provided accelerate config files (e.g. [`context_parallel_2gpu.yaml`](https://github.com/huggingface/trl/blob/main/examples/accelerate_configs/context_parallel_2gpu.yaml) for 2 GPUs):
-
-```yaml
-compute_environment: LOCAL_MACHINE
-debug: false
-distributed_type: FSDP
-downcast_bf16: 'no'
-enable_cpu_affinity: false
-fsdp_config:
-  fsdp_activation_checkpointing: true  # Enable activation checkpointing for memory efficiency
-  fsdp_auto_wrap_policy: TRANSFORMER_BASED_WRAP
-  fsdp_cpu_ram_efficient_loading: true
-  fsdp_offload_params: false
-  fsdp_reshard_after_forward: true
-  fsdp_state_dict_type: FULL_STATE_DICT
-  fsdp_version: 2
-machine_rank: 0
-main_training_function: main
-mixed_precision: bf16
-num_machines: 1
-num_processes: 2  # Number of GPUs
-rdzv_backend: static
-same_network: true
-tpu_env: []
-tpu_use_cluster: false
-tpu_use_sudo: false
-use_cpu: false
-parallelism_config:
-  parallelism_config_dp_replicate_size: 1
-  parallelism_config_dp_shard_size: 1
-  parallelism_config_tp_size: 1
-  parallelism_config_cp_size: 2  # Context parallel size
+```sh
+accelerate launch \
+    --config_file examples/sft_qwen3_8b_1m_context/context_parallel_8gpu.yaml \
+    examples/sft_qwen3_8b_1m_context/sft_qwen3_8b_1m_context.py
 ```
 
-##### Training Configuration
+The script fine-tunes Qwen3-8B on books from [PG-19](https://huggingface.co/datasets/emozilla/pg19), joined end to end until each one is about a million tokens long. After ten minutes or so of loading and tokenizing, the first step lands:
+
+```
+{'loss': 4.311, 'grad_norm': 29.25, 'num_tokens': 1049000.0, 'epoch': 0.25}
+  8%|▊ | 1/12 [06:20<1:09:41, 380.10s/it]
+```
+
+Three numbers are worth reading:
+
+- **`num_tokens` is 1.049e6.** That is one sequence, not a batch of short ones. Every token attends to every earlier token, across the whole million.
+- **Loss starts at 4.3**, which is a normal starting loss. A run that is subtly misconfigured for long context starts around 10 instead, and we will come back to why.
+- **380 s per step.** One step is one sequence, so that is a little over six minutes per sequence.
+
+Naively, this sequence needs 288 GB per GPU. The rest of this guide is the story of how that comes down to 56.
+
+## What just happened
+
+Everything below builds up from a setup we already know: one GPU, a few thousand tokens per sequence. Things start breaking as the sequence grows, and they break in a fixed order.
+
+### The loss is the first thing to break
+
+Take Qwen3-4B on a single 80 GB card and grow the sequence. The first thing to run out of memory is not the model. It is the loss. Check the memory profile.
+
+<img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/long_context_profile_plain.png" alt="Memory through one training step, with a large block of memory between the forward and backward passes"/>
+
+The peak is between the forward and backward passes, which is where the loss is computed. To understand why the peak is there, we need to look at what the last stages of decoding do and how the loss is built from them.
+
+<img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/long_context_plain_loss.png" alt="Hidden states times the lm_head weights giving a logits matrix of sequence by vocabulary, then the per-token loss"/>
+
+The last layer of the decoder outputs a hidden state of shape \\( L \times H \\), where \\( L \\) is the sequence length and \\( H \\) is the hidden size. This hidden state is then multiplied by the language modeling head weights to produce a logits matrix of shape \\( L \times V \\), where \\( V \\) is the vocabulary size. This matrix is huge, because the sequence is long and the vocabulary is large (over a hundred thousand entries). The loss is then computed with a cross entropy function from that matrix and the target labels, and materializing it is precisely what the peak is.
+
+Can we compute the loss without materializing the whole logits matrix? Yes, we can proceed in chunks.
+
+### The massive logits matrix: chunk it
+
+Instead of computing the logits for the whole sequence at once, we take a few hundred rows at a time, compute the loss for those, and sum the pieces. The entire logits matrix is never held in memory at once. Rows are the dimension that splits cleanly: the loss is a sum over rows, and the softmax inside it runs along the vocabulary of one row, so a chunk of rows carries everything its own loss needs.
+
+<img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/long_context_chunked_loss.png" alt="The same computation one chunk of rows at a time, each chunk freed before the next, summing into the same loss"/>
+
+One big multiplication becomes several smaller ones, and the memory saving is large enough that the loss is never the peak again. TRL uses 256 rows per chunk, which keeps each multiplication big enough to use the GPU well.
+
+The new profile looks like this.
+
+<img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/long_context_profile_chunked.png" alt="The same step with the chunked loss, where the memory stays flat throughout"/>
+
+The peak is gone.
+
+How to enable this in TRL? There is nothing to do: the chunked loss is the default. If you want to opt in to the plain loss, set `loss_type="nll"` in the [`SFTConfig`].
+
+How far does this let us push the sequence? In memory terms, this one change alone takes us from 32k tokens to 160k.
+
+<img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/long_context_scaling.png" alt="Peak memory against sequence length, the plain loss running out of memory far earlier than the chunked loss"/>
+
+### The model has never seen position 100,000: rescale the positions with YaRN
+
+We can fit 160k tokens in memory now. But can the model actually read them?
+
+Qwen3-4B was trained on sequences of 40,960 tokens. The config says so:
 
 ```python
-from trl import SFTConfig
+>>> from transformers import AutoConfig
+>>> AutoConfig.from_pretrained("Qwen/Qwen3-4B").max_position_embeddings
+40960
+```
 
+Every position beyond that is a position the model has never encountered. Nothing crashes, but the run just trains on tokens the model cannot place. Here is the loss on every token of a 160k-token sequence:
+
+<img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/long_context_rope_pertoken_plain.png" alt="Per-token loss along a 160k-token sequence, flat for most of it then climbing steeply near the end"/>
+
+The model does not fall over at 40,960. It keeps going for a while, and only starts to lose the thread past 70k or so. From there it climbs steadily, ending above the unigram entropy of the same text (6.45): worse than a model that ignores the context entirely and predicts from token frequencies alone.
+
+<img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/long_context_rope_scaling.png" alt="The trained range of positions, the much longer range we ask for, and the same range rescaled to fit inside the trained one"/>
+
+Each token comes with its position, and the model learned what positions between 0 and 40,960 mean. Ask it about position 100,000 and it has nothing to go on.
+
+The way out is to never hand it a position it does not know. We rescale: position 100,000 becomes position 25,000, and every position in the sequence lands back inside the range the model knows. The tokens do not change, only the position each one is given. This is what [YaRN](https://huggingface.co/papers/2309.00071) does, and the factor is simply how much further we are going: 40,960 trained, 163,840 wanted, so 4.
+
+How to enable this in TRL? Pass the RoPE configuration when the model is loaded:
+
+```python
 training_args = SFTConfig(
-    # required
-    pad_to_multiple_of=4,           # ensures divisibility by cp_size * 2
-    # to get the most out of CP
-    max_length=16384,               # long sequence length
-    use_liger_kernel=True,          # compatible with CP
-    gradient_checkpointing=False,   # The activation_checkpointing in FSDP config and the gradient_checkpointing in training arg can't be set to True simultaneously
-    per_device_train_batch_size=1,
-    ...
+    ...,
+    model_init_kwargs={
+        "rope_parameters": {
+            "rope_type": "yarn",
+            "rope_theta": 1_000_000,  # has to match what the model ships with
+            "factor": 4.0,
+            "original_max_position_embeddings": 40960,
+        },
+    },
 )
 ```
 
-Then, launch your training script with the appropriate accelerate config file:
+The same measurement, with the rescaled run on top:
 
-```bash
-accelerate launch --config_file context_parallel_2gpu.yaml train.py
+<img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/long_context_rope_pertoken.png" alt="The same per-token loss with a second run using rescaled positions, which stays flat where the first one climbs"/>
+
+The rescaled run stays flat all the way to 160k. Over the last 20k tokens it averages a loss of 2.8, against 7.3 without the rescaling.
+
+### The activations are what is left: offload them
+
+With the loss chunked and the positions rescaled, one GPU takes us to 160k tokens. Then it runs out again. What is filling the card this time?
+
+<img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/profile_layers_plain.png" alt="Memory through one step at 96k tokens, with one red band per layer stacking up through the forward and draining through the backward"/>
+
+The model and its optimizer account for a fixed 22 GB, whatever the sequence length. Above that, each red band is one layer's saved activation, 0.47 GB apiece. They stack up as the forward writes them, sit there, and come off one at a time as the backward consumes them. The grey on top is everything recomputed and thrown away within milliseconds.
+
+TRL already reduces them for you, and it is on by default. Gradient checkpointing keeps only what goes into each layer and throws away everything the layer computes inside itself: the attention scores, the wide MLP intermediate, the norms. When the backward pass needs them it runs the layer a second time to get them back. What survives is one saved tensor per layer, `sequence x hidden` each, and at long sequence lengths that is still the largest thing on the card.
+
+The useful observation is that those tensors are not needed during the forward pass at all. They are written, left alone, and read much later. So they do not have to sit on the GPU in the meantime: they can be moved to CPU memory and brought back when the backward pass reaches them.
+
+```python
+training_args = SFTConfig(..., gradient_checkpointing_kwargs={"offload": True})
 ```
 
-#### Best Practices
+<img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/profile_layers_offload.png" alt="The same step with the activations offloaded, where almost no red bands remain resident"/>
 
-1. **Use the `pad_to_multiple_of` parameter** - This is now the recommended way to ensure sequence length divisibility:
-   - For `cp_size=2`: use `pad_to_multiple_of=4` (since `cp_size * 2 = 4`)
-   - For `cp_size=4`: use `pad_to_multiple_of=8` (since `cp_size * 2 = 8`)
-   - The data collator automatically pads sequences to the required multiple, ensuring compatibility with CP
+Same step, same length: instead of 38 bands stacking up, only 4 are ever resident at once, and the peak drops from 59.9 GB to 48.8 GB. Which buys sequence length:
 
-2. **Do not use packing** - Context parallelism can only express full causal attention: the per-layer attention
-   mask is dropped and replaced by `is_causal=True`. Packed sequences rely on a block-diagonal mask to keep the
-   packed documents separate, so under context parallelism they would attend across document boundaries. TRL raises
-   an error for this combination.
+<img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/long_context_offload.png" alt="Peak memory against sequence length with and without activation offload, the offload line running lower and reaching further"/>
 
-3. **Combine with other memory optimizations** like Liger kernels, bfloat16, and gradient checkpointing
+Below 48k the two are the same, because at that length there is barely anything to move. Past it the offloaded run stays lower, and where the sequence used to stop at 160k it now reaches 256k on the same card.
 
-4. **Start with smaller context parallel sizes** (2-4 GPUs) before scaling up
+This one is not free. Every saved activation crosses to the host and back, and that traffic has to fit between the compute it sits next to.
 
-5. **Monitor memory usage** across all GPUs to ensure balanced workload
+### One GPU is not enough: split the sequence across many
 
-#### Training at 1M tokens and beyond
+Chunked loss, offloaded activations: one card now trains on 256k tokens. How to reach one million? To see what stands in the way, look inside a single layer during the backward pass (grey peaks in the above profile).
 
-With the setup above plus a few levers, SFT scales to million-token sequences on a single 8×H100 node. Verified configurations:
+Gradient checkpointing means the forward keeps almost nothing: each layer stores its input and throws the rest away. The layer is recomputed later, when the backward reaches it, and that is the moment everything exists at once. In the MLP, one line of the model,
 
-| Model | Sequence length | GPUs | Step time | Peak GPU memory |
-|---|---|---|---|---|
-| Qwen3-0.6B | 1M | 8 | 137 s | 27.9 GB |
-| Qwen3-0.6B | 2M | 8 | 538 s | 42.2 GB |
-| Qwen3-0.6B | 4M | 8 | 2135 s | 73.7 GB |
-| Qwen3-8B | 1M | 8 | 380 s | 56.2 GB |
+```python
+down_proj(act_fn(gate_proj(x)) * up_proj(x))
+```
 
-Context length scales with the number of nodes: sequence length and GPU count can be doubled together at roughly 2x step time (because each GPU keeps the same shard of the sequence).
+four tensors are built at the full intermediate width, and the standard implementation keeps all four until the backward has walked past them. At a million tokens, on a model whose MLP widens every token from 2560 to 9728:
 
-| Model | Sequence length | GPUs (`cp_size`) | Step time |
-|---|---|---|---|
-| Qwen3-8B | 1M | 8 (1 node) | 364 s |
-| Qwen3-8B | 2M | 16 (2 nodes) | 696 s |
-| Qwen3-8B | 4M | 32 (4 nodes) | 1346 s |
+```
+gate_proj(x)                             19 GB = 1,048,576 x 9728 x 2 bytes
+act_fn(gate_proj(x))                     19 GB
+up_proj(x)                               19 GB
+act_fn(gate_proj(x)) * up_proj(x)        19 GB
+                                  total  76 GB
+```
 
-These three were measured against each other with a hand-tuned activation offload rather than the config
-above, so read them for the scaling ratio and not as absolute step times.
+76 GB, inside one layer, on a card that has 80 and has already given 30 to the model and its optimizer.
+At this point the answer is not to store the sequence more cleverly. It is to give each GPU less of it.
 
-The levers, roughly in the order you will need them as model size or sequence length grows:
+<img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/long_context_cp.png" alt="A sequence of tokens overflowing a single GPU and running out of memory, then the same sequence cut into four slices that each fit on one GPU"/>
 
-1. **Keep the default `loss_type="chunked_nll"`.** At 1M tokens, materializing `[seq, vocab]` logits costs tens of GB per GPU; the chunked loss never does.
-2. **Offload checkpointed activations to host memory** (≥ ~1.5M tokens, or ≥ ~8B parameters): pass `gradient_checkpointing_kwargs={"offload": True}`, which needs transformers from main until the next release. Each checkpointed layer's input — the dominant surviving activation, `layers × seq/cp × hidden` bytes — moves to pinned host memory during the forward and returns on demand during the backward. Both copies run on the compute stream, so the step gets slower.
-3. **Context extension needs RoPE scaling.** A base model evaluated at positions far beyond its trained range starts at a high loss (10.6 vs 4.4 for Qwen3-8B at 1M with YaRN ×32). Configure it at load time, and note that in transformers v5 `rope_theta` lives inside `rope_parameters`, so the override must carry it:
+Give each GPU one slice of the sequence. With four of them, every GPU holds 262,144 tokens instead of 1,048,576. The four tensors shrink with it: 19 GB rather than 76, which alongside the model's 30 GB fits on the card.
 
-   ```python
-   model_init_kwargs={
-       "rope_parameters": {"rope_type": "yarn", "rope_theta": 1000000, "factor": 32, "original_max_position_embeddings": 32768},
-   }
-   ```
+**The obvious objection is attention**. Every token has to attend to every earlier token, and no GPU has the earlier tokens. So the GPUs exchange what they are missing, and what comes out is exactly what one enormous GPU would have computed.
 
-Context parallelism can only express full causal attention, which constrains what it can train:
+There are two ways to run that exchange, context parallelism (CP) and Ulysses sequence parallelism (SP).
 
-- **Full-attention models only.** Models with sliding-window or chunked attention layers cannot be used: their
-  per-layer mask has to be dropped, which would silently turn those layers into full causal attention.
-  Accelerate rejects such models. This rules out much of the current crop — gpt-oss (every other layer),
-  Gemma 3 and Gemma 4 (five of every six), Muse-Glimmer (39 of 52), Mistral and Ministral (every layer).
-- **No packing**, for the same reason: packed documents are kept apart by a block-diagonal mask, which is
-  dropped too. TRL raises for this combination.
+| | CP | SP |
+| --- | --- | --- |
+| FSDP2 | ✅ | ❌ |
+| DeepSpeed | ❌ | ✅ |
+| Setting | `cp_size` | `sp_size` |
+| What gets split | the tokens | the attention heads |
+| How far it scales | any number of GPUs | up to the number of KV heads, 8 here |
+| Attention | SDPA, causal only | SDPA or FlashAttention |
+| Requires | accelerate 1.11 | accelerate 1.12, DeepSpeed 0.18.1 |
 
-Attention is quadratic, so step time grows ~4× for every 2× in sequence length (137 s → 538 s → 2135 s for 0.6B at 1M/2M/4M), while memory — with the levers above — grows roughly linearly.
+**On FSDP2, use CP.** Each GPU keeps its own slice, and the other slices come to it in turn, so every token eventually sees every earlier token.
 
-#### Benchmarking Ring Attention
+```yaml
+parallelism_config:
+  parallelism_config_cp_size: 4
+```
 
-We benchmarked Ring Attention to highlight its potential improvements in training efficiency.  
-Our experiments were conducted using **1, 2, 4, and 8 H100 GPUs**, though the results can be extended to larger clusters with more nodes and GPUs.
+**On DeepSpeed, use SP.** Instead of moving slices around, it reshuffles the batch just before attention so each GPU holds every token but only a quarter of the attention heads, then shuffles back afterwards.
 
-For the setup, we fine-tuned an **8B model** ([Qwen/Qwen3-8B](https://huggingface.co/Qwen/Qwen3-8B)) using the provided accelerate configuration  
-([`context_parallel_2gpu.yaml`](https://github.com/huggingface/trl/blob/main/examples/accelerate_configs/context_parallel_2gpu.yaml)).  
-We adjusted `num_processes` and `parallelism_config_cp_size` based on the number of GPUs for each run.  
-Training was performed with the [sft.py](https://github.com/huggingface/trl/blob/main/trl/scripts/sft.py) example script, combined with the parameters described above.
+```yaml
+parallelism_config:
+  parallelism_config_sp_size: 4
+```
 
-The results below summarize the **maximum trainable sequence length** and **iterations per second** for different numbers of GPUs. A value marked as `OOM` indicates that the configuration ran out of memory and could not be trained.  
+The two knobs do not cross over today: `cp_size` requires FSDP2 and `sp_size` only runs under DeepSpeed. Pick the backend and the method follows. The rest of this section follows the FSDP2 path, which is what the example at the top of this guide uses: its GPUs are not independent workers on separate batches, they are one group sharing a single sequence.
 
-These results show that **Context Parallelism (CP) scales effectively with more GPUs**, enabling training on much longer sequences. With **8 GPUs**, context lengths of over **300k tokens** become feasible, unlocking training with extremely long contexts while maintaining reasonable throughput.  
+Two things change once it is on:
 
-<div class="flex justify-center">
-  <img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/context_parallelism_max_length_plot.png" alt="CP Max content length" width="45%"/>
-  <img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/context_parallelism_s_it_plot.png" alt="CP seconds/iteration" width="45%"/>
-</div>
+1. Sequences have to be padded to a multiple of `cp_size * 2`, so `pad_to_multiple_of=8` (in the [`SFTConfig`]) for four GPUs.
+2. The causal-SDPA requirement rules out packing, which relies on a block-diagonal mask to keep documents from reading each other, and TRL raises if you ask for both. It also rules out models whose layers use sliding-window or chunked attention, which accelerate refuses: OpenAI GPT-OSS, Gemma 3 and 4, Qwen3.5 and later. Qwen3 and Qwen3-MoE are full attention throughout, which is why they are the models here.
+
+Passing the slices around costs less than you might expect. At 131k tokens on one node, a step takes 34.6 s across two GPUs, 17.8 s across four and 9.5 s across eight. Each doubling of the group nearly halves the step time, and going from two to eight recovers 3.7x of a possible 4x.
+
+And that is the last of the four levers:
+
+<img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/long_context_cp_scaling.png" alt="Peak memory against sequence length on one GPU and on four with context parallelism, the four-GPU line reaching a million tokens where the single GPU stops just past 256k"/>
+
+One card stops just past 256k. Four of them take the whole million!, landing at 63.6 GB with room to spare. The sequence this guide opened with fits.
 
 > [!TIP]
-> Accelerate also supports **N-Dimensional Parallelism (ND-parallelism)**, which enables you to combine different parallelization strategies to efficiently distribute model training across multiple GPUs.  
->
-> You can learn more and explore configuration examples in the [Accelerate ND-parallelism guide](https://github.com/huggingface/accelerate/blob/main/examples/torch_native_parallelism/README.md#nd-parallelism).
+> Set `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`. At a million tokens the run above needs 63.6 GB on an 80 GB card, and still fails without it: the tensors it asks for are large and contiguous, and the allocator cannot find room for them among the blocks it already holds.
 
-### ALST/Ulysses Implementation (DeepSpeed)
+## Further reading
 
-ALST (Arctic Long Sequence Training) / Ulysses uses attention head parallelism to split long sequences across GPUs, working with DeepSpeed's ZeRO optimizer.
-
-> [!NOTE]
-> **Technical Note on Parallelism Configuration:**
-> - **DeepSpeed ALST/Ulysses** uses `sp_size` with `sp_backend="deepspeed"` in both YAML and Python API
-> - **Ring Attention (FSDP2)** uses `cp_size` with `cp_backend="torch"`
->
-> The Trainer automatically accounts for both CP and SP when calculating effective batch sizes and training metrics.
-
-#### Requirements and Limitations
-
-1. **DeepSpeed 0.18.1 or higher** is required
-2. **Accelerate 1.12.0 or higher** is required for ALST/Ulysses sequence parallelism support
-3. **Attention implementation** - Flash Attention 2 recommended (clean output), SDPA works as fallback
-4. **Sequence length divisibility** - sequences must be divisible by `sp_size`. Use `pad_to_multiple_of` in your training config.
-5. **Parallelism configuration** - You must ensure `dp_replicate_size × dp_shard_size × sp_size = num_processes`
-
-#### Configuration
-
-##### Accelerate Configuration
-
-Use the provided accelerate config file ([`alst_ulysses_4gpu.yaml`](https://github.com/huggingface/trl/blob/main/examples/accelerate_configs/alst_ulysses_4gpu.yaml)):
-
-```yaml
-compute_environment: LOCAL_MACHINE
-debug: false
-deepspeed_config:
-  zero_stage: 3
-  seq_parallel_communication_data_type: bf16
-distributed_type: DEEPSPEED
-mixed_precision: bf16
-num_machines: 1
-num_processes: 4  # Number of GPUs
-parallelism_config:
-  parallelism_config_dp_replicate_size: 1
-  parallelism_config_dp_shard_size: 2  # Enables 2D parallelism with SP
-  parallelism_config_tp_size: 1
-  parallelism_config_sp_size: 2  # Sequence parallel size
-  parallelism_config_sp_backend: deepspeed
-  parallelism_config_sp_seq_length_is_variable: true
-  parallelism_config_sp_attn_implementation: flash_attention_2
-```
-
-##### Training Configuration
-
-```python
-from trl import SFTConfig
-
-training_args = SFTConfig(
-    # required
-    pad_to_multiple_of=2,    # Must equal sp_size
-    # to get the most out of SP
-    max_length=4096,
-    packing=True,
-    attn_implementation="flash_attention_2",
-    per_device_train_batch_size=1,
-    ...
-)
-```
-
-Then, launch your training script with the appropriate accelerate config file:
-
-```bash
-accelerate launch --config_file examples/accelerate_configs/alst_ulysses_4gpu.yaml train.py
-```
-
-#### 2D Parallelism
-
-The 4 GPU configuration above automatically enables 2D parallelism by combining Data Parallelism (DP) with Sequence Parallelism (SP). With `sp_size=2` and `dp_shard_size=2`, the 4 GPUs are organized as:
-- 2 sequence parallel groups (processing the same data split across sequences)
-- 2 data parallel groups (processing different data)
-
-To adjust the parallelism for different GPU counts, modify the YAML config:
-
-| GPUs | sp_size | dp_shard_size | Use Case | YAML Changes |
-|------|---------|---------------|----------|--------------|
-| 4 | 2 | 2 | Balanced - longer sequences + more data | `num_processes: 4`, `sp_size: 2`, `dp_shard_size: 2` |
-| 4 | 4 | 1 | Pure SP for maximum sequence length | `num_processes: 4`, `sp_size: 4`, `dp_shard_size: 1` |
-| 8 | 2 | 4 | Large-scale training | `num_processes: 8`, `sp_size: 2`, `dp_shard_size: 4` |
-
-#### Best Practices
-
-1. **Use `pad_to_multiple_of`** to ensure sequences are divisible by `sp_size`
-2. **Use Flash Attention 2** for clean output (SDPA works but shows packing warnings)
-3. **Start with `sp_size=2`** before scaling to larger values
-4. **Use DeepSpeed ZeRO Stage 3** for large models
-5. **Combine with memory optimizations** like Liger kernels and gradient checkpointing
-6. **Validate parallelism config**: Ensure `dp_replicate_size × dp_shard_size × sp_size = num_processes`
-
-#### Complete Example
-
-Here's how to run ALST/Ulysses training using the built-in [`sft.py`](https://github.com/huggingface/trl/blob/main/trl/scripts/sft.py) script with 4 GPUs:
-
-```bash
-accelerate launch --config_file examples/accelerate_configs/alst_ulysses_4gpu.yaml \
-    trl/scripts/sft.py \
-    --model_name_or_path Qwen/Qwen2-0.5B \
-    --dataset_name trl-lib/Capybara \
-    --learning_rate 2e-4 \
-    --max_steps 100 \
-    --max_seq_length 4096 \
-    --packing \
-    --packing_strategy wrapped \
-    --dtype bfloat16 \
-    --attn_implementation flash_attention_2 \
-    --output_dir output-alst-4gpu \
-    --logging_steps 10 \
-    --report_to trackio
-```
-
-This command automatically:
-- Configures 2D parallelism (SP=2, DP=2) across 4 GPUs
-- Uses Flash Attention 2 for clean training
-- Enables packing with automatic padding to ensure sequence divisibility
-- Leverages DeepSpeed ZeRO Stage 3 for memory efficiency
-
-### Further Reading
-
-#### General Resources
-- [Hugging Face Blog: Understanding Ulysses and Ring Attention](https://huggingface.co/blog/exploding-gradients/ulysses-ring-attention) - Detailed comparison of Ring Attention vs Ulysses approaches
-- [Accelerate: Context Parallelism Guide](https://huggingface.co/docs/accelerate/concept_guides/context_parallelism)
-- [Hugging Face Blog: Enabling Long-Context Training with Sequence Parallelism in Axolotl](https://huggingface.co/blog/axolotl-ai-co/long-context-with-sequence-parallelism-in-axolotl)
-
-#### Ring Attention (FSDP2)
-- [Ultrascale Playbook - Context Parallelism](https://huggingface.co/spaces/nanotron/ultrascale-playbook?section=context_parallelism)
-- [Accelerate Example: 128k Sequence Length](https://github.com/huggingface/accelerate/blob/main/examples/torch_native_parallelism/README.md#context-parallelism-128k-sequence-length)
-- [Accelerate ND-parallelism Guide](https://github.com/huggingface/accelerate/blob/main/examples/torch_native_parallelism/README.md#nd-parallelism)
-
-#### ALST/Ulysses (DeepSpeed)
-- [DeepSpeed Sequence Parallelism Documentation](https://www.deepspeed.ai/tutorials/ds-sequence/)
-- [Snowflake Engineering Blog: Arctic Long Sequence Training (ALST)](https://www.snowflake.com/en/engineering-blog/arctic-long-sequence-training-multi-million-token-ai/)
+- [Context parallelism](https://huggingface.co/docs/accelerate/concept_guides/context_parallelism), the accelerate guide to `cp_size` and the device mesh it builds.
+- [Ulysses and ring attention](https://huggingface.co/blog/exploding-gradients/ulysses-ring-attention), on how the two exchanges differ and what each costs to communicate.
+- [YaRN](https://huggingface.co/papers/2309.00071), the position rescaling used in the RoPE section.
