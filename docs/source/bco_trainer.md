@@ -12,7 +12,7 @@ The [`experimental.bco.BCOTrainer`] supports both [conversational](dataset_forma
 
 ## Expected model format
 
-The BCO trainer expects a model of `AutoModelForCausalLM`, compared to PPO that expects `AutoModelForCausalLMWithValueHead` for the value function.
+The BCO trainer expects a model of `AutoModelForCausalLM`.
 
 ## Using the `BCOTrainer`
 
