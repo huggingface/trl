@@ -1494,9 +1494,10 @@ class KTOTrainer(_BaseTrainer):
         mode = "train" if self.model.training else "eval"
         batch = {k: (v.to(self.accelerator.device) if isinstance(v, torch.Tensor) else v) for k, v in inputs.items()}
 
-        labels = batch["label"]
-        num_chosen = labels.to(self.accelerator.device)
-        num_rejected = ~num_chosen
+        # Datasets may carry 0/1 integer labels; `~` on an integer tensor is a bitwise inversion, so cast first.
+        labels = torch.as_tensor(batch["label"], dtype=torch.bool, device=self.accelerator.device)
+        num_chosen = labels
+        num_rejected = ~labels
 
         KL_logps = self._compute_kl_logps(model, batch)
 

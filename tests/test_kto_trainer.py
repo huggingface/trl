@@ -81,8 +81,9 @@ def test_metrics_with_a_single_label_class_in_bfloat16(label):
     assert f"rewards/{absent}" not in trainer._metrics["train"]
 
 
+@pytest.mark.parametrize("label_dtype", [torch.bool, torch.int64])
 @pytest.mark.parametrize("outlier_label", [True, False])
-def test_entropy_ignores_duplicate_padding(outlier_label):
+def test_entropy_ignores_duplicate_padding(outlier_label, label_dtype):
     shift_logits = torch.tensor(
         [
             [[10.0, 0.0], [10.0, 0.0]],
@@ -109,7 +110,7 @@ def test_entropy_ignores_duplicate_padding(outlier_label):
         "input_ids": torch.zeros(3, 3, dtype=torch.long),
         "attention_mask": torch.ones(3, 3, dtype=torch.long),
         "completion_mask": torch.ones(3, 3, dtype=torch.long),
-        "label": torch.tensor([True, False, outlier_label]),
+        "label": torch.tensor([True, False, outlier_label], dtype=label_dtype),
         "ref_logps": torch.zeros(3),
         "ref_KL_logps": torch.zeros(3),
     }
