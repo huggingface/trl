@@ -234,7 +234,7 @@ class NashMDTrainer(OnlineDPOTrainer):
     @property
     def mixture_coef(self):
         if isinstance(self._mixture_coef, list):
-            epoch = self.state.epoch
+            epoch = int(self.state.epoch or 0)
             return self._mixture_coef[epoch] if epoch < len(self._mixture_coef) else self._mixture_coef[-1]
         else:
             return self._mixture_coef

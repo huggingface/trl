@@ -14,7 +14,7 @@
 
 import pytest
 from datasets import DatasetDict, load_dataset
-from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer, TrainerState
 from transformers.utils import is_peft_available
 
 from trl.experimental.xpo import XPOConfig, XPOTrainer
@@ -24,6 +24,15 @@ from ..testing_utils import TrlTestCase, require_peft
 
 if is_peft_available():
     from peft import LoraConfig, get_peft_model
+
+
+@pytest.mark.parametrize("epoch, expected_alpha", [(None, 0.1), (0.25, 0.1), (1.0, 0.2), (2.0, 0.2)])
+def test_alpha_schedule(epoch, expected_alpha):
+    trainer = object.__new__(XPOTrainer)
+    trainer._alpha = [0.1, 0.2]
+    trainer.state = TrainerState(epoch=epoch)
+
+    assert trainer.alpha == expected_alpha
 
 
 @pytest.mark.low_priority
