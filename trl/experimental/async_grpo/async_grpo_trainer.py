@@ -684,6 +684,77 @@ def _iter_vllm_named_params(model: torch.nn.Module) -> Iterator[tuple[str, torch
         yield name, param
 
 
+def select_adapter_sync(server_info: dict, model: "PeftModel", args: AsyncGRPOConfig) -> bool:
+    """
+    Decide whether weight syncs push the adapter alone instead of merged base weights.
+
+    A pure function of what the server reported and what is about to be trained, so it can be tested with the dict
+    `/server_info` returns rather than with a server. Anything vLLM's adapter format cannot express falls back to the
+    merged path with a warning. A server that is merely misconfigured — too low a rank, too few adapter slots — raises
+    instead, rather than silently syncing 100x the bytes its launch line asked for.
+
+    Args:
+        server_info (`dict`):
+            The server's resolved `vllm_config`, as returned by [`VLLMClient.get_server_info`]. Only `lora_config` and
+            `parallel_config.data_parallel_size` are read.
+        model ([`~peft.PeftModel`]):
+            The PEFT-wrapped model about to be trained.
+        args ([`AsyncGRPOConfig`]):
+            The training arguments; `max_staleness` sets how many adapter versions the server must hold at once.
+
+    Returns:
+        `bool`:
+            Whether syncs should push only the adapter.
+    """
+    # `lora_config` is `None` unless the server was started with `--enable-lora`, making it the capability probe.
+    server_lora_config = server_info["lora_config"]
+    if server_lora_config is None:
+        logger.warning(
+            "Training a PEFT model against a vLLM server started without `--enable-lora`: every weight sync has "
+            "to merge the adapter into the base model and push the full weights. Restart the server with "
+            "`--enable-lora --max-lora-rank <r>` and `VLLM_ALLOW_RUNTIME_LORA_UPDATING=1` in its environment to "
+            "push only the adapter instead (~1% of the bytes)."
+        )
+        return False
+
+    # `/v1/load_lora_adapter` reaches only the data-parallel replica that answered it, leaving the others on
+    # the base model. The merged path has no such problem, so hand data-parallel servers to it.
+    if server_info["parallel_config"]["data_parallel_size"] > 1:
+        logger.warning(
+            "Falling back to merged-weight vLLM sync: the server runs with `--data-parallel-size > 1`, where a "
+            "loaded adapter reaches only the replica that received the request."
+        )
+        return False
+
+    try:
+        peft_config = validate_lora_for_vllm_sync(model)
+    except ValueError as error:
+        logger.warning(f"Falling back to merged-weight vLLM sync. {error}")
+        return False
+
+    # `rank_pattern` can lift individual modules above the base `r`.
+    adapter_rank = max([peft_config.r, *peft_config.rank_pattern.values()])
+    if server_lora_config["max_lora_rank"] < adapter_rank:
+        raise ValueError(
+            f"The adapter has rank {adapter_rank}, but the vLLM server was started with `--max-lora-rank "
+            f"{server_lora_config['max_lora_rank']}`. Restart it with `--max-lora-rank "
+            f"{round_lora_rank(adapter_rank)}`."
+        )
+    # `max_staleness` bounds how many policies back a sample may still be consumed from, so `max_staleness + 1`
+    # adapters can be named by in-flight requests at once. Each sync loads the new version before unloading the one
+    # that just fell out of that window, so the server briefly holds one more — and vLLM does not reject the extra
+    # load, it silently evicts the oldest still-servable adapter.
+    min_loras = args.max_staleness + 2
+    if server_lora_config["max_loras"] < min_loras:
+        raise ValueError(
+            f"The vLLM server was started with `--max-loras {server_lora_config['max_loras']}`, but "
+            f"`max_staleness={args.max_staleness}` lets requests still name {min_loras - 1} distinct policy "
+            f"versions, and each sync loads the next one before unloading the oldest. Restart the server with "
+            f"`--max-loras {min_loras}`, or lower `max_staleness`."
+        )
+    return True
+
+
 class AsyncGRPOTrainer(_BaseTrainer):
     """
     Trainer for the Group Relative Policy Optimization (GRPO) method. This algorithm was initially proposed in the
@@ -1117,70 +1188,15 @@ class AsyncGRPOTrainer(_BaseTrainer):
             self.add_callback(_EpochStopCallback(self, self._epoch_stop_groups))
 
     def _init_lora_sync(self, model: "PeftModel") -> bool:
-        """Decide whether weight syncs push the adapter alone instead of merged base weights. Main process only.
-
-        Anything vLLM's adapter format cannot express falls back to the merged path with a warning, since that path
-        handles every rejected case correctly. A server that is merely misconfigured — too low a rank, too few adapter
-        slots — raises instead, rather than silently syncing 100x the bytes its launch line asked for.
-
-        Args:
-            model ([`~peft.PeftModel`]):
-                The PEFT-wrapped model about to be trained.
-
-        Returns:
-            `bool`:
-                Whether syncs should push only the adapter.
-        """
+        """Probe the server and decide the sync mode. Main process only; the decision itself is [`select_adapter_sync`]."""
         self.vllm_client.wait_for_server_ready()
-        server_info = self.vllm_client.get_server_info()
-        # `lora_config` is `None` unless the server was started with `--enable-lora`, making it the capability probe.
-        server_lora_config = server_info["lora_config"]
-        if server_lora_config is None:
-            logger.warning(
-                "Training a PEFT model against a vLLM server started without `--enable-lora`: every weight sync has "
-                "to merge the adapter into the base model and push the full weights. Restart the server with "
-                "`--enable-lora --max-lora-rank <r>` and `VLLM_ALLOW_RUNTIME_LORA_UPDATING=1` in its environment to "
-                "push only the adapter instead (~1% of the bytes)."
+        lora_sync = select_adapter_sync(self.vllm_client.get_server_info(), model, self.args)
+        if lora_sync:
+            logger.info(
+                f"Adapter-only vLLM sync enabled: syncs publish the '{self._adapter_name}' adapter as "
+                f"'{self._lora_name}-v{{N}}' from {self._lora_dir}, which the vLLM server must be able to read."
             )
-            return False
-
-        # `/v1/load_lora_adapter` reaches only the data-parallel replica that answered it, leaving the others on
-        # the base model. The merged path has no such problem, so hand data-parallel servers to it.
-        if server_info["parallel_config"]["data_parallel_size"] > 1:
-            logger.warning(
-                "Falling back to merged-weight vLLM sync: the server runs with `--data-parallel-size > 1`, where a "
-                "loaded adapter reaches only the replica that received the request."
-            )
-            return False
-
-        try:
-            peft_config = validate_lora_for_vllm_sync(model)
-        except ValueError as error:
-            logger.warning(f"Falling back to merged-weight vLLM sync. {error}")
-            return False
-
-        # `rank_pattern` can lift individual modules above the base `r`.
-        adapter_rank = max([peft_config.r, *peft_config.rank_pattern.values()])
-        if server_lora_config["max_lora_rank"] < adapter_rank:
-            raise ValueError(
-                f"The adapter has rank {adapter_rank}, but the vLLM server was started with `--max-lora-rank "
-                f"{server_lora_config['max_lora_rank']}`. Restart it with `--max-lora-rank "
-                f"{round_lora_rank(adapter_rank)}`."
-            )
-        # `max_staleness` bounds how many policies back a sample may still be consumed from, so `max_staleness + 1`
-        min_loras = self.args.max_staleness + 2
-        if server_lora_config["max_loras"] < min_loras:
-            raise ValueError(
-                f"The vLLM server was started with `--max-loras {server_lora_config['max_loras']}`, but "
-                f"`max_staleness={self.args.max_staleness}` lets requests still name {min_loras - 1} distinct policy "
-                f"versions, and each sync loads the next one before unloading the oldest. Restart the server with "
-                f"`--max-loras {min_loras}`, or lower `max_staleness`."
-            )
-        logger.info(
-            f"Adapter-only vLLM sync enabled: syncs publish the '{self._adapter_name}' adapter as "
-            f"'{self._lora_name}-v{{N}}' from {self._lora_dir}, which the vLLM server must be able to read."
-        )
-        return True
+        return lora_sync
 
     def get_train_dataloader(self) -> DataLoader:
         num_processes = self.accelerator.num_processes
