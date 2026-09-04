@@ -3018,6 +3018,12 @@ class GRPOTrainer(_BaseTrainer):
             )
         else:
             normalizer = self.current_gradient_accumulation_steps if mode == "train" else 1.0  # no accum in eval
+        # `_compute_loss` logs `policy_loss` for the non-Liger path, which this path never reaches, so log the same
+        # quantity here. Match where each branch of `_compute_loss` captures it: DAPO/CISPO/VESPO build the loss
+        # with the normalizer already divided in and capture afterwards, while the other loss types capture before
+        # the accumulation rescale. Liger rejects the entropy bonus, so nothing else is folded in either way.
+        policy_loss = loss / normalizer if self.loss_type in ["cispo", "dapo", "vespo"] else loss
+        self._metrics[mode]["policy_loss"].append(self.accelerator.gather(policy_loss.detach()).nanmean().item())
         return loss / normalizer
 
     @profiling_decorator
@@ -3272,6 +3278,11 @@ class GRPOTrainer(_BaseTrainer):
         else:
             raise ValueError(f"Unknown loss type: {self.loss_type}")
 
+        # Log for every run, not only the ones with an entropy bonus enabled. `policy_loss` is captured after the
+        # KL term is folded in above, so with `beta != 0` it carries that too; it excludes only the entropy bonus
+        # and the MoE auxiliary loss, both added below.
+        self._metrics[mode]["policy_loss"].append(self.accelerator.gather(policy_loss).nanmean().item())
+
         # Entropy bonus: add entropy regularization to encourage exploration. _entropy_bonus_enabled is set
         # whenever a non-zero static coef is set OR adaptive mode is enabled (adaptive stays enabled even when
         # entropy_coef has been decremented to entropy_coef_min so it can recover once entropy drops again).
@@ -3298,8 +3309,6 @@ class GRPOTrainer(_BaseTrainer):
                 apply_coef = self.entropy_coef
 
             loss = loss - apply_coef * entropy_loss
-
-            self._metrics[mode]["policy_loss"].append(self.accelerator.gather(policy_loss).nanmean().item())
 
             # Adaptive update. Gated on train mode so evaluation cannot mutate the entropy controller state.
             if self.use_adaptive_entropy and mode == "train":

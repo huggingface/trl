@@ -48,6 +48,7 @@ class TestGSPOTokenTrainer(TrlTestCase):
         trainer.train()
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
+        assert any("policy_loss" in log for log in trainer.state.log_history)
 
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
