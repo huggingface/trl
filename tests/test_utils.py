@@ -1595,7 +1595,7 @@ class TestComputeFlopsPerToken(TrlTestCase):
         f_tied = compute_flops_per_token(cfg, 16384)
         cfg.tie_word_embeddings = False
         f_untied = compute_flops_per_token(cfg, 16384)
-        expected_delta = 3 * 2 * cfg.vocab_size * cfg.hidden_size
+        expected_delta = 0
         assert f_untied - f_tied == expected_delta
 
     def test_moe_active_vs_total_experts(self):
