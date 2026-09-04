@@ -13,10 +13,20 @@
 # limitations under the License.
 
 
+import pytest
+import torch
 from datasets import Dataset, load_dataset
+from torch import nn
 from transformers import AutoTokenizer
 
-from trl.experimental.utils import DataCollatorForChatML, prepare_peft_model, truncate_dataset
+from trl.data_utils import apply_chat_template
+from trl.experimental.utils import (
+    DataCollatorForChatML,
+    get_reward,
+    get_reward_from_policy_tokens,
+    prepare_peft_model,
+    truncate_dataset,
+)
 
 from ..testing_utils import TrlTestCase, require_bitsandbytes, require_peft, require_torch_accelerator
 
@@ -182,3 +192,233 @@ class TestPreparePeftModel(TrlTestCase):
 
         fp32 = [name for name, param in model.named_parameters() if param.dtype == torch.float32]
         assert fp32 == [], f"expected no float32 params after prepare_peft_model, got e.g. {fp32[:5]}"
+
+
+class _TinyBackbone(nn.Module):
+    def __init__(self, vocab_size, hidden_size):
+        super().__init__()
+        self.embed = nn.Embedding(vocab_size, hidden_size)
+
+    def forward(
+        self,
+        input_ids,
+        attention_mask=None,
+        position_ids=None,
+        return_dict=True,
+        output_hidden_states=True,
+        use_cache=False,
+    ):
+        hidden = self.embed(input_ids)
+
+        class Output:
+            pass
+
+        output = Output()
+        output.hidden_states = (hidden, hidden)
+        return output
+
+
+class _TinyRewardModel(nn.Module):
+    def __init__(self, vocab_size, hidden_size=8):
+        super().__init__()
+        self.base_model_prefix = "model"
+        self.config = type("Config", (), {"vocab_size": vocab_size, "hidden_size": hidden_size})()
+        self.model = _TinyBackbone(vocab_size, hidden_size)
+        self.score = nn.Linear(hidden_size, 1, bias=False)
+
+
+class _IndexReportingBackbone(nn.Module):
+    def __init__(self, vocab_size, hidden_size):
+        super().__init__()
+        self.embed = nn.Embedding(vocab_size, hidden_size)
+
+    def forward(
+        self,
+        input_ids,
+        attention_mask=None,
+        position_ids=None,
+        return_dict=True,
+        output_hidden_states=True,
+        use_cache=False,
+    ):
+        hidden = self.embed(input_ids).clone()
+        token_index = torch.arange(input_ids.size(1), device=input_ids.device, dtype=hidden.dtype)
+        hidden[..., 0] = token_index
+        output = type("Output", (), {})()
+        output.hidden_states = (hidden, hidden)
+        return output
+
+
+class _IndexReportingRewardModel(nn.Module):
+    """`score` returns the token index so tests can see which position was selected."""
+
+    def __init__(self, vocab_size, hidden_size=8):
+        super().__init__()
+        self.base_model_prefix = "model"
+        self.config = type("Config", (), {"vocab_size": vocab_size, "hidden_size": hidden_size})()
+        self.model = _IndexReportingBackbone(vocab_size, hidden_size)
+        self.score = nn.Linear(hidden_size, 1, bias=False)
+        with torch.no_grad():
+            self.score.weight.zero_()
+            self.score.weight[0, 0] = 1.0
+
+
+class TestGetRewardFromPolicyTokens(TrlTestCase):
+    def setup_method(self):
+        self.policy_tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
+        self.reward_tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-LlamaForCausalLM-3.2")
+        if self.policy_tokenizer.pad_token is None:
+            self.policy_tokenizer.pad_token = self.policy_tokenizer.eos_token
+        if self.reward_tokenizer.pad_token is None:
+            self.reward_tokenizer.pad_token = self.reward_tokenizer.eos_token
+        reward_vocab = max(self.reward_tokenizer.vocab_size, len(self.reward_tokenizer))
+        self.reward_model = _TinyRewardModel(reward_vocab)
+
+    def test_retokenizes_policy_ids_outside_reward_vocab(self):
+        prompt = "hello"
+        completion = " world"
+        prompt_ids = self.policy_tokenizer(prompt, add_special_tokens=False, return_tensors="pt")["input_ids"]
+        completion_ids = self.policy_tokenizer(completion, add_special_tokens=False, return_tensors="pt")["input_ids"]
+        query_responses = torch.cat([prompt_ids, completion_ids], dim=1)
+        context_length = prompt_ids.shape[1]
+
+        oob_id = self.reward_model.config.vocab_size
+        if oob_id < self.policy_tokenizer.vocab_size:
+            query_responses = query_responses.clone()
+            query_responses[0, -1] = oob_id
+            with pytest.raises((IndexError, RuntimeError)):
+                get_reward(self.reward_model, query_responses, self.reward_tokenizer.pad_token_id, context_length)
+
+        scores = get_reward_from_policy_tokens(
+            self.reward_model,
+            query_responses,
+            context_length,
+            [prompt],
+            self.policy_tokenizer,
+            self.reward_tokenizer,
+        )
+        assert scores.shape == (1,)
+        assert torch.isfinite(scores).all()
+
+    def test_conversational_prompts(self):
+        prompt = [{"role": "user", "content": "Hi"}]
+        completion = "Hello"
+        completion_ids = self.policy_tokenizer(completion, add_special_tokens=False, return_tensors="pt")["input_ids"]
+        context_length = 1
+        query_responses = torch.cat([torch.zeros((1, context_length), dtype=torch.long), completion_ids], dim=1)
+
+        scores = get_reward_from_policy_tokens(
+            self.reward_model,
+            query_responses,
+            context_length,
+            [prompt],
+            self.policy_tokenizer,
+            self.reward_tokenizer,
+        )
+        assert scores.shape == (1,)
+        assert torch.isfinite(scores).all()
+
+    def test_conversational_scores_last_token_not_prompt_eos(self):
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
+        tokenizer.pad_token = tokenizer.eos_token
+        assert tokenizer.pad_token_id == tokenizer.eos_token_id
+
+        prompt = [{"role": "user", "content": "Hi"}]
+        completion = "Hello there"
+        example = {"messages": prompt + [{"role": "assistant", "content": completion}]}
+        text = apply_chat_template(example, tokenizer)["text"]
+        encoded = tokenizer(text, add_special_tokens=False, return_tensors="pt")
+        token_ids = encoded["input_ids"][0]
+        pad_positions = (token_ids == tokenizer.pad_token_id).nonzero(as_tuple=False)
+        last_index = token_ids.size(0) - 1
+        assert pad_positions.numel() > 0, "chat template must emit eos/pad at turn boundaries for this test"
+        first_pad_index = int(pad_positions[0])
+        assert first_pad_index < last_index, "first pad/eos must not be the completion end"
+
+        vocab = max(tokenizer.vocab_size, len(tokenizer), int(token_ids.max()) + 1)
+        reward_model = _IndexReportingRewardModel(vocab)
+        completion_ids = tokenizer(completion, add_special_tokens=False, return_tensors="pt")["input_ids"]
+        context_length = 2
+        query_responses = torch.cat([torch.zeros((1, context_length), dtype=torch.long), completion_ids], dim=1)
+
+        scores = get_reward_from_policy_tokens(
+            reward_model,
+            query_responses,
+            context_length,
+            [prompt],
+            tokenizer,
+            tokenizer,
+        )
+        scored_index = int(scores.item())
+        assert scored_index == last_index
+        assert scored_index != first_pad_index - 1
+
+    def test_batched_chat_padding_scores_per_row_last_token(self):
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
+        tokenizer.pad_token = tokenizer.eos_token
+        prompts = [
+            [{"role": "user", "content": "Hi"}],
+            [{"role": "user", "content": "A much longer user question for padding"}],
+        ]
+        completions = ["Yes", "This is a longer assistant reply"]
+        expected = []
+        for prompt, completion in zip(prompts, completions, strict=True):
+            text = apply_chat_template(
+                {"messages": prompt + [{"role": "assistant", "content": completion}]}, tokenizer
+            )["text"]
+            token_ids = tokenizer(text, add_special_tokens=False, return_tensors="pt")["input_ids"][0]
+            expected.append(token_ids.size(0) - 1)
+
+        vocab = max(tokenizer.vocab_size, len(tokenizer))
+        reward_model = _IndexReportingRewardModel(vocab)
+        completion_ids = tokenizer(completions, add_special_tokens=False, padding=True, return_tensors="pt")[
+            "input_ids"
+        ]
+        context_length = 1
+        query_responses = torch.cat(
+            [torch.zeros((len(prompts), context_length), dtype=torch.long), completion_ids], dim=1
+        )
+
+        scores = get_reward_from_policy_tokens(
+            reward_model,
+            query_responses,
+            context_length,
+            prompts,
+            tokenizer,
+            tokenizer,
+        )
+        assert [int(x) for x in scores.tolist()] == expected
+
+    def test_same_tokenizer_matches_add_special_tokens_false(self):
+        tokenizer = self.reward_tokenizer
+        if tokenizer.bos_token_id is None:
+            pytest.skip("tokenizer needs a BOS token to pin the Online DPO encoding")
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
+
+        prompt = "The answer is 2 + 2?"
+        completion = " that is four."
+        with_bos = tokenizer(prompt + completion, add_special_tokens=True, return_tensors="pt")["input_ids"][0]
+        without_bos = tokenizer(prompt + completion, add_special_tokens=False, return_tensors="pt")["input_ids"][0]
+        assert with_bos[0] == tokenizer.bos_token_id
+        assert without_bos[0] != tokenizer.bos_token_id
+        assert with_bos.tolist() != without_bos.tolist()
+
+        vocab = max(tokenizer.vocab_size, len(tokenizer), int(with_bos.max()) + 1)
+        reward_model = _IndexReportingRewardModel(vocab)
+
+        prompt_ids = tokenizer(prompt, add_special_tokens=False, return_tensors="pt")["input_ids"]
+        prompt_ids = torch.cat([torch.tensor([[tokenizer.bos_token_id]], dtype=prompt_ids.dtype), prompt_ids], dim=1)
+        completion_ids = tokenizer(completion, add_special_tokens=False, return_tensors="pt")["input_ids"]
+        query_responses = torch.cat([prompt_ids, completion_ids], dim=1)
+
+        scores = get_reward_from_policy_tokens(
+            reward_model,
+            query_responses,
+            prompt_ids.shape[1],
+            [prompt],
+            tokenizer,
+            tokenizer,
+        )
+        assert int(scores.item()) == without_bos.size(0) - 1
+        assert int(scores.item()) != query_responses.size(1) - 1
