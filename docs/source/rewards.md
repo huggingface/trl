@@ -14,6 +14,10 @@ This module contains some useful reward functions, primarily intended for use wi
 
 [[autodoc]] rewards.get_cosine_scaled_reward
 
+## get_length_scaled_accuracy_reward
+
+[[autodoc]] rewards.get_length_scaled_accuracy_reward
+
 ## think_format_reward
 
 [[autodoc]] rewards.think_format_reward
