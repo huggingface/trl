@@ -176,15 +176,6 @@ trainer.train()
 > [!WARNING]
 > The distillation loss reads `lm_head.weight` directly and runs the student backbone without going through `PeftModel.forward()`. Adapters on `lm_head` (via `target_modules`) and prompt-learning methods (PromptTuning, PrefixTuning, P-Tuning) are therefore rejected, since they would be silently ignored. To train the head, use `modules_to_save=["lm_head"]` instead.
 
-### Train with Liger Kernel
-
-Liger Kernel is a collection of Triton kernels for LLM training that boosts multi-GPU throughput, cuts memory use, and works seamlessly with tools like FlashAttention, PyTorch FSDP, and DeepSpeed. For more information, see [Liger Kernel Integration](liger_kernel_integration).
-
-Set `use_liger_kernel=True` in the [`DistillationConfig`] to compute the JSD with the fused Liger kernel instead of the chunked path.
-
-> [!WARNING]
-> The fused Liger kernel cannot apply per-model `logit_scale` (e.g. Cohere) or `final_logit_softcapping` (e.g. Gemma), so it is rejected for models that set them — use the default chunked path for those.
-
 ## Agent Training
 
 [`DistillationTrainer`] supports **agent training**: the student calls tools during generation and is distilled on the resulting trajectory. Tool-result tokens are masked out of the loss, so the student is only trained on the tokens it generated itself.
