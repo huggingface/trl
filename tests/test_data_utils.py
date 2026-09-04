@@ -1339,15 +1339,27 @@ class TestPackDatasetBfd(TrlTestCase):
         dataset = pack_dataset(dataset, seq_length, strategy="bfd_split")
         assert dataset.to_dict() == expected_output
 
+    @pytest.mark.parametrize(
+        ("input_ids", "map_kwargs", "expected_output"),
+        [
+            pytest.param([[], []], {}, {"input_ids": [], "seq_lengths": []}, id="all_empty"),
+            pytest.param(
+                [[1, 2], [3, 4], [], []],
+                {"batch_size": 2},
+                {"input_ids": [[1, 2, 3, 4]], "seq_lengths": [[2, 2]]},
+                id="empty_second_batch",
+            ),
+        ],
+    )
     @pytest.mark.parametrize("strategy", ["bfd", "bfd_split"])
-    def test_with_all_empty_sequences(self, strategy):
+    def test_with_all_empty_sequences(self, strategy, input_ids, map_kwargs, expected_output):
         dataset = Dataset.from_dict(
-            {"input_ids": [[], []]}, features=Features({"input_ids": Sequence(Value("int64"))})
+            {"input_ids": input_ids}, features=Features({"input_ids": Sequence(Value("int64"))})
         )
 
-        packed_dataset = pack_dataset(dataset, seq_length=4, strategy=strategy)
+        packed_dataset = pack_dataset(dataset, seq_length=4, strategy=strategy, map_kwargs=map_kwargs)
 
-        assert packed_dataset.to_dict() == {"input_ids": [], "seq_lengths": []}
+        assert packed_dataset.to_dict() == expected_output
 
 
 class TestMaybeConvertToChatML(TrlTestCase):
