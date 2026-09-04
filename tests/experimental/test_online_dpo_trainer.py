@@ -48,7 +48,7 @@ def test_objective_metrics_ignore_duplicate_padding():
     model = torch.nn.Linear(1, 1)
     ref_model = torch.nn.Linear(1, 1)
     completion_ids = torch.ones(2 * batch_size, 2, dtype=torch.long)
-    completion_mask = torch.ones_like(completion_ids)
+    completion_mask = torch.tensor([[1, 1], [1, 0], [1, 0], [1, 1], [1, 0], [1, 0]])
     logprobs = torch.tensor(
         [[-1.0, -1.0], [-2.0, -2.0], [-30.0, -30.0], [-3.0, -3.0], [-4.0, -4.0], [-40.0, -40.0]],
         requires_grad=True,
@@ -95,15 +95,16 @@ def test_objective_metrics_ignore_duplicate_padding():
 
     OnlineDPOTrainer.training_step(trainer, model, {"prompt": ["a", "b", "outlier"]})
 
-    kl = (logprobs - ref_logprobs).sum(1).view(2, batch_size).mean(0)
-    non_score_reward = (-trainer.beta * (logprobs - ref_logprobs)).sum(1)
+    kl_per_token = (logprobs - ref_logprobs) * completion_mask
+    kl = kl_per_token.sum(1).view(2, batch_size).mean(0)
+    non_score_reward = (-trainer.beta * kl_per_token).sum(1)
     expected = {
         "objective/scores_margin": rewards[:batch_size] - rewards[batch_size:],
         "objective/scores": rewards.view(2, batch_size).mean(0),
         "objective/kl": kl,
         "objective/non_score_reward": non_score_reward.view(2, batch_size).mean(0),
         "objective/rlhf_reward": (rewards + non_score_reward).view(2, batch_size).mean(0),
-        "objective/entropy": -logprobs.sum(1).view(2, batch_size).mean(0),
+        "objective/entropy": -(logprobs * completion_mask).sum(1).view(2, batch_size).mean(0),
     }
     for key, values in expected.items():
         assert trainer.stats[key][-1] == values[:-1].mean().item()
