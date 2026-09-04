@@ -497,8 +497,12 @@ class TestSFTTrainer(TrlTestCase):
         with caplog.at_level(logging.WARNING, logger="trl.trainer.sft_trainer"):
             trainer.train()
 
-        assert "The training loss is not finite" in caplog.text
-        assert "The evaluation loss is not finite" in caplog.text
+        training_warnings = [message for message in caplog.messages if "The training loss is not finite" in message]
+        evaluation_warnings = [
+            message for message in caplog.messages if "The evaluation loss is not finite" in message
+        ]
+        assert len(training_warnings) == 1
+        assert len(evaluation_warnings) == 1
 
     def test_nonfinite_loss_metric_is_a_rate_over_the_logging_window(self):
         """The metric averages one flag per loss computation, so one bad micro-batch out of four reads 0.25.
