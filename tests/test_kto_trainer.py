@@ -43,41 +43,58 @@ if is_peft_available():
     from peft.utils import TaskType
 
 
-def test_entropy_ignores_duplicate_padding():
+@pytest.mark.parametrize("outlier_label", [True, False])
+def test_entropy_ignores_duplicate_padding(outlier_label):
     shift_logits = torch.tensor(
         [
             [[10.0, 0.0], [10.0, 0.0]],
-            [[10.0, 0.0], [10.0, 0.0]],
             [[0.0, 0.0], [0.0, 0.0]],
+            [[0.0, 20.0], [0.0, 20.0]],
         ]
     )
     logits = torch.cat((shift_logits, torch.zeros(3, 1, 2)), dim=1)
     trainer = SimpleNamespace(
-        model=SimpleNamespace(training=False),
+        model=SimpleNamespace(training=True),
         accelerator=SimpleNamespace(device=torch.device("cpu"), gather_for_metrics=drop_last_for_metrics),
-        _compute_kl_logps=lambda model, batch: torch.zeros(3),
+        _compute_kl_logps=lambda model, batch: torch.tensor([0.0, 0.0, 10.0]),
         aux_loss_enabled=False,
         precompute_ref_logps=True,
-        calculate_KL=False,
+        calculate_KL=True,
         loss_type="kto",
         beta=0.1,
         desirable_weight=1.0,
         undesirable_weight=1.0,
-        _metrics={"eval": defaultdict(list)},
+        _metrics={"train": defaultdict(list)},
         _total_train_tokens=0,
     )
     inputs = {
         "input_ids": torch.zeros(3, 3, dtype=torch.long),
         "attention_mask": torch.ones(3, 3, dtype=torch.long),
         "completion_mask": torch.ones(3, 3, dtype=torch.long),
-        "label": torch.tensor([True, False, False]),
+        "label": torch.tensor([True, False, outlier_label]),
         "ref_logps": torch.zeros(3),
+        "ref_KL_logps": torch.zeros(3),
     }
 
     KTOTrainer._compute_loss(trainer, lambda **kwargs: SimpleNamespace(logits=logits), inputs, False)
 
     expected_entropy = torch.distributions.Categorical(logits=shift_logits[:-1]).entropy().mean().item()
-    assert trainer._metrics["eval"]["entropy"][-1] == pytest.approx(expected_entropy, abs=1e-6)
+    assert trainer._metrics["train"]["entropy"][-1] == pytest.approx(expected_entropy, abs=1e-6)
+
+    logps = torch.log_softmax(shift_logits, dim=-1)[..., 0].sum(dim=1)
+    rewards = trainer.beta * logps
+    expected = {
+        "kl": 0.0,
+        "rewards/margins": (rewards[0] - rewards[1]).item(),
+    }
+    label = "chosen" if outlier_label else "rejected"
+    kept_idx = 0 if outlier_label else 1
+    expected[f"logits/{label}"] = shift_logits[kept_idx].mean().item()
+    expected[f"rewards/{label}"] = rewards[kept_idx].item()
+    expected[f"logps/{label}"] = logps[kept_idx].item()
+    for key, value in expected.items():
+        assert trainer._metrics["train"][key][-1] == pytest.approx(value, abs=1e-6)
+    assert trainer._metrics["train"]["num_tokens"][-1] == 6
 
 
 @require_vision

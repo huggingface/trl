@@ -47,15 +47,13 @@ if is_peft_available():
 
 def test_entropy_ignores_duplicate_padding():
     batch_size = 3
-    chosen_logits = torch.tensor([[[10.0, 0.0], [10.0, 0.0]], [[10.0, 0.0], [10.0, 0.0]], [[0.0, 0.0], [0.0, 0.0]]])
-    rejected_logits = torch.tensor([[[10.0, 0.0], [10.0, 0.0]], [[10.0, 0.0], [10.0, 0.0]], [[2.0, 0.0], [2.0, 0.0]]])
+    chosen_logits = torch.tensor([[[10.0, 0.0], [10.0, 0.0]], [[10.0, 0.0], [10.0, 0.0]], [[0.0, 20.0], [0.0, 20.0]]])
+    rejected_logits = torch.tensor([[[0.0, 0.0], [0.0, 0.0]], [[0.0, 0.0], [0.0, 0.0]], [[20.0, 19.0], [20.0, 19.0]]])
     shift_logits = torch.cat((chosen_logits, rejected_logits))
     logits = torch.cat((shift_logits, torch.zeros(2 * batch_size, 1, 2)), dim=1)
     trainer = SimpleNamespace(
         model=SimpleNamespace(training=False),
-        accelerator=SimpleNamespace(
-            device=torch.device("cpu"), gather=lambda tensor: tensor, gather_for_metrics=drop_last_for_metrics
-        ),
+        accelerator=SimpleNamespace(device=torch.device("cpu"), gather_for_metrics=drop_last_for_metrics),
         aux_loss_enabled=False,
         precompute_ref_logps=True,
         ld_alpha=None,
@@ -81,6 +79,24 @@ def test_entropy_ignores_duplicate_padding():
     kept_logits = torch.cat((chosen_logits[:-1], rejected_logits[:-1]))
     expected_entropy = torch.distributions.Categorical(logits=kept_logits).entropy().mean().item()
     assert trainer._metrics["eval"]["entropy"][-1] == pytest.approx(expected_entropy, abs=1e-6)
+
+    chosen_logps = torch.log_softmax(chosen_logits, dim=-1)[..., 0].sum(dim=1)
+    rejected_logps = torch.log_softmax(rejected_logits, dim=-1)[..., 0].sum(dim=1)
+    chosen_rewards = trainer.beta * chosen_logps
+    rejected_rewards = trainer.beta * rejected_logps
+    expected = {
+        "logits/chosen": chosen_logits[:-1].mean().item(),
+        "logits/rejected": rejected_logits[:-1].mean().item(),
+        "mean_token_accuracy": 1.0,
+        "rewards/chosen": chosen_rewards[:-1].mean().item(),
+        "rewards/rejected": rejected_rewards[:-1].mean().item(),
+        "rewards/accuracies": (chosen_rewards[:-1] > rejected_rewards[:-1]).float().mean().item(),
+        "rewards/margins": (chosen_rewards[:-1] - rejected_rewards[:-1]).mean().item(),
+        "logps/chosen": chosen_logps[:-1].mean().item(),
+        "logps/rejected": rejected_logps[:-1].mean().item(),
+    }
+    for key, value in expected.items():
+        assert trainer._metrics["eval"][key][-1] == pytest.approx(value, abs=1e-6)
 
 
 class TestDataCollatorForPreference(TrlTestCase):
