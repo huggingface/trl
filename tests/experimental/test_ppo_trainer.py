@@ -17,7 +17,7 @@ import os
 
 import pytest
 import torch
-from datasets import load_dataset
+from datasets import Dataset, load_dataset
 from transformers import (
     AutoModelForCausalLM,
     AutoModelForSeq2SeqLM,
@@ -32,6 +32,7 @@ from trl.experimental.ppo import (
     AutoModelForSeq2SeqLMWithValueHead,
     PPOConfig,
     PPOTrainer,
+    ppo_trainer,
 )
 from trl.experimental.ppo.ppo_trainer import batch_generation, masked_mean, masked_var, masked_whiten
 
@@ -685,6 +686,109 @@ class TestCore(TrlTestCase):
         whiten_masked = masked_whiten(self.test_input, self.test_mask)[1:3]
         diffs = (whiten_unmasked - whiten_masked).sum()
         assert abs(diffs.item()) < 0.00001
+
+
+def test_uneven_micro_batch_stats_are_pooled(tmp_path, monkeypatch):
+    model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+    model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
+    ref_model = AutoModelForCausalLM.from_pretrained(model_id)
+    tokenizer = AutoTokenizer.from_pretrained(model_id, padding_side="left")
+    tokenizer.add_special_tokens({"pad_token": "[PAD]"})
+    reward_model_id = "trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5"
+    value_model = AutoModelForSequenceClassification.from_pretrained(reward_model_id, num_labels=1)
+    reward_model = AutoModelForSequenceClassification.from_pretrained(reward_model_id, num_labels=1)
+    tokenized = tokenizer("Hello world")
+    train_dataset = Dataset.from_dict(
+        {
+            "input_ids": [tokenized["input_ids"]] * 12,
+            "attention_mask": [tokenized["attention_mask"]] * 12,
+        }
+    )
+    training_args = PPOConfig(
+        output_dir=tmp_path,
+        per_device_train_batch_size=4,
+        gradient_accumulation_steps=3,
+        num_mini_batches=2,
+        num_ppo_epochs=1,
+        total_episodes=12,
+        response_length=4,
+        num_sample_generations=0,
+        use_cpu=True,
+        bf16=False,
+        gradient_checkpointing=False,
+        disable_tqdm=True,
+        save_strategy="no",
+        report_to="none",
+    )
+    masked_inputs = []
+    rollout_logprobs = {}
+    logprobs_diffs = []
+    entropy_logits = []
+
+    # Captures the four masked micro-batch statistics. The scalar reduction and sub-batch shape exclude setup calls.
+    def tracked_masked_mean(values, mask, axis=None):
+        if axis is None and values.shape[0] < 12:
+            masked_inputs.append((values.detach().clone(), mask.detach().clone()))
+        return masked_mean(values, mask, axis)
+
+    selective_log_softmax = ppo_trainer.selective_log_softmax
+
+    # Captures rollout logprobs and training inputs used by entropy, approx-KL, and ratio without global Torch patches.
+    # The response-length shape and gradient state distinguish training micro-batches from rollout/reference calls.
+    def tracked_selective_log_softmax(logits, index):
+        output = selective_log_softmax(logits, index)
+        if logits.ndim == 3 and logits.shape[1] == training_args.response_length:
+            if logits.requires_grad:
+                entropy_logits.append(logits.detach().clone())
+                old_logprobs = torch.stack([rollout_logprobs[tuple(response.tolist())] for response in index])
+                padding_mask = index == tokenizer.pad_token_id
+                new_logprobs = output.detach().masked_fill(padding_mask, ppo_trainer.INVALID_LOGPROB)
+                old_logprobs = old_logprobs.masked_fill(padding_mask, ppo_trainer.INVALID_LOGPROB)
+                logprobs_diffs.append(new_logprobs - old_logprobs)
+            elif not rollout_logprobs:
+                rollout_logprobs.update(
+                    (tuple(response.tolist()), logprob.detach().clone())
+                    for response, logprob in zip(index, output, strict=True)
+                )
+        return output
+
+    monkeypatch.setattr(ppo_trainer, "masked_mean", tracked_masked_mean)
+    monkeypatch.setattr(ppo_trainer, "selective_log_softmax", tracked_selective_log_softmax)
+    trainer = PPOTrainer(
+        args=training_args,
+        processing_class=tokenizer,
+        model=model,
+        ref_model=ref_model,
+        reward_model=reward_model,
+        value_model=value_model,
+        train_dataset=train_dataset,
+        eval_dataset=train_dataset,
+    )
+
+    trainer.train()
+
+    assert [values.shape[0] for values, _ in masked_inputs] == [4, 4, 4, 4, 2, 2, 2, 2] * 2
+    assert [values.shape[0] for values in logprobs_diffs] == [4, 2, 4, 2]
+    assert [values.shape[0] for values in entropy_logits] == [4, 2, 4, 2]
+
+    def pooled_mean(inputs):
+        numerator = sum((values * mask).sum() for values, mask in inputs)
+        denominator = sum(mask.sum() for _, mask in inputs)
+        return (numerator / denominator).item()
+
+    metrics = trainer.state.log_history[-1]
+    logprobs_diff = torch.cat(logprobs_diffs)
+    logits = torch.cat(entropy_logits)
+    prob_dist = torch.nn.functional.softmax(logits, dim=-1)
+    entropy = torch.logsumexp(logits, dim=-1) - torch.sum(prob_dist * logits, dim=-1)
+    assert metrics["policy/approxkl_avg"] == pytest.approx(0.5 * logprobs_diff.square().mean().item(), abs=1e-7)
+    # masked_mean writes value loss, value clipfrac, policy loss, then policy clipfrac for every micro-batch.
+    assert metrics["loss/value_avg"] == pytest.approx(0.5 * pooled_mean(masked_inputs[0::4]), abs=1e-7)
+    assert metrics["val/clipfrac_avg"] == pytest.approx(pooled_mean(masked_inputs[1::4]), abs=1e-7)
+    assert metrics["loss/policy_avg"] == pytest.approx(pooled_mean(masked_inputs[2::4]), abs=1e-7)
+    assert metrics["policy/clipfrac_avg"] == pytest.approx(pooled_mean(masked_inputs[3::4]), abs=1e-7)
+    assert metrics["policy/entropy_avg"] == pytest.approx(entropy.mean().item(), abs=1e-7)
+    assert metrics["val/ratio"] == pytest.approx(logprobs_diff.exp().mean().item(), abs=1e-6)
 
 
 class TestPPOTrainer(TrlTestCase):

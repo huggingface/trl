@@ -636,6 +636,10 @@ class PPOTrainer(_BaseTrainer):
         vf_clipfrac_stats = torch.zeros(stats_shape, device=device)
         entropy_stats = torch.zeros(stats_shape, device=device)
         ratio_stats = torch.zeros(stats_shape, device=device)
+        ratio_mean_stats = torch.zeros(stats_shape, device=device)
+        padding_count_stats = torch.zeros(stats_shape, device=device)
+        padding_p1_count_stats = torch.zeros(stats_shape, device=device)
+        micro_batch_size_stats = torch.zeros(stats_shape, device=device)
         model.train()
 
         # trainer state initialization
@@ -855,17 +859,42 @@ class PPOTrainer(_BaseTrainer):
                                 prob_dist = torch.nn.functional.softmax(logits, dim=-1)
                                 entropy = torch.logsumexp(logits, dim=-1) - torch.sum(prob_dist * logits, dim=-1)
                                 approxkl = 0.5 * (logprobs_diff**2).mean()
-                                approxkl_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = approxkl
+                                padding_count = (~padding_mask[micro_batch_inds]).sum()
+                                padding_p1_count = (~padding_mask_p1[micro_batch_inds]).sum()
+                                micro_batch_size = len(micro_batch_inds)
+                                approxkl_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = (
+                                    approxkl * micro_batch_size
+                                )
                                 pg_clipfrac_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = (
-                                    pg_clipfrac
+                                    pg_clipfrac * padding_count
                                 )
-                                pg_loss_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = pg_loss
-                                vf_loss_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = vf_loss
+                                pg_loss_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = (
+                                    pg_loss * padding_count
+                                )
+                                vf_loss_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = (
+                                    vf_loss * padding_p1_count
+                                )
                                 vf_clipfrac_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = (
-                                    vf_clipfrac
+                                    vf_clipfrac * padding_p1_count
                                 )
-                                entropy_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = entropy.mean()
-                                ratio_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = ratio.mean()
+                                entropy_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = (
+                                    entropy.mean() * micro_batch_size
+                                )
+                                ratio_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = (
+                                    ratio.mean() * micro_batch_size
+                                )
+                                ratio_mean_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = (
+                                    ratio.mean()
+                                )
+                                padding_count_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = (
+                                    padding_count
+                                )
+                                padding_p1_count_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = (
+                                    padding_p1_count
+                                )
+                                micro_batch_size_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = (
+                                    micro_batch_size
+                                )
                         gradient_accumulation_idx += 1
                     minibatch_idx += 1
                     # del everything and empty cache
@@ -875,6 +904,7 @@ class PPOTrainer(_BaseTrainer):
                         vf_losses1, vf_losses2, vf_loss, vf_clipfrac, logprobs_diff, ratio, pg_losses, pg_losses2, pg_loss_max,
                         pg_loss, loss, pg_clipfrac, prob_dist, entropy, approxkl, mb_return,
                         mb_advantage, mb_values, mb_responses, mb_query_responses, mb_logprobs,
+                        padding_count, padding_p1_count, micro_batch_size,
                     )
                     # fmt: on
                     empty_cache()
@@ -894,14 +924,31 @@ class PPOTrainer(_BaseTrainer):
                 )
                 metrics["objective/rlhf_reward"] = self.accelerator.gather_for_metrics(rlhf_reward).mean().item()
                 metrics["objective/scores"] = self.accelerator.gather_for_metrics(scores.mean()).mean().item()
-                metrics["policy/approxkl_avg"] = self.accelerator.gather_for_metrics(approxkl_stats).mean().item()
-                metrics["policy/clipfrac_avg"] = self.accelerator.gather_for_metrics(pg_clipfrac_stats).mean().item()
-                metrics["loss/policy_avg"] = self.accelerator.gather_for_metrics(pg_loss_stats).mean().item()
-                metrics["loss/value_avg"] = self.accelerator.gather_for_metrics(vf_loss_stats).mean().item()
-                metrics["val/clipfrac_avg"] = self.accelerator.gather_for_metrics(vf_clipfrac_stats).mean().item()
-                metrics["policy/entropy_avg"] = self.accelerator.gather_for_metrics(entropy_stats).mean().item()
-                metrics["val/ratio"] = self.accelerator.gather_for_metrics(ratio_stats).mean().item()
-                metrics["val/ratio_var"] = self.accelerator.gather_for_metrics(ratio_stats).var().item()
+                padding_count = self.accelerator.gather_for_metrics(padding_count_stats).sum()
+                padding_p1_count = self.accelerator.gather_for_metrics(padding_p1_count_stats).sum()
+                micro_batch_size = self.accelerator.gather_for_metrics(micro_batch_size_stats).sum()
+                metrics["policy/approxkl_avg"] = (
+                    self.accelerator.gather_for_metrics(approxkl_stats).sum() / micro_batch_size
+                ).item()
+                metrics["policy/clipfrac_avg"] = (
+                    self.accelerator.gather_for_metrics(pg_clipfrac_stats).sum() / padding_count
+                ).item()
+                metrics["loss/policy_avg"] = (
+                    self.accelerator.gather_for_metrics(pg_loss_stats).sum() / padding_count
+                ).item()
+                metrics["loss/value_avg"] = (
+                    self.accelerator.gather_for_metrics(vf_loss_stats).sum() / padding_p1_count
+                ).item()
+                metrics["val/clipfrac_avg"] = (
+                    self.accelerator.gather_for_metrics(vf_clipfrac_stats).sum() / padding_p1_count
+                ).item()
+                metrics["policy/entropy_avg"] = (
+                    self.accelerator.gather_for_metrics(entropy_stats).sum() / micro_batch_size
+                ).item()
+                metrics["val/ratio"] = (
+                    self.accelerator.gather_for_metrics(ratio_stats).sum() / micro_batch_size
+                ).item()
+                metrics["val/ratio_var"] = self.accelerator.gather_for_metrics(ratio_mean_stats).var().item()
                 metrics["val/num_eos_tokens"] = (responses == processing_class.eos_token_id).sum().item()
                 metrics["lr"] = self.lr_scheduler.get_last_lr()[0]
                 metrics["episode"] = self.state.episode
