@@ -93,7 +93,7 @@ While training and evaluating, we record the following metrics:
 - `completions/clipped_ratio`: The ratio of truncated (clipped) completions.
 - `tools/call_frequency`: The average number of tool calls per completion in the generation batch. Logged only when `tools` are provided.
 - `tools/failure_frequency`: The fraction of tool calls that failed (the tool was not found, raised an exception, or the call type is unsupported). It is `0.0` when no tool was called. Logged only when `tools` are provided.
-- `entropy`: Average entropy of token predictions across generated completions (in nats). Not logged on the Liger fast path.
+- `entropy`: Average entropy of token predictions across generated completions (in nats).
 
 ## Customization
 

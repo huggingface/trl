@@ -612,7 +612,7 @@ class DistillationTrainer(_BaseTrainer):
                 if param.requires_grad:
                     param.data = param.data.to(torch.bfloat16)
 
-        # Both loss paths (chunked and Liger) read `lm_head.weight` directly and run the backbone via
+        # The chunked JSD loss reads `lm_head.weight` directly and runs the backbone via
         # `_get_last_hidden_state`, bypassing `PeftModel.forward()` — so PEFT setups that live outside the backbone
         # weights are silently ignored. Fail loudly rather than train on a silently-wrong objective.
         if is_peft_model(model):
@@ -1815,13 +1815,12 @@ class DistillationTrainer(_BaseTrainer):
 
         # Log the mean per-token student entropy (in nats). The reduction runs here, after `_forward_redirection`
         # returns, so the `gather_for_metrics` collective does not run inside the DDP/FSDP-wrapped forward (a hang/
-        # ordering risk). The Liger path produces no entropy, so it logs none. Mirrors `SFTTrainer.compute_loss`.
-        if entropy_sum is not None:
-            mode = "train" if self.model.training else "eval"
-            num_valid_tokens = self.accelerator.gather_for_metrics(num_valid_tokens).sum()
-            entropy_sum = self.accelerator.gather_for_metrics(entropy_sum).sum()
-            entropy = (entropy_sum / num_valid_tokens).item() if num_valid_tokens > 0 else 0.0
-            self._metrics[mode]["entropy"].append(entropy)
+        # ordering risk). Mirrors `SFTTrainer.compute_loss`.
+        mode = "train" if self.model.training else "eval"
+        num_valid_tokens = self.accelerator.gather_for_metrics(num_valid_tokens).sum()
+        entropy_sum = self.accelerator.gather_for_metrics(entropy_sum).sum()
+        entropy = (entropy_sum / num_valid_tokens).item() if num_valid_tokens > 0 else 0.0
+        self._metrics[mode]["entropy"].append(entropy)
 
         return (loss, None) if return_outputs else loss
 
