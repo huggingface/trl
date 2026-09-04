@@ -102,6 +102,12 @@ require_torch_gpu_if_bnb_not_multi_backend_enabled = pytest.mark.skipif(
 )
 
 
+def drop_last_for_metrics(tensors):
+    if isinstance(tensors, tuple):
+        return tuple(tensor[:-1] if tensor.ndim else tensor for tensor in tensors)
+    return tensors[:-1] if tensors.ndim else tensors
+
+
 def is_ampere_or_newer(device_index=0):
     if not torch.cuda.is_available():
         return False

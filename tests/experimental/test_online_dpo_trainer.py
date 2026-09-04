@@ -12,14 +12,25 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from collections import defaultdict
+from types import SimpleNamespace
+
 import pytest
+import torch
 from datasets import Dataset, DatasetDict, features, load_dataset
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
 from transformers.utils import is_peft_available, is_vision_available
 
 from trl.experimental.online_dpo import OnlineDPOConfig, OnlineDPOTrainer
 
-from ..testing_utils import TrlTestCase, require_peft, require_torch_accelerator, require_vision, require_vllm
+from ..testing_utils import (
+    TrlTestCase,
+    drop_last_for_metrics,
+    require_peft,
+    require_torch_accelerator,
+    require_vision,
+    require_vllm,
+)
 
 
 if is_peft_available():
@@ -30,6 +41,72 @@ if is_vision_available():
     import numpy as np
     from PIL import Image
     from transformers import AutoModelForImageTextToText, AutoProcessor
+
+
+def test_objective_metrics_ignore_duplicate_padding():
+    batch_size = 3
+    model = torch.nn.Linear(1, 1)
+    ref_model = torch.nn.Linear(1, 1)
+    completion_ids = torch.ones(2 * batch_size, 2, dtype=torch.long)
+    completion_mask = torch.ones_like(completion_ids)
+    logprobs = torch.tensor(
+        [[-1.0, -1.0], [-2.0, -2.0], [-30.0, -30.0], [-3.0, -3.0], [-4.0, -4.0], [-40.0, -40.0]],
+        requires_grad=True,
+    )
+    ref_logprobs = torch.tensor(
+        [[-2.0, -2.0], [-3.0, -3.0], [-10.0, -10.0], [-4.0, -4.0], [-5.0, -5.0], [-20.0, -20.0]]
+    )
+    rewards = torch.tensor([3.0, 4.0, 100.0, 1.0, 2.0, -100.0])
+
+    def forward(current_model, *args):
+        return logprobs if current_model is model else ref_logprobs
+
+    trainer = SimpleNamespace(
+        args=SimpleNamespace(
+            use_vllm=False,
+            missing_eos_penalty=None,
+            loss_type="sigmoid",
+            torch_empty_cache_steps=None,
+            optim="adamw_torch",
+            n_gpu=1,
+            gradient_accumulation_steps=1,
+        ),
+        ref_model=ref_model,
+        model=model,
+        reward_funcs=[object()],
+        processing_class=SimpleNamespace(
+            eos_token_id=1,
+            batch_decode=lambda token_ids, skip_special_tokens: ["completion"] * len(token_ids),
+        ),
+        _tokenizer=SimpleNamespace(eos_token_id=1),
+        beta=0.5,
+        stats=defaultdict(list),
+        state=SimpleNamespace(global_step=1),
+        accelerator=SimpleNamespace(gather_for_metrics=drop_last_for_metrics, backward=lambda loss, **kwargs: None),
+        _generate=lambda current_model, prompts, images: (
+            torch.ones(2 * batch_size, 1, dtype=torch.long),
+            torch.ones(2 * batch_size, 1, dtype=torch.long),
+            completion_ids,
+            completion_mask,
+        ),
+        _forward=forward,
+        _calculate_rewards_from_functions=lambda **kwargs: rewards,
+    )
+
+    OnlineDPOTrainer.training_step(trainer, model, {"prompt": ["a", "b", "outlier"]})
+
+    kl = (logprobs - ref_logprobs).sum(1).view(2, batch_size).mean(0)
+    non_score_reward = (-trainer.beta * (logprobs - ref_logprobs)).sum(1)
+    expected = {
+        "objective/scores_margin": rewards[:batch_size] - rewards[batch_size:],
+        "objective/scores": rewards.view(2, batch_size).mean(0),
+        "objective/kl": kl,
+        "objective/non_score_reward": non_score_reward.view(2, batch_size).mean(0),
+        "objective/rlhf_reward": (rewards + non_score_reward).view(2, batch_size).mean(0),
+        "objective/entropy": -logprobs.sum(1).view(2, batch_size).mean(0),
+    }
+    for key, values in expected.items():
+        assert trainer.stats[key][-1] == values[:-1].mean().item()
 
 
 class TestOnlineDPOTrainer(TrlTestCase):

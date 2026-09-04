@@ -704,8 +704,12 @@ class TPOTrainer(_BaseTrainer):
         # Log the metrics
         # Entropy
         per_token_entropy = entropy_from_logits(shift_logits.detach())
-        entropy = per_token_entropy[shift_completion_mask.bool()].mean()
-        entropy = self.accelerator.gather_for_metrics(entropy).mean().item()
+        per_token_entropy = per_token_entropy.view(n_branches, -1, per_token_entropy.shape[1]).transpose(0, 1)
+        entropy_mask = (
+            shift_completion_mask.bool().view(n_branches, -1, shift_completion_mask.shape[1]).transpose(0, 1)
+        )
+        per_token_entropy, entropy_mask = self.accelerator.gather_for_metrics((per_token_entropy, entropy_mask))
+        entropy = per_token_entropy[entropy_mask].mean().item()
         self._metrics[mode]["entropy"].append(entropy)
 
         # Number of tokens

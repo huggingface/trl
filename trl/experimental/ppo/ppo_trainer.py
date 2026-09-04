@@ -879,11 +879,11 @@ class PPOTrainer(_BaseTrainer):
                     # fmt: on
                     empty_cache()
             with torch.no_grad():
-                mean_kl = kl.sum(1).mean()
+                mean_kl = kl.sum(1)
                 # Mask padding positions, filled with INVALID_LOGPROB, else they'd drag the entropy negative
-                mean_entropy = ((-logprobs) * (~padding_mask).float()).sum(1).mean()
-                mean_non_score_reward = non_score_reward.sum(1).mean()
-                rlhf_reward = mean_non_score_reward + scores.mean()
+                mean_entropy = ((-logprobs) * (~padding_mask).float()).sum(1)
+                mean_non_score_reward = non_score_reward.sum(1)
+                rlhf_reward = mean_non_score_reward + scores
                 eps = int(self.state.episode / (time.time() - start_time))
                 metrics = {}
                 metrics["eps"] = eps
@@ -893,7 +893,7 @@ class PPOTrainer(_BaseTrainer):
                     self.accelerator.gather_for_metrics(mean_non_score_reward).mean().item()
                 )
                 metrics["objective/rlhf_reward"] = self.accelerator.gather_for_metrics(rlhf_reward).mean().item()
-                metrics["objective/scores"] = self.accelerator.gather_for_metrics(scores.mean()).mean().item()
+                metrics["objective/scores"] = self.accelerator.gather_for_metrics(scores).mean().item()
                 metrics["policy/approxkl_avg"] = self.accelerator.gather_for_metrics(approxkl_stats).mean().item()
                 metrics["policy/clipfrac_avg"] = self.accelerator.gather_for_metrics(pg_clipfrac_stats).mean().item()
                 metrics["loss/policy_avg"] = self.accelerator.gather_for_metrics(pg_loss_stats).mean().item()

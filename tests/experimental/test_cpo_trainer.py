@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from types import SimpleNamespace
+
 import pytest
 import torch
 from datasets import DatasetDict, load_dataset
@@ -19,7 +21,25 @@ from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokeni
 
 from trl.experimental.cpo import CPOConfig, CPOTrainer
 
-from ..testing_utils import TrlTestCase, require_peft
+from ..testing_utils import TrlTestCase, drop_last_for_metrics, require_peft
+
+
+def test_logits_metrics_ignore_duplicate_padding():
+    chosen_logits = torch.tensor([1.0, 3.0, 100.0]).view(3, 1, 1)
+    rejected_logits = torch.tensor([-1.0, -3.0, -100.0]).view(3, 1, 1)
+    forward_output = (torch.ones(3), torch.zeros(3), chosen_logits, rejected_logits, torch.tensor(0.0))
+    trainer = SimpleNamespace(
+        concatenated_forward=lambda model, batch: forward_output,
+        cpo_loss=lambda chosen, rejected: (torch.zeros(3), torch.ones(3), torch.zeros(3)),
+        accelerator=SimpleNamespace(gather_for_metrics=drop_last_for_metrics),
+        aux_loss_enabled=False,
+        cpo_alpha=1.0,
+    )
+
+    _, metrics = CPOTrainer.get_batch_loss_metrics(trainer, None, {})
+
+    assert metrics["logits/chosen"] == chosen_logits[:-1].mean().item()
+    assert metrics["logits/rejected"] == rejected_logits[:-1].mean().item()
 
 
 class TestCPOTrainer(TrlTestCase):
