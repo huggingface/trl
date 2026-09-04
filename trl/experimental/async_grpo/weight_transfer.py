@@ -17,6 +17,7 @@ import threading
 import time
 from collections import Counter
 
+import torch
 from accelerate.logging import get_logger
 
 from ...import_utils import is_vllm_available
@@ -24,17 +25,14 @@ from .vllm_client import VLLMClient
 
 
 if is_vllm_available(min_version="0.22.0"):
+    from vllm.distributed.device_communicators.pynccl import PyNcclCommunicator
+    from vllm.distributed.utils import StatelessProcessGroup
+    from vllm.distributed.weight_transfer.packed_tensor import packed_nccl_broadcast_producer
     from vllm.utils.network_utils import get_ip, get_open_port
 
-# vLLM 0.28.0 (vllm-project/vllm#50902) replaced the static `NCCLWeightTransferEngine.trainer_init` /
-# `trainer_send_weights` with a stateful trainer engine and moved `packed` from the per-update info to the init info.
-# The rendezvous and packed-broadcast helpers the statics were built on are still exposed, so they are called directly.
-_HAS_STATEFUL_TRAINER_ENGINE = is_vllm_available(min_version="0.28.0")
-if _HAS_STATEFUL_TRAINER_ENGINE:
-    from vllm.distributed.weight_transfer.nccl_common import trainer_init as open_trainer_endpoint
-    from vllm.distributed.weight_transfer.packed_tensor import packed_nccl_broadcast_producer
-elif is_vllm_available(min_version="0.22.0"):
-    from vllm.distributed.weight_transfer.nccl_engine import NCCLTrainerSendWeightsArgs, NCCLWeightTransferEngine
+# vLLM 0.28.0 (vllm-project/vllm#50902) moved `packed` from the per-update info to the init info. The server builds a
+# dataclass from the dict it receives, so the key is rejected anywhere but the place its version expects.
+_PACKED_IN_INIT_INFO = is_vllm_available(min_version="0.28.0")
 
 
 logger = get_logger(__name__)
@@ -73,7 +71,7 @@ class WeightTransferClient:
         self.vllm = vllm_client
         self.weight_sync_timeout = weight_sync_timeout
         self._weight_update_info = weight_update_info
-        if not _HAS_STATEFUL_TRAINER_ENGINE:
+        if not _PACKED_IN_INIT_INFO:
             self._weight_update_info = {**weight_update_info, "packed": True}
         self.model_update_group = None
 
@@ -99,17 +97,16 @@ class WeightTransferClient:
             "rank_offset": 1,
             "world_size": world_size,
         }
-        if _HAS_STATEFUL_TRAINER_ENGINE:
+        if _PACKED_IN_INIT_INFO:
             init_info["packed"] = True
 
         error: list[BaseException] = []
 
         def trainer_init():
             try:
-                if _HAS_STATEFUL_TRAINER_ENGINE:
-                    self.model_update_group = open_trainer_endpoint(init_info)
-                else:
-                    self.model_update_group = NCCLWeightTransferEngine.trainer_init(init_info)
+                # The trainer is rank 0 of the group, on the current device.
+                pg = StatelessProcessGroup.create(host=master_address, port=master_port, rank=0, world_size=world_size)
+                self.model_update_group = PyNcclCommunicator(pg, device=torch.cuda.current_device())
             except BaseException as exc:  # noqa: BLE001
                 error.append(exc)
 
@@ -140,15 +137,9 @@ class WeightTransferClient:
 
         def trainer_send_weights():
             try:
-                if _HAS_STATEFUL_TRAINER_ENGINE:
-                    packed_nccl_broadcast_producer(
-                        iterator=iterator, group=self.model_update_group, src=0, post_iter_func=lambda item: item[1]
-                    )
-                else:
-                    NCCLWeightTransferEngine.trainer_send_weights(
-                        iterator=iterator,
-                        trainer_args=NCCLTrainerSendWeightsArgs(group=self.model_update_group, packed=True),
-                    )
+                packed_nccl_broadcast_producer(
+                    iterator=iterator, group=self.model_update_group, src=0, post_iter_func=lambda item: item[1]
+                )
             except BaseException as exc:  # noqa: BLE001
                 error.append(exc)
 
