@@ -213,7 +213,9 @@ Every `.py` example in the [Examples Index](example_overview#index) declares its
 
 ### Docker Images
 
-An up-to-date Docker image with all TRL dependencies is available at [huggingface/trl](https://hub.docker.com/r/huggingface/trl) and can be used directly with Hugging Face Jobs:
+Jobs runs your script with `uv`, which installs the dependencies declared in its `# /// script` header into a fresh environment. The TRL your script imports therefore comes from that header, not from the image, and the examples above need no `--image` at all.
+
+A Docker image with TRL preinstalled is available at [huggingface/trl](https://hub.docker.com/r/huggingface/trl). Passing it to `hf jobs uv run` gives the job the image's system layer, such as its CUDA toolchain, which matters for dependencies that compile against it:
 
 <hfoptions id="script_type">
 <hfoption id="bash">
@@ -243,6 +245,90 @@ run_uv_job(
 </hfoption>
 </hfoptions>
 
+To run the TRL that is installed in the image, use `hf jobs run` instead. It runs a command in the image directly, with no script header to resolve, so the image's own TRL is what executes. The `--` separates the command from the Jobs options, which is needed whenever the command itself takes options:
+
+<hfoptions id="script_type">
+<hfoption id="bash">
+
+```bash
+hf jobs run \
+    --flavor a100-large \
+    --secrets HF_TOKEN \
+    huggingface/trl \
+    -- \
+    trl sft --model_name_or_path Qwen/Qwen2-0.5B-Instruct --dataset_name trl-lib/Capybara --output_dir Qwen2-0.5B-SFT
+```
+
+</hfoption>
+<hfoption id="python">
+
+```python
+from huggingface_hub import run_job
+
+run_job(
+    image="huggingface/trl",
+    command=[
+        "trl", "sft",
+        "--model_name_or_path", "Qwen/Qwen2-0.5B-Instruct",
+        "--dataset_name", "trl-lib/Capybara",
+        "--output_dir", "Qwen2-0.5B-SFT",
+    ],
+    flavor="a100-large",
+    secrets={"HF_TOKEN": "hf_..."},
+)
+```
+
+</hfoption>
+</hfoptions>
+
+The image is published under three kinds of tag:
+
+| Tag | Contents |
+| --- | --- |
+| `X.Y.Z` | The TRL release of that version, built when that version is released |
+| `latest` | The most recent release |
+| `dev` | The `main` branch, rebuilt on every merge |
+
+Use `dev` to run the development version, which is useful for trying a fix that has landed on `main` but is not released yet:
+
+<hfoptions id="script_type">
+<hfoption id="bash">
+
+```bash
+hf jobs run \
+    --flavor a100-large \
+    --secrets HF_TOKEN \
+    huggingface/trl:dev \
+    -- \
+    trl sft --model_name_or_path Qwen/Qwen2-0.5B-Instruct --dataset_name trl-lib/Capybara --output_dir Qwen2-0.5B-SFT
+```
+
+</hfoption>
+<hfoption id="python">
+
+```python
+from huggingface_hub import run_job
+
+run_job(
+    image="huggingface/trl:dev",
+    command=[
+        "trl", "sft",
+        "--model_name_or_path", "Qwen/Qwen2-0.5B-Instruct",
+        "--dataset_name", "trl-lib/Capybara",
+        "--output_dir", "Qwen2-0.5B-SFT",
+    ],
+    flavor="a100-large",
+    secrets={"HF_TOKEN": "hf_..."},
+)
+```
+
+</hfoption>
+</hfoptions>
+
+Tags only select what is installed in the image, so they matter for `hf jobs run`. With `hf jobs uv run` the version comes from the script header instead, and the tag makes no difference to which TRL is imported.
+
+Combining the two, so that `uv` resolves the script header while some imports still come from the image, needs extra flags. See [Reuse the image's packages and add dependencies with UV](https://huggingface.co/docs/hub/jobs-popular-images#reuse-the-images-packages-and-add-dependencies-with-uv) for that form and the paths it requires.
+
 Jobs runs on a Docker image from Hugging Face Spaces or Docker Hub, so you can also specify any custom image:
 
 <hfoptions id="script_type">
@@ -253,7 +339,6 @@ hf jobs uv run \
     --flavor a100-large \
     --secrets HF_TOKEN \
     --image <docker-image> \
-    --secrets HF_TOKEN \
     train.py
 ```
 
