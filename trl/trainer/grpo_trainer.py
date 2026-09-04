@@ -1058,6 +1058,7 @@ class GRPOTrainer(_BaseTrainer):
 
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
+        self._loss_window_metrics = defaultdict(float)
         self._total_train_tokens = 0
         self._current_train_step_time = 0.0
         self.log_completions = args.log_completions
@@ -1559,6 +1560,12 @@ class GRPOTrainer(_BaseTrainer):
         entropies = torch.cat(all_entropies, dim=0) if compute_entropy else None
         aux_loss = torch.stack(all_aux_losses).mean() if compute_aux_loss else None
         return logps, entropies, aux_loss
+
+    def train(self, *args, **kwargs):
+        # A run interrupted inside an accumulation window leaves partial sums behind; a later call must not fold them
+        # into its first window.
+        self._loss_window_metrics.clear()
+        return super().train(*args, **kwargs)
 
     def training_step(self, model, inputs, num_items_in_batch):
         time_before = time.perf_counter()
@@ -3299,8 +3306,6 @@ class GRPOTrainer(_BaseTrainer):
 
             loss = loss - apply_coef * entropy_loss
 
-            self._metrics[mode]["policy_loss"].append(self.accelerator.gather(policy_loss).nanmean().item())
-
             # Adaptive update. Gated on train mode so evaluation cannot mutate the entropy controller state.
             if self.use_adaptive_entropy and mode == "train":
                 # Accumulate the entropy sum and active-token count of every micro-batch into a running window
@@ -3337,7 +3342,6 @@ class GRPOTrainer(_BaseTrainer):
         if self.aux_loss_enabled:
             normalizer = self.current_gradient_accumulation_steps if mode == "train" else 1.0
             loss = loss + self.router_aux_loss_coef * aux_loss / normalizer
-            self._metrics[mode]["aux_loss"].append(self.accelerator.gather_for_metrics(aux_loss).mean().item())
 
         # Log the metrics
         def masked_seq_mean(x):
@@ -3353,10 +3357,28 @@ class GRPOTrainer(_BaseTrainer):
             totals = self.accelerator.reduce(torch.stack([local_sum, local_count]), reduction="sum")
             return (totals[0] / totals[1].clamp(min=1.0)).item()
 
+        loss_metrics = {"entropy": global_masked_mean(entropies)}
+        if self._entropy_bonus_enabled:
+            loss_metrics["policy_loss"] = self.accelerator.gather(policy_loss).nanmean().item()
+        if self.aux_loss_enabled:
+            loss_metrics["aux_loss"] = self.accelerator.gather_for_metrics(aux_loss).mean().item()
         if self.beta != 0.0:
-            self._metrics[mode]["kl"].append(global_masked_mean(per_token_kl))
+            loss_metrics["kl"] = global_masked_mean(per_token_kl)
 
-        self._metrics[mode]["entropy"].append(global_masked_mean(entropies))
+        # In training, each value is a micro-batch mean whose contribution to the optimizer-window loss is scaled by
+        # the current accumulation-window size. Sum those contributions and append one value per optimizer window so
+        # short final windows have the same weight as full windows when `log` averages the entries. Evaluation has no
+        # accumulation, so its per-batch logging stays unchanged.
+        if mode == "train":
+            for name, value in loss_metrics.items():
+                self._loss_window_metrics[name] += value / self.current_gradient_accumulation_steps
+            if self.accelerator.sync_gradients:
+                for name, value in self._loss_window_metrics.items():
+                    self._metrics[mode][name].append(value)
+                self._loss_window_metrics.clear()
+        else:
+            for name, value in loss_metrics.items():
+                self._metrics[mode][name].append(value)
 
         if self.loss_type in ["grpo", "bnpo", "dr_grpo", "dapo", "luspo"]:
             # Compute the clipped probability ratios
