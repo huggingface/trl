@@ -274,9 +274,10 @@ class TestTransformersContinuousBatchingContract:
 
 
 class TestGRPOTrainer(TrlTestCase):
-    def test_num_generations_must_be_at_least_two(self):
+    @pytest.mark.parametrize("num_generations", [0, 1])
+    def test_num_generations_must_be_at_least_two(self, num_generations):
         with pytest.raises(ValueError, match="GRPO requires at least 2 generations"):
-            GRPOConfig(output_dir=self.tmp_dir, num_generations=0)
+            GRPOConfig(output_dir=self.tmp_dir, num_generations=num_generations)
 
     def test_init_minimal(self):
         # Test that GRPOTrainer can be instantiated with only model, reward_model and train_dataset
