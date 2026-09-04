@@ -41,7 +41,6 @@ from trl.import_utils import is_liger_kernel_available
 
 from .testing_utils import (
     TrlTestCase,
-    is_ampere_or_newer,
     require_bitsandbytes,
     require_liger_kernel,
     require_peft,
@@ -4764,11 +4763,6 @@ class TestGRPOTrainerSlow(TrlTestCase):
             "trl-internal-testing/small-Qwen2ForCausalLM-2.5",
             "trl-internal-testing/small-Qwen3ForCausalLM",
         ],
-    )
-    @pytest.mark.skipif(
-        not is_ampere_or_newer() and torch_device != "xpu",
-        reason="transformers continuous batching switches attention to Flash Attention, which requires an Ampere or "
-        "newer GPU, or XPU (see https://github.com/huggingface/transformers/issues/47926)",
     )
     def test_train_with_transformers_continuous_batching(self, model_name):
         """Test that training works with transformers continuous batching (requires GPU)."""
