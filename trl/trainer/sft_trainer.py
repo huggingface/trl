@@ -322,6 +322,7 @@ def _patch_chunked_ce_lm_head(model: torch.nn.Module, chunk_size: int, is_vlm: b
         # into the gradient-checkpointed chunk loop causes FSDP2 to re-gather it once per chunk
         # during backward recomputation. full_tensor() converts it to a plain tensor once; all
         # chunks reference that tensor, so only one all-gather occurs (in full_tensor()'s backward).
+        # `_chunk` casts the weight to the hidden-states dtype per chunk.
         if isinstance(lm_head_weight, torch.distributed.tensor.DTensor):
             lm_head_weight = lm_head_weight.full_tensor()
             if lm_head_bias is not None:
