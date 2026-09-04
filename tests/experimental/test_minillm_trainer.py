@@ -88,18 +88,24 @@ class TestMiniLLMComputeAdvantage:
     def test_length_normalization_ignores_padding(self):
         """A constant reward of 1.0 with gamma=1.0 must give an advantage of exactly 1.0 at every valid position,
         however long the batch is padded. Counting padded slots toward the length, as the old 1e-4 fill did, lowers the
-        first position of a short completion (0.9514 for a single valid token padded to 512)."""
-        stub = types.SimpleNamespace(gamma=1.0, length_normalization=True)
-        for length in (1, 128, 512):
-            mask = torch.zeros(1, 512)
-            mask[0, :length] = 1
-            advantages = MiniLLMTrainer._compute_advantage(stub, torch.zeros(1, 512), torch.ones(1, 512), mask)
-            torch.testing.assert_close(advantages[0, :length], torch.ones(length))
-            torch.testing.assert_close(advantages[0, length:], torch.zeros(512 - length))
+        first position of a short completion (0.9514 for a single valid token padded to 512), and a floor on the
+        discounted length would deflate late positions once gamma < 1."""
+        for gamma in (1.0, 0.9):
+            stub = types.SimpleNamespace(gamma=gamma, length_normalization=True)
+            for length in (1, 128, 512):
+                mask = torch.zeros(1, 512)
+                mask[0, :length] = 1
+                advantages = MiniLLMTrainer._compute_advantage(stub, torch.zeros(1, 512), torch.ones(1, 512), mask)
+                # With gamma < 1 the discounted length of a late position is tiny (0.9**300 is 1.9e-14), so any floor
+                # on the denominator would deflate it; the expected value is exactly the reward at every position.
+                torch.testing.assert_close(advantages[0, :length], torch.ones(length))
+                torch.testing.assert_close(advantages[0, length:], torch.zeros(512 - length))
 
-        advantages = MiniLLMTrainer._compute_advantage(stub, torch.zeros(1, 8), torch.ones(1, 8), torch.zeros(1, 8))
-        assert torch.isfinite(advantages).all()
-        torch.testing.assert_close(advantages, torch.zeros(1, 8))
+            advantages = MiniLLMTrainer._compute_advantage(
+                stub, torch.zeros(1, 8), torch.ones(1, 8), torch.zeros(1, 8)
+            )
+            assert torch.isfinite(advantages).all()
+            torch.testing.assert_close(advantages, torch.zeros(1, 8))
 
 
 class TestMiniLLMComputeLossMask:

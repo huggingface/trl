@@ -337,9 +337,11 @@ class MiniLLMTrainer(GRPOTrainer):
 
             if self.length_normalization:
                 # Only unmasked positions count toward the discounted length, so the advantage of a completion does
-                # not depend on how much padding the batch carries. The clamp keeps a fully masked row finite.
+                # not depend on how much padding the batch carries. A length is zero only where every later position
+                # is masked, and there the numerator is zero too, so dividing by one keeps that tail at zero without
+                # touching valid positions whose discounted length is small.
                 lengths = (mask * gamma_pow).flip(1).cumsum(dim=1).flip(1)
-                advantages = advantages / lengths.clamp(min=1e-4)
+                advantages = advantages / lengths.masked_fill(lengths == 0, 1.0)
         else:
             advantages = rewards
 
