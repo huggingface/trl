@@ -23,8 +23,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import transformers
+from datasets import IterableDataset
 from packaging.version import Version
-from transformers import AutoConfig, AutoModelForCausalLM
+from transformers import AutoConfig, AutoModelForCausalLM, PretrainedConfig
 from transformers.testing_utils import torch_device
 from transformers.utils import is_peft_available
 
@@ -45,6 +46,7 @@ from trl.trainer.utils import (
     pad,
     patch_chunked_lm_head,
     print_prompt_completions_sample,
+    repeat_iterable_dataset,
     selective_log_softmax,
     shuffle_sequence_dict,
     split_pixel_values_by_grid,
@@ -534,6 +536,82 @@ class TestRepeatRandomSampler(TrlTestCase):
         assert sampled[24:28] == sampled[28:32] == sampled[32:36]
 
 
+class TestRepeatIterableDataset(TrlTestCase):
+    @staticmethod
+    def _make_dataset(n):
+        return IterableDataset.from_generator(lambda: ({"x": i} for i in range(n)))
+
+    @pytest.mark.parametrize("mini_repeat_count,batch_size,repeat_count", [(1, 1, 1), (2, 3, 4), (3, 2, 2), (2, 2, 3)])
+    def test_matches_repeat_sampler(self, mini_repeat_count, batch_size, repeat_count):
+        # The streaming transform must yield records in exactly the same order as RepeatSampler yields indices for a
+        # map-style dataset (unshuffled), across a representative range of arguments.
+        n = 12
+        expected = list(
+            RepeatSampler(
+                list(range(n)),
+                mini_repeat_count=mini_repeat_count,
+                batch_size=batch_size,
+                repeat_count=repeat_count,
+                shuffle=False,
+            )
+        )
+        actual = [
+            record["x"]
+            for record in repeat_iterable_dataset(
+                self._make_dataset(n),
+                mini_repeat_count=mini_repeat_count,
+                batch_size=batch_size,
+                repeat_count=repeat_count,
+            )
+        ]
+        assert actual == expected
+
+    def test_default_arguments(self):
+        dataset = self._make_dataset(4)
+        sampled = [record["x"] for record in repeat_iterable_dataset(dataset, mini_repeat_count=2)]
+        assert sampled == [0, 0, 1, 1, 2, 2, 3, 3]
+
+    def test_drops_incomplete_batch(self):
+        dataset = self._make_dataset(7)
+        sampled = [record["x"] for record in repeat_iterable_dataset(dataset, mini_repeat_count=1, batch_size=2)]
+        # The last element is dropped because it can't form a full batch of size 2.
+        assert sampled == [0, 1, 2, 3, 4, 5]
+
+    def test_preserves_all_columns(self):
+        dataset = IterableDataset.from_generator(lambda: ({"x": i, "answer": str(i)} for i in range(2)))
+        sampled = list(repeat_iterable_dataset(dataset, mini_repeat_count=2))
+        assert sampled == [
+            {"x": 0, "answer": "0"},
+            {"x": 0, "answer": "0"},
+            {"x": 1, "answer": "1"},
+            {"x": 1, "answer": "1"},
+        ]
+
+    def test_repeats_are_independent_objects(self):
+        # Repeated records must be independent objects (like the map-style path, where the dataset re-materializes a
+        # fresh object per access), so an in-place edit to one repeat doesn't corrupt the others.
+        dataset = IterableDataset.from_generator(lambda: ({"prompt": [{"content": "hi"}]} for _ in range(1)))
+        sampled = list(repeat_iterable_dataset(dataset, mini_repeat_count=2))
+        assert sampled[0] is not sampled[1]
+        assert sampled[0]["prompt"] is not sampled[1]["prompt"]
+        sampled[0]["prompt"][-1]["content"] += " there"
+        assert sampled[1]["prompt"][-1]["content"] == "hi"
+
+    def test_reshuffles_across_epochs(self):
+        # The transform stays chained to the source, so `set_epoch` reaches an upstream `shuffle` and the order is
+        # reshuffled every epoch, matching RepeatSampler (whose RNG advances on each `__iter__`).
+        dataset = IterableDataset.from_generator(lambda: ({"x": i} for i in range(8))).shuffle(seed=42)
+        repeated = repeat_iterable_dataset(dataset, mini_repeat_count=1, batch_size=8)
+
+        repeated.set_epoch(0)
+        epoch_0 = [record["x"] for record in repeated]
+        repeated.set_epoch(1)
+        epoch_1 = [record["x"] for record in repeated]
+
+        assert sorted(epoch_0) == sorted(epoch_1) == list(range(8))  # same content
+        assert epoch_0 != epoch_1  # different order
+
+
 class TestEntropyFromLogits(TrlTestCase):
     @pytest.mark.parametrize("shape", [(768,), (32, 768), (8, 16, 768), (2, 4, 8, 768)])
     @pytest.mark.parametrize("chunk_size", [1, 16])
@@ -578,6 +656,36 @@ class TestPrintPromptCompletionsSample(TrlTestCase):
         """)
 
         assert output == expected_output
+
+    @patch("sys.stdout", new_callable=StringIO)
+    def test_no_advantages(self, mock_stdout):
+        # When `advantages` is None, the Advantage column is omitted (e.g. distillation, which has no advantages).
+        prompts = ["The sky is", "The sun is"]
+        completions = [" blue.", " in the sky."]
+        rewards = {"Correctness": [0.123, 0.456]}
+        step = 42
+
+        print_prompt_completions_sample(prompts, completions, rewards, None, step)
+
+        output = mock_stdout.getvalue()
+        assert "Prompt" in output
+        assert "Completion" in output
+        assert "Correctness" in output
+        assert "Advantage" not in output
+
+    @patch("sys.stdout", new_callable=StringIO)
+    def test_no_rewards_no_advantages(self, mock_stdout):
+        # Prompt/completion-only table: empty rewards and `advantages=None` (the distillation case).
+        prompts = ["The sky is", "The sun is"]
+        completions = [" blue.", " in the sky."]
+        step = 42
+
+        print_prompt_completions_sample(prompts, completions, {}, None, step)
+
+        output = mock_stdout.getvalue()
+        assert "Prompt" in output
+        assert "Completion" in output
+        assert "Advantage" not in output
 
     @patch("sys.stdout", new_callable=StringIO)
     def test_extra_columns(self, mock_stdout):
@@ -1032,6 +1140,32 @@ class TestSplitPixelValuesByGrid(TrlTestCase):
         assert torch.equal(result["spatial_shapes"][0], batch["spatial_shapes"][:3])
         assert torch.equal(result["spatial_shapes"][1], batch["spatial_shapes"][3:])
 
+    def test_split_without_grid_metadata(self):
+        # LLaVA-style: no grid metadata at all, pixel_values and image_sizes are indexed by image
+        batch = {
+            "num_images": [1, 2],
+            "pixel_values": torch.arange(3 * 4).reshape(3, 4),
+            "image_sizes": torch.tensor([[8, 8], [4, 4], [2, 2]]),
+        }
+        result = split_pixel_values_by_grid(batch)
+        assert isinstance(result["pixel_values"], list)
+        assert len(result["pixel_values"]) == 2
+        assert torch.equal(result["pixel_values"][0], batch["pixel_values"][:1])
+        assert torch.equal(result["pixel_values"][1], batch["pixel_values"][1:])
+        assert isinstance(result["image_sizes"], list)
+        assert len(result["image_sizes"]) == 2
+        assert torch.equal(result["image_sizes"][0], batch["image_sizes"][:1])
+        assert torch.equal(result["image_sizes"][1], batch["image_sizes"][1:])
+
+    def test_no_split_when_padded_by_sample(self):
+        # Idefics-style: pixel_values is padded to (num_samples, max_num_images, ...), already sample-indexed
+        batch = {
+            "num_images": [1, 2],
+            "pixel_values": torch.arange(2 * 2 * 4).reshape(2, 2, 4),
+        }
+        result = split_pixel_values_by_grid(batch)
+        assert result == batch
+
 
 class TestUnsplitPixelValuesByGrid(TrlTestCase):
     def test_unsplit_correctly(self):
@@ -1072,6 +1206,14 @@ class TestUnsplitPixelValuesByGrid(TrlTestCase):
         torch.testing.assert_close(result["pixel_attention_mask"], torch.cat(pixel_attention_mask, dim=0))
         assert isinstance(result["spatial_shapes"], torch.Tensor)
         assert torch.equal(result["spatial_shapes"], torch.cat(spatial_shapes, dim=0))
+
+    def test_unsplit_image_sizes(self):
+        pixel_values = [torch.randn(1, 4), torch.randn(2, 4)]
+        image_sizes = [torch.tensor([[8, 8]]), torch.tensor([[4, 4], [2, 2]])]
+        batch = {"pixel_values": pixel_values, "image_sizes": image_sizes}
+        result = unsplit_pixel_values_by_grid(batch)
+        assert isinstance(result["image_sizes"], torch.Tensor)
+        assert torch.equal(result["image_sizes"], torch.cat(image_sizes, dim=0))
 
     def test_no_op_if_not_list(self):
         original = torch.randn(5, 3)
@@ -1153,6 +1295,57 @@ class TestChunkedLogProbFunction:
         torch.testing.assert_close(grad_hidden_chunked, hidden.grad, atol=1e-2, rtol=1e-2)
         torch.testing.assert_close(grad_weight_chunked, weight.grad, atol=1e-2, rtol=1e-2)
 
+    @pytest.mark.parametrize("temperature", [1.0, 0.7])
+    def test_backward_entropy(self, temperature):
+        """Backprop through the `entropy` output alone (as opposed to `logprobs`, covered above)."""
+        torch.manual_seed(42)
+        hidden = torch.randn(self.N, self.H, requires_grad=True)
+        weight = torch.randn(self.V, self.H, requires_grad=True)
+        labels = torch.randint(0, self.V, (self.N,))
+
+        # Chunked backward
+        _, entropy_chunked = _ChunkedLogProbFunction.apply(hidden, weight, labels, temperature, self.CHUNK_SIZE)
+        entropy_chunked.sum().backward()
+        grad_hidden_chunked = hidden.grad.clone()
+        grad_weight_chunked = weight.grad.clone()
+
+        hidden.grad = None
+        weight.grad = None
+
+        # Reference backward
+        _, entropy_ref = self._reference_logprobs_and_entropy(hidden, weight, labels, temperature)
+        entropy_ref.sum().backward()
+
+        torch.testing.assert_close(grad_hidden_chunked, hidden.grad, atol=1e-4, rtol=1e-4)
+        torch.testing.assert_close(grad_weight_chunked, weight.grad, atol=1e-4, rtol=1e-4)
+
+    @pytest.mark.parametrize("temperature", [1.0, 0.7])
+    def test_backward_combined(self, temperature):
+        """Backprop through `logprobs` and `entropy` together, to catch the gradients overwriting each other
+        instead of accumulating."""
+        torch.manual_seed(42)
+        hidden = torch.randn(self.N, self.H, requires_grad=True)
+        weight = torch.randn(self.V, self.H, requires_grad=True)
+        labels = torch.randint(0, self.V, (self.N,))
+
+        # Chunked backward
+        logprobs_chunked, entropy_chunked = _ChunkedLogProbFunction.apply(
+            hidden, weight, labels, temperature, self.CHUNK_SIZE
+        )
+        (2.0 * logprobs_chunked + 0.5 * entropy_chunked).sum().backward()
+        grad_hidden_chunked = hidden.grad.clone()
+        grad_weight_chunked = weight.grad.clone()
+
+        hidden.grad = None
+        weight.grad = None
+
+        # Reference backward
+        logprobs_ref, entropy_ref = self._reference_logprobs_and_entropy(hidden, weight, labels, temperature)
+        (2.0 * logprobs_ref + 0.5 * entropy_ref).sum().backward()
+
+        torch.testing.assert_close(grad_hidden_chunked, hidden.grad, atol=1e-4, rtol=1e-4)
+        torch.testing.assert_close(grad_weight_chunked, weight.grad, atol=1e-4, rtol=1e-4)
+
 
 class _FakeTransformerModel(nn.Module):
     """Minimal stand-in for a transformer body: returns random hidden states of the right shape."""
@@ -1175,7 +1368,7 @@ class _FakeCausalLM(nn.Module):
 
     def __init__(self, hidden_size, vocab_size):
         super().__init__()
-        self.config = type("Config", (), {})()
+        self.config = PretrainedConfig()
         self.model = _FakeTransformerModel(hidden_size)
         self.lm_head = nn.Linear(hidden_size, vocab_size, bias=False)
 
@@ -1204,6 +1397,14 @@ _CHUNKED_LM_HEAD_MODEL_IDS = [
     "trl-internal-testing/tiny-GemmaForCausalLM",
     "trl-internal-testing/tiny-Glm4MoeForCausalLM",
     "trl-internal-testing/tiny-GptOssForCausalLM",
+    "trl-internal-testing/tiny-Lfm2ForCausalLM",
+    pytest.param(
+        "trl-internal-testing/tiny-Lfm2ForCausalLM-2.5",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("5.0.0"),
+            reason="LFM2.5 tokenizer requires transformers>=5.0.0",
+        ),
+    ),
     "trl-internal-testing/tiny-LlamaForCausalLM-3.1",
     "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
     "trl-internal-testing/tiny-LlamaForCausalLM-3",
@@ -1314,7 +1515,7 @@ class TestPatchChunkedLMHead:
     @pytest.mark.parametrize("model_id", _CHUNKED_LM_HEAD_MODEL_IDS)
     @pytest.mark.parametrize("temperature", [1.0, 0.7])
     def test_forward(self, model_id, temperature):
-        model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch.bfloat16).to(torch_device)
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype=torch.bfloat16).to(torch_device)
         model.eval()
 
         B, S, chunk_size = 2, 8, 32
@@ -1342,7 +1543,13 @@ class TestPatchChunkedLMHead:
     @pytest.mark.parametrize("model_id", _CHUNKED_LM_HEAD_MODEL_IDS)
     @pytest.mark.parametrize("temperature", [1.0, 0.7])
     def test_backward(self, model_id, temperature):
-        model_ref = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch.bfloat16).to(torch_device)
+        # Run in float32, not bfloat16. For models that tie their embeddings, `lm_head.weight.grad` is the sum of the
+        # LM-head projection and the input-embedding lookup, so its absolute error is set by the larger of the two
+        # rather than by the element's own value. In bfloat16 that error (~1 ULP at the gradient's scale) swamps the
+        # assertion: every untied model lands on the same ~1.6e-2 bf16 quantum, and the tied ones range up to ~4e-1,
+        # which no useful tolerance can separate from a real bug. float32 drops the worst case to ~3e-5 and makes the
+        # test sensitive to the thing it is meant to check: that the chunked gradient matches the reference.
+        model_ref = AutoModelForCausalLM.from_pretrained(model_id, dtype=torch.float32).to(torch_device)
         model_chunked = copy.deepcopy(model_ref)
 
         B, S, chunk_size = 2, 8, 32
@@ -1364,7 +1571,7 @@ class TestPatchChunkedLMHead:
         out["log_probs"].sum().backward()
         chunked_grad = model_chunked.lm_head.weight.grad.clone()
 
-        torch.testing.assert_close(chunked_grad, ref_grad, atol=5e-2, rtol=5e-2)
+        torch.testing.assert_close(chunked_grad, ref_grad, atol=1e-3, rtol=1e-3)
 
 
 class TestComputeFlopsPerToken(TrlTestCase):
@@ -1405,6 +1612,14 @@ class TestComputeFlopsPerToken(TrlTestCase):
         per_expert_per_layer = 2 * 3 * cfg.hidden_size * cfg.moe_intermediate_size
         expected_delta = 3 * moe_layers * (2 - 1) * per_expert_per_layer
         assert f_hi - f_lo == expected_delta
+
+    def test_config_without_head_dim(self):
+        # `head_dim` is optional on configs: Qwen2 doesn't declare it. Falling back to `hidden_size //
+        # num_attention_heads` must give the same result as setting it explicitly.
+        cfg = AutoConfig.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
+        derived = compute_flops_per_token(cfg, 16384)
+        cfg.head_dim = cfg.hidden_size // cfg.num_attention_heads
+        assert compute_flops_per_token(cfg, 16384) == derived
 
 
 class TestComputeMfu(TrlTestCase):
@@ -1447,3 +1662,11 @@ class TestAdjustedMfu(TrlTestCase):
         f_med = adjusted_mfu(100.0, cfg, 16384)
         f_long = adjusted_mfu(100.0, cfg, 65536)
         assert f_short > f_med > f_long
+
+    def test_config_without_head_dim(self):
+        # `head_dim` is optional on configs: Qwen2 doesn't declare it. Falling back to `hidden_size //
+        # num_attention_heads` must give the same result as setting it explicitly.
+        cfg = AutoConfig.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
+        derived = adjusted_mfu(100.0, cfg, 16384)
+        cfg.head_dim = cfg.hidden_size // cfg.num_attention_heads
+        assert adjusted_mfu(100.0, cfg, 16384) == pytest.approx(derived)

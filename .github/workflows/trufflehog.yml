@@ -1,18 +1,34 @@
 on:
+  # scan the pushed commits, not the whole history: on `pull_request` and on a push to main the action
+  # derives a base commit, while a bare `push` has none on a new branch and walks every commit ever
+  # made. if a base is ever set explicitly, pass a sha: a ref name does not resolve in the scanner clone.
+  pull_request:
   push:
+    branches:
+      - main
+  schedule:
+    - cron: '0 3 * * 1'  # weekly full-history sweep, so history stays in scope
 
 name: Secret Leaks
+
+permissions:
+  contents: read
 
 jobs:
   trufflehog:
     runs-on: ubuntu-latest
     steps:
     - name: Checkout code
-      uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       with:
         fetch-depth: 0
+        # the scan step mounts this directory, `.git/config` included, into a third-party container
+        persist-credentials: false
     - name: Secret Scanning
-      uses: trufflesecurity/trufflehog@30d5bb91af1a771378349dbbb0c82129392acf70  # v3.95.6
+      uses: trufflesecurity/trufflehog@20652fbbdefffcdaa493a5bf57ab2ac6b1db715b  # v3.97.1
       with:
-        # exclude buggy postgres detector that is causing false positives and not relevant to our codebase
-        extra_args: --results=verified,unknown --exclude-detectors=postgres
+        # the action runs the scanner as a container and defaults to the mutable `:latest` tag, so the SHA above
+        # pins only the wrapper. pin the image by digest too, and bump it together with the action SHA.
+        version: 3.97.1@sha256:deb2af10659a488a14d262a323addcde099d99827a1cf1dc4e93c17915c39f08
+        # without --fail-on-scan-errors, a scan that errors out and covers nothing passes as a scan that found nothing.
+        extra_args: --results=verified,unknown --fail-on-scan-errors

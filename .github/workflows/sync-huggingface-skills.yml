@@ -14,10 +14,10 @@ jobs:
       contents: read
     steps:
       - name: Checkout trl repo
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Set up Python
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
           python-version: '3.12'
 
@@ -40,24 +40,26 @@ jobs:
           repositories: huggingface/skills
 
       - name: Checkout huggingface/skills repo
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           repository: huggingface/skills
           token: ${{ steps.app_token.outputs.token }}
           path: skills-repo
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # v8.2.0
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
 
       - name: Copy generated files
-        run: cp trl/skills/trl-training/SKILL.md skills-repo/skills/trl-training/
+        run: |
+          mkdir -p skills-repo/skills/trl-training
+          cp skills/trl-training/SKILL.md skills-repo/skills/trl-training/
 
       - name: Check for TRL skill changes
         id: check_changes
         working-directory: skills-repo
-        # git diff returns zero if there is no diff
+        # git status --porcelain prints nothing if there is no change
         run: |
-          if git diff --quiet -- skills/trl-training/SKILL.md; then
+          if [ -z "$(git status --porcelain -- skills/trl-training/)" ]; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
             echo "No trl skill changes; skipping PR"
           else
@@ -82,7 +84,7 @@ jobs:
           body: |
             Auto-generated from [trl@${{ github.sha }}](https://github.com/huggingface/trl/commit/${{ github.sha }})
 
-            Triggered by changes to `trl/skills/trl-training`
+            Triggered by changes to `skills/trl-training`
 
             ---
             This PR was created automatically by the [sync-huggingface-skills](https://github.com/huggingface/trl/blob/main/.github/workflows/sync-huggingface-skills.yml) workflow.

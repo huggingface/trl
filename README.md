@@ -22,9 +22,7 @@
 
 ## 🎉 What's New
 
-**🌍 Multi-environment agentic RL:** [`GRPOTrainer`](https://huggingface.co/docs/trl/grpo_trainer) now supports per-example environment selection and environment-owned rewards — mix multiple sandboxed task suites in one run and let each environment define its own scoring, with [Harbor](https://huggingface.co/docs/trl/harbor) and [OpenEnv](https://huggingface.co/docs/trl/openenv).
-
-**🎯 KTO is now stable:** [`KTOTrainer`](https://huggingface.co/docs/trl/kto_trainer) graduates to the stable API after a full alignment pass with [`DPOTrainer`](https://huggingface.co/docs/trl/dpo_trainer).
+**📜 Training beyond 1M tokens:** A new [long context guide](https://huggingface.co/docs/trl/long_context_training) walks through the four things that break as sequences grow — the loss, the positions, the activations and the memory of a single GPU — and ends on an example that trains Qwen3-8B on million-token sequences on one 8-GPU node.
 
 ## Overview
 

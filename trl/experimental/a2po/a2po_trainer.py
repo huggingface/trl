@@ -31,9 +31,10 @@ from transformers import (
 )
 
 from ...data_utils import maybe_apply_chat_template
-from ...models import create_reference_model, unwrap_model_for_generation
+from ...models import unwrap_model_for_generation
 from ...trainer.base_trainer import _BaseTrainer
 from ...trainer.utils import selective_log_softmax
+from ..utils import create_reference_model
 from .a2po_config import A2POConfig
 
 
@@ -45,7 +46,6 @@ RewardFunc = Callable[..., list[float]]
 
 
 class A2POTrainer(_BaseTrainer):
-    # docstyle-ignore
     """
     Trainer for the A*-PO (Optimal Advantage Regression) method, introduced in [Accelerating RL for LLM Reasoning with
     Optimal Advantage Regression](https://huggingface.co/papers/2505.20686).
@@ -53,8 +53,8 @@ class A2POTrainer(_BaseTrainer):
     A*-PO runs in two stages:
 
     1. **Offline value estimation.** Before training, `num_value_samples` completions are sampled from the reference
-       policy for every training prompt and scored with `reward_funcs`. The optimal value is estimated as
-       `V*(x) = beta1 * log(mean_i exp(r(x, y_i) / beta1))` and cached per prompt.
+       policy for every training prompt and scored with `reward_funcs`. The optimal value is estimated as `V*(x) =
+       beta1 * log(mean_i exp(r(x, y_i) / beta1))` and cached per prompt.
     2. **On-policy regression.** During training, a single completion is generated per prompt from the current policy.
        The loss is the squared error between the implicit reward `beta2 * log(pi(y|x) / pi_ref(y|x))` and the optimal
        advantage estimate `r(x, y) - V*(x)`.

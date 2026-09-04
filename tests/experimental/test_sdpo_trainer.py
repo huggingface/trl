@@ -17,8 +17,8 @@ import logging
 
 import pytest
 import torch
-from datasets import Dataset, load_dataset
-from transformers import TrainerCallback
+from datasets import Dataset, DatasetDict, load_dataset
+from transformers import HfArgumentParser, TrainerCallback
 
 from trl.experimental.sdpo import SDPOConfig, SDPOTrainer
 
@@ -173,6 +173,35 @@ class TestSDPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             if param.sum() != 0:
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @pytest.mark.parametrize("eval_dataset_type", ["dataset", "dataset_dict", "dict_of_dataset", "none"])
+    def test_init_with_eval_dataset(self, eval_dataset_type):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
+
+        if eval_dataset_type == "none":
+            eval_dataset = None
+        elif eval_dataset_type == "dataset":
+            eval_dataset = dataset["test"]
+        elif eval_dataset_type == "dataset_dict":
+            eval_dataset = DatasetDict({"data1": dataset["test"], "data2": dataset["test"]})
+        else:  # "dict_of_dataset"
+            eval_dataset = {"data1": dataset["test"], "data2": dataset["test"]}
+
+        training_args = SDPOConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = SDPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset["train"],
+            eval_dataset=eval_dataset,
+        )
+
+        if eval_dataset_type == "none":
+            assert trainer.eval_dataset is None
+        elif isinstance(trainer.eval_dataset, dict):
+            assert set(trainer.eval_dataset.keys()) == {"data1", "data2"}
+        else:
+            assert trainer.eval_dataset is eval_dataset
 
     @require_liger_kernel
     @require_torch_accelerator
@@ -378,6 +407,46 @@ class TestSDPOTrainer(TrlTestCase):
         assert 'Feedback: use {"x": 2} as a check.' in capture_callback.captured_teacher_input_text
         assert "{{" not in capture_callback.captured_teacher_input_text
         assert "}}" not in capture_callback.captured_teacher_input_text
+
+    def test_scale_rewards_accepts_string_via_cli(self):
+        parser = HfArgumentParser((SDPOConfig,))
+        (args,) = parser.parse_args_into_dataclasses(["--output_dir", self.tmp_dir, "--scale_rewards", "batch"])
+        assert args.scale_rewards == "batch"
+        (args,) = parser.parse_args_into_dataclasses(["--output_dir", self.tmp_dir, "--scale_rewards", "none"])
+        assert args.scale_rewards == "none"
+
+    def test_warns_when_feedback_available_but_disabled(self, caplog):
+        dataset = Dataset.from_dict(
+            {
+                "prompt": ["Solve 2+2."],
+                "privileged_context": ["The correct answer is 4."],
+            }
+        )
+        training_args = SDPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,
+            per_device_train_batch_size=1,
+            generation_batch_size=2,
+            num_generations=2,
+            max_completion_length=8,
+            include_environment_feedback=False,
+            max_steps=1,
+            report_to="none",
+        )
+
+        def reward(**kwargs):
+            return [0.0] * len(kwargs["prompts"])
+
+        trainer = SDPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs=reward,
+            args=training_args,
+            train_dataset=dataset,
+        )
+        with caplog.at_level(logging.WARNING, logger="trl.experimental.sdpo.sdpo_trainer"):
+            trainer.train()
+
+        assert any("include_environment_feedback" in record.message for record in caplog.records)
 
     def test_train_with_conversational_prompts_preserves_context(self):
         dataset = Dataset.from_dict(

@@ -813,48 +813,56 @@ def _load_sparse_projection_matrix(path, device, *, student_vocab_size, teacher_
         raise FileNotFoundError(f"Projection matrix not found: {path}")
     data = torch.load(path, map_location="cpu", weights_only=False)
 
+    normalize_rows = False
     if isinstance(data, dict) and "indices" in data and "likelihoods" in data:
         top_idx = data["indices"].long()
         likelihoods = data["likelihoods"].float()
+        if top_idx.shape != likelihoods.shape:
+            raise ValueError(f"indices/likelihoods shape mismatch in {path}: {top_idx.shape} vs {likelihoods.shape}")
         v_s, top_k = top_idx.shape
         row = torch.arange(v_s).unsqueeze(1).expand(-1, top_k).reshape(-1)
         col = top_idx.reshape(-1)
         vals = likelihoods.reshape(-1)
         indices = torch.stack([row, col], dim=0)
-    elif isinstance(data, dict) and data and all(isinstance(k, tuple) and len(k) == 2 for k in data.keys()):
+    elif isinstance(data, dict) and data and all(isinstance(k, tuple) and len(k) == 2 for k in data):
         pairs = list(data.keys())
         row = torch.tensor([k[0] for k in pairs], dtype=torch.long)
         col = torch.tensor([k[1] for k in pairs], dtype=torch.long)
         indices = torch.stack([row, col], dim=0)
         vals = torch.tensor(list(data.values()), dtype=torch.float32)
+        normalize_rows = True
     else:
         raise ValueError(
             f"Unrecognised projection matrix format at {path}. Expected dict with "
             "'indices'/'likelihoods' tensors or dict[(s_id, t_id)] -> count."
         )
 
-    # Drop -1 sentinel entries (padding in exact-map files).
-    keep = indices[1] >= 0
+    # Drop sentinels and entries outside the model vocabularies.
+    keep = (
+        (indices[0] >= 0) & (indices[0] < student_vocab_size) & (indices[1] >= 0) & (indices[1] < teacher_vocab_size)
+    )
     indices, vals = indices[:, keep], vals[keep]
 
-    v_s_final = max(int(student_vocab_size), int(indices[0].max().item()) + 1 if indices.numel() > 0 else 0)
-    v_t_final = max(int(teacher_vocab_size), int(indices[1].max().item()) + 1 if indices.numel() > 0 else 0)
+    if normalize_rows and indices.numel() > 0:
+        row_sums = torch.zeros(student_vocab_size, dtype=vals.dtype)
+        row_sums.scatter_add_(0, indices[0], vals)
+        vals = vals / row_sums[indices[0]].clamp_min(torch.finfo(vals.dtype).eps)
 
     sparse = torch.sparse_coo_tensor(
-        indices, vals, (v_s_final, v_t_final), device=device, dtype=torch.float32
+        indices, vals, (student_vocab_size, teacher_vocab_size), device=device, dtype=torch.float32
     ).coalesce()
     _SPARSE_PROJ_CACHE[key] = sparse
     return sparse
 
 
-def _load_exact_token_map(path, device, *, teacher_vocab_size):
+def _load_exact_token_map(path, device, *, student_vocab_size, teacher_vocab_size):
     """Build and cache the common/uncommon vocab partition for H-KL.
 
     A student token joins the common set when its top-1 projection weight is >= 0.6 (relaxed threshold, hardcoded to
     match the reference implementation). Collisions on the same teacher token keep the student with the highest weight.
     See https://huggingface.co/papers/2605.21699 Section 3.2.
     """
-    key = (str(path), str(device), int(teacher_vocab_size))
+    key = (str(path), str(device), int(student_vocab_size), int(teacher_vocab_size))
     if key in _EXACT_MAP_CACHE:
         return _EXACT_MAP_CACHE[key]
 
@@ -866,11 +874,16 @@ def _load_exact_token_map(path, device, *, teacher_vocab_size):
 
     top_indices = data["indices"].long().to(device)
     top_likelihoods = data["likelihoods"].float().to(device)
-    v_s = top_indices.shape[0]
+    if top_indices.shape != top_likelihoods.shape:
+        raise ValueError(
+            f"indices/likelihoods shape mismatch in {path}: {top_indices.shape} vs {top_likelihoods.shape}"
+        )
+    v_s = int(student_vocab_size)
     v_t = int(teacher_vocab_size)
 
     sorted_vals, sorted_pos = torch.sort(top_likelihoods, dim=-1, descending=True)
-    has_map = sorted_vals[:, 0] >= 0.6
+    file_v_s = min(top_indices.shape[0], v_s)
+    has_map = sorted_vals[:file_v_s, 0] >= 0.6
 
     s_candidates = torch.where(has_map)[0]
     empty = torch.empty(0, dtype=torch.long, device=device)
@@ -929,10 +942,10 @@ class XTokenLoss(nn.Module):
 
     Implements two variants from https://huggingface.co/papers/2605.21699:
 
-    - ``"p_kl"`` (Projection KL, paper Eq. 2): projects the full student distribution to teacher vocab space via a
+    - ``"p_kl"`` (Projection KL, paper Eq. 4): projects the full student distribution to teacher vocab space via a
       sparse matrix W and computes forward KL, recovering signal for tokens in the uncommon set.
-    - ``"h_kl"`` (Hybrid KL, paper Eq. 3-4): GOLD hybrid structure with the common set built via top-1 mapping under W
-      (threshold ≥ 0.6) rather than strict string equality.
+    - ``"h_kl"`` (Hybrid KL, paper Eq. 3 and 5): GOLD hybrid structure with the common set built via top-1 mapping
+      under W (threshold ≥ 0.6) rather than strict string equality.
 
     Both paths apply T² gradient scaling (Hinton 2015) and optionally a stop-gradient dynamic CE/KD balancing factor
     (paper Eq. 7).
@@ -940,7 +953,14 @@ class XTokenLoss(nn.Module):
     Token-span alignment reuses TRL's ``ULDLoss._align_by_byte_offsets``.
     """
 
-    def __init__(self, config, student_vocab_size, teacher_vocab_size):
+    def __init__(
+        self,
+        config,
+        student_vocab_size,
+        teacher_vocab_size,
+        student_eos_token_id=None,
+        teacher_eos_token_id=None,
+    ):
         super().__init__()
         self.loss_type = config.xtoken_loss_type
         self.projection_path = config.xtoken_projection_matrix_path
@@ -954,6 +974,8 @@ class XTokenLoss(nn.Module):
         self.skip_teacher_eos = config.uld_skip_teacher_eos
         self.student_vocab_size = student_vocab_size
         self.teacher_vocab_size = teacher_vocab_size
+        self.student_eos_token_id = student_eos_token_id
+        self.teacher_eos_token_id = teacher_eos_token_id
         self.ignore_index = -100
 
     def _proj_matrix(self, device):
@@ -965,7 +987,12 @@ class XTokenLoss(nn.Module):
         )
 
     def _exact_map(self, device):
-        return _load_exact_token_map(self.projection_path, device, teacher_vocab_size=self.teacher_vocab_size)
+        return _load_exact_token_map(
+            self.projection_path,
+            device,
+            student_vocab_size=self.student_vocab_size,
+            teacher_vocab_size=self.teacher_vocab_size,
+        )
 
     def forward(
         self,
@@ -985,8 +1012,12 @@ class XTokenLoss(nn.Module):
         if student_logits.shape[-1] > self.student_vocab_size:
             student_logits = student_logits[..., : self.student_vocab_size]
 
-        s_starts, s_sizes = self._answer_spans(student_labels, skip_eos=self.skip_student_eos)
-        t_starts, t_sizes = self._answer_spans(teacher_labels, skip_eos=self.skip_teacher_eos)
+        s_starts, s_sizes = self._answer_spans(
+            student_labels, skip_eos=self.skip_student_eos, eos_token_id=self.student_eos_token_id
+        )
+        t_starts, t_sizes = self._answer_spans(
+            teacher_labels, skip_eos=self.skip_teacher_eos, eos_token_id=self.teacher_eos_token_id
+        )
 
         kd_terms = []
         ce_terms = []
@@ -996,7 +1027,7 @@ class XTokenLoss(nn.Module):
             s0, ss = s_starts[i], s_sizes[i]
             t0, ts = t_starts[i], t_sizes[i]
 
-            if ss <= 0 or ts <= 0:
+            if ss <= 0:
                 zero = student_logits[i].sum() * 0.0
                 kd_terms.append(zero)
                 ce_terms.append(zero)
@@ -1023,7 +1054,7 @@ class XTokenLoss(nn.Module):
             # KD: logit at s0-1 predicts token s0 (first completion token) — same
             # [:, :-1] / [:, 1:] shift as CE. Skip when s0 or t0 == 0 (no preceding
             # predictor; CE is already zero'd by the s0 < 1 branch above).
-            if s0 < 1 or t0 < 1:
+            if ts <= 0 or s0 < 1 or t0 < 1:
                 kd_terms.append(student_logits[i].sum() * 0.0)
                 continue
 
@@ -1059,12 +1090,12 @@ class XTokenLoss(nn.Module):
 
         if self.dynamic_scaling:
             # loss = sg(ce/kd) * kd + ce; kl_weight and ce_scale are intentionally ignored in this branch.
-            scale = (ce.detach() / kd.detach().clamp(min=1e-8)).clamp(0.01, 100.0)
+            scale = (ce.detach().abs() / kd.detach().abs().clamp(min=1e-8)).clamp(0.01, 100.0)
             return scale * kd + ce
         return self.kl_weight * kd + self.ce_scale * ce
 
     @staticmethod
-    def _answer_spans(labels, *, skip_eos):
+    def _answer_spans(labels, *, skip_eos, eos_token_id):
         starts, sizes = [], []
         for row in labels:
             mask = row.ne(-100)
@@ -1074,7 +1105,8 @@ class XTokenLoss(nn.Module):
                 continue
             starts.append(int(mask.nonzero(as_tuple=True)[0][0].item()))
             sz = int(mask.sum().item())
-            sizes.append(sz - 1 if skip_eos else sz)
+            last_idx = int(mask.nonzero(as_tuple=True)[0][-1].item())
+            sizes.append(sz - 1 if skip_eos and row[last_idx].item() == eos_token_id else sz)
         return starts, sizes
 
     @staticmethod
@@ -1093,7 +1125,7 @@ class XTokenLoss(nn.Module):
     def _compute_p_kl(self, s_logits, t_logits, paired, device, T):
         """P-KL: project student to teacher vocab, global top-k, forward KL with T² scaling.
 
-        Implements Eq. (2) from https://huggingface.co/papers/2605.21699.
+        Implements Eq. (4) from https://huggingface.co/papers/2605.21699.
         """
         eps = 1e-10
         s_groups = [p[0] for p in paired]
@@ -1136,7 +1168,7 @@ class XTokenLoss(nn.Module):
     def _compute_h_kl(self, s_logits, t_logits, paired, device, T):
         """H-KL: relaxed common-set forward KL + uncommon sorted-L1, T² scaling.
 
-        Common set built via top-1 mapping under W (threshold ≥ 0.6). Implements Eq. (3-4) from
+        Common set built via top-1 mapping under W (threshold ≥ 0.6). Implements Eq. (3) and Eq. (5) from
         https://huggingface.co/papers/2605.21699.
         """
         s_groups = [p[0] for p in paired]
@@ -1274,7 +1306,7 @@ class GOLDTrainer(SFTTrainer):
                     f"teacher is '{teacher_model_type}'. Images will be processed separately through each "
                     "model's processor, which may increase memory usage and computation time."
                 )
-            if is_cross_architecture or args.use_uld_loss:
+            if is_cross_architecture or args.use_uld_loss or args.xtoken_loss_type != "none":
                 self._teacher_processor = (
                     teacher_proc
                     if isinstance(teacher_model, str)
@@ -1283,12 +1315,11 @@ class GOLDTrainer(SFTTrainer):
                         trust_remote_code=args.trust_remote_code,
                     )
                 )
-        if self._is_cross_architecture_vlm and not args.use_uld_loss:
+        if self._is_cross_architecture_vlm and not (args.use_uld_loss or args.xtoken_loss_type != "none"):
             raise ValueError(
                 "Cross-architecture VLM distillation (student and teacher have different `model_type`) is not "
                 "supported with the standard JSD loss because the models require different image token formats "
-                "and tokenizers. Please set `use_uld_loss=True` in your GOLDConfig to enable cross-tokenizer "
-                "alignment via ULD loss."
+                "and tokenizers. Enable ULD or X-Token loss for cross-tokenizer alignment."
             )
         self._is_vision_dataset = "image" in dataset_sample or "images" in dataset_sample
         if self._is_vision_dataset and not self._is_vlm:
@@ -1347,19 +1378,13 @@ class GOLDTrainer(SFTTrainer):
             self.use_liger_gkd_loss = True
             self._forward_redirection = _ForwardRedirection()
 
-        if args.teacher_model_init_kwargs is None:
-            teacher_model_init_kwargs = {}
-        elif not isinstance(teacher_model, str):
+        teacher_model_init_kwargs = dict(args.teacher_model_init_kwargs or {})
+        if not isinstance(teacher_model, str) and args.teacher_model_init_kwargs is not None:
             raise ValueError(
                 "You passed teacher_model_init_kwargs to the GOLDConfig, but your teacher_model is already instantiated."
             )
-        else:
-            teacher_model_init_kwargs = args.teacher_model_init_kwargs
-            teacher_model_init_kwargs["dtype"] = (
-                teacher_model_init_kwargs["dtype"]
-                if teacher_model_init_kwargs["dtype"] in ["auto", None]
-                else getattr(torch, teacher_model_init_kwargs["dtype"])
-            )
+        dtype = teacher_model_init_kwargs.get("dtype")
+        teacher_model_init_kwargs["dtype"] = dtype if dtype in ["auto", None] else getattr(torch, dtype)
 
         _needs_teacher_tok = args.use_uld_loss or args.xtoken_loss_type != "none"
         if _needs_teacher_tok and args.teacher_tokenizer_name_or_path is None:
@@ -1383,7 +1408,7 @@ class GOLDTrainer(SFTTrainer):
             teacher_model = create_model_from_path(teacher_model, **init_kwargs)
         self.use_uld_loss = args.use_uld_loss
         self.teacher_tokenizer = None
-        if args.use_uld_loss and self._teacher_processor is not None:
+        if _needs_teacher_tok and self._teacher_processor is not None:
             self.teacher_tokenizer = self._teacher_processor.tokenizer
             if self.teacher_tokenizer.pad_token is None:
                 self.teacher_tokenizer.pad_token = self.teacher_tokenizer.eos_token
@@ -1466,6 +1491,15 @@ class GOLDTrainer(SFTTrainer):
         self._matched_step_eq = 0.0
         self._unmatched_step_eq = 0.0
 
+        self._xtoken_kl_sum = 0.0
+        self._xtoken_ce_sum = 0.0
+        self._xtoken_pair_sum = 0.0
+        self._xtoken_steps = 0.0
+        self._xtoken_accuracy_num = 0.0
+        self._xtoken_accuracy_den = 0.0
+        self._xtoken_projection_num = 0.0
+        self._xtoken_projection_den = 0.0
+
         self.uld_loss_fn = None
         if self.use_uld_loss:
             self.uld_loss_fn = ULDLoss(
@@ -1481,6 +1515,8 @@ class GOLDTrainer(SFTTrainer):
                 config=args,
                 student_vocab_size=self.model.config.get_text_config().vocab_size,
                 teacher_vocab_size=_teacher_vocab_size,
+                student_eos_token_id=self._tokenizer.eos_token_id,
+                teacher_eos_token_id=self.teacher_tokenizer.eos_token_id,
             )
 
         generation_kwargs = {
@@ -2952,6 +2988,7 @@ class GOLDTrainer(SFTTrainer):
                 outputs_teacher = self.teacher_model(
                     input_ids=teacher_input_ids,
                     attention_mask=teacher_attention_mask,
+                    use_cache=False,
                     **teacher_forward_kwargs,
                 )
         else:
@@ -3088,8 +3125,8 @@ class GOLDTrainer(SFTTrainer):
 
         if self.xtoken_loss_fn is not None and self.teacher_tokenizer is not None:
             xtoken_student_labels = inputs["labels"].clone()
-            if self.processing_class.pad_token_id is not None:
-                xtoken_student_labels[xtoken_student_labels == self.processing_class.pad_token_id] = -100
+            if self.pad_token_id is not None:
+                xtoken_student_labels[xtoken_student_labels == self.pad_token_id] = -100
             xtoken_teacher_labels = teacher_labels.clone()
             if self.teacher_tokenizer.pad_token_id is not None:
                 xtoken_teacher_labels[xtoken_teacher_labels == self.teacher_tokenizer.pad_token_id] = -100
@@ -3108,41 +3145,51 @@ class GOLDTrainer(SFTTrainer):
             )
 
             if num_items_in_batch is not None:
-                num_valid_local = (xtoken_student_labels != -100).sum().clamp_min(1)
+                num_valid_local = (xtoken_student_labels[:, 1:] != -100).sum().clamp_min(1)
                 if isinstance(num_items_in_batch, torch.Tensor):
                     num_items_in_batch = num_items_in_batch.to(loss.device)
                 loss = loss * num_valid_local / num_items_in_batch
 
             mode = "train" if self.model.training else "eval"
-            dev = self.accelerator.device
-            self._metrics[mode]["xtoken/kl_loss"].append(
-                self.accelerator.gather(self.xtoken_loss_fn.last_kl_loss).mean().item()
-            )
-            self._metrics[mode]["xtoken/ce_loss"].append(
-                self.accelerator.gather(self.xtoken_loss_fn.last_ce_loss).mean().item()
-            )
-            acc_num = self.accelerator.gather(
-                torch.tensor(float(self.xtoken_loss_fn.last_accuracy_num), device=dev)
-            ).sum()
-            acc_den = self.accelerator.gather(
-                torch.tensor(float(self.xtoken_loss_fn.last_accuracy_den), device=dev)
-            ).sum()
-            self._metrics[mode]["xtoken/accuracy"].append((acc_num / acc_den).item() if acc_den > 0 else 0.0)
-            self._metrics[mode]["xtoken/num_valid_pairs"].append(
-                self.accelerator.gather(torch.tensor(float(self.xtoken_loss_fn.last_num_valid_pairs), device=dev))
-                .mean()
-                .item()
-            )
-            if self.xtoken_loss_fn.loss_type == "p_kl":
-                proj_num = self.accelerator.gather(
-                    torch.tensor(float(self.xtoken_loss_fn.last_proj_accuracy_num), device=dev)
-                ).sum()
-                proj_den = self.accelerator.gather(
-                    torch.tensor(float(self.xtoken_loss_fn.last_proj_accuracy_den), device=dev)
-                ).sum()
-                self._metrics[mode]["xtoken/proj_accuracy"].append(
-                    (proj_num / proj_den).item() if proj_den > 0 else 0.0
+            if mode == "train":
+                self._xtoken_kl_sum += self.xtoken_loss_fn.last_kl_loss.item()
+                self._xtoken_ce_sum += self.xtoken_loss_fn.last_ce_loss.item()
+                self._xtoken_pair_sum += self.xtoken_loss_fn.last_num_valid_pairs
+                self._xtoken_steps += 1.0
+                self._xtoken_accuracy_num += self.xtoken_loss_fn.last_accuracy_num
+                self._xtoken_accuracy_den += self.xtoken_loss_fn.last_accuracy_den
+                self._xtoken_projection_num += self.xtoken_loss_fn.last_proj_accuracy_num
+                self._xtoken_projection_den += self.xtoken_loss_fn.last_proj_accuracy_den
+            else:
+                dev = self.accelerator.device
+                self._metrics[mode]["xtoken/kl_loss"].append(
+                    self.accelerator.gather(self.xtoken_loss_fn.last_kl_loss).mean().item()
                 )
+                self._metrics[mode]["xtoken/ce_loss"].append(
+                    self.accelerator.gather(self.xtoken_loss_fn.last_ce_loss).mean().item()
+                )
+                acc_num = self.accelerator.gather(
+                    torch.tensor(float(self.xtoken_loss_fn.last_accuracy_num), device=dev)
+                ).sum()
+                acc_den = self.accelerator.gather(
+                    torch.tensor(float(self.xtoken_loss_fn.last_accuracy_den), device=dev)
+                ).sum()
+                self._metrics[mode]["xtoken/accuracy"].append((acc_num / acc_den).item() if acc_den > 0 else 0.0)
+                self._metrics[mode]["xtoken/num_valid_pairs"].append(
+                    self.accelerator.gather(torch.tensor(float(self.xtoken_loss_fn.last_num_valid_pairs), device=dev))
+                    .mean()
+                    .item()
+                )
+                if self.xtoken_loss_fn.loss_type == "p_kl":
+                    proj_num = self.accelerator.gather(
+                        torch.tensor(float(self.xtoken_loss_fn.last_proj_accuracy_num), device=dev)
+                    ).sum()
+                    proj_den = self.accelerator.gather(
+                        torch.tensor(float(self.xtoken_loss_fn.last_proj_accuracy_den), device=dev)
+                    ).sum()
+                    self._metrics[mode]["xtoken/proj_accuracy"].append(
+                        (proj_num / proj_den).item() if proj_den > 0 else 0.0
+                    )
 
         empty_cache()
 
@@ -3342,6 +3389,14 @@ class GOLDTrainer(SFTTrainer):
                     self._unmatched_sum,
                     self._matched_step_eq,
                     self._unmatched_step_eq,
+                    self._xtoken_kl_sum,
+                    self._xtoken_ce_sum,
+                    self._xtoken_pair_sum,
+                    self._xtoken_steps,
+                    self._xtoken_accuracy_num,
+                    self._xtoken_accuracy_den,
+                    self._xtoken_projection_num,
+                    self._xtoken_projection_den,
                 ],
                 dtype=torch.float64,
                 device=device,
@@ -3363,6 +3418,14 @@ class GOLDTrainer(SFTTrainer):
                 unmatched_sum,
                 matched_eq,
                 unmatched_eq,
+                xtoken_kl_sum,
+                xtoken_ce_sum,
+                xtoken_pair_sum,
+                xtoken_steps,
+                xtoken_accuracy_num,
+                xtoken_accuracy_den,
+                xtoken_projection_num,
+                xtoken_projection_den,
             ) = vec.tolist()
 
             if on_eq > 0:
@@ -3375,10 +3438,21 @@ class GOLDTrainer(SFTTrainer):
             if unmatched_eq > 0:
                 logs["unmatched_loss"] = round(unmatched_sum / unmatched_eq, 4)
 
+            if xtoken_steps > 0:
+                logs["xtoken/kl_loss"] = xtoken_kl_sum / xtoken_steps
+                logs["xtoken/ce_loss"] = xtoken_ce_sum / xtoken_steps
+                logs["xtoken/num_valid_pairs"] = xtoken_pair_sum / xtoken_steps
+                logs["xtoken/accuracy"] = xtoken_accuracy_num / max(xtoken_accuracy_den, 1.0)
+                if xtoken_projection_den > 0:
+                    logs["xtoken/proj_accuracy"] = xtoken_projection_num / xtoken_projection_den
+
             self._on_policy_loss_total = self._off_policy_loss_total = 0.0
             self._on_policy_step_equiv = self._off_policy_step_equiv = 0.0
             self._matched_sum = self._unmatched_sum = 0.0
             self._matched_step_eq = self._unmatched_step_eq = 0.0
+            self._xtoken_kl_sum = self._xtoken_ce_sum = self._xtoken_pair_sum = self._xtoken_steps = 0.0
+            self._xtoken_accuracy_num = self._xtoken_accuracy_den = 0.0
+            self._xtoken_projection_num = self._xtoken_projection_den = 0.0
 
         # This method can be called both in training and evaluation. When called in evaluation, the keys in `logs`
         # start with "eval_". We need to add the prefix "eval_" to the keys in `metrics` to match the format.

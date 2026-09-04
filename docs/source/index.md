@@ -12,9 +12,7 @@ The library is integrated with 🤗 [transformers](https://github.com/huggingfac
 
 ## 🎉 What's New
 
-**🌍 Multi-environment agentic RL:** [`GRPOTrainer`](grpo_trainer) now supports per-example environment selection and environment-owned rewards — mix multiple sandboxed task suites in one run and let each environment define its own scoring, with [Harbor](harbor) and [OpenEnv](openenv).
-
-**🎯 KTO is now stable:** [`KTOTrainer`](kto_trainer) graduates to the stable API after a full alignment pass with [`DPOTrainer`](dpo_trainer).
+**📜 Training beyond 1M tokens:** A new [long context guide](long_context_training) walks through the four things that break as sequences grow — the loss, the positions, the activations and the memory of a single GPU — and ends on an example that trains Qwen3-8B on million-token sequences on one 8-GPU node.
 
 ## Taxonomy
 
@@ -51,6 +49,7 @@ Below is the current list of TRL trainers, organized by method type (⚡️ = vL
 
 ### Knowledge distillation
 
+- [`DistillationTrainer`](distillation_trainer) ⚡️
 - [`GKDTrainer`](gkd_trainer) 🧪
 - [`MiniLLMTrainer`](minillm_trainer) 🧪
 

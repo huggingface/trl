@@ -16,7 +16,7 @@ import importlib
 
 import pytest
 import torch
-from datasets import Dataset
+from datasets import Dataset, DatasetDict
 from transformers import TrainerCallback
 from transformers.utils import is_peft_available
 
@@ -133,6 +133,42 @@ class TestSDFTTrainer(TrlTestCase):
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
         self._assert_any_trainable_param_changed(trainer.model, previous_trainable_params)
+
+    @pytest.mark.parametrize("eval_dataset_type", ["dataset", "dataset_dict", "dict_of_dataset", "none"])
+    def test_init_with_eval_dataset(self, eval_dataset_type):
+        # Streaming datasets are not yet supported in SDFT
+        train_dataset = Dataset.from_dict(
+            {
+                "prompt": ["Solve 2+2.", "Name the capital of France."],
+                "privileged_context": ["Example answer: 4.", "Example answer: Paris."],
+            }
+        )
+        eval_split = Dataset.from_dict({"prompt": ["Solve 3+3."], "privileged_context": ["Example answer: 6."]})
+
+        if eval_dataset_type == "none":
+            eval_dataset = None
+        elif eval_dataset_type == "dataset":
+            eval_dataset = eval_split
+        elif eval_dataset_type == "dataset_dict":
+            eval_dataset = DatasetDict({"data1": eval_split, "data2": eval_split})
+        else:  # "dict_of_dataset"
+            eval_dataset = {"data1": eval_split, "data2": eval_split}
+
+        training_args = SDFTConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = SDFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=train_dataset,
+            eval_dataset=eval_dataset,
+        )
+
+        # SDFT tokenizes prompts/completions on the fly during generation, so eval datasets are stored as-is.
+        if eval_dataset_type == "none":
+            assert trainer.eval_dataset is None
+        elif isinstance(trainer.eval_dataset, dict):
+            assert set(trainer.eval_dataset.keys()) == {"data1", "data2"}
+        else:
+            assert trainer.eval_dataset is eval_dataset
 
     @require_liger_kernel
     @require_torch_accelerator

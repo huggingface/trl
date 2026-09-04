@@ -21,7 +21,6 @@ from ...trainer.sft_config import SFTConfig
 
 @dataclass
 class GOLDConfig(SFTConfig):
-    # docstyle-ignore
     r"""
     Configuration class for [`GOLDTrainer`].
 
@@ -75,8 +74,8 @@ class GOLDConfig(SFTConfig):
             Whether to use Universal Logit Distillation (ULD) loss instead of Generalized Jensen-Shannon Divergence
             loss.
         use_extended_uld (`bool`, *optional*, defaults to `True`):
-            Whether to enable extended ULD alignment that uses tokenizers to align and merge token probabilities
-            across student and teacher tokenizations. When `True`, the trainer will compute token mappings and merge
+            Whether to enable extended ULD alignment that uses tokenizers to align and merge token probabilities across
+            student and teacher tokenizations. When `True`, the trainer will compute token mappings and merge
             probabilities for split tokens; when `False`, ULD will use simple positional truncation like in the
             original ULD paper.
         uld_token_merge_strategy (`str`, *optional*, defaults to `"observed"`):
@@ -115,21 +114,20 @@ class GOLDConfig(SFTConfig):
         > Parameters for X-Token cross-tokenizer KD (https://huggingface.co/papers/2605.21699)
 
         xtoken_loss_type (`str`, *optional*, defaults to `"none"`):
-            Cross-tokenizer KD variant: `"none"` (disabled), `"p_kl"` (projection KL), or `"h_kl"`
-            (hybrid KL with relaxed common set). Requires `teacher_tokenizer_name_or_path` and
-            `xtoken_projection_matrix_path`.
+            Cross-tokenizer KD variant: `"none"` (disabled), `"p_kl"` (projection KL), or `"h_kl"` (hybrid KL with
+            relaxed common set). Requires `teacher_tokenizer_name_or_path` and `xtoken_projection_matrix_path`.
         xtoken_projection_matrix_path (`str`, *optional*):
             Path to a precomputed projection matrix file. Required when `xtoken_loss_type != "none"`.
         xtoken_temperature (`float`, *optional*, defaults to `1.0`):
             Temperature T for X-Token KD loss; the loss is multiplied by T² (Hinton 2015).
         xtoken_dynamic_scaling (`bool`, *optional*, defaults to `True`):
-            Scale KD by `stop_gradient(CE / KD)` to balance loss magnitudes (paper Eq. 7).
+            Scale KD by `stop_gradient(abs(CE) / abs(KD))` to balance loss magnitudes (paper Eq. 7).
         xtoken_uncommon_topk (`int`, *optional*, defaults to `8192`):
             H-KL: cap sorted-L1 uncommon comparison to the top-k tokens per side.
         xtoken_vocab_topk (`int`, *optional*, defaults to `8192`):
-            P-KL: restrict KL to the global top-k teacher tokens by max logit. Interacts with the projection
-            matrix `--top-k`: teacher tokens outside the matrix's reach get near-zero projected student mass
-            and dominate the KL, so smaller values concentrate the loss on tokens the student can match.
+            P-KL: restrict KL to the global top-k teacher tokens by max logit. Interacts with the projection matrix
+            `--top-k`: teacher tokens outside the matrix's reach get near-zero projected student mass and dominate the
+            KL, so smaller values concentrate the loss on tokens the student can match.
         xtoken_kl_weight (`float`, *optional*, defaults to `1.0`):
             Weight for the X-Token KD term when `xtoken_dynamic_scaling=False`.
         xtoken_ce_scale (`float`, *optional*, defaults to `0.1`):
@@ -139,7 +137,7 @@ class GOLDConfig(SFTConfig):
         use_vllm (`bool`, *optional*, defaults to `False`):
             Whether to use vLLM for generating completions from the student model. Requires `vllm` to be installed.
         vllm_mode (`str`, *optional*, defaults to `"colocate"`):
-            Mode for student vLLM integration. Either `"server"` (connect to a running TRL vLLM server) or `"colocate"`
+            Mode for student vLLM integration. Either `"server"` (connect to a running vLLM server) or `"colocate"`
             (run vLLM in the same process).
         vllm_server_host (`str`, *optional*, defaults to `"0.0.0.0"`):
             Host of the vLLM server for the student model (if `vllm_mode="server"`).
@@ -387,8 +385,8 @@ class GOLDConfig(SFTConfig):
         metadata={
             "help": (
                 'Cross-tokenizer KD loss variant. "none" disables X-Token; "p_kl" uses full-vocab '
-                'projection (P-KL, Eq. 2 in https://huggingface.co/papers/2605.21699); "h_kl" uses '
-                "the relaxed common-set hybrid (H-KL, Eq. 3-4). Requires `teacher_tokenizer_name_or_path` "
+                'projection (P-KL, Eq. 4 in https://huggingface.co/papers/2605.21699); "h_kl" uses '
+                "the relaxed common-set hybrid (H-KL, Eq. 3 and 5). Requires `teacher_tokenizer_name_or_path` "
                 "and `xtoken_projection_matrix_path`."
             )
         },
@@ -417,7 +415,7 @@ class GOLDConfig(SFTConfig):
         default=True,
         metadata={
             "help": (
-                "When True, scale the KD loss by stop_gradient(CE / KD) before adding CE, keeping CE and "
+                "When True, scale the KD loss by stop_gradient(abs(CE) / abs(KD)) before adding CE, keeping CE and "
                 "KD magnitudes balanced throughout training (X-Token paper Eq. 7)."
             )
         },
@@ -470,7 +468,7 @@ class GOLDConfig(SFTConfig):
     vllm_mode: str = field(
         default="colocate",
         metadata={
-            "help": 'Mode for vLLM integration. Either "server" (connect to a running TRL vLLM server) or "colocate" (run vLLM in the same process).'
+            "help": 'Mode for vLLM integration. Either "server" (connect to a running vLLM server) or "colocate" (run vLLM in the same process).'
         },
     )
     vllm_server_base_url: str | None = field(
