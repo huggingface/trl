@@ -12,7 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from collections import defaultdict
+from types import SimpleNamespace
+
 import pytest
+import torch
 from datasets import DatasetDict, load_dataset
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
 from transformers.utils import is_peft_available
@@ -61,6 +65,40 @@ class TestXPOTrainer(TrlTestCase):
         trainer.train()
 
         assert "train_loss" in trainer.state.log_history[-1]
+
+    def test_logps_metrics_contain_only_policy_logps(self):
+        trainer = SimpleNamespace(
+            accelerator=SimpleNamespace(gather_for_metrics=lambda tensor: tensor),
+            stats=defaultdict(list),
+            beta=0.1,
+            alpha=0.2,
+            processing_class=SimpleNamespace(eos_token_id=99),
+        )
+        model_data = {"input_ids": torch.tensor([[0, 1, 99], [0, 1, 2]])}
+        ref_data = {"input_ids": torch.tensor([[0, 3, 4], [0, 5, 99]])}
+        model_logprobs_model_data = torch.tensor([[1.0, 2.0], [10.0, 20.0]])
+        model_logprobs_ref_data = torch.tensor([[4.0, 5.0], [40.0, 50.0]])
+        ref_logprobs_ref_data = torch.tensor([[0.4, 0.5], [4.0, 5.0]])
+        ref_logprobs_model_data = torch.tensor([[0.1, 0.2], [1.0, 2.0]])
+
+        XPOTrainer._log_statistics(
+            trainer,
+            model_data,
+            ref_data,
+            model_logprobs_model_data,
+            model_logprobs_ref_data,
+            ref_logprobs_ref_data,
+            ref_logprobs_model_data,
+            torch.tensor([True, False]),
+            torch.tensor([0.1, 0.2]),
+            torch.tensor([0.3, 0.4]),
+            1,
+            torch.tensor([1.0, 2.0]),
+            torch.tensor([0.5, 1.5]),
+        )
+
+        assert trainer.stats["logps/chosen"] == [pytest.approx(46.5)]
+        assert trainer.stats["logps/rejected"] == [pytest.approx(19.5)]
 
     @pytest.mark.parametrize("eval_dataset_type", ["dataset", "dataset_dict", "dict_of_dataset", "none"])
     def test_init_with_eval_dataset(self, eval_dataset_type):

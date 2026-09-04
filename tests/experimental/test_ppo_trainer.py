@@ -753,22 +753,55 @@ class TestPPOTrainer(TrlTestCase):
     def test_statistics_ignore_an_all_padding_micro_batch(self):
         """A micro-batch whose rows are all padding has no statistic to report. Its `masked_mean` is 0 by
         construction, and writing that 0 into the buffers made the later `.mean()` count it as an observation, so
-        `val/ratio` read 0.5 when the one real micro-batch had a ratio of 1. The slot now stays NaN and the `nanmean`
-        reductions leave it out. The all-padding row is forced by making generation emit the pad token first, so its
-        sequence length comes out as -1 and every response position is padding. The tokenizer's own pad token is used
-        as is: padding with EOS instead makes `forward` drop every EOS from the attention mask as well, and it moved
-        `val/ratio` by up to 2e-3 even without the forced row; the distinct pad token keeps the real micro-batch within
-        1e-7."""
+        `val/ratio` read 0.5 when the one real micro-batch had a ratio of 1. Policy slots now stay NaN and the
+        `nanmean` reductions leave them out. Value slots use `padding_mask_p1` instead: a zero-length response retains
+        its first value timestep, so its value diagnostics must still be logged. The all-padding row is forced by
+        making generation emit the pad token first, so its sequence length comes out as -1 and every response position
+        is policy padding. The tokenizer's own pad token is used as is: padding with EOS instead makes `forward` drop
+        every EOS from the attention mask as well, and it moved `val/ratio` by up to 2e-3 even without the forced row;
+        the distinct pad token keeps the real micro-batch within 1e-7."""
         tokenizer = AutoTokenizer.from_pretrained(self.model_id, padding_side="left")
         pad_token_id = tokenizer.pad_token_id
         real_batch_generation = ppo_trainer_module.batch_generation
+        real_forward = ppo_trainer_module.forward
+        context_length = None
+        expected_entropies = []
 
         def batch_generation_with_one_empty_row(model, queries, local_rollout_forward_batch_size, pad_id, config):
+            nonlocal context_length
+            context_length = queries.shape[1]
             query_responses, logitss = real_batch_generation(
                 model, queries, local_rollout_forward_batch_size, pad_id, config
             )
             query_responses[0, queries.shape[1]] = pad_token_id
             return query_responses, logitss
+
+        def forward_with_distinct_empty_value(model, query_responses, pad_id):
+            output = real_forward(model, query_responses, pad_id)
+            if isinstance(model, ppo_trainer_module.PolicyAndValueWrapper):
+                policy_output, values = output
+                responses = query_responses[:, context_length:]
+                sequence_lengths = ppo_trainer_module.first_true_indices(responses == pad_token_id) - 1
+                response_idxs = torch.arange(responses.shape[1], device=responses.device).expand_as(responses)
+                policy_mask = response_idxs <= sequence_lengths.unsqueeze(1)
+                policy_logits = policy_output.logits.clone()
+                response_logits = policy_logits[:, context_length - 1 : -1]
+                response_logits[~policy_mask] = -1000
+                response_logits[..., 0] = torch.where(
+                    policy_mask, response_logits[..., 0], torch.zeros_like(response_logits[..., 0])
+                )
+                policy_output.logits = policy_logits
+                logits = policy_output.logits[:, context_length - 1 : -1] / (training_args.temperature + 1e-7)
+                prob_dist = torch.nn.functional.softmax(logits, dim=-1)
+                entropy = torch.logsumexp(logits, dim=-1) - torch.sum(prob_dist * logits, dim=-1)
+                if policy_mask.any():
+                    expected_entropies.append(masked_mean(entropy, policy_mask).item())
+
+                empty_rows = sequence_lengths == -1
+                values = values.clone()
+                values[empty_rows, context_length - 1 : -1] = values[empty_rows, context_length - 1 : -1] * 0 + 1000
+                output = policy_output, values
+            return output
 
         training_args = PPOConfig(
             output_dir=self.tmp_dir,
@@ -776,6 +809,7 @@ class TestPPOTrainer(TrlTestCase):
             gradient_accumulation_steps=2,
             num_mini_batches=1,
             num_ppo_epochs=1,
+            total_episodes=2,
             report_to="none",
         )
         trainer = PPOTrainer(
@@ -788,15 +822,21 @@ class TestPPOTrainer(TrlTestCase):
             train_dataset=self.raw_dataset["train"],
             eval_dataset=self.raw_dataset["test"],
         )
-        with patch.object(ppo_trainer_module, "batch_generation", batch_generation_with_one_empty_row):
+        with (
+            patch.object(ppo_trainer_module, "batch_generation", batch_generation_with_one_empty_row),
+            patch.object(ppo_trainer_module, "forward", forward_with_distinct_empty_value),
+        ):
             trainer.train()
 
-        ratios = [log["val/ratio"] for log in trainer.state.log_history if "val/ratio" in log]
-        assert ratios, "no `val/ratio` was logged, so the assertion below would pass vacuously"
+        logs = [log for log in trainer.state.log_history if "val/ratio" in log]
+        assert logs, "no PPO statistics were logged, so the assertions below would pass vacuously"
+        assert len(expected_entropies) == len(logs)
         # The one real micro-batch reports a ratio of 1 (measured within 1.2e-7); counting the empty slot as a 0 halves
         # it to 0.5.
-        for ratio in ratios:
-            assert ratio == pytest.approx(1.0, abs=1e-4)
+        for log, expected_entropy in zip(logs, expected_entropies, strict=True):
+            assert log["val/ratio"] == pytest.approx(1.0, abs=1e-4)
+            assert log["policy/entropy_avg"] == pytest.approx(expected_entropy)
+            assert log["loss/value_avg"] > 100_000
 
     def test_statistics_do_not_carry_over_from_the_previous_update(self):
         """The statistic buffers are NaN-initialised and a slot is written only for a micro-batch with a valid token.

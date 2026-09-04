@@ -806,11 +806,12 @@ class PPOTrainer(_BaseTrainer):
                 advantages = torch.masked_fill(advantages, padding_mask, 0)
                 empty_cache()
 
-            # A slot starts as NaN and is written only for a micro-batch that holds at least one valid token. An
-            # all-padding micro-batch has no statistic to report: writing the 0 that `masked_mean` returns for it would
-            # count as an observation and pull every mean toward 0, so its slot stays NaN and the `nanmean` reductions
-            # below leave it out. The buffers are fresh for every update, so a slot that stays NaN cannot carry the
-            # previous update's value into this one's averages.
+            # A slot starts as NaN and is written only for a micro-batch that holds a valid token for that statistic.
+            # An all-padding response has no policy statistic to report, but its first value timestep is valid through
+            # `padding_mask_p1`. Writing the 0 that a policy `masked_mean` returns would count as an observation and
+            # pull every policy mean toward 0, so those slots stay NaN and the `nanmean` reductions below leave them
+            # out. The buffers are fresh for every update, so a slot that stays NaN cannot carry the previous update's
+            # value into this one's averages.
             approxkl_stats = torch.full(stats_shape, float("nan"), device=device)
             pg_clipfrac_stats = torch.full(stats_shape, float("nan"), device=device)
             pg_loss_stats = torch.full(stats_shape, float("nan"), device=device)
@@ -877,12 +878,13 @@ class PPOTrainer(_BaseTrainer):
                                 entropy = torch.logsumexp(logits, dim=-1) - torch.sum(prob_dist * logits, dim=-1)
                                 approxkl = 0.5 * masked_mean(logprobs_diff**2, ~padding_mask[micro_batch_inds])
                                 slot = (ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx)
+                                if (~padding_mask_p1[micro_batch_inds]).any():
+                                    vf_loss_stats[slot] = vf_loss
+                                    vf_clipfrac_stats[slot] = vf_clipfrac
                                 if (~padding_mask[micro_batch_inds]).any():
                                     approxkl_stats[slot] = approxkl
                                     pg_clipfrac_stats[slot] = pg_clipfrac
                                     pg_loss_stats[slot] = pg_loss
-                                    vf_loss_stats[slot] = vf_loss
-                                    vf_clipfrac_stats[slot] = vf_clipfrac
                                     entropy_stats[slot] = masked_mean(entropy, ~padding_mask[micro_batch_inds])
                                     ratio_stats[slot] = masked_mean(ratio, ~padding_mask[micro_batch_inds])
                         gradient_accumulation_idx += 1
