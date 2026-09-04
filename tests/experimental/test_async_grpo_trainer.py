@@ -19,7 +19,10 @@ import math
 import multiprocessing as mp
 import os
 import queue
+import signal
+import subprocess
 from collections import defaultdict
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -54,7 +57,14 @@ from trl.experimental.async_grpo.async_rollout_worker import (
 )
 from trl.trainer.base_trainer import _BaseTrainer
 
-from ..testing_utils import TrlTestCase, is_ampere_or_newer
+from ..testing_utils import TrlTestCase, is_ampere_or_newer, require_torch_multi_accelerator
+
+
+ROOT = Path(__file__).resolve().parents[2]
+_HERE = Path(__file__).parent
+_FSDP2_WORKER = _HERE / "_async_grpo_fsdp2_worker.py"
+_FSDP2_CONFIG = _HERE / "data" / "accelerate_configs" / "fsdp2_reshard.yaml"
+_FSDP2_RESULT_PREFIX = "ASYNC_GRPO_FSDP2_RESULT"
 
 
 # The trainer loads the model with Flash Attention, which requires a `head_size` multiple of 8. Hence the `small-*`
@@ -63,6 +73,22 @@ from ..testing_utils import TrlTestCase, is_ampere_or_newer
 
 def dummy_reward_func(completions, **kwargs):
     return [float(hash(c[0]["content"]) % 100) / 100.0 for c in completions]
+
+
+def _descendant_pids(pid: int) -> list[int]:
+    """Every process below `pid` in the /proc tree, so a timeout can kill ranks that torch elastic detached into their
+    own sessions."""
+    found, stack = [], [pid]
+    while stack:
+        parent = stack.pop()
+        try:
+            children = Path(f"/proc/{parent}/task/{parent}/children").read_text().split()
+        except OSError:
+            children = []
+        for child in map(int, children):
+            found.append(child)
+            stack.append(child)
+    return found
 
 
 class _StubRolloutWorker:
@@ -302,6 +328,73 @@ class TestAsyncGRPOTrainer(TrlTestCase):
                 args=args,
                 environment_factory={"a": EnvA, "b": EnvB},
             )
+
+    @pytest.mark.slow
+    @require_torch_multi_accelerator
+    def test_train_fsdp2(self):
+        # Functional smoke: AsyncGRPOTrainer trains under a 2-process FSDP2 group, confirming the optimizer
+        # updates the FSDP2-sharded parameters. Uses an in-process stub rollout worker (no vLLM server /
+        # NCCL weight transfer), so the only distributed surface is the FSDP2 parameter lifecycle.
+        #
+        # `@pytest.mark.slow` marks the cost, but no lane collects this test today: `slow_tests` is
+        # `pytest -m "slow" tests/`, and `norecursedirs` excludes `tests/experimental` from that recursive
+        # collection. `test_experimental` passes an explicit path so it does collect the test, but its runner
+        # is single-GPU, where `@require_torch_multi_accelerator` skips it.
+        #
+        # Pin the repo root onto PYTHONPATH for the child: `accelerate launch` re-execs each rank via
+        # torch.distributed.elastic, which sets sys.path[0] to the launched script's directory
+        # (tests/experimental/), not cwd. Without this, a non-editable `trl` already in site-packages
+        # would shadow the working tree and the test would exercise the wrong code.
+        env = os.environ.copy()
+        env["PYTHONPATH"] = os.pathsep.join([str(ROOT), env.get("PYTHONPATH", "")]).rstrip(os.pathsep)
+        # `cwd` below is the repo root, so hand the worker somewhere else to write trainer artifacts.
+        env["ASYNC_GRPO_FSDP2_OUTPUT_DIR"] = str(self.tmp_dir)
+        # Bound the child: the trainer's rollout consumer blocks indefinitely on an empty queue (it only
+        # calls `check_health`, which this stub implements as a no-op), so a starved run would hang the
+        # pytest process rather than fail it. The timeout turns that into a readable failure.
+        # `accelerate launch` starts each rank through torch elastic, which puts every worker in its own session
+        # (`start_new_session=True`), so neither `subprocess.run(timeout=...)` nor a kill of the launcher's process
+        # group reaches the ranks: they would keep the GPUs and hold the stdout pipe open, and the read after the
+        # timeout would never return. Collect the descendants from /proc while the launcher is still their parent
+        # and kill the whole tree.
+        proc = subprocess.Popen(
+            ["accelerate", "launch", "--config_file", str(_FSDP2_CONFIG), str(_FSDP2_WORKER)],
+            env=env,
+            cwd=ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            stdout, stderr = proc.communicate(timeout=900)
+        except subprocess.TimeoutExpired:
+            for pid in [proc.pid, *_descendant_pids(proc.pid)]:
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            stdout, stderr = proc.communicate()
+            pytest.fail(f"FSDP2 worker timed out after 900s:\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}")
+        result = subprocess.CompletedProcess(proc.args, proc.returncode, stdout, stderr)
+        assert result.returncode == 0, f"FSDP2 worker failed:\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+
+        result_lines = [ln for ln in result.stdout.splitlines() if ln.startswith(_FSDP2_RESULT_PREFIX)]
+        assert len(result_lines) == 1, f"expected exactly one result line, got {result_lines}\n{result.stdout}"
+        measured = json.loads(result_lines[0][len(_FSDP2_RESULT_PREFIX) :].strip())
+
+        # Training actually ran under FSDP2, produced a finite loss, and updated the parameters.
+        # The worker configures more than one step so the optimizer loop runs repeatedly under FSDP2; accepting fewer
+        # would let an early stop after step 1 pass.
+        assert measured["max_steps"] > 1, f"worker must configure more than one step: {measured}"
+        assert measured["steps"] == measured["max_steps"], f"not every configured step ran: {measured}"
+        assert measured["train_loss_finite"], f"train loss not finite under FSDP2: {measured}"
+        assert measured["params_changed"], f"parameters did not change under FSDP2: {measured}"
+        # A replicated single-process run would pass the checks above too, so pin the launch shape the config asks
+        # for: two ranks, FSDP version 2, and parameters that are DTensors after wrapping.
+        assert measured["num_processes"] == 2, f"expected a two-process launch: {measured}"
+        assert measured["distributed_type"] == "FSDP", f"not launched under FSDP: {measured}"
+        assert measured["fsdp_version"] == 2, f"not FSDP version 2: {measured}"
+        assert measured["sharded_params"] > 0, f"no parameter was sharded as a DTensor: {measured}"
 
 
 def _vision_parameter_names(model) -> set[str]:
