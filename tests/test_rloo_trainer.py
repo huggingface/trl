@@ -17,7 +17,7 @@ from unittest.mock import patch
 import pytest
 import torch
 import transformers
-from datasets import DatasetDict, IterableDatasetDict, load_dataset
+from datasets import Dataset, DatasetDict, IterableDatasetDict, load_dataset
 from packaging.version import Version
 from transformers import (
     AutoModelForCausalLM,
@@ -2232,3 +2232,28 @@ class TestRLOOTrainerVLM(TrlTestCase):
         )
         trainer.train()
         assert len(trainer._logs["images"]) == 0
+
+    def test_tokenize_prompts_vlm_string_content(self):
+        # VLM processors may reject plain string content; _tokenize_prompts should normalize it.
+        prompts = [[{"role": "user", "content": "Describe the image."}]]
+        dataset = Dataset.from_dict({"prompt": prompts})
+
+        def reward_func(completions, **kwargs):
+            return [0.0] * len(completions)
+
+        training_args = RLOOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            num_generations=2,
+            max_completion_length=8,
+            report_to="none",
+        )
+        trainer = RLOOTrainer(
+            model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            reward_funcs=reward_func,
+            args=training_args,
+            train_dataset=dataset,
+        )
+        prompt_ids, images, _ = trainer._tokenize_prompts(prompts)
+        assert prompt_ids
+        assert images is None
