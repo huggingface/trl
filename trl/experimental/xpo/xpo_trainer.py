@@ -85,8 +85,8 @@ class XPOTrainer(OnlineDPOTrainer):
         peft_config ([`~peft.PeftConfig`], *optional*):
             The peft config to use for training.
         compute_metrics (`Callable[[EvalPrediction], dict]`, *optional*):
-            The function to use to compute the metrics. Must take a `EvalPrediction` and return a dictionary string to
-            metric values.
+            Not supported: evaluation computes only a loss, since `prediction_step` returns no predictions or labels
+            for the callback. Passing a callable raises a `ValueError`.
         callbacks (`list[transformers.TrainerCallback]`):
             The callbacks to use for training.
         optimizers (`tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`):
@@ -131,6 +131,11 @@ class XPOTrainer(OnlineDPOTrainer):
         optimizers: tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
         preprocess_logits_for_metrics: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] | None = None,
     ) -> None:
+        if compute_metrics is not None:
+            raise ValueError(
+                "`compute_metrics` is not supported: `prediction_step` returns only a loss, so the callback would never "
+                "be called. Read `eval_loss` from `evaluate()` instead."
+            )
         super().__init__(
             model=model,
             ref_model=ref_model,
@@ -424,11 +429,9 @@ class XPOTrainer(OnlineDPOTrainer):
         self.stats["alpha"].append(self.alpha)
         self.stats["beta"].append(self.beta)
 
-    def training_step(
-        self, model: nn.Module, inputs: dict[str, torch.Tensor | Any], num_items_in_batch: int | None = None
+    def _compute_loss(
+        self, model: nn.Module, inputs: dict[str, torch.Tensor | Any], log_stats: bool = True
     ) -> torch.Tensor:
-        model.train()
-
         # Apply chat template and tokenize the input
         batch_size = len(next(iter(inputs.values())))
         prompts = inputs["prompt"]
@@ -472,20 +475,30 @@ class XPOTrainer(OnlineDPOTrainer):
         )
 
         # Log everything
-        self._log_statistics(
-            model_data,
-            ref_data,
-            model_logprobs_model_data.detach(),
-            model_logprobs_ref_data.detach(),
-            ref_logprobs_ref_data,
-            ref_logprobs_model_data,
-            chosen_mask,
-            dpo_losses.detach(),
-            xpo_losses.detach(),
-            context_length,
-            model_scores,
-            ref_scores,
-        )
+        if log_stats:
+            self._log_statistics(
+                model_data,
+                ref_data,
+                model_logprobs_model_data.detach(),
+                model_logprobs_ref_data.detach(),
+                ref_logprobs_ref_data,
+                ref_logprobs_model_data,
+                chosen_mask,
+                dpo_losses.detach(),
+                xpo_losses.detach(),
+                context_length,
+                model_scores,
+                ref_scores,
+            )
+
+        return loss
+
+    def training_step(
+        self, model: nn.Module, inputs: dict[str, torch.Tensor | Any], num_items_in_batch: int | None = None
+    ) -> torch.Tensor:
+        model.train()
+
+        loss = self._compute_loss(model, inputs)
 
         if (
             self.args.torch_empty_cache_steps is not None
@@ -504,3 +517,20 @@ class XPOTrainer(OnlineDPOTrainer):
         self.accelerator.backward(loss, **kwargs)
 
         return loss.detach() / self.args.gradient_accumulation_steps
+
+    def prediction_step(
+        self,
+        model: nn.Module,
+        inputs: dict[str, torch.Tensor | Any],
+        prediction_loss_only: bool,
+        ignore_keys: list[str] | None = None,
+    ) -> tuple[torch.Tensor | None, torch.Tensor | None, torch.Tensor | None]:
+        # `Trainer.prediction_step` never reaches `compute_loss` for this trainer: it gates on
+        # `has_labels or loss_without_labels`, and an evaluation batch carries only prompts, so both are False
+        # and the default path calls the model without `input_ids`. Compute the loss the way training does
+        # instead, with statistics off: `self.stats` is averaged and cleared by the training logger, so
+        # appending evaluation values to it would shift the training metrics. See
+        # https://github.com/huggingface/trl/issues/2228.
+        with torch.no_grad():
+            loss = self._compute_loss(model, inputs, log_stats=False)
+        return loss.detach(), None, None
