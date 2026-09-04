@@ -767,7 +767,7 @@ def test_uneven_micro_batch_stats_are_pooled(tmp_path, monkeypatch):
 
     trainer.train()
 
-    assert [values.shape[0] for values, _ in masked_inputs] == [4, 4, 4, 4, 2, 2, 2, 2] * 2
+    assert [values.shape[0] for values, _ in masked_inputs] == [4] * 7 + [2] * 7 + [4] * 7 + [2] * 7
     assert [values.shape[0] for values in logprobs_diffs] == [4, 2, 4, 2]
     assert [values.shape[0] for values in entropy_logits] == [4, 2, 4, 2]
 
@@ -777,18 +777,15 @@ def test_uneven_micro_batch_stats_are_pooled(tmp_path, monkeypatch):
         return (numerator / denominator).item()
 
     metrics = trainer.state.log_history[-1]
-    logprobs_diff = torch.cat(logprobs_diffs)
-    logits = torch.cat(entropy_logits)
-    prob_dist = torch.nn.functional.softmax(logits, dim=-1)
-    entropy = torch.logsumexp(logits, dim=-1) - torch.sum(prob_dist * logits, dim=-1)
-    assert metrics["policy/approxkl_avg"] == pytest.approx(0.5 * logprobs_diff.square().mean().item(), abs=1e-7)
-    # masked_mean writes value loss, value clipfrac, policy loss, then policy clipfrac for every micro-batch.
-    assert metrics["loss/value_avg"] == pytest.approx(0.5 * pooled_mean(masked_inputs[0::4]), abs=1e-7)
-    assert metrics["val/clipfrac_avg"] == pytest.approx(pooled_mean(masked_inputs[1::4]), abs=1e-7)
-    assert metrics["loss/policy_avg"] == pytest.approx(pooled_mean(masked_inputs[2::4]), abs=1e-7)
-    assert metrics["policy/clipfrac_avg"] == pytest.approx(pooled_mean(masked_inputs[3::4]), abs=1e-7)
-    assert metrics["policy/entropy_avg"] == pytest.approx(entropy.mean().item(), abs=1e-7)
-    assert metrics["val/ratio"] == pytest.approx(logprobs_diff.exp().mean().item(), abs=1e-6)
+    # masked_mean writes value loss, value clipfrac, policy loss, policy clipfrac, approximate KL, entropy, then
+    # ratio for every micro-batch.
+    assert metrics["loss/value_avg"] == pytest.approx(0.5 * pooled_mean(masked_inputs[0::7]), abs=1e-7)
+    assert metrics["val/clipfrac_avg"] == pytest.approx(pooled_mean(masked_inputs[1::7]), abs=1e-7)
+    assert metrics["loss/policy_avg"] == pytest.approx(pooled_mean(masked_inputs[2::7]), abs=1e-7)
+    assert metrics["policy/clipfrac_avg"] == pytest.approx(pooled_mean(masked_inputs[3::7]), abs=1e-7)
+    assert metrics["policy/approxkl_avg"] == pytest.approx(0.5 * pooled_mean(masked_inputs[4::7]), abs=1e-7)
+    assert metrics["policy/entropy_avg"] == pytest.approx(pooled_mean(masked_inputs[5::7]), abs=1e-7)
+    assert metrics["val/ratio"] == pytest.approx(pooled_mean(masked_inputs[6::7]), abs=1e-6)
 
 
 def test_ratio_var_ignores_unwritten_stats(tmp_path):

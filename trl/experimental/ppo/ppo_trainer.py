@@ -639,7 +639,6 @@ class PPOTrainer(_BaseTrainer):
         ratio_mean_stats = torch.zeros(stats_shape, device=device)
         padding_count_stats = torch.zeros(stats_shape, device=device)
         padding_p1_count_stats = torch.zeros(stats_shape, device=device)
-        micro_batch_size_stats = torch.zeros(stats_shape, device=device)
         model.train()
 
         # trainer state initialization
@@ -858,12 +857,12 @@ class PPOTrainer(_BaseTrainer):
                                 )
                                 prob_dist = torch.nn.functional.softmax(logits, dim=-1)
                                 entropy = torch.logsumexp(logits, dim=-1) - torch.sum(prob_dist * logits, dim=-1)
-                                approxkl = 0.5 * (logprobs_diff**2).mean()
-                                padding_count = (~padding_mask[micro_batch_inds]).sum()
+                                response_mask = ~padding_mask[micro_batch_inds]
+                                approxkl = 0.5 * masked_mean(logprobs_diff**2, response_mask)
+                                padding_count = response_mask.sum()
                                 padding_p1_count = (~padding_mask_p1[micro_batch_inds]).sum()
-                                micro_batch_size = len(micro_batch_inds)
                                 approxkl_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = (
-                                    approxkl * micro_batch_size
+                                    approxkl * padding_count
                                 )
                                 pg_clipfrac_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = (
                                     pg_clipfrac * padding_count
@@ -878,22 +877,18 @@ class PPOTrainer(_BaseTrainer):
                                     vf_clipfrac * padding_p1_count
                                 )
                                 entropy_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = (
-                                    entropy.mean() * micro_batch_size
+                                    masked_mean(entropy, response_mask) * padding_count
                                 )
+                                mean_ratio = masked_mean(ratio, response_mask)
                                 ratio_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = (
-                                    ratio.mean() * micro_batch_size
+                                    mean_ratio * padding_count
                                 )
-                                ratio_mean_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = (
-                                    ratio.mean()
-                                )
+                                ratio_mean_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = mean_ratio
                                 padding_count_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = (
                                     padding_count
                                 )
                                 padding_p1_count_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = (
                                     padding_p1_count
-                                )
-                                micro_batch_size_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = (
-                                    micro_batch_size
                                 )
                         gradient_accumulation_idx += 1
                     minibatch_idx += 1
@@ -904,7 +899,7 @@ class PPOTrainer(_BaseTrainer):
                         vf_losses1, vf_losses2, vf_loss, vf_clipfrac, logprobs_diff, ratio, pg_losses, pg_losses2, pg_loss_max,
                         pg_loss, loss, pg_clipfrac, prob_dist, entropy, approxkl, mb_return,
                         mb_advantage, mb_values, mb_responses, mb_query_responses, mb_logprobs,
-                        padding_count, padding_p1_count, micro_batch_size,
+                        padding_count, padding_p1_count, response_mask, mean_ratio,
                     )
                     # fmt: on
                     empty_cache()
@@ -926,10 +921,8 @@ class PPOTrainer(_BaseTrainer):
                 metrics["objective/scores"] = self.accelerator.gather_for_metrics(scores.mean()).mean().item()
                 padding_count = self.accelerator.gather_for_metrics(padding_count_stats).sum()
                 padding_p1_count = self.accelerator.gather_for_metrics(padding_p1_count_stats).sum()
-                gathered_micro_batch_size_stats = self.accelerator.gather_for_metrics(micro_batch_size_stats)
-                micro_batch_size = gathered_micro_batch_size_stats.sum()
                 metrics["policy/approxkl_avg"] = (
-                    self.accelerator.gather_for_metrics(approxkl_stats).sum() / micro_batch_size
+                    self.accelerator.gather_for_metrics(approxkl_stats).sum() / padding_count
                 ).item()
                 metrics["policy/clipfrac_avg"] = (
                     self.accelerator.gather_for_metrics(pg_clipfrac_stats).sum() / padding_count
@@ -944,13 +937,12 @@ class PPOTrainer(_BaseTrainer):
                     self.accelerator.gather_for_metrics(vf_clipfrac_stats).sum() / padding_p1_count
                 ).item()
                 metrics["policy/entropy_avg"] = (
-                    self.accelerator.gather_for_metrics(entropy_stats).sum() / micro_batch_size
+                    self.accelerator.gather_for_metrics(entropy_stats).sum() / padding_count
                 ).item()
-                metrics["val/ratio"] = (
-                    self.accelerator.gather_for_metrics(ratio_stats).sum() / micro_batch_size
-                ).item()
+                metrics["val/ratio"] = (self.accelerator.gather_for_metrics(ratio_stats).sum() / padding_count).item()
                 ratio_mean = self.accelerator.gather_for_metrics(ratio_mean_stats)
-                metrics["val/ratio_var"] = ratio_mean[gathered_micro_batch_size_stats > 0].var().item()
+                gathered_padding_count_stats = self.accelerator.gather_for_metrics(padding_count_stats)
+                metrics["val/ratio_var"] = ratio_mean[gathered_padding_count_stats > 0].var().item()
                 metrics["val/num_eos_tokens"] = (responses == processing_class.eos_token_id).sum().item()
                 metrics["lr"] = self.lr_scheduler.get_last_lr()[0]
                 metrics["episode"] = self.state.episode
