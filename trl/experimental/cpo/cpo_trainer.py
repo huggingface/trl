@@ -827,21 +827,25 @@ class CPOTrainer(_BaseTrainer):
                 # Shift so that tokens < n predict n
                 logits = logits[..., :-1, :].contiguous()
                 labels = labels[..., 1:].contiguous()
+            batch_size = labels.shape[0]
             # Flatten the tokens
-            loss_fct = nn.CrossEntropyLoss()
+            loss_fct = nn.CrossEntropyLoss(reduction="none")
             logits = logits.view(-1, logits.shape[-1])
             labels = labels.view(-1)
             # Enable model parallelism
             labels = labels.to(logits.device)
-            loss = loss_fct(logits, labels)
-            return loss
+            loss = loss_fct(logits, labels).view(batch_size, -1)
+            loss_sum = loss.sum(dim=1)
+            loss_count = (labels != -100).view(batch_size, -1).sum(dim=1)
+            return loss_sum, loss_count
 
         labels = concatenated_batch["concatenated_labels"].clone()
 
         if self.cpo_alpha == 0:
-            nll_loss = torch.tensor(0.0).to(self.accelerator.device)
+            nll_loss_sum = torch.zeros(len_chosen, device=self.accelerator.device)
+            nll_loss_count = torch.ones(len_chosen, device=self.accelerator.device)
         else:
-            nll_loss = cross_entropy_loss(all_logits[:len_chosen], labels[:len_chosen])
+            nll_loss_sum, nll_loss_count = cross_entropy_loss(all_logits[:len_chosen], labels[:len_chosen])
 
         all_logps = self.get_batch_logps(
             all_logits,
@@ -857,9 +861,17 @@ class CPOTrainer(_BaseTrainer):
         rejected_logits = all_logits[len_chosen:]
 
         if self.aux_loss_enabled:
-            return (chosen_logps, rejected_logps, chosen_logits, rejected_logits, nll_loss, outputs.aux_loss)
+            return (
+                chosen_logps,
+                rejected_logps,
+                chosen_logits,
+                rejected_logits,
+                nll_loss_sum,
+                nll_loss_count,
+                outputs.aux_loss,
+            )
 
-        return (chosen_logps, rejected_logps, chosen_logits, rejected_logits, nll_loss)
+        return (chosen_logps, rejected_logps, chosen_logits, rejected_logits, nll_loss_sum, nll_loss_count)
 
     def get_batch_loss_metrics(
         self,
@@ -876,16 +888,18 @@ class CPOTrainer(_BaseTrainer):
             policy_rejected_logps,
             policy_chosen_logits,
             policy_rejected_logits,
-            policy_nll_loss,
-        ) = forward_output[:5]
+            policy_nll_loss_sum,
+            policy_nll_loss_count,
+        ) = forward_output[:6]
         if self.aux_loss_enabled:
-            aux_loss = forward_output[5]
+            aux_loss = forward_output[6]
 
         losses, chosen_rewards, rejected_rewards = self.cpo_loss(
             policy_chosen_logps,
             policy_rejected_logps,
         )
 
+        policy_nll_loss = policy_nll_loss_sum.sum() / policy_nll_loss_count.sum()
         loss = losses.mean() + self.cpo_alpha * policy_nll_loss
         reward_accuracies = (chosen_rewards > rejected_rewards).float()
 
@@ -903,12 +917,14 @@ class CPOTrainer(_BaseTrainer):
             self.accelerator.gather_for_metrics(policy_chosen_logps).detach().mean().item()
         )
         metrics[f"{prefix}logits/rejected"] = (
-            self.accelerator.gather_for_metrics(policy_rejected_logits.detach().mean()).mean().item()
+            self.accelerator.gather_for_metrics(policy_rejected_logits.detach().mean(dim=(1, 2))).mean().item()
         )
         metrics[f"{prefix}logits/chosen"] = (
-            self.accelerator.gather_for_metrics(policy_chosen_logits.detach().mean()).mean().item()
+            self.accelerator.gather_for_metrics(policy_chosen_logits.detach().mean(dim=(1, 2))).mean().item()
         )
-        metrics[f"{prefix}nll_loss"] = self.accelerator.gather_for_metrics(policy_nll_loss).detach().mean().item()
+        policy_nll_loss_sum = self.accelerator.gather_for_metrics(policy_nll_loss_sum).detach().sum()
+        policy_nll_loss_count = self.accelerator.gather_for_metrics(policy_nll_loss_count).sum()
+        metrics[f"{prefix}nll_loss"] = (policy_nll_loss_sum / policy_nll_loss_count).item()
 
         if self.aux_loss_enabled:
             loss += self.aux_loss_coef * aux_loss

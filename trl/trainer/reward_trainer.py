@@ -766,17 +766,18 @@ class RewardTrainer(_BaseTrainer):
 
         # Compute min, mean, max, accuracy and margin
         with torch.no_grad():
-            all_rewards = self.accelerator.gather(outputs.logits)
+            all_rewards = torch.stack((rewards_chosen, rewards_rejected), dim=1)
+            all_rewards = self.accelerator.gather_for_metrics(all_rewards)
             self._metrics[mode]["min_reward"].append(all_rewards.min().item())
             self._metrics[mode]["mean_reward"].append(all_rewards.mean().item())
             self._metrics[mode]["max_reward"].append(all_rewards.max().item())
 
-            mean_accuracy = (rewards_chosen > rewards_rejected).float().mean()
-            mean_accuracy = self.accelerator.gather_for_metrics(mean_accuracy).mean().item()
+            accuracy = (rewards_chosen > rewards_rejected).float()
+            mean_accuracy = self.accelerator.gather_for_metrics(accuracy).mean().item()
             self._metrics[mode]["accuracy"].append(mean_accuracy)
 
-            mean_margin = (rewards_chosen - rewards_rejected).mean()
-            mean_margin = self.accelerator.gather_for_metrics(mean_margin).mean()
+            margin = rewards_chosen - rewards_rejected
+            mean_margin = self.accelerator.gather_for_metrics(margin).mean()
             self._metrics[mode]["margin"].append(mean_margin.item())
 
         return (loss, outputs) if return_outputs else loss

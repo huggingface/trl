@@ -1417,7 +1417,7 @@ class KTOTrainer(_BaseTrainer):
                 ref_lm_head = self.ref_model.get_output_embeddings()
 
         if self.calculate_KL:
-            kl = (KL_logps - ref_KL_logps).mean().detach()
+            kl = (KL_logps - ref_KL_logps).detach()
             kl = self.accelerator.gather_for_metrics(kl).mean().clamp(min=0)
         else:
             kl = torch.zeros(1).to(self.accelerator.device)
@@ -1494,9 +1494,10 @@ class KTOTrainer(_BaseTrainer):
         mode = "train" if self.model.training else "eval"
         batch = {k: (v.to(self.accelerator.device) if isinstance(v, torch.Tensor) else v) for k, v in inputs.items()}
 
-        labels = batch["label"]
-        num_chosen = labels.sum().to(self.accelerator.device)
-        num_rejected = (len(labels) - num_chosen).to(self.accelerator.device)
+        # Datasets may carry 0/1 integer labels; `~` on an integer tensor is a bitwise inversion, so cast first.
+        labels = torch.as_tensor(batch["label"], dtype=torch.bool, device=self.accelerator.device)
+        num_chosen = labels
+        num_rejected = ~labels
 
         KL_logps = self._compute_kl_logps(model, batch)
 
@@ -1564,7 +1565,7 @@ class KTOTrainer(_BaseTrainer):
             ref_rejected_logps = ref_completion_logps.index_select(0, rejected_idx)
 
         if self.calculate_KL:
-            kl = (KL_logps - ref_KL_logps).mean().detach()
+            kl = (KL_logps - ref_KL_logps).detach()
             kl = self.accelerator.gather_for_metrics(kl).mean().clamp(min=0)
         else:
             kl = torch.zeros(1).to(chosen_logps.device)
@@ -1610,10 +1611,10 @@ class KTOTrainer(_BaseTrainer):
         # Entropy
         per_token_entropy = entropy_from_logits(shift_logits.detach())
         mask = batch["completion_mask"][:, 1:]
-        entropy_sum = (per_token_entropy * mask).sum()
-        total_tokens = mask.sum()
+        entropy_sum = (per_token_entropy * mask).sum(dim=1)
+        total_tokens = mask.sum(dim=1)
 
-        # Gather counts across ranks and weight-average
+        # Gather per-example sums and counts across ranks, then weight-average
         entropy_sum = self.accelerator.gather_for_metrics(entropy_sum).sum()
         total_tokens = self.accelerator.gather_for_metrics(total_tokens).sum()
         entropy = (entropy_sum / total_tokens).item() if total_tokens > 0 else 0.0
@@ -1627,14 +1628,12 @@ class KTOTrainer(_BaseTrainer):
 
         # Average logits for chosen and rejected completions
         shift_completion_mask = batch["completion_mask"][:, 1:]
-        chosen_logits = shift_logits.detach().index_select(0, chosen_idx)
-        rejected_logits = shift_logits.detach().index_select(0, rejected_idx)
-        chosen_mask = shift_completion_mask.index_select(0, chosen_idx)
-        rejected_mask = shift_completion_mask.index_select(0, rejected_idx)
-        total_chosen_logits = chosen_logits[chosen_mask.bool()].mean(-1).sum()
-        total_chosen_tokens = chosen_mask.sum()
-        total_rejected_logits = rejected_logits[rejected_mask.bool()].mean(-1).sum()
-        total_rejected_tokens = rejected_mask.sum()
+        chosen_mask = shift_completion_mask * labels.unsqueeze(1)
+        rejected_mask = shift_completion_mask * (~labels).unsqueeze(1)
+        total_chosen_logits = (shift_logits.detach().mean(-1) * chosen_mask).sum(dim=1)
+        total_chosen_tokens = chosen_mask.sum(dim=1)
+        total_rejected_logits = (shift_logits.detach().mean(-1) * rejected_mask).sum(dim=1)
+        total_rejected_tokens = rejected_mask.sum(dim=1)
         total_chosen_logits = self.accelerator.gather_for_metrics(total_chosen_logits).sum().item()
         total_chosen_tokens = self.accelerator.gather_for_metrics(total_chosen_tokens).sum().item()
         total_rejected_logits = self.accelerator.gather_for_metrics(total_rejected_logits).sum().item()
@@ -1647,20 +1646,28 @@ class KTOTrainer(_BaseTrainer):
         all_num_chosen = self.accelerator.gather_for_metrics(num_chosen).sum().item()
         all_num_rejected = self.accelerator.gather_for_metrics(num_rejected).sum().item()
 
+        # A batch without one label class gets an empty float32 default for its rewards, so match the target dtype.
+        chosen_rewards = chosen_rewards.to(completion_logps.dtype)
+        rejected_rewards = rejected_rewards.to(completion_logps.dtype)
+        chosen_rewards_sum = torch.zeros_like(completion_logps).index_copy(0, chosen_idx, chosen_rewards)
+        rejected_rewards_sum = torch.zeros_like(completion_logps).index_copy(0, rejected_idx, rejected_rewards)
+        chosen_logps_sum = torch.zeros_like(completion_logps).index_copy(0, chosen_idx, chosen_logps)
+        rejected_logps_sum = torch.zeros_like(completion_logps).index_copy(0, rejected_idx, rejected_logps)
+
         if all_num_chosen > 0:
             self._metrics[mode]["rewards/chosen"].append(
-                self.accelerator.gather_for_metrics(chosen_rewards.nansum()).nansum().item() / all_num_chosen
+                self.accelerator.gather_for_metrics(chosen_rewards_sum).sum().item() / all_num_chosen
             )
             self._metrics[mode]["logps/chosen"].append(
-                self.accelerator.gather_for_metrics(chosen_logps.nansum()).nansum().item() / all_num_chosen
+                self.accelerator.gather_for_metrics(chosen_logps_sum).sum().item() / all_num_chosen
             )
 
         if all_num_rejected > 0:
             self._metrics[mode]["rewards/rejected"].append(
-                self.accelerator.gather_for_metrics(rejected_rewards.nansum()).nansum().item() / all_num_rejected
+                self.accelerator.gather_for_metrics(rejected_rewards_sum).sum().item() / all_num_rejected
             )
             self._metrics[mode]["logps/rejected"].append(
-                self.accelerator.gather_for_metrics(rejected_logps.nansum()).nansum().item() / all_num_rejected
+                self.accelerator.gather_for_metrics(rejected_logps_sum).sum().item() / all_num_rejected
             )
 
         if all_num_chosen > 0 and all_num_rejected > 0:

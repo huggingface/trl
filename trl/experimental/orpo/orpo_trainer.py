@@ -784,14 +784,17 @@ class ORPOTrainer(_BaseTrainer):
                 # Shift so that tokens < n predict n
                 logits = logits[..., :-1, :].contiguous()
                 labels = labels[..., 1:].contiguous()
+            batch_size = labels.shape[0]
             # Flatten the tokens
-            loss_fct = nn.CrossEntropyLoss()
+            loss_fct = nn.CrossEntropyLoss(reduction="none")
             logits = logits.view(-1, logits.shape[-1])
             labels = labels.view(-1)
             # Enable model parallelism
             labels = labels.to(logits.device)
-            loss = loss_fct(logits, labels)
-            return loss
+            loss = loss_fct(logits, labels).view(batch_size, -1)
+            loss_sum = loss.sum(dim=1)
+            loss_count = (labels != -100).view(batch_size, -1).sum(dim=1)
+            return loss_sum, loss_count
 
         if self.is_encoder_decoder:
             labels = concatenated_batch["concatenated_labels"].clone()
@@ -800,7 +803,7 @@ class ORPOTrainer(_BaseTrainer):
             attention_mask = concatenated_batch["concatenated_attention_mask"]
             labels = torch.where(attention_mask == 1, labels, -100)
         # orpo chosen nll loss is computed over the full prompt and response
-        chosen_nll_loss = cross_entropy_loss(all_logits[:len_chosen], labels[:len_chosen])
+        chosen_nll_loss_sum, chosen_nll_loss_count = cross_entropy_loss(all_logits[:len_chosen], labels[:len_chosen])
 
         all_logps = self.get_batch_logps(
             all_logits,
@@ -820,9 +823,24 @@ class ORPOTrainer(_BaseTrainer):
             rejected_logits = all_logits[len_chosen:]
 
         if self.aux_loss_enabled:
-            return (chosen_logps, rejected_logps, chosen_logits, rejected_logits, chosen_nll_loss, outputs.aux_loss)
+            return (
+                chosen_logps,
+                rejected_logps,
+                chosen_logits,
+                rejected_logits,
+                chosen_nll_loss_sum,
+                chosen_nll_loss_count,
+                outputs.aux_loss,
+            )
 
-        return (chosen_logps, rejected_logps, chosen_logits, rejected_logits, chosen_nll_loss)
+        return (
+            chosen_logps,
+            rejected_logps,
+            chosen_logits,
+            rejected_logits,
+            chosen_nll_loss_sum,
+            chosen_nll_loss_count,
+        )
 
     def get_batch_loss_metrics(
         self,
@@ -839,15 +857,17 @@ class ORPOTrainer(_BaseTrainer):
             policy_rejected_logps,
             policy_chosen_logits,
             policy_rejected_logits,
-            policy_nll_loss,
-        ) = forward_output[:5]
+            policy_nll_loss_sum,
+            policy_nll_loss_count,
+        ) = forward_output[:6]
         if self.aux_loss_enabled:
-            aux_loss = forward_output[5]
+            aux_loss = forward_output[6]
 
         losses, chosen_rewards, rejected_rewards, log_odds_ratio, log_odds_chosen = self.odds_ratio_loss(
             policy_chosen_logps, policy_rejected_logps
         )
         # full ORPO loss
+        policy_nll_loss = policy_nll_loss_sum.sum() / policy_nll_loss_count.sum()
         loss = policy_nll_loss - losses.mean()
 
         reward_accuracies = (chosen_rewards > rejected_rewards).float()
@@ -862,12 +882,14 @@ class ORPOTrainer(_BaseTrainer):
         metrics[f"{prefix}logps/rejected"] = self.accelerator.gather_for_metrics(policy_rejected_logps).detach().mean()
         metrics[f"{prefix}logps/chosen"] = self.accelerator.gather_for_metrics(policy_chosen_logps).detach().mean()
         metrics[f"{prefix}logits/rejected"] = self.accelerator.gather_for_metrics(
-            policy_rejected_logits.detach().mean()
+            policy_rejected_logits.detach().mean(dim=(1, 2))
         ).mean()
         metrics[f"{prefix}logits/chosen"] = self.accelerator.gather_for_metrics(
-            policy_chosen_logits.detach().mean()
+            policy_chosen_logits.detach().mean(dim=(1, 2))
         ).mean()
-        metrics[f"{prefix}nll_loss"] = self.accelerator.gather_for_metrics(policy_nll_loss).detach().mean()
+        policy_nll_loss_sum = self.accelerator.gather_for_metrics(policy_nll_loss_sum).detach().sum()
+        policy_nll_loss_count = self.accelerator.gather_for_metrics(policy_nll_loss_count).sum()
+        metrics[f"{prefix}nll_loss"] = policy_nll_loss_sum / policy_nll_loss_count
         metrics[f"{prefix}log_odds_ratio"] = self.accelerator.gather_for_metrics(log_odds_ratio).detach().mean()
         metrics[f"{prefix}log_odds_chosen"] = self.accelerator.gather_for_metrics(log_odds_chosen).detach().mean()
         if is_torch_xla_available():

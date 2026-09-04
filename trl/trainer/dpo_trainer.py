@@ -1329,21 +1329,21 @@ class DPOTrainer(_BaseTrainer):
         self._metrics[mode]["logits/chosen"].append(avg_chosen_logits)
         self._metrics[mode]["logits/rejected"].append(avg_rejected_logits)
 
-        agg_chosen_rewards = self.accelerator.gather(chosen_rewards)
-        agg_rejected_rewards = self.accelerator.gather(rejected_rewards)
+        agg_chosen_rewards = self.accelerator.gather_for_metrics(chosen_rewards)
+        agg_rejected_rewards = self.accelerator.gather_for_metrics(rejected_rewards)
         self._metrics[mode]["rewards/chosen"].append(agg_chosen_rewards.mean().item())
         self._metrics[mode]["rewards/rejected"].append(agg_rejected_rewards.mean().item())
 
         reward_accuracies = (chosen_rewards > rejected_rewards).float()
-        agg_reward_accuracies = self.accelerator.gather(reward_accuracies)
+        agg_reward_accuracies = self.accelerator.gather_for_metrics(reward_accuracies)
         self._metrics[mode]["rewards/accuracies"].append(agg_reward_accuracies.mean().item())
 
         margins = chosen_rewards - rejected_rewards
-        agg_margins = self.accelerator.gather(margins)
+        agg_margins = self.accelerator.gather_for_metrics(margins)
         self._metrics[mode]["rewards/margins"].append(agg_margins.mean().item())
 
-        self._metrics[mode]["logps/chosen"].append(self.accelerator.gather(chosen_logps).mean().item())
-        self._metrics[mode]["logps/rejected"].append(self.accelerator.gather(rejected_logps).mean().item())
+        self._metrics[mode]["logps/chosen"].append(self.accelerator.gather_for_metrics(chosen_logps).mean().item())
+        self._metrics[mode]["logps/rejected"].append(self.accelerator.gather_for_metrics(rejected_logps).mean().item())
 
         return loss
 
@@ -1607,10 +1607,14 @@ class DPOTrainer(_BaseTrainer):
         # Entropy
         per_token_entropy = entropy_from_logits(shift_logits.detach())
         mask = shift_completion_mask
-        entropy_sum = (per_token_entropy * mask).sum()
-        total_tokens = mask.sum()
+        entropy_sum = (per_token_entropy * mask).sum(dim=1)
+        total_tokens = mask.sum(dim=1)
 
-        # Gather counts across ranks and weight-average
+        # `gather_for_metrics` de-duplicates examples, but the batch stacks chosen and rejected rows.
+        entropy_sum = entropy_sum.view(2, -1).sum(0)
+        total_tokens = total_tokens.view(2, -1).sum(0)
+
+        # Gather per-example sums and counts across ranks, then weight-average
         entropy_sum = self.accelerator.gather_for_metrics(entropy_sum).sum()
         total_tokens = self.accelerator.gather_for_metrics(total_tokens).sum()
         entropy = (entropy_sum / total_tokens).item() if total_tokens > 0 else 0.0
@@ -1625,10 +1629,10 @@ class DPOTrainer(_BaseTrainer):
         # Average logits for chosen and rejected completions
         chosen_logits, rejected_logits = shift_logits.detach().chunk(2, dim=0)
         chosen_mask, rejected_mask = shift_completion_mask.chunk(2, dim=0)
-        total_chosen_logits = chosen_logits[chosen_mask.bool()].mean(-1).sum()
-        total_chosen_tokens = chosen_mask.sum()
-        total_rejected_logits = rejected_logits[rejected_mask.bool()].mean(-1).sum()
-        total_rejected_tokens = rejected_mask.sum()
+        total_chosen_logits = (chosen_logits.mean(-1) * chosen_mask).sum(dim=1)
+        total_chosen_tokens = chosen_mask.sum(dim=1)
+        total_rejected_logits = (rejected_logits.mean(-1) * rejected_mask).sum(dim=1)
+        total_rejected_tokens = rejected_mask.sum(dim=1)
         total_chosen_logits = self.accelerator.gather_for_metrics(total_chosen_logits).sum().item()
         total_chosen_tokens = self.accelerator.gather_for_metrics(total_chosen_tokens).sum().item()
         total_rejected_logits = self.accelerator.gather_for_metrics(total_rejected_logits).sum().item()
@@ -1643,8 +1647,8 @@ class DPOTrainer(_BaseTrainer):
         chosen_mask = shift_completion_mask[: len(shift_completion_mask) // 2].bool()
         chosen_labels = shift_labels[: len(shift_labels) // 2]
         correct_predictions = (predictions == chosen_labels) & chosen_mask
-        total_tokens = chosen_mask.sum()
-        correct_tokens = correct_predictions.sum()
+        total_tokens = chosen_mask.sum(dim=1)
+        correct_tokens = correct_predictions.sum(dim=1)
         correct_tokens = self.accelerator.gather_for_metrics(correct_tokens)
         total_tokens = self.accelerator.gather_for_metrics(total_tokens)
         total_sum = total_tokens.sum()
@@ -1654,24 +1658,24 @@ class DPOTrainer(_BaseTrainer):
         # Rewards for chosen and rejected completions
         chosen_rewards = self.beta * chosen_logratios.detach()
         rejected_rewards = self.beta * rejected_logratios.detach()
-        agg_chosen_rewards = self.accelerator.gather(chosen_rewards)
-        agg_rejected_rewards = self.accelerator.gather(rejected_rewards)
+        agg_chosen_rewards = self.accelerator.gather_for_metrics(chosen_rewards)
+        agg_rejected_rewards = self.accelerator.gather_for_metrics(rejected_rewards)
         self._metrics[mode]["rewards/chosen"].append(agg_chosen_rewards.mean().item())
         self._metrics[mode]["rewards/rejected"].append(agg_rejected_rewards.mean().item())
 
         # Reward accuracy
         reward_accuracies = (chosen_rewards > rejected_rewards).float()
-        agg_reward_accuracies = self.accelerator.gather(reward_accuracies)
+        agg_reward_accuracies = self.accelerator.gather_for_metrics(reward_accuracies)
         self._metrics[mode]["rewards/accuracies"].append(agg_reward_accuracies.mean().item())
 
         # Reward margins
         margins = chosen_rewards - rejected_rewards
-        agg_margins = self.accelerator.gather(margins)
+        agg_margins = self.accelerator.gather_for_metrics(margins)
         self._metrics[mode]["rewards/margins"].append(agg_margins.mean().item())
 
         # Average log probabilities for chosen and rejected completions
-        self._metrics[mode]["logps/chosen"].append(self.accelerator.gather(chosen_logps).mean().item())
-        self._metrics[mode]["logps/rejected"].append(self.accelerator.gather(rejected_logps).mean().item())
+        self._metrics[mode]["logps/chosen"].append(self.accelerator.gather_for_metrics(chosen_logps).mean().item())
+        self._metrics[mode]["logps/rejected"].append(self.accelerator.gather_for_metrics(rejected_logps).mean().item())
 
         return (loss, outputs) if return_outputs else loss
 

@@ -12,6 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from collections import defaultdict
+from types import SimpleNamespace
+
 import pytest
 import torch
 import transformers
@@ -26,6 +29,7 @@ from trl.trainer.dpo_trainer import DataCollatorForPreference, DataCollatorForVi
 
 from .testing_utils import (
     TrlTestCase,
+    drop_last_for_metrics,
     is_ampere_or_newer,
     require_bitsandbytes,
     require_kernels,
@@ -39,6 +43,60 @@ if is_peft_available():
     import peft
     from peft import LoraConfig, PromptTuningConfig, get_peft_model
     from peft.utils import TaskType
+
+
+def test_entropy_ignores_duplicate_padding():
+    batch_size = 3
+    chosen_logits = torch.tensor([[[10.0, 0.0], [10.0, 0.0]], [[10.0, 0.0], [10.0, 0.0]], [[0.0, 20.0], [0.0, 20.0]]])
+    rejected_logits = torch.tensor([[[0.0, 0.0], [0.0, 0.0]], [[0.0, 0.0], [0.0, 0.0]], [[20.0, 19.0], [20.0, 19.0]]])
+    shift_logits = torch.cat((chosen_logits, rejected_logits))
+    logits = torch.cat((shift_logits, torch.zeros(2 * batch_size, 1, 2)), dim=1)
+    trainer = SimpleNamespace(
+        model=SimpleNamespace(training=False),
+        accelerator=SimpleNamespace(device=torch.device("cpu"), gather_for_metrics=drop_last_for_metrics),
+        aux_loss_enabled=False,
+        precompute_ref_logps=True,
+        ld_alpha=None,
+        f_divergence_type="reverse_kl",
+        loss_types=["sigmoid"],
+        loss_weights=[1.0],
+        beta=0.1,
+        label_smoothing=0.0,
+        use_weighting=False,
+        _metrics={"eval": defaultdict(list)},
+        _total_train_tokens=0,
+    )
+    inputs = {
+        "input_ids": torch.zeros(2 * batch_size, 3, dtype=torch.long),
+        "attention_mask": torch.ones(2 * batch_size, 3, dtype=torch.long),
+        "completion_mask": torch.ones(2 * batch_size, 3, dtype=torch.long),
+        "ref_chosen_logps": torch.zeros(batch_size),
+        "ref_rejected_logps": torch.zeros(batch_size),
+    }
+
+    DPOTrainer._compute_loss(trainer, lambda **kwargs: SimpleNamespace(logits=logits), inputs, False)
+
+    kept_logits = torch.cat((chosen_logits[:-1], rejected_logits[:-1]))
+    expected_entropy = torch.distributions.Categorical(logits=kept_logits).entropy().mean().item()
+    assert trainer._metrics["eval"]["entropy"][-1] == pytest.approx(expected_entropy, abs=1e-6)
+
+    chosen_logps = torch.log_softmax(chosen_logits, dim=-1)[..., 0].sum(dim=1)
+    rejected_logps = torch.log_softmax(rejected_logits, dim=-1)[..., 0].sum(dim=1)
+    chosen_rewards = trainer.beta * chosen_logps
+    rejected_rewards = trainer.beta * rejected_logps
+    expected = {
+        "logits/chosen": chosen_logits[:-1].mean().item(),
+        "logits/rejected": rejected_logits[:-1].mean().item(),
+        "mean_token_accuracy": 1.0,
+        "rewards/chosen": chosen_rewards[:-1].mean().item(),
+        "rewards/rejected": rejected_rewards[:-1].mean().item(),
+        "rewards/accuracies": (chosen_rewards[:-1] > rejected_rewards[:-1]).float().mean().item(),
+        "rewards/margins": (chosen_rewards[:-1] - rejected_rewards[:-1]).mean().item(),
+        "logps/chosen": chosen_logps[:-1].mean().item(),
+        "logps/rejected": rejected_logps[:-1].mean().item(),
+    }
+    for key, value in expected.items():
+        assert trainer._metrics["eval"][key][-1] == pytest.approx(value, abs=1e-6)
 
 
 class TestDataCollatorForPreference(TrlTestCase):

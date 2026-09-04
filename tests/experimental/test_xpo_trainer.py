@@ -12,18 +12,80 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from collections import defaultdict
+from types import SimpleNamespace
+
 import pytest
+import torch
 from datasets import DatasetDict, load_dataset
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
 from transformers.utils import is_peft_available
 
 from trl.experimental.xpo import XPOConfig, XPOTrainer
 
-from ..testing_utils import TrlTestCase, require_peft
+from ..testing_utils import TrlTestCase, drop_last_for_metrics, require_peft
 
 
 if is_peft_available():
     from peft import LoraConfig, get_peft_model
+
+
+def test_log_statistics_metrics_ignore_duplicate_padding():
+    model_model = torch.tensor([[-1.0, -2.0], [-2.0, -3.0], [-30.0, -40.0]])
+    model_ref = torch.tensor([[-4.0, -5.0], [-5.0, -6.0], [-50.0, -60.0]])
+    ref_ref = torch.tensor([[-5.0, -6.0], [-6.0, -7.0], [-80.0, -90.0]])
+    ref_model = torch.tensor([[-3.0, -4.0], [-4.0, -5.0], [-10.0, -20.0]])
+    chosen_mask = torch.tensor([True, False, True])
+    trainer = SimpleNamespace(
+        accelerator=SimpleNamespace(gather_for_metrics=drop_last_for_metrics),
+        stats=defaultdict(list),
+        beta=0.5,
+        alpha=0.1,
+        processing_class=SimpleNamespace(eos_token_id=0),
+    )
+    model_data = {"input_ids": torch.tensor([[1, 0], [1, 0], [1, 1]])}
+    ref_data = {"input_ids": torch.tensor([[1, 0], [1, 0], [1, 1]])}
+
+    XPOTrainer._log_statistics(
+        trainer,
+        model_data,
+        ref_data,
+        model_model,
+        model_ref,
+        ref_ref,
+        ref_model,
+        chosen_mask,
+        torch.ones(3),
+        torch.ones(3),
+        1,
+        torch.ones(3),
+        torch.zeros(3),
+    )
+
+    model_model_sum = model_model.sum(1)
+    model_ref_sum = model_ref.sum(1)
+    ref_ref_sum = ref_ref.sum(1)
+    ref_model_sum = ref_model.sum(1)
+    chosen_model = torch.where(chosen_mask, model_model_sum, model_ref_sum)
+    chosen_ref = torch.where(chosen_mask, ref_model_sum, ref_ref_sum)
+    rejected_model = torch.where(~chosen_mask, model_model_sum, model_ref_sum)
+    rejected_ref = torch.where(~chosen_mask, ref_model_sum, ref_ref_sum)
+    chosen_rewards = (chosen_model - chosen_ref) * trainer.beta
+    rejected_rewards = (rejected_model - rejected_ref) * trainer.beta
+    expected = {
+        "logps/chosen": chosen_model,
+        "logps/rejected": rejected_model,
+        "rewards/chosen": chosen_rewards,
+        "rewards/rejected": rejected_rewards,
+        "objective/kl": ((model_model - ref_model).sum(1) + (model_ref - ref_ref).sum(1)) / 2,
+        "objective/entropy": (-model_model.sum(1) - model_ref.sum(1)) / 2,
+        "rewards/margins": chosen_rewards - rejected_rewards,
+        "rewards/accuracies": (chosen_rewards > rejected_rewards).float(),
+        "val/model_contain_eos_token": torch.tensor([1.0, 1.0, 0.0]),
+        "val/ref_contain_eos_token": torch.tensor([1.0, 1.0, 0.0]),
+    }
+    for key, values in expected.items():
+        assert trainer.stats[key][-1] == values[:-1].mean().item()
 
 
 @pytest.mark.low_priority

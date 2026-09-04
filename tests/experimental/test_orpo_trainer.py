@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from types import SimpleNamespace
+
 import pytest
 import torch
 from datasets import DatasetDict, load_dataset
@@ -19,7 +21,90 @@ from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokeni
 
 from trl.experimental.orpo import ORPOConfig, ORPOTrainer
 
-from ..testing_utils import TrlTestCase, require_peft
+from ..testing_utils import TrlTestCase, drop_last_for_metrics, require_peft
+
+
+def test_logits_metrics_ignore_duplicate_padding():
+    chosen_logits = torch.tensor([1.0, 3.0, 100.0]).view(3, 1, 1)
+    rejected_logits = torch.tensor([-1.0, -3.0, -100.0]).view(3, 1, 1)
+    nll_loss_sum = torch.tensor([2.0, 6.0, 100.0])
+    nll_loss_count = torch.tensor([1, 3, 1])
+    forward_output = (
+        torch.ones(3),
+        torch.zeros(3),
+        chosen_logits,
+        rejected_logits,
+        nll_loss_sum,
+        nll_loss_count,
+    )
+    trainer = SimpleNamespace(
+        concatenated_forward=lambda model, batch: forward_output,
+        odds_ratio_loss=lambda chosen, rejected: (
+            torch.zeros(3),
+            torch.ones(3),
+            torch.zeros(3),
+            torch.zeros(3),
+            torch.zeros(3),
+        ),
+        accelerator=SimpleNamespace(gather_for_metrics=drop_last_for_metrics),
+        aux_loss_enabled=False,
+    )
+
+    loss, metrics = ORPOTrainer.get_batch_loss_metrics(trainer, None, {})
+
+    assert loss == nll_loss_sum.sum() / nll_loss_count.sum()
+    assert metrics["logits/chosen"] == chosen_logits[:-1].mean().item()
+    assert metrics["logits/rejected"] == rejected_logits[:-1].mean().item()
+    assert metrics["nll_loss"] == nll_loss_sum[:-1].sum().item() / nll_loss_count[:-1].sum().item()
+
+
+def test_nll_forward_preserves_token_mean_with_duplicate_padding():
+    logits = torch.zeros(6, 3, 2)
+    input_ids = torch.tensor(
+        [
+            [0, 0, 0],
+            [0, 0, 0],
+            [0, 1, 0],
+            [0, 0, 0],
+            [0, 0, 0],
+            [0, 1, 0],
+        ]
+    )
+    attention_mask = torch.tensor(
+        [
+            [1, 1, 0],
+            [1, 1, 1],
+            [1, 1, 0],
+            [1, 1, 0],
+            [1, 1, 1],
+            [1, 1, 0],
+        ]
+    )
+    concatenated_batch = {
+        "concatenated_input_ids": input_ids,
+        "concatenated_attention_mask": attention_mask,
+        "concatenated_labels": input_ids,
+    }
+    trainer = SimpleNamespace(
+        concatenated_inputs=lambda batch, **kwargs: concatenated_batch,
+        get_batch_logps=lambda logits, labels, **kwargs: torch.zeros(6),
+        is_encoder_decoder=False,
+        padding_value=0,
+        accelerator=SimpleNamespace(device=torch.device("cpu")),
+        aux_loss_enabled=False,
+    )
+
+    output = ORPOTrainer.concatenated_forward(
+        trainer,
+        lambda *args, **kwargs: SimpleNamespace(logits=logits),
+        {"chosen_labels": torch.zeros(3, 1)},
+    )
+
+    nll_loss_sum, nll_loss_count = output[4:6]
+    labels = torch.where(attention_mask[:3] == 1, input_ids[:3], -100)
+    expected = torch.nn.functional.cross_entropy(logits[:3, :-1].reshape(-1, 2), labels[:, 1:].reshape(-1))
+    assert nll_loss_sum.shape == nll_loss_count.shape == (3,)
+    torch.testing.assert_close(nll_loss_sum.sum() / nll_loss_count.sum(), expected)
 
 
 class TestORPOTrainer(TrlTestCase):
