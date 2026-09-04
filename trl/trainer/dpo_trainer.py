@@ -64,6 +64,7 @@ from .utils import (
     pad,
     selective_log_softmax,
     use_adapter,
+    warn_if_fp32_with_mixed_precision,
 )
 
 
@@ -558,6 +559,8 @@ class DPOTrainer(_BaseTrainer):
                         "Please set it in only one place, preferably as a trainer argument."
                     )
                 model_init_kwargs["quantization_config"] = quantization_config
+            # Warn if the model will load in fp32 under mixed precision (see warn_if_fp32_with_mixed_precision)
+            warn_if_fp32_with_mixed_precision(args, model_init_kwargs)
             # Distributed training requires device_map=None ("auto" fails)
             if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 model_init_kwargs["device_map"] = None

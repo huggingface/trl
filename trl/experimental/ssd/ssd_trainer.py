@@ -59,6 +59,7 @@ from ...trainer.utils import (
     pad,
     selective_log_softmax,
     split_tensor_dict,
+    warn_if_fp32_with_mixed_precision,
 )
 from ..utils import prepare_peft_model
 from .ssd_config import SSDConfig
@@ -123,6 +124,8 @@ class SSDTrainer(_BaseTrainer):
             if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 model_init_kwargs["device_map"] = None
             model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
+            # Warn if the model will load in fp32 under mixed precision (see warn_if_fp32_with_mixed_precision)
+            warn_if_fp32_with_mixed_precision(args, model_init_kwargs)
             model = create_model_from_path(model, **model_init_kwargs)
         elif args.model_init_kwargs is not None:
             logger.warning(
