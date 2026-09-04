@@ -39,6 +39,10 @@ if is_peft_available():
 
 
 class TestRLOOTrainer(TrlTestCase):
+    def test_num_generations_must_be_at_least_two(self):
+        with pytest.raises(ValueError, match="RLOO requires at least 2 generations"):
+            RLOOConfig(output_dir=self.tmp_dir, num_generations=0)
+
     def test_init_minimal(self):
         # Test that RLOOTrainer can be instantiated with only model, reward_model and train_dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")

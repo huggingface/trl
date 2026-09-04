@@ -1078,6 +1078,12 @@ class GRPOConfig(_BaseConfig):
                 "this invariant. Set auto_find_batch_size=False and lower per_device_train_batch_size instead."
             )
 
+        if self.num_generations < 2:
+            raise ValueError(
+                "GRPO requires at least 2 generations per prompt to calculate the advantages. You provided "
+                f"{self.num_generations}."
+            )
+
         num_processes = self.world_size
         # The current default effective batch size
         if self.generation_batch_size is None and self.steps_per_generation is None:
@@ -1117,12 +1123,6 @@ class GRPOConfig(_BaseConfig):
             raise ValueError(
                 f"generation_batch_size ({self.generation_batch_size}) must be divisible by num_generations "
                 f"({self.num_generations})."
-            )
-
-        if self.num_generations < 2:
-            raise ValueError(
-                "GRPO requires at least 2 generations per prompt to calculate the advantages. You provided "
-                f"{self.num_generations}, which is less than the minimum required."
             )
 
         if self.vllm_importance_sampling_cap is not None:

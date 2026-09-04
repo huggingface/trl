@@ -630,7 +630,6 @@ class RLOOConfig(_BaseConfig):
                 "so Transformers' context-parallel / Ulysses sequence-parallel input sharding cannot be applied to the "
                 "raw generation batch. Set both `cp_size=1` and `sp_size=1`, or disable `parallelism_config`."
             )
-
         # `auto_find_batch_size` halves the train batch size on OOM, and the generation batch is derived from it. The
         # reduced batch is no longer guaranteed to hold full prompt groups, which breaks grouping the rewards by
         # prompt. There's no way to preserve the invariant while shrinking the batch, so reject it up front.
@@ -639,6 +638,12 @@ class RLOOConfig(_BaseConfig):
                 "auto_find_batch_size is not supported by RLOO, because the generation batch must contain full "
                 "prompt groups of num_generations completions, and reducing the batch size on out-of-memory breaks "
                 "this invariant. Set auto_find_batch_size=False and lower per_device_train_batch_size instead."
+            )
+
+        if self.num_generations < 2:
+            raise ValueError(
+                "RLOO requires at least 2 generations per prompt to calculate the advantages. You provided "
+                f"{self.num_generations}."
             )
 
         num_processes = self.world_size
@@ -680,10 +685,4 @@ class RLOOConfig(_BaseConfig):
             raise ValueError(
                 f"generation_batch_size ({self.generation_batch_size}) must be divisible by num_generations "
                 f"({self.num_generations})."
-            )
-
-        if self.num_generations < 2:
-            raise ValueError(
-                "RLOO requires at least 2 generations per prompt to calculate the advantages. You provided "
-                f"{self.num_generations}, which is less than the minimum required."
             )
