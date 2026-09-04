@@ -38,20 +38,17 @@ from transformers.modeling_utils import PreTrainedModel
 from transformers.processing_utils import ProcessorMixin
 from transformers.tokenization_utils_base import PreTrainedTokenizerBase
 from transformers.trainer_utils import EvalPrediction, seed_worker
-from transformers.utils import is_liger_kernel_available, is_peft_available, is_rich_available
+from transformers.utils import is_peft_available, is_rich_available
 
 from ...extras.profiling import profiling_decorator
 from ...generation.vllm_generation import VLLMGeneration
 from ...import_utils import is_vllm_available
+from ...losses import FusedLinearJSDLoss
 from ...models import prepare_deepspeed
 from ...models.utils import _ForwardRedirection, unwrap_model_for_generation
 from ...trainer.base_trainer import _BaseTrainer
 from ...trainer.utils import RepeatSampler, create_model_from_path, disable_dropout_in_model, pad, split_tensor_dict
 from .iw_opd_config import IWOPDConfig
-
-
-if is_liger_kernel_available():
-    from liger_kernel.chunked_loss import LigerFusedLinearJSDLoss
 
 
 if is_peft_available():
@@ -489,7 +486,7 @@ class IWOPDTrainer(_BaseTrainer):
         # ── Liger fused JSD loss ──
         self.use_liger_loss = False
         if args.use_liger_kernel:
-            self.liger_loss = LigerFusedLinearJSDLoss(
+            self.liger_loss = FusedLinearJSDLoss(
                 beta=args.beta,
                 ignore_index=-100,
                 temperature=args.temperature,

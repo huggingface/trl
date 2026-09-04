@@ -60,6 +60,7 @@ from ..distributed import DistributedBackend
 from ..extras.profiling import profiling_context, profiling_decorator
 from ..generation.vllm_generation import VLLMGeneration
 from ..import_utils import is_jmespath_available, is_vllm_available
+from ..losses import FusedLinearJSDLoss
 from ..models import prepare_deepspeed
 from ..models.utils import _ForwardRedirection, unwrap_model_for_generation
 from .base_trainer import _BaseTrainer
@@ -79,10 +80,6 @@ from .utils import (
     split_tensor_dict,
     unsplit_pixel_values_by_grid,
 )
-
-
-if is_liger_kernel_available():
-    from liger_kernel.chunked_loss import LigerFusedLinearJSDLoss
 
 
 if is_peft_available():
@@ -653,7 +650,7 @@ class DistillationTrainer(_BaseTrainer):
                     "Liger is required to use `use_liger_kernel` as the distillation loss. Run "
                     "`pip install liger-kernel`."
                 )
-            self.liger_loss = LigerFusedLinearJSDLoss(
+            self.liger_loss = FusedLinearJSDLoss(
                 beta=args.beta,
                 ignore_index=-100,
                 temperature=args.temperature,

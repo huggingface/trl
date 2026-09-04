@@ -1243,7 +1243,7 @@ class TestDistillationTrainer(TrlTestCase):
         # The Liger fused path and the default chunked path compute the same JSD objective (they share the hidden-state
         # extraction and differ only in the final loss call), so they must agree on a fixed batch. Toggling
         # `use_liger_kernel` on one trainer keeps the same (un-patched) model, so only the loss kernel differs.
-        from liger_kernel.chunked_loss import LigerFusedLinearJSDLoss
+        from trl.losses import FusedLinearJSDLoss
 
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         trainer = DistillationTrainer(
@@ -1277,7 +1277,7 @@ class TestDistillationTrainer(TrlTestCase):
         with torch.no_grad():
             chunked_loss = trainer.compute_loss(trainer.model, batch, num_items_in_batch=num_valid)
             trainer.use_liger_kernel = True
-            trainer.liger_loss = LigerFusedLinearJSDLoss(
+            trainer.liger_loss = FusedLinearJSDLoss(
                 beta=trainer.beta,
                 ignore_index=-100,
                 temperature=trainer.temperature,
