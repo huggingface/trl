@@ -87,21 +87,6 @@ xfail_data_parallel = pytest.mark.xfail(
 )
 
 
-def is_bitsandbytes_multi_backend_available() -> bool:
-    if is_bitsandbytes_available():
-        import bitsandbytes as bnb
-
-        return "multi_backend" in getattr(bnb, "features", set())
-    return False
-
-
-# Function ported from transformers.testing_utils before transformers#41283
-require_torch_gpu_if_bnb_not_multi_backend_enabled = pytest.mark.skipif(
-    not is_bitsandbytes_multi_backend_available() and not torch_device == "cuda",
-    reason="test requires bitsandbytes multi-backend enabled or 'cuda' torch device",
-)
-
-
 def drop_last_for_metrics(tensors):
     if isinstance(tensors, tuple):
         return tuple(tensor[:-1] if tensor.ndim else tensor for tensor in tensors)
