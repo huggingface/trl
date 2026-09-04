@@ -576,6 +576,10 @@ class TestDistributed(TrlTestCase):
         assert probe["loss_finite"], f"chunked_nll loss not finite under FSDP2: {probe}"
         observed = probe["all_gathers"]
         n_chunks = probe["n_chunks_if_regressed"]
+        # Both runs must have gathered something and the probe must be sharded too: a counter that saw nothing in
+        # either run would give an excess of 0 and pass the bound below without measuring anything.
+        assert baseline_gathers > 0 and observed > 0, f"no all-gather was counted: {baseline} / {probe}"
+        assert probe["sharded_params"] > 0, f"no parameter was sharded in the probe run: {probe}"
 
         # Non-vacuity guard: a per-token-chunk regression can only be detected if the step actually ran several
         # token chunks. If only one chunk ran, a regression would gather exactly once too and the test would
