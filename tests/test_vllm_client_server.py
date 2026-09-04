@@ -183,10 +183,42 @@ class TestVLLMGenerationParameterIteration(TrlTestCase):
 
         monkeypatch.setattr("trl.generation.vllm_generation.FSDP", FakeFSDP)
         generation = object.__new__(VLLMGeneration)
+        generation.model = Model()
 
-        parameters = dict(generation._iter_fsdp1_params(Model()))
+        parameters = dict(generation._iter_fsdp1_params(generation.model))
 
         assert set(parameters) == {"lm_head.weight"}
+
+    def test_fsdp1_skips_tuner_parameters(self, monkeypatch):
+        class FakeFSDP(nn.Module):
+            @staticmethod
+            def summon_full_params(module, recurse=False, writeback=False):
+                return nullcontext()
+
+        class Model(FakeFSDP):
+            prefix = "lora_"
+
+            def __init__(self):
+                super().__init__()
+                self.base_model = nn.Module()
+                self.base_model.model = nn.Module()
+                self.base_model.model.q_proj = nn.Module()
+                self.base_model.model.q_proj.base_layer = nn.Linear(2, 2, bias=False)
+                self.base_model.model.q_proj.lora_A = nn.ModuleDict(
+                    {"default": nn.Linear(2, 1, bias=False), "ref": nn.Linear(2, 1, bias=False)}
+                )
+                self.base_model.model.q_proj.lora_B = nn.ModuleDict(
+                    {"default": nn.Linear(1, 2, bias=False), "ref": nn.Linear(1, 2, bias=False)}
+                )
+
+        monkeypatch.setattr("trl.generation.vllm_generation.FSDP", FakeFSDP)
+        monkeypatch.setattr("trl.generation.vllm_generation.is_peft_model", lambda model: True)
+        generation = object.__new__(VLLMGeneration)
+        generation.model = Model()
+
+        parameters = dict(generation._iter_fsdp1_params(generation.model))
+
+        assert set(parameters) == {"q_proj.weight"}
 
 
 @pytest.mark.slow

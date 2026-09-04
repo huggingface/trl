@@ -886,6 +886,9 @@ class OnlineDPOTrainer(_BaseTrainer):
                     full_name = f"{prefix}.{param_name}" if prefix else param_name
                     full_name = self._fix_param_name_to_vllm(full_name, extra_prefixes=["_fsdp_wrapped_module."])
                     full_name = full_name.removeprefix("base_model.model.").replace(".base_layer", "")
+                    # Skip PEFT layers: they don't exist in vLLM, and they are merged already.
+                    if is_peft_model(self.model) and self.model.prefix in full_name:
+                        continue
                     # When module to save, remove its prefix and discard the original module, as well as the copies
                     # held by other adapters (such as the frozen "ref" one); vLLM sees only the "default" copy
                     if "original_module" in full_name or (
