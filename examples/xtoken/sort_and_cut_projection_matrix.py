@@ -89,17 +89,23 @@ def sort_and_cut(
         r_lik = orig_lik[row]
 
         valid = (r_idx != -1) & (r_lik > 0)
-        if not valid.any():
+        has_scale_slot = preserve_last and r_lik[-1] > 0
+        if not valid.any() and not has_scale_slot:
             continue
 
         v_idx = r_idx[valid]
         v_lik = r_lik[valid]
 
-        if preserve_last and new_top_k >= 2:
+        if preserve_last:
             # Keep the last original column anchored at position new_top_k-1.
             # Sort only the first (orig_k-1) valid elements, take top (new_top_k-1) of them.
             last_i = orig_idx[row, orig_k - 1]
             last_l = orig_lik[row, orig_k - 1]
+
+            if new_top_k == 1:
+                new_idx[row, 0] = last_i
+                new_lik[row, 0] = last_l
+                continue
 
             # valid elements excluding the last original column
             sort_valid = valid.clone()
@@ -114,7 +120,7 @@ def sort_and_cut(
                 new_idx[row, :n] = sorted_i[:n]
                 new_lik[row, :n] = sorted_l[:n]
 
-            if last_i != -1 and last_l > 0:
+            if last_l > 0:
                 new_idx[row, new_top_k - 1] = last_i
                 new_lik[row, new_top_k - 1] = last_l
         else:

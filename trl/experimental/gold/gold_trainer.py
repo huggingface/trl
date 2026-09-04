@@ -1205,7 +1205,10 @@ class XTokenLoss(nn.Module):
         else:
             l1_uncommon = s_chunks.new_zeros(())
 
-        return (kl_common + l1_uncommon) * (T * T)
+        # The common term is the paper's partial full-vocabulary KL sum, so a top-k approximation of the balancing
+        # uncommon L1 term can make the hybrid estimate slightly negative. A divergence must not reward moving farther
+        # from the teacher; floor that approximation at zero before dynamic loss scaling.
+        return (kl_common + l1_uncommon).clamp_min(0.0) * (T * T)
 
 
 class GOLDTrainer(SFTTrainer):
