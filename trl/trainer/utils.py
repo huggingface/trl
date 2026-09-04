@@ -19,6 +19,7 @@ import hashlib
 import importlib.resources as pkg_resources
 import os
 import random
+import shutil
 import socket
 import threading
 import types
@@ -33,11 +34,12 @@ import pandas as pd
 import torch
 import torch.nn.functional as F
 import transformers
-from accelerate import PartialState
+from accelerate import Accelerator, PartialState
 from accelerate.logging import get_logger
 from datasets import IterableDataset
 from huggingface_hub import ModelCard, ModelCardData
 from packaging.version import Version
+from torch.distributed.tensor import DTensor
 from torch.utils.data import Sampler
 from transformers import (
     AutoConfig,
@@ -1261,6 +1263,153 @@ def use_adapter(model: "PeftModel", adapter_name: str | None):
             model.set_adapter(previous_adapter)
 
 
+# Ranks vLLM builds stacked LoRA buffers for. Any other value crashes engine construction.
+VLLM_LORA_RANKS = (1, 8, 16, 32, 64, 128, 256, 320, 512)
+
+
+def round_lora_rank(adapter_rank: int) -> int:
+    """
+    Round a LoRA rank up to the smallest `max_lora_rank` vLLM accepts.
+
+    `max_lora_rank` is a capacity bound rather than the served rank, so an `r=4` adapter is served correctly under `8`.
+
+    Args:
+        adapter_rank (`int`):
+            Rank of the adapter to serve.
+
+    Returns:
+        `int`:
+            Smallest value in `VLLM_LORA_RANKS` greater than or equal to `adapter_rank`.
+
+    Examples:
+
+    ```python
+    >>> round_lora_rank(4)
+    8
+    ```
+    """
+    for rank in VLLM_LORA_RANKS:
+        if rank >= adapter_rank:
+            return rank
+    raise ValueError(
+        f"LoRA rank {adapter_rank} is larger than the largest rank vLLM can serve ({VLLM_LORA_RANKS[-1]}). Lower `r` "
+        f"(and `rank_pattern`) to sync the adapter to vLLM, or sync merged weights instead."
+    )
+
+
+def validate_lora_for_vllm_sync(model: "PeftModel") -> "LoraConfig":
+    """
+    Return the active adapter's config, checking it can be served as a plain vLLM LoRA adapter.
+
+    vLLM's LoRA manager only knows about `lora_A` / `lora_B` deltas on a fixed set of linear layers. Anything else a
+    PEFT config can express — fully-trained modules, DoRA magnitudes, trained biases, fused-MoE parameter LoRA — has no
+    home in the adapter checkpoint vLLM loads, and is silently ignored (or worse, misread) at serving time. Every such
+    config is rejected here so the caller can fall back to syncing merged weights, which handles all of them.
+
+    Args:
+        model ([`~peft.PeftModel`]):
+            PEFT model whose active adapter is checked.
+
+    Returns:
+        [`~peft.LoraConfig`]:
+            Config of the single active adapter.
+    """
+    if len(model.active_adapters) != 1:
+        raise ValueError(
+            f"Adapter-only vLLM sync serves a single adapter, but {len(model.active_adapters)} are active "
+            f"({model.active_adapters}). Activate one adapter, or sync merged weights instead."
+        )
+    peft_config = model.peft_config[model.active_adapters[0]]
+    if not isinstance(peft_config, LoraConfig):
+        raise ValueError(
+            f"Adapter-only vLLM sync supports LoRA adapters only, got `{type(peft_config).__name__}`. Sync merged "
+            f"weights instead."
+        )
+    if peft_config.modules_to_save:
+        raise ValueError(
+            f"`modules_to_save={peft_config.modules_to_save}` cannot ride in a LoRA adapter: those modules are "
+            f"fully trained, not a low-rank delta, so vLLM would keep serving the base checkpoint's copy. Sync "
+            f"merged weights instead."
+        )
+    if peft_config.use_dora:
+        raise ValueError(
+            "DoRA adapters are not servable by vLLM: the magnitude vector has no slot in the adapter format. Sync "
+            "merged weights instead."
+        )
+    if peft_config.bias != "none":
+        raise ValueError(
+            f"`bias='{peft_config.bias}'` trains bias terms, which are not part of a LoRA adapter and would be "
+            f"dropped on the way to vLLM. Use `bias='none'`, or sync merged weights instead."
+        )
+    if peft_config.target_parameters:
+        raise ValueError(
+            f"`target_parameters={peft_config.target_parameters}` (fused-MoE parameter LoRA) needs the adapter to be "
+            f"declared with `is_3d_lora_weight=True` against a server started with "
+            f"`--enable-mixed-moe-lora-format`. vLLM does not inspect the checkpoint, so a wrong declaration loads "
+            f"the weights into the wrong stacked buffers and silently produces garbage. Sync merged weights instead."
+        )
+    target_modules = peft_config.target_modules or []
+    if isinstance(target_modules, str):  # a regex matching module names, rather than a collection of them
+        target_modules = [target_modules]
+    if any("lm_head" in module or "embed_tokens" in module for module in target_modules):
+        raise ValueError(
+            f"`target_modules={peft_config.target_modules}` targets the head or the embeddings. vLLM restricts LoRA "
+            f"on those layers and drops the head delta from `prompt_logprobs` entirely "
+            f"(https://github.com/vllm-project/vllm/issues/51594), so the trainer and the server would disagree on "
+            f"every logprob. Sync merged weights instead."
+        )
+    return peft_config
+
+
+def save_lora_adapter(model: "PeftModel", accelerator: Accelerator, adapter_name: str, dest_dir: str) -> None:
+    """
+    Save one PEFT adapter to `dest_dir`, gathering sharded parameters as needed.
+
+    This is a collective: every process must call it, not only the main one, because materializing a sharded parameter
+    all-gathers across ranks.
+
+    `dest_dir` is named after the adapter and holds `adapter_config.json` at its root, the layout vLLM's filesystem
+    LoRA resolver expects when it serves `<cache_dir>/<adapter_name>`. It is published with an atomic rename, so a
+    server reading it over a shared filesystem never observes a half-flushed adapter.
+
+    Args:
+        model ([`~peft.PeftModel`]):
+            PEFT model holding the adapter.
+        accelerator ([`~accelerate.Accelerator`]):
+            Accelerator whose device sharded parameters are gathered on.
+        adapter_name (`str`):
+            Name of the adapter to save.
+        dest_dir (`str`):
+            Directory the adapter is published to. Replaced if it already exists.
+    """
+    state_dict = {
+        name: param for name, param in model.state_dict().items() if "lora_" in name and f".{adapter_name}." in name
+    }
+    materialized = {}
+    for name, param in state_dict.items():
+        # With `fsdp_offload_params`, the local shard lives on CPU; the all-gather needs it on device.
+        if param.is_cpu:
+            param = param.to(accelerator.device)
+        if isinstance(param, DTensor):  # FSDP2
+            param = param.full_tensor()
+        materialized[name] = param.detach().cpu()
+
+    if not accelerator.is_main_process:
+        return
+    # Staged under a dot-prefixed name: `dest_dir`'s parent is an adapter namespace, so a plain `<name>.tmp` sibling
+    # would be a half-written adapter sitting in it, and a crash mid-save would leak one there permanently.
+    tmp_dir = os.path.join(os.path.dirname(dest_dir), f".{os.path.basename(dest_dir)}.tmp")
+    shutil.rmtree(tmp_dir, ignore_errors=True)
+    os.makedirs(tmp_dir, exist_ok=True)
+    model.save_pretrained(tmp_dir, selected_adapters=[adapter_name], state_dict=materialized, safe_serialization=True)
+    # PEFT nests every adapter but `"default"` in a subdirectory, while vLLM expects `adapter_config.json` at the root
+    # of the path it is handed.
+    saved_dir = tmp_dir if adapter_name == "default" else os.path.join(tmp_dir, adapter_name)
+    shutil.rmtree(dest_dir, ignore_errors=True)
+    os.rename(saved_dir, dest_dir)  # atomic within one filesystem
+    shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
 def start_event_loop_in_daemon(
     name: str | None = None,
 ) -> tuple[threading.Thread, asyncio.AbstractEventLoop, threading.Event]:
@@ -1420,7 +1569,9 @@ class _ChunkedLogProbFunction(torch.autograd.Function):
         for start in range(0, vocab, chunk_size):
             end = min(start + chunk_size, vocab)
             C = end - start
-            w_chunk = weight[start:end]  # [C, H]
+            # Same cast as the forward: under mixed precision `hidden` is bf16 while `weight` keeps the fp32
+            # parameter dtype, and `torch.mm` rejects the mix.
+            w_chunk = weight[start:end].to(hidden.dtype)  # [C, H]
 
             torch.mm(hidden, w_chunk.t(), out=mm_buf[:, :C])
             logits_chunk = logits_buf[:, :C]
@@ -1503,9 +1654,18 @@ def patch_chunked_lm_head(
             hidden_flat = hidden_flat[valid_mask]  # [N_valid, H]
             targets_flat = targets_flat[valid_mask]  # [N_valid]
 
+        # This function reads `lm_head.weight` instead of calling the module, so it never fires the pre-forward
+        # hook that unshards the head's FSDP2 group. Without PEFT the group unshards anyway, via the final norm that
+        # shares it; with PEFT accelerate fails to find that norm through the wrapper, and the weight arrives as a
+        # sharded `DTensor` that `torch.mm` rejects. Keyed off the tensor type, so it stops firing once accelerate's
+        # lookup handles PEFT. `full_tensor` is differentiable.
+        lm_head_weight = self.lm_head.weight
+        if isinstance(lm_head_weight, DTensor):
+            lm_head_weight = lm_head_weight.full_tensor()
+
         logprobs_valid, entropy_valid = _ChunkedLogProbFunction.apply(
             hidden_flat,
-            self.lm_head.weight,
+            lm_head_weight,
             targets_flat,
             temperature,
             chunk_size,

@@ -19,6 +19,7 @@ import json
 import math
 import os
 import queue
+import shutil
 import textwrap
 import threading
 import time
@@ -30,12 +31,14 @@ from typing import Any, Protocol
 
 import torch
 from accelerate.logging import get_logger
+from accelerate.utils import broadcast_object_list, is_peft_model
 from datasets import Dataset, IterableDataset
 from torch.distributed._tensor import DTensor
 from torch.utils.data import DataLoader
 from transformers import AutoTokenizer, PreTrainedModel, PreTrainedTokenizerBase, TrainerCallback
 from transformers.data.data_collator import DataCollatorMixin
 from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR
+from transformers.utils import is_peft_available
 
 from ...trainer.base_trainer import _BaseTrainer
 from ...trainer.utils import (
@@ -48,6 +51,9 @@ from ...trainer.utils import (
     nanmin,
     pad,
     patch_chunked_lm_head,
+    round_lora_rank,
+    save_lora_adapter,
+    validate_lora_for_vllm_sync,
 )
 from .async_grpo_config import AsyncGRPOConfig
 from .async_rollout_worker import AsyncRolloutWorker, RolloutSample
@@ -56,6 +62,9 @@ from .weight_transfer import WeightTransferClient
 
 
 logger = get_logger(__name__)
+
+if is_peft_available():
+    from peft import PeftConfig, PeftModel, get_peft_model
 
 if is_trackio_available():
     import trackio
@@ -646,6 +655,106 @@ class DataCollatorForRollout(DataCollatorMixin):
         self.metrics["batch/pad_frac"].append((padded.numel() - int(padded.sum()), padded.numel()))
 
 
+def _iter_vllm_named_params(model: torch.nn.Module) -> Iterator[tuple[str, torch.nn.Parameter]]:
+    """Yield `(name, param)` for every parameter the vLLM server receives, under its base-checkpoint name.
+
+    The weight manifest built once in `__init__` and the stream sent by `_streaming_iter` must agree
+    element-for-element — the server sizes its receive buffers from the manifest — so both walk this generator rather
+    than each re-deriving the name cleanup. Parameters are yielded as-is: `DTensor.shape` is the global shape, so
+    building the manifest costs no all-gather.
+    """
+    is_peft = is_peft_model(model)
+    for name, param in model.named_parameters():
+        # Frozen parameters (a VLM's vision tower) never change, so they are never sent. Under PEFT the filter is
+        # inverted: the trainable parameters are the adapter tensors vLLM never sees, and it is the frozen base
+        # weights that move once the adapter has been merged into them.
+        if not is_peft and not param.requires_grad:
+            continue
+        # DDP/FSDP1 wrapping and gradient checkpointing, avoids vllm module not exist error
+        name = name.removeprefix("module.").replace("_checkpoint_wrapped_module.", "")
+        # When using PEFT, we need to recover the original parameter name
+        name = name.removeprefix("base_model.model.").replace(".base_layer", "")
+        # Skip PEFT layers: they don't exist in vLLM, and they are merged already.
+        if is_peft and model.prefix in name:
+            continue
+        # When module to save, remove its prefix and discard the original module
+        if "original_module" in name:
+            continue
+        name = name.replace("modules_to_save.default.", "")
+        yield name, param
+
+
+def select_adapter_sync(server_info: dict, model: "PeftModel", args: AsyncGRPOConfig) -> bool:
+    """
+    Decide whether weight syncs push the adapter alone instead of merged base weights.
+
+    A pure function of what the server reported and what is about to be trained, so it can be tested with the dict
+    `/server_info` returns rather than with a server. Anything vLLM's adapter format cannot express falls back to the
+    merged path with a warning. A server that is merely misconfigured — too low a rank, too few adapter slots — raises
+    instead, rather than silently syncing 100x the bytes its launch line asked for.
+
+    Args:
+        server_info (`dict`):
+            The server's resolved `vllm_config`, as returned by [`VLLMClient.get_server_info`]. Only `lora_config` and
+            `parallel_config.data_parallel_size` are read.
+        model ([`~peft.PeftModel`]):
+            The PEFT-wrapped model about to be trained.
+        args ([`AsyncGRPOConfig`]):
+            The training arguments; `max_staleness` sets how many adapter versions the server must hold at once.
+
+    Returns:
+        `bool`:
+            Whether syncs should push only the adapter.
+    """
+    # `lora_config` is `None` unless the server was started with `--enable-lora`, making it the capability probe.
+    server_lora_config = server_info["lora_config"]
+    if server_lora_config is None:
+        logger.warning(
+            "Training a PEFT model against a vLLM server started without `--enable-lora`: every weight sync has "
+            "to merge the adapter into the base model and push the full weights. Restart the server with "
+            "`--enable-lora --max-lora-rank <r>` and `VLLM_ALLOW_RUNTIME_LORA_UPDATING=1` in its environment to "
+            "push only the adapter instead (~1% of the bytes)."
+        )
+        return False
+
+    # `/v1/load_lora_adapter` reaches only the data-parallel replica that answered it, leaving the others on
+    # the base model. The merged path has no such problem, so hand data-parallel servers to it.
+    if server_info["parallel_config"]["data_parallel_size"] > 1:
+        logger.warning(
+            "Falling back to merged-weight vLLM sync: the server runs with `--data-parallel-size > 1`, where a "
+            "loaded adapter reaches only the replica that received the request."
+        )
+        return False
+
+    try:
+        peft_config = validate_lora_for_vllm_sync(model)
+    except ValueError as error:
+        logger.warning(f"Falling back to merged-weight vLLM sync. {error}")
+        return False
+
+    # `rank_pattern` can lift individual modules above the base `r`.
+    adapter_rank = max([peft_config.r, *peft_config.rank_pattern.values()])
+    if server_lora_config["max_lora_rank"] < adapter_rank:
+        raise ValueError(
+            f"The adapter has rank {adapter_rank}, but the vLLM server was started with `--max-lora-rank "
+            f"{server_lora_config['max_lora_rank']}`. Restart it with `--max-lora-rank "
+            f"{round_lora_rank(adapter_rank)}`."
+        )
+    # `max_staleness` bounds how many policies back a sample may still be consumed from, so `max_staleness + 1`
+    # adapters can be named by in-flight requests at once. Each sync loads the new version before unloading the one
+    # that just fell out of that window, so the server briefly holds one more — and vLLM does not reject the extra
+    # load, it silently evicts the oldest still-servable adapter.
+    min_loras = args.max_staleness + 2
+    if server_lora_config["max_loras"] < min_loras:
+        raise ValueError(
+            f"The vLLM server was started with `--max-loras {server_lora_config['max_loras']}`, but "
+            f"`max_staleness={args.max_staleness}` lets requests still name {min_loras - 1} distinct policy "
+            f"versions, and each sync loads the next one before unloading the oldest. Restart the server with "
+            f"`--max-loras {min_loras}`, or lower `max_staleness`."
+        )
+    return True
+
+
 class AsyncGRPOTrainer(_BaseTrainer):
     """
     Trainer for the Group Relative Policy Optimization (GRPO) method. This algorithm was initially proposed in the
@@ -727,6 +836,10 @@ class AsyncGRPOTrainer(_BaseTrainer):
         optimizers (`tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None]`, *optional*, defaults to `(None, None)`):
             A tuple containing the optimizer and the scheduler to use. Will default to an instance of `AdamW` on your
             model and a scheduler given by [`~transformers.get_linear_schedule_with_warmup`] controlled by `args`.
+        peft_config ([`~peft.PeftConfig`], *optional*):
+            PEFT configuration used to wrap the model. If `None`, the model is not wrapped. When the vLLM server was
+            started with `--enable-lora`, a LoRA adapter is synced to it as an adapter rather than as merged weights;
+            see the LoRA section of the AsyncGRPO documentation.
         tools (list of `Callable`, *optional*):
             A list of callable tool functions (sync or async) that the model can invoke during generation. Each tool
             should be a standard Python function with properly type-hinted arguments and return values, and a
@@ -787,6 +900,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
         processing_class: PreTrainedTokenizerBase | None = None,
         callbacks: list[TrainerCallback] | None = None,
         optimizers: tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None] = (None, None),
+        peft_config: "PeftConfig | None" = None,
         tools: list[Callable] | None = None,
         environment_factory: EnvironmentFactory | dict[str, EnvironmentFactory] | None = None,
         rollout_worker: RolloutWorkerProtocol | None = None,
@@ -848,6 +962,33 @@ class AsyncGRPOTrainer(_BaseTrainer):
             )
         if processing_class.pad_token is None:
             processing_class.pad_token = processing_class.eos_token
+
+        # PEFT. Placed after `patch_chunked_lm_head`, which patches the bare `lm_head` and would otherwise have to
+        # traverse `base_model.model` to find it.
+        if peft_config is not None:
+            if not is_peft_available():
+                raise ImportError(
+                    "You passed `peft_config` but the `peft` library is not installed. "
+                    "Install it with `pip install trl[peft]`."
+                )
+            if not isinstance(peft_config, PeftConfig):
+                raise TypeError(
+                    f"`peft_config` must be a `peft.PeftConfig` instance (e.g. `peft.LoraConfig`), "
+                    f"got {type(peft_config).__name__}."
+                )
+            if is_peft_model(model):
+                raise ValueError(
+                    "You passed a `PeftModel` instance together with a `peft_config` to the trainer. Please first merge "
+                    "and unload the existing adapter, save the resulting base model, and then pass that base model along "
+                    "with the new `peft_config` to the trainer."
+                )
+            # Unlike `GRPOTrainer`, no `autocast_adapter_dtype=False` branch (it works around a DeepSpeed ZeRO-3
+            # dtype mismatch, and AsyncGRPO is FSDP2-only) and no "ref" adapter (there is no reference model).
+            model = get_peft_model(model, peft_config)
+
+        # NOTE: See https://github.com/huggingface/transformers/issues/42489
+        if is_peft_model(model) and args.gradient_checkpointing:
+            model.enable_input_require_grads()
 
         # Reward functions
         if reward_funcs is None:
@@ -952,6 +1093,15 @@ class AsyncGRPOTrainer(_BaseTrainer):
         self._step_samples = 0.0
         self._last_groups_trained = 0
         self.model_version = 0
+        # Adapter-only vLLM sync is derived from a PEFT model plus a server started with `--enable-lora`, rather
+        # than configured. Rank 0 probes and broadcasts the answer below.
+        self._lora_sync = False
+        self._lora_name = "trl-policy"
+        # Absolute: the path is resolved by the *server's* process, which has its own working directory and may not
+        # be on this machine. vLLM reads a path it cannot resolve as a Hub repo id, failing deep inside the engine.
+        self._lora_dir = os.path.abspath(os.path.join(self.args.output_dir, ".vllm_lora"))
+        # Captured once, so a trainer that later activates another adapter does not ship that one as the policy.
+        self._adapter_name = model.active_adapters[0] if is_peft_model(model) else None
         # Create worker and queue on rank 0
         if self.accelerator.is_main_process:
             # Weight sync and the token-budget query target the vLLM server from the config; the client is the single
@@ -959,31 +1109,34 @@ class AsyncGRPOTrainer(_BaseTrainer):
             self.vllm_client = VLLMClient(self.args.vllm_server_base_url, self.args.vllm_server_timeout)
 
             if weight_transfer is not None:
-                # Injected backend (e.g. a no-op stub in tests, or a custom sync mechanism).
+                # Injected backend (e.g. a no-op stub in tests, or a custom sync mechanism). It owns weight sync
+                # entirely, so the server is not probed and adapter sync stays off.
                 self.weight_transfer = weight_transfer
             else:
-                # Collect weight metadata once — names/dtypes/shapes are fixed for the lifetime of training.
-                # DTensor.shape returns the global shape without triggering any all-gather.
-                weight_names, weight_dtype_names, weight_shapes = [], [], []
-                for name, param in model.named_parameters():
-                    # Frozen parameters (a VLM's vision tower) never change, so they are never sent.
-                    if not param.requires_grad:
-                        continue
-                    # DDP/FSDP1 wrapping and gradient checkpointing, avoids vllm module not exist error
-                    name = name.removeprefix("module.").replace("_checkpoint_wrapped_module.", "")
-                    weight_names.append(name)
-                    weight_dtype_names.append(str(param.dtype).split(".")[-1])
-                    weight_shapes.append(list(param.shape))
-                self.weight_transfer = WeightTransferClient(
-                    vllm_client=self.vllm_client,
-                    weight_update_info={
-                        "names": weight_names,
-                        "dtype_names": weight_dtype_names,
-                        "shapes": weight_shapes,
-                        "packed": True,
-                    },
-                    weight_sync_timeout=self.args.weight_sync_timeout,
-                )
+                if is_peft_model(model):
+                    self._lora_sync = self._init_lora_sync(model)
+                if self._lora_sync:
+                    # The adapter reaches the server as a directory path over HTTP, so there is no NCCL transfer
+                    # group to build and no manifest to collect.
+                    self.weight_transfer = None
+                else:
+                    # Collect weight metadata once — names/dtypes/shapes are fixed for the lifetime of training.
+                    # DTensor.shape returns the global shape without triggering any all-gather.
+                    weight_names, weight_dtype_names, weight_shapes = [], [], []
+                    for name, param in _iter_vllm_named_params(model):
+                        weight_names.append(name)
+                        weight_dtype_names.append(str(param.dtype).split(".")[-1])
+                        weight_shapes.append(list(param.shape))
+                    self.weight_transfer = WeightTransferClient(
+                        vllm_client=self.vllm_client,
+                        weight_update_info={
+                            "names": weight_names,
+                            "dtype_names": weight_dtype_names,
+                            "shapes": weight_shapes,
+                            "packed": True,
+                        },
+                        weight_sync_timeout=self.args.weight_sync_timeout,
+                    )
 
             if rollout_worker is not None:
                 # Use the injected worker (e.g. a stub in tests). The queue is owned by the worker.
@@ -991,6 +1144,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
             else:
                 self.rollout_worker = AsyncRolloutWorker(
                     model_name=get_config_model_id(model.config),
+                    lora_name=self._lora_name if self._lora_sync else None,
                     dataset=train_dataset,
                     reward_funcs=reward_funcs,
                     processing_class=processing_class,
@@ -1021,6 +1175,10 @@ class AsyncGRPOTrainer(_BaseTrainer):
             self.vllm_client = None
             self.weight_transfer = None
 
+        # Every rank must agree on the sync mode: one arm runs a collective adapter save, the other a collective
+        # parameter gather, and a split decision hangs both.
+        self._lora_sync = broadcast_object_list([self._lora_sync], from_process=0)[0]
+
         # Add callbacks. Cold weight sync + worker start on train begin, then periodic weight syncs.
         self.add_callback(_OptimizerTimeCallback(self))
         self.add_callback(_TrainBeginCallback(self))
@@ -1028,6 +1186,17 @@ class AsyncGRPOTrainer(_BaseTrainer):
         self.add_callback(StepIntervalCallback(self._log_step_metrics, 1))
         if self._epoch_stop_groups is not None:
             self.add_callback(_EpochStopCallback(self, self._epoch_stop_groups))
+
+    def _init_lora_sync(self, model: "PeftModel") -> bool:
+        """Probe the server and decide the sync mode. Main process only; the decision itself is [`select_adapter_sync`]."""
+        self.vllm_client.wait_for_server_ready()
+        lora_sync = select_adapter_sync(self.vllm_client.get_server_info(), model, self.args)
+        if lora_sync:
+            logger.info(
+                f"Adapter-only vLLM sync enabled: syncs publish the '{self._adapter_name}' adapter as "
+                f"'{self._lora_name}-v{{N}}' from {self._lora_dir}, which the vLLM server must be able to read."
+            )
+        return lora_sync
 
     def get_train_dataloader(self) -> DataLoader:
         num_processes = self.accelerator.num_processes
@@ -1327,18 +1496,44 @@ class AsyncGRPOTrainer(_BaseTrainer):
         # Iterate parameters one at a time. For FSDP2 (DTensor), full_tensor() all-gathers just this parameter across
         # FSDP ranks, then frees it once the generator advances — avoiding materializing the full model in memory.
         device = self.accelerator.device
-        for name, param in self.model.named_parameters():
-            if not param.requires_grad:
-                continue
-            # DDP/FSDP1 wrapping and gradient checkpointing, avoids vllm module not exist error
-            name = name.removeprefix("module.").replace("_checkpoint_wrapped_module.", "")
+        for name, param in _iter_vllm_named_params(self.accelerator.unwrap_model(self.model)):
             full = param.full_tensor() if isinstance(param, DTensor) else param.detach()
             if full.device != device:
                 full = full.to(device)
             yield name, full
 
     def _sync_weight(self):
+        """Publish the current policy to vLLM, then bump the version the rollout worker requests.
+
+        Dispatches to the sync mode picked at init, logging `perf/weight_sync_*` for both here so they stay comparable.
+        """
         t0 = time.time()
+        if self._lora_sync:
+            t_pause, t_barrier, t_transfer = self._sync_weight_lora(t0)
+        else:
+            t_pause, t_barrier, t_transfer = self._sync_weight_merged(t0)
+        weight_sync_s = time.time() - t0
+        # log the three phases  of weight sync
+        self._metrics["train"]["perf/weight_sync_s"].append(weight_sync_s)
+        self._metrics["train"]["perf/weight_sync_pause_s"].append(t_pause - t0)
+        self._metrics["train"]["perf/weight_sync_barrier_s"].append(t_barrier - t_pause)
+        self._metrics["train"]["perf/weight_sync_transfer_s"].append(t_transfer - t_barrier)
+        logger.info(f"Weight sync: done. Total {weight_sync_s:.1f}s")
+
+    def _sync_weight_merged(self, t0: float) -> tuple[float, float, float]:
+        """Fold the adapter, if any, into the base weights and stream every parameter to vLLM over NCCL.
+
+        Args:
+            t0 (`float`):
+                When the sync started, for the phase log lines.
+
+        Returns:
+            `tuple[float, float, float]`:
+                The pause, barrier and transfer phase marks, which [`_sync_weight`] turns into metrics.
+        """
+        # Under DDP `self.model` is the wrapper, which exposes none of the PEFT API used below.
+        model = self.accelerator.unwrap_model(self.model)
+
         logger.info("Weight sync: pausing vLLM...")
         if self.accelerator.is_main_process and self.weight_transfer:
             self.weight_transfer.pause()
@@ -1349,12 +1544,20 @@ class AsyncGRPOTrainer(_BaseTrainer):
         t_barrier = time.time()
 
         logger.info(f"Weight sync: transferring weights... (barrier took {t_barrier - t_pause:.1f}s)")
-        if self.accelerator.is_main_process and self.weight_transfer:
-            self.weight_transfer.send_weights(self._streaming_iter())
-        else:
-            # Non-rank-0 processes must still participate in full_tensor() collectives for FSDP2.
-            for _ in self._streaming_iter():
-                pass
+        # vLLM only knows the base checkpoint's parameters, so the adapter is folded into them for the send. The
+        # `finally` is not optional: leaving it merged would train merged weights from the next step on.
+        if is_peft_model(model):
+            model.merge_adapter()
+        try:
+            if self.accelerator.is_main_process and self.weight_transfer:
+                self.weight_transfer.send_weights(self._streaming_iter())
+            else:
+                # Non-rank-0 processes must still participate in full_tensor() collectives for FSDP2.
+                for _ in self._streaming_iter():
+                    pass
+        finally:
+            if is_peft_model(model):
+                model.unmerge_adapter()
         t_transfer = time.time()
 
         self.accelerator.wait_for_everyone()
@@ -1366,13 +1569,65 @@ class AsyncGRPOTrainer(_BaseTrainer):
             self.model_version += 1
             if self.rollout_worker:
                 self.rollout_worker.update_model_version(self.model_version)
-        weight_sync_s = time.time() - t0
-        # log the three phases  of weight sync
-        self._metrics["train"]["perf/weight_sync_s"].append(weight_sync_s)
-        self._metrics["train"]["perf/weight_sync_pause_s"].append(t_pause - t0)
-        self._metrics["train"]["perf/weight_sync_barrier_s"].append(t_barrier - t_pause)
-        self._metrics["train"]["perf/weight_sync_transfer_s"].append(t_transfer - t_barrier)
-        logger.info(f"Weight sync: done. Total {weight_sync_s:.1f}s")
+        return t_pause, t_barrier, t_transfer
+
+    def _sync_weight_lora(self, t0: float) -> tuple[float, float, float]:
+        """Publish the trained adapter to vLLM under a fresh versioned name, moving no base weight.
+
+        Each sync publishes `{lora_name}-v{N}` instead of overwriting the previous adapter in place, because
+        `load_inplace=True` makes the server re-read the adapter from disk on every request
+        (https://github.com/vllm-project/vllm/pull/41482) and vLLM keys its prefix cache on the adapter name alone
+        (https://github.com/vllm-project/vllm/issues/42125), so an in-place swap would serve the previous policy's KV
+        blocks. A new name is a fresh cache namespace, so no `reset_prefix_cache()` is needed.
+
+        Args:
+            t0 (`float`):
+                When the sync started, for the phase log lines.
+
+        Returns:
+            `tuple[float, float, float]`:
+                The pause, barrier and transfer phase marks, which [`_sync_weight`] turns into metrics.
+        """
+        version = self.model_version + 1
+        adapter_dir = os.path.join(self._lora_dir, f"{self._lora_name}-v{version}")
+        # Under DDP `self.model` is the wrapper, which does not expose `save_pretrained`.
+        model = self.accelerator.unwrap_model(self.model)
+
+        logger.info("Weight sync: pausing vLLM...")
+        if self.accelerator.is_main_process:
+            self.vllm_client.pause()
+        t_pause = time.time()
+        logger.info(f"Weight sync: pause took {t_pause - t0:.1f}s, waiting for all ranks...")
+
+        self.accelerator.wait_for_everyone()
+        t_barrier = time.time()
+
+        logger.info(f"Weight sync: transferring adapter... (barrier took {t_barrier - t_pause:.1f}s)")
+        # Every rank calls this, not just rank 0: materializing a sharded adapter parameter is a collective, even
+        # though only the main process writes the files.
+        save_lora_adapter(model, self.accelerator, self._adapter_name, adapter_dir)
+        t_transfer = time.time()
+
+        self.accelerator.wait_for_everyone()
+
+        logger.info(f"Weight sync: resuming vLLM... (transfer took {t_transfer - t_barrier:.1f}s)")
+        if self.accelerator.is_main_process:
+            # The adapter has to exist on the server BEFORE the version moves below: the rollout worker derives the
+            # adapter it requests from `model_version`, so bumping first would name one that is not loaded yet.
+            self.vllm_client.load_lora_adapter(f"{self._lora_name}-v{version}", adapter_dir)
+            self.vllm_client.resume()
+            stale_version = version - (self.args.max_staleness + 1)
+            if stale_version > 0:
+                self.vllm_client.unload_lora_adapter(f"{self._lora_name}-v{stale_version}")
+            # The files outlive the unload by one sync: vLLM resolves `lora_path` lazily inside the engine, where
+            # a missing directory is not a 404 but a fatal `HFValidationError`.
+            if stale_version > 1:
+                stale_dir = f"{self._lora_name}-v{stale_version - 1}"
+                shutil.rmtree(os.path.join(self._lora_dir, stale_dir), ignore_errors=True)
+            self.model_version = version
+            if self.rollout_worker:
+                self.rollout_worker.update_model_version(self.model_version)
+        return t_pause, t_barrier, t_transfer
 
     def _save_checkpoint(self, model, trial):
         if self.accelerator.is_main_process and isinstance(self.rollout_worker, AsyncRolloutWorker):
@@ -1382,7 +1637,9 @@ class AsyncGRPOTrainer(_BaseTrainer):
             trained = self._trained_groups
             first_untrained = next(g for g in itertools.count() if g not in trained)
             prompt_index = self.rollout_worker._loop_kwargs["dataset_start_index"] + first_untrained
-            rollout_state = {"prompt_index": prompt_index}
+            # `model_version` rides along so adapter names keep counting across a resume: restarting at v1 would
+            # republish a different adapter under a name a still-running server already holds.
+            rollout_state = {"prompt_index": prompt_index, "model_version": self.model_version}
             with open(os.path.join(checkpoint_dir, "rollout_state.json"), "w") as f:
                 json.dump(rollout_state, f)
         super()._save_checkpoint(model, trial)
@@ -1410,6 +1667,10 @@ class AsyncGRPOTrainer(_BaseTrainer):
                         rollout_state = json.load(f)
                     self.rollout_worker._loop_kwargs["dataset_start_index"] = rollout_state["prompt_index"]
                     self._groups_before_resume = rollout_state["prompt_index"]
+                    # Older checkpoints predate this field; resuming from one restarts numbering at v1, which is
+                    # only safe against a freshly started server.
+                    self.model_version = rollout_state.get("model_version", 0)
+                    self.rollout_worker.update_model_version(self.model_version)
         try:
             return super()._inner_training_loop(*args, **kwargs)
         finally:
