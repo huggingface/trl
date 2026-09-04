@@ -40,7 +40,7 @@ class FusedLinearDPOFunction(FusedLinearPreferenceBase):
         discopop_tau=0.05,
     ):
         """
-        Paper: https://huggingface.co/papers/2305.18290
+        Paper: https://arxiv.org/pdf/2305.18290
 
         Formula: L_DPO = -E[ log_sigmoid( β * (log(π(y_w|x)/π_ref(y_w|x)) - log(π(y_l|x)/π_ref(y_l|x))) ) ]
 

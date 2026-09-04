@@ -38,7 +38,7 @@ class FusedLinearKTOFunction(FusedLinearUnpairedPreferenceBase):
     ):
         """
         Implements the Kahneman-Tversky Optimization (KTO) loss function. Paper: "KTO: Model Alignment as Prospect
-        Theory-Guided Optimization" https://huggingface.co/papers/2402.01306
+        Theory-Guided Optimization" https://arxiv.org/abs/2402.01306
 
         KTO loss is inspired by prospect theory (https://en.wikipedia.org/wiki/Prospect_theory) from behavioral
         economics, which models how humans make decisions under uncertainty. The loss function is asymmetric, treating
