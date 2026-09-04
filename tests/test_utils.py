@@ -1295,6 +1295,37 @@ class TestChunkedLogProbFunction:
         torch.testing.assert_close(grad_hidden_chunked, hidden.grad, atol=1e-2, rtol=1e-2)
         torch.testing.assert_close(grad_weight_chunked, weight.grad, atol=1e-2, rtol=1e-2)
 
+    @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16])
+    def test_backward_half_hidden_with_full_precision_weight(self, dtype):
+        """Autocast leaves the lm_head weight in float32 while the hidden states are half.
+
+        That is the case the cast in forward exists for; backward recomputes the same logits and
+        has to make the same cast, or `torch.mm` rejects the mismatched operands.
+        """
+        torch.manual_seed(42)
+        hidden = torch.randn(self.N, self.H).to(dtype).requires_grad_(True)
+        weight = torch.randn(self.V, self.H, requires_grad=True)  # float32, as autocast leaves it
+        labels = torch.randint(0, self.V, (self.N,))
+
+        logprobs_chunked, _ = _ChunkedLogProbFunction.apply(hidden, weight, labels, 1.0, self.CHUNK_SIZE)
+        logprobs_chunked.sum().backward()
+        grad_hidden_chunked = hidden.grad.clone()
+        grad_weight_chunked = weight.grad.clone()
+
+        hidden.grad = None
+        weight.grad = None
+
+        # The shared reference helper matmuls the two operands directly, so it needs the same
+        # cast autocast applies before the lm_head; only the weight side differs here.
+        logits_ref = (hidden @ weight.to(dtype).t()).to(torch.float32)
+        logprobs_ref = F.log_softmax(logits_ref, dim=-1).gather(-1, labels.unsqueeze(-1)).squeeze(-1)
+        logprobs_ref.sum().backward()
+
+        assert grad_hidden_chunked.dtype == hidden.dtype
+        assert grad_weight_chunked.dtype == weight.dtype
+        torch.testing.assert_close(grad_hidden_chunked, hidden.grad, atol=1e-2, rtol=1e-2)
+        torch.testing.assert_close(grad_weight_chunked, weight.grad, atol=1e-2, rtol=1e-2)
+
     @pytest.mark.parametrize("temperature", [1.0, 0.7])
     def test_backward_entropy(self, temperature):
         """Backprop through the `entropy` output alone (as opposed to `logprobs`, covered above)."""
