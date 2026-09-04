@@ -16,7 +16,7 @@ The library is integrated with 🤗 [transformers](https://github.com/huggingfac
 
 ## Taxonomy
 
-Below is the current list of TRL trainers.
+Below is an overview of TRL trainers, organized by maturity and method type.
 
 <div style="display: flex; justify-content: space-between; width: 100%; gap: 2rem;">
 <div style="flex: 1; min-width: 0;">
@@ -72,6 +72,7 @@ Below is the current list of TRL trainers.
 
 #### Offline methods
 
+- [BEMA for Reference Model](bema_for_reference_model)
 - [`BCOTrainer`](bco_trainer)
 - [`CPOTrainer`](cpo_trainer)
 - [`ORPOTrainer`](orpo_trainer)
