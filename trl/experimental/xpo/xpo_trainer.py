@@ -85,8 +85,8 @@ class XPOTrainer(OnlineDPOTrainer):
         peft_config ([`~peft.PeftConfig`], *optional*):
             The peft config to use for training.
         compute_metrics (`Callable[[EvalPrediction], dict]`, *optional*):
-            The function to use to compute the metrics. Must take a `EvalPrediction` and return a dictionary string to
-            metric values.
+            Not supported: evaluation computes only a loss, since `prediction_step` returns no predictions or labels
+            for the callback. Passing a callable raises a `ValueError`.
         callbacks (`list[transformers.TrainerCallback]`):
             The callbacks to use for training.
         optimizers (`tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`):
@@ -131,6 +131,11 @@ class XPOTrainer(OnlineDPOTrainer):
         optimizers: tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
         preprocess_logits_for_metrics: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] | None = None,
     ) -> None:
+        if compute_metrics is not None:
+            raise ValueError(
+                "`compute_metrics` is not supported: `prediction_step` returns only a loss, so the callback would never "
+                "be called. Read `eval_loss` from `evaluate()` instead."
+            )
         super().__init__(
             model=model,
             ref_model=ref_model,

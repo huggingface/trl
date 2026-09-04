@@ -167,11 +167,26 @@ class TestNashMDTrainer(TrlTestCase):
             processing_class=self.tokenizer,
         )
 
-        # A hardcoded return value would satisfy a bare membership check, so assert the loss itself. Its sign is
-        # not fixed across these trainers, so bound the magnitude instead: non-zero rules out a stubbed
-        # `prediction_step`, and finite rules out inf and NaN.
+        # A stubbed `prediction_step` returning any constant passes a magnitude bound, so pin `eval_loss` to the losses
+        # `_compute_loss` produced on the evaluation batches, weighted by batch size as `Trainer` does.
+        recorded = []
+        original = trainer._compute_loss
+
+        def spy(model, inputs, log_stats=True):
+            loss = original(model, inputs, log_stats=log_stats)
+            batch_size = len(next(iter(inputs.values())))
+            recorded.append((log_stats, batch_size, loss.item()))
+            return loss
+
+        trainer._compute_loss = spy
         metrics = trainer.evaluate()
-        assert 0 < abs(metrics["eval_loss"]) < float("inf")
+
+        assert len(recorded) == len(trainer.get_eval_dataloader())
+        assert all(log_stats is False for log_stats, _, _ in recorded)
+        expected_loss = sum(batch_size * loss for _, batch_size, loss in recorded) / sum(
+            batch_size for _, batch_size, _ in recorded
+        )
+        assert metrics["eval_loss"] == pytest.approx(expected_loss, abs=1e-5)
 
     def test_evaluate_does_not_pollute_training_stats(self):
         # `self.stats` is averaged and cleared by the training logger, so appending evaluation values to it would

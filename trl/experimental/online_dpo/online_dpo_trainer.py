@@ -149,8 +149,8 @@ class OnlineDPOTrainer(_BaseTrainer):
         peft_config ([`~peft.PeftConfig`], *optional*):
             PEFT configuration used to wrap the model. If `None`, the model is not wrapped.
         compute_metrics (`Callable[[EvalPrediction], dict]`, *optional*):
-            The function to use to compute the metrics. Must take a `EvalPrediction` and return a dictionary string to
-            metric values.
+            Not supported: evaluation computes only a loss, since `prediction_step` returns no predictions or labels
+            for the callback. Passing a callable raises a `ValueError`.
         callbacks (`list[transformers.TrainerCallback]`):
             The callbacks to use for training.
         optimizers (`tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`):
@@ -403,6 +403,11 @@ class OnlineDPOTrainer(_BaseTrainer):
             args.gradient_checkpointing_kwargs = args.gradient_checkpointing_kwargs or {}
             args.gradient_checkpointing_kwargs.setdefault("use_reentrant", False)
 
+        if compute_metrics is not None:
+            raise ValueError(
+                "`compute_metrics` is not supported: `prediction_step` returns only a loss, so the callback would never "
+                "be called. Read `eval_loss` from `evaluate()` instead."
+            )
         super().__init__(
             model=model,
             args=args,

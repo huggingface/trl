@@ -148,11 +148,41 @@ class TestOnlineDPOTrainer(TrlTestCase):
             reward_processing_classes=self.reward_tokenizer,
         )
 
-        # A hardcoded return value would satisfy a bare membership check, so assert the loss itself. Its sign is
-        # not fixed across these trainers, so bound the magnitude instead: non-zero rules out a stubbed
-        # `prediction_step`, and finite rules out inf and NaN.
+        # A stubbed `prediction_step` returning any constant passes a magnitude bound, so pin `eval_loss` to the losses
+        # `_compute_loss` produced on the evaluation batches, weighted by batch size as `Trainer` does.
+        recorded = []
+        original = trainer._compute_loss
+
+        def spy(model, inputs, log_stats=True):
+            loss = original(model, inputs, log_stats=log_stats)
+            batch_size = len(next(iter(inputs.values())))
+            recorded.append((log_stats, batch_size, loss.item()))
+            return loss
+
+        trainer._compute_loss = spy
         metrics = trainer.evaluate()
-        assert 0 < abs(metrics["eval_loss"]) < float("inf")
+
+        assert len(recorded) == len(trainer.get_eval_dataloader())
+        assert all(log_stats is False for log_stats, _, _ in recorded)
+        expected_loss = sum(batch_size * loss for _, batch_size, loss in recorded) / sum(
+            batch_size for _, batch_size, _ in recorded
+        )
+        assert metrics["eval_loss"] == pytest.approx(expected_loss, abs=1e-5)
+
+    def test_compute_metrics_is_rejected(self):
+        # `prediction_step` returns only a loss, so a `compute_metrics` callback would never run; refuse it up front.
+        training_args = OnlineDPOConfig(output_dir=self.tmp_dir, report_to="none")
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        with pytest.raises(ValueError, match="`compute_metrics` is not supported"):
+            OnlineDPOTrainer(
+                model=self.model,
+                reward_funcs=self.reward_model,
+                args=training_args,
+                train_dataset=dataset,
+                processing_class=self.tokenizer,
+                reward_processing_classes=self.reward_tokenizer,
+                compute_metrics=lambda eval_prediction: {},
+            )
 
     def test_evaluate_does_not_pollute_training_stats(self):
         # `self.stats` is averaged and cleared by the training logger, so appending evaluation values to it would
