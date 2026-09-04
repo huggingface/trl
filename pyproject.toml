@@ -67,7 +67,7 @@ quality = [
     "hf-doc-builder"
 ]
 quantization = [
-    "bitsandbytes"
+    "bitsandbytes>=0.50.0"
 ]
 scikit = [
     "scikit-learn"
@@ -119,7 +119,7 @@ dev = [
     "pre-commit",
     "hf-doc-builder",
     # quantization
-    "bitsandbytes",
+    "bitsandbytes>=0.50.0",
     # scikit: included in bco
     # test
     "pytest-cov",
@@ -209,13 +209,6 @@ filterwarnings = [
     # Remove once: no supported torch version emits it
     "ignore:The argument 'device' of Tensor.pin_memory:DeprecationWarning",
     "ignore:The argument 'device' of Tensor.is_pinned:DeprecationWarning",
-
-    # bitsandbytes calls the deprecated torch._check_is_size in its CUDA quant ops (upstream, not actionable in TRL)
-    # Triggered indirectly by loading bitsandbytes-quantized models in the PEFT + quantization tests
-    # Tracking issue: https://github.com/huggingface/trl/issues/6447
-    # Upstream fix released in bitsandbytes 0.50.0: https://github.com/bitsandbytes-foundation/bitsandbytes/pull/1940
-    # Remove once: bitsandbytes >= 0.50.0 is required
-    "ignore:_check_is_size will be removed in a future PyTorch release:FutureWarning",
 
     # triton builds an ast.AnnAssign node without the required `simple` field during kernel compilation (upstream,
     # not actionable in TRL); a DeprecationWarning on Python 3.14 that becomes an error on 3.15
