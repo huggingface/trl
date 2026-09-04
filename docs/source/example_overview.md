@@ -69,6 +69,7 @@ Check for additional optional dependencies [here](https://github.com/huggingface
 | [`sft_visual_chat`](https://github.com/huggingface/trl/tree/main/examples/sft_visual_chat) | SFT of a Vision Language Model in a chat setting. Only tested with [LLaVA 1.5](https://huggingface.co/llava-hf/llava-1.5-7b-hf), [LLaVA 1.6](https://huggingface.co/llava-hf/llava-v1.6-mistral-7b-hf), and [Llama-3.2-11B-Vision-Instruct](https://huggingface.co/meta-llama/Llama-3.2-11B-Vision-Instruct); users may see unexpected behaviour in other model architectures. | |
 | [`ssd_codegen`](https://github.com/huggingface/trl/tree/main/examples/ssd_codegen) | Simple Self-Distillation for code generation with [`experimental.ssd.SSDTrainer`], plus evaluation on LiveCodeBench. | |
 | [`tpo_ultrafeedback`](https://github.com/huggingface/trl/tree/main/examples/tpo_ultrafeedback) | Triple Preference Optimization with [`experimental.tpo.TPOTrainer`] using the [tpo-alignment/triple-preference-ultrafeedback-40K](https://huggingface.co/datasets/tpo-alignment/triple-preference-ultrafeedback-40K) dataset. | |
+| [`xtoken`](https://github.com/huggingface/trl/tree/main/examples/xtoken) | X-Token off-policy cross-tokenizer knowledge distillation with [`experimental.gold.GOLDTrainer`], including projection-matrix preparation. | |
 
 ## Distributed Training
 

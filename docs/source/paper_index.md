@@ -1710,6 +1710,38 @@ training_args = IWOPDConfig(
 )
 ```
 
+### On the Position Bias of On-Policy Distillation
+
+**📜 Paper**: https://huggingface.co/papers/2606.22600
+
+Introduces Importance-Weighted On-Policy Distillation (IW-OPD), which addresses the position bias in OPD by reweighting sampled-token distillation updates according to accumulated teacher-student prefix discrepancy. Early tokens keep larger weights, while later tokens after high drift are downweighted. Used in TRL via [`experimental.distillation.DistillationTrainer`] with `distillation_objective="iw_opd"`.
+
+The paper reports its main experiments with a verl PPO trainer and vLLM rollouts. `DistillationTrainer` exposes the matching distillation and rollout settings below; PPO-specific settings from the paper such as clipping range `0.2`, dual-clip constant `3.0`, PPO epochs, entropy coefficient, KL reward penalty, auxiliary KL, and rollout importance correction are not `DistillationConfig` parameters.
+
+```python
+from trl.experimental.distillation import DistillationConfig
+
+# Table 6 and Algorithm 1 of the paper, mapped to DistillationConfig where available.
+training_args = DistillationConfig(
+    distillation_objective="iw_opd",
+    iw_opd_gamma=0.5,  # γ amplification, Algorithm 1 and Appendix C.3
+    lmbda=1.0,  # fully on-policy rollouts
+    learning_rate=1e-5,  # Table 6
+    per_device_train_batch_size=1,  # Table 6 uses PPO micro-batch size 1 per GPU
+    gradient_accumulation_steps=32,  # with 32 GPUs, this gives the paper's 1024-prompt batch
+    num_generations=1,  # Table 6 rollout samples per prompt
+    temperature=1.0,  # Table 6 training decoding temperature
+    top_p=1.0,  # Table 6 training decoding top-p
+    max_prompt_length=2048,  # Table 6
+    max_completion_length=16384,  # Table 6
+    warmup_ratio=0.0,  # Table 6
+    use_vllm=True,  # Table 6 uses vLLM rollouts
+    vllm_sync_frequency=1,  # refresh rollout policy after each update
+    save_steps=10,  # Table 6 checkpoint frequency
+    eval_steps=10,  # Table 6 validation frequency
+)
+```
+
 ### On-Policy Distillation
 
 **📰 Blog**: https://thinkingmachines.ai/blog/on-policy-distillation/
@@ -1749,7 +1781,7 @@ training_args = GKDConfig(
 )
 ```
 
-You can also use the [`GOLDTrainer`] and [`GOLDConfig`] to perform on-policy distillation with a similar configuration:
+You can also use the [`GOLDTrainer`] and [`GOLDConfig`] to perform on-policy distillation with a similar configuration. See also [Unlocking On-Policy Distillation for Any Model Family](https://huggingface.co/spaces/HuggingFaceH4/on-policy-distillation):
 
 ```python
 from trl.experimental.gold import GOLDConfig
@@ -1759,6 +1791,52 @@ config = GOLDConfig(
     beta=1.0, # to ensure reverse-kl as the loss function
     teacher_model_name_or_path="teacher-model", # specify the teacher model
 
+)
+```
+
+### Cross-Tokenizer Knowledge Distillation (X-Token)
+
+**📜 Paper**: https://huggingface.co/papers/2605.21699
+
+X-Token extends the GOLD distillation framework to student-teacher pairs that **do not share a tokenizer**. It is an **off-policy** method (`lmbda=0`): the dataset provides the completion text, both student and teacher run forward passes on that text, and the cross-tokenizer KD loss is computed between their logits. No on-policy student rollouts are needed. A precomputed sparse projection matrix W ∈ ℝ^{V_s × V_t} maps each student token to the teacher tokens it most plausibly corresponds to, projecting the student distribution into the teacher vocab space so the two can be compared directly.
+
+Two loss formulations are provided:
+
+| Variant | `xtoken_loss_type` | Description |
+|---------|-------------------|-------------|
+| P-KL | `"p_kl"` | Projects the full student distribution into teacher vocab via W and computes forward KL on a global top-k subset. Implements Eq. (4) of the paper. |
+| H-KL | `"h_kl"` | Hybrid: forward KL on a relaxed common set (top-1 projection weight ≥ 0.6) and sorted-L1 on uncommon tokens. Implements Eq. (3) with the mapping from Eq. (5). |
+
+First build the projection matrix with the prep scripts in `examples/xtoken/`. Step 1 re-tokenizes the student vocab with the teacher tokenizer; the optional `--runtime-top-k` flag then sorts and trims the matrix in one go (equivalent to running `sort_and_cut_projection_matrix.py` afterwards):
+
+```bash
+python examples/xtoken/build_projection_matrix.py \
+    --student-model meta-llama/Llama-3.2-1B-Instruct \
+    --teacher-model Qwen/Qwen3-4B \
+    --runtime-top-k 4 \
+    --output-dir cross_tokenizer_data
+```
+
+Then train with the example script (off-policy, no vLLM needed):
+
+```bash
+python examples/xtoken/xtoken.py \
+    --student-model meta-llama/Llama-3.2-1B-Instruct \
+    --teacher-model Qwen/Qwen3-4B \
+    --projection-matrix cross_tokenizer_data/projection_map_Llama-3.2-1B-Instruct_to_Qwen3-4B_multitoken_top_32_double_top4.pt \
+    --loss-type p_kl
+```
+
+or pass the path to `GOLDConfig` directly:
+
+```python
+from trl.experimental.gold import GOLDConfig
+
+config = GOLDConfig(
+    lmbda=0.0,  # off-policy: no student rollouts needed
+    xtoken_loss_type="p_kl",
+    xtoken_projection_matrix_path="cross_tokenizer_data/projection_map_Llama-3.2-1B-Instruct_to_Qwen3-4B_multitoken_top_32_double_top4.pt",
+    teacher_tokenizer_name_or_path="Qwen/Qwen3-4B",
 )
 ```
 
