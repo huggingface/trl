@@ -215,7 +215,7 @@ Every `.py` example in the [Examples Index](example_overview#index) declares its
 
 Jobs runs your script with `uv`, which installs the dependencies declared in its `# /// script` header into a fresh environment. The TRL your script imports therefore comes from that header, not from the image, and the examples above need no `--image` at all.
 
-A Docker image with TRL preinstalled is available at [huggingface/trl](https://hub.docker.com/r/huggingface/trl). Passing it gives the job the image's system layer, such as its CUDA toolchain, which matters for dependencies that compile against it:
+A Docker image with TRL preinstalled is available at [huggingface/trl](https://hub.docker.com/r/huggingface/trl). Passing it to `hf jobs uv run` gives the job the image's system layer, such as its CUDA toolchain, which matters for dependencies that compile against it:
 
 <hfoptions id="script_type">
 <hfoption id="bash">
@@ -245,7 +245,42 @@ run_uv_job(
 </hfoption>
 </hfoptions>
 
-To import the TRL installed in the image instead of the one `uv` resolves from the header, extra flags are needed. See [Popular Jobs images](https://huggingface.co/docs/hub/jobs-popular-images) for that form and the paths it requires.
+To run the TRL that is installed in the image, use `hf jobs run` instead. It runs a command in the image directly, with no script header to resolve, so the image's own TRL is what executes:
+
+<hfoptions id="script_type">
+<hfoption id="bash">
+
+```bash
+hf jobs run \
+    --flavor a100-large \
+    --secrets HF_TOKEN \
+    huggingface/trl \
+    trl sft --model_name_or_path Qwen/Qwen2-0.5B-Instruct --dataset_name trl-lib/Capybara --output_dir Qwen2-0.5B-SFT
+```
+
+</hfoption>
+<hfoption id="python">
+
+```python
+from huggingface_hub import run_job
+
+run_job(
+    image="huggingface/trl",
+    command=[
+        "trl", "sft",
+        "--model_name_or_path", "Qwen/Qwen2-0.5B-Instruct",
+        "--dataset_name", "trl-lib/Capybara",
+        "--output_dir", "Qwen2-0.5B-SFT",
+    ],
+    flavor="a100-large",
+    secrets={"HF_TOKEN": "hf_..."},
+)
+```
+
+</hfoption>
+</hfoptions>
+
+Combining the two, so that `uv` resolves the script header while some imports still come from the image, needs extra flags. See [Popular Jobs images](https://huggingface.co/docs/hub/jobs-popular-images) for that form and the paths it requires.
 
 Jobs runs on a Docker image from Hugging Face Spaces or Docker Hub, so you can also specify any custom image:
 
