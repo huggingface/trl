@@ -1755,9 +1755,19 @@ class GRPOTrainer(_BaseTrainer):
                 images.append(prompt_images if prompt_images else None)
             images = images if has_images else None
 
+            # vLLM expects prompts holding one placeholder token per image, and expands them itself against the
+            # images passed alongside. The processor-expanded IDs required by the training forward pass therefore
+            # get expanded a second time, which corrupts the prompt. Render an unexpanded copy with the tokenizer
+            # alone for the vLLM call. See https://github.com/huggingface/trl/issues/6294
+            # This holds for both vLLM modes: colocate expands the placeholders from the images it is given, and
+            # server locates them from the runs of image tokens (`VLLMGeneration._place_features`), which expects
+            # one run per image. Expanded IDs break both.
+            unexpand_for_vllm = self.use_vllm and images is not None
+
             if self.environment_factories is not None:
                 # Tools differ per example across environments, so render each prompt with its own tool schema.
                 prompt_ids = []
+                vllm_prompt_ids = []
                 multimodal_fields = {}
                 for prompt, name in zip(prompts, self._batch_environments, strict=True):
                     tokenized = self.processing_class.apply_chat_template(
@@ -1770,6 +1780,16 @@ class GRPOTrainer(_BaseTrainer):
                         **self.chat_template_kwargs,
                     )
                     prompt_ids.append(tokenized["input_ids"][0])
+                    if unexpand_for_vllm:
+                        text = self.processing_class.apply_chat_template(
+                            conversation=[prompt],
+                            tools=self._env_tools[name] or None,  # `or None`: Llama bug: tool boilerplate for tools=[]
+                            chat_template=self.chat_template,
+                            add_generation_prompt=True,
+                            tokenize=False,
+                            **self.chat_template_kwargs,
+                        )
+                        vllm_prompt_ids.append(self._tokenizer(text[0], add_special_tokens=False)["input_ids"])
                     # For VLMs, the processor returns extra multimodal fields (pixel_values, image_grid_thw, etc.)
                     for k, v in tokenized.items():
                         if k not in ("input_ids", "attention_mask"):
@@ -1781,7 +1801,9 @@ class GRPOTrainer(_BaseTrainer):
                     k: torch.cat(v) if isinstance(v[0], torch.Tensor) else [row for prompt_v in v for row in prompt_v]
                     for k, v in multimodal_fields.items()
                 }
-                return prompt_ids, images, multimodal_fields
+                if not unexpand_for_vllm:
+                    vllm_prompt_ids = prompt_ids
+                return prompt_ids, images, multimodal_fields, vllm_prompt_ids
 
             # Workaround for a bug in transformers 5.3.0 where some processors (e.g. Qwen2.5-VL) crash on
             # batched unpadded input (transformers#44514).
@@ -1807,13 +1829,26 @@ class GRPOTrainer(_BaseTrainer):
                 prompt_ids = tokenized["input_ids"]
             # For VLMs, the processor returns extra multimodal fields (pixel_values, image_grid_thw, etc.)
             multimodal_fields = {k: v for k, v in tokenized.items() if k not in ("input_ids", "attention_mask")}
+            if unexpand_for_vllm:
+                texts = self.processing_class.apply_chat_template(
+                    conversation=prompts,
+                    tools=self.tools or None,  # `or None`: Llama bug: it renders tool boilerplate for tools=[]
+                    chat_template=self.chat_template,
+                    add_generation_prompt=True,
+                    tokenize=False,
+                    **self.chat_template_kwargs,
+                )
+                vllm_prompt_ids = self._tokenizer(texts, add_special_tokens=False)["input_ids"]
+            else:
+                vllm_prompt_ids = prompt_ids
         else:
             prompt_ids = self.processing_class(text=prompts)["input_ids"]
             images = None
             multimodal_fields = {}
-        return prompt_ids, images, multimodal_fields
+            vllm_prompt_ids = prompt_ids
+        return prompt_ids, images, multimodal_fields, vllm_prompt_ids
 
-    def _generate_single_turn(self, prompt_ids, images, multimodal_fields, has_tool_images=False):
+    def _generate_single_turn(self, prompt_ids, images, multimodal_fields, vllm_prompt_ids, has_tool_images=False):
         device = self.accelerator.device
         mode = "train" if self.model.training else "eval"
 
@@ -1828,7 +1863,7 @@ class GRPOTrainer(_BaseTrainer):
             # Generate using vLLM with raw token IDs
             num_generations = self.num_generations if mode == "train" else self.num_generations_eval
             _, completion_ids, logprobs, _ = self.vllm_generation.generate(
-                prompts=prompt_ids,
+                prompts=vllm_prompt_ids,
                 images=images,
                 num_generations=num_generations,
                 profiler=profiling_context(self, "vLLM.generate"),
@@ -1927,7 +1962,11 @@ class GRPOTrainer(_BaseTrainer):
         return completion_ids, logprobs
 
     def _get_tool_suffix_ids(self, tool_messages):
-        """Get token IDs for tool result formatting by using a minimal dummy conversation."""
+        """Get token IDs for tool result formatting by using a minimal dummy conversation.
+
+        Returns the processor-expanded suffix IDs, and a copy holding a single placeholder token per
+        tool-returned image for the vLLM call. The two are identical unless generating with vLLM for a VLM.
+        """
         # Use the real tool name instead of a dummy: some templates (e.g. GPT-OSS) derive the tool response
         # header from the assistant's tool call name.
         dummy_tool_calls = [{"type": "function", "function": {"name": tool_messages[0]["name"], "arguments": {}}}]
@@ -1965,25 +2004,62 @@ class GRPOTrainer(_BaseTrainer):
         if self._is_vlm:
             prefix_ids = prefix_ids[0]
             full_ids = full_ids[0]
+        tracks = [(prefix_ids, full_ids)]
 
-        # Some chat templates (notably Qwen3/Qwen3.5) render "...<|im_end|>\n" after an assistant/tool block.
-        # When we compute `suffix_ids` by slicing `full_ids`, we must align the slicing boundary to
-        # EOS (not EOS + newline). Templates that don't use EOS as end-of-turn (e.g. Gemma uses
-        # <turn|>) skip this trimming.
-        eos_positions = [i for i, tok_id in enumerate(prefix_ids) if tok_id == self._tokenizer.eos_token_id]
-        if eos_positions:
-            prefix_ids = prefix_ids[: eos_positions[-1] + 1]
+        if self.use_vllm and self._is_vlm:
+            # Render the same pair with the tokenizer alone, so images returned by tools keep the single
+            # placeholder token vLLM expands itself, as in `_tokenize_prompts`.
+            # `tokenize=False` returns a plain string here, since a single conversation is passed rather than a batch.
+            prefix_text = self.processing_class.apply_chat_template(
+                dummy_messages,
+                add_generation_prompt=False,
+                tokenize=False,
+                chat_template=self.chat_template,
+                **self.chat_template_kwargs,
+            )
+            full_text = self.processing_class.apply_chat_template(
+                dummy_messages + tool_messages,
+                add_generation_prompt=True,
+                tokenize=False,
+                chat_template=self.chat_template,
+                **self.chat_template_kwargs,
+            )
+            tracks.append(
+                (
+                    self._tokenizer(prefix_text, add_special_tokens=False)["input_ids"],
+                    self._tokenizer(full_text, add_special_tokens=False)["input_ids"],
+                )
+            )
 
-        if full_ids[: len(prefix_ids)] != prefix_ids:
-            raise ValueError("Unexpected tokenization: the EOS-trimmed prefix IDs are not a prefix of the full IDs.")
-        return full_ids[len(prefix_ids) :]
+        suffix_ids = []
+        for prefix, full in tracks:
+            # Some chat templates (notably Qwen3/Qwen3.5) render "...<|im_end|>\n" after an assistant/tool block.
+            # When we compute `suffix_ids` by slicing `full`, we must align the slicing boundary to
+            # EOS (not EOS + newline). Templates that don't use EOS as end-of-turn (e.g. Gemma uses
+            # <turn|>) skip this trimming.
+            eos_positions = [i for i, tok_id in enumerate(prefix) if tok_id == self._tokenizer.eos_token_id]
+            if eos_positions:
+                prefix = prefix[: eos_positions[-1] + 1]
 
-    def _tool_call_loop(self, prompts, prompt_ids, completion_ids, completions, logprobs, images, multimodal_fields):
+            if full[: len(prefix)] != prefix:
+                raise ValueError(
+                    "Unexpected tokenization: the EOS-trimmed prefix IDs are not a prefix of the full IDs."
+                )
+            suffix_ids.append(full[len(prefix) :])
+        # Without the vLLM track, both returned suffixes are the expanded one.
+        return suffix_ids[0], suffix_ids[-1]
+
+    def _tool_call_loop(
+        self, prompts, prompt_ids, vllm_prompt_ids, completion_ids, completions, logprobs, images, multimodal_fields
+    ):
         # Tool execution loop: execute tools, then regenerate completions with tool results appended to the prompt
         tool_calls = [completion[0].get("tool_calls") for completion in completions]
         idxs_with_tool = [idx for idx, tool_call in enumerate(tool_calls) if tool_call]
         tool_calls = [tool_calls[idx] for idx in idxs_with_tool]
         tool_mask = [[1] * len(ids) for ids in completion_ids]  # 0 for tool result tokens, 1 elsewhere
+        # Completions as seen on the unexpanded track handed to vLLM: they differ from `completion_ids` only once a
+        # tool has returned an image, since the tool suffix is appended to both.
+        vllm_completion_ids = list(completion_ids)
         # Collect images from multimodal tool responses for the forward pass
         tool_images = [[] for _ in completion_ids]
         tool_call_count = 0
@@ -2063,6 +2139,7 @@ class GRPOTrainer(_BaseTrainer):
 
             # Build token IDs by concatenation: prompt + completion + tool_suffix.
             prompt_completion_tool_ids = []
+            vllm_prompt_completion_tool_ids = []
             for idx in range(len(idxs_with_tool)):
                 idx_with_tool = idxs_with_tool[idx]
                 # Extract trailing tool messages from completions
@@ -2072,9 +2149,14 @@ class GRPOTrainer(_BaseTrainer):
                         tool_messages.insert(0, message)
                     else:
                         break
-                suffix_ids = self._get_tool_suffix_ids(tool_messages)
+                suffix_ids, vllm_suffix_ids = self._get_tool_suffix_ids(tool_messages)
                 prompt_completion_tool_ids.append(
                     prompt_ids[idx_with_tool] + completion_ids[idx_with_tool] + suffix_ids
+                )
+                # Same concatenation on the unexpanded track, so vLLM keeps receiving one placeholder token per
+                # image, for prompt images and tool-returned images alike.
+                vllm_prompt_completion_tool_ids.append(
+                    vllm_prompt_ids[idx_with_tool] + vllm_completion_ids[idx_with_tool] + vllm_suffix_ids
                 )
 
             # Drop tool results whose addition would push the sequence past max_completion_length (the completion
@@ -2101,6 +2183,9 @@ class GRPOTrainer(_BaseTrainer):
             idxs_with_tool = [idx for idx, o in zip(idxs_with_tool, overlong, strict=True) if not o]
             prompt_completion_tool_ids = [
                 pct for pct, o in zip(prompt_completion_tool_ids, overlong, strict=True) if not o
+            ]
+            vllm_prompt_completion_tool_ids = [
+                pct for pct, o in zip(vllm_prompt_completion_tool_ids, overlong, strict=True) if not o
             ]
             if not idxs_with_tool:
                 break  # all overlong, exit tool loop
@@ -2161,6 +2246,7 @@ class GRPOTrainer(_BaseTrainer):
                 prompt_completion_tool_ids,
                 loop_images,
                 loop_multimodal_fields,
+                vllm_prompt_completion_tool_ids,
                 has_tool_images=any(imgs for imgs in tool_images),
             )
 
@@ -2196,6 +2282,11 @@ class GRPOTrainer(_BaseTrainer):
                 prompt_length = len(prompt_ids[idx_with_tool])
                 pct = prompt_completion_tool_ids[idx]  # = prompt-completion-tool
                 completion_ids[idx_with_tool] = pct[prompt_length:] + post_tool_ids[idx]
+                # Mirror the update on the unexpanded track, so the next iteration builds on unexpanded history
+                vllm_pct = vllm_prompt_completion_tool_ids[idx]
+                vllm_completion_ids[idx_with_tool] = (
+                    vllm_pct[len(vllm_prompt_ids[idx_with_tool]) :] + post_tool_ids[idx]
+                )
 
             # Decode post-tool completions
             post_tool_completions = [
@@ -2242,11 +2333,14 @@ class GRPOTrainer(_BaseTrainer):
                 raise ValueError(f"rollout_func must return keys {missing_keys_list} in its output dict.")
             extra_fields = {k: v for k, v in output.items() if k not in required_keys}
             prompt_ids, completion_ids, logprobs = output["prompt_ids"], output["completion_ids"], output["logprobs"]
+            vllm_prompt_ids = prompt_ids
             images = None
             multimodal_fields = {}
         else:
-            prompt_ids, images, multimodal_fields = self._tokenize_prompts(prompts)
-            completion_ids, logprobs = self._generate_single_turn(prompt_ids, images, multimodal_fields)
+            prompt_ids, images, multimodal_fields, vllm_prompt_ids = self._tokenize_prompts(prompts)
+            completion_ids, logprobs = self._generate_single_turn(
+                prompt_ids, images, multimodal_fields, vllm_prompt_ids
+            )
             extra_fields = {}
 
         # Decode completions. It's important to use `parse_response` when possible, because it handles tool calls.
@@ -2277,7 +2371,7 @@ class GRPOTrainer(_BaseTrainer):
                 tool_failure_count,
                 tool_images,
             ) = self._tool_call_loop(
-                prompts, prompt_ids, completion_ids, completions, logprobs, images, multimodal_fields
+                prompts, prompt_ids, vllm_prompt_ids, completion_ids, completions, logprobs, images, multimodal_fields
             )
             # Merge tool response images into the images list for the forward pass
             if any(imgs for imgs in tool_images):
