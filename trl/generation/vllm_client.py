@@ -29,10 +29,15 @@ from urllib.parse import urlparse
 import torch
 from requests.adapters import HTTPAdapter
 from torch import nn
+from transformers import is_bitsandbytes_available
 from transformers.utils import get_json_schema
 from urllib3.util.retry import Retry
 
 from ..import_utils import is_requests_available, is_vllm_available
+
+
+if is_bitsandbytes_available():
+    import bitsandbytes as bnb
 
 
 if is_requests_available():
@@ -51,6 +56,28 @@ _HAS_WEIGHT_UPDATE_LIFECYCLE = is_vllm_available(min_version="0.21.0")
 
 
 logger = logging.getLogger(__name__)
+
+
+def _dense_param_data(param: nn.Parameter) -> torch.Tensor:
+    """
+    Return a parameter's data as a dense tensor, dequantizing bitsandbytes 4-bit weights.
+
+    vLLM's weight loader expects a dense `[out_features, in_features]` tensor in the model dtype. A bitsandbytes 4-bit
+    base instead stores a flat packed `uint8` buffer whose scales live in `quant_state`, and reading `.data` drops that
+    `quant_state`. Pushing it unchanged therefore both mismatches the shape vLLM allocated and loses the scales
+    entirely. See https://github.com/huggingface/trl/issues/4973.
+
+    Args:
+        param (`torch.nn.Parameter`):
+            Parameter to read. Must be the parameter object rather than its `.data`, since `.data` has already
+            discarded the quantization state.
+
+    Returns:
+        `torch.Tensor`: the dense weight, dequantized when the parameter is 4-bit.
+    """
+    if is_bitsandbytes_available() and isinstance(param, bnb.nn.Params4bit):
+        return bnb.functional.dequantize_4bit(param.data, param.quant_state)
+    return param.data
 
 
 def pil_to_base64(image):
@@ -813,11 +840,16 @@ class VLLMClient:
             model (`nn.Module`):
                 Model whose parameters (weights/biases) are to be updated.
         """
-        metadata = [
-            (name, str(param.dtype).removeprefix("torch."), list(param.shape))
-            for name, param in model.named_parameters()
-        ]
-        self.update_named_params(metadata, ((name, param.data) for name, param in model.named_parameters()))
+
+        # The metadata has to describe the dense tensors that are sent, not the packed storage a 4-bit parameter
+        # holds, so both passes go through `_dense_param_data`. Dequantizing twice keeps the send lazy: materializing
+        # every dense weight up front would hold the whole dequantized model at once.
+        def dense_params():
+            for name, param in model.named_parameters():
+                yield name, _dense_param_data(param)
+
+        metadata = [(name, str(data.dtype).removeprefix("torch."), list(data.shape)) for name, data in dense_params()]
+        self.update_named_params(metadata, dense_params())
 
     def reset_prefix_cache(self):
         """

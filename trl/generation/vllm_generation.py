@@ -36,7 +36,7 @@ from ..distributed import DistributedBackend
 from ..extras.profiling import ProfilingContext
 from ..import_utils import is_vllm_available
 from ..trainer.utils import ensure_master_addr_port
-from .vllm_client import VLLMClient
+from .vllm_client import VLLMClient, _dense_param_data
 
 
 if is_vllm_available():
@@ -106,6 +106,66 @@ if TYPE_CHECKING:
 
 if is_bitsandbytes_available():
     import bitsandbytes as bnb
+
+
+def _check_quantization_supported(
+    model: nn.Module, fsdp_version: int | None, fsdp_use_orig_params: bool | None, pre_quantized: bool
+) -> None:
+    """
+    Raise when the model's quantization cannot survive the dense weight push into vLLM.
+
+    The engine is built dense on purpose: the base may be 4-bit, but every weight is dequantized to the model dtype on
+    the way out (see `_dense_param_data`), and building with `quantization="bitsandbytes"` would allocate packed
+    `[out_features, in_features // 2]` weights that reject that push. Four combinations cannot be served that way and
+    are refused here rather than at the first sync. See https://github.com/huggingface/trl/issues/4973.
+
+    Args:
+        model (`torch.nn.Module`):
+            Model whose modules are inspected for bitsandbytes layers.
+        fsdp_version (`int` or `None`):
+            FSDP major version in use, `None` when FSDP is not enabled, which is what `DistributedBackend` reports.
+            Version 2 is refused with a 4-bit base because it reads weights from `state_dict()`, which returns plain
+            tensors whose `quant_state` is already gone by the time `_dense_param_data` runs.
+        fsdp_use_orig_params (`bool` or `None`):
+            FSDP1's `use_orig_params` setting, `None` when FSDP is not enabled. FSDP1 reads through
+            `summon_full_params`, which exposes the original `Params4bit` with its `quant_state` only when this is
+            `True`; with Accelerate's default of `False` it exposes plain tensors, and the packed storage would be
+            pushed as if it were the dense weight. Measured on one H100: `(16, 1)` pushed for an `(8, 8)` layer.
+        pre_quantized (`bool`):
+            Whether the engine is built from a checkpoint that was saved already quantized. vLLM reads
+            `quantization_config` from the checkpoint at `name_or_path` and then allocates the packed weights the dense
+            push cannot fill, so such a checkpoint cannot be served in colocate mode. In server mode the trainer does
+            not know what the server was started from, so callers pass `False` there.
+
+    Raises:
+        `ValueError`: if the model holds 8-bit layers, or 4-bit layers while `fsdp_version` is 2, or 4-bit layers while
+        `fsdp_version` is 1 and `fsdp_use_orig_params` is not `True`, or 4-bit layers while `pre_quantized` is `True`.
+    """
+    if not is_bitsandbytes_available():
+        return
+    for _, module in model.named_modules():
+        if isinstance(module, bnb.nn.Linear8bitLt):
+            raise ValueError("vLLM does not support in-flight 8-bit quantization.")
+        if isinstance(module, bnb.nn.Linear4bit) and pre_quantized:
+            raise ValueError(
+                "vLLM colocate mode cannot serve a checkpoint that was saved already quantized with bitsandbytes: "
+                "vLLM reads `quantization_config` from the checkpoint and allocates packed weights that reject the "
+                "dense push at sync time. Load the unquantized checkpoint with "
+                "`quantization_config=BitsAndBytesConfig(load_in_4bit=True)` instead, or use server mode with a "
+                "server started from the unquantized checkpoint."
+            )
+        if isinstance(module, bnb.nn.Linear4bit) and fsdp_version == 2:
+            raise ValueError(
+                "vLLM weight sync does not support a 4-bit quantized base under FSDP2. Train with DeepSpeed or on a "
+                "single device, or load the base in full precision."
+            )
+        if isinstance(module, bnb.nn.Linear4bit) and fsdp_version == 1 and not fsdp_use_orig_params:
+            raise ValueError(
+                "vLLM weight sync does not support a 4-bit quantized base under FSDP1 with `use_orig_params=False` "
+                "(Accelerate's default): `summon_full_params` then exposes the packed storage without its "
+                "`quant_state`, and that packed tensor is what would be pushed. Set `fsdp_use_orig_params: true` in "
+                "the FSDP config, train with DeepSpeed or on a single device, or load the base in full precision."
+            )
 
 
 class VLLMGeneration:
@@ -297,6 +357,14 @@ class VLLMGeneration:
                 "`pip install trl[vllm]` to use it."
             )
 
+        # Both modes push dense weights at sync time (see `_dense_param_data`), so the check runs before either branch.
+        # Only colocate mode builds the engine from `model.name_or_path`, where a checkpoint saved already quantized
+        # makes vLLM allocate packed weights; `hf_quantizer.pre_quantized` records whether the checkpoint was one.
+        # Transformers sets `hf_quantizer` only when a quantizer ran (see modeling_utils.py:1515).
+        hf_quantizer = getattr(model, "hf_quantizer", None)
+        pre_quantized = self.mode == "colocate" and hf_quantizer is not None and hf_quantizer.pre_quantized
+        _check_quantization_supported(model, self._dist.fsdp_version, self._dist.fsdp_use_orig_params, pre_quantized)
+
         if self.mode == "server":
             if accelerator.is_main_process:
                 if self.server_base_url is not None:
@@ -334,15 +402,6 @@ class VLLMGeneration:
             # Ensure distributed rendezvous variables are set without colliding across concurrent runs
             ensure_master_addr_port()
 
-            quantization = None
-            if is_bitsandbytes_available():
-                for _, module in model.named_modules():
-                    if isinstance(module, bnb.nn.Linear4bit):
-                        quantization = "bitsandbytes"
-                        break
-                    elif isinstance(module, bnb.nn.Linear8bitLt):
-                        raise ValueError("vLLM does not support in-flight 8-bit quantization.")
-
             # Build LLM initialization kwargs
             self.llm = LLM(
                 model=model.name_or_path,
@@ -359,7 +418,6 @@ class VLLMGeneration:
                 max_num_batched_tokens=4096,
                 # Important so temperature scaling/logit tweaking affects the TIS log probs
                 logprobs_mode="processed_logprobs",
-                quantization=quantization,
                 trust_remote_code=self.trust_remote_code,
             )
             if self.enable_sleep_mode:
@@ -403,7 +461,7 @@ class VLLMGeneration:
                         continue  # skip FSDP subtrees already traversed
                     visited.add(full_name)
 
-                    yield full_name, param.data
+                    yield full_name, _dense_param_data(param)
 
     def _iter_fsdp2_params(self, module: nn.Module):
         """FSDP2-specific parameter iteration."""
@@ -421,6 +479,8 @@ class VLLMGeneration:
 
             if param.is_cpu:
                 param = param.to(self.accelerator.device)
+            # No `_dense_param_data` here: `state_dict()` already dropped any `quant_state`, so a 4-bit base cannot be
+            # served on this path and `_check_quantization_supported` refuses it up front.
             param = param.full_tensor()
 
             yield name, param
@@ -464,7 +524,7 @@ class VLLMGeneration:
                             continue
                         name = self._fix_param_name_to_vllm(name, extra_prefixes=["modules_to_save.default."])
 
-                        yield name, param.data
+                        yield name, _dense_param_data(param)
                 # Unmerge adapters while parameters are still gathered
                 model.unmerge_adapter()
                 # Parameters will automatically be repartitioned when exiting the context
@@ -476,7 +536,7 @@ class VLLMGeneration:
                 for name, param in model.named_parameters():
                     name = self._fix_param_name_to_vllm(name)
                     with self._dist.gather_params([param]):
-                        yield name, param.data
+                        yield name, _dense_param_data(param)
 
     def sync_weights(self):
         """Synchronize model weights to vLLM.
