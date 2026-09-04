@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import gc
+import math
 import os
 import warnings
 from collections.abc import Callable
@@ -282,6 +283,159 @@ class TestGRPOTrainer(TrlTestCase):
             reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
             train_dataset=dataset,
         )
+
+    def _kl_clip_setup(self):
+        # Shared scaffolding for the #3015 regression tests below. Returns a trainer whose loss actually runs the
+        # K3 KL branch (beta > 0) and hand-built inputs whose reference log-probs equal the policy's, so each test
+        # can offset `ref_per_token_logps` to drive `kl_log_ratio = ref - policy` into the regime it cares about.
+        # The clip is read from `args` at loss time, so a single trainer can serve several clip settings.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        training_args = GRPOConfig(output_dir=self.tmp_dir, beta=0.1, report_to="none")
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+        trainer.model.eval()
+
+        # Trainer.__init__ moves the model to args.device, so on a GPU runner the inputs have to be built there too.
+        device = next(trainer.model.parameters()).device
+        batch_size, prompt_len, completion_len = 2, 3, 6
+        prompt_ids = torch.randint(1, 1000, (batch_size, prompt_len), device=device)
+        prompt_mask = torch.ones(batch_size, prompt_len, dtype=torch.long, device=device)
+        completion_ids = torch.randint(1, 1000, (batch_size, completion_len), device=device)
+        completion_mask = torch.ones(batch_size, completion_len, dtype=torch.long, device=device)
+        with torch.no_grad():
+            baseline_logps, _, _ = trainer._get_per_token_logps_and_entropies(
+                trainer.model,
+                torch.cat([prompt_ids, completion_ids], dim=1),
+                torch.cat([prompt_mask, completion_mask], dim=1),
+                completion_len,
+            )
+        inputs = {
+            "prompt_ids": prompt_ids,
+            "prompt_mask": prompt_mask,
+            "completion_ids": completion_ids,
+            "completion_mask": completion_mask,
+            "advantages": torch.tensor([1.0, -1.0], device=device),
+            "old_per_token_logps": baseline_logps,
+            "ref_per_token_logps": baseline_logps,
+            # The default loss_type ("dapo") normalizes by this, built here the way _generate_and_score_completions
+            # builds it: the number of unmasked completion tokens in the batch.
+            "num_items_in_batch": completion_mask.sum(),
+        }
+        return trainer, inputs
+
+    @staticmethod
+    def _exp_ceiling(dtype):
+        # Largest log-ratio whose exponential is still representable in `dtype`. Derived rather than hardcoded: the
+        # threshold is ~88.7 for float32, ~88.7 for bfloat16 and ~11.1 for float16, so a literal would be wrong for
+        # whichever dtype the test does not run under.
+        return math.log(torch.finfo(dtype).max)
+
+    def test_kl_log_ratio_clip_tames_overflow(self):
+        # Regression test for #3015: when the policy drifts far below the reference, `kl_log_ratio` grows large and
+        # positive and the K3 estimator `exp(kl_log_ratio) - kl_log_ratio - 1` overflows to `inf`. Clipping must
+        # bring the loss back to a finite value.
+        trainer, inputs = self._kl_clip_setup()
+        ceiling = self._exp_ceiling(inputs["ref_per_token_logps"].dtype)
+        inputs["ref_per_token_logps"] = inputs["ref_per_token_logps"] + (ceiling + 1.0)
+
+        trainer.args.kl_log_ratio_clip = None
+        assert not torch.isfinite(trainer._compute_loss(trainer.model, inputs)), (
+            "expected the unclipped K3 estimator to overflow on a log-ratio above the dtype's exp ceiling"
+        )
+
+        trainer.args.kl_log_ratio_clip = 10.0
+        assert torch.isfinite(trainer._compute_loss(trainer.model, inputs)), (
+            "kl_log_ratio_clip did not tame the overflow"
+        )
+
+    def test_kl_log_ratio_clip_above_dtype_ceiling_raises(self):
+        # A clip whose own exponential overflows cannot keep the KL term finite, so it is rejected instead of
+        # silently producing `inf`.
+        trainer, inputs = self._kl_clip_setup()
+        ceiling = self._exp_ceiling(inputs["ref_per_token_logps"].dtype)
+        trainer.args.kl_log_ratio_clip = ceiling + 1.0
+
+        with pytest.raises(ValueError, match="is too large for"):
+            trainer._compute_loss(trainer.model, inputs)
+
+    def test_kl_log_ratio_clip_leaves_large_negative_log_ratio_intact(self):
+        # `exp` cannot overflow for a large negative log-ratio, it underflows to zero and leaves K3 finite and
+        # growing as `-kl_log_ratio - 1`. Clipping that side would shrink an already correct estimate, so the clip
+        # is one-sided and the loss must not depend on it here.
+        trainer, inputs = self._kl_clip_setup()
+        inputs["ref_per_token_logps"] = inputs["ref_per_token_logps"] - 50.0
+
+        trainer.args.kl_log_ratio_clip = None
+        unclipped = trainer._compute_loss(trainer.model, inputs)
+        trainer.args.kl_log_ratio_clip = 10.0
+        clipped = trainer._compute_loss(trainer.model, inputs)
+
+        torch.testing.assert_close(clipped, unclipped)
+
+    def test_kl_log_ratio_clip_does_not_bind_normally_scaled_log_ratios(self):
+        # The clip only bounds the log-ratio from above, so a clip far outside the data's range is a no-op.
+        trainer, inputs = self._kl_clip_setup()
+        inputs["ref_per_token_logps"] = inputs["ref_per_token_logps"] + 0.05
+
+        trainer.args.kl_log_ratio_clip = None
+        unclipped = trainer._compute_loss(trainer.model, inputs)
+        trainer.args.kl_log_ratio_clip = 10.0
+        clipped = trainer._compute_loss(trainer.model, inputs)
+
+        torch.testing.assert_close(clipped, unclipped)
+        # The field exists, defaults to no clipping, and is settable.
+        assert GRPOConfig(output_dir=self.tmp_dir).kl_log_ratio_clip is None
+        assert GRPOConfig(output_dir=self.tmp_dir, kl_log_ratio_clip=10.0).kl_log_ratio_clip == 10.0
+
+    @pytest.mark.parametrize("use_bias_correction_kl", [True, False])
+    def test_kl_log_ratio_clip_keeps_the_gradient_toward_the_reference(self, use_bias_correction_kl):
+        # A clipped token must still pull the policy back toward the reference. With a plain clamp the K3 term
+        # loses its slope, and with the bias correction the surviving `K3(clip) * ratio` pushes the policy the other
+        # way (the ratio's gradient rewards a lower log-prob). The clip is straight-through, so the gradient of the
+        # loss with respect to the clipped token's log-prob has to stay negative: raising the log-prob lowers the loss.
+        trainer, inputs = self._kl_clip_setup()
+        trainer.args.use_bias_correction_kl = use_bias_correction_kl
+        trainer.args.kl_log_ratio_clip = 10.0
+        inputs["advantages"] = torch.zeros_like(inputs["advantages"])  # keep only the KL term in the loss
+        inputs["ref_per_token_logps"] = inputs["ref_per_token_logps"] + 20.0  # every token sits above the clip
+        # Hand the loss a leaf log-prob tensor in place of the model's, so its gradient is what the KL term sees. The
+        # loss also logs the entropies it asked for, so hand it zeros of the same shape.
+        per_token_logps = inputs["old_per_token_logps"].clone().requires_grad_(True)
+        entropies = torch.zeros_like(per_token_logps)
+        with patch.object(
+            trainer, "_get_per_token_logps_and_entropies", return_value=(per_token_logps, entropies, None)
+        ):
+            loss = trainer._compute_loss(trainer.model, inputs)
+        loss.backward()
+
+        assert torch.isfinite(loss)
+        assert (per_token_logps.grad < 0).all(), (
+            "the clipped KL term pushes the policy away from the reference: "
+            f"d(loss)/d(log-prob) = {per_token_logps.grad.flatten().tolist()}"
+        )
+
+    def test_kl_log_ratio_clip_keeps_the_kl_term_non_negative(self):
+        # With zero advantages the loss is `beta` times the mean K3 term, which is non-negative by construction
+        # (`exp(x) - x - 1 >= 0`); a clipped `x` must keep it that way, and finite.
+        trainer, inputs = self._kl_clip_setup()
+        trainer.args.kl_log_ratio_clip = 10.0
+        inputs["advantages"] = torch.zeros_like(inputs["advantages"])
+        inputs["ref_per_token_logps"] = inputs["ref_per_token_logps"] + 20.0
+
+        loss = trainer._compute_loss(trainer.model, inputs)
+
+        assert torch.isfinite(loss) and loss > 0
+
+    @pytest.mark.parametrize("value", [0.0, -1.0, float("-inf"), float("inf"), float("nan")])
+    def test_kl_log_ratio_clip_rejects_non_positive_or_non_finite_values(self, value):
+        # A non-positive clip invents KL at an exact match, and a non-finite one either disables the clip or brings
+        # back the `inf` it exists to prevent, which the trainer's overflow guard does not catch for `-inf`.
+        with pytest.raises(ValueError, match="kl_log_ratio_clip"):
+            GRPOConfig(output_dir=self.tmp_dir, kl_log_ratio_clip=value)
 
     @pytest.mark.parametrize(
         "model_id",
@@ -1003,6 +1157,28 @@ class TestGRPOTrainer(TrlTestCase):
                 args=training_args,
                 train_dataset=dataset,
                 peft_config=PromptTuningConfig(task_type=TaskType.CAUSAL_LM, num_virtual_tokens=8),
+            )
+
+    @require_liger_kernel
+    def test_liger_kernel_with_kl_log_ratio_clip_raises(self):
+        # `kl_log_ratio_clip` is applied only in the manual `_compute_loss` path; the Liger fused loss computes the KL
+        # internally and can't receive the clip, so the trainer must fail fast rather than silently ignore the guard
+        # against `inf` overflow (issue #3015).
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="float32")
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            use_liger_kernel=True,
+            beta=0.1,  # non-zero so the KL term (and thus the clip) is active
+            kl_log_ratio_clip=20.0,
+            report_to="none",
+        )
+        with pytest.raises(NotImplementedError, match="kl_log_ratio_clip"):
+            GRPOTrainer(
+                model=model,
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
             )
 
     @require_peft

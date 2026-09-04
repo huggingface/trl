@@ -1033,6 +1033,13 @@ class GRPOTrainer(_BaseTrainer):
                 raise ImportError(
                     "Liger is required to use `use_liger_kernel` as the GRPO loss. Run `pip install liger-kernel`."
                 )
+            if self.beta != 0.0 and args.kl_log_ratio_clip is not None:
+                raise NotImplementedError(
+                    "`kl_log_ratio_clip` is not supported with `use_liger_kernel=True`: the Liger fused GRPO loss "
+                    "computes the KL penalty internally and does not apply the clip, so the guard against `inf` "
+                    "overflow (issue #3015) would not take effect. Set `use_liger_kernel=False` to use "
+                    "`kl_log_ratio_clip`."
+                )
             # Redirect the model.module forward to the model forward to ensure pre-forward hooks are called, so that
             # under ZeRO-3 the parameter coordinator gathers/reduces `lm_head.weight` around the fused loss.
             self._forward_redirection = _ForwardRedirection()
@@ -3186,9 +3193,27 @@ class GRPOTrainer(_BaseTrainer):
         # Compute the KL divergence between the model and the reference model
         if self.beta != 0.0:
             ref_per_token_logps = inputs["ref_per_token_logps"]
-            per_token_kl = (
-                torch.exp(ref_per_token_logps - per_token_logps) - (ref_per_token_logps - per_token_logps) - 1
-            )
+            kl_log_ratio = ref_per_token_logps - per_token_logps
+            # Clip the log-ratio before the exponential so the K3 estimator stays finite when the policy and
+            # reference distributions drift far apart (issue #3015). Only a large positive log-ratio overflows
+            # `exp`; a large negative one underflows to zero and leaves K3 finite, so clamping that side would
+            # shrink an already correct estimate. A clip whose own exponential overflows the working dtype cannot
+            # keep the term finite, so reject it instead of returning `inf`. No-op when the clip is None.
+            # The clip is straight-through: the value is clamped but the gradient passes as if it were not, so a
+            # clipped token still pulls the policy back toward the reference with the slope at the clip. A plain clamp
+            # would zero that slope, and with the bias correction below the term would then reduce to
+            # `K3(clip) * ratio`, whose gradient pushes the policy further away from the reference.
+            if self.args.kl_log_ratio_clip is not None:
+                clip = torch.tensor(self.args.kl_log_ratio_clip, dtype=kl_log_ratio.dtype, device=kl_log_ratio.device)
+                if not torch.isfinite(torch.exp(clip)):
+                    raise ValueError(
+                        f"`kl_log_ratio_clip={self.args.kl_log_ratio_clip}` is too large for {kl_log_ratio.dtype}: "
+                        f"`torch.exp` overflows to `inf` at that value, so the clip cannot keep the KL term finite. "
+                        f"Lower it until `torch.exp(torch.tensor(kl_log_ratio_clip, dtype={kl_log_ratio.dtype}))` "
+                        f"is finite."
+                    )
+                kl_log_ratio = kl_log_ratio + (kl_log_ratio.clamp(max=clip) - kl_log_ratio).detach()
+            per_token_kl = torch.exp(kl_log_ratio) - kl_log_ratio - 1
             # Importance sampling correction for the KL divergence
             if self.args.use_bias_correction_kl:
                 per_token_kl = per_token_kl * coef_1

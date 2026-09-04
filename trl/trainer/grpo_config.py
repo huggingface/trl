@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import math
 import warnings
 from dataclasses import dataclass, field
 from typing import Any
@@ -361,6 +362,15 @@ class GRPOConfig(_BaseConfig):
             including on-policy: the ratio is differentiable, so it affects the gradient even where its value is
             exactly 1. The unbiased reverse-KL property holds for `importance_sampling_level="token"`; with
             `"sequence"` a sequence-level weight is broadcast onto the per-token KL.
+        kl_log_ratio_clip (`float`, *optional*):
+            Upper-bounds the log-ratio `log(pi_ref / pi_theta)` before the exponential in the K3 KL estimator, so that
+            a policy drifting far below the reference cannot overflow `torch.exp` to `inf` (see issue #3015). Only the
+            upper side is clipped: a large negative log-ratio underflows to zero and leaves the estimator finite, so
+            clipping it would shrink a correct value. The clip is straight-through, so a clipped token keeps a gradient
+            toward the reference. If `None` (default), no clipping is applied and the estimator is unchanged. Must be
+            positive and finite, and small enough that `torch.exp` of it is representable in the dtype the log-probs
+            are computed in, which is roughly 11 for float16 and 88 for bfloat16 and float32; a larger value raises
+            `ValueError` rather than silently returning `inf`.
 
         > Parameters that control the logging
 
@@ -973,6 +983,20 @@ class GRPOConfig(_BaseConfig):
             "'sequence' a sequence-level weight is broadcast onto the per-token KL."
         },
     )
+    kl_log_ratio_clip: float | None = field(
+        default=None,
+        metadata={
+            "help": "Upper-bounds the log-ratio `log(pi_ref / pi_theta)` before the exponential in the K3 KL "
+            "estimator, so that a policy drifting far below the reference cannot overflow `torch.exp` to `inf` "
+            "(see issue #3015). Only the upper side is clipped: a large negative log-ratio underflows to zero "
+            "and leaves the estimator finite, so clipping it would shrink a correct value. The clip is "
+            "straight-through, so a clipped token keeps a gradient toward the reference. If `None` (default), "
+            "no clipping is applied and the estimator is unchanged. Must be positive and finite, and small enough "
+            "that `torch.exp` of it is representable in the dtype the log-probs are computed in, which is roughly "
+            "11 for float16 and 88 for bfloat16 and float32; a larger value raises `ValueError` rather than "
+            "silently returning `inf`."
+        },
+    )
 
     # Parameters that control the logging
     log_completions: bool = field(
@@ -1124,6 +1148,14 @@ class GRPOConfig(_BaseConfig):
                 "GRPO requires at least 2 generations per prompt to calculate the advantages. You provided "
                 f"{self.num_generations}, which is less than the minimum required."
             )
+
+        # A non-positive clip would invent KL where the policy matches the reference (`x = 0` clamped to a negative
+        # value gives `K3 > 0`), and a non-finite one either disables the clip or reintroduces the `inf` it exists
+        # to prevent; the trainer's own overflow guard only catches values whose exponential overflows.
+        if self.kl_log_ratio_clip is not None and not (
+            math.isfinite(self.kl_log_ratio_clip) and self.kl_log_ratio_clip > 0.0
+        ):
+            raise ValueError(f"`kl_log_ratio_clip` must be a positive finite number, got {self.kl_log_ratio_clip}.")
 
         if self.vllm_importance_sampling_cap is not None:
             warnings.warn(
