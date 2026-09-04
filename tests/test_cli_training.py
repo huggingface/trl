@@ -31,3 +31,18 @@ def test_cli_accelerate_config_overrides_config_file(tmp_path):
     assert Path(launch_args[1]).name == "zero3.yaml"
     assert "--accelerate_config" not in launch_args
     assert mock_launch.call_args.kwargs["training_script_args"] == ["--config", str(config_path)]
+
+
+def test_cli_accelerate_config_from_config_file(tmp_path):
+    """A YAML-only Accelerate config must still reach the launcher."""
+    from trl.cli import main
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("accelerate_config: zero2\n")
+
+    with patch("trl.cli.accelerate_launcher.launch_training_script") as mock_launch:
+        main(["sft", "--config", str(config_path)])
+
+    mock_launch.assert_called_once()
+    launch_args = mock_launch.call_args.kwargs["launch_args"]
+    assert Path(launch_args[1]).name == "zero2.yaml"
