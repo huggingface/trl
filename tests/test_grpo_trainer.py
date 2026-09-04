@@ -2739,6 +2739,118 @@ class TestGRPOTrainer(TrlTestCase):
         expected_warning = "weights each sequence by its completion length"
         assert (expected_warning in caplog.text) == (loss_type != "grpo")
 
+    @pytest.mark.parametrize(
+        ("top_p", "top_k", "min_p", "repetition_penalty", "should_warn"),
+        [
+            (1.0, 0, None, 1.0, False),  # defaults: nothing reshapes the logits, only the real mismatch remains
+            (0.9, 0, None, 1.0, True),
+            (1.0, 50, None, 1.0, True),
+            (1.0, 0, 0.05, 1.0, True),
+            (0.9, 50, 0.05, 1.0, True),
+            (1.0, 0, None, 1.2, True),  # penalties reach the returned logprobs too, so they bias the ratio
+        ],
+    )
+    def test_warning_raised_truncated_sampling_with_importance_sampling_correction(
+        self, top_p, top_k, min_p, repetition_penalty, should_warn
+    ):
+        """Reshaped sampling biases the vLLM importance-sampling ratio.
+
+        vLLM returns logprobs renormalized over the surviving support while the trainer takes a full-vocab log-softmax,
+        so their difference carries `log S`, the log of the mass that survives truncation, on top of the
+        train/inference mismatch the correction is meant to measure. `repetition_penalty` reaches the same returned
+        logprobs because penalties are applied before the sampler computes them. Warn instead of correcting silently.
+        """
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            GRPOConfig(
+                output_dir=self.tmp_dir,
+                use_vllm=True,
+                vllm_importance_sampling_correction=True,
+                top_p=top_p,
+                top_k=top_k,
+                min_p=min_p,
+                repetition_penalty=repetition_penalty,
+                report_to="none",
+            )
+
+        messages = [str(w.message) for w in caught]
+        assert any("biases `sampling/sampling_logp_difference`" in m for m in messages) == should_warn
+
+    @pytest.mark.parametrize(
+        ("field_kwargs", "generation_kwargs", "should_warn"),
+        [
+            ({}, {"top_p": 0.9}, True),  # the override alone reshapes: the field says 1.0, vLLM samples at 0.9
+            ({"top_p": 0.9}, {"top_p": 1.0}, False),  # the override restores the default, so nothing reshapes
+            ({}, {"temperature": 0.5}, True),  # vLLM samples at 0.5 while the trainer divides by 1.0
+            ({}, {"temperature": 1.0}, False),  # same value on both sides, the cancellation holds
+            ({"temperature": 0.5}, {}, False),  # the field alone moves both sides, so nothing to warn about
+            ({"temperature": 0.5}, {"temperature": 0.5}, False),  # an override equal to the field is no override
+            ({"temperature": 0.001}, {}, True),  # vLLM raises it to 0.01 while the trainer divides by 0.001
+            ({}, {"temperature": 0.005}, True),  # the same band reached through the override
+            ({"temperature": 0.01}, {}, False),  # vLLM's floor itself is sampled as requested
+        ],
+    )
+    def test_warning_reads_generation_kwargs_overrides(self, field_kwargs, generation_kwargs, should_warn):
+        """`generation_kwargs` is merged over the sampling fields when the request is built, so it decides what vLLM
+        actually samples with; the check has to read the effective value, not the field."""
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            GRPOConfig(
+                output_dir=self.tmp_dir,
+                use_vllm=True,
+                vllm_importance_sampling_correction=True,
+                generation_kwargs=generation_kwargs,
+                report_to="none",
+                **field_kwargs,
+            )
+
+        messages = [str(w.message) for w in caught]
+        assert any("biases `sampling/sampling_logp_difference`" in m for m in messages) == should_warn
+
+    def test_warning_raised_for_off_policy_mask_without_importance_sampling_correction(self):
+        """The off-policy mask reads the same vLLM logprobs, so it is biased even with the correction turned off."""
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            GRPOConfig(
+                output_dir=self.tmp_dir,
+                use_vllm=True,
+                vllm_importance_sampling_correction=False,
+                off_policy_mask_threshold=0.1,
+                top_p=0.9,
+                report_to="none",
+            )
+
+        assert any("biases `sampling/sampling_logp_difference`" in str(w.message) for w in caught)
+
+    def test_no_truncation_warning_when_nothing_consumes_vllm_logprobs(self):
+        """With the correction off and no off-policy mask nothing reads vLLM's logprobs, so truncation must stay silent."""
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            GRPOConfig(
+                output_dir=self.tmp_dir,
+                use_vllm=True,
+                vllm_importance_sampling_correction=False,
+                top_p=0.9,
+                report_to="none",
+            )
+
+        assert not any("biases `sampling/sampling_logp_difference`" in str(w.message) for w in caught)
+
+    def test_no_truncation_warning_without_vllm(self):
+        """Without vLLM there are no returned logprobs to bias, whatever the consumers say."""
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            GRPOConfig(
+                output_dir=self.tmp_dir,
+                use_vllm=False,
+                vllm_importance_sampling_correction=True,
+                off_policy_mask_threshold=0.1,
+                top_p=0.9,
+                report_to="none",
+            )
+
+        assert not any("biases `sampling/sampling_logp_difference`" in str(w.message) for w in caught)
+
     def test_train_num_generations_larger_than_batch_size(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 

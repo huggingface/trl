@@ -88,7 +88,9 @@ class GRPOConfig(_BaseConfig):
             Number of steps per generation. If `None`, it defaults to `gradient_accumulation_steps`. Mutually exclusive
             with `generation_batch_size`.
         temperature (`float`, defaults to `1.0`):
-            Temperature for sampling. The higher the temperature, the more random the completions.
+            Temperature for sampling. The higher the temperature, the more random the completions. With vLLM, any
+            positive value below `0.01` is raised to `0.01` by vLLM while the trainer keeps the requested value, which
+            biases the importance-sampling ratio, so a warning is raised for it.
         top_p (`float`, *optional*, defaults to `1.0`):
             Float that controls the cumulative probability of the top tokens to consider. Must be in (0, 1]. Set to
             `1.0` to consider all tokens.
@@ -102,7 +104,11 @@ class GRPOConfig(_BaseConfig):
             Additional keyword arguments to pass to [`~transformers.GenerationConfig`] (if using transformers) or
             `SamplingParams` (if using vLLM) when sampling completions. This can be used to further customize the
             generation behavior, such as setting `suppress_tokens`, `num_beams`, etc. If it contains keys that conflict
-            with the other generation parameters (like `min_p`, `top_p`, etc.), they will override them.
+            with the other generation parameters (like `min_p`, `top_p`, etc.), they will override them. With vLLM, any
+            sampler-side modifier passed here (`logit_bias`, `bad_words`, `frequency_penalty`, ...) reshapes the logits
+            vLLM computes its logprobs from and biases `sampling/sampling_logp_difference` the same way `top_p` does;
+            only `top_p`, `top_k`, `min_p`, `repetition_penalty` and a `temperature` override are checked for it. A
+            `rollout_func` replaces generation entirely, so its sampling settings are not checked either.
         chat_template_kwargs (`dict[str, Any]`, *optional*):
             Additional keyword arguments to pass to the `apply_chat_template` function when generating completions.
         repetition_penalty (`float`, *optional*, defaults to `1.0`):
@@ -524,7 +530,11 @@ class GRPOConfig(_BaseConfig):
     )
     temperature: float = field(
         default=1.0,
-        metadata={"help": "Temperature for sampling. The higher the temperature, the more random the completions."},
+        metadata={
+            "help": "Temperature for sampling. The higher the temperature, the more random the completions. With "
+            "vLLM, any positive value below 0.01 is raised to 0.01 by vLLM while the trainer keeps the requested "
+            "value, which biases the importance-sampling ratio, so a warning is raised for it."
+        },
     )
     top_p: float = field(
         default=1.0,
@@ -553,7 +563,12 @@ class GRPOConfig(_BaseConfig):
             "help": "Additional keyword arguments to pass to `GenerationConfig` (if using transformers) or "
             "`SamplingParams` (if using vLLM) when sampling completions. This can be used to further customize the "
             "generation behavior, such as setting `suppress_tokens`, `num_beams`, etc. If it contains keys that "
-            "conflict with the other generation parameters (like `min_p`, `top_p`, etc.), they will override them."
+            "conflict with the other generation parameters (like `min_p`, `top_p`, etc.), they will override them. "
+            "With vLLM, any sampler-side modifier passed here (`logit_bias`, `bad_words`, `frequency_penalty`, ...) "
+            "reshapes the logits vLLM computes its logprobs from and biases `sampling/sampling_logp_difference` the "
+            "same way `top_p` does; only `top_p`, `top_k`, `min_p`, `repetition_penalty` and a `temperature` override "
+            "are checked for it. A `rollout_func` replaces generation entirely, so its sampling settings are not "
+            "checked either."
         },
     )
     chat_template_kwargs: dict | str | None = field(
@@ -1133,6 +1148,76 @@ class GRPOConfig(_BaseConfig):
                 stacklevel=2,
             )
             self.vllm_importance_sampling_clip_max = self.vllm_importance_sampling_cap
+
+        # The trainer always asks vLLM for the logprobs of the sampled tokens; two paths consume them: the importance
+        # sampling correction and the off-policy mask, which reads `sampling_per_token_logps` whenever
+        # `off_policy_mask_threshold` is set, correction or not.
+        consumes_vllm_logprobs = self.use_vllm and (
+            self.vllm_importance_sampling_correction or self.off_policy_mask_threshold is not None
+        )
+        if consumes_vllm_logprobs:
+            # vLLM is asked for `processed_logprobs`, which the sampler computes after it has reshaped the logits,
+            # while the trainer takes a full-vocab log-softmax of the unreshaped ones. Their difference therefore
+            # carries that reshaping on top of the train/inference mismatch the correction exists to measure.
+            # top_p/top_k/min_p renormalize over the surviving support, so the difference picks up log(S) where S is
+            # the surviving mass. For top_p that mass is the smallest set of top tokens reaching top_p, so S is at
+            # least top_p and depends on the distribution; measured on one H100 with a peaked model,
+            # `sampling/sampling_logp_difference/mean` read 0.105 at top_p=0.9 and 0.223 at top_p=0.8 against 0.001 at
+            # top_p=1.0. `repetition_penalty` is applied by the same sampler pass, before those logprobs are computed,
+            # so it biases them too. `temperature` cancels as long as vLLM samples at the trainer's value: the trainer
+            # divides its own logits by it. A `generation_kwargs` override of `temperature` breaks that, so it is
+            # checked, and so is any positive value below 0.01, which vLLM raises to 0.01 (`_MAX_TEMP` in its
+            # `SamplingParams`) while the trainer still divides by the configured value.
+            # `generation_kwargs` is merged over these fields when the request is built, so the effective values are
+            # what vLLM sees. Limits: `top_k` at or above the vocabulary size is disabled by vLLM but still warns here,
+            # since the config does not know the vocabulary size; other sampler-side modifiers passed through
+            # `generation_kwargs` (`logit_bias`, `bad_words`, `frequency_penalty`, ...) reshape the logits the same way
+            # but are not checked; a `rollout_func` replaces generation entirely, so its settings are not seen here;
+            # and subclass configs inherit the check although the replay-buffer trainer stores no sampling logprobs
+            # when the correction is off and the GSPO-token trainer has no off-policy mask, so with the correction off
+            # the warning is spurious there.
+            overrides = self.generation_kwargs or {}
+            effective = {
+                name: overrides.get(name, value)
+                for name, value in (
+                    ("top_p", self.top_p),
+                    ("top_k", self.top_k),
+                    ("min_p", self.min_p),
+                    ("repetition_penalty", self.repetition_penalty),
+                    ("temperature", self.temperature),
+                )
+            }
+            biasing = [
+                name
+                for name, active in (
+                    ("top_p", effective["top_p"] < 1.0),
+                    ("top_k", effective["top_k"] > 0),
+                    ("min_p", effective["min_p"] is not None and effective["min_p"] > 0.0),
+                    ("repetition_penalty", effective["repetition_penalty"] != 1.0),
+                    (
+                        "temperature",
+                        effective["temperature"] != self.temperature or 0.0 < effective["temperature"] < 0.01,
+                    ),
+                )
+                if active
+            ]
+            if biasing:
+                quoted = [f"`{name}`" for name in biasing]
+                names = quoted[0] if len(quoted) == 1 else ", ".join(quoted[:-1]) + " and " + quoted[-1]
+                warnings.warn(
+                    f"Setting {names} (through the config field or a `generation_kwargs` override) biases "
+                    "`sampling/sampling_logp_difference` and what is derived from it, the importance-sampling ratio "
+                    "and the off-policy mask: vLLM computes the logprobs it returns after the sampler has applied "
+                    "these settings, while the trainer normalizes over the full vocabulary and divides by the "
+                    "configured `temperature` only, so their difference includes that reshaping rather than the "
+                    "train/inference mismatch alone. Keep the sampling defaults (`top_p=1.0`, `top_k=0`, "
+                    "`min_p=None`, `repetition_penalty=1.0`, `temperature` not overridden and not below 0.01) until "
+                    "the correction accounts for it, or disable both consumers with "
+                    "`vllm_importance_sampling_correction=False` and "
+                    "`off_policy_mask_threshold=None`. See https://github.com/huggingface/trl/issues/6789.",
+                    UserWarning,
+                    stacklevel=3,
+                )
 
         if (
             self.vllm_importance_sampling_clip_min is not None
