@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import importlib
 
 import pytest
 import torch
@@ -21,7 +22,7 @@ from transformers.utils import is_peft_available
 
 from trl.experimental.sdft import SDFTConfig, SDFTTrainer
 
-from ..testing_utils import TrlTestCase, require_peft, require_torch_accelerator
+from ..testing_utils import TrlTestCase, require_liger_kernel, require_peft, require_torch_accelerator
 
 
 if is_peft_available():
@@ -62,6 +63,10 @@ class RecordingTeacherClient:
 
 
 class TestSDFTTrainer(TrlTestCase):
+    def teardown_method(self):
+        if hasattr(self, "_liger_module"):
+            importlib.reload(importlib.import_module(self._liger_module))
+
     @staticmethod
     def _trainable_param_snapshot(model):
         return {name: param.detach().clone() for name, param in model.named_parameters() if param.requires_grad}
@@ -165,8 +170,9 @@ class TestSDFTTrainer(TrlTestCase):
         else:
             assert trainer.eval_dataset is eval_dataset
 
+    @require_liger_kernel
     @require_torch_accelerator
-    def test_fused_loss_matches_non_fused_loss(self):
+    def test_liger_loss_matches_non_liger_loss(self):
         dataset = Dataset.from_dict({"prompt": ["Solve 2+2."], "privileged_context": ["Example answer: 4."]})
         common = dict(
             output_dir=self.tmp_dir,
@@ -181,21 +187,22 @@ class TestSDFTTrainer(TrlTestCase):
 
         ref_trainer = SDFTTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            args=SDFTConfig(use_fused_linear_loss=False, **common),
+            args=SDFTConfig(use_liger_kernel=False, **common),
             train_dataset=dataset,
         )
-        fused_trainer = SDFTTrainer(
+        liger_trainer = SDFTTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            args=SDFTConfig(use_fused_linear_loss=True, **common),
+            args=SDFTConfig(use_liger_kernel=True, **common),
             train_dataset=dataset,
         )
+        self._liger_module = liger_trainer.model.__module__
 
-        fused_trainer.model.load_state_dict(ref_trainer.model.state_dict())
+        liger_trainer.model.load_state_dict(ref_trainer.model.state_dict())
         torch.manual_seed(0)
         with torch.no_grad():
             for param in ref_trainer.teacher_model.parameters():
                 param.add_(0.5 * torch.randn_like(param))
-        fused_trainer.teacher_model.load_state_dict(ref_trainer.teacher_model.state_dict())
+        liger_trainer.teacher_model.load_state_dict(ref_trainer.teacher_model.state_dict())
 
         device = next(ref_trainer.model.parameters()).device
         batch = {
@@ -208,13 +215,13 @@ class TestSDFTTrainer(TrlTestCase):
         }
 
         ref_trainer.model.eval()
-        fused_trainer.model.eval()
+        liger_trainer.model.eval()
         with torch.no_grad():
             ref_loss = ref_trainer.compute_loss(ref_trainer.model, batch).item()
-            fused_loss = fused_trainer.compute_loss(fused_trainer.model, batch).item()
+            liger_loss = liger_trainer.compute_loss(liger_trainer.model, batch).item()
 
         torch.testing.assert_close(
-            torch.tensor(fused_loss),
+            torch.tensor(liger_loss),
             torch.tensor(ref_loss),
             rtol=2e-2,
             atol=1e-6,

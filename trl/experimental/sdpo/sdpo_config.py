@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import warnings
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -150,11 +149,6 @@ class SDPOConfig(_BaseConfig):
             Maximum length of the generated completion.
         temperature (`float`, *optional*, defaults to `1.0`):
             Temperature for sampling. The higher the temperature, the more random the completions.
-        use_fused_linear_loss (`bool`, *optional*, defaults to `False`):
-            Whether to compute the loss with the fused linear JSD loss: the `lm_head` projection and the loss are
-            computed together, one chunk of sequences at a time, so the full `(batch_size, seq_len, vocab_size)` logits
-            are never materialized. This reduces peak memory for large vocabularies. Setting `use_liger_kernel=True`
-            also enables it, which is deprecated.
         top_p (`float`, *optional*, defaults to `1.0`):
             Float that controls the cumulative probability of the top tokens to consider. Must be in (0, 1]. Set to 1.0
             to consider all tokens.
@@ -329,15 +323,6 @@ class SDPOConfig(_BaseConfig):
     temperature: float = field(
         default=1.0,
         metadata={"help": "Temperature for sampling. The higher the temperature, the more random the completions."},
-    )
-    use_fused_linear_loss: bool = field(
-        default=False,
-        metadata={
-            "help": "Whether to compute the loss with the fused linear JSD loss: the `lm_head` projection and the "
-            "loss are computed together, one chunk of sequences at a time, so the full `(batch_size, seq_len, "
-            "vocab_size)` logits are never materialized. This reduces peak memory for large vocabularies. Setting "
-            "`use_liger_kernel=True` also enables it, which is deprecated."
-        },
     )
     top_p: float = field(
         default=1.0,
@@ -617,15 +602,6 @@ class SDPOConfig(_BaseConfig):
 
     def __post_init__(self):
         super().__post_init__()
-
-        if self.use_liger_kernel and not self.use_fused_linear_loss:
-            warnings.warn(
-                "Enabling the fused linear loss via `use_liger_kernel=True` is deprecated and will be removed in "
-                "v2.0.0. Set `use_fused_linear_loss=True` instead.",
-                FutureWarning,
-                stacklevel=3,
-            )
-            self.use_fused_linear_loss = True
         if not 0.0 <= self.distillation_weight <= 1.0:
             raise ValueError(f"`distillation_weight` must be in [0, 1], got {self.distillation_weight}.")
         if self.distillation_mode == "sampled_token" and self.distillation_alpha != 1.0:

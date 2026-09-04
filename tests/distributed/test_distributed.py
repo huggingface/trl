@@ -21,7 +21,7 @@ import torch
 import transformers
 from packaging.version import Version
 
-from ..testing_utils import TrlTestCase, require_torch_multi_accelerator
+from ..testing_utils import TrlTestCase, require_liger_kernel, require_torch_multi_accelerator
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -187,6 +187,7 @@ class TestDistributed(TrlTestCase):
         )
         # fmt: on
 
+    @require_liger_kernel
     @pytest.mark.parametrize(
         "config",
         [
@@ -208,14 +209,14 @@ class TestDistributed(TrlTestCase):
             pytest.param(
                 "fsdp2",
                 marks=pytest.mark.xfail(
-                    reason="fused linear DPO loss reads `lm_head.weight` and runs the backbone directly, which is "
+                    reason="Liger DPO loss reads `lm_head.weight` and runs the backbone directly, which is "
                     "incompatible with FSDP2's DTensor-sharded parameters (mixed Tensor/DTensor ops).",
                     strict=True,
                 ),
             ),
         ],
     )
-    def test_dpo_fused_linear_loss(self, config, get_config_path):
+    def test_dpo_liger(self, config, get_config_path):
         # fmt: off
         run_command(
             [
@@ -224,12 +225,13 @@ class TestDistributed(TrlTestCase):
                 "--model_name_or_path", "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
                 "--dataset_name", "trl-internal-testing/zen",
                 "--dataset_config", "standard_preference",
-                "--use_fused_linear_loss",
+                "--use_liger_kernel",
             ],
             os.environ.copy(),
         )
         # fmt: on
 
+    @require_liger_kernel
     @pytest.mark.parametrize(
         "config",
         [
@@ -251,14 +253,14 @@ class TestDistributed(TrlTestCase):
             pytest.param(
                 "fsdp2",
                 marks=pytest.mark.xfail(
-                    reason="fused linear KTO loss reads `lm_head.weight` and runs the backbone directly, which is "
+                    reason="Liger KTO loss reads `lm_head.weight` and runs the backbone directly, which is "
                     "incompatible with FSDP2's DTensor-sharded parameters (mixed Tensor/DTensor ops).",
                     strict=True,
                 ),
             ),
         ],
     )
-    def test_kto_fused_linear_loss(self, config, get_config_path):
+    def test_kto_liger(self, config, get_config_path):
         # fmt: off
         run_command(
             [
@@ -267,7 +269,7 @@ class TestDistributed(TrlTestCase):
                 "--model_name_or_path", "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
                 "--dataset_name", "trl-internal-testing/zen",
                 "--dataset_config", "standard_unpaired_preference",
-                "--use_fused_linear_loss",
+                "--use_liger_kernel",
             ],
             os.environ.copy(),
         )
@@ -463,6 +465,7 @@ class TestDistributed(TrlTestCase):
         )
         # fmt: on
 
+    @require_liger_kernel
     @pytest.mark.parametrize(
         "config",
         [
@@ -485,7 +488,7 @@ class TestDistributed(TrlTestCase):
             "fsdp2",
         ],
     )
-    def test_grpo_fused_linear_loss(self, config, get_config_path):
+    def test_grpo_liger(self, config, get_config_path):
         # fmt: off
         run_command(
             [
@@ -495,7 +498,7 @@ class TestDistributed(TrlTestCase):
                 "--dataset_name", "trl-internal-testing/zen",
                 "--dataset_config", "conversational_prompt_only",
                 "--reward_model_name_or_path", "trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
-                "--use_fused_linear_loss",
+                "--use_liger_kernel",
             ],
             os.environ.copy(),
         )

@@ -150,7 +150,7 @@ While training and evaluating, we record the following metrics:
 Some argument combinations are intentionally restricted in the current [`DPOTrainer`] implementation:
 
 * `use_weighting=True` is not supported with `loss_type="aot"` or `loss_type="aot_unpaired"`.
-* With `use_fused_linear_loss=True`:
+* With `use_liger_kernel=True`:
   * only a single `loss_type` is supported,
   * `compute_metrics` is not supported,
   * `precompute_ref_log_probs=True` is not supported.
@@ -237,9 +237,9 @@ trainer.train()
 > DPOConfig(learning_rate=1e-5, ...)
 > ```
 
-### Train with the fused linear loss
+### Train with Liger Kernel
 
-Setting `use_fused_linear_loss=True` computes the `lm_head` projection and the loss together, one chunk of sequences at a time, so the full logits are never materialized. For more information, see [Fused linear loss](reducing_memory_usage#fused-linear-loss-for-reducing-peak-memory-usage).
+Liger Kernel is a collection of Triton kernels for LLM training that boosts multi-GPU throughput by 20%, cuts memory use by 60% (enabling up to 4× longer context), and works seamlessly with tools like FlashAttention, PyTorch FSDP, and DeepSpeed. For more information, see [Liger Kernel Integration](liger_kernel_integration).
 
 ### Rapid Experimentation for DPO
 

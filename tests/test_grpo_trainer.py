@@ -37,11 +37,13 @@ from transformers.testing_utils import backend_empty_cache, torch_device
 from transformers.utils import is_peft_available
 
 from trl import GRPOConfig, GRPOTrainer
+from trl.import_utils import is_liger_kernel_available
 
 from .testing_utils import (
     TrlTestCase,
     is_ampere_or_newer,
     require_bitsandbytes,
+    require_liger_kernel,
     require_peft,
     require_response_parsing,
     require_torch_accelerator,
@@ -390,9 +392,9 @@ class TestGRPOTrainer(TrlTestCase):
         )
         assert type(trainer.model).__name__ == "RemoteForCausalLM"
 
-    @pytest.mark.parametrize("use_fused_linear_loss", [False, True])
+    @pytest.mark.parametrize("use_liger_kernel", [False, pytest.param(True, marks=require_liger_kernel)])
     @pytest.mark.parametrize("loss_type", ["bnpo", "dr_grpo", "dapo", "cispo", "sapo", "luspo", "vespo"])
-    def test_train_loss_types(self, loss_type, use_fused_linear_loss):
+    def test_train_loss_types(self, loss_type, use_liger_kernel):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         training_args = GRPOConfig(
@@ -404,7 +406,7 @@ class TestGRPOTrainer(TrlTestCase):
             max_completion_length=32,  # reduce the completion length to reduce memory usage
             gradient_accumulation_steps=2,  # set to 2 to test than DAPO can operate with accumulated batch
             loss_type=loss_type,
-            use_fused_linear_loss=use_fused_linear_loss,
+            use_liger_kernel=use_liger_kernel,
             report_to="none",
         )
         trainer = GRPOTrainer(
@@ -425,6 +427,7 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @require_liger_kernel
     @pytest.mark.parametrize(
         "loss_type, beta",
         [
@@ -439,8 +442,8 @@ class TestGRPOTrainer(TrlTestCase):
             ("dapo", 0.1),  # non-zero beta so that the KL term is compared too
         ],
     )
-    def test_fused_loss_matches_non_fused_loss(self, loss_type, beta):
-        # The fused and default paths must return the same loss for the same batch. `steps_per_generation` differs
+    def test_liger_loss_matches_non_liger_loss(self, loss_type, beta):
+        # The Liger and non-Liger paths must return the same loss for the same batch. `steps_per_generation` differs
         # from `gradient_accumulation_steps` so that the per-window rescale dapo/cispo/vespo apply is non-trivial.
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
@@ -454,7 +457,7 @@ class TestGRPOTrainer(TrlTestCase):
             steps_per_generation=4,
             gradient_accumulation_steps=2,
             loss_type=loss_type,
-            use_fused_linear_loss=True,
+            use_liger_kernel=True,
             report_to="none",
         )
         trainer = GRPOTrainer(
@@ -470,26 +473,26 @@ class TestGRPOTrainer(TrlTestCase):
         inputs = trainer._prepare_inputs(next(iter(trainer.get_train_dataloader())))
 
         raw_losses = []
-        original_forward = trainer.fused_linear_loss.forward
+        original_forward = trainer.liger_loss.forward
 
         def capture_raw_loss(*args, **kwargs):
             output = original_forward(*args, **kwargs)
             raw_losses.append(output[0])
             return output
 
-        with patch.object(trainer.fused_linear_loss, "forward", side_effect=capture_raw_loss):
-            fused_loss = trainer.compute_loss(trainer.model, inputs)
-        trainer.use_fused_linear_loss = False
+        with patch.object(trainer.liger_loss, "forward", side_effect=capture_raw_loss):
+            liger_loss = trainer.compute_loss(trainer.model, inputs)
+        trainer.use_liger_kernel = False
         loss = trainer.compute_loss(trainer.model, inputs)
 
-        assert fused_loss.abs() > 0  # the comparison below would hold vacuously for two zero losses
-        torch.testing.assert_close(fused_loss, loss, rtol=1e-4, atol=1e-5)
+        assert liger_loss.abs() > 0  # the comparison below would hold vacuously for two zero losses
+        torch.testing.assert_close(liger_loss, loss, rtol=1e-4, atol=1e-5)
 
         # Both paths divide by `current_gradient_accumulation_steps`, so an error in it cancels out in the comparison
         # above. Pin the dapo/cispo/vespo per-window rescale to a known factor: steps_per_generation (4) divided by
         # gradient_accumulation_steps (2).
         if loss_type == "dapo":
-            torch.testing.assert_close(fused_loss, raw_losses[0] * 2.0, rtol=1e-4, atol=1e-5)
+            torch.testing.assert_close(liger_loss, raw_losses[0] * 2.0, rtol=1e-4, atol=1e-5)
 
         release_memory(trainer.model, trainer)
 
@@ -908,12 +911,12 @@ class TestGRPOTrainer(TrlTestCase):
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @require_peft
-    def test_fused_linear_loss_with_peft_lm_head_raises(self):
-        # The fused linear GRPO loss reads `lm_head.weight` directly, so a LoRA adapter on `lm_head` is silently
+    def test_liger_kernel_with_peft_lm_head_raises(self):
+        # The Liger fused GRPO loss reads `lm_head.weight` directly, so a LoRA adapter on `lm_head` is silently
         # ignored and never trained. The trainer must fail fast instead of training a silently-frozen head (#4612).
         model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="float32")
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
-        training_args = GRPOConfig(output_dir=self.tmp_dir, use_fused_linear_loss=True, report_to="none")
+        training_args = GRPOConfig(output_dir=self.tmp_dir, use_liger_kernel=True, report_to="none")
         # `ensure_weight_tying=True` silences PEFT's weight-tying warning fired when lm_head is in the adapter on a
         # model with untied embeddings; once tying respects `tie_word_embeddings`, the flag itself warns that no tied
         # modules were found, so it must only be set on the affected range.
@@ -933,13 +936,13 @@ class TestGRPOTrainer(TrlTestCase):
             )
 
     @require_peft
-    def test_fused_linear_loss_with_peft_non_lm_head_target_allowed(self):
+    def test_liger_kernel_with_peft_non_lm_head_target_allowed(self):
         # The lm_head guard must only fire when the adapter actually wraps lm_head. An adapter that targets other
-        # modules (here q_proj/v_proj) leaves lm_head as a plain Linear, so the fused loss reads the real (frozen)
-        # head weight and there is nothing to silently drop. Guards against an over-broad regression.
+        # modules (here q_proj/v_proj) leaves lm_head as a plain Linear, so Liger reads the real (frozen) head weight
+        # and there is nothing to silently drop. Guards against an over-broad regression.
         model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="float32")
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
-        training_args = GRPOConfig(output_dir=self.tmp_dir, use_fused_linear_loss=True, report_to="none")
+        training_args = GRPOConfig(output_dir=self.tmp_dir, use_liger_kernel=True, report_to="none")
         kwargs = {
             "model": model,
             "reward_funcs": "trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
@@ -947,16 +950,22 @@ class TestGRPOTrainer(TrlTestCase):
             "train_dataset": dataset,
             "peft_config": LoraConfig(target_modules=["q_proj", "v_proj"]),
         }
-        GRPOTrainer(**kwargs)  # must construct without raising
+        if is_liger_kernel_available():
+            GRPOTrainer(**kwargs)  # must construct without raising
+        else:
+            # Liger isn't installed on this lane: the guard runs before the Liger-availability check, so the only
+            # acceptable failure is the missing-dependency ImportError, never the lm_head ValueError.
+            with pytest.raises(ImportError):
+                GRPOTrainer(**kwargs)
 
     @require_peft
-    def test_fused_linear_loss_with_peft_modules_to_save_lm_head_allowed(self):
+    def test_liger_kernel_with_peft_modules_to_save_lm_head_allowed(self):
         # `modules_to_save=["lm_head"]` makes the head a fully trained copy (ModulesToSaveWrapper, not a tuner layer),
-        # so `lm_head.weight` resolves to the trained weight and the fused loss trains it correctly. This is the
-        # documented workaround in the guard's error message, so it must stay unblocked.
+        # so `lm_head.weight` resolves to the trained weight and Liger trains it correctly. This is the documented
+        # workaround in the guard's error message, so it must stay unblocked.
         model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="float32")
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
-        training_args = GRPOConfig(output_dir=self.tmp_dir, use_fused_linear_loss=True, report_to="none")
+        training_args = GRPOConfig(output_dir=self.tmp_dir, use_liger_kernel=True, report_to="none")
         # `ensure_weight_tying=True` silences PEFT's weight-tying warning fired when lm_head is in the adapter on a
         # model with untied embeddings; once tying respects `tie_word_embeddings`, the flag itself warns that no tied
         # modules were found, so it must only be set on the affected range.
@@ -974,15 +983,19 @@ class TestGRPOTrainer(TrlTestCase):
             "train_dataset": dataset,
             "peft_config": peft_config,
         }
-        GRPOTrainer(**kwargs)  # must construct without raising
+        if is_liger_kernel_available():
+            GRPOTrainer(**kwargs)  # must construct without raising
+        else:
+            with pytest.raises(ImportError):
+                GRPOTrainer(**kwargs)
 
     @require_peft
-    def test_fused_linear_loss_with_peft_prompt_learning_raises(self):
-        # Prompt-learning methods inject virtual tokens via PeftModel.forward(), which the fused linear GRPO loss
-        # bypasses. The trainer must fail fast to avoid computing the loss on the wrong (truncated) sequence.
+    def test_liger_kernel_with_peft_prompt_learning_raises(self):
+        # Prompt-learning methods inject virtual tokens via PeftModel.forward(), which the Liger GRPO loss bypasses.
+        # The trainer must fail fast to avoid computing the loss on the wrong (truncated) sequence.
         model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="float32")
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
-        training_args = GRPOConfig(output_dir=self.tmp_dir, use_fused_linear_loss=True, report_to="none")
+        training_args = GRPOConfig(output_dir=self.tmp_dir, use_liger_kernel=True, report_to="none")
         with pytest.raises(ValueError, match="prompt-learning"):
             GRPOTrainer(
                 model=model,
@@ -1822,14 +1835,15 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    @pytest.mark.xfail(reason="Off-Policy Masking isn't compatible with the fused linear loss yet.")
-    def test_train_with_off_policy_mask_with_fused_linear_loss(self):
+    @require_liger_kernel
+    @pytest.mark.xfail(reason="Off-Policy Masking isn't compatible with Liger yet.")
+    def test_train_with_off_policy_mask_with_liger(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
             off_policy_mask_threshold=0.5,
-            use_fused_linear_loss=True,
+            use_liger_kernel=True,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
@@ -1853,8 +1867,9 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    def test_compute_fused_loss_passes_vllm_is_ratio(self):
-        """Test that importance_sampling_ratio from inputs is passed to the fused GRPO loss as vllm_is_ratio."""
+    @require_liger_kernel
+    def test_compute_liger_loss_passes_vllm_is_ratio(self):
+        """Test that importance_sampling_ratio from inputs is passed to liger_grpo_loss as vllm_is_ratio."""
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         training_args = GRPOConfig(
@@ -1863,7 +1878,7 @@ class TestGRPOTrainer(TrlTestCase):
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
-            use_fused_linear_loss=True,
+            use_liger_kernel=True,
             report_to="none",
             logging_strategy="no",
         )
@@ -1886,14 +1901,12 @@ class TestGRPOTrainer(TrlTestCase):
 
         with (
             patch.object(trainer, "_generate_and_score_completions", side_effect=gen_with_is_ratio),
-            patch.object(
-                trainer.fused_linear_loss, "forward", wraps=trainer.fused_linear_loss.forward
-            ) as mock_forward,
+            patch.object(trainer.liger_loss, "forward", wraps=trainer.liger_loss.forward) as mock_forward,
         ):
             trainer.train()
 
-            # Verify vllm_is_ratio was passed in every call to the fused GRPO loss
-            assert mock_forward.call_count > 0, "the fused GRPO loss.forward was never called"
+            # Verify vllm_is_ratio was passed in every call to liger_grpo_loss
+            assert mock_forward.call_count > 0, "liger_grpo_loss.forward was never called"
             for call in mock_forward.call_args_list:
                 vllm_is_ratio = call.kwargs.get("vllm_is_ratio")
                 assert vllm_is_ratio is not None, (
@@ -1906,8 +1919,8 @@ class TestGRPOTrainer(TrlTestCase):
         release_memory(trainer.model, trainer)
 
     @pytest.mark.parametrize("use_bias_correction_kl", [True, False])
-    @pytest.mark.parametrize("use_fused_linear_loss", [False, True])
-    def test_train_bias_correction_kl(self, use_fused_linear_loss, use_bias_correction_kl):
+    @pytest.mark.parametrize("use_liger_kernel", [False, pytest.param(True, marks=require_liger_kernel)])
+    def test_train_bias_correction_kl(self, use_liger_kernel, use_bias_correction_kl):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
@@ -1917,7 +1930,7 @@ class TestGRPOTrainer(TrlTestCase):
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
-            use_fused_linear_loss=use_fused_linear_loss,
+            use_liger_kernel=use_liger_kernel,
             report_to="none",
         )
         trainer = GRPOTrainer(
@@ -2756,8 +2769,8 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    @pytest.mark.parametrize("use_fused_linear_loss", [False, True])
-    def test_train_delta_clipping(self, use_fused_linear_loss):
+    @pytest.mark.parametrize("use_liger_kernel", [False, pytest.param(True, marks=require_liger_kernel)])
+    def test_train_delta_clipping(self, use_liger_kernel):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         training_args = GRPOConfig(
@@ -2767,7 +2780,7 @@ class TestGRPOTrainer(TrlTestCase):
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
             delta=2.0,  # set delta to a non-None value
-            use_fused_linear_loss=use_fused_linear_loss,
+            use_liger_kernel=use_liger_kernel,
             report_to="none",
         )
         trainer = GRPOTrainer(
@@ -4228,8 +4241,21 @@ class TestGRPOTrainerVLM(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    @pytest.mark.parametrize("model_id", ["trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration"])
-    def test_train_vlm_and_fused_linear_loss(self, model_id):
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+                marks=pytest.mark.xfail(
+                    (Version("5.2.0") < Version(transformers.__version__))
+                    and not is_liger_kernel_available(min_version="0.8.0"),
+                    reason="Upstream issue tracked at https://github.com/linkedin/Liger-Kernel/issues/1117",
+                ),
+            ),
+        ],
+    )
+    @require_liger_kernel
+    def test_train_vlm_and_liger(self, model_id):
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
         def reward_func(completions, **kwargs):
@@ -4243,7 +4269,7 @@ class TestGRPOTrainerVLM(TrlTestCase):
             num_generations=2,  # VLM training is memory intensive, reduce num_generations to avoid OOM
             # note: num_generations=2 is only suitable for CI testing; production training should use more generations
             max_completion_length=8,  # reduce the completion length to reduce memory usage
-            use_fused_linear_loss=True,
+            use_liger_kernel=True,  # enable Liger kernel
             report_to="none",
         )
         trainer = GRPOTrainer(
@@ -4577,13 +4603,14 @@ class TestGRPOTrainerSlow(TrlTestCase):
             "trl-internal-testing/tiny-MistralForCausalLM-0.2",
         ],
     )
+    @require_liger_kernel
     @xfail_data_parallel
-    def test_train_with_fused_linear_grpo_loss(self, model_name):
+    def test_train_with_liger_grpo_kernel(self, model_name):
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
             per_device_train_batch_size=3,
             num_generations=3,
-            use_fused_linear_loss=True,
+            use_liger_kernel=True,
             max_completion_length=self.max_length,
             report_to="none",
             logging_strategy="no",
@@ -4603,7 +4630,7 @@ class TestGRPOTrainerSlow(TrlTestCase):
         )
         from trl.losses import FusedLinearGRPOLoss
 
-        assert isinstance(trainer.fused_linear_loss, FusedLinearGRPOLoss)
+        assert isinstance(trainer.liger_loss, FusedLinearGRPOLoss)
 
         previous_trainable_params = {n: param.clone() for n, param in model.named_parameters()}
 
@@ -4622,16 +4649,17 @@ class TestGRPOTrainerSlow(TrlTestCase):
             "trl-internal-testing/tiny-MistralForCausalLM-0.2",
         ],
     )
+    @require_liger_kernel
     @require_peft
     @xfail_data_parallel
-    def test_train_with_fused_linear_grpo_loss_and_peft(self, model_name):
+    def test_train_with_liger_grpo_kernel_and_peft(self, model_name):
         from peft import LoraConfig, TaskType
 
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
             per_device_train_batch_size=3,
             num_generations=3,
-            use_fused_linear_loss=True,
+            use_liger_kernel=True,
             max_completion_length=self.max_length,
             report_to="none",
             logging_strategy="no",
@@ -4662,7 +4690,7 @@ class TestGRPOTrainerSlow(TrlTestCase):
         )
         from trl.losses import FusedLinearGRPOLoss
 
-        assert isinstance(trainer.fused_linear_loss, FusedLinearGRPOLoss)
+        assert isinstance(trainer.liger_loss, FusedLinearGRPOLoss)
 
         # Verify PEFT adapter is properly initialized
         from peft import PeftModel
@@ -4684,15 +4712,16 @@ class TestGRPOTrainerSlow(TrlTestCase):
 
         release_memory(model, trainer)
 
+    @require_liger_kernel
     @xfail_data_parallel
-    def test_fused_linear_grpo_loss_importance_sampling(self):
+    def test_liger_grpo_kernel_importance_sampling(self):
         model_name = "trl-internal-testing/tiny-LlamaForCausalLM-3.2"
 
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
             per_device_train_batch_size=3,
             num_generations=3,
-            use_fused_linear_loss=True,
+            use_liger_kernel=True,
             max_completion_length=self.max_length,
             importance_sampling_level="sequence",
             report_to="none",
@@ -4713,7 +4742,7 @@ class TestGRPOTrainerSlow(TrlTestCase):
         )
         from trl.losses import FusedLinearGRPOLoss
 
-        assert isinstance(trainer.fused_linear_loss, FusedLinearGRPOLoss)
+        assert isinstance(trainer.liger_loss, FusedLinearGRPOLoss)
 
         previous_trainable_params = {n: param.clone() for n, param in model.named_parameters()}
 

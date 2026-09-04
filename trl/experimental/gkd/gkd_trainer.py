@@ -142,19 +142,19 @@ class GKDTrainer(SFTTrainer):
         else:
             args.dataset_kwargs["skip_prepare_dataset"] = True
 
-        # Fused linear GKD loss (JSD)
-        self.use_fused_linear_loss = False
-        if args.use_fused_linear_loss:
-            # Match the non-fused path: pure JSD (no hard CE component) and no temperature
+        # Liger fused GKD loss (JSD)
+        self.use_liger_gkd_loss = False
+        if args.use_liger_kernel:
+            # Match the non-Liger path: pure JSD (no hard CE component) and no temperature
             # scaling, since `generalized_jsd_loss` is called without a `temperature` argument.
-            self.fused_linear_loss = FusedLinearJSDLoss(
+            self.liger_loss = FusedLinearJSDLoss(
                 beta=args.beta,
                 ignore_index=-100,
                 compiled=False,
                 weight_hard_loss=0.0,
                 weight_soft_loss=1.0,
             )
-            self.use_fused_linear_loss = True
+            self.use_liger_gkd_loss = True
             self._forward_redirection = _ForwardRedirection()
 
         super().__init__(
@@ -338,13 +338,13 @@ class GKDTrainer(SFTTrainer):
             return jsd
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
-        if self.use_fused_linear_loss:
+        if self.use_liger_gkd_loss:
             # Forward only through the base models (avoid lm_head to save memory).
             # Route through the DDP/FSDP wrapper via _forward_redirection so that
             # DDP.forward() is called and prepare_for_backward() fires correctly.
             unwrapped_student = self.accelerator.unwrap_model(model)
             student_outputs = self._forward_redirection(
-                model, unwrapped_student, self._fused_student_forward, unwrapped_student, inputs
+                model, unwrapped_student, self._liger_student_forward, unwrapped_student, inputs
             )
 
             self.teacher_model.eval()
@@ -383,8 +383,8 @@ class GKDTrainer(SFTTrainer):
             student_head = unwrapped_student.get_output_embeddings()
             teacher_head = unwrapped_teacher.get_output_embeddings()
 
-            # fused linear jsd loss
-            loss = self.fused_linear_loss(
+            # liger fused jsd loss
+            loss = self.liger_loss(
                 student_input=student_hidden,
                 student_weight=student_head.weight,
                 teacher_input=teacher_hidden,
@@ -394,8 +394,8 @@ class GKDTrainer(SFTTrainer):
                 teacher_bias=getattr(teacher_head, "bias", None),
             )
 
-            # The fused linear JSD loss normalizes by the local number of valid tokens. Under gradient accumulation we
-            # want the global normalization, so rescale by `num_valid_local / num_items_in_batch`.
+            # The Liger JSD loss normalizes by the local number of valid tokens. Under gradient accumulation we want
+            # the global normalization, so rescale by `num_valid_local / num_items_in_batch`.
             if num_items_in_batch is not None:
                 num_valid_local = (true_labels != -100).sum().clamp_min(1)
                 if isinstance(num_items_in_batch, torch.Tensor):
@@ -448,8 +448,8 @@ class GKDTrainer(SFTTrainer):
         # Return loss
         return (loss, student_outputs) if return_outputs else loss
 
-    def _fused_student_forward(self, student, inputs):
-        """Decoder-only forward used by the fused JSD path (skips lm_head to save memory)."""
+    def _liger_student_forward(self, student, inputs):
+        """Decoder-only forward used by the Liger JSD path (skips lm_head to save memory)."""
         if hasattr(student, "get_decoder") and student.get_decoder() is not None:
             decoder = student.get_decoder()
         else:

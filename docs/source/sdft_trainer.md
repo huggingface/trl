@@ -12,7 +12,7 @@ Plain supervised fine-tuning trains on the demonstration text off-policy, which 
 
 `teacher_model_kind` selects which copy of the model acts as teacher. `"base"` (the default) freezes the initial weights as a fixed reference, matching the paper; `"live"` reuses the current student for a zero-lag self-teacher; `"ema"` maintains an exponential moving average, resynced every `teacher_sync_steps` steps at rate `teacher_update_rate`. Under PEFT, `"base"` is obtained by disabling the adapter during the teacher forward to recover the base weights, and `"ema"` with pure-LoRA training holds the moving average in a dedicated `"teacher"` adapter instead of a second model copy. `"ema"` with a non-pure-LoRA PEFT model (e.g. `modules_to_save` or `bias`) is not supported, since a separate EMA copy cannot be parameter-matched to the student.
 
-By default the student generates from the plain prompt; set `generate_from_teacher=True` to sample from the demonstration-conditioned prompt instead, trading on-policy fidelity for higher-quality rollouts. The distillation objective is set by `distillation_mode` (`"topk_logits"` by default, with `"full_logits"` and `"sampled_token"` alternatives), `distillation_alpha`, and `distillation_topk`; `num_loss_tokens_to_skip` drops leading completion tokens from the loss. Setting `use_fused_linear_loss=True` swaps in a memory-efficient fused JSD loss that avoids materializing the full-vocabulary logits; it requires `distillation_mode="full_logits"` and is incompatible with `distillation_is_clip`. Training is text-only; generation runs through transformers by default, or vLLM (colocate or server mode) when `use_vllm=True`.
+By default the student generates from the plain prompt; set `generate_from_teacher=True` to sample from the demonstration-conditioned prompt instead, trading on-policy fidelity for higher-quality rollouts. The distillation objective is set by `distillation_mode` (`"topk_logits"` by default, with `"full_logits"` and `"sampled_token"` alternatives), `distillation_alpha`, and `distillation_topk`; `num_loss_tokens_to_skip` drops leading completion tokens from the loss. Setting `use_liger_kernel=True` swaps in a memory-efficient fused JSD loss (Liger) that avoids materializing the full-vocabulary logits; it requires `distillation_mode="full_logits"` and is incompatible with `distillation_is_clip`. Training is text-only; generation runs through transformers by default, or vLLM (colocate or server mode) when `use_vllm=True`.
 
 ## Usage
 
@@ -67,7 +67,7 @@ When using the teacher server:
 - `use_vllm=True` and `vllm_mode="server"` are required
 - `teacher_model_kind` must be `"live"` (the server holds the current student weights)
 - `distillation_mode` must be `"sampled_token"` (reverse KL on the realized token) or `"topk_logits"`. The server returns the teacher's own top-k log-probs, so `topk_logits` distills over the teacher's top-k support (it cannot use the student's, unlike the local objective); with a `"live"` teacher the two supports nearly coincide. `full_logits` is unavailable.
-- `use_fused_linear_loss` is not supported
+- `use_liger_kernel` is not supported
 
 ## Expected dataset columns
 

@@ -36,7 +36,7 @@ from trl.experimental.utils import (
 )
 from trl.trainer.utils import RepeatSampler, identity
 
-from ..testing_utils import TrlTestCase
+from ..testing_utils import TrlTestCase, require_liger_kernel
 
 
 @pytest.fixture(scope="module")
@@ -837,7 +837,7 @@ def test_gold_trainer_init_defaults_vllm_max_model_length_to_max_length(monkeypa
     args = SimpleNamespace(
         model_init_kwargs=None,
         max_length=128,
-        use_fused_linear_loss=False,
+        use_liger_kernel=False,
         trust_remote_code=False,
         teacher_model_init_kwargs=None,
         use_uld_loss=False,
@@ -963,7 +963,7 @@ def test_prepared_tokenized_rows_keep_completion_after_truncation(llama_tokenize
         dataset_text_field="text",
         max_length=max_length,
         packing_strategy="bfd",
-        use_fused_linear_loss=False,
+        use_liger_kernel=False,
     )
     trainer = GOLDTrainer.__new__(GOLDTrainer)
     prepared = trainer._prepare_dataset_with_original_text(
@@ -1017,7 +1017,7 @@ def test_prepared_tokenized_rows_rebase_byte_offsets_when_truncation_eats_into_c
         dataset_text_field="text",
         max_length=max_length,
         packing_strategy="bfd",
-        use_fused_linear_loss=False,
+        use_liger_kernel=False,
     )
     trainer = GOLDTrainer.__new__(GOLDTrainer)
     prepared = trainer._prepare_dataset_with_original_text(
@@ -1052,7 +1052,7 @@ def test_prepare_dataset_messages_uses_last_assistant_turn(qwen_tokenizer):
         dataset_text_field="text",
         max_length=512,
         packing_strategy="bfd",
-        use_fused_linear_loss=False,
+        use_liger_kernel=False,
     )
     trainer = GOLDTrainer.__new__(GOLDTrainer)
 
@@ -1900,7 +1900,7 @@ def test_gold_trainer_init_rejects_llm_with_vision_dataset(monkeypatch):
     args = SimpleNamespace(
         model_init_kwargs=None,
         max_length=128,
-        use_fused_linear_loss=False,
+        use_liger_kernel=False,
         trust_remote_code=False,
         teacher_model_init_kwargs=None,
         use_uld_loss=False,
@@ -2231,7 +2231,7 @@ def test_gold_trainer_init_rejects_non_vlm_teacher(monkeypatch):
         model_init_kwargs=None,
         max_length=128,
         truncation_mode="keep_start",
-        use_fused_linear_loss=False,
+        use_liger_kernel=False,
         trust_remote_code=False,
         teacher_model_init_kwargs=None,
         use_uld_loss=False,
@@ -2322,7 +2322,7 @@ def test_gold_trainer_init_rejects_keep_end_truncation_for_vlm(monkeypatch):
         model_init_kwargs=None,
         max_length=128,
         truncation_mode="keep_end",
-        use_fused_linear_loss=False,
+        use_liger_kernel=False,
         teacher_model_init_kwargs=None,
         use_uld_loss=False,
         teacher_tokenizer_name_or_path=None,
@@ -2427,7 +2427,7 @@ def test_gold_trainer_vlm_vllm_init_uses_identity_collator(monkeypatch):
         model_init_kwargs=None,
         max_length=128,
         truncation_mode="keep_start",
-        use_fused_linear_loss=False,
+        use_liger_kernel=False,
         trust_remote_code=False,
         teacher_model_init_kwargs=None,
         use_uld_loss=False,
@@ -2519,7 +2519,7 @@ def _make_vlm_trainer_args(use_vllm=False):
         model_init_kwargs=None,
         max_length=128,
         truncation_mode="keep_start",
-        use_fused_linear_loss=False,
+        use_liger_kernel=False,
         trust_remote_code=False,
         teacher_model_init_kwargs=None,
         use_uld_loss=False,
@@ -3410,11 +3410,12 @@ _TINY_LLAMA = "trl-internal-testing/tiny-LlamaForCausalLM-3.2"
 
 
 @pytest.mark.slow
-def test_jsd_fused_linear_loss_text_train_step_smoke(tmp_path):
-    """Text same-family (tiny Llama → tiny Llama) runs one off-policy JSD step with the fused linear loss.
+@require_liger_kernel
+def test_jsd_liger_text_train_step_smoke(tmp_path):
+    """Text same-family (tiny Llama → tiny Llama) runs one off-policy JSD step with the fused Liger loss.
 
-    Exercises the `FusedLinearJSDLoss` path end-to-end (`_fused_backbone` student + teacher forwards, fused lm_head
-    matmul) and asserts the resulting training loss is finite.
+    Exercises the `LigerFusedLinearJSDLoss` path end-to-end (`_liger_backbone` student + teacher forwards, fused
+    lm_head matmul) and asserts the resulting training loss is finite.
     """
     from datasets import load_dataset
 
@@ -3443,7 +3444,7 @@ def test_jsd_fused_linear_loss_text_train_step_smoke(tmp_path):
         num_generations=1,
         use_vllm=False,
         use_uld_loss=False,
-        use_fused_linear_loss=True,
+        use_liger_kernel=True,
         log_completions=False,
         save_strategy="no",
         eval_strategy="no",
@@ -3463,11 +3464,12 @@ def test_jsd_fused_linear_loss_text_train_step_smoke(tmp_path):
 
 
 @pytest.mark.slow
-def test_vlm_jsd_fused_linear_loss_same_family_train_step_smoke(tmp_path, vlm_dataset):
-    """Same-family VLM (tiny Qwen3-VL → tiny Qwen3-VL) runs one off-policy JSD step with the fused linear loss.
+@require_liger_kernel
+def test_vlm_jsd_liger_same_family_train_step_smoke(tmp_path, vlm_dataset):
+    """Same-family VLM (tiny Qwen3-VL → tiny Qwen3-VL) runs one off-policy JSD step with the fused Liger loss.
 
-    Proves the VLM fused-loss path: `_fused_backbone` routes through `base_model` (so image features are injected) for
-    both student and teacher, image kwargs reach the backbone forwards, and the fused JSD loss is finite.
+    Proves the VLM Liger path: `_liger_backbone` routes through `base_model` (so image features are injected) for both
+    student and teacher, image kwargs reach the backbone forwards, and the fused JSD loss is finite.
     """
     try:
         student = AutoModelForImageTextToText.from_pretrained(_TINY_QWEN3_VL, dtype=torch.bfloat16)
@@ -3493,7 +3495,7 @@ def test_vlm_jsd_fused_linear_loss_same_family_train_step_smoke(tmp_path, vlm_da
         num_generations=1,
         use_vllm=False,
         use_uld_loss=False,
-        use_fused_linear_loss=True,
+        use_liger_kernel=True,
         log_completions=False,
         save_strategy="no",
         eval_strategy="no",

@@ -361,11 +361,6 @@ class GRPOConfig(_BaseConfig):
             including on-policy: the ratio is differentiable, so it affects the gradient even where its value is
             exactly 1. The unbiased reverse-KL property holds for `importance_sampling_level="token"`; with
             `"sequence"` a sequence-level weight is broadcast onto the per-token KL.
-        use_fused_linear_loss (`bool`, *optional*, defaults to `False`):
-            Whether to compute the loss with the fused linear GRPO loss: the `lm_head` projection and the loss are
-            computed together, one chunk of sequences at a time, so the full `(batch_size, seq_len, vocab_size)` logits
-            are never materialized. This reduces peak memory for large vocabularies. Setting `use_liger_kernel=True`
-            also enables it, which is deprecated.
 
         > Parameters that control the logging
 
@@ -978,15 +973,6 @@ class GRPOConfig(_BaseConfig):
             "'sequence' a sequence-level weight is broadcast onto the per-token KL."
         },
     )
-    use_fused_linear_loss: bool = field(
-        default=False,
-        metadata={
-            "help": "Whether to compute the loss with the fused linear GRPO loss: the `lm_head` projection and the "
-            "loss are computed together, one chunk of sequences at a time, so the full `(batch_size, seq_len, "
-            "vocab_size)` logits are never materialized. This reduces peak memory for large vocabularies. Setting "
-            "`use_liger_kernel=True` also enables it, which is deprecated."
-        },
-    )
 
     # Parameters that control the logging
     log_completions: bool = field(
@@ -1054,15 +1040,6 @@ class GRPOConfig(_BaseConfig):
 
     def __post_init__(self):
         super().__post_init__()
-
-        if self.use_liger_kernel and not self.use_fused_linear_loss:
-            warnings.warn(
-                "Enabling the fused linear loss via `use_liger_kernel=True` is deprecated and will be removed in "
-                "v2.0.0. Set `use_fused_linear_loss=True` instead.",
-                FutureWarning,
-                stacklevel=3,
-            )
-            self.use_fused_linear_loss = True
 
         if self.use_transformers_paged:
             warnings.warn(

@@ -47,6 +47,7 @@ from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_peft_available
 
 from ..data_utils import _tokenize, apply_chat_template, extract_prompt, is_conversational, prepare_multimodal_messages
+from ..import_utils import is_liger_kernel_available
 from ..losses import FusedLinearDPOLoss
 from ..models import get_act_offloading_ctx_manager, prepare_deepspeed, prepare_fsdp
 from ..models.utils import _ForwardRedirection, disable_gradient_checkpointing
@@ -789,59 +790,62 @@ class DPOTrainer(_BaseTrainer):
                 "value of 1e-3."
             )
 
-        # Fused linear loss
-        self.use_fused_linear_loss = args.use_fused_linear_loss
-        if self.use_fused_linear_loss:
+        # Liger loss
+        self.use_liger_kernel = args.use_liger_kernel
+        if self.use_liger_kernel:
+            if not is_liger_kernel_available():
+                raise ImportError(
+                    "You set `use_liger_kernel=True` but the liger kernel is not available. "
+                    "Please install liger-kernel first: `pip install liger-kernel`"
+                )
             if len(self.loss_types) != 1:
                 raise NotImplementedError(
-                    "Multiple loss types are not yet supported when using the fused linear loss. If you need this "
-                    "feature, please open a feature request at https://github.com/huggingface/trl/issues."
+                    "Multiple loss types are not yet supported when using Liger kernel. If you need this feature, "
+                    "please open a feature request at https://github.com/huggingface/trl/issues."
                 )
             if self.f_divergence_type != "reverse_kl":
                 raise ValueError(
-                    "`use_fused_linear_loss=True` is incompatible with a non-default `f_divergence_type`. The fused "
-                    "linear DPO loss always uses the standard reverse-KL parameterization, so the requested "
-                    "divergence would be silently ignored. Either set `f_divergence_type='reverse_kl'`, or set "
-                    "`use_fused_linear_loss=False`."
+                    "`use_liger_kernel=True` is incompatible with a non-default `f_divergence_type`. The Liger fused "
+                    "DPO loss always uses the standard reverse-KL parameterization, so the requested divergence would "
+                    "be silently ignored. Either set `f_divergence_type='reverse_kl'`, or set `use_liger_kernel=False`."
                 )
             if compute_metrics is not None:
                 raise ValueError(
-                    "compute_metrics is not supported with the fused linear loss. compute_metrics requires to be able "
-                    "to recover the logits from the forward pass, but the fused linear loss does not materialize "
-                    "logits."
+                    "compute_metrics is not supported with the Liger kernel. compute_metrics requires to be able to "
+                    "recover the logits from the forward pass, but Liger kernel does not materialize logits."
                 )
             if self.precompute_ref_logps:
                 raise ValueError(
-                    "The fused linear DPO loss does not support precomputing reference log probabilities. Either "
-                    "disable `precompute_ref_log_probs` or set `use_fused_linear_loss` to False."
+                    "Liger DPO loss does not support precomputing reference log probabilities. Either disable "
+                    "`precompute_ref_log_probs` or set `use_liger_kernel` to False."
                 )
             if is_peft_model(model):
-                # The fused linear DPO loss multiplies the hidden states by `lm_head.weight` directly. When the LM head
+                # The Liger fused DPO loss multiplies the hidden states by `lm_head.weight` directly. When the LM head
                 # is targeted by a PEFT adapter (`"lm_head"` in `target_modules`), `lm_head.weight` is the frozen base
-                # weight and the trainable adapter parameters live in separate submodules that the fused loss never
-                # sees. The head adapter would silently receive no gradient, so the model trains as if `lm_head` were
-                # frozen. Fail loudly rather than train a silently-frozen head.
+                # weight and the trainable adapter parameters live in separate submodules that Liger never sees. The
+                # head adapter would silently receive no gradient, so the model trains as if `lm_head` were frozen.
+                # Fail loudly rather than train a silently-frozen head.
                 output_embeddings = model.get_output_embeddings()
                 if isinstance(output_embeddings, BaseTunerLayer):
                     raise ValueError(
-                        "`use_fused_linear_loss=True` is incompatible with applying a PEFT adapter to `lm_head`. The "
-                        "fused linear DPO loss reads `lm_head.weight` directly, so the adapter on the head is ignored "
-                        "and never trained. Either remove `'lm_head'` from your `target_modules`, or set "
-                        "`use_fused_linear_loss=False`."
+                        "`use_liger_kernel=True` is incompatible with applying a PEFT adapter to `lm_head`. The Liger "
+                        "fused DPO loss reads `lm_head.weight` directly, so the adapter on the head is ignored and "
+                        "never trained. Either remove `'lm_head'` from your `target_modules`, or set "
+                        "`use_liger_kernel=False`."
                     )
                 # Prompt-learning methods (PromptTuning, PrefixTuning, P-Tuning) inject virtual tokens via
-                # `PeftModel.forward()`. The fused linear DPO loss bypasses `PeftModel.forward()` by calling the
-                # backbone directly, so virtual tokens are never prepended and the loss is computed on the wrong
-                # sequence. Fail loudly rather than train on a silently corrupted input.
+                # `PeftModel.forward()`. The Liger DPO loss bypasses `PeftModel.forward()` by calling the backbone
+                # directly, so virtual tokens are never prepended and the loss is computed on the wrong sequence.
+                # Fail loudly rather than train on a silently corrupted input.
                 if any(isinstance(cfg, PromptLearningConfig) for cfg in model.peft_config.values()):
                     raise ValueError(
-                        "`use_fused_linear_loss=True` is incompatible with prompt-learning PEFT methods "
-                        "(PromptTuning, PrefixTuning, P-Tuning). The fused linear DPO loss bypasses "
-                        "`PeftModel.forward()` by calling the backbone directly, so virtual tokens are never "
-                        "prepended and the loss is computed on the wrong sequence. Use a weight-based adapter such as "
-                        "LoRA instead, or set `use_fused_linear_loss=False`."
+                        "`use_liger_kernel=True` is incompatible with prompt-learning PEFT methods (PromptTuning, "
+                        "PrefixTuning, P-Tuning). The Liger DPO loss bypasses `PeftModel.forward()` by calling the "
+                        "backbone directly, so virtual tokens are never prepended and the loss is computed on the "
+                        "wrong sequence. Use a weight-based adapter such as LoRA instead, or set "
+                        "`use_liger_kernel=False`."
                     )
-            self.fused_linear_loss = FusedLinearDPOLoss(beta=args.beta, loss_type=self.loss_types[0])
+            self.liger_loss = FusedLinearDPOLoss(beta=args.beta, loss_type=self.loss_types[0])
             # Redirect the model.module forward to the model forward to ensure pre-forward hooks are called, so that
             # under ZeRO-3 the parameter coordinator gathers/reduces `lm_head.weight` around the fused loss.
             self._forward_redirection = _ForwardRedirection()
@@ -892,11 +896,11 @@ class DPOTrainer(_BaseTrainer):
         is_moe = getattr(text_config, "output_router_logits", None) is not None
         self.aux_loss_enabled = is_moe and args.router_aux_loss_coef != 0.0
         self.router_aux_loss_coef = args.router_aux_loss_coef
-        if self.aux_loss_enabled and self.use_fused_linear_loss:
+        if self.aux_loss_enabled and self.use_liger_kernel:
             raise ValueError(
-                "The fused linear DPO loss does not support the Mixture-of-Experts load-balancing auxiliary loss, "
-                "because it fuses the loss without materializing the router logits. Either set `router_aux_loss_coef` "
-                "to `0.0` to disable the auxiliary loss, or set `use_fused_linear_loss` to False."
+                "Liger DPO loss does not support the Mixture-of-Experts load-balancing auxiliary loss, because it "
+                "fuses the loss without materializing the router logits. Either set `router_aux_loss_coef` to `0.0` "
+                "to disable the auxiliary loss, or set `use_liger_kernel` to False."
             )
 
         # Reference model
@@ -1232,11 +1236,11 @@ class DPOTrainer(_BaseTrainer):
         ref_chosen_logps, ref_rejected_logps = ref_logps.chunk(2, dim=0)
         return ref_chosen_logps, ref_rejected_logps
 
-    def _compute_loss_fused_linear(self, model, inputs, return_outputs):
+    def _compute_loss_liger(self, model, inputs, return_outputs):
         if return_outputs:
             raise RuntimeError(
-                "return_outputs=True is not supported with the fused linear DPO loss. The fused linear loss computes "
-                "the loss without materializing logits, so outputs cannot be returned."
+                "return_outputs=True is not supported with the Liger DPO loss. The Liger loss computes the loss "
+                "without materializing logits, so outputs cannot be returned."
             )
 
         mode = "train" if self.model.training else "eval"
@@ -1298,7 +1302,7 @@ class DPOTrainer(_BaseTrainer):
         labels[shift_completion_mask == 0] = -100
 
         with maybe_gather_lm_head_ctx(weight, bias, ref_weight, ref_bias):
-            loss, metrics = self.fused_linear_loss(
+            loss, metrics = self.liger_loss(
                 weight, hidden_states, labels, bias, ref_hidden_states, ref_weight, ref_bias
             )
 
@@ -1738,7 +1742,7 @@ class DPOTrainer(_BaseTrainer):
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         try:
-            if self.use_fused_linear_loss:
+            if self.use_liger_kernel:
                 # Under ZeRO-3, `lm_head.weight` is sharded and the fused loss reads it directly (bypassing the
                 # module), so run the loss inside the engine's forward via `_forward_redirection` to arm the parameter
                 # coordinator's gather/reduce hooks.
@@ -1747,14 +1751,9 @@ class DPOTrainer(_BaseTrainer):
                 unwrapped_model = self.accelerator.unwrap_model(model)
                 if is_zero3 or self.is_fsdp_enabled:
                     return self._forward_redirection(
-                        model,
-                        unwrapped_model,
-                        self._compute_loss_fused_linear,
-                        unwrapped_model,
-                        inputs,
-                        return_outputs,
+                        model, unwrapped_model, self._compute_loss_liger, unwrapped_model, inputs, return_outputs
                     )
-                return self._compute_loss_fused_linear(unwrapped_model, inputs, return_outputs)
+                return self._compute_loss_liger(unwrapped_model, inputs, return_outputs)
             return self._compute_loss(model, inputs, return_outputs)
         except ValueError as e:
             if "Image features and image tokens do not match" in str(e) and self.args.max_length is not None:
@@ -1787,7 +1786,7 @@ class DPOTrainer(_BaseTrainer):
         inputs = self._prepare_inputs(inputs)
         with torch.no_grad(), self.compute_loss_context_manager():
             if prediction_loss_only:
-                loss = self.compute_loss(model, inputs, return_outputs=False)  # fused loss: no logits
+                loss = self.compute_loss(model, inputs, return_outputs=False)  # logits aren't materialized with liger
                 logits, labels = None, None
             else:
                 loss, outputs = self.compute_loss(model, inputs, return_outputs=True)

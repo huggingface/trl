@@ -10,10 +10,12 @@ With this memory reduction, you can potentially turn off `cpu_offloading` or gra
 
 ## Supported Trainers
 
-Liger Kernel is supported in [`SFTTrainer`], where `use_liger_kernel=True` patches the model with Liger's `RMSNorm`, `RoPE`, `SwiGLU` and fused linear cross-entropy kernels.
-
-> [!NOTE]
-> The fused DPO, KTO, GRPO and JSD losses that Liger provides now live in TRL under `use_fused_linear_loss=True`, with no extra dependency. See [Fused linear loss](reducing_memory_usage#fused-linear-loss-for-reducing-peak-memory-usage). Setting `use_liger_kernel=True` on those trainers still enables them, but this is deprecated.
+Liger Kernel is supported in the following TRL trainers:
+- **SFT** (Supervised Fine-Tuning)
+- **DPO** (Direct Preference Optimization)
+- **GRPO** (Group Relative Policy Optimization)
+- **KTO** (Kahneman-Tversky Optimization)
+- **GKD** (Generalized Knowledge Distillation)
 
 ## Usage
 
@@ -23,12 +25,54 @@ Liger Kernel is supported in [`SFTTrainer`], where `use_liger_kernel=True` patch
   pip install liger-kernel
   ```
 
-2. Once installed, set `use_liger_kernel=True` in [`SFTConfig`]. No other changes are needed!
+2. Once installed, set `use_liger_kernel=True` in your trainer config. No other changes are needed!
+
+<hfoptions id="liger">
+<hfoption id="SFT">
 
 ```python
 from trl import SFTConfig
 
 training_args = SFTConfig(..., use_liger_kernel=True)
 ```
+
+</hfoption>
+<hfoption id="DPO">
+
+```python
+from trl import DPOConfig
+
+training_args = DPOConfig(..., use_liger_kernel=True)
+```
+
+</hfoption>
+<hfoption id="GRPO">
+
+```python
+from trl import GRPOConfig
+
+training_args = GRPOConfig(..., use_liger_kernel=True)
+```
+
+</hfoption>
+<hfoption id="KTO">
+
+```python
+from trl import KTOConfig
+
+training_args = KTOConfig(..., use_liger_kernel=True)
+```
+
+</hfoption>
+<hfoption id="GKD">
+
+```python
+from trl.experimental.gkd import GKDConfig
+
+training_args = GKDConfig(..., use_liger_kernel=True)
+```
+
+</hfoption>
+</hfoptions>
 
 To learn more about Liger-Kernel, visit their [official repository](https://github.com/linkedin/Liger-Kernel/).

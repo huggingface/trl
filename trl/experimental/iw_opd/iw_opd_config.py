@@ -56,11 +56,6 @@ class IWOPDConfig(_BaseConfig):
             Interpolation coefficient for the Generalized Jensen-Shannon Divergence loss. When `0.0`, the loss is the
             forward KL divergence. When `1.0`, the loss is the reverse KL divergence. When `0.5`, it is the standard
             JSD.
-        use_fused_linear_loss (`bool`, *optional*, defaults to `False`):
-            Whether to compute the loss with the fused linear JSD loss: the `lm_head` projection and the loss are
-            computed together, one chunk of sequences at a time, so the full `(batch_size, seq_len, vocab_size)` logits
-            are never materialized. This reduces peak memory for large vocabularies. Setting `use_liger_kernel=True`
-            also enables it, which is deprecated.
         distillation_objective (`str`, *optional*, defaults to `"iw_opd"`):
             Objective to optimize. `"iw_opd"` uses the sampled-token Importance-Weighted On-Policy Distillation
             objective. `"jsd"` keeps the generalized JSD/KL objective.
@@ -212,15 +207,6 @@ class IWOPDConfig(_BaseConfig):
         metadata={
             "help": "Interpolation coefficient for the Generalized JSD loss. "
             "0.0 = forward KL, 0.5 = JSD, 1.0 = reverse KL."
-        },
-    )
-    use_fused_linear_loss: bool = field(
-        default=False,
-        metadata={
-            "help": "Whether to compute the loss with the fused linear JSD loss: the `lm_head` projection and the "
-            "loss are computed together, one chunk of sequences at a time, so the full `(batch_size, seq_len, "
-            "vocab_size)` logits are never materialized. This reduces peak memory for large vocabularies. Setting "
-            "`use_liger_kernel=True` also enables it, which is deprecated."
         },
     )
     distillation_objective: str = field(
@@ -415,15 +401,6 @@ class IWOPDConfig(_BaseConfig):
     def __post_init__(self):
         super().__post_init__()
 
-        if self.use_liger_kernel and not self.use_fused_linear_loss:
-            warnings.warn(
-                "Enabling the fused linear loss via `use_liger_kernel=True` is deprecated and will be removed in "
-                "v2.0.0. Set `use_fused_linear_loss=True` instead.",
-                FutureWarning,
-                stacklevel=3,
-            )
-            self.use_fused_linear_loss = True
-
         if self.lmbda < 0.0 or self.lmbda > 1.0:
             raise ValueError(f"lmbda must be in [0.0, 1.0], got {self.lmbda}.")
         if self.beta < 0.0 or self.beta > 1.0:
@@ -461,15 +438,15 @@ class IWOPDConfig(_BaseConfig):
                 f"{self.per_device_train_batch_size} * {self.gradient_accumulation_steps}."
             )
 
-        if self.use_teacher_server and self.use_fused_linear_loss:
+        if self.use_teacher_server and self.use_liger_kernel:
             raise ValueError(
-                "use_fused_linear_loss=True is not supported with use_teacher_server=True because the fused loss path "
+                "use_liger_kernel=True is not supported with use_teacher_server=True because the Liger loss path "
                 "requires a local teacher model."
             )
-        if self.distillation_objective == "iw_opd" and self.use_fused_linear_loss:
+        if self.distillation_objective == "iw_opd" and self.use_liger_kernel:
             raise ValueError(
-                "use_fused_linear_loss=True is not supported with distillation_objective='iw_opd' because IW-OPD "
-                "needs sampled-token student and teacher logprobs."
+                "use_liger_kernel=True is not supported with distillation_objective='iw_opd' because IW-OPD needs "
+                "sampled-token student and teacher logprobs."
             )
         if self.distillation_objective == "iw_opd" and self.lmbda < 1.0:
             raise ValueError(

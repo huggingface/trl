@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import importlib
 import os
 from types import SimpleNamespace
 
@@ -23,7 +24,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig
 
 from trl.experimental.gkd import GKDConfig, GKDTrainer
 
-from ..testing_utils import TrlTestCase, require_torch_accelerator
+from ..testing_utils import TrlTestCase, require_liger_kernel, require_torch_accelerator
 
 
 class TestGKDTrainerGenerateOnPolicy(TrlTestCase):
@@ -323,6 +324,10 @@ class TestGKDTrainer(TrlTestCase):
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
         self.tokenizer.pad_token = self.tokenizer.eos_token
 
+    def teardown_method(self):
+        if hasattr(self, "_liger_module"):
+            importlib.reload(importlib.import_module(self._liger_module))
+
     def test_gkd_trainer(self):
         training_args = GKDConfig(
             output_dir=self.tmp_dir,
@@ -400,13 +405,14 @@ class TestGKDTrainer(TrlTestCase):
         else:
             assert trainer.eval_dataset is eval_dataset
 
-    def test_gkd_trainer_with_fused_linear_loss(self):
+    @require_liger_kernel
+    def test_gkd_trainer_with_liger(self):
         training_args = GKDConfig(
             output_dir=self.tmp_dir,
             per_device_train_batch_size=2,
             max_length=64,
             report_to="none",
-            use_fused_linear_loss=True,
+            use_liger_kernel=True,
         )
         dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
 
@@ -417,6 +423,11 @@ class TestGKDTrainer(TrlTestCase):
             train_dataset=dataset,
             processing_class=self.tokenizer,
         )
+        self._liger_module = trainer.model.__module__
+
+        # Ensure liger fused JSD path is enabled; if not, skip (runtime may lack system libs)
+        if not getattr(trainer, "use_liger_gkd_loss", False):
+            pytest.skip("Liger fused JSD not enabled at runtime; skipping fused-loss assertion")
 
         trainer.train()
 
@@ -486,12 +497,13 @@ class TestGKDTrainer(TrlTestCase):
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
-    def test_compute_loss_return_outputs_with_fused_linear_loss(self):
-        """Test that return_outputs=True works correctly with fused linear loss path."""
+    @require_liger_kernel
+    def test_compute_loss_return_outputs_with_liger(self):
+        """Test that return_outputs=True works correctly with Liger kernel path."""
         training_args = GKDConfig(
             output_dir=self.tmp_dir,
             report_to="none",
-            use_fused_linear_loss=True,
+            use_liger_kernel=True,
             max_steps=2,
             eval_strategy="steps",
             eval_steps=1,
@@ -508,16 +520,18 @@ class TestGKDTrainer(TrlTestCase):
             eval_dataset=dummy_dataset["test"],
             processing_class=self.tokenizer,
         )
+        self._liger_module = trainer.model.__module__
 
         # evaluate() calls compute_loss with return_outputs=True; must not raise UnboundLocalError
         eval_results = trainer.evaluate()
         assert "eval_loss" in eval_results
         assert eval_results["eval_loss"] is not None
 
+    @require_liger_kernel
     @require_torch_accelerator
-    def test_fused_loss_matches_non_fused_loss(self):
-        # The fused linear JSD path must compute the same loss as the default path
-        # (FusedLinearJSDLoss defaults mix 0.5 * CE + 0.5 * JSD, but GKD wants pure JSD).
+    def test_liger_loss_matches_non_liger_loss(self):
+        # The Liger fused JSD path must compute the same loss as the non-Liger path
+        # (LigerFusedLinearJSDLoss defaults mix 0.5 * CE + 0.5 * JSD, but GKD wants pure JSD).
         common = dict(output_dir=self.tmp_dir, report_to="none", per_device_train_batch_size=2, max_length=64)
         dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train").select(
             range(2)
@@ -526,39 +540,40 @@ class TestGKDTrainer(TrlTestCase):
         ref_trainer = GKDTrainer(
             model=self.model_id,
             teacher_model=self.model_id,
-            args=GKDConfig(use_fused_linear_loss=False, **common),
+            args=GKDConfig(use_liger_kernel=False, **common),
             train_dataset=dataset,
             processing_class=self.tokenizer,
         )
-        fused_trainer = GKDTrainer(
+        liger_trainer = GKDTrainer(
             model=self.model_id,
             teacher_model=self.model_id,
-            args=GKDConfig(use_fused_linear_loss=True, **common),
+            args=GKDConfig(use_liger_kernel=True, **common),
             train_dataset=dataset,
             processing_class=self.tokenizer,
         )
+        self._liger_module = liger_trainer.model.__module__
 
         # Force student/teacher weights identical between trainers, then diverge teacher
         # so JSD is well above fp noise.
-        fused_trainer.model.load_state_dict(ref_trainer.model.state_dict())
+        liger_trainer.model.load_state_dict(ref_trainer.model.state_dict())
         torch.manual_seed(0)
         with torch.no_grad():
             for p in ref_trainer.teacher_model.parameters():
                 p.add_(0.5 * torch.randn_like(p))
-        fused_trainer.teacher_model.load_state_dict(ref_trainer.teacher_model.state_dict())
+        liger_trainer.teacher_model.load_state_dict(ref_trainer.teacher_model.state_dict())
 
         device = next(ref_trainer.model.parameters()).device
         batch = ref_trainer.data_collator([ref_trainer.train_dataset[i] for i in range(2)])
         batch = {k: v.to(device) for k, v in batch.items() if isinstance(v, torch.Tensor)}
 
         ref_trainer.model.eval()
-        fused_trainer.model.eval()
+        liger_trainer.model.eval()
         with torch.no_grad():
             ref_loss = ref_trainer.compute_loss(ref_trainer.model, batch).item()
-            fused_loss = fused_trainer.compute_loss(fused_trainer.model, batch).item()
+            liger_loss = liger_trainer.compute_loss(liger_trainer.model, batch).item()
 
         torch.testing.assert_close(
-            torch.tensor(fused_loss),
+            torch.tensor(liger_loss),
             torch.tensor(ref_loss),
             rtol=2e-2,
             atol=1e-6,
@@ -568,7 +583,7 @@ class TestGKDTrainer(TrlTestCase):
     def test_loss_normalizes_by_num_items_in_batch(self):
         # When `num_items_in_batch` is passed (as under gradient accumulation), the loss must be the JSD summed over
         # valid tokens divided by that global count, rather than the local per-microbatch mean. See issue #4719.
-        # GPU-gated like `test_fused_loss_matches_non_fused_loss`: GKD's loss path is accelerator-affine, so the model
+        # GPU-gated like `test_liger_loss_matches_non_liger_loss`: GKD's loss path is accelerator-affine, so the model
         # runs on the device rather than being forced to CPU.
         common = dict(
             output_dir=self.tmp_dir,
@@ -582,7 +597,7 @@ class TestGKDTrainer(TrlTestCase):
         trainer = GKDTrainer(
             model=self.model_id,
             teacher_model=self.model_id,
-            args=GKDConfig(use_fused_linear_loss=False, **common),
+            args=GKDConfig(use_liger_kernel=False, **common),
             train_dataset=dataset,
             processing_class=self.tokenizer,
         )
@@ -637,7 +652,7 @@ class TestGKDTrainer(TrlTestCase):
         trainer = GKDTrainer(
             model=self.model_id,
             teacher_model=self.model_id,
-            args=GKDConfig(use_fused_linear_loss=False, **common),
+            args=GKDConfig(use_liger_kernel=False, **common),
             train_dataset=dataset,
             processing_class=self.tokenizer,
         )
@@ -666,10 +681,11 @@ class TestGKDTrainer(TrlTestCase):
         # local mean. The old prompt-width slice summed FEWER tokens than num_valid, so loss_global != loss_mean.
         torch.testing.assert_close(loss_global, loss_mean, rtol=1e-4, atol=1e-6)
 
+    @require_liger_kernel
     @require_torch_accelerator
-    def test_fused_loss_normalizes_by_num_items_in_batch(self):
-        # The fused linear JSD path normalizes by the local valid-token count internally; passing num_items_in_batch
-        # must rescale it to the global count (see issue #4719). Mirrors the default-path test on the fused path.
+    def test_liger_loss_normalizes_by_num_items_in_batch(self):
+        # The Liger fused JSD path normalizes by the local valid-token count internally; passing num_items_in_batch
+        # must rescale it to the global count (see issue #4719). Mirrors the non-Liger test on the Liger path.
         common = dict(output_dir=self.tmp_dir, report_to="none", per_device_train_batch_size=2, max_length=64)
         dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train").select(
             range(2)
@@ -677,10 +693,13 @@ class TestGKDTrainer(TrlTestCase):
         trainer = GKDTrainer(
             model=self.model_id,
             teacher_model=self.model_id,
-            args=GKDConfig(use_fused_linear_loss=True, **common),
+            args=GKDConfig(use_liger_kernel=True, **common),
             train_dataset=dataset,
             processing_class=self.tokenizer,
         )
+        self._liger_module = trainer.model.__module__
+        if not getattr(trainer, "use_liger_gkd_loss", False):
+            pytest.skip("Liger fused JSD not enabled at runtime; skipping fused-loss assertion")
 
         torch.manual_seed(0)
         with torch.no_grad():

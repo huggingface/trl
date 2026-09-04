@@ -369,7 +369,7 @@ class IWOPDTrainer(_BaseTrainer):
     - On-policy / off-policy mixing via `lmbda` (buffered across gradient accumulation)
     - Local teacher model or external teacher via vLLM server
     - Student on-policy generation via vLLM or model.generate()
-    - Fused linear JSD loss for memory efficiency
+    - Liger kernel for memory-efficient fused JSD loss
     """
 
     _tag_names = ["trl", "iw-opd"]
@@ -483,10 +483,10 @@ class IWOPDTrainer(_BaseTrainer):
                 max_prompt_length=args.max_prompt_length,
             )
 
-        # ── Fused linear JSD loss ──
-        self.use_fused_linear_loss = False
-        if args.use_fused_linear_loss:
-            self.fused_linear_loss = FusedLinearJSDLoss(
+        # ── Liger fused JSD loss ──
+        self.use_liger_loss = False
+        if args.use_liger_kernel:
+            self.liger_loss = FusedLinearJSDLoss(
                 beta=args.beta,
                 ignore_index=-100,
                 temperature=args.temperature,
@@ -494,7 +494,7 @@ class IWOPDTrainer(_BaseTrainer):
                 weight_hard_loss=0.0,
                 weight_soft_loss=1.0,
             )
-            self.use_fused_linear_loss = True
+            self.use_liger_loss = True
             self._forward_redirection = _ForwardRedirection()
 
         # ── Teacher model setup ──
@@ -1576,8 +1576,8 @@ class IWOPDTrainer(_BaseTrainer):
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         self._raise_if_local_teacher_tokenizer_mismatch()
 
-        if self.use_fused_linear_loss:
-            loss = self._compute_fused_linear_loss(model, inputs, num_items_in_batch=num_items_in_batch)
+        if self.use_liger_loss:
+            loss = self._compute_liger_loss(model, inputs, num_items_in_batch=num_items_in_batch)
             return (loss, None) if return_outputs else loss
 
         # Student forward pass
@@ -1680,8 +1680,8 @@ class IWOPDTrainer(_BaseTrainer):
 
         return (loss, student_outputs) if return_outputs else loss
 
-    def _fused_student_forward(self, student, inputs):
-        """Decoder-only forward used by the fused JSD path (skips lm_head to save memory)."""
+    def _liger_student_forward(self, student, inputs):
+        """Decoder-only forward used by the Liger JSD path (skips lm_head to save memory)."""
         if hasattr(student, "get_decoder") and student.get_decoder() is not None:
             decoder = student.get_decoder()
         else:
@@ -1692,13 +1692,13 @@ class IWOPDTrainer(_BaseTrainer):
             use_cache=False,
         )
 
-    def _compute_fused_linear_loss(self, model, inputs, num_items_in_batch=None):
-        """Memory-efficient JSD using the fused linear loss (operates on hidden states, not full logits)."""
+    def _compute_liger_loss(self, model, inputs, num_items_in_batch=None):
+        """Memory-efficient JSD using Liger kernel (operates on hidden states, not full logits)."""
         # Route through the DDP/FSDP wrapper via _forward_redirection so that
         # DDP.forward() is called and prepare_for_backward() fires correctly.
         unwrapped_student = self.accelerator.unwrap_model(model)
         student_outputs = self._forward_redirection(
-            model, unwrapped_student, self._fused_student_forward, unwrapped_student, inputs
+            model, unwrapped_student, self._liger_student_forward, unwrapped_student, inputs
         )
 
         self.teacher_model.eval()
@@ -1730,7 +1730,7 @@ class IWOPDTrainer(_BaseTrainer):
         student_head = unwrapped_student.get_output_embeddings()
         teacher_head = unwrapped_teacher.get_output_embeddings()
 
-        loss = self.fused_linear_loss(
+        loss = self.liger_loss(
             student_input=student_hidden,
             student_weight=student_head.weight,
             teacher_input=teacher_hidden,
@@ -1740,7 +1740,7 @@ class IWOPDTrainer(_BaseTrainer):
             teacher_bias=getattr(teacher_head, "bias", None),
         )
 
-        # The fused linear JSD loss normalizes by the local number of valid tokens. Under gradient accumulation we want
+        # The Liger JSD loss normalizes by the local number of valid tokens. Under gradient accumulation we want
         # the global normalization, so rescale by `num_valid_local / num_items_in_batch`.
         if num_items_in_batch is not None:
             num_valid_local = (true_labels != -100).sum().clamp_min(1)
@@ -1751,9 +1751,9 @@ class IWOPDTrainer(_BaseTrainer):
         del student_hidden, teacher_hidden, true_labels
         return loss
 
-    def _get_fused_zero3_lm_head_gather_ctx(self, model: nn.Module):
-        """Context manager for gathering lm_head parameters under the fused loss + ZeRO-3."""
-        if not self.use_fused_linear_loss:
+    def _get_liger_zero3_lm_head_gather_ctx(self, model: nn.Module):
+        """Context manager for gathering lm_head parameters under Liger + ZeRO-3."""
+        if not self.use_liger_loss:
             return nullcontext()
 
         deepspeed_plugin = self.accelerator.state.deepspeed_plugin
@@ -1784,7 +1784,7 @@ class IWOPDTrainer(_BaseTrainer):
         """Training step with on/off-policy loss tracking and completion stats."""
         buffer_steps = self.args.gradient_accumulation_steps
 
-        with self._get_fused_zero3_lm_head_gather_ctx(model):
+        with self._get_liger_zero3_lm_head_gather_ctx(model):
             loss = super().training_step(model, inputs, num_items_in_batch)
 
         slice_idx = (self._buffer_step - 1) % buffer_steps

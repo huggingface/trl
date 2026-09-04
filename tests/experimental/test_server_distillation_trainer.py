@@ -74,9 +74,9 @@ def _variable_length_dataset():
     )
 
 
-def test_config_rejects_fused_linear_loss(tmp_path):
-    with pytest.raises(ValueError, match="use_fused_linear_loss=True is not supported by ServerDistillationTrainer"):
-        ServerDistillationConfig(**_make_server_config_kwargs(tmp_path), use_fused_linear_loss=True)
+def test_config_rejects_liger(tmp_path):
+    with pytest.raises(ValueError, match="use_liger_kernel=True is not supported by ServerDistillationTrainer"):
+        ServerDistillationConfig(**_make_server_config_kwargs(tmp_path), use_liger_kernel=True)
 
 
 def test_config_rejects_reverse_kl_argmax(tmp_path):

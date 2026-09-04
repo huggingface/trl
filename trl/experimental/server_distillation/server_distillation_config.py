@@ -87,9 +87,9 @@ class ServerDistillationConfig(DistillationConfig):
 
         if self.reverse_kl_top_1_mode not in {"sampled", "argmax"}:
             raise ValueError("reverse_kl_top_1_mode must be one of: 'sampled', 'argmax'")
-        if self.use_fused_linear_loss:
+        if self.use_liger_kernel:
             raise ValueError(
-                "use_fused_linear_loss=True is not supported by ServerDistillationTrainer because the fused loss path "
+                "use_liger_kernel=True is not supported by ServerDistillationTrainer because the Liger loss path "
                 "requires a local teacher model."
             )
         if self.teacher_model_server_url is None or not self.teacher_model_server_url.strip():

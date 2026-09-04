@@ -45,7 +45,7 @@ from transformers import (
     is_trackio_available,
     is_wandb_available,
 )
-from transformers.utils import is_peft_available, is_rich_available
+from transformers.utils import is_liger_kernel_available, is_peft_available, is_rich_available
 
 from ..chat_template_utils import (
     _SUPPORTS_RESPONSE_TEMPLATE,
@@ -608,7 +608,7 @@ class DistillationTrainer(_BaseTrainer):
                 if param.requires_grad:
                     param.data = param.data.to(torch.bfloat16)
 
-        # Both loss paths (chunked and fused) read `lm_head.weight` directly and run the backbone via
+        # Both loss paths (chunked and Liger) read `lm_head.weight` directly and run the backbone via
         # `_get_last_hidden_state`, bypassing `PeftModel.forward()` — so PEFT setups that live outside the backbone
         # weights are silently ignored. Fail loudly rather than train on a silently-wrong objective.
         if is_peft_model(model):
@@ -633,14 +633,19 @@ class DistillationTrainer(_BaseTrainer):
                     "adapter such as LoRA instead."
                 )
 
-        # The chunked JSD loss (and the fused path) call the student backbone directly, bypassing the DDP/FSDP
+        # The chunked JSD loss (and the Liger path) call the student backbone directly, bypassing the DDP/FSDP
         # wrapper's forward; route them through `_forward_redirection` so `prepare_for_backward()` still fires.
         self._forward_redirection = _ForwardRedirection()
 
-        # Fused linear JSD loss
-        self.use_fused_linear_loss = False
-        if args.use_fused_linear_loss:
-            self.fused_linear_loss = FusedLinearJSDLoss(
+        # Liger fused JSD loss
+        self.use_liger_kernel = False
+        if args.use_liger_kernel:
+            if not is_liger_kernel_available():
+                raise ImportError(
+                    "Liger is required to use `use_liger_kernel` as the distillation loss. Run "
+                    "`pip install liger-kernel`."
+                )
+            self.liger_loss = FusedLinearJSDLoss(
                 beta=args.beta,
                 ignore_index=-100,
                 temperature=args.temperature,
@@ -648,7 +653,7 @@ class DistillationTrainer(_BaseTrainer):
                 weight_hard_loss=0.0,
                 weight_soft_loss=1.0,
             )
-            self.use_fused_linear_loss = True
+            self.use_liger_kernel = True
 
         # Teacher model setup
         # `teacher_model` may be None: subclasses (e.g. ServerDistillationTrainer) supply the teacher another way.
@@ -739,11 +744,11 @@ class DistillationTrainer(_BaseTrainer):
                     f"requires a shared vocabulary. Use a teacher with the same vocab_size, or GOLD for "
                     f"cross-tokenizer distillation."
                 )
-            # The fused linear JSD loss projects `h @ Wᵀ` directly and has no `logit_scale` /
+            # The Liger fused JSD kernel projects `h @ Wᵀ` directly and has no `logit_scale` /
             # `final_logit_softcapping` parameters, so (unlike the chunked path) it cannot reproduce Cohere
             # `logit_scale` or Gemma `final_logit_softcapping`. Refuse rather than silently optimize a different
             # objective than the model's real forward.
-            if self.use_fused_linear_loss:
+            if self.use_liger_kernel:
                 for name, model in [("student", self.model), ("teacher", teacher_model)]:
                     # On VLMs the logit post-processing lives on `text_config`, so read it through
                     # `get_text_config()`. Muse Glimmer names its pre-softcap multiplier `output_multiplier`.
@@ -755,11 +760,11 @@ class DistillationTrainer(_BaseTrainer):
                     softcapped = getattr(config, "final_logit_softcapping", None) is not None
                     if scaled or softcapped:
                         raise ValueError(
-                            f"`use_fused_linear_loss=True` is incompatible with the {name} model's `logit_scale` / "
-                            "`final_logit_softcapping` (e.g. Cohere / Gemma models): the fused linear JSD loss reads "
-                            "`lm_head.weight` directly and cannot apply them, so it would optimize a different "
-                            "objective than the model's real forward. Set `use_fused_linear_loss=False` to use the "
-                            "chunked loss, which applies both."
+                            f"`use_liger_kernel=True` is incompatible with the {name} model's `logit_scale` / "
+                            f"`final_logit_softcapping` (e.g. Cohere / Gemma models): the Liger fused JSD loss reads "
+                            f"`lm_head.weight` directly and cannot apply them, so it would optimize a different "
+                            f"objective than the model's real forward. Set `use_liger_kernel=False` to use the chunked "
+                            f"loss, which applies both."
                         )
             if self.is_deepspeed_enabled:
                 self.teacher_model = prepare_deepspeed(teacher_model, self.accelerator)
@@ -1846,7 +1851,7 @@ class DistillationTrainer(_BaseTrainer):
 
         # Log the mean per-token student entropy (in nats). The reduction runs here, after `_forward_redirection`
         # returns, so the `gather_for_metrics` collective does not run inside the DDP/FSDP-wrapped forward (a hang/
-        # ordering risk). The fused path produces no entropy, so it logs none. Mirrors `SFTTrainer.compute_loss`.
+        # ordering risk). The Liger path produces no entropy, so it logs none. Mirrors `SFTTrainer.compute_loss`.
         if entropy_sum is not None:
             mode = "train" if self.model.training else "eval"
             num_valid_tokens = self.accelerator.gather_for_metrics(num_valid_tokens).sum()
@@ -1903,7 +1908,7 @@ class DistillationTrainer(_BaseTrainer):
         student_lm_head = unwrapped_student.get_output_embeddings()
         teacher_lm_head = unwrapped_teacher.get_output_embeddings()
 
-        if self.use_fused_linear_loss:
+        if self.use_liger_kernel:
             # Fused JSD over the same hidden states as the chunked path. `true_labels` only masks positions (the
             # hard-loss weight is 0), so any non-ignore id marks a valid completion token; `_get_last_hidden_state`
             # already returns the completion-aligned positions, so no shift is needed.
@@ -1926,7 +1931,7 @@ class DistillationTrainer(_BaseTrainer):
             with maybe_gather_lm_head_ctx(
                 student_lm_head.weight, student_lm_head.bias, teacher_lm_head.weight, teacher_lm_head.bias
             ):
-                loss = self.fused_linear_loss(
+                loss = self.liger_loss(
                     student_input=student_hidden_states.reshape(-1, student_hidden_states.size(-1)),
                     student_weight=student_weight,
                     teacher_input=teacher_hidden_states.reshape(-1, teacher_hidden_states.size(-1)),
@@ -1935,22 +1940,21 @@ class DistillationTrainer(_BaseTrainer):
                     student_bias=student_bias,
                     teacher_bias=teacher_bias,
                 )
-            # The fused loss normalizes by the local valid-token count; rescale to the global count for grad-accum
-            # correctness.
+            # Liger normalizes by the local valid-token count; rescale to the global count for grad-accum correctness.
             if num_items_in_batch is not None:
                 num_valid_local = (true_labels != -100).sum().clamp_min(1)
                 if isinstance(num_items_in_batch, torch.Tensor):
                     num_items_in_batch = num_items_in_batch.to(loss.device)
                 loss = loss * num_valid_local / num_items_in_batch
-            # The fused kernel produces no entropy; `compute_loss` logs none for the fused path.
+            # The fused kernel produces no entropy; `compute_loss` logs none for the Liger path.
             return loss, None, None
 
         # On VLMs the logit post-processing lives on `text_config`, so read it through `get_text_config()`.
         student_config = unwrapped_student.config.get_text_config()
         teacher_config = unwrapped_teacher.config.get_text_config()
         # `logit_scale` is None on models that don't scale (e.g. MPT); read that as unscaled (1.0). A real 0.0 is kept
-        # as-is: the fused-loss guard rejects it, and the chunked path applies it faithfully. Muse Glimmer applies the
-        # same pre-softcap multiplier under the name `output_multiplier`.
+        # as-is: the Liger guard rejects it, and the chunked path applies it faithfully. Muse Glimmer applies the same
+        # pre-softcap multiplier under the name `output_multiplier`.
         student_logit_scale = getattr(student_config, "logit_scale", None)
         if student_logit_scale is None:
             student_logit_scale = getattr(student_config, "output_multiplier", None)

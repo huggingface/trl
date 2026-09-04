@@ -37,7 +37,7 @@ from transformers import (
     TrainerCallback,
 )
 from transformers.trainer_utils import seed_worker
-from transformers.utils import is_datasets_available, is_peft_available
+from transformers.utils import is_datasets_available, is_liger_kernel_available, is_peft_available
 
 from ...data_utils import is_conversational
 from ...losses import FusedLinearJSDLoss
@@ -366,26 +366,31 @@ class SDFTTrainer(_BaseTrainer):
                     "vocabulary, so `full_logits` is unavailable. Note `topk_logits` distills over the teacher's own "
                     "top-k support (the server cannot score the student's top-k indices)."
                 )
-            if args.use_fused_linear_loss:
+            if args.use_liger_kernel:
                 raise ValueError(
-                    "`use_teacher_server=True` is incompatible with `use_fused_linear_loss`: the server returns top-k "
-                    "logprobs while the fused linear loss needs full-vocabulary hidden states."
+                    "`use_teacher_server=True` is incompatible with `use_liger_kernel`: the server returns top-k "
+                    "logprobs while the Liger fused loss needs full-vocabulary hidden states."
                 )
-        # Fused linear JSD loss for `full_logits`: same generalized JSD as `compute_divergence`, so alpha maps to beta.
-        self.use_fused_linear_loss = False
-        if args.use_fused_linear_loss:
+        # Liger fused JSD loss for `full_logits`: same generalized JSD as `compute_divergence`, so alpha maps to beta.
+        self.use_liger_loss = False
+        if args.use_liger_kernel:
+            if not is_liger_kernel_available():
+                raise ImportError(
+                    "Liger is required to use `use_liger_kernel` as the self-distillation loss. Run "
+                    "`pip install liger-kernel`."
+                )
             if args.distillation_mode != "full_logits":
                 raise ValueError(
-                    "`use_fused_linear_loss` only supports `distillation_mode='full_logits'`, got "
+                    "`use_liger_kernel` only supports `distillation_mode='full_logits'`, got "
                     f"{args.distillation_mode!r}. The fused JSD kernel operates on the full vocabulary and cannot "
                     "express the top-k support or sampled-token objectives."
                 )
             if args.distillation_is_clip is not None:
                 raise ValueError(
-                    "`use_fused_linear_loss` is incompatible with `distillation_is_clip`: the fused kernel does not "
-                    "expose per-token losses for importance-sampling clipping."
+                    "`use_liger_kernel` is incompatible with `distillation_is_clip`: the fused kernel does not expose "
+                    "per-token losses for importance-sampling clipping."
                 )
-            self.fused_linear_loss = FusedLinearJSDLoss(
+            self.liger_loss = FusedLinearJSDLoss(
                 beta=args.distillation_alpha,
                 ignore_index=-100,
                 temperature=args.temperature,
@@ -394,7 +399,7 @@ class SDFTTrainer(_BaseTrainer):
                 weight_soft_loss=1.0,
             )
             self._forward_redirection = _ForwardRedirection()
-            self.use_fused_linear_loss = True
+            self.use_liger_loss = True
 
         super().__init__(
             model=model,
@@ -599,7 +604,7 @@ class SDFTTrainer(_BaseTrainer):
 
     def training_step(self, model, inputs, num_items_in_batch):
         # Gather spans forward+backward: the fused JSD computes the lm_head grad in backward.
-        with self._get_fused_zero3_lm_head_gather_ctx(model):
+        with self._get_liger_zero3_lm_head_gather_ctx(model):
             output = super().training_step(model, inputs, num_items_in_batch)
         self._step += 1
         return output
@@ -826,8 +831,8 @@ class SDFTTrainer(_BaseTrainer):
 
         if self.use_teacher_server:
             loss = self._compute_server_distillation_loss(model, inputs)
-        elif self.use_fused_linear_loss:
-            loss = self._compute_fused_linear_loss(model, inputs)
+        elif self.use_liger_loss:
+            loss = self._compute_liger_loss(model, inputs)
         else:
             distillation_logits = self._compute_teacher_student_logits(model, self.teacher_model, inputs)
             loss = self._compute_self_distillation_loss(model, inputs, distillation_logits)
@@ -1126,8 +1131,8 @@ class SDFTTrainer(_BaseTrainer):
         logits = logits[:, -logits_to_keep:, :]
         return logits / self.temperature
 
-    def _compute_fused_linear_loss(self, model, inputs: TrainingBatch) -> torch.Tensor:
-        """`full_logits` distillation via the fused linear JSD loss: forwards the base models for hidden states and
+    def _compute_liger_loss(self, model, inputs: TrainingBatch) -> torch.Tensor:
+        """`full_logits` distillation via the Liger fused JSD kernel: forwards the base models for hidden states and
         fuses the lm_head projection with the divergence, never materializing the full-vocab logits.
 
         Each model is forwarded through its own wrapper via `_forward_redirection` so FSDP2/DeepSpeed materialize the
@@ -1148,7 +1153,7 @@ class SDFTTrainer(_BaseTrainer):
             teacher_hidden, teacher_weight, teacher_bias = self._forward_redirection(
                 self.teacher_model,
                 unwrapped_teacher,
-                self._fused_teacher_side,
+                self._liger_teacher_side,
                 unwrapped_teacher,
                 inputs,
                 logits_to_keep,
@@ -1157,7 +1162,7 @@ class SDFTTrainer(_BaseTrainer):
         return self._forward_redirection(
             model,
             unwrapped_student,
-            self._fused_student_loss,
+            self._liger_student_loss,
             unwrapped_student,
             inputs,
             logits_to_keep,
@@ -1167,7 +1172,7 @@ class SDFTTrainer(_BaseTrainer):
             teacher_bias,
         )
 
-    def _fused_teacher_side(self, teacher, inputs: TrainingBatch, logits_to_keep: int):
+    def _liger_teacher_side(self, teacher, inputs: TrainingBatch, logits_to_keep: int):
         """Teacher hidden states + frozen lm_head weight, captured while the teacher params are materialized."""
         hidden = teacher.get_decoder()(
             input_ids=inputs["teacher_input_ids"],
@@ -1181,7 +1186,7 @@ class SDFTTrainer(_BaseTrainer):
         bias = head.bias.detach().clone() if head.bias is not None else None
         return hidden, weight, bias
 
-    def _fused_student_loss(
+    def _liger_student_loss(
         self,
         student,
         inputs: TrainingBatch,
@@ -1206,10 +1211,10 @@ class SDFTTrainer(_BaseTrainer):
         true_labels = torch.where(loss_mask.bool(), completion_ids, torch.full_like(completion_ids, -100))
 
         student_head = student.get_output_embeddings()
-        # Per-sequence then batch mean (grpo), matching the non-fused path: the fused kernel reduces by total tokens
+        # Per-sequence then batch mean (grpo), matching the non-Liger path: the fused kernel reduces by total tokens
         # (bnpo), so we call it per sequence and average.
         seq_losses = [
-            self.fused_linear_loss(
+            self.liger_loss(
                 student_input=student_hidden[i],
                 student_weight=student_head.weight,
                 teacher_input=teacher_hidden[i],
@@ -1226,11 +1231,11 @@ class SDFTTrainer(_BaseTrainer):
         self._log_self_distillation_metric(mode, self.accelerator.gather(loss.detach()).mean().item())
         return loss
 
-    def _get_fused_zero3_lm_head_gather_ctx(self, model):
-        """Gather the sharded student/teacher lm_head weights for the fused matmul under ZeRO-3. The fused loss reads
+    def _get_liger_zero3_lm_head_gather_ctx(self, model):
+        """Gather the sharded student/teacher lm_head weights for the fused matmul under ZeRO-3. Liger reads
         `lm_head.weight` by attribute, so the gather hook never fires; the decoder forward gathers itself. No-op
         outside ZeRO-3."""
-        if not self.use_fused_linear_loss:
+        if not self.use_liger_loss:
             return nullcontext()
 
         deepspeed_plugin = self.accelerator.state.deepspeed_plugin

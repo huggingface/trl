@@ -32,7 +32,7 @@ from trl.experimental.iw_opd.iw_opd_trainer import (
     build_teacher_request_inputs,
 )
 
-from ..testing_utils import TrlTestCase, require_torch_accelerator
+from ..testing_utils import TrlTestCase, require_liger_kernel, require_torch_accelerator
 
 
 def _make_distillation_config_kwargs(tmp_path):
@@ -138,13 +138,13 @@ def _variable_length_dataset():
     )
 
 
-def test_distillation_config_rejects_fused_linear_loss_with_teacher_server(tmp_path):
-    with pytest.raises(ValueError, match="use_fused_linear_loss=True is not supported with use_teacher_server=True"):
+def test_distillation_config_rejects_liger_with_teacher_server(tmp_path):
+    with pytest.raises(ValueError, match="use_liger_kernel=True is not supported with use_teacher_server=True"):
         IWOPDConfig(
             **_make_distillation_config_kwargs(tmp_path),
             use_teacher_server=True,
             teacher_model_server_url="http://localhost:8000",
-            use_fused_linear_loss=True,
+            use_liger_kernel=True,
         )
 
 
@@ -168,14 +168,14 @@ def test_distillation_config_rejects_invalid_iw_opd_epsilon(tmp_path):
         IWOPDConfig(**_make_distillation_config_kwargs(tmp_path), iw_opd_epsilon=0.0)
 
 
-def test_distillation_config_rejects_iw_opd_with_fused_linear_loss(tmp_path):
+def test_distillation_config_rejects_iw_opd_with_liger(tmp_path):
     with pytest.raises(
-        ValueError, match="use_fused_linear_loss=True is not supported with distillation_objective='iw_opd'"
+        ValueError, match="use_liger_kernel=True is not supported with distillation_objective='iw_opd'"
     ):
         IWOPDConfig(
             **_make_distillation_config_kwargs(tmp_path),
             distillation_objective="iw_opd",
-            use_fused_linear_loss=True,
+            use_liger_kernel=True,
         )
 
 
@@ -606,11 +606,12 @@ class TestIWOPDTrainer(TrlTestCase):
         # Doubling the global count exactly halves the loss (sum / num_items is linear in 1/num_items).
         torch.testing.assert_close(loss_double, loss_mean / 2, rtol=1e-4, atol=1e-6)
 
+    @require_liger_kernel
     @require_torch_accelerator
-    def test_distillation_trainer_with_fused_linear_loss(self):
+    def test_distillation_trainer_with_liger(self):
         import importlib
 
-        training_args = self._make_args(use_fused_linear_loss=True, use_cpu=False)
+        training_args = self._make_args(use_liger_kernel=True, use_cpu=False)
         dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
 
         trainer = IWOPDTrainer(
@@ -622,7 +623,7 @@ class TestIWOPDTrainer(TrlTestCase):
         )
 
         try:
-            assert trainer.use_fused_linear_loss is True
+            assert trainer.use_liger_loss is True
             trainer.train()
             assert trainer.state.log_history[-1]["train_loss"] is not None
         finally:

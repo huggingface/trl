@@ -156,13 +156,53 @@ training_args = SFTConfig(..., model_init_kwargs={"attn_implementation": "flash_
 
 Liger Kernel is a collection of Triton kernels designed for LLM training that can increase throughput by 20% and reduce memory usage by 60%.
 
+<hfoptions id="liger">
+<hfoption id="SFT">
+
 ```python
 from trl import SFTConfig
 
 training_args = SFTConfig(..., use_liger_kernel=True)
 ```
 
-For the preference and RL trainers, see [Fused linear loss](reducing_memory_usage#fused-linear-loss-for-reducing-peak-memory-usage).
+</hfoption>
+<hfoption id="DPO">
+
+```python
+from trl import DPOConfig
+
+training_args = DPOConfig(..., use_liger_kernel=True)
+```
+
+</hfoption>
+<hfoption id="GRPO">
+
+```python
+from trl import GRPOConfig
+
+training_args = GRPOConfig(..., use_liger_kernel=True)
+```
+
+</hfoption>
+<hfoption id="KTO">
+
+```python
+from trl import KTOConfig
+
+training_args = KTOConfig(..., use_liger_kernel=True)
+```
+
+</hfoption>
+<hfoption id="GKD">
+
+```python
+from trl.experimental.gkd import GKDConfig
+
+training_args = GKDConfig(..., use_liger_kernel=True)
+```
+
+</hfoption>
+</hfoptions>
 
 For more information, see [Liger Kernel Integration](liger_kernel_integration).
 
