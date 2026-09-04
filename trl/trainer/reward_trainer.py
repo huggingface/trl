@@ -699,8 +699,10 @@ class RewardTrainer(_BaseTrainer):
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Filtering {dataset_name} >{args.max_length} tokens"
                 dataset = dataset.filter(
-                    lambda example: len(example["chosen_ids"]) <= args.max_length
-                    and len(example["rejected_ids"]) <= args.max_length,
+                    lambda example: (
+                        len(example["chosen_ids"]) <= args.max_length
+                        and len(example["rejected_ids"]) <= args.max_length
+                    ),
                     **map_kwargs,
                 )
 
