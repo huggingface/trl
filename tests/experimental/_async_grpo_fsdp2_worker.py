@@ -198,11 +198,18 @@ def main() -> None:
 
     last = trainer.state.log_history[-1] if trainer.state.log_history else {}
     train_loss = last.get("train_loss")
+    # The pytest side asserts on the launch shape too: a replicated single-process run would also change the
+    # parameters and report a finite loss, so world size, the distributed type and sharded parameters are reported.
+    accelerator = trainer.accelerator
     result = {
         "steps": trainer.state.global_step,
         "max_steps": _MAX_STEPS,
         "params_changed": changed,
         "train_loss_finite": train_loss is not None and bool(np.isfinite(train_loss)),
+        "num_processes": accelerator.num_processes,
+        "distributed_type": accelerator.distributed_type.value,
+        "fsdp_version": accelerator.state.fsdp_plugin.fsdp_version if accelerator.state.fsdp_plugin else None,
+        "sharded_params": sum(isinstance(p, torch.distributed.tensor.DTensor) for p in trainer.model.parameters()),
     }
     # Only rank 0 prints the asserted line, so the pytest side parses exactly one result.
     if trainer.accelerator.is_main_process:

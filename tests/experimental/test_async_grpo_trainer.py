@@ -389,6 +389,12 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         assert measured["steps"] == measured["max_steps"], f"not every configured step ran: {measured}"
         assert measured["train_loss_finite"], f"train loss not finite under FSDP2: {measured}"
         assert measured["params_changed"], f"parameters did not change under FSDP2: {measured}"
+        # A replicated single-process run would pass the checks above too, so pin the launch shape the config asks
+        # for: two ranks, FSDP version 2, and parameters that are DTensors after wrapping.
+        assert measured["num_processes"] == 2, f"expected a two-process launch: {measured}"
+        assert measured["distributed_type"] == "FSDP", f"not launched under FSDP: {measured}"
+        assert measured["fsdp_version"] == 2, f"not FSDP version 2: {measured}"
+        assert measured["sharded_params"] > 0, f"no parameter was sharded as a DTensor: {measured}"
 
 
 def _vision_parameter_names(model) -> set[str]:
