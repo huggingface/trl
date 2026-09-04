@@ -582,6 +582,10 @@ class DPOTrainer(_BaseTrainer):
                 "`model` and `ref_model` cannot be the same object. In most cases you should omit `ref_model` and "
                 "we'll initialize it to a copy of `model` for you."
             )
+        if ref_model is not None and is_peft_model(ref_model):
+            raise ValueError(
+                "`ref_model` cannot be a `PeftModel`. To use a `PeftModel`, pass it as `model` and omit `ref_model`."
+            )
 
         # Processing class
         if processing_class is None:
@@ -906,31 +910,27 @@ class DPOTrainer(_BaseTrainer):
                 "to disable the auxiliary loss, or set `use_liger_kernel` to False."
             )
 
-        # Reference model
-        if ref_model is None:
-            if is_peft_model(self.model) or args.precompute_ref_log_probs:
-                # If PEFT is used, the reference model is not needed since the adapter can be disabled to revert to the
-                # initial model. If precompute_ref_log_probs is True, the reference model does not need to be kept in
-                # memory during training.
-                self.ref_model = None
-            else:
-                ref_model_init_kwargs = dict(args.model_init_kwargs or {})  # copy to avoid mutating model_init_kwargs
-                if quantization_config is not None:
-                    ref_model_init_kwargs["quantization_config"] = quantization_config
-                # Distributed training requires device_map=None ("auto" fails)
-                if self.args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
-                    ref_model_init_kwargs["device_map"] = None
-                ref_model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
-                ref_model_path = get_config_model_id(self.model.config)
-                self.ref_model = create_model_from_path(ref_model_path, **ref_model_init_kwargs)
-        else:
-            self.ref_model = ref_model
+        # Reference model:
+        # - if not provided, create one from the model path
+        #   - unless:
+        #     - using PEFT (which recovers the reference by disabling the adapter)
+        #     - or precompute_ref_log_probs (which uses self.model as the reference before training starts)
+        if ref_model is None and not is_peft_model(self.model) and not args.precompute_ref_log_probs:
+            ref_model_init_kwargs = dict(args.model_init_kwargs or {})  # copy to avoid mutating model_init_kwargs
+            if quantization_config is not None:
+                ref_model_init_kwargs["quantization_config"] = quantization_config
+            # Distributed training requires device_map=None ("auto" fails)
+            if self.args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
+                ref_model_init_kwargs["device_map"] = None
+            ref_model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
+            ref_model_path = get_config_model_id(self.model.config)
+            ref_model = create_model_from_path(ref_model_path, **ref_model_init_kwargs)
 
         # Disable dropout in the models
         if args.disable_dropout:
             disable_dropout_in_model(model)
-            if self.ref_model is not None:
-                disable_dropout_in_model(self.ref_model)
+            if ref_model is not None:
+                disable_dropout_in_model(ref_model)
 
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
@@ -944,13 +944,13 @@ class DPOTrainer(_BaseTrainer):
         # Add tags to the model
         self.model.add_model_tags(self._tag_names)
 
-        if self.ref_model is not None:
+        if ref_model is not None:
             if self.is_deepspeed_enabled:
-                self.ref_model = prepare_deepspeed(self.ref_model, self.accelerator)
+                ref_model = prepare_deepspeed(ref_model, self.accelerator)
             elif self.is_fsdp_enabled:
-                self.ref_model = prepare_fsdp(self.ref_model, self.accelerator)
+                ref_model = prepare_fsdp(ref_model, self.accelerator)
             else:
-                self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
+                ref_model = self.accelerator.prepare_model(ref_model, evaluation_mode=True)
 
         if args.sync_ref_model:
             if is_peft_model(self.model):
@@ -969,7 +969,14 @@ class DPOTrainer(_BaseTrainer):
                     "the reference model is periodically updated during training, making any precomputed reference "
                     "log-probs stale. Set `precompute_ref_log_probs=False` or disable `sync_ref_model`."
                 )
-            self.add_callback(SyncRefModelCallback(ref_model=self.ref_model, accelerator=self.accelerator))
+            self.add_callback(SyncRefModelCallback(ref_model=ref_model, accelerator=self.accelerator))
+
+        # Reference model:
+        # - Explicit ref_model
+        # - Or self.model
+        #   - If PEFT, we trigger adapter switching on self.model for the reference forward passes
+        #   - If non-PEFT, self.model is used to precompute_ref_log_probs because no training step has run yet
+        self.ref_model = ref_model or self.model
 
         # Reference forwards during precompute reuse a single DeepSpeed inference engine (see `_precompute_ref_logps`).
         self._precompute_engine = None
@@ -1127,7 +1134,7 @@ class DPOTrainer(_BaseTrainer):
                 "`precompute_ref_log_probs=True` is not supported with IterableDataset. Please use a map-style "
                 "Dataset or set `precompute_ref_log_probs=False`."
             )
-        model_hash = hash_module(self.ref_model or self.model)
+        model_hash = hash_module(self.ref_model)
         # Both inputs are rank-dependent under distributed training (ZeRO-3 shards the model), so broadcast rank 0's
         # value so all ranks share one cache file.
         fingerprint = [Hasher.hash((dataset._fingerprint, model_hash))]
@@ -1151,12 +1158,12 @@ class DPOTrainer(_BaseTrainer):
         # This runs before the parent class prepares the model in `train`, so with DeepSpeed the parameters are still
         # on CPU (ZeRO-1/2) and sharded (ZeRO-3). Wrap the model in an inference engine to place and gather them. Build
         # it once and reuse it across precompute passes (train, eval, and later `evaluate` calls)
-        if self.ref_model is None and self.is_deepspeed_enabled:
+        if self.ref_model is self.model and self.is_deepspeed_enabled:
             if self._precompute_engine is None:
                 self._precompute_engine = prepare_deepspeed(self.model, self.accelerator)
             model = self._precompute_engine
         else:
-            model = self.ref_model or self.model
+            model = self.ref_model
 
         ref_chosen_logps = []
         ref_rejected_logps = []
@@ -1205,8 +1212,8 @@ class DPOTrainer(_BaseTrainer):
         model_kwargs["use_cache"] = False
 
         with torch.no_grad(), disable_gradient_checkpointing(self.model, self.args.gradient_checkpointing_kwargs):
-            if self.ref_model is None and is_peft_model(self.model):
-                unwrapped_model = self.accelerator.unwrap_model(self.model)
+            if is_peft_model(self.ref_model):
+                unwrapped_model = self.accelerator.unwrap_model(self.ref_model)
                 with use_adapter(
                     unwrapped_model, adapter_name="ref" if "ref" in unwrapped_model.peft_config else None
                 ):
@@ -1272,7 +1279,7 @@ class DPOTrainer(_BaseTrainer):
         bias = lm_head.bias
 
         with torch.no_grad(), disable_gradient_checkpointing(self.model, self.args.gradient_checkpointing_kwargs):
-            if self.ref_model is None:
+            if is_peft_model(self.ref_model):
                 # PEFT model with no explicit reference model: recover reference behaviour by disabling / switching to
                 # the frozen "ref" adapter, exactly as _compute_loss does for logit-based reference computation.
                 model_unwrapped = self.accelerator.unwrap_model(self.model)
@@ -1392,13 +1399,13 @@ class DPOTrainer(_BaseTrainer):
             # torch.no_grad() block triggers a harmless PyTorch warning ("None of the inputs have requires_grad=True").
             # Temporarily disable checkpointing to avoid this warning during inference.
             with torch.no_grad(), disable_gradient_checkpointing(self.model, self.args.gradient_checkpointing_kwargs):
-                if is_peft_model(model) and self.ref_model is None:
+                if is_peft_model(self.ref_model):
                     # When training a PEFT adapter, how we obtain the reference depends on the setup:
                     # - New adapter: disabling adapters yields the base model.
                     # - Re-training an existing adapter: an initial copy is loaded under the name "ref".
-                    model = self.accelerator.unwrap_model(model)
-                    with use_adapter(model, adapter_name="ref" if "ref" in model.peft_config else None):
-                        ref_outputs = self.model(**ref_model_kwargs)
+                    ref_model = self.accelerator.unwrap_model(self.ref_model)
+                    with use_adapter(ref_model, adapter_name="ref" if "ref" in ref_model.peft_config else None):
+                        ref_outputs = self.ref_model(**ref_model_kwargs)
                 else:
                     ref_outputs = self.ref_model(**ref_model_kwargs)
 
@@ -1697,7 +1704,7 @@ class DPOTrainer(_BaseTrainer):
             # tokenizing so we fail fast.
             if (
                 self.precompute_ref_logps
-                and self.ref_model is None
+                and self.ref_model is self.model
                 and not is_peft_model(self.model)
                 and self.state.global_step > 0
             ):
