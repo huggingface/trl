@@ -364,6 +364,8 @@ class GRPOConfig(_BaseConfig):
 
         > Parameters that control the logging
 
+        log_entropy (`bool`, *optional*, defaults to `True`):
+            Whether to log the per-token entropy metric. Disable to skip computing it unless needed for training.
         log_completions (`bool`, *optional*, defaults to `False`):
             Whether to log a sample of (prompt, completion) pairs every `logging_steps` steps. If `rich` is installed,
             it prints the sample. If `wandb` and/or `trackio` logging is enabled, it logs it to `wandb` and/or
@@ -975,6 +977,12 @@ class GRPOConfig(_BaseConfig):
     )
 
     # Parameters that control the logging
+    log_entropy: bool = field(
+        default=True,
+        metadata={
+            "help": "Whether to log the per-token entropy metric. Disable to skip computing it unless needed for training."
+        },
+    )
     log_completions: bool = field(
         default=False,
         metadata={

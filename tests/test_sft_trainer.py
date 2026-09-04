@@ -286,6 +286,33 @@ class TestDataCollatorForLanguageModeling(TrlTestCase):
 
 
 class TestSFTTrainer(TrlTestCase):
+    @pytest.mark.parametrize("log_entropy", [False, True])
+    @pytest.mark.parametrize("loss_type", ["nll", "chunked_nll"])
+    def test_log_entropy(self, log_entropy, loss_type):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        # Leave the flag unset to exercise the default when entropy logging is enabled.
+        entropy_kwargs = {} if log_entropy else {"log_entropy": False}
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            max_steps=2,
+            logging_steps=1,
+            report_to="none",
+            loss_type=loss_type,
+            **entropy_kwargs,
+        )
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+        trainer.train()
+
+        assert any("loss" in entry for entry in trainer.state.log_history)
+        if log_entropy:
+            assert any("entropy" in entry for entry in trainer.state.log_history)
+        else:
+            assert all("entropy" not in entry for entry in trainer.state.log_history)
+
     def test_init_with_training_arguments(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
         args = TrainingArguments(output_dir=self.tmp_dir, report_to="none")

@@ -112,6 +112,8 @@ class SFTConfig(_BaseConfig):
               only (positions with `labels == -100` are dropped before the matmul) and the cross-entropy is processed
               in chunks of tokens to reduce peak activation memory. Not compatible with `use_liger_kernel`.
 
+        log_entropy (`bool`, *optional*, defaults to `True`):
+            Whether to log the per-token entropy metric. Disable to skip computing it unless needed for training.
         activation_offloading (`bool`, *optional*, defaults to `False`):
             Whether to offload the activations to the CPU.
 
@@ -287,6 +289,12 @@ class SFTConfig(_BaseConfig):
             "processed in chunks of tokens to reduce peak activation memory; not compatible with `use_liger_kernel`; "
             "the patched `lm_head` path covers standard causal LMs and VLMs whose language model exposes a top-level "
             "`lm_head`, architectures with a non-standard head are not supported)."
+        },
+    )
+    log_entropy: bool = field(
+        default=True,
+        metadata={
+            "help": "Whether to log the per-token entropy metric. Disable to skip computing it unless needed for training."
         },
     )
     activation_offloading: bool = field(

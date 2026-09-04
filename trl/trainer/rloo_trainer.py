@@ -1711,7 +1711,7 @@ class RLOOTrainer(_BaseTrainer):
             input_ids,
             attention_mask,
             logits_to_keep,
-            compute_entropy=True,
+            compute_entropy=self.args.log_entropy,
             compute_aux_loss=self.aux_loss_enabled,
             pixel_values=inputs.get("pixel_values"),
             image_grid_thw=inputs.get("image_grid_thw"),
@@ -1747,10 +1747,11 @@ class RLOOTrainer(_BaseTrainer):
             self._metrics[mode]["aux_loss"].append(self.accelerator.gather_for_metrics(aux_loss).mean().item())
 
         # Entropy
-        entropy_stats = self.accelerator.reduce(
-            torch.stack([(entropies * completion_mask).sum(), completion_mask.sum().float()]), reduction="sum"
-        )
-        self._metrics[mode]["entropy"].append((entropy_stats[0] / entropy_stats[1].clamp(min=1.0)).item())
+        if self.args.log_entropy:
+            entropy_stats = self.accelerator.reduce(
+                torch.stack([(entropies * completion_mask).sum(), completion_mask.sum().float()]), reduction="sum"
+            )
+            self._metrics[mode]["entropy"].append((entropy_stats[0] / entropy_stats[1].clamp(min=1.0)).item())
 
         # Compute the clipped probability ratios
         is_low_clipped = (coef_1 < 1 - self.epsilon_low) & (advantages < 0)

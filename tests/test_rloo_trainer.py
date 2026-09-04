@@ -39,6 +39,35 @@ if is_peft_available():
 
 
 class TestRLOOTrainer(TrlTestCase):
+    @pytest.mark.parametrize("log_entropy", [False, True])
+    def test_log_entropy(self, log_entropy):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        # Leave the flag unset to exercise the default when entropy logging is enabled.
+        entropy_kwargs = {} if log_entropy else {"log_entropy": False}
+        training_args = RLOOConfig(
+            output_dir=self.tmp_dir,
+            max_steps=2,
+            logging_steps=1,
+            report_to="none",
+            per_device_train_batch_size=2,
+            num_generations=2,
+            max_completion_length=8,
+            **entropy_kwargs,
+        )
+        trainer = RLOOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs=lambda completions, **kwargs: [float(len(completion)) for completion in completions],
+            args=training_args,
+            train_dataset=dataset,
+        )
+        trainer.train()
+
+        assert any("loss" in entry for entry in trainer.state.log_history)
+        if log_entropy:
+            assert any("entropy" in entry for entry in trainer.state.log_history)
+        else:
+            assert all("entropy" not in entry for entry in trainer.state.log_history)
+
     def test_init_minimal(self):
         # Test that RLOOTrainer can be instantiated with only model, reward_model and train_dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")

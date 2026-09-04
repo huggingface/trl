@@ -98,7 +98,7 @@ class _ChunkedCELMHeadOutput(CausalLMOutputWithPast):
     aux_loss: torch.Tensor | None = None
 
 
-def _chunk(h, w, b, lbl, logit_scale, final_logit_softcapping):
+def _chunk(h, w, b, lbl, logit_scale, final_logit_softcapping, compute_entropy):
     with maybe_gather_lm_head_ctx(w, b):
         # Project in the compute dtype and upcast only for the softmax, like `"nll"` and
         # `transformers`' own `ForCausalLMLoss` do. Matching the weight to the hidden-states dtype keeps the
@@ -115,7 +115,7 @@ def _chunk(h, w, b, lbl, logit_scale, final_logit_softcapping):
     chunk_loss = F.nll_loss(log_p, lbl, ignore_index=-100, reduction="sum")
     valid = lbl != -100
     chunk_correct = ((logits.argmax(dim=-1) == lbl) & valid).sum().float()
-    chunk_entropy = (-(log_p.exp() * log_p).sum(dim=-1) * valid).sum()
+    chunk_entropy = (-(log_p.exp() * log_p).sum(dim=-1) * valid).sum() if compute_entropy else None
     return chunk_loss, chunk_correct, chunk_entropy
 
 
@@ -129,7 +129,8 @@ def _chunked_cross_entropy_loss(
     logit_scale: float = 1.0,
     final_logit_softcapping: float | None = None,
     lm_head_bias: torch.Tensor | None = None,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    compute_entropy: bool = True,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None, torch.Tensor]:
     """
     Memory-efficient next-token cross-entropy over hidden states and an `lm_head` weight.
 
@@ -171,11 +172,14 @@ def _chunked_cross_entropy_loss(
             matching the `final_logit_softcapping` behavior of Gemma-style models. Applied after `logit_scale`.
         lm_head_bias (`torch.Tensor`, *optional*):
             Bias of the `lm_head` linear layer, shape `(V,)`. Added to each chunk's logits when provided.
+        compute_entropy (`bool`, *optional*, defaults to `True`):
+            Whether to compute per-token entropy. When disabled, the entropy sum is `None`.
 
     Returns:
-        `tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]`: scalar loss, number of correctly-predicted
-        tokens (count), sum of per-token Shannon entropy (in nats), and number of valid (non-`-100`) target tokens —
-        all over the local batch. Raw sums are returned so callers can reduce correctly across ranks.
+        `tuple[torch.Tensor, torch.Tensor, torch.Tensor or None, torch.Tensor]`: scalar loss, number of
+        correctly-predicted tokens (count), sum of per-token Shannon entropy (in nats, or `None` when disabled), and
+        number of valid (non-`-100`) target tokens, all over the local batch. Raw sums are returned so callers can
+        reduce correctly across ranks.
     """
     if labels is None and shift_labels is None:
         raise ValueError("At least one of `labels` or `shift_labels` must be provided.")
@@ -191,7 +195,7 @@ def _chunked_cross_entropy_loss(
     n_valid_tensor = valid.sum()
 
     correct = hidden.new_zeros((), dtype=torch.float32)
-    entropy_sum = hidden.new_zeros((), dtype=torch.float32)
+    entropy_sum = hidden.new_zeros((), dtype=torch.float32) if compute_entropy else None
 
     # Pack valid tokens to the front so masked positions form whole trailing chunks. `argsort` on the boolean mask is
     # a static-shape op (unlike `hidden[valid]`, whose output shape is data-dependent and poisons XLA compilation).
@@ -217,11 +221,13 @@ def _chunked_cross_entropy_loss(
             lbl_chunk,
             logit_scale,
             final_logit_softcapping,
+            compute_entropy,
             use_reentrant=False,
         )
         loss = loss + chunk_loss
         correct = correct + chunk_correct
-        entropy_sum = entropy_sum + chunk_entropy
+        if compute_entropy:
+            entropy_sum = entropy_sum + chunk_entropy
 
     if num_items_in_batch is None:
         # Clamped for the same reason: a fully-masked rank reduces to a finite zero rather than `0 / 0`.
@@ -233,7 +239,9 @@ def _chunked_cross_entropy_loss(
     return loss, correct, entropy_sum, n_valid_tensor
 
 
-def _patch_chunked_ce_lm_head(model: torch.nn.Module, chunk_size: int, is_vlm: bool = False) -> None:
+def _patch_chunked_ce_lm_head(
+    model: torch.nn.Module, chunk_size: int, is_vlm: bool = False, compute_entropy: bool = True
+) -> None:
     """
     Patch `model.forward` to compute the LM loss via [`_chunked_cross_entropy_loss`].
 
@@ -258,6 +266,8 @@ def _patch_chunked_ce_lm_head(model: torch.nn.Module, chunk_size: int, is_vlm: b
             Set to `True` for VLMs. Only used for the transformers < 5.0.0 fallbacks: VLMs set `base_model_prefix = ""`
             there (so the backbone must be read off `model.model`), and they take the config-level MoE aux-loss
             parameters rather than the model-level ones.
+        compute_entropy (`bool`, *optional*, defaults to `True`):
+            Whether to compute per-token entropy. When disabled, the entropy sum is `None`.
     """
     # On VLMs the logit post-processing lives on `text_config`, so read it through `get_text_config()`. The MoE
     # `output_router_logits` flag lives there too, and is read off the same config below.
@@ -337,6 +347,7 @@ def _patch_chunked_ce_lm_head(model: torch.nn.Module, chunk_size: int, is_vlm: b
             logit_scale=logit_scale,
             final_logit_softcapping=final_logit_softcapping,
             lm_head_bias=lm_head_bias,
+            compute_entropy=compute_entropy,
         )
 
         aux_loss = None
@@ -1342,7 +1353,12 @@ class SFTTrainer(_BaseTrainer):
                             "`lm_head` from `target_modules`, or switch to `loss_type='nll'`. If this is a real use "
                             "case for you, please open an issue at https://github.com/huggingface/trl/issues."
                         )
-                _patch_chunked_ce_lm_head(target, chunk_size=_CHUNKED_LM_HEAD_CHUNK_SIZE, is_vlm=self._is_vlm)
+                _patch_chunked_ce_lm_head(
+                    target,
+                    chunk_size=_CHUNKED_LM_HEAD_CHUNK_SIZE,
+                    is_vlm=self._is_vlm,
+                    compute_entropy=args.log_entropy,
+                )
             else:
                 raise ValueError(
                     f"Invalid `loss_type` {args.loss_type} passed. Supported values are 'nll', 'dft', and "
@@ -1812,9 +1828,10 @@ class SFTTrainer(_BaseTrainer):
             # forward, so the valid-token count over the padded labels can differ from the un-padded `labels[..., 1:]`
             # count by up to one per sequence; using the patched output keeps numerator and denominator aligned.
             num_valid = self.accelerator.gather_for_metrics(outputs.num_valid_tokens).sum()
-            entropy_sum = self.accelerator.gather_for_metrics(outputs.entropy_sum).sum()
-            entropy = (entropy_sum / num_valid).item() if num_valid > 0 else 0.0
-            self._metrics[mode]["entropy"].append(entropy)
+            if outputs.entropy_sum is not None:
+                entropy_sum = self.accelerator.gather_for_metrics(outputs.entropy_sum).sum()
+                entropy = (entropy_sum / num_valid).item() if num_valid > 0 else 0.0
+                self._metrics[mode]["entropy"].append(entropy)
         elif not self.args.use_liger_kernel:  # liger doesn't return logits
             with torch.no_grad():
                 if "shift_labels" in inputs:
@@ -1832,24 +1849,26 @@ class SFTTrainer(_BaseTrainer):
                 ):
                     shift_logits = shift_logits[:, self.num_virtual_tokens :, :]
 
-                per_token_entropy = entropy_from_logits(shift_logits)
                 predictions = shift_logits.argmax(dim=-1)
                 mask = shift_labels != -100
 
-                entropy_sum = (per_token_entropy * mask).sum()
                 total_tokens = mask.sum()
                 correct_predictions = (predictions == shift_labels) & mask
                 correct_tokens = correct_predictions.sum()
 
                 # Gather counts across ranks and weight-average
-                entropy_sum = self.accelerator.gather_for_metrics(entropy_sum).sum()
                 total_tokens = self.accelerator.gather_for_metrics(total_tokens).sum()
                 correct_tokens = self.accelerator.gather_for_metrics(correct_tokens)
-                entropy = (entropy_sum / total_tokens).item() if total_tokens > 0 else 0.0
 
                 total_sum = total_tokens.sum()
                 accuracy = (correct_tokens.sum() / total_sum).item() if total_sum > 0 else 0.0
-            self._metrics[mode]["entropy"].append(entropy)
+
+                if self.args.log_entropy:
+                    per_token_entropy = entropy_from_logits(shift_logits)
+                    entropy_sum = (per_token_entropy * mask).sum()
+                    entropy_sum = self.accelerator.gather_for_metrics(entropy_sum).sum()
+                    entropy = (entropy_sum / total_tokens).item() if total_tokens > 0 else 0.0
+                    self._metrics[mode]["entropy"].append(entropy)
             self._metrics[mode]["mean_token_accuracy"].append(accuracy)
 
         if mode == "train":

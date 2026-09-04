@@ -193,7 +193,7 @@ While training and evaluating, we record the following metrics:
 - `sampling/importance_sampling_ratio/mean`: The average constrained importance sampling ratio. Logged only when `use_vllm=True` and `vllm_importance_sampling_correction=True`.
 - `sampling/importance_sampling_ratio/max`: The largest constrained importance sampling ratio. Logged only when `use_vllm=True` and `vllm_importance_sampling_correction=True`.
 - `policy_loss`: The policy gradient loss value (before any entropy bonus). Logged when `entropy_coef` is nonzero or `use_adaptive_entropy=True`.
-- `entropy`: Average entropy of token predictions across generated completions. (If `mask_truncated_completions=True`, masked sequences tokens are excluded.)
+- `entropy`: Average entropy of token predictions across generated completions. (If `mask_truncated_completions=True`, masked sequences tokens are excluded.) Set `log_entropy=False` to skip computing it.
 - `entropy_coef`: The current entropy regularization coefficient. Logged when `entropy_coef` is nonzero or `use_adaptive_entropy=True`. Updated once per optimizer step when `use_adaptive_entropy=True`.
 - `aux_loss`: The load-balancing auxiliary loss of a Mixture-of-Experts model, before it is scaled by `router_aux_loss_coef` and added to the loss. Logged only when the model is a MoE model and `router_aux_loss_coef` is nonzero.
 - `kl`: The average KL divergence between the model and the reference model, calculated over generated completions. Logged only if `beta` is nonzero.

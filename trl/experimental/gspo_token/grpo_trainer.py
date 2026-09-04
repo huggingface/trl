@@ -34,7 +34,7 @@ class GRPOTrainer(_GRPOTrainer):
             input_ids,
             attention_mask,
             logits_to_keep,
-            compute_entropy=True,
+            compute_entropy=self.top_entropy_quantile < 1.0 or self._entropy_bonus_enabled or self.args.log_entropy,
             pixel_values=inputs.get("pixel_values"),
             image_grid_thw=inputs.get("image_grid_thw"),
             num_images=inputs.get("num_images"),
@@ -146,7 +146,8 @@ class GRPOTrainer(_GRPOTrainer):
         if self.beta != 0.0:
             self._metrics[mode]["kl"].append(global_masked_mean(per_token_kl))
 
-        self._metrics[mode]["entropy"].append(global_masked_mean(entropies))
+        if self.args.log_entropy:
+            self._metrics[mode]["entropy"].append(global_masked_mean(entropies))
 
         # Compute the clipped probability ratios
         is_low_clipped = (coef_1 < 1 - self.epsilon_low) & (advantages < 0)
