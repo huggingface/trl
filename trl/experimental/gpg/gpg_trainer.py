@@ -38,18 +38,13 @@ class GPGTrainer(GRPOTrainer):
     stores the reciprocal, `(B - M) / B`, and divides by it, which is the same operation written the other way around
     and matches how the authors' own implementation stores it.
 
-    Invalidity is a property of the *group*, not of a single completion, so `M` is read by counting groups rather than
-    completions. The group-mean subtraction leaves every member of a group whose rewards are identical on the same
-    value, and `nan_to_num` zeroes the whole row of a group no reward function could score, so a row whose entries are
-    all equal is exactly a degenerate group. Note that "all equal" is not "all zero": in exact arithmetic the
-    subtraction cancels, but in float every member subtracts the same mean from the same reward and so lands on the
-    same rounding residual instead. Testing the members against each other is therefore exact and needs no tolerance,
-    where a zero test counts 44.1% of degenerate groups as informative on continuous rewards. Scoring each completion
-    on its own would over-correct as well, whenever a continuous reward happened to land on its group mean.
-    `frac_reward_zero_std`, which [`GRPOTrainer`] logs, is close but not equal, because it is derived from the reward
-    standard deviation rather than from the advantages: a group no reward function could score has a NaN standard
-    deviation, which is not close to zero, so the metric counts it valid although its advantages are all equal, and the
-    metric turns into a batch-wide statistic that collapses to 0 or 1 when `scale_rewards="batch"`.
+    A group is informative when its scorable rewards produce distinct advantages. Every scorable completion in an
+    informative group counts toward the fraction, while unscorable completions do not because their advantages are
+    forced to zero. The correction also zeroes the shared floating-point residual left by group-mean subtraction in
+    degenerate groups. `frac_reward_zero_std`, which [`GRPOTrainer`] logs, is close but not equal, because it is
+    derived from the reward standard deviation rather than from the advantages: a group no reward function could score
+    has a NaN standard deviation, which is not close to zero, so the metric counts it valid although its advantages are
+    all equal, and the metric turns into a batch-wide statistic that collapses to 0 or 1 when `scale_rewards="batch"`.
 
     The paper's eq. 5 normalizes by the total completion-token count, which is what `loss_type="bnpo"` and `"dapo"` do
     and what the authors' implementation uses. Against that denominator a completion-count multiplier is exact only
@@ -70,10 +65,10 @@ class GPGTrainer(GRPOTrainer):
     curbs the variance a large correction factor introduces. This trainer applies the correction alone, so a batch
     where nearly every group is degenerate still takes one large, high-variance step.
 
-    Note that with the default `num_iterations=1` the GRPO surrogate is *gradient-identical* to the plain policy
-    gradient GPG writes down: the importance ratio is exactly one at the point of evaluation, and clipping around one
-    is inert, so both reduce to `advantages * dlogp/dtheta`. Raising `num_iterations` above 1 makes the objective
-    genuinely off-policy and departs from the method as published.
+    The generation period must divide `gradient_accumulation_steps`, so every generated batch is consumed before an
+    optimizer update. The GRPO surrogate is then *gradient-identical* to the plain policy gradient GPG writes down: the
+    importance ratio is exactly one at the point of evaluation, and clipping around one is inert, so both reduce to
+    `advantages * dlogp/dtheta`.
 
     Everything else (generation, reward computation, weight syncing, metric logging) is inherited unchanged.
     """
@@ -103,6 +98,14 @@ class GPGTrainer(GRPOTrainer):
                 f"GPGTrainer requires a `GPGConfig`, but got `{type(args).__name__}`. GPG's defaults and its "
                 f"`bias_correction` switch live on `GPGConfig`, so a plain `GRPOConfig` would silently train "
                 f"uncorrected GRPO. Pass `GPGConfig(...)`, or omit `args` to build one."
+            )
+
+        generate_every = args.steps_per_generation * args.num_iterations
+        if args.gradient_accumulation_steps % generate_every != 0:
+            raise ValueError(
+                "GPG requires `steps_per_generation * num_iterations` to divide `gradient_accumulation_steps` so "
+                "every generated batch is consumed before an optimizer update. Otherwise later slices use stale "
+                "log-probabilities and activate the clipped GRPO surrogate instead of plain policy gradient."
             )
 
         # Validate the settings that are decided by `args` alone before the parent builds anything: a rejected
@@ -197,39 +200,29 @@ class GPGTrainer(GRPOTrainer):
                 "`bias_correction=False`."
             )
 
-        # Fraction of groups that still carry a gradient, refreshed once per generation batch. Keyed by mode
+        # Fraction of completion slots that still carry a gradient, refreshed once per generation batch. Keyed by mode
         # like `_metrics`: the parent buffers one train generation across `steps_per_generation` optimizer steps and
         # only regenerates periodically, while eval generates per batch, so an eval landing inside that window would
         # otherwise leave the remaining buffered train steps rescaling with the eval fraction. Starts at 1.0 so the
         # correction is a no-op if the loss is ever computed before a generation batch has been scored.
-        self._valid_group_fraction = {"train": 1.0, "eval": 1.0}
+        self._valid_sample_fraction = {"train": 1.0, "eval": 1.0}
+        self._scorable_mask = None
+
+    def _calculate_rewards(self, inputs, prompts, completions, completion_ids_list):
+        rewards_per_func = super()._calculate_rewards(inputs, prompts, completions, completion_ids_list)
+
+        self._scorable_mask = ~torch.isnan(rewards_per_func).all(dim=1)
+
+        return rewards_per_func
 
     def _generate_and_score_completions(self, inputs):
         inputs = super()._generate_and_score_completions(inputs)
 
-        # Count valid *groups*, not individual completions. The paper's M is the number of samples belonging to
-        # groups whose responses are "all right or wrong", so invalidity is a property of the group.
-        #
-        # A group is degenerate when its advantages carry no spread, which is not the same as their all being zero.
-        # In exact arithmetic the two coincide, because the group-mean subtraction cancels. In float they do not:
-        # every member of a degenerate group subtracts the same mean from the same reward, so all of them land on the
-        # same non-zero residual. Over 20000 fully degenerate groups at `num_generations=8` with continuous rewards, a
-        # zero test counts 44.1% of them as informative on residuals as large as 9.5e-07.
-        #
-        # Exactly-zero entries are excluded before the spread is taken, rather than treated as another value. Such an
-        # entry is a completion no reward function could score, which `nan_to_num` forces to zero, and it carries no
-        # signal by construction. Counting it would misread the mixed case: rewards [2.9, 2.9, 2.9, None] leave
-        # advantages [-2.4e-07, -2.4e-07, -2.4e-07, 0.0], where three identical rewards plus one unscorable completion
-        # is a degenerate group, but the lone exact zero would make the row look informative. Under
-        # `scale_rewards="group"` that residual grows to -2.4e-03, so the misreading is not confined to rounding noise.
-        # A group whose entries are all zero has no spread and no signal, so it stays degenerate, which is the
-        # fully-unscorable case.
-        #
-        # Scoring each completion on its own is wrong for a second, independent reason. With continuous rewards a
-        # completion that happens to sit on its group mean gets a zero advantage inside an otherwise informative
-        # group, and counting it as invalid inflates the correction: rewards [0, 1, 2] center to [-1, 0, 1], which
-        # the per-completion rule scores as 2 of 3 valid and corrects by 3/2, where the paper leaves the group
-        # intact and corrects by 1.
+        # A group is informative when its scorable advantages have some spread. Use the scorability mask rather than
+        # excluding exactly-zero advantages: a zero can be a valid group-mean sample, while an unscorable completion
+        # is forced to zero and must not make a degenerate group's shared floating-point residual look informative.
+        # Every scorable completion in an informative group carries the group's learning signal. Unscorable
+        # completions do not, so exclude their slots from the correction factor as well.
         #
         # Read it here rather than at loss time: one generation batch feeds several gradient-accumulation
         # micro-batches, each of which calls `_compute_loss`.
@@ -243,10 +236,18 @@ class GPGTrainer(GRPOTrainer):
         advantages = self.accelerator.gather(inputs["advantages"])
         num_generations = self.num_generations if mode == "train" else self.num_generations_eval
         groups = advantages.view(-1, num_generations)
-        signal = groups != 0
-        highest = groups.masked_fill(~signal, -torch.inf).max(dim=1).values
-        lowest = groups.masked_fill(~signal, torch.inf).min(dim=1).values
-        self._valid_group_fraction[mode] = ((highest != lowest) & signal.any(dim=1)).float().mean().item()
+        scorable_groups = self._scorable_mask.view(-1, num_generations)
+        highest = groups.masked_fill(~scorable_groups, -torch.inf).max(dim=1).values
+        lowest = groups.masked_fill(~scorable_groups, torch.inf).min(dim=1).values
+        informative_groups = (highest != lowest) & scorable_groups.any(dim=1)
+        valid_samples = informative_groups.repeat_interleave(num_generations) & self._scorable_mask
+        self._valid_sample_fraction[mode] = valid_samples.float().mean().item()
+
+        process_slice = slice(
+            self.accelerator.process_index * len(inputs["advantages"]),
+            (self.accelerator.process_index + 1) * len(inputs["advantages"]),
+        )
+        inputs["advantages"] = inputs["advantages"] * valid_samples[process_slice]
 
         return inputs
 
@@ -254,7 +255,7 @@ class GPGTrainer(GRPOTrainer):
         loss = super()._compute_loss(model, inputs)
 
         mode = "train" if self.model.training else "eval"
-        fraction = self._valid_group_fraction[mode]
+        fraction = self._valid_sample_fraction[mode]
 
         # Skip the correction when no completion carries a gradient: the loss is then flat and there is nothing to
         # rescale, while the factor itself would be a division by zero.

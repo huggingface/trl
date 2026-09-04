@@ -14,7 +14,7 @@
 
 import pytest
 import torch
-from datasets import load_dataset
+from datasets import Dataset, load_dataset
 
 from trl import GRPOConfig
 from trl.experimental.gpg import GPGConfig, GPGTrainer
@@ -67,12 +67,11 @@ class TestGPGTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_bias_correction_rescales_the_loss(self):
-        # The correction divides the loss by the fraction of groups whose rewards are not all identical, so with a
-        # degenerate fraction of `f` the corrected loss must be the uncorrected one divided by `1 - f`. Drive
-        # `_compute_loss` directly with a stubbed parent so the assertion pins the factor and nothing else.
+        # The correction divides the loss by the fraction of completion slots that carry signal. Drive `_compute_loss`
+        # directly with a stubbed parent so the assertion pins the factor and nothing else.
         trainer = GPGTrainer.__new__(GPGTrainer)
         trainer.bias_correction = True
-        trainer._valid_group_fraction = {"train": 1.0, "eval": 1.0}
+        trainer._valid_sample_fraction = {"train": 1.0, "eval": 1.0}
         trainer.model = type("M", (), {"training": True})()
 
         base_loss = torch.tensor(2.0)
@@ -81,17 +80,17 @@ class TestGPGTrainer(TrlTestCase):
         GRPOTrainerParent._compute_loss = lambda self, model, inputs: base_loss
         try:
             for frac_zero_std, expected in [(0.0, 2.0), (0.5, 4.0), (0.75, 8.0)]:
-                trainer._valid_group_fraction["train"] = 1.0 - frac_zero_std
+                trainer._valid_sample_fraction["train"] = 1.0 - frac_zero_std
                 assert trainer._compute_loss(None, {}).item() == expected
 
             # Every group degenerate: the advantages are all zero, so there is no gradient to restore and the factor
             # would divide by zero. The loss must pass through untouched.
-            trainer._valid_group_fraction["train"] = 0.0
+            trainer._valid_sample_fraction["train"] = 0.0
             assert trainer._compute_loss(None, {}).item() == 2.0
 
             # Opting out recovers the uncorrected GRPO magnitude.
             trainer.bias_correction = False
-            trainer._valid_group_fraction["train"] = 0.5
+            trainer._valid_sample_fraction["train"] = 0.5
             assert trainer._compute_loss(None, {}).item() == 2.0
         finally:
             GRPOTrainerParent._compute_loss = original_compute_loss
@@ -103,7 +102,7 @@ class TestGPGTrainer(TrlTestCase):
         # rescaling with the eval fraction, so the cache is keyed by mode.
         trainer = GPGTrainer.__new__(GPGTrainer)
         trainer.bias_correction = True
-        trainer._valid_group_fraction = {"train": 1.0, "eval": 1.0}
+        trainer._valid_sample_fraction = {"train": 1.0, "eval": 1.0}
 
         base_loss = torch.tensor(1.0)
         GRPOTrainerParent = GPGTrainer.__mro__[1]
@@ -111,9 +110,9 @@ class TestGPGTrainer(TrlTestCase):
         GRPOTrainerParent._compute_loss = lambda self, model, inputs: base_loss
         try:
             # Train generation scores a batch where half the groups are degenerate.
-            trainer._valid_group_fraction["train"] = 0.5
+            trainer._valid_sample_fraction["train"] = 0.5
             # An eval pass then scores a batch where none are, which used to overwrite the shared scalar.
-            trainer._valid_group_fraction["eval"] = 1.0
+            trainer._valid_sample_fraction["eval"] = 1.0
 
             trainer.model = type("M", (), {"training": True})()
             assert trainer._compute_loss(None, {}).item() == 2.0, (
@@ -125,7 +124,7 @@ class TestGPGTrainer(TrlTestCase):
         finally:
             GRPOTrainerParent._compute_loss = original_compute_loss
 
-    def test_valid_group_fraction_counts_groups_not_completions(self):
+    def test_valid_sample_fraction_counts_informative_groups(self):
         # Paper eq. 7 defines `M` as the samples belonging to groups whose responses are "all right or wrong", so
         # invalidity is a property of the group. Reshaping the gathered advantages to (-1, num_generations) and
         # asking whether any member is non-zero reproduces that. Scoring each completion on its own does not: a
@@ -138,8 +137,9 @@ class TestGPGTrainer(TrlTestCase):
         # The parent slices `advantages` to the local process before returning, and the override gathers it back.
         # Single-process here, so the gather is the identity; what it must do across ranks is restore the parent's
         # pre-slice ordering, which is the tensor these cases stand in for.
-        trainer.accelerator = type("A", (), {"gather": staticmethod(lambda tensor: tensor)})()
-        trainer._valid_group_fraction = {"train": 1.0, "eval": 1.0}
+        trainer.accelerator = type("A", (), {"process_index": 0, "gather": staticmethod(lambda tensor: tensor)})()
+        trainer._valid_sample_fraction = {"train": 1.0, "eval": 1.0}
+        trainer._scorable_mask = None
 
         cases = {
             "train": [
@@ -166,15 +166,30 @@ class TestGPGTrainer(TrlTestCase):
                 mode = "train" if training else "eval"
                 trainer.model = type("M", (), {"training": training})()
                 for advantages, expected in cases[mode]:
+                    trainer._scorable_mask = torch.ones(len(advantages), dtype=torch.bool)
                     GRPOTrainerParent._generate_and_score_completions = lambda self, inputs, values=advantages: {
                         "advantages": torch.tensor(values)
                     }
                     trainer._generate_and_score_completions({})
-                    assert trainer._valid_group_fraction[mode] == pytest.approx(expected), (
+                    assert trainer._valid_sample_fraction[mode] == pytest.approx(expected), (
                         f"{mode}: advantages {advantages} should give a factor of {expected}"
                     )
         finally:
             GRPOTrainerParent._generate_and_score_completions = original_generate
+
+    def test_generation_and_optimizer_steps_must_be_aligned(self):
+        args = GPGConfig(
+            output_dir=self.tmp_dir,
+            steps_per_generation=2,
+            gradient_accumulation_steps=1,
+            report_to="none",
+        )
+        with pytest.raises(ValueError, match="to divide `gradient_accumulation_steps`"):
+            GPGTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=args,
+            )
 
     def test_bias_correction_rejects_settings_that_break_the_identity(self):
         # Each of these makes the factor stop canceling the loss denominator, or moves a regularizer's effective
@@ -257,7 +272,7 @@ class TestGPGTrainer(TrlTestCase):
         )
         assert not trainer.bias_correction
 
-    def test_valid_group_fraction_is_computed_on_the_gathered_advantages(self):
+    def test_valid_sample_fraction_is_computed_on_the_gathered_advantages(self):
         # The parent slices `advantages` to the local process before returning, so reading the local slice would give
         # each rank its own factor and make the result depend on the world size. Simulate two ranks in one process:
         # the local slice holds a partial group, and the stub gather returns what the parent had before slicing. A
@@ -269,8 +284,9 @@ class TestGPGTrainer(TrlTestCase):
         trainer.num_generations = 3
         trainer.num_generations_eval = 3
         trainer.model = type("M", (), {"training": True})()
-        trainer.accelerator = type("A", (), {"gather": staticmethod(lambda tensor: gathered)})()
-        trainer._valid_group_fraction = {"train": 1.0, "eval": 1.0}
+        trainer.accelerator = type("A", (), {"process_index": 0, "gather": staticmethod(lambda tensor: gathered)})()
+        trainer._valid_sample_fraction = {"train": 1.0, "eval": 1.0}
+        trainer._scorable_mask = torch.ones(6, dtype=torch.bool)
 
         GRPOTrainerParent = GPGTrainer.__mro__[1]
         original_generate = GRPOTrainerParent._generate_and_score_completions
@@ -280,7 +296,7 @@ class TestGPGTrainer(TrlTestCase):
         finally:
             GRPOTrainerParent._generate_and_score_completions = original_generate
 
-        assert trainer._valid_group_fraction["train"] == 0.5, (
+        assert trainer._valid_sample_fraction["train"] == 0.5, (
             "the fraction must come from the gathered advantages, not the local slice"
         )
 
@@ -298,19 +314,23 @@ class TestGPGTrainer(TrlTestCase):
         trainer.num_generations = 3
         trainer.num_generations_eval = 3
         trainer.model = type("M", (), {"training": True})()
-        trainer.accelerator = type("A", (), {"gather": staticmethod(lambda tensor: gathered)})()
-        trainer._valid_group_fraction = {"train": 1.0, "eval": 1.0}
+        trainer.accelerator = type("A", (), {"process_index": 0, "gather": staticmethod(lambda tensor: gathered)})()
+        trainer._valid_sample_fraction = {"train": 1.0, "eval": 1.0}
+        trainer._scorable_mask = torch.ones(6, dtype=torch.bool)
 
         GRPOTrainerParent = GPGTrainer.__mro__[1]
         original_generate = GRPOTrainerParent._generate_and_score_completions
         GRPOTrainerParent._generate_and_score_completions = lambda self, inputs: {"advantages": gathered}
         try:
-            trainer._generate_and_score_completions({})
+            output = trainer._generate_and_score_completions({})
         finally:
             GRPOTrainerParent._generate_and_score_completions = original_generate
 
-        assert trainer._valid_group_fraction["train"] == 0.0, (
+        assert trainer._valid_sample_fraction["train"] == 0.0, (
             "both groups are degenerate, so no group carries a gradient and the correction must not fire"
+        )
+        assert output["advantages"].equal(torch.zeros_like(gathered)), (
+            "a degenerate group's shared rounding residual must not reach the policy-gradient loss"
         )
 
     def test_a_partly_unscorable_degenerate_group_stays_degenerate(self):
@@ -329,8 +349,9 @@ class TestGPGTrainer(TrlTestCase):
         trainer.num_generations = 4
         trainer.num_generations_eval = 4
         trainer.model = type("M", (), {"training": True})()
-        trainer.accelerator = type("A", (), {"gather": staticmethod(lambda tensor: gathered)})()
-        trainer._valid_group_fraction = {"train": 1.0, "eval": 1.0}
+        trainer.accelerator = type("A", (), {"process_index": 0, "gather": staticmethod(lambda tensor: gathered)})()
+        trainer._valid_sample_fraction = {"train": 1.0, "eval": 1.0}
+        trainer._scorable_mask = torch.tensor([True, True, True, False])
 
         GRPOTrainerParent = GPGTrainer.__mro__[1]
         original_generate = GRPOTrainerParent._generate_and_score_completions
@@ -340,9 +361,53 @@ class TestGPGTrainer(TrlTestCase):
         finally:
             GRPOTrainerParent._generate_and_score_completions = original_generate
 
-        assert trainer._valid_group_fraction["train"] == 0.0, (
+        assert trainer._valid_sample_fraction["train"] == 0.0, (
             "every scorable member of the group has the same reward, so the group carries no gradient"
         )
+
+    def test_zero_advantages_in_an_informative_group_remain_valid(self):
+        rewards = torch.tensor([1.0, 1.0, torch.nextafter(torch.tensor(1.0), torch.tensor(torch.inf))])
+        mean = torch.nanmean(rewards.view(-1, 3), dim=1).repeat_interleave(3)
+        advantages = rewards - mean
+        assert (advantages != 0).sum() == 1
+
+        trainer = GPGTrainer.__new__(GPGTrainer)
+        trainer.num_generations = trainer.num_generations_eval = 3
+        trainer.model = type("M", (), {"training": True})()
+        trainer.accelerator = type("A", (), {"process_index": 0, "gather": staticmethod(lambda tensor: tensor)})()
+        trainer._valid_sample_fraction = {"train": 1.0, "eval": 1.0}
+        trainer._scorable_mask = torch.ones(3, dtype=torch.bool)
+
+        GRPOTrainerParent = GPGTrainer.__mro__[1]
+        original_generate = GRPOTrainerParent._generate_and_score_completions
+        GRPOTrainerParent._generate_and_score_completions = lambda self, inputs: {"advantages": advantages}
+        try:
+            trainer._generate_and_score_completions({})
+        finally:
+            GRPOTrainerParent._generate_and_score_completions = original_generate
+
+        assert trainer._valid_sample_fraction["train"] == 1.0
+
+    def test_partly_unscorable_informative_group_counts_only_scorable_samples(self):
+        advantages = torch.tensor([-0.5, 0.5, 0.0, 0.0])
+        scorable = torch.tensor([True, True, False, False])
+
+        trainer = GPGTrainer.__new__(GPGTrainer)
+        trainer.num_generations = trainer.num_generations_eval = 4
+        trainer.model = type("M", (), {"training": True})()
+        trainer.accelerator = type("A", (), {"process_index": 0, "gather": staticmethod(lambda tensor: tensor)})()
+        trainer._valid_sample_fraction = {"train": 1.0, "eval": 1.0}
+        trainer._scorable_mask = scorable
+
+        GRPOTrainerParent = GPGTrainer.__mro__[1]
+        original_generate = GRPOTrainerParent._generate_and_score_completions
+        GRPOTrainerParent._generate_and_score_completions = lambda self, inputs: {"advantages": advantages}
+        try:
+            trainer._generate_and_score_completions({})
+        finally:
+            GRPOTrainerParent._generate_and_score_completions = original_generate
+
+        assert trainer._valid_sample_fraction["train"] == 0.5
 
     def test_vllm_importance_sampling_mask_is_rejected(self):
         # `vllm_importance_sampling_correction` defaults to True and its mode defaults to "sequence_mask", so
@@ -401,12 +466,8 @@ class TestGPGTrainer(TrlTestCase):
             )
 
     def test_the_override_runs_on_the_real_generation_path(self):
-        # The unit tests above drive `_generate_and_score_completions` with a stubbed parent, and they are what pin
-        # the counting rule. This one runs the real generation path end to end and checks only that the override
-        # survives it and leaves a usable fraction behind. It deliberately does not claim to catch per-completion
-        # counting: with a single group per generation batch, a per-completion rule also lands on 1.0 whenever every
-        # advantage is non-zero, so the assertion below would pass either way.
-        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        # Initialize the factor to an impossible sentinel so the final assertion proves that the override ran.
+        dataset = Dataset.from_dict({"prompt": ["The weather is", "The sky is", "The sun is"]})
 
         training_args = GPGConfig(
             output_dir=self.tmp_dir,
@@ -422,8 +483,7 @@ class TestGPGTrainer(TrlTestCase):
             args=training_args,
             train_dataset=dataset,
         )
+        trainer._valid_sample_fraction["train"] = -1.0
         trainer.train()
 
-        num_groups = training_args.generation_batch_size // trainer.num_generations
-        assert num_groups == 1, "the assertion below assumes a single group per generation batch"
-        assert trainer._valid_group_fraction["train"] in [0.0, 1.0]
+        assert 0.0 <= trainer._valid_sample_fraction["train"] <= 1.0

@@ -176,7 +176,7 @@ training_args = GPGConfig(
     beta=0.0,  # no KL constraint and no reference model
     scale_rewards="none",  # mean-centered advantage, no std scaling
     loss_type="grpo",  # per-completion normalizer, which the correction cancels exactly
-    bias_correction=True,  # rescale by the fraction of groups whose advantages carry spread
+    bias_correction=True,  # rescale by the fraction of completion slots that carry signal
 )
 ```
 

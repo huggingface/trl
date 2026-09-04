@@ -49,11 +49,10 @@ class GPGConfig(GRPOConfig):
             loaded model turns out to be a Mixture-of-Experts. This defaults to `0.0` where [`GRPOConfig`] defaults to
             `0.001`, so such a model trains under GPG without further configuration.
         bias_correction (`bool`, *optional*, defaults to `True`):
-            Whether to rescale the loss by the fraction of groups whose advantages are not all zero (paper eq. 7). A
-            group whose rewards are all identical, or one that no reward function could score, has a zero advantage
-            throughout and contributes nothing to the gradient, yet it still counts toward the loss denominator and so
-            shrinks the update. GPG divides the loss by that fraction to compensate. Set to `False` to recover the
-            uncorrected GRPO gradient magnitude.
+            Whether to rescale the loss by the fraction of completion slots that carry an informative group's signal
+            (paper eq. 7). Degenerate groups and unscorable completions contribute nothing to the gradient, yet they
+            still count toward the loss denominator and shrink the update. GPG divides the loss by the remaining
+            fraction to compensate. Set to `False` to recover the uncorrected GRPO gradient magnitude.
     """
 
     beta: float = field(
@@ -90,9 +89,8 @@ class GPGConfig(GRPOConfig):
     bias_correction: bool = field(
         default=True,
         metadata={
-            "help": "Whether to rescale the loss by the fraction of groups whose advantages are not all zero. A "
-            "group with identical rewards, or one no reward function could score, contributes nothing to the "
-            "gradient yet still counts toward the loss denominator. GPG divides the loss by that fraction to "
-            "compensate."
+            "help": "Whether to rescale the loss by the fraction of completion slots that carry an informative "
+            "group's signal. Degenerate groups and unscorable completions contribute nothing to the gradient yet "
+            "still count toward the loss denominator. GPG divides the loss by the remaining fraction to compensate."
         },
     )
