@@ -861,8 +861,6 @@ class AsyncGRPOTrainer(_BaseTrainer):
         if args.use_liger_kernel:
             raise NotImplementedError("`use_liger_kernel` is not supported yet.")
 
-        _is_quantized_model = getattr(model, "is_loaded_in_4bit", False) or getattr(model, "is_loaded_in_8bit", False)
-
         # MoE load-balancing auxiliary loss, applied to Mixture-of-Experts models (no effect otherwise)
         text_config = model.config.get_text_config()
         is_moe = getattr(text_config, "output_router_logits", None) is not None
@@ -920,21 +918,6 @@ class AsyncGRPOTrainer(_BaseTrainer):
         # NOTE: See https://github.com/huggingface/transformers/issues/42489
         if is_peft_model(model) and args.gradient_checkpointing:
             model.enable_input_require_grads()
-
-        _model_dtype = model.dtype
-
-        # When using QLoRA, `get_peft_model` upcasts the adapter weights to fp32 (`autocast_adapter_dtype=True`, which
-        # `cast_adapter_dtype` applies to fp16 and bf16 adapters). Undo it, so the adapters train in the dtype the
-        # model was loaded under, following the recommendations of the original paper (see
-        # https://huggingface.co/papers/2305.14314, paragraph 3). Normally this is done by passing
-        # `autocast_adapter_dtype=False` to `get_peft_model`, but that option is not yet supported for quantized
-        # models. See: https://github.com/huggingface/peft/issues/2889
-        # `GRPOTrainer` hardcodes bf16 here; AsyncGRPO cannot, because `AsyncGRPOConfig.dtype` is an explicit
-        # setting and a hardcoded dtype would silently override it.
-        if _is_quantized_model:
-            for param in model.parameters():
-                if param.requires_grad:
-                    param.data = param.data.to(_model_dtype)
 
         # Reward functions
         if reward_funcs is None:
@@ -1125,14 +1108,6 @@ class AsyncGRPOTrainer(_BaseTrainer):
         # parameter gather, and a split decision hangs both.
         self._lora_sync = broadcast_object_list([self._lora_sync], from_process=0)[0]
 
-        if _is_quantized_model and self.is_fsdp_enabled and not self._lora_sync:
-            raise ValueError(
-                "QLoRA with FSDP2 is not supported on the merged-weight vLLM sync path: PEFT's bitsandbytes "
-                "`merge_adapter()` cannot merge DTensor-sharded quantized weights. Use dense LoRA with FSDP2, QLoRA "
-                "without FSDP2, or adapter-only LoRA sync (launch the vLLM server with `--enable-lora`). See "
-                "https://github.com/huggingface/accelerate/issues/3874."
-            )
-
         # Add callbacks. Cold weight sync + worker start on train begin, then periodic weight syncs.
         self.add_callback(_OptimizerTimeCallback(self))
         self.add_callback(_TrainBeginCallback(self))
@@ -1192,14 +1167,14 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 f"{server_lora_config['max_lora_rank']}`. Restart it with `--max-lora-rank "
                 f"{round_lora_rank(adapter_rank)}`."
             )
-        # `max_staleness` bounds how many policies back a sample may still be consumed from, so that many
-        # adapters can be named by in-flight requests at once.
-        min_loras = self.args.max_staleness + 1
+        # `max_staleness` bounds how many policies back a sample may still be consumed from, so `max_staleness + 1`
+        min_loras = self.args.max_staleness + 2
         if server_lora_config["max_loras"] < min_loras:
             raise ValueError(
                 f"The vLLM server was started with `--max-loras {server_lora_config['max_loras']}`, but "
-                f"`max_staleness={self.args.max_staleness}` lets requests still name {min_loras} distinct policy "
-                f"versions. Restart the server with `--max-loras {min_loras}`, or lower `max_staleness`."
+                f"`max_staleness={self.args.max_staleness}` lets requests still name {min_loras - 1} distinct policy "
+                f"versions, and each sync loads the next one before unloading the oldest. Restart the server with "
+                f"`--max-loras {min_loras}`, or lower `max_staleness`."
             )
         logger.info(
             f"Adapter-only vLLM sync enabled: syncs publish the '{self._adapter_name}' adapter as "
@@ -1625,9 +1600,6 @@ class AsyncGRPOTrainer(_BaseTrainer):
             # adapter it requests from `model_version`, so bumping first would name one that is not loaded yet.
             self.vllm_client.load_lora_adapter(f"{self._lora_name}-v{version}", adapter_dir)
             self.vllm_client.resume()
-            # Keep `max_staleness + 1` versions servable — the bound `_init_lora_sync` asserts against
-            # `--max-loras`, since a request may name any policy a sample could still be consumed from. Unloading
-            # sooner pulls the adapter out from under in-flight requests.
             stale_version = version - (self.args.max_staleness + 1)
             if stale_version > 0:
                 self.vllm_client.unload_lora_adapter(f"{self._lora_name}-v{stale_version}")

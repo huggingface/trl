@@ -1373,8 +1373,9 @@ class TestRolloutRequestModel(TrlTestCase):
         assert loop._request_model == "trl-policy-v3"
 
 
-# A LoRA-capable server, as reported by `/server_info`. `max_loras` covers `max_staleness + 1` policy versions.
-SERVER_LORA_CONFIG = {"max_lora_rank": 32, "max_loras": 2}
+# A LoRA-capable server, as reported by `/server_info`. `max_loras` covers the `max_staleness + 1` servable policy
+# versions plus the one being loaded, for the tests' default `max_staleness=1`.
+SERVER_LORA_CONFIG = {"max_lora_rank": 32, "max_loras": 3}
 
 
 def _server_info(lora_config, data_parallel_size=1):
@@ -1491,8 +1492,8 @@ class TestAsyncGRPOTrainerPeft(TrlTestCase):
             self._build(self._lora_config(r=64), server_lora_config=SERVER_LORA_CONFIG)
 
     def test_too_few_adapter_slots_for_max_staleness_raises(self):
-        with pytest.raises(ValueError, match="--max-loras 2"):
-            self._build(self._lora_config(), server_lora_config={"max_lora_rank": 32, "max_loras": 1}, max_staleness=1)
+        with pytest.raises(ValueError, match="--max-loras 3"):
+            self._build(self._lora_config(), server_lora_config={"max_lora_rank": 32, "max_loras": 2}, max_staleness=1)
 
     def test_data_parallel_server_falls_back_to_merged(self):
         # `/v1/load_lora_adapter` reaches only the replica that answered it, leaving the others on the base model.
@@ -1530,7 +1531,7 @@ class TestAsyncGRPOTrainerPeft(TrlTestCase):
         # Regression: evicting at `v{N-2}` regardless of `max_staleness` deleted an adapter that in-flight requests
         # could still name. vLLM resolves `lora_path` lazily inside the engine, so the missing directory killed the
         # engine with an `HFValidationError` (it falls back to reading the path as a Hub repo id) rather than 404ing.
-        # The bound has to match the `--max-loras >= max_staleness + 1` check in `_init_lora_sync`.
+        # The bound has to match the `--max-loras >= max_staleness + 2` check in `_init_lora_sync`.
         trainer = self._build(self._lora_config(), server_lora_config=SERVER_LORA_CONFIG, max_staleness=1)
         unloaded = []
 
@@ -1555,7 +1556,7 @@ class TestAsyncGRPOTrainerPeft(TrlTestCase):
 
     def test_a_larger_max_staleness_keeps_more_versions(self):
         trainer = self._build(
-            self._lora_config(), server_lora_config={"max_lora_rank": 32, "max_loras": 5}, max_staleness=4
+            self._lora_config(), server_lora_config={"max_lora_rank": 32, "max_loras": 6}, max_staleness=4
         )
         unloaded = []
 

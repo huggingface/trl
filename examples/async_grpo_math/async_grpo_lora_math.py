@@ -27,7 +27,7 @@ LoRA AsyncGRPO on GSM8K with an 8B policy, on two GPUs: vLLM on GPU 0, the train
 
 Each weight sync publishes only the adapter (~160 MB at r=32) instead of the merged 8B checkpoint (~16 GB in bf16). That happens automatically because the server below is started with `--enable-lora`; without that flag the same script still trains, falling back to merged-weight sync with a warning.
 
-`--max-loras 5` covers the `max_staleness + 1` adapter versions that are servable at once, and `--max-lora-rank 32` matches `r` below. The rank is a capacity bound, so any of 1, 8, 16, 32, 64, 128, 256, 320, 512 that is >= r works.
+`--max-loras 6` covers the `max_staleness + 1` adapter versions that are servable at once plus the one being loaded, and `--max-lora-rank 32` matches `r` below. The rank is a capacity bound, so any of 1, 8, 16, 32, 64, 128, 256, 320, 512 that is >= r works.
 
 ```bash
 CUDA_VISIBLE_DEVICES=0 \
@@ -37,7 +37,7 @@ vllm serve Qwen/Qwen3-8B \
     --max-model-len 2048 \
     --logprobs-mode processed_logprobs \
     --weight-transfer-config '{"backend":"nccl"}' \
-    --enable-lora --max-lora-rank 32 --max-loras 5
+    --enable-lora --max-lora-rank 32 --max-loras 6
 
 CUDA_VISIBLE_DEVICES=1 accelerate launch --num_processes 1 \
     examples/async_grpo_math/async_grpo_lora_math.py

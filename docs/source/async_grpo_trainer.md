@@ -121,14 +121,12 @@ CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 VLLM_ALLOW_RUNTIME_LORA_UPDATING=1
     --weight-transfer-config '{"backend":"nccl"}' \
     --enable-lora \
     --max-lora-rank 32 \
-    --max-loras 5
+    --max-loras 6
 ```
 
 `VLLM_ALLOW_RUNTIME_LORA_UPDATING=1` exposes the endpoint the trainer posts each new adapter to. Add `VLLM_WORKER_MULTIPROC_METHOD=spawn` if you serve tensor-parallel, and keep `--weight-transfer-config` either way: the trainer only chooses a sync mode when it starts, by which point the server is already up, and merged sync is the fallback.
 
-`--max-lora-rank` must be one of `1, 8, 16, 32, 64, 128, 256, 320, 512`. It sets the highest rank the server can serve rather than the rank it will serve, so an `r=4` adapter works fine under `8`. `--max-loras` must be at least `max_staleness + 1`, since the trainer keeps that many adapter versions registered at once. That way a rollout that started under an older policy can finish under it, instead of switching policies mid-generation. The trainer checks both values when it starts and tells you what to restart the server with.
-
-There is no flag to choose between the two modes. The trainer probes the server on startup and uses adapter sync if the model is a plain LoRA model and the server reports LoRA support. Anything else falls back to merged sync and logs the reason: a server started without `--enable-lora`, a data-parallel server (`/v1/load_lora_adapter` only reaches the replica that answers it, so the others keep serving the base model; tensor parallelism is fine), or an adapter vLLM cannot serve as-is, which means `modules_to_save`, DoRA, `bias != "none"`, `target_parameters`, or LoRA on `lm_head` / `embed_tokens`.
+`--max-lora-rank` must be one of `1, 8, 16, 32, 64, 128, 256, 320, 512`. It sets the highest rank the server can serve rather than the rank it will serve, so an `r=4` adapter works fine under `8`. `--max-loras` must be at least `max_staleness + 2`: the trainer keeps `max_staleness + 1` adapter versions registered so a rollout that started under an older policy can finish under it instead of switching policies mid-generation, and each sync loads the next version before it unloads the oldest. The trainer checks both values when it starts and tells you what to restart the server with.
 
 vLLM loads adapters from disk rather than over the network, so the trainer writes each version under `<output_dir>/.vllm_lora/` and gives the server the path. If the server runs on a different machine, that directory has to be on a filesystem both of them can see.
 
@@ -136,7 +134,7 @@ vLLM loads adapters from disk rather than over the network, so the trainer write
 > `<output_dir>/.vllm_lora/` is a serving cache, not where your trained adapter is kept. It only holds the most recent versions, and each one is deleted shortly after it falls out of the staleness window. Checkpoints are what preserve the adapter you trained, so do not turn them off: with `save_strategy="no"` a multi-hour run finishes and leaves nothing behind. `output_dir` also has to be readable by the server and has to outlive the job, so node-local scratch will not work, even though it would keep syncs off a slow shared filesystem.
 
 > [!TIP]
-> Adapter sync is not always faster. vLLM generates roughly 1.33–1.39x slower per token when it serves a LoRA adapter than when it serves merged weights, and generation is usually what dominates wall-clock time in RL. What you get in return is a much shorter pause at each sync and about 1% of the sync bandwidth. It is also the only way to run QLoRA with FSDP2, because PEFT cannot merge a quantized weight that FSDP2 has sharded. If you are not using QLoRA and generation throughput is your bottleneck, merged sync is often still the better choice.
+> Adapter sync is not always faster. vLLM generates roughly 1.33–1.39x slower per token when it serves a LoRA adapter than when it serves merged weights, and generation is usually what dominates wall-clock time in RL. What you get in return is a much shorter pause at each sync and about 1% of the sync bandwidth. If generation throughput is your bottleneck, merged sync is often still the better choice.
 
 ## Design philosophy
 
