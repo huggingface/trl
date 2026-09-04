@@ -344,6 +344,46 @@ class TestSyncRefModelCallbackAdapterPairing(TrlTestCase):
             model.get_parameter(f"{delta}.ref"), torch.full_like(model.get_parameter(f"{delta}.ref"), 7.0)
         )
 
+    def test_prompt_learning_parameters_follow_the_ema_equation(self):
+        from peft import (
+            PrefixTuningConfig,
+            PromptEncoderConfig,
+            PromptTuningConfig,
+            TaskType,
+            get_peft_model,
+        )
+        from transformers import Qwen2Config, Qwen2ForCausalLM
+
+        configs = [
+            PromptTuningConfig(task_type=TaskType.CAUSAL_LM, num_virtual_tokens=4),
+            PrefixTuningConfig(task_type=TaskType.CAUSAL_LM, num_virtual_tokens=4),
+            PromptEncoderConfig(task_type=TaskType.CAUSAL_LM, num_virtual_tokens=4, encoder_hidden_size=8),
+        ]
+        for config in configs:
+            base_model = Qwen2ForCausalLM(
+                Qwen2Config(
+                    vocab_size=32,
+                    hidden_size=16,
+                    intermediate_size=32,
+                    num_hidden_layers=1,
+                    num_attention_heads=2,
+                    num_key_value_heads=2,
+                    max_position_embeddings=32,
+                )
+            )
+            model = get_peft_model(base_model, config)
+            model.add_adapter("ref", config)
+
+            with torch.no_grad():
+                for name, param in model.prompt_encoder["default"].named_parameters():
+                    param.fill_(4.0)
+                    model.prompt_encoder["ref"].get_parameter(name).fill_(8.0)
+
+            SyncRefModelCallback._sync_ref_adapter(model, alpha=0.25)
+
+            for name, param in model.prompt_encoder["ref"].named_parameters():
+                assert torch.equal(param, torch.full_like(param, 7.0)), (type(config).__name__, name)
+
     def test_modules_to_save_with_a_child_named_default_is_paired(self):
         from peft import LoraConfig, get_peft_model
 

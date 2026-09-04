@@ -506,17 +506,20 @@ class GRPOTrainer(_BaseTrainer):
                 model.add_adapter("ref", default_config)
                 for name, param in model.named_parameters():
                     parts = name.split(".")
-                    # PEFT keys adapter parameters by adapter name inside a `ModuleDict` (LoRA matrices, `modules_to_save`) or a
-                    # `ParameterDict` (`trainable_token_indices` deltas), and the key is not always the last "default" component:
-                    # `modules_to_save` wraps a module that may itself contain one. Scan the candidates from the end and take the
-                    # first whose container also holds a "ref" key. Names where none qualifies belong to the base model, even when
-                    # a module or parameter there happens to be called "default".
+                    # PEFT keys adapter parameters by adapter name inside a `ModuleDict` (LoRA matrices, `modules_to_save`, and
+                    # `prompt_encoder`) or a `ParameterDict` (`trainable_token_indices` deltas), and the key is not always the
+                    # last "default" component: `modules_to_save` wraps a module that may itself contain one. Scan the candidates
+                    # from the end and take the first whose container also holds a "ref" key. Names where none qualifies belong
+                    # to the base model, even when a module or parameter there happens to be called "default".
                     for index in (i for i in reversed(range(len(parts))) if parts[i] == "default"):
                         parent = model.get_submodule(".".join(parts[:index])) if index else model
                         owner = model.get_submodule(".".join(parts[: index - 1])) if index > 1 else model
                         if (
                             isinstance(parent, (torch.nn.ModuleDict, torch.nn.ParameterDict))
-                            and isinstance(owner, (BaseTunerLayer, ModulesToSaveWrapper))
+                            and (
+                                isinstance(owner, (BaseTunerLayer, ModulesToSaveWrapper))
+                                or (isinstance(owner, PeftModel) and parent is owner.prompt_encoder)
+                            )
                             and "ref" in parent
                         ):
                             ref_param = model.get_parameter(".".join(parts[:index] + ["ref"] + parts[index + 1 :]))
