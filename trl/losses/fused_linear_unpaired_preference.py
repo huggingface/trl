@@ -261,11 +261,11 @@ class FusedLinearUnpairedPreferenceBase(torch.autograd.Function):
         else:
             log_probs = (per_token_logps_chunk * loss_mask_chunk).sum(-1)
 
-        chosen_logps_sum = (log_probs * preference_labels_chunk).sum()
-        rejected_logps_sum = (log_probs * ~preference_labels_chunk).sum()
+        chosen_logps_sum = (log_probs * preference_labels_chunk.unsqueeze(1)).sum()
+        rejected_logps_sum = (log_probs * (~preference_labels_chunk).unsqueeze(1)).sum()
 
-        chosen_logits_sum = (logits_chunk * preference_labels_chunk.view(-1, 1, 1)).sum()
-        rejected_logits_sum = (logits_chunk * (~preference_labels_chunk).view(-1, 1, 1)).sum()
+        chosen_logits_sum = (logits_chunk * preference_labels_chunk.unsqueeze(1)).sum()
+        rejected_logits_sum = (logits_chunk * (~preference_labels_chunk).unsqueeze(1)).sum()
 
         return (
             log_probs,

@@ -841,12 +841,7 @@ class DPOTrainer(_BaseTrainer):
                         "prepended and the loss is computed on the wrong sequence. Use a weight-based adapter such as "
                         "LoRA instead, or set `use_fused_linear_loss=False`."
                     )
-            self.fused_linear_loss = FusedLinearDPOLoss(
-                beta=args.beta,
-                loss_type=self.loss_types[0],
-                label_smoothing=self.label_smoothing,
-                discopop_tau=args.discopop_tau,
-            )
+            self.fused_linear_loss = FusedLinearDPOLoss(beta=args.beta, loss_type=self.loss_types[0])
             # Redirect the model.module forward to the model forward to ensure pre-forward hooks are called, so that
             # under ZeRO-3 the parameter coordinator gathers/reduces `lm_head.weight` around the fused loss.
             self._forward_redirection = _ForwardRedirection()
