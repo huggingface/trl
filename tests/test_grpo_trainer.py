@@ -427,6 +427,67 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @pytest.mark.parametrize(
+        ("window_sizes", "advantages"),
+        [
+            ([3, 1], [1.0, 1.0, 1.0, 4.0]),
+            ([2, 2], [1.0, 2.0, 3.0, 4.0]),
+        ],
+    )
+    def test_policy_loss_is_averaged_over_accumulation_windows(self, window_sizes, advantages):
+        dataset = Dataset.from_dict({"prompt": ["p"] * 3})
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,
+            num_generations=3,
+            max_completion_length=2,
+            gradient_accumulation_steps=3,
+            loss_type="grpo",
+            entropy_coef=0.1,
+            use_cpu=True,
+            bf16=False,
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs=lambda completions, **kwargs: [0.0] * len(completions),
+            args=training_args,
+            train_dataset=dataset,
+        )
+        trainer.model.train()
+        inputs = {
+            "prompt_ids": torch.tensor([[1]] * 3),
+            "prompt_mask": torch.ones(3, 1, dtype=torch.long),
+            "completion_ids": torch.tensor([[2, 3]] * 3),
+            "completion_mask": torch.ones(3, 2, dtype=torch.long),
+            "advantages": torch.ones(3),
+        }
+
+        window_policy_losses = []
+        offset = 0
+        for window_size in window_sizes:
+            trainer.current_gradient_accumulation_steps = window_size
+            window_contributions = []
+            for micro_step, advantage in enumerate(advantages[offset : offset + window_size]):
+                trainer.accelerator.gradient_state._set_sync_gradients(micro_step == window_size - 1)
+                inputs["advantages"].fill_(advantage)
+                trainer._compute_loss(trainer.model, inputs)
+                window_contributions.append(-advantage / window_size)
+            window_policy_losses.append(sum(window_contributions))
+            offset += window_size
+
+        policy_loss_entries = trainer._metrics["train"]["policy_loss"]
+        logged_policy_loss = sum(policy_loss_entries) / len(policy_loss_entries)
+        expected_policy_loss = sum(window_policy_losses) / len(window_policy_losses)
+        old_flat_mean = -sum(advantages) / len(advantages)
+
+        assert logged_policy_loss == pytest.approx(expected_policy_loss)
+        assert len(policy_loss_entries) == len(window_sizes)
+        if len(set(window_sizes)) == 1:
+            assert logged_policy_loss == pytest.approx(old_flat_mean)
+        else:
+            assert logged_policy_loss != pytest.approx(old_flat_mean)
+
     @require_liger_kernel
     @pytest.mark.parametrize(
         "loss_type, beta",
