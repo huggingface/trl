@@ -1,4 +1,4 @@
-.PHONY: test precommit common_tests slow_tests tests_gpu test_experimental codex claude clean-ai
+.PHONY: test precommit common_tests slow_tests tests_gpu test_experimental claude clean-ai
 
 check_dirs := examples tests trl
 
@@ -22,15 +22,13 @@ slow_tests:
 test_experimental:
 	pytest -n auto -s -v tests/experimental
 
-codex:
-	mkdir -p .agents
-	rm -rf .agents/skills
-	ln -snf ../.ai/skills .agents/skills
-
 claude:
 	mkdir -p .claude
 	rm -rf .claude/skills
-	ln -snf ../.ai/skills .claude/skills
+	ln -snf ../.agents/skills .claude/skills
 
+# The `.agents/skills` line removes a leftover symlink from the old `make codex` setup; the tracked
+# directory is left alone.
 clean-ai:
-	rm -rf .agents/skills .claude/skills
+	[ -L .agents/skills ] && rm .agents/skills || true
+	rm -rf .claude/skills
