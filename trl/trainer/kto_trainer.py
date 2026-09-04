@@ -53,7 +53,7 @@ from ..data_utils import (
     prepare_multimodal_messages,
     unpair_preference_dataset,
 )
-from ..import_utils import is_liger_kernel_available
+from ..losses import FusedLinearKTOLoss
 from ..models import get_act_offloading_ctx_manager, prepare_deepspeed, prepare_fsdp
 from ..models.utils import _ForwardRedirection, disable_gradient_checkpointing
 from .base_trainer import _BaseTrainer
@@ -71,10 +71,6 @@ from .utils import (
     selective_log_softmax,
     use_adapter,
 )
-
-
-if is_liger_kernel_available():
-    from liger_kernel.chunked_loss import LigerFusedLinearKTOLoss
 
 
 if is_peft_available():
@@ -817,54 +813,50 @@ class KTOTrainer(_BaseTrainer):
             raise ValueError(
                 "Actual (not effective) batch size must be > 1. KTO will not work properly because the KL term will be equivalent to the implied reward."
             )
-        # Liger loss
-        self.use_liger_kernel = args.use_liger_kernel
-        if self.use_liger_kernel:
-            if not is_liger_kernel_available():
-                raise ImportError(
-                    "You set `use_liger_kernel=True` but the liger kernel is not available. "
-                    "Please install liger-kernel first: `pip install liger-kernel`"
-                )
+        # Fused linear loss
+        self.use_fused_linear_loss = args.use_fused_linear_loss
+        if self.use_fused_linear_loss:
             if self.loss_type in ["apo_zero_unpaired"]:
                 raise ValueError(
-                    "You cannot set `loss_type='apo_zero_unpaired'` with liger-kernel. "
-                    "Only KTO loss is supported with liger-kernel."
+                    "You cannot set `loss_type='apo_zero_unpaired'` with the fused linear loss. "
+                    "Only KTO loss is supported with the fused linear loss."
                 )
             if compute_metrics is not None:
                 raise ValueError(
-                    "compute_metrics is not supported with the Liger kernel. compute_metrics requires to be able to "
-                    "recover the logits from the forward pass, but Liger kernel does not materialize logits."
+                    "compute_metrics is not supported with the fused linear loss. compute_metrics requires to be able "
+                    "to recover the logits from the forward pass, but the fused linear loss does not materialize "
+                    "logits."
                 )
             if self.precompute_ref_logps:
                 raise ValueError(
-                    "Liger KTO loss does not support precomputing reference log probabilities. Either disable "
-                    "`precompute_ref_log_probs` or set `use_liger_kernel` to False."
+                    "The fused linear KTO loss does not support precomputing reference log probabilities. Either "
+                    "disable `precompute_ref_log_probs` or set `use_fused_linear_loss` to False."
                 )
             if is_peft_model(model):
-                # The Liger fused KTO loss multiplies the hidden states by `lm_head.weight` directly. When the LM head
+                # The fused linear KTO loss multiplies the hidden states by `lm_head.weight` directly. When the LM head
                 # is targeted by a PEFT adapter (`"lm_head"` in `target_modules`), `lm_head.weight` is the frozen base
-                # weight and the trainable adapter parameters live in separate submodules that Liger never sees. The
-                # head adapter would silently receive no gradient, so the model trains as if `lm_head` were frozen.
-                # Fail loudly rather than train a silently-frozen head.
+                # weight and the trainable adapter parameters live in separate submodules that the fused loss never
+                # sees. The head adapter would silently receive no gradient, so the model trains as if `lm_head` were
+                # frozen. Fail loudly rather than train a silently-frozen head.
                 output_embeddings = model.get_output_embeddings()
                 if isinstance(output_embeddings, BaseTunerLayer):
                     raise ValueError(
-                        "`use_liger_kernel=True` is incompatible with applying a PEFT adapter to `lm_head`. The Liger "
-                        "fused KTO loss reads `lm_head.weight` directly, so the adapter on the head is ignored and "
-                        "never trained. Either remove `'lm_head'` from your `target_modules`, or set "
-                        "`use_liger_kernel=False`."
+                        "`use_fused_linear_loss=True` is incompatible with applying a PEFT adapter to `lm_head`. The "
+                        "fused linear KTO loss reads `lm_head.weight` directly, so the adapter on the head is ignored "
+                        "and never trained. Either remove `'lm_head'` from your `target_modules`, or set "
+                        "`use_fused_linear_loss=False`."
                     )
                 # Prompt-learning methods (PromptTuning, PrefixTuning, P-Tuning) inject virtual tokens via
-                # `PeftModel.forward()`. The Liger KTO loss bypasses `PeftModel.forward()` by calling the backbone
-                # directly, so virtual tokens are never prepended and the loss is computed on the wrong sequence.
-                # Fail loudly rather than train on a silently corrupted input.
+                # `PeftModel.forward()`. The fused linear KTO loss bypasses `PeftModel.forward()` by calling the
+                # backbone directly, so virtual tokens are never prepended and the loss is computed on the wrong
+                # sequence. Fail loudly rather than train on a silently corrupted input.
                 if any(isinstance(cfg, PromptLearningConfig) for cfg in model.peft_config.values()):
                     raise ValueError(
-                        "`use_liger_kernel=True` is incompatible with prompt-learning PEFT methods (PromptTuning, "
-                        "PrefixTuning, P-Tuning). The Liger KTO loss bypasses `PeftModel.forward()` by calling the "
-                        "backbone directly, so virtual tokens are never prepended and the loss is computed on the "
-                        "wrong sequence. Use a weight-based adapter such as LoRA instead, or set "
-                        "`use_liger_kernel=False`."
+                        "`use_fused_linear_loss=True` is incompatible with prompt-learning PEFT methods "
+                        "(PromptTuning, PrefixTuning, P-Tuning). The fused linear KTO loss bypasses "
+                        "`PeftModel.forward()` by calling the backbone directly, so virtual tokens are never "
+                        "prepended and the loss is computed on the wrong sequence. Use a weight-based adapter such as "
+                        "LoRA instead, or set `use_fused_linear_loss=False`."
                     )
 
         # Dataset
@@ -911,11 +903,11 @@ class KTOTrainer(_BaseTrainer):
         is_moe = getattr(text_config, "output_router_logits", None) is not None
         self.aux_loss_enabled = is_moe and args.router_aux_loss_coef != 0.0
         self.router_aux_loss_coef = args.router_aux_loss_coef
-        if self.aux_loss_enabled and self.use_liger_kernel:
+        if self.aux_loss_enabled and self.use_fused_linear_loss:
             raise ValueError(
-                "Liger KTO loss does not support the Mixture-of-Experts load-balancing auxiliary loss, because it "
-                "fuses the loss without materializing the router logits. Either set `router_aux_loss_coef` to `0.0` "
-                "to disable the auxiliary loss, or set `use_liger_kernel` to False."
+                "The fused linear KTO loss does not support the Mixture-of-Experts load-balancing auxiliary loss, "
+                "because it fuses the loss without materializing the router logits. Either set `router_aux_loss_coef` "
+                "to `0.0` to disable the auxiliary loss, or set `use_fused_linear_loss` to False."
             )
 
         # Reference model
@@ -983,9 +975,9 @@ class KTOTrainer(_BaseTrainer):
                 )
             self.add_callback(SyncRefModelCallback(ref_model=self.ref_model, accelerator=self.accelerator))
 
-        # The Liger loss is built here, because it needs `self.ref_model`
-        if self.use_liger_kernel:
-            self.liger_loss = LigerFusedLinearKTOLoss(beta=self.beta, use_ref_model=(self.ref_model is not None))
+        # The fused linear loss is built here, because it needs `self.ref_model`
+        if self.use_fused_linear_loss:
+            self.fused_linear_loss = FusedLinearKTOLoss(beta=self.beta, use_ref_model=(self.ref_model is not None))
             # Redirect the model.module forward to the model forward to ensure pre-forward hooks are called, so that
             # under ZeRO-3 the parameter coordinator gathers/reduces `lm_head.weight` around the fused loss.
             self._forward_redirection = _ForwardRedirection()
@@ -1139,9 +1131,9 @@ class KTOTrainer(_BaseTrainer):
 
                     if not (des_weight_in_range or und_weight_in_range):
                         logger.warning(
-                            "You have different amounts of desirable/positive and undesirable/negative examples but the "
-                            "weights on the desirable and undesirable losses don't seem to be in an ideal range. Based "
-                            f"on your data, we recommend EITHER "
+                            "You have different amounts of desirable/positive and undesirable/negative examples but "
+                            "the weights on the desirable and undesirable losses don't seem to be in an ideal range. "
+                            "Based on your data, we recommend EITHER "
                             f"desirable_weight in [{des_weight_lower_bound}, {des_weight_upper_bound}] or "
                             f"undesirable_weight in [{und_weight_lower_bound}, {und_weight_upper_bound}] (but NOT BOTH). "
                             "See the documentation on how to optimally set these weights.",
@@ -1317,7 +1309,7 @@ class KTOTrainer(_BaseTrainer):
                 KL_model_kwargs["mm_token_type_ids"] = batch["KL_mm_token_type_ids"]
 
             with torch.no_grad():
-                if self.use_liger_kernel:
+                if self.use_fused_linear_loss:
                     # Running the full model would call `lm_head` as a module. Under ZeRO-3 that registers
                     # `lm_head.weight` in the parameter coordinator's forward trace, which then conflicts with the
                     # dense weight gradient the fused loss produces for the same parameter (the fused backward fails
@@ -1343,11 +1335,11 @@ class KTOTrainer(_BaseTrainer):
             KL_logps = KL_per_token_logps.sum(-1)
         return KL_logps
 
-    def _compute_loss_liger(self, model, inputs, return_outputs):
+    def _compute_loss_fused_linear(self, model, inputs, return_outputs):
         if return_outputs:
             raise RuntimeError(
-                "return_outputs=True is not supported with the Liger KTO loss. The Liger loss computes the loss "
-                "without materializing logits, so outputs cannot be returned."
+                "return_outputs=True is not supported with the fused linear KTO loss. The fused linear loss computes "
+                "the loss without materializing logits, so outputs cannot be returned."
             )
 
         mode = "train" if self.model.training else "eval"
@@ -1437,7 +1429,7 @@ class KTOTrainer(_BaseTrainer):
                     chosen_rewards_sum,
                     rejected_rewards_sum,
                 ),
-            ) = self.liger_loss(
+            ) = self.fused_linear_loss(
                 _input=outputs.last_hidden_state[:, :-1],
                 lin_weight=lm_head.weight,
                 target=target,
@@ -1746,7 +1738,7 @@ class KTOTrainer(_BaseTrainer):
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         try:
-            if self.use_liger_kernel:
+            if self.use_fused_linear_loss:
                 # Under ZeRO-3, `lm_head.weight` is sharded and the fused loss reads it directly (bypassing the
                 # module), so run the loss inside the engine's forward via `_forward_redirection` to arm the parameter
                 # coordinator's gather/reduce hooks.
@@ -1755,9 +1747,14 @@ class KTOTrainer(_BaseTrainer):
                 unwrapped_model = self.accelerator.unwrap_model(model)
                 if is_zero3 or self.is_fsdp_enabled:
                     return self._forward_redirection(
-                        model, unwrapped_model, self._compute_loss_liger, unwrapped_model, inputs, return_outputs
+                        model,
+                        unwrapped_model,
+                        self._compute_loss_fused_linear,
+                        unwrapped_model,
+                        inputs,
+                        return_outputs,
                     )
-                return self._compute_loss_liger(unwrapped_model, inputs, return_outputs)
+                return self._compute_loss_fused_linear(unwrapped_model, inputs, return_outputs)
             return self._compute_loss(model, inputs, return_outputs)
         except ValueError as e:
             if "Image features and image tokens do not match" in str(e) and self.args.max_length is not None:
@@ -1790,7 +1787,9 @@ class KTOTrainer(_BaseTrainer):
         inputs = self._prepare_inputs(inputs)
         with torch.no_grad(), self.compute_loss_context_manager():
             if prediction_loss_only:
-                loss = self.compute_loss(model, inputs, return_outputs=False)  # logits aren't materialized with liger
+                loss = self.compute_loss(
+                    model, inputs, return_outputs=False
+                )  # logits aren't materialized with the fused linear loss
                 logits, labels = None, None
             else:
                 loss, outputs = self.compute_loss(model, inputs, return_outputs=True)

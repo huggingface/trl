@@ -44,6 +44,11 @@ class GOLDConfig(SFTConfig):
         beta (`float`, *optional*, defaults to `0.5`):
             Interpolation coefficient between `0.0` and `1.0` of the Generalized Jensen-Shannon Divergence loss. When
             beta is `0.0`, the loss is the KL divergence. When beta is `1.0`, the loss is the Inverse KL Divergence.
+        use_fused_linear_loss (`bool`, *optional*, defaults to `False`):
+            Whether to compute the loss with the fused linear JSD loss: the `lm_head` projection and the loss are
+            computed together, one chunk of sequences at a time, so the full `(batch_size, seq_len, vocab_size)`
+            logits are never materialized. This reduces peak memory for large vocabularies. Setting
+            `use_liger_kernel=True` also enables it, which is deprecated.
         max_completion_length (`int`, *optional*, defaults to `128`):
             Maximum number of tokens to generate per completion.
         teacher_model_name_or_path (`str`, *optional*):
@@ -209,6 +214,15 @@ class GOLDConfig(SFTConfig):
             "help": "Interpolation coefficient between `0.0` and `1.0` of the Generalized Jensen-Shannon Divergence "
             "loss. When beta is `0.0`, the loss is the KL divergence. When beta is `1.0`, the loss is the Inverse KL "
             "Divergence."
+        },
+    )
+    use_fused_linear_loss: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to compute the loss with the fused linear JSD loss: the `lm_head` projection and the "
+            "loss are computed together, one chunk of sequences at a time, so the full `(batch_size, seq_len, "
+            "vocab_size)` logits are never materialized. This reduces peak memory for large vocabularies. Setting "
+            "`use_liger_kernel=True` also enables it, which is deprecated."
         },
     )
     max_completion_length: int = field(
@@ -460,6 +474,15 @@ class GOLDConfig(SFTConfig):
 
     def __post_init__(self):
         super().__post_init__()
+
+        if self.use_liger_kernel and not self.use_fused_linear_loss:
+            warnings.warn(
+                "Enabling the fused linear loss via `use_liger_kernel=True` is deprecated and will be removed in "
+                "v2.0.0. Set `use_fused_linear_loss=True` instead.",
+                FutureWarning,
+                stacklevel=3,
+            )
+            self.use_fused_linear_loss = True
 
         # check lmbda and beta are in the range [0, 1]
         if self.lmbda < 0.0 or self.lmbda > 1.0:

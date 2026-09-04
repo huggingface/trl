@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import warnings
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -64,6 +65,11 @@ class KTOConfig(_BaseConfig):
             Batch size to use when precomputing reference model log probabilities. This can be set higher than the
             training batch size to speed up preprocessing. If `None`, defaults to `per_device_train_batch_size` for
             training and `per_device_eval_batch_size` for evaluation.
+        use_fused_linear_loss (`bool`, *optional*, defaults to `False`):
+            Whether to compute the loss with the fused linear KTO loss: the `lm_head` projection and the loss are
+            computed together, one chunk of sequences at a time, so the full `(batch_size, seq_len, vocab_size)`
+            logits are never materialized. This reduces peak memory for large vocabularies. Setting
+            `use_liger_kernel=True` also enables it, which is deprecated.
 
         > Parameters that control the training
 
@@ -185,6 +191,15 @@ class KTOConfig(_BaseConfig):
             "`per_device_train_batch_size` for training and `per_device_eval_batch_size` for evaluation."
         },
     )
+    use_fused_linear_loss: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to compute the loss with the fused linear KTO loss: the `lm_head` projection and the "
+            "loss are computed together, one chunk of sequences at a time, so the full `(batch_size, seq_len, "
+            "vocab_size)` logits are never materialized. This reduces peak memory for large vocabularies. Setting "
+            "`use_liger_kernel=True` also enables it, which is deprecated."
+        },
+    )
 
     # Parameters that control the training
     loss_type: str = field(
@@ -243,3 +258,15 @@ class KTOConfig(_BaseConfig):
             "synchronized with the reference policy. To use this parameter, you must set `sync_ref_model=True`."
         },
     )
+
+    def __post_init__(self):
+        super().__post_init__()
+
+        if self.use_liger_kernel and not self.use_fused_linear_loss:
+            warnings.warn(
+                "Enabling the fused linear loss via `use_liger_kernel=True` is deprecated and will be removed in "
+                "v2.0.0. Set `use_fused_linear_loss=True` instead.",
+                FutureWarning,
+                stacklevel=3,
+            )
+            self.use_fused_linear_loss = True

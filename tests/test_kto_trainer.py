@@ -24,7 +24,7 @@ from transformers.utils import is_peft_available
 from trl import KTOConfig, KTOTrainer
 from trl.trainer.kto_trainer import DataCollatorForUnpairedPreference, DataCollatorForVisionUnpairedPreference
 
-from .testing_utils import TrlTestCase, require_bitsandbytes, require_liger_kernel, require_peft, require_vision
+from .testing_utils import TrlTestCase, require_bitsandbytes, require_peft, require_vision
 
 
 if is_peft_available():
@@ -891,14 +891,13 @@ class TestKTOTrainer(TrlTestCase):
             elif "base_layer" not in n:  # We expect the peft params to be different (except for the base layer)
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    @require_liger_kernel
-    def test_train_with_liger(self):
+    def test_train_with_fused_linear_loss(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
 
         training_args = KTOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
-            use_liger_kernel=True,
+            use_fused_linear_loss=True,
             report_to="none",
         )
         trainer = KTOTrainer(
@@ -916,11 +915,11 @@ class TestKTOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    @require_liger_kernel
     @require_peft
-    def test_train_with_liger_kernel_and_peft(self):
-        # A LoRA adapter that does not target lm_head leaves the head as a plain Linear, so Liger reads the real
-        # weight. Verify the full PEFT+Liger path actually trains (peft params change, base params stay frozen).
+    def test_train_with_fused_linear_loss_and_peft(self):
+        # A LoRA adapter that does not target lm_head leaves the head as a plain Linear, so the fused loss reads the
+        # real weight. Verify the full PEFT+fused-loss path actually trains (peft params change, base params stay
+        # frozen).
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
@@ -928,7 +927,7 @@ class TestKTOTrainer(TrlTestCase):
         training_args = KTOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
-            use_liger_kernel=True,
+            use_fused_linear_loss=True,
             report_to="none",
         )
         trainer = KTOTrainer(
@@ -947,13 +946,12 @@ class TestKTOTrainer(TrlTestCase):
             elif "base_layer" not in n:
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    @require_liger_kernel
     @require_peft
-    def test_liger_kernel_with_peft_lm_head_raises(self):
-        # The Liger fused KTO loss reads `lm_head.weight` directly, so a LoRA adapter on `lm_head` is silently
+    def test_fused_linear_loss_with_peft_lm_head_raises(self):
+        # The fused linear KTO loss reads `lm_head.weight` directly, so a LoRA adapter on `lm_head` is silently
         # ignored and never trained. The trainer must fail fast instead of training a silently-frozen head.
         dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
-        training_args = KTOConfig(output_dir=self.tmp_dir, use_liger_kernel=True, report_to="none")
+        training_args = KTOConfig(output_dir=self.tmp_dir, use_fused_linear_loss=True, report_to="none")
         # `ensure_weight_tying=True` silences PEFT's weight-tying warning fired when lm_head is in the adapter on a
         # model with untied embeddings; once tying respects `tie_word_embeddings`, the flag itself warns that no tied
         # modules were found, so it must only be set on the affected range.
@@ -971,13 +969,12 @@ class TestKTOTrainer(TrlTestCase):
                 peft_config=lora_config,
             )
 
-    @require_liger_kernel
     @require_peft
-    def test_liger_kernel_with_peft_prompt_learning_raises(self):
-        # Prompt-learning methods inject virtual tokens via PeftModel.forward(), which the Liger KTO loss bypasses.
-        # The trainer must fail fast to avoid computing the loss on the wrong (truncated) sequence.
+    def test_fused_linear_loss_with_peft_prompt_learning_raises(self):
+        # Prompt-learning methods inject virtual tokens via PeftModel.forward(), which the fused linear KTO loss
+        # bypasses. The trainer must fail fast to avoid computing the loss on the wrong (truncated) sequence.
         dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
-        training_args = KTOConfig(output_dir=self.tmp_dir, use_liger_kernel=True, report_to="none")
+        training_args = KTOConfig(output_dir=self.tmp_dir, use_fused_linear_loss=True, report_to="none")
         with pytest.raises(ValueError, match="prompt-learning"):
             KTOTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
@@ -986,17 +983,16 @@ class TestKTOTrainer(TrlTestCase):
                 peft_config=PromptTuningConfig(task_type=TaskType.CAUSAL_LM, num_virtual_tokens=8),
             )
 
-    @require_liger_kernel
-    def test_init_fails_with_compute_metrics_and_liger(self):
+    def test_init_fails_with_compute_metrics_and_fused_linear_loss(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
 
         training_args = KTOConfig(
             output_dir=self.tmp_dir,
-            use_liger_kernel=True,
+            use_fused_linear_loss=True,
             report_to="none",
         )
 
-        with pytest.raises(ValueError, match="compute_metrics is not supported with the Liger kernel"):
+        with pytest.raises(ValueError, match="compute_metrics is not supported with the fused linear loss"):
             KTOTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
                 args=training_args,
@@ -1004,14 +1000,13 @@ class TestKTOTrainer(TrlTestCase):
                 compute_metrics=lambda _: {},
             )
 
-    @require_liger_kernel
-    def test_init_fails_with_moe_aux_loss_and_liger(self):
+    def test_init_fails_with_moe_aux_loss_and_fused_linear_loss(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
 
-        # The MoE auxiliary loss is on by default; it is incompatible with the Liger fused loss.
+        # The MoE auxiliary loss is on by default; it is incompatible with the fused linear loss.
         training_args = KTOConfig(
             output_dir=self.tmp_dir,
-            use_liger_kernel=True,
+            use_fused_linear_loss=True,
             report_to="none",
         )
 
@@ -1588,14 +1583,13 @@ class TestKTOTrainerVLM(TrlTestCase):
                 train_dataset=dataset,
             )
 
-    @require_liger_kernel
-    def test_train_vlm_liger(self):
+    def test_train_vlm_fused_linear_loss(self):
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_unpaired_preference", split="train")
         training_args = KTOConfig(
             output_dir=self.tmp_dir,
             max_length=None,  # for VLMs, truncating can remove image tokens, leading to errors
             per_device_train_batch_size=2,  # VLM training is memory intensive, reduce batch size to avoid OOM
-            use_liger_kernel=True,
+            use_fused_linear_loss=True,
             report_to="none",
         )
         trainer = KTOTrainer(

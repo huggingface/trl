@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import warnings
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -135,6 +136,11 @@ class DistillationConfig(_BaseConfig):
             forward KL divergence. When `1.0`, the loss is the reverse KL divergence. When `0.5`, it is the standard
             JSD. Unlike GRPO's `beta` (a KL-penalty coefficient against a reference model), here it selects the
             divergence itself; there is no reference-model KL penalty.
+        use_fused_linear_loss (`bool`, *optional*, defaults to `False`):
+            Whether to compute the loss with the fused linear JSD loss: the `lm_head` projection and the loss are
+            computed together, one chunk of sequences at a time, so the full `(batch_size, seq_len, vocab_size)`
+            logits are never materialized. This reduces peak memory for large vocabularies. Setting
+            `use_liger_kernel=True` also enables it, which is deprecated.
         max_tool_calling_iterations (`int`, *optional*):
             Maximum number of tool-calling turns when training an agent. If `None`, there is no limit and generation
             stops when the model generates a response turn with no tool calls or when the total response length reaches
@@ -353,9 +359,18 @@ class DistillationConfig(_BaseConfig):
     beta: float = field(
         default=1.0,
         metadata={
-            "help": "Interpolation coefficient for the Generalized JSD loss. 0.0 = forward KL, 0.5 = JSD, 1.0 = reverse "
-            "KL. Unlike GRPO's `beta` (a KL-penalty coefficient against a reference model), here it selects the "
-            "divergence itself; there is no reference-model KL penalty."
+            "help": "Interpolation coefficient for the Generalized JSD loss. 0.0 = forward KL, 0.5 = JSD, 1.0 = "
+            "reverse KL. Unlike GRPO's `beta` (a KL-penalty coefficient against a reference model), here it selects "
+            "the divergence itself; there is no reference-model KL penalty."
+        },
+    )
+    use_fused_linear_loss: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to compute the loss with the fused linear JSD loss: the `lm_head` projection and the "
+            "loss are computed together, one chunk of sequences at a time, so the full `(batch_size, seq_len, "
+            "vocab_size)` logits are never materialized. This reduces peak memory for large vocabularies. Setting "
+            "`use_liger_kernel=True` also enables it, which is deprecated."
         },
     )
     max_tool_calling_iterations: int | None = field(
@@ -390,6 +405,15 @@ class DistillationConfig(_BaseConfig):
 
     def __post_init__(self):
         super().__post_init__()
+
+        if self.use_liger_kernel and not self.use_fused_linear_loss:
+            warnings.warn(
+                "Enabling the fused linear loss via `use_liger_kernel=True` is deprecated and will be removed in "
+                "v2.0.0. Set `use_fused_linear_loss=True` instead.",
+                FutureWarning,
+                stacklevel=3,
+            )
+            self.use_fused_linear_loss = True
 
         if self.beta < 0.0 or self.beta > 1.0:
             raise ValueError(f"beta must be in [0.0, 1.0], got {self.beta}.")

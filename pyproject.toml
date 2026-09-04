@@ -252,7 +252,7 @@ filterwarnings = [
 
     # torch inductor advises enabling TF32 on every compile when the float32 matmul precision is left at its default
     # (upstream, not actionable in TRL: the precision is a process-wide numerics setting only the user should change)
-    # Triggered by the DPO and KTO Liger tests, the only ones that compile, since the GPU CI moved from T4 to L40S:
+    # Triggered by the DPO and KTO fused linear loss tests, the only ones that compile, since the GPU CI moved from T4 to L40S:
     # the advisory is guarded on compute capability >= (8, 0), unreachable on T4
     # Tracking issue: https://github.com/huggingface/trl/issues/6849
     # Upstream issue: https://github.com/pytorch/pytorch/issues/175484

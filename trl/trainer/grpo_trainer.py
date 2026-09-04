@@ -69,7 +69,8 @@ from ..data_utils import apply_chat_template, is_conversational, prepare_multimo
 from ..distributed import DistributedBackend
 from ..extras.profiling import profiling_context, profiling_decorator
 from ..generation.vllm_generation import VLLMGeneration
-from ..import_utils import is_jmespath_available, is_liger_kernel_available
+from ..import_utils import is_jmespath_available
+from ..losses import FusedLinearGRPOLoss
 from ..models import prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
 from ..models.utils import _ForwardRedirection, disable_gradient_checkpointing
 from .base_trainer import _BaseTrainer
@@ -99,10 +100,6 @@ from .utils import (
     unsplit_pixel_values_by_grid,
     use_adapter,
 )
-
-
-if is_liger_kernel_available():
-    from liger_kernel.chunked_loss import LigerFusedLinearGRPOLoss
 
 
 if is_peft_available():
@@ -779,7 +776,7 @@ class GRPOTrainer(_BaseTrainer):
         self.vllm_importance_sampling_mode = args.vllm_importance_sampling_mode
         self.vllm_importance_sampling_clip_max = args.vllm_importance_sampling_clip_max
         self.vllm_importance_sampling_clip_min = args.vllm_importance_sampling_clip_min
-        self.use_liger_kernel = args.use_liger_kernel
+        self.use_fused_linear_loss = args.use_fused_linear_loss
         self.loss_type = args.loss_type
         self.multi_objective_aggregation = args.multi_objective_aggregation
 
@@ -791,40 +788,41 @@ class GRPOTrainer(_BaseTrainer):
         self.scale_rewards = args.scale_rewards
         self.importance_sampling_level = args.importance_sampling_level
         self.off_policy_mask_threshold = args.off_policy_mask_threshold
-        if self.use_liger_kernel and self.off_policy_mask_threshold is not None:
-            raise ValueError("Liger kernel does not support off-policy sequence masking yet.")
-        if self.use_liger_kernel and is_peft_model(model):
-            # The Liger fused GRPO loss multiplies the hidden states by `lm_head.weight` directly. When the LM head is
+        if self.use_fused_linear_loss and self.off_policy_mask_threshold is not None:
+            raise ValueError("The fused linear loss does not support off-policy sequence masking yet.")
+        if self.use_fused_linear_loss and is_peft_model(model):
+            # The fused linear GRPO loss multiplies the hidden states by `lm_head.weight` directly. When the LM head is
             # targeted by a PEFT adapter (`"lm_head"` in `target_modules`), `lm_head.weight` is the frozen base weight
-            # and the trainable adapter parameters live in separate submodules that Liger never sees. The head adapter
-            # would silently receive no gradient, so the model trains as if `lm_head` were frozen. Fail loudly rather
-            # than train a silently-frozen head.
+            # and the trainable adapter parameters live in separate submodules that the fused loss never sees. The
+            # head adapter would silently receive no gradient, so the model trains as if `lm_head` were frozen. Fail
+            # loudly rather than train a silently-frozen head.
             output_embeddings = model.get_output_embeddings()
             if isinstance(output_embeddings, BaseTunerLayer):
                 raise ValueError(
-                    "`use_liger_kernel=True` is incompatible with applying a PEFT adapter to `lm_head`. The Liger "
-                    "fused GRPO loss reads `lm_head.weight` directly, so the adapter on the head is ignored and never "
-                    "trained. Either remove `'lm_head'` from your `target_modules`, or set `use_liger_kernel=False`."
+                    "`use_fused_linear_loss=True` is incompatible with applying a PEFT adapter to `lm_head`. The "
+                    "fused linear GRPO loss reads `lm_head.weight` directly, so the adapter on the head is ignored "
+                    "and never trained. Either remove `'lm_head'` from your `target_modules`, or set "
+                    "`use_fused_linear_loss=False`."
                 )
             # Prompt-learning methods (PromptTuning, PrefixTuning, P-Tuning) inject virtual tokens via
-            # `PeftModel.forward()`. The Liger GRPO loss bypasses `PeftModel.forward()` by calling the backbone
+            # `PeftModel.forward()`. The fused linear GRPO loss bypasses `PeftModel.forward()` by calling the backbone
             # directly, so virtual tokens are never prepended and the loss is computed on the wrong sequence.
             # Fail loudly rather than train on a silently corrupted input.
             if any(isinstance(cfg, PromptLearningConfig) for cfg in model.peft_config.values()):
                 raise ValueError(
-                    "`use_liger_kernel=True` is incompatible with prompt-learning PEFT methods (PromptTuning, "
-                    "PrefixTuning, P-Tuning). The Liger GRPO loss bypasses `PeftModel.forward()` by calling the "
-                    "backbone directly, so virtual tokens are never prepended and the loss is computed on the "
+                    "`use_fused_linear_loss=True` is incompatible with prompt-learning PEFT methods (PromptTuning, "
+                    "PrefixTuning, P-Tuning). The fused linear GRPO loss bypasses `PeftModel.forward()` by calling "
+                    "the backbone directly, so virtual tokens are never prepended and the loss is computed on the "
                     "wrong sequence. Use a weight-based adapter such as LoRA instead, or set "
-                    "`use_liger_kernel=False`."
+                    "`use_fused_linear_loss=False`."
                 )
         self.mask_truncated_completions = args.mask_truncated_completions
         self.top_entropy_quantile = args.top_entropy_quantile
-        if self.use_liger_kernel and self.top_entropy_quantile < 1.0:
+        if self.use_fused_linear_loss and self.top_entropy_quantile < 1.0:
             raise NotImplementedError(
-                "Liger Kernels don't currently support masking token positions based on entropy."
+                "The fused linear loss does not support masking token positions based on entropy."
             )
-        if self.use_liger_kernel and self.importance_sampling_level not in ("token", "sequence"):
+        if self.use_fused_linear_loss and self.importance_sampling_level not in ("token", "sequence"):
             raise ValueError(
                 f"Unknown importance sampling level: {self.importance_sampling_level}. "
                 "Possible values are 'token' and 'sequence'."
@@ -841,8 +839,8 @@ class GRPOTrainer(_BaseTrainer):
         # accumulation window, so the adaptive controller sees the exact window-global entropy (not just the
         # last micro-batch). Reset to None at each optimizer step.
         self._entropy_window_stats = None
-        if self.use_liger_kernel and self._entropy_bonus_enabled:
-            raise NotImplementedError("Entropy bonus is not supported with Liger kernel.")
+        if self.use_fused_linear_loss and self._entropy_bonus_enabled:
+            raise NotImplementedError("Entropy bonus is not supported with the fused linear loss.")
 
         # Datasets
         self.shuffle_dataset = args.shuffle_dataset
@@ -1027,17 +1025,13 @@ class GRPOTrainer(_BaseTrainer):
             if self.ref_model is not None:
                 _cast_lm_head_to_fp32(self.ref_model)
 
-        # Liger loss
-        if self.use_liger_kernel:
-            if not is_liger_kernel_available():
-                raise ImportError(
-                    "Liger is required to use `use_liger_kernel` as the GRPO loss. Run `pip install liger-kernel`."
-                )
+        # Fused linear loss
+        if self.use_fused_linear_loss:
             # Redirect the model.module forward to the model forward to ensure pre-forward hooks are called, so that
             # under ZeRO-3 the parameter coordinator gathers/reduces `lm_head.weight` around the fused loss.
             self._forward_redirection = _ForwardRedirection()
 
-            self.liger_loss = LigerFusedLinearGRPOLoss(
+            self.fused_linear_loss = FusedLinearGRPOLoss(
                 beta=self.beta,
                 epsilon_low=self.epsilon_low,
                 epsilon_high=self.epsilon_high,
@@ -2956,7 +2950,7 @@ class GRPOTrainer(_BaseTrainer):
             output["tool_mask"] = tool_mask
         return output
 
-    def compute_liger_loss(self, unwrapped_model, inputs):
+    def compute_fused_linear_loss(self, unwrapped_model, inputs):
         # Compute the per-token log probabilities for the model
         prompt_ids, prompt_mask = inputs["prompt_ids"], inputs["prompt_mask"]
         completion_ids, completion_mask = inputs["completion_ids"], inputs["completion_mask"]
@@ -2982,15 +2976,15 @@ class GRPOTrainer(_BaseTrainer):
         loss_mask = completion_mask if "tool_mask" not in inputs else completion_mask * inputs["tool_mask"]
         lm_head_weight = unwrapped_model.lm_head.weight
         lm_head_bias = unwrapped_model.lm_head.bias
-        # Liger reads `lm_head` directly instead of through `model.forward()`, so its ZeRO-3 gather hook never fires and
-        # the fused matmul gets an empty shard. Gather the weight/bias ourselves for the call (the weight grad is
-        # computed during this forward, so it isn't needed in the backward).
+        # The fused loss reads `lm_head` directly instead of through `model.forward()`, so its ZeRO-3 gather hook
+        # never fires and the fused matmul gets an empty shard. Gather the weight/bias ourselves for the call (the
+        # weight grad is computed during this forward, so it isn't needed in the backward).
         with maybe_gather_lm_head_ctx(lm_head_weight, lm_head_bias):
-            loss, metrics = self.liger_loss(
+            loss, metrics = self.fused_linear_loss(
                 _input=last_hidden_state,
                 lin_weight=lm_head_weight,
                 selected_token_ids=completion_ids,
-                # The attention_mask parameter in liger loss is actually used as a loss mask (not model attention)
+                # The attention_mask parameter in the fused loss is actually used as a loss mask (not model attention)
                 attention_mask=loss_mask,
                 advantages=inputs["advantages"],
                 bias=lm_head_bias,
@@ -2999,7 +2993,7 @@ class GRPOTrainer(_BaseTrainer):
                 vllm_is_ratio=inputs.get("importance_sampling_ratio"),
                 num_items_in_batch=inputs.get("num_items_in_batch"),
             )
-        # Extract metrics from the liger_grpo_loss output
+        # Extract metrics from the fused linear GRPO loss output
         # KL divergence is the first metric when beta is non-zero
         mean_kl = metrics[0] if self.beta != 0.0 else None
         clip_ratio = metrics[-1]
@@ -3009,8 +3003,8 @@ class GRPOTrainer(_BaseTrainer):
             self._metrics[mode]["kl"].append(self.accelerator.gather(mean_kl).mean().item())
         self._metrics[mode]["clip_ratio"].append(self.accelerator.gather(clip_ratio).mean().item())
         # DAPO/CISPO/VESPO normalize by num_items_in_batch / num_processes (applied internally by
-        # the Liger loss), then need a `current_gradient_accumulation_steps / steps_per_generation`
-        # rescale to land on the per-window token-mean — matching the non-Liger path
+        # the fused loss), then need a `current_gradient_accumulation_steps / steps_per_generation`
+        # rescale to land on the per-window token-mean — matching the non-fused path
         # (see `_compute_loss`).
         if self.loss_type in ["cispo", "dapo", "vespo"]:
             normalizer = (
@@ -3024,10 +3018,12 @@ class GRPOTrainer(_BaseTrainer):
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         if return_outputs:
             raise ValueError("The GRPOTrainer does not support returning outputs")
-        if self.use_liger_kernel:
-            # Compute the loss using the liger grpo loss
+        if self.use_fused_linear_loss:
+            # Compute the loss using the fused linear GRPO loss
             unwrapped_model = self.accelerator.unwrap_model(model)
-            return self._forward_redirection(model, unwrapped_model, self.compute_liger_loss, unwrapped_model, inputs)
+            return self._forward_redirection(
+                model, unwrapped_model, self.compute_fused_linear_loss, unwrapped_model, inputs
+            )
         return self._compute_loss(model, inputs)
 
     @staticmethod

@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import warnings
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -149,6 +150,11 @@ class SDPOConfig(_BaseConfig):
             Maximum length of the generated completion.
         temperature (`float`, *optional*, defaults to `1.0`):
             Temperature for sampling. The higher the temperature, the more random the completions.
+        use_fused_linear_loss (`bool`, *optional*, defaults to `False`):
+            Whether to compute the loss with the fused linear JSD loss: the `lm_head` projection and the loss are
+            computed together, one chunk of sequences at a time, so the full `(batch_size, seq_len, vocab_size)`
+            logits are never materialized. This reduces peak memory for large vocabularies. Setting
+            `use_liger_kernel=True` also enables it, which is deprecated.
         top_p (`float`, *optional*, defaults to `1.0`):
             Float that controls the cumulative probability of the top tokens to consider. Must be in (0, 1]. Set to 1.0
             to consider all tokens.
@@ -324,6 +330,15 @@ class SDPOConfig(_BaseConfig):
         default=1.0,
         metadata={"help": "Temperature for sampling. The higher the temperature, the more random the completions."},
     )
+    use_fused_linear_loss: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to compute the loss with the fused linear JSD loss: the `lm_head` projection and the "
+            "loss are computed together, one chunk of sequences at a time, so the full `(batch_size, seq_len, "
+            "vocab_size)` logits are never materialized. This reduces peak memory for large vocabularies. Setting "
+            "`use_liger_kernel=True` also enables it, which is deprecated."
+        },
+    )
     top_p: float = field(
         default=1.0,
         metadata={
@@ -449,7 +464,17 @@ class SDPOConfig(_BaseConfig):
     loss_type: str = field(
         default="dapo",
         metadata={
-            "help": "Specifies the loss formulation to use. Supported values are 'grpo', 'bnpo', 'dr_grpo', and 'dapo'. 'grpo': Aggregates token-level losses by normalizing over sequence length. Not recommended due to length bias—this approach tends to prefer shorter completions with positive advantages and longer ones with negative advantages. 'dapo' (default): Aggregates token-level losses by normalizing with the number of active tokens in the global accumulated batch. This method was introduced in the DAPO paper to eliminate length bias. 'dr_grpo': Aggregates token-level losses by normalizing with a global constant. This method was introduced in the Dr. GRPO paper to eliminate length bias. The value of the constant corresponds to `max_completion_length`. 'bnpo': Aggregates token-level losses by normalizing with the number of active tokens in the local batch. Note that normalization is performed over the local batch only, so results may slightly vary depending on the local batch size, despite a constant effective batch size. When using `per_device_train_batch_size==1`, the loss is equivalent to the GRPO loss."
+            "help": "Specifies the loss formulation to use. Supported values are 'grpo', 'bnpo', 'dr_grpo', and "
+            "'dapo'. 'grpo': Aggregates token-level losses by normalizing over sequence length. Not recommended due "
+            "to length bias—this approach tends to prefer shorter completions with positive advantages and longer "
+            "ones with negative advantages. 'dapo' (default): Aggregates token-level losses by normalizing with the "
+            "number of active tokens in the global accumulated batch. This method was introduced in the DAPO paper to "
+            "eliminate length bias. 'dr_grpo': Aggregates token-level losses by normalizing with a global constant. "
+            "This method was introduced in the Dr. GRPO paper to eliminate length bias. The value of the constant "
+            "corresponds to `max_completion_length`. 'bnpo': Aggregates token-level losses by normalizing with the "
+            "number of active tokens in the local batch. Note that normalization is performed over the local batch "
+            "only, so results may slightly vary depending on the local batch size, despite a constant effective batch "
+            "size. When using `per_device_train_batch_size==1`, the loss is equivalent to the GRPO loss."
         },
     )
     mask_truncated_completions: bool = field(
@@ -602,6 +627,15 @@ class SDPOConfig(_BaseConfig):
 
     def __post_init__(self):
         super().__post_init__()
+
+        if self.use_liger_kernel and not self.use_fused_linear_loss:
+            warnings.warn(
+                "Enabling the fused linear loss via `use_liger_kernel=True` is deprecated and will be removed in "
+                "v2.0.0. Set `use_fused_linear_loss=True` instead.",
+                FutureWarning,
+                stacklevel=3,
+            )
+            self.use_fused_linear_loss = True
         if not 0.0 <= self.distillation_weight <= 1.0:
             raise ValueError(f"`distillation_weight` must be in [0, 1], got {self.distillation_weight}.")
         if self.distillation_mode == "sampled_token" and self.distillation_alpha != 1.0:

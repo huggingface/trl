@@ -130,10 +130,7 @@ PEFT can be combined with other memory reduction techniques such as quantization
 
 For more information, see [Liger Kernel Integration](liger_kernel_integration).
 
-To use Liger for reducing peak memory usage, use the following code snippet:
-
-<hfoptions id="liger">
-<hfoption id="SFT">
+To use Liger for reducing peak memory usage in [`SFTTrainer`]:
 
 ```python
 from trl import SFTConfig
@@ -141,13 +138,17 @@ from trl import SFTConfig
 training_args = SFTConfig(..., use_liger_kernel=True)
 ```
 
-</hfoption>
+## Fused linear loss for reducing peak memory usage
+
+For preference and RL objectives, the `[batch × seq_len × vocab]` logits tensor is materialized twice (policy and reference). Setting `use_fused_linear_loss=True` computes the `lm_head` projection and the loss together, one chunk of sequences at a time, so the full logits are never materialized. It is available in [`DPOTrainer`], [`KTOTrainer`], [`GRPOTrainer`], [`DistillationTrainer`] and the experimental GKD, GOLD, SDPO, SDFT and IW-OPD trainers. The implementation lives in `trl.losses` and was adapted from [Liger Kernel](https://github.com/linkedin/Liger-Kernel); it needs no extra dependency.
+
+<hfoptions id="fused">
 <hfoption id="DPO">
 
 ```python
 from trl import DPOConfig
 
-training_args = DPOConfig(..., use_liger_kernel=True)
+training_args = DPOConfig(..., use_fused_linear_loss=True)
 ```
 
 </hfoption>
@@ -156,7 +157,7 @@ training_args = DPOConfig(..., use_liger_kernel=True)
 ```python
 from trl import GRPOConfig
 
-training_args = GRPOConfig(..., use_liger_kernel=True)
+training_args = GRPOConfig(..., use_fused_linear_loss=True)
 ```
 
 </hfoption>
@@ -165,20 +166,22 @@ training_args = GRPOConfig(..., use_liger_kernel=True)
 ```python
 from trl import KTOConfig
 
-training_args = KTOConfig(..., use_liger_kernel=True)
+training_args = KTOConfig(..., use_fused_linear_loss=True)
 ```
 
 </hfoption>
-<hfoption id="GKD">
+<hfoption id="Distillation">
 
 ```python
-from trl.experimental.gkd import GKDConfig
+from trl import DistillationConfig
 
-training_args = GKDConfig(..., use_liger_kernel=True)
+training_args = DistillationConfig(..., use_fused_linear_loss=True)
 ```
 
 </hfoption>
 </hfoptions>
+
+Because the logits are never materialized, `compute_metrics` is not available with the fused loss, and PEFT adapters on `lm_head` or prompt-learning methods are rejected.
 
 ## Chunked cross-entropy for reducing peak memory usage
 

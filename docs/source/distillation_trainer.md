@@ -93,7 +93,7 @@ While training and evaluating, we record the following metrics:
 - `completions/clipped_ratio`: The ratio of truncated (clipped) completions.
 - `tools/call_frequency`: The average number of tool calls per completion in the generation batch. Logged only when `tools` are provided.
 - `tools/failure_frequency`: The fraction of tool calls that failed (the tool was not found, raised an exception, or the call type is unsupported). It is `0.0` when no tool was called. Logged only when `tools` are provided.
-- `entropy`: Average entropy of token predictions across generated completions (in nats). Not logged on the Liger fast path.
+- `entropy`: Average entropy of token predictions across generated completions (in nats). Not logged with `use_fused_linear_loss=True`.
 
 ## Customization
 
@@ -176,14 +176,12 @@ trainer.train()
 > [!WARNING]
 > The distillation loss reads `lm_head.weight` directly and runs the student backbone without going through `PeftModel.forward()`. Adapters on `lm_head` (via `target_modules`) and prompt-learning methods (PromptTuning, PrefixTuning, P-Tuning) are therefore rejected, since they would be silently ignored. To train the head, use `modules_to_save=["lm_head"]` instead.
 
-### Train with Liger Kernel
+### Train with the fused linear loss
 
-Liger Kernel is a collection of Triton kernels for LLM training that boosts multi-GPU throughput, cuts memory use, and works seamlessly with tools like FlashAttention, PyTorch FSDP, and DeepSpeed. For more information, see [Liger Kernel Integration](liger_kernel_integration).
-
-Set `use_liger_kernel=True` in the [`DistillationConfig`] to compute the JSD with the fused Liger kernel instead of the chunked path.
+Set `use_fused_linear_loss=True` in the [`DistillationConfig`] to compute the JSD with the fused linear loss instead of the chunked path. For more information, see [Fused linear loss](reducing_memory_usage#fused-linear-loss-for-reducing-peak-memory-usage).
 
 > [!WARNING]
-> The fused Liger kernel cannot apply per-model `logit_scale` (e.g. Cohere) or `final_logit_softcapping` (e.g. Gemma), so it is rejected for models that set them — use the default chunked path for those.
+> The fused linear loss cannot apply per-model `logit_scale` (e.g. Cohere) or `final_logit_softcapping` (e.g. Gemma), so it is rejected for models that set them — use the default chunked path for those.
 
 ## Agent Training
 

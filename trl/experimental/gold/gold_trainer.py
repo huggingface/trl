@@ -49,7 +49,6 @@ from transformers.tokenization_utils_base import PreTrainedTokenizerBase
 from transformers.trainer_utils import EvalPrediction, seed_worker
 from transformers.utils import (
     is_datasets_available,
-    is_liger_kernel_available,
     is_peft_available,
     is_rich_available,
 )
@@ -63,6 +62,7 @@ from ...data_utils import (
 from ...extras.profiling import profiling_decorator
 from ...generation.vllm_generation import VLLMGeneration
 from ...import_utils import is_vllm_available
+from ...losses import FusedLinearJSDLoss
 from ...models import prepare_deepspeed
 from ...models.utils import _ForwardRedirection, unwrap_model_for_generation
 from ...trainer.sft_trainer import SFTTrainer
@@ -84,10 +84,6 @@ from ..utils import (
     piece_byte_len,
 )
 from .gold_config import GOLDConfig
-
-
-if is_liger_kernel_available():
-    from liger_kernel.chunked_loss import LigerFusedLinearJSDLoss
 
 
 if is_peft_available():
@@ -911,19 +907,19 @@ class GOLDTrainer(SFTTrainer):
             else:
                 data_collator = DataCollatorForChatML(tokenizer=self._tokenizer, max_length=args.max_length)
 
-        # Liger fused GKD loss (JSD)
-        self.use_liger_gkd_loss = False
-        if args.use_liger_kernel:
-            # The fused Liger JSD loss requires student and teacher to share a vocabulary, while ULD loss exists
+        # Fused linear GKD loss (JSD)
+        self.use_fused_linear_loss = False
+        if args.use_fused_linear_loss:
+            # The fused linear JSD loss requires student and teacher to share a vocabulary, while ULD loss exists
             # precisely for the cross-tokenizer case — the two cannot be combined.
             if args.use_uld_loss:
                 raise ValueError(
-                    "`use_liger_kernel=True` cannot be combined with `use_uld_loss=True`. The fused Liger JSD loss "
-                    "requires the student and teacher to share a vocabulary, whereas ULD loss handles the "
+                    "`use_fused_linear_loss=True` cannot be combined with `use_uld_loss=True`. The fused linear JSD "
+                    "loss requires the student and teacher to share a vocabulary, whereas ULD loss handles the "
                     "cross-tokenizer case. Either set `use_uld_loss=False` (if your student and teacher are from the "
-                    "same family and the standard JSD loss applies), or set `use_liger_kernel=False`."
+                    "same family and the standard JSD loss applies), or set `use_fused_linear_loss=False`."
                 )
-            self.liger_loss = LigerFusedLinearJSDLoss(
+            self.fused_linear_loss = FusedLinearJSDLoss(
                 beta=args.beta,
                 ignore_index=-100,
                 temperature=args.temperature,
@@ -931,7 +927,7 @@ class GOLDTrainer(SFTTrainer):
                 weight_hard_loss=0.0,
                 weight_soft_loss=1.0,
             )
-            self.use_liger_gkd_loss = True
+            self.use_fused_linear_loss = True
             self._forward_redirection = _ForwardRedirection()
 
         if args.teacher_model_init_kwargs is None:
@@ -2229,7 +2225,7 @@ class GOLDTrainer(SFTTrainer):
                 dataset = dataset.select_columns(columns_to_select)
                 dataset = pack_dataset(dataset, args.max_length, args.packing_strategy, map_kwargs)
 
-            if args.use_liger_kernel:
+            if args.use_fused_linear_loss:
                 required_columns = {
                     "input_ids",
                     "attention_mask",
@@ -2495,7 +2491,7 @@ class GOLDTrainer(SFTTrainer):
                     **teacher_forward_kwargs,
                 )
         else:
-            if self.use_liger_gkd_loss:
+            if self.use_fused_linear_loss:
                 # Forward only through the base models (avoid lm_head to save memory).
                 # Route through the DDP/FSDP wrapper via _forward_redirection so that
                 # DDP.forward() is called and prepare_for_backward() fires correctly.
@@ -2503,14 +2499,14 @@ class GOLDTrainer(SFTTrainer):
                 student_outputs = self._forward_redirection(
                     model,
                     unwrapped_student,
-                    self._liger_student_forward,
+                    self._fused_student_forward,
                     unwrapped_student,
                     inputs,
                 )
 
                 self.teacher_model.eval()
                 unwrapped_teacher = self.accelerator.unwrap_model(self.teacher_model)
-                base_teacher = self._liger_backbone(unwrapped_teacher)
+                base_teacher = self._fused_backbone(unwrapped_teacher)
                 with torch.no_grad():
                     teacher_outputs = base_teacher(
                         input_ids=inputs["input_ids"],
@@ -2538,7 +2534,7 @@ class GOLDTrainer(SFTTrainer):
                 student_head = unwrapped_student.get_output_embeddings()
                 teacher_head = unwrapped_teacher.get_output_embeddings()
 
-                loss = self.liger_loss(
+                loss = self.fused_linear_loss(
                     student_input=student_hidden,
                     student_weight=student_head.weight,
                     teacher_input=teacher_hidden,
@@ -2548,8 +2544,8 @@ class GOLDTrainer(SFTTrainer):
                     teacher_bias=getattr(teacher_head, "bias", None),
                 )
 
-                # The Liger JSD loss normalizes by the local number of valid tokens. Under gradient accumulation we
-                # want the global normalization, so rescale by `num_valid_local / num_items_in_batch`.
+                # The fused linear JSD loss normalizes by the local number of valid tokens. Under gradient
+                # accumulation we want the global normalization, so rescale by `num_valid_local / num_items_in_batch`.
                 if num_items_in_batch is not None:
                     num_valid_local = (true_labels != -100).sum().clamp_min(1)
                     if isinstance(num_items_in_batch, torch.Tensor):
@@ -2709,8 +2705,8 @@ class GOLDTrainer(SFTTrainer):
             completion_texts,
         )
 
-    def _liger_backbone(self, unwrapped_model: nn.Module) -> nn.Module:
-        """Return the lm_head-free backbone used by the Liger JSD path (skips lm_head to save memory).
+    def _fused_backbone(self, unwrapped_model: nn.Module) -> nn.Module:
+        """Return the lm_head-free backbone used by the fused JSD path (skips lm_head to save memory).
 
         `base_model` gives the backbone — text decoder for LMs, multimodal wrapper for VLMs (so vision-token injection
         runs before the text decoder). `get_decoder()` won't do: on VLMs it returns just the text stack and feeds
@@ -2723,9 +2719,9 @@ class GOLDTrainer(SFTTrainer):
             return unwrapped_model.model
         return unwrapped_model.base_model
 
-    def _liger_student_forward(self, student, inputs):
-        """Backbone forward used by the Liger JSD path (skips lm_head to save memory)."""
-        backbone = self._liger_backbone(student)
+    def _fused_student_forward(self, student, inputs):
+        """Backbone forward used by the fused JSD path (skips lm_head to save memory)."""
+        backbone = self._fused_backbone(student)
         return backbone(
             input_ids=inputs["input_ids"],
             attention_mask=inputs["attention_mask"],
@@ -2733,8 +2729,8 @@ class GOLDTrainer(SFTTrainer):
             **self._get_model_forward_kwargs(inputs),
         )
 
-    def _get_liger_zero3_lm_head_gather_ctx(self, model: nn.Module):
-        if not self.use_liger_gkd_loss:
+    def _get_fused_zero3_lm_head_gather_ctx(self, model: nn.Module):
+        if not self.use_fused_linear_loss:
             return nullcontext()
 
         deepspeed_plugin = self.accelerator.state.deepspeed_plugin
@@ -2782,8 +2778,8 @@ class GOLDTrainer(SFTTrainer):
         """
         buffer_steps = self.args.gradient_accumulation_steps
 
-        # Keep lm_head gathered across forward+backward for Liger + ZeRO-3.
-        with self._get_liger_zero3_lm_head_gather_ctx(model):
+        # Keep lm_head gathered across forward+backward for the fused loss + ZeRO-3.
+        with self._get_fused_zero3_lm_head_gather_ctx(model):
             loss = super().training_step(model, inputs, num_items_in_batch)
 
         slice_idx = (self._step - 1) % buffer_steps
