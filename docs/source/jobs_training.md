@@ -213,7 +213,9 @@ Every `.py` example in the [Examples Index](example_overview#index) declares its
 
 ### Docker Images
 
-An up-to-date Docker image with all TRL dependencies is available at [huggingface/trl](https://hub.docker.com/r/huggingface/trl) and can be used directly with Hugging Face Jobs:
+Jobs runs your script with `uv`, which installs the dependencies declared in its `# /// script` header into a fresh environment. The TRL your script imports therefore comes from that header, not from the image, and the examples above need no `--image` at all.
+
+A Docker image with TRL preinstalled is available at [huggingface/trl](https://hub.docker.com/r/huggingface/trl). Passing it gives the job the image's system layer, such as its CUDA toolchain, which matters for dependencies that compile against it:
 
 <hfoptions id="script_type">
 <hfoption id="bash">
@@ -243,6 +245,8 @@ run_uv_job(
 </hfoption>
 </hfoptions>
 
+To import the TRL installed in the image instead of the one `uv` resolves from the header, extra flags are needed. See [Popular Jobs images](https://huggingface.co/docs/hub/jobs-popular-images) for that form and the paths it requires.
+
 Jobs runs on a Docker image from Hugging Face Spaces or Docker Hub, so you can also specify any custom image:
 
 <hfoptions id="script_type">
@@ -253,7 +257,6 @@ hf jobs uv run \
     --flavor a100-large \
     --secrets HF_TOKEN \
     --image <docker-image> \
-    --secrets HF_TOKEN \
     train.py
 ```
 
