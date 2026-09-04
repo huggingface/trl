@@ -140,7 +140,7 @@ training_args = SFTConfig(..., use_liger_kernel=True)
 
 ## Fused linear loss for reducing peak memory usage
 
-For preference and RL objectives, the `[batch × seq_len × vocab]` logits tensor is materialized twice (policy and reference). Setting `use_fused_linear_loss=True` computes the `lm_head` projection and the loss together, one chunk of sequences at a time, so the full logits are never materialized. It is available in [`DPOTrainer`], [`KTOTrainer`], [`GRPOTrainer`], [`DistillationTrainer`] and the experimental GKD, GOLD, SDPO, SDFT and IW-OPD trainers. The implementation lives in `trl.losses` and was adapted from [Liger Kernel](https://github.com/linkedin/Liger-Kernel); it needs no extra dependency.
+For preference, RL and distillation objectives, the `[batch × seq_len × vocab]` logits tensor is one of the dominant activations held in memory, often twice (policy and reference, or student and teacher). Setting `use_fused_linear_loss=True` computes the `lm_head` projection and the loss together, one chunk of sequences at a time, so the full logits are never materialized. It is available in [`DPOTrainer`], [`KTOTrainer`], [`GRPOTrainer`], [`DistillationTrainer`] and the experimental GKD, GOLD, SDPO, SDFT and IW-OPD trainers. The implementation lives in `trl.losses` and was adapted from [Liger Kernel](https://github.com/linkedin/Liger-Kernel); it needs no extra dependency.
 
 <hfoptions id="fused">
 <hfoption id="DPO">
