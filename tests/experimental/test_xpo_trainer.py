@@ -73,8 +73,8 @@ def test_log_statistics_metrics_ignore_duplicate_padding():
     chosen_rewards = (chosen_model - chosen_ref) * trainer.beta
     rejected_rewards = (rejected_model - rejected_ref) * trainer.beta
     expected = {
-        "logps/chosen": chosen_model + chosen_ref,
-        "logps/rejected": rejected_model + rejected_ref,
+        "logps/chosen": chosen_model,
+        "logps/rejected": rejected_model,
         "rewards/chosen": chosen_rewards,
         "rewards/rejected": rejected_rewards,
         "objective/kl": ((model_model - ref_model).sum(1) + (model_ref - ref_ref).sum(1)) / 2,
