@@ -428,6 +428,8 @@ class DataCollatorForChatML:
         if "original_prompt_text" in examples[0] and "original_completion_text" in examples[0]:
             out["original_prompt_text"] = [ex["original_prompt_text"] for ex in examples]
             out["original_completion_text"] = [ex["original_completion_text"] for ex in examples]
+        if "teacher_prompt_text" in examples[0]:
+            out["teacher_prompt_text"] = [ex["teacher_prompt_text"] for ex in examples]
         return out
 
 

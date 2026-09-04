@@ -29,6 +29,9 @@ messages). Important configuration flags on [`GOLDConfig`] include:
   matched/unmatched loss.
 * `beta`, `lmbda`, `seq_kd` – inherited from [`experimental.gkd.GKDConfig`], controlling the generalized JSD interpolation and on-policy
   sampling ratio.
+* `use_privileged_context`, `teacher_prompt_template`, `privileged_context_column` – lets the teacher see extra
+  per-example context while the student prompt remains unchanged. This is currently limited to text, off-policy,
+  standard-JSD training.
 * `num_generations`, `generation_batch_size` – control buffered rollout generation across gradient accumulation windows.
   `generation_batch_size` is the number of unique prompts per worker per optimizer step.
 
@@ -113,6 +116,41 @@ GOLD requires a [conversational](dataset_formats#conversational) [language model
 
 `GOLDTrainer` keeps the raw messages so the ChatML collator can construct prompts and completions with the correct
 boundaries.
+
+## Privileged Context
+
+Privileged-context distillation gives the teacher extra information that is unavailable to the student at inference
+time. Add a context column to a normal prompt/completion dataset, then enable the feature explicitly:
+
+```python
+from datasets import Dataset
+
+dataset = Dataset.from_list(
+    [
+        {
+            "prompt": [{"role": "user", "content": "What caused the outage?"}],
+            "completion": [{"role": "assistant", "content": "A timeout change caused the outage."}],
+            "privileged_context": "The deployment changed the timeout immediately before errors began.",
+        }
+    ]
+)
+
+args = GOLDConfig(
+    output_dir="gold-model",
+    lmbda=0.0,
+    use_privileged_context=True,
+)
+```
+
+The student is trained on the original prompt and completion. The teacher receives a separate prompt built from
+`"{prompt}\n\n{privileged_context}"` by default, then scores the exact same completion. For conversational data,
+GOLD rewrites only the final user turn before reapplying the chat template; system, tool, and assistant turns remain
+unchanged. Set `teacher_prompt_template` to customize this prompt, and `privileged_context_column` to use a column
+other than `"privileged_context"`.
+
+The teacher prompt is never truncated, so ensure that it fits within the teacher model's context window. This initial
+support is intentionally limited to text, off-policy standard JSD distillation: `lmbda` must be `0`, and
+`seq_kd=True`, `use_uld_loss=True`, packing, VLMs, and Liger Kernel are not supported with privileged context.
 
 ## How Token Merging Works
 
