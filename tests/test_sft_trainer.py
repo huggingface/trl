@@ -2765,6 +2765,13 @@ class TestChunkedCrossEntropyLoss:
         torch.testing.assert_close(ent_sum_c / n_valid_c, ent_r, atol=1e-5, rtol=1e-5)
         assert n_valid_c.item() == expected_n_valid.item()
 
+    def test_bf16_hidden_fp32_weight(self):
+        """A bf16 hidden state against an fp32 `lm_head` weight projects without a dtype mismatch."""
+        hidden, weight, labels = self._inputs()
+        loss_c, *_ = _chunked_cross_entropy_loss(hidden.bfloat16(), weight, self.CHUNK_SIZE, labels)
+        loss_r, *_ = self._reference(hidden.bfloat16().float(), weight, labels)
+        torch.testing.assert_close(loss_c, loss_r, atol=2e-2, rtol=2e-2)
+
     def test_num_items_in_batch_reduction(self):
         """When num_items_in_batch is provided, loss is sum / num_items_in_batch."""
         hidden, weight, labels = self._inputs(ignore_positions=slice(0, 3))
