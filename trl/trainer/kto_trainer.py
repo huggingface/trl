@@ -1645,6 +1645,9 @@ class KTOTrainer(_BaseTrainer):
         all_num_chosen = self.accelerator.gather_for_metrics(num_chosen).sum().item()
         all_num_rejected = self.accelerator.gather_for_metrics(num_rejected).sum().item()
 
+        # A batch without one label class gets an empty float32 default for its rewards, so match the target dtype.
+        chosen_rewards = chosen_rewards.to(completion_logps.dtype)
+        rejected_rewards = rejected_rewards.to(completion_logps.dtype)
         chosen_rewards_sum = torch.zeros_like(completion_logps).index_copy(0, chosen_idx, chosen_rewards)
         rejected_rewards_sum = torch.zeros_like(completion_logps).index_copy(0, rejected_idx, rejected_rewards)
         chosen_logps_sum = torch.zeros_like(completion_logps).index_copy(0, chosen_idx, chosen_logps)

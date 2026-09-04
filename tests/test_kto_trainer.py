@@ -43,6 +43,44 @@ if is_peft_available():
     from peft.utils import TaskType
 
 
+@pytest.mark.parametrize("label", [True, False])
+def test_metrics_with_a_single_label_class_in_bfloat16(label):
+    # One label class only: the other class's rewards are the empty float32 default, which must still scatter into
+    # the bfloat16 row-aligned tensor.
+    shift_logits = torch.tensor([[[10.0, 0.0], [10.0, 0.0]], [[0.0, 0.0], [0.0, 0.0]]], dtype=torch.bfloat16)
+    logits = torch.cat((shift_logits, torch.zeros(2, 1, 2, dtype=torch.bfloat16)), dim=1)
+    trainer = SimpleNamespace(
+        model=SimpleNamespace(training=True),
+        accelerator=SimpleNamespace(device=torch.device("cpu"), gather_for_metrics=lambda tensor: tensor),
+        _compute_kl_logps=lambda model, batch: torch.zeros(2, dtype=torch.bfloat16),
+        aux_loss_enabled=False,
+        precompute_ref_logps=True,
+        calculate_KL=False,
+        loss_type="kto",
+        beta=0.1,
+        desirable_weight=1.0,
+        undesirable_weight=1.0,
+        _metrics={"train": defaultdict(list)},
+        _total_train_tokens=0,
+    )
+    inputs = {
+        "input_ids": torch.zeros(2, 3, dtype=torch.long),
+        "attention_mask": torch.ones(2, 3, dtype=torch.long),
+        "completion_mask": torch.ones(2, 3, dtype=torch.long),
+        "label": torch.tensor([label, label]),
+        "ref_logps": torch.zeros(2, dtype=torch.bfloat16),
+    }
+
+    KTOTrainer._compute_loss(trainer, lambda **kwargs: SimpleNamespace(logits=logits), inputs, False)
+
+    present, absent = ("chosen", "rejected") if label else ("rejected", "chosen")
+    logps = torch.log_softmax(shift_logits.float(), dim=-1)[..., 0].sum(dim=1)
+    assert trainer._metrics["train"][f"rewards/{present}"][-1] == pytest.approx(
+        (trainer.beta * logps).mean().item(), abs=1e-2
+    )
+    assert f"rewards/{absent}" not in trainer._metrics["train"]
+
+
 @pytest.mark.parametrize("outlier_label", [True, False])
 def test_entropy_ignores_duplicate_padding(outlier_label):
     shift_logits = torch.tensor(
