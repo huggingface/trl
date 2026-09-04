@@ -359,9 +359,9 @@ class DistillationConfig(_BaseConfig):
     beta: float = field(
         default=1.0,
         metadata={
-            "help": "Interpolation coefficient for the Generalized JSD loss. 0.0 = forward KL, 0.5 = JSD, 1.0 = "
-            "reverse KL. Unlike GRPO's `beta` (a KL-penalty coefficient against a reference model), here it selects "
-            "the divergence itself; there is no reference-model KL penalty."
+            "help": "Interpolation coefficient for the Generalized JSD loss. 0.0 = forward KL, 0.5 = JSD, 1.0 = reverse "
+            "KL. Unlike GRPO's `beta` (a KL-penalty coefficient against a reference model), here it selects the "
+            "divergence itself; there is no reference-model KL penalty."
         },
     )
     use_fused_linear_loss: bool = field(

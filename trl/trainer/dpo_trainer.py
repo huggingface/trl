@@ -1787,9 +1787,7 @@ class DPOTrainer(_BaseTrainer):
         inputs = self._prepare_inputs(inputs)
         with torch.no_grad(), self.compute_loss_context_manager():
             if prediction_loss_only:
-                loss = self.compute_loss(
-                    model, inputs, return_outputs=False
-                )  # logits aren't materialized with the fused linear loss
+                loss = self.compute_loss(model, inputs, return_outputs=False)  # fused loss: no logits
                 logits, labels = None, None
             else:
                 loss, outputs = self.compute_loss(model, inputs, return_outputs=True)

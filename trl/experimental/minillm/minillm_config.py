@@ -89,7 +89,7 @@ class MiniLLMConfig(GRPOConfig):
         # 1. num_generations can be < 2 in MiniLLMConfig. Scale_rewards must be set to "none" to avoid nan.
         _BaseConfig.__post_init__(self)
 
-        if self.use_fused_linear_loss and not self.use_fused_linear_loss:
+        if self.use_liger_kernel and not self.use_fused_linear_loss:
             warnings.warn(
                 "Enabling the fused linear loss via `use_liger_kernel=True` is deprecated and will be removed in "
                 "v2.0.0. Set `use_fused_linear_loss=True` instead.",

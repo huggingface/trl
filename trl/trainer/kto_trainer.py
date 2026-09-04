@@ -1131,9 +1131,9 @@ class KTOTrainer(_BaseTrainer):
 
                     if not (des_weight_in_range or und_weight_in_range):
                         logger.warning(
-                            "You have different amounts of desirable/positive and undesirable/negative examples but "
-                            "the weights on the desirable and undesirable losses don't seem to be in an ideal range. "
-                            "Based on your data, we recommend EITHER "
+                            "You have different amounts of desirable/positive and undesirable/negative examples but the "
+                            "weights on the desirable and undesirable losses don't seem to be in an ideal range. Based "
+                            f"on your data, we recommend EITHER "
                             f"desirable_weight in [{des_weight_lower_bound}, {des_weight_upper_bound}] or "
                             f"undesirable_weight in [{und_weight_lower_bound}, {und_weight_upper_bound}] (but NOT BOTH). "
                             "See the documentation on how to optimally set these weights.",
@@ -1787,9 +1787,7 @@ class KTOTrainer(_BaseTrainer):
         inputs = self._prepare_inputs(inputs)
         with torch.no_grad(), self.compute_loss_context_manager():
             if prediction_loss_only:
-                loss = self.compute_loss(
-                    model, inputs, return_outputs=False
-                )  # logits aren't materialized with the fused linear loss
+                loss = self.compute_loss(model, inputs, return_outputs=False)  # fused loss: no logits
                 logits, labels = None, None
             else:
                 loss, outputs = self.compute_loss(model, inputs, return_outputs=True)
