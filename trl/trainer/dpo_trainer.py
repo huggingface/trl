@@ -934,6 +934,9 @@ class DPOTrainer(_BaseTrainer):
 
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
+        # Set by `_open_eval_window`, because `log` cannot see the caller's prefix and has to file eval
+        # metrics under the prefix the caller actually asked for.
+        self._metric_key_prefix = "eval"
         self._total_train_tokens = 0
 
         # Gradient accumulation requires scaled loss. Normally, loss scaling in the parent class depends on whether the
@@ -1240,7 +1243,10 @@ class DPOTrainer(_BaseTrainer):
         return ref_chosen_logps, ref_rejected_logps
 
     def _compute_loss_liger(self, model, inputs, return_outputs):
-        if return_outputs:
+        # `return_outputs` reaches every rank from the same caller, so today all of them raise together. Agree
+        # across ranks anyway: the loss path below now ends in a collective, and a raise that skips it on one rank
+        # only would leave the others waiting for a gather that never comes.
+        if self.accelerator.gather(torch.tensor(float(return_outputs), device=self.accelerator.device)).any():
             raise RuntimeError(
                 "return_outputs=True is not supported with the Liger DPO loss. The Liger loss computes the loss "
                 "without materializing logits, so outputs cannot be returned."
@@ -1248,76 +1254,105 @@ class DPOTrainer(_BaseTrainer):
 
         mode = "train" if self.model.training else "eval"
 
-        _non_model_keys = {"completion_mask", "ref_chosen_logps", "ref_rejected_logps"}
-        model_kwargs = {k: v for k, v in inputs.items() if k not in _non_model_keys}
-        model_kwargs["use_cache"] = False
+        # A forward failure is this rank's own, so raising here would leave the peers waiting in the first of
+        # the metric gathers below. Record the failure, agree on it before any of those collectives run, then
+        # raise on every rank: the rank that saw the error re-raises it, the others point at that rank.
+        forward_error: BaseException | None = None
+        try:
+            _non_model_keys = {"completion_mask", "ref_chosen_logps", "ref_rejected_logps"}
+            model_kwargs = {k: v for k, v in inputs.items() if k not in _non_model_keys}
+            model_kwargs["use_cache"] = False
 
-        if is_peft_model(model):
-            model = model.base_model.model
+            if is_peft_model(model):
+                model = model.base_model.model
 
-        # `base_model` gives the backbone model (skipping `lm_head`) — text decoder for LMs, multimodal wrapper for
-        # VLMs (so vision-token injection runs before the text decoder). `get_decoder()` won't do: on VLMs it
-        # returns just the text stack and feeds image-placeholder IDs through it.
-        # Pre-5.0 transformers VLMs set `base_model_prefix = ""` so `base_model is self` (re-runs `lm_head`).
-        # Fall back to `.model` there.
-        if self._is_vlm and Version(transformers.__version__) < Version("5.0.0"):
-            backbone = model.model
-        else:
-            backbone = model.base_model
+            # `base_model` gives the backbone model (skipping `lm_head`) — text decoder for LMs, multimodal wrapper for
+            # VLMs (so vision-token injection runs before the text decoder). `get_decoder()` won't do: on VLMs it
+            # returns just the text stack and feeds image-placeholder IDs through it.
+            # Pre-5.0 transformers VLMs set `base_model_prefix = ""` so `base_model is self` (re-runs `lm_head`).
+            # Fall back to `.model` there.
+            if self._is_vlm and Version(transformers.__version__) < Version("5.0.0"):
+                backbone = model.model
+            else:
+                backbone = model.base_model
 
-        outputs = backbone(**model_kwargs)
-        hidden_states = outputs.last_hidden_state[:, :-1].contiguous()
-        lm_head = model.get_output_embeddings()
-        weight = lm_head.weight
-        bias = lm_head.bias
+            outputs = backbone(**model_kwargs)
+            hidden_states = outputs.last_hidden_state[:, :-1].contiguous()
+            lm_head = model.get_output_embeddings()
+            weight = lm_head.weight
+            bias = lm_head.bias
 
-        with torch.no_grad(), disable_gradient_checkpointing(self.model, self.args.gradient_checkpointing_kwargs):
-            if self.ref_model is None:
-                # PEFT model with no explicit reference model: recover reference behaviour by disabling / switching to
-                # the frozen "ref" adapter, exactly as _compute_loss does for logit-based reference computation.
-                model_unwrapped = self.accelerator.unwrap_model(self.model)
-                with use_adapter(
-                    model_unwrapped, adapter_name="ref" if "ref" in model_unwrapped.peft_config else None
-                ):
-                    ref_model_inner = model_unwrapped.base_model.model
+            with torch.no_grad(), disable_gradient_checkpointing(self.model, self.args.gradient_checkpointing_kwargs):
+                if self.ref_model is None:
+                    # PEFT model with no explicit reference model: recover reference behaviour by disabling / switching
+                    # to the frozen "ref" adapter, exactly as _compute_loss does for logit-based reference computation.
+                    model_unwrapped = self.accelerator.unwrap_model(self.model)
+                    with use_adapter(
+                        model_unwrapped, adapter_name="ref" if "ref" in model_unwrapped.peft_config else None
+                    ):
+                        ref_model_inner = model_unwrapped.base_model.model
+                        if self._is_vlm and Version(transformers.__version__) < Version("5.0.0"):
+                            ref_backbone = ref_model_inner.model
+                        else:
+                            ref_backbone = ref_model_inner.base_model
+                        ref_outputs = ref_backbone(**model_kwargs)
+                        ref_lm_head = model_unwrapped.get_output_embeddings()
+                else:
+                    ref_model_inner = (
+                        self.ref_model.base_model.model if is_peft_model(self.ref_model) else self.ref_model
+                    )
                     if self._is_vlm and Version(transformers.__version__) < Version("5.0.0"):
                         ref_backbone = ref_model_inner.model
                     else:
                         ref_backbone = ref_model_inner.base_model
                     ref_outputs = ref_backbone(**model_kwargs)
-                    ref_lm_head = model_unwrapped.get_output_embeddings()
+                    ref_lm_head = self.ref_model.get_output_embeddings()
+                ref_hidden_states = ref_outputs.last_hidden_state[:, :-1].contiguous()
+                ref_weight = ref_lm_head.weight
+                ref_bias = ref_lm_head.bias
+
+            input_ids = model_kwargs["input_ids"]
+            completion_mask = inputs["completion_mask"]
+            shift_completion_mask = completion_mask[:, 1:]
+            labels = input_ids[:, 1:].clone()
+            labels[shift_completion_mask == 0] = -100
+
+            with maybe_gather_lm_head_ctx(weight, bias, ref_weight, ref_bias):
+                loss, metrics = self.liger_loss(
+                    weight, hidden_states, labels, bias, ref_hidden_states, ref_weight, ref_bias
+                )
+
+            (
+                chosen_logps,
+                rejected_logps,
+                chosen_logits_mean,
+                rejected_logits_mean,
+                nll_loss,
+                chosen_rewards,
+                rejected_rewards,
+            ) = metrics
+        except Exception as e:
+            if (
+                isinstance(e, ValueError)
+                and "Image features and image tokens do not match" in str(e)
+                and self.args.max_length is not None
+            ):
+                forward_error = ValueError(
+                    f"The current `max_length` ({self.args.max_length}) is too short and causes image placeholder "
+                    f"tokens in `input_ids` to be truncated, while the corresponding image features remain intact. "
+                    f"Please increase `max_length` or set it to `None` to disable truncation."
+                )
+                forward_error.__cause__ = e
             else:
-                ref_model_inner = self.ref_model.base_model.model if is_peft_model(self.ref_model) else self.ref_model
-                if self._is_vlm and Version(transformers.__version__) < Version("5.0.0"):
-                    ref_backbone = ref_model_inner.model
-                else:
-                    ref_backbone = ref_model_inner.base_model
-                ref_outputs = ref_backbone(**model_kwargs)
-                ref_lm_head = self.ref_model.get_output_embeddings()
-            ref_hidden_states = ref_outputs.last_hidden_state[:, :-1].contiguous()
-            ref_weight = ref_lm_head.weight
-            ref_bias = ref_lm_head.bias
-
-        input_ids = model_kwargs["input_ids"]
-        completion_mask = inputs["completion_mask"]
-        shift_completion_mask = completion_mask[:, 1:]
-        labels = input_ids[:, 1:].clone()
-        labels[shift_completion_mask == 0] = -100
-
-        with maybe_gather_lm_head_ctx(weight, bias, ref_weight, ref_bias):
-            loss, metrics = self.liger_loss(
-                weight, hidden_states, labels, bias, ref_hidden_states, ref_weight, ref_bias
+                forward_error = e
+        failed_anywhere = torch.tensor(float(forward_error is not None), device=self.accelerator.device)
+        if self.accelerator.gather(failed_anywhere).any():
+            if forward_error is not None:
+                raise forward_error
+            raise RuntimeError(
+                "The forward pass failed on another rank. This rank raises too so the run fails together instead of "
+                "blocking in the next collective; the cause is in the failing rank's traceback."
             )
-
-        (
-            chosen_logps,
-            rejected_logps,
-            chosen_logits_mean,
-            rejected_logits_mean,
-            nll_loss,
-            chosen_rewards,
-            rejected_rewards,
-        ) = metrics
 
         if mode == "train":
             num_tokens_in_batch = self.accelerator.gather_for_metrics(inputs["attention_mask"].sum()).sum().item()
@@ -1345,6 +1380,42 @@ class DPOTrainer(_BaseTrainer):
         self._metrics[mode]["logps/chosen"].append(self.accelerator.gather(chosen_logps).mean().item())
         self._metrics[mode]["logps/rejected"].append(self.accelerator.gather(rejected_logps).mean().item())
 
+        # A non-finite training loss can pass through the logs as a plausible number. When `logging_nan_inf_filter` is
+        # enabled, which is the default, and `is_torch_xla_available()` is false, `transformers` discards the step's
+        # own loss and logs a value derived from the losses accumulated since the last log, so the curve never shows
+        # the step that failed. Report the condition here instead. Gather first, so a rank whose loss went non-finite
+        # is counted even when the other ranks are finite.
+        # Widen before the reduction: a low-precision dtype such as `float8_e5m2` has no `mean` kernel, and
+        # narrowing instead would report a finite `float64` loss above `float32`'s maximum as non-finite.
+        nonfinite = self.accelerator.gather((~torch.isfinite(loss.detach().double().mean())).float())
+        self._metrics[mode]["frac_nonfinite_loss"].append(nonfinite.mean().item())
+        if nonfinite.any():
+            # `logging_nan_inf_filter` and the optimizer step belong to the training loop only, so each mode gets its
+            # own message. `warning_once` keys its cache on the message text, so the two do not suppress each other and
+            # an evaluation warning cannot stop a later training warning from being emitted.
+            if mode == "train":
+                logger.warning_once(
+                    "The training loss is not finite (NaN or Inf) for at least one step. The logged loss may not show "
+                    "it: when `logging_nan_inf_filter` is enabled, which is the default, and "
+                    "`is_torch_xla_available()` is false, `transformers` discards the step's own loss and logs a "
+                    "value derived from the losses accumulated since the last training log. The backward pass still "
+                    "runs on the non-finite value; whether that ultimately produces a parameter update depends on the "
+                    "resulting gradients and the configured scaler, optimizer and backend. `frac_nonfinite_loss` "
+                    "reports the fraction of ranks whose loss was non-finite, averaged over every loss computation "
+                    "since the last log, so it is a rate rather than a count of affected optimizer steps."
+                )
+            else:
+                logger.warning_once(
+                    "The evaluation loss is not finite (NaN or Inf) for at least one batch. It is neither "
+                    "backpropagated nor used for an optimizer step, so it does not itself change the weights, but any "
+                    "metric derived from it may be affected, including the reported evaluation loss and anything "
+                    "downstream of it such as best-model selection, early stopping and metric-driven schedulers. "
+                    "`frac_nonfinite_loss` reports the fraction of ranks whose loss was non-finite, averaged over "
+                    "this evaluation. It records one flag per rank per loss computation, while the reported loss is "
+                    "gathered per sample with padded positions trimmed, so the two can disagree. Only `evaluate()` "
+                    "logs it, never `predict()`."
+                )
+
         return loss
 
     def _compute_loss(self, model, inputs, return_outputs):
@@ -1358,61 +1429,90 @@ class DPOTrainer(_BaseTrainer):
         # as a forward kwarg (not from the model config), so it must be passed here.
         if self.aux_loss_enabled:
             model_kwargs["output_router_logits"] = True
-        outputs = model(**model_kwargs)
+        # A forward failure is this rank's own, so raising here would leave the peers waiting in the first of
+        # the metric gathers below. Record the failure, agree on it before any of those collectives run, then
+        # raise on every rank: the rank that saw the error re-raises it, the others point at that rank.
+        forward_error: BaseException | None = None
+        try:
+            outputs = model(**model_kwargs)
 
-        input_ids = inputs["input_ids"]
-        completion_mask = inputs["completion_mask"]
-        shift_logits = outputs.logits[..., :-1, :]
-        shift_labels = input_ids[..., 1:]
-        shift_completion_mask = completion_mask[..., 1:]
-        per_token_logps = selective_log_softmax(shift_logits, shift_labels)
-        per_token_logps[shift_completion_mask == 0] = 0.0  # mask out non-completion tokens
-        if self.ld_alpha is None:
-            logps = per_token_logps.sum(dim=1)  # sum over sequence length
-        else:
-            comp_pos = shift_completion_mask.cumsum(dim=1)
-            comp_lens = shift_completion_mask.sum(dim=1).long()
-            chosen_lens, rejected_lens = comp_lens.chunk(2, dim=0)
-            shared_lens = torch.minimum(chosen_lens, rejected_lens)
-            shared_lens = torch.cat([shared_lens, shared_lens], dim=0).to(device)
-            shared_mask = (comp_pos > 0) & (comp_pos <= shared_lens.unsqueeze(1))  # shared: 1 <= pos <= shared_len
-            tail_mask = comp_pos > shared_lens.unsqueeze(1)  # tail: pos > shared_len
-            shared_logps = (per_token_logps * shared_mask).sum(dim=1)
-            tail_logps = (per_token_logps * tail_mask).sum(dim=1)
-            logps = shared_logps + self.ld_alpha * tail_logps
-        chosen_logps, rejected_logps = logps.chunk(2, dim=0)  # batch is [chosen, rejected]
-
-        if self.precompute_ref_logps:
-            ref_chosen_logps, ref_rejected_logps = inputs["ref_chosen_logps"], inputs["ref_rejected_logps"]
-        else:
-            # The reference forward only needs logits for log-probs. Drop `output_router_logits` so the frozen
-            # reference model does not materialize router logits and compute a discarded MoE aux loss.
-            ref_model_kwargs = {k: v for k, v in model_kwargs.items() if k != "output_router_logits"}
-            # When gradient checkpointing is enabled with use_reentrant=True (default), calling the model inside a
-            # torch.no_grad() block triggers a harmless PyTorch warning ("None of the inputs have requires_grad=True").
-            # Temporarily disable checkpointing to avoid this warning during inference.
-            with torch.no_grad(), disable_gradient_checkpointing(self.model, self.args.gradient_checkpointing_kwargs):
-                if is_peft_model(model) and self.ref_model is None:
-                    # When training a PEFT adapter, how we obtain the reference depends on the setup:
-                    # - New adapter: disabling adapters yields the base model.
-                    # - Re-training an existing adapter: an initial copy is loaded under the name "ref".
-                    model = self.accelerator.unwrap_model(model)
-                    with use_adapter(model, adapter_name="ref" if "ref" in model.peft_config else None):
-                        ref_outputs = self.model(**ref_model_kwargs)
-                else:
-                    ref_outputs = self.ref_model(**ref_model_kwargs)
-
-            ref_shift_logits = ref_outputs.logits[..., :-1, :]
-            ref_per_token_logps = selective_log_softmax(ref_shift_logits, shift_labels)
-            ref_per_token_logps[shift_completion_mask == 0] = 0.0  # mask out non-completion tokens
+            input_ids = inputs["input_ids"]
+            completion_mask = inputs["completion_mask"]
+            shift_logits = outputs.logits[..., :-1, :]
+            shift_labels = input_ids[..., 1:]
+            shift_completion_mask = completion_mask[..., 1:]
+            per_token_logps = selective_log_softmax(shift_logits, shift_labels)
+            per_token_logps[shift_completion_mask == 0] = 0.0  # mask out non-completion tokens
             if self.ld_alpha is None:
-                ref_logps = ref_per_token_logps.sum(dim=1)  # sum over sequence length
+                logps = per_token_logps.sum(dim=1)  # sum over sequence length
             else:
-                # reuse comp_pos/shared_mask/tail_mask computed above (they depend only on completion_mask)
-                ref_shared_logps = (ref_per_token_logps * shared_mask).sum(dim=1)
-                ref_tail_logps = (ref_per_token_logps * tail_mask).sum(dim=1)
-                ref_logps = ref_shared_logps + self.ld_alpha * ref_tail_logps
-            ref_chosen_logps, ref_rejected_logps = ref_logps.chunk(2, dim=0)  # batch is [chosen, rejected]
+                comp_pos = shift_completion_mask.cumsum(dim=1)
+                comp_lens = shift_completion_mask.sum(dim=1).long()
+                chosen_lens, rejected_lens = comp_lens.chunk(2, dim=0)
+                shared_lens = torch.minimum(chosen_lens, rejected_lens)
+                shared_lens = torch.cat([shared_lens, shared_lens], dim=0).to(device)
+                shared_mask = (comp_pos > 0) & (comp_pos <= shared_lens.unsqueeze(1))  # shared: 1 <= pos <= shared_len
+                tail_mask = comp_pos > shared_lens.unsqueeze(1)  # tail: pos > shared_len
+                shared_logps = (per_token_logps * shared_mask).sum(dim=1)
+                tail_logps = (per_token_logps * tail_mask).sum(dim=1)
+                logps = shared_logps + self.ld_alpha * tail_logps
+            chosen_logps, rejected_logps = logps.chunk(2, dim=0)  # batch is [chosen, rejected]
+
+            if self.precompute_ref_logps:
+                ref_chosen_logps, ref_rejected_logps = inputs["ref_chosen_logps"], inputs["ref_rejected_logps"]
+            else:
+                # The reference forward only needs logits for log-probs. Drop `output_router_logits` so the frozen
+                # reference model does not materialize router logits and compute a discarded MoE aux loss.
+                ref_model_kwargs = {k: v for k, v in model_kwargs.items() if k != "output_router_logits"}
+                # When gradient checkpointing is enabled with use_reentrant=True (default), calling the model inside a
+                # torch.no_grad() block triggers a harmless PyTorch warning ("None of the inputs have
+                # requires_grad=True"). Temporarily disable checkpointing to avoid this warning during inference.
+                with (
+                    torch.no_grad(),
+                    disable_gradient_checkpointing(self.model, self.args.gradient_checkpointing_kwargs),
+                ):
+                    if is_peft_model(model) and self.ref_model is None:
+                        # When training a PEFT adapter, how we obtain the reference depends on the setup:
+                        # - New adapter: disabling adapters yields the base model.
+                        # - Re-training an existing adapter: an initial copy is loaded under the name "ref".
+                        model = self.accelerator.unwrap_model(model)
+                        with use_adapter(model, adapter_name="ref" if "ref" in model.peft_config else None):
+                            ref_outputs = self.model(**ref_model_kwargs)
+                    else:
+                        ref_outputs = self.ref_model(**ref_model_kwargs)
+                ref_shift_logits = ref_outputs.logits[..., :-1, :]
+                ref_per_token_logps = selective_log_softmax(ref_shift_logits, shift_labels)
+                ref_per_token_logps[shift_completion_mask == 0] = 0.0  # mask out non-completion tokens
+                if self.ld_alpha is None:
+                    ref_logps = ref_per_token_logps.sum(dim=1)  # sum over sequence length
+                else:
+                    # reuse comp_pos/shared_mask/tail_mask computed above (they depend only on completion_mask)
+                    ref_shared_logps = (ref_per_token_logps * shared_mask).sum(dim=1)
+                    ref_tail_logps = (ref_per_token_logps * tail_mask).sum(dim=1)
+                    ref_logps = ref_shared_logps + self.ld_alpha * ref_tail_logps
+                ref_chosen_logps, ref_rejected_logps = ref_logps.chunk(2, dim=0)  # batch is [chosen, rejected]
+        except Exception as e:
+            if (
+                isinstance(e, ValueError)
+                and "Image features and image tokens do not match" in str(e)
+                and self.args.max_length is not None
+            ):
+                forward_error = ValueError(
+                    f"The current `max_length` ({self.args.max_length}) is too short and causes image placeholder "
+                    f"tokens in `input_ids` to be truncated, while the corresponding image features remain intact. "
+                    f"Please increase `max_length` or set it to `None` to disable truncation."
+                )
+                forward_error.__cause__ = e
+            else:
+                forward_error = e
+        failed_anywhere = torch.tensor(float(forward_error is not None), device=self.accelerator.device)
+        if self.accelerator.gather(failed_anywhere).any():
+            if forward_error is not None:
+                raise forward_error
+            raise RuntimeError(
+                "The forward pass failed on another rank. This rank raises too so the run fails together instead of "
+                "blocking in the next collective; the cause is in the failing rank's traceback."
+            )
 
         # Get the log ratios for the chosen and rejected responses
         chosen_logratios = chosen_logps - ref_chosen_logps
@@ -1673,6 +1773,42 @@ class DPOTrainer(_BaseTrainer):
         self._metrics[mode]["logps/chosen"].append(self.accelerator.gather(chosen_logps).mean().item())
         self._metrics[mode]["logps/rejected"].append(self.accelerator.gather(rejected_logps).mean().item())
 
+        # A non-finite training loss can pass through the logs as a plausible number. When `logging_nan_inf_filter` is
+        # enabled, which is the default, and `is_torch_xla_available()` is false, `transformers` discards the step's
+        # own loss and logs a value derived from the losses accumulated since the last log, so the curve never shows
+        # the step that failed. Report the condition here instead. Gather first, so a rank whose loss went non-finite
+        # is counted even when the other ranks are finite.
+        # Widen before the reduction: a low-precision dtype such as `float8_e5m2` has no `mean` kernel, and
+        # narrowing instead would report a finite `float64` loss above `float32`'s maximum as non-finite.
+        nonfinite = self.accelerator.gather((~torch.isfinite(loss.detach().double().mean())).float())
+        self._metrics[mode]["frac_nonfinite_loss"].append(nonfinite.mean().item())
+        if nonfinite.any():
+            # `logging_nan_inf_filter` and the optimizer step belong to the training loop only, so each mode gets its
+            # own message. `warning_once` keys its cache on the message text, so the two do not suppress each other and
+            # an evaluation warning cannot stop a later training warning from being emitted.
+            if mode == "train":
+                logger.warning_once(
+                    "The training loss is not finite (NaN or Inf) for at least one step. The logged loss may not show "
+                    "it: when `logging_nan_inf_filter` is enabled, which is the default, and "
+                    "`is_torch_xla_available()` is false, `transformers` discards the step's own loss and logs a "
+                    "value derived from the losses accumulated since the last training log. The backward pass still "
+                    "runs on the non-finite value; whether that ultimately produces a parameter update depends on the "
+                    "resulting gradients and the configured scaler, optimizer and backend. `frac_nonfinite_loss` "
+                    "reports the fraction of ranks whose loss was non-finite, averaged over every loss computation "
+                    "since the last log, so it is a rate rather than a count of affected optimizer steps."
+                )
+            else:
+                logger.warning_once(
+                    "The evaluation loss is not finite (NaN or Inf) for at least one batch. It is neither "
+                    "backpropagated nor used for an optimizer step, so it does not itself change the weights, but any "
+                    "metric derived from it may be affected, including the reported evaluation loss and anything "
+                    "downstream of it such as best-model selection, early stopping and metric-driven schedulers. "
+                    "`frac_nonfinite_loss` reports the fraction of ranks whose loss was non-finite, averaged over "
+                    "this evaluation. It records one flag per rank per loss computation, while the reported loss is "
+                    "gathered per sample with padded positions trimmed, so the two can disagree. Only `evaluate()` "
+                    "logs it, never `predict()`."
+                )
+
         return (loss, outputs) if return_outputs else loss
 
     def evaluate(
@@ -1687,9 +1823,9 @@ class DPOTrainer(_BaseTrainer):
         metric_key_prefix: str = "eval",
     ) -> dict[str, float]:
         # When a dataset is passed directly to `evaluate` (e.g. a held-out test set), preprocess it the same way
-        # `__init__` does, so that `evaluate` accepts the same dataset types as the trainer. `_prepare_dataset` is
-        # idempotent: it skips datasets that are already tokenized. A `str` selects a dataset that was already prepared
-        # at init time, so it's left untouched.
+        # `__init__` does, so that `evaluate` accepts the same dataset types as the trainer. `_prepare_dataset` tokenizes
+        # from the text columns, so it has to receive the raw dataset, never one it already prepared. A `str` selects a
+        # dataset that was already prepared at init time, so it's left untouched.
         if not self._is_vision_dataset and eval_dataset is not None and not isinstance(eval_dataset, str):
             # Full fine-tuning with no `ref_model` uses `self.model` as the reference, which is only valid before
             # training. After a step (`global_step > 0`) it's the trained policy, so we can't precompute a correct
@@ -1731,6 +1867,9 @@ class DPOTrainer(_BaseTrainer):
             if isinstance(eval_dataset, dict):
                 metrics = {}
                 for name, dataset in eval_dataset.items():
+                    # Each split is its own evaluation window, and `super().evaluate` does not re-enter
+                    # this override, so open the window per split with that split's prefix.
+                    self._open_eval_window(f"{metric_key_prefix}_{name}")
                     metrics.update(
                         super().evaluate(
                             eval_dataset=dataset,
@@ -1739,46 +1878,56 @@ class DPOTrainer(_BaseTrainer):
                         )
                     )
                 return metrics
+        self._open_eval_window(metric_key_prefix)
         return super().evaluate(
             eval_dataset=eval_dataset, ignore_keys=ignore_keys, metric_key_prefix=metric_key_prefix
         )
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
-        try:
-            if self.use_liger_kernel:
-                # Under ZeRO-3, `lm_head.weight` is sharded and the fused loss reads it directly (bypassing the
-                # module), so run the loss inside the engine's forward via `_forward_redirection` to arm the parameter
-                # coordinator's gather/reduce hooks.
-                deepspeed_plugin = self.accelerator.state.deepspeed_plugin
-                is_zero3 = deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3
-                unwrapped_model = self.accelerator.unwrap_model(model)
-                if is_zero3 or self.is_fsdp_enabled:
-                    return self._forward_redirection(
-                        model, unwrapped_model, self._compute_loss_liger, unwrapped_model, inputs, return_outputs
-                    )
-                return self._compute_loss_liger(unwrapped_model, inputs, return_outputs)
-            return self._compute_loss(model, inputs, return_outputs)
-        except ValueError as e:
-            if "Image features and image tokens do not match" in str(e) and self.args.max_length is not None:
-                raise ValueError(
-                    f"The current `max_length` ({self.args.max_length}) is too short and causes image placeholder "
-                    f"tokens in `input_ids` to be truncated, while the corresponding image features remain intact. "
-                    f"Please increase `max_length` or set it to `None` to disable truncation."
-                ) from e
-            raise
+        if self.use_liger_kernel:
+            # Under ZeRO-3, `lm_head.weight` is sharded and the fused loss reads it directly (bypassing the
+            # module), so run the loss inside the engine's forward via `_forward_redirection` to arm the parameter
+            # coordinator's gather/reduce hooks.
+            deepspeed_plugin = self.accelerator.state.deepspeed_plugin
+            is_zero3 = deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3
+            unwrapped_model = self.accelerator.unwrap_model(model)
+            if is_zero3 or self.is_fsdp_enabled:
+                return self._forward_redirection(
+                    model, unwrapped_model, self._compute_loss_liger, unwrapped_model, inputs, return_outputs
+                )
+            return self._compute_loss_liger(unwrapped_model, inputs, return_outputs)
+        return self._compute_loss(model, inputs, return_outputs)
 
     # Override training step to add activation offloading context.
     def training_step(self, *args, **kwargs):
         with self.maybe_activation_offload_context:
             return super().training_step(*args, **kwargs)
 
+    def _open_eval_window(self, metric_key_prefix):
+        # `log()` drains `self._metrics` but `predict()` never calls it, so a `predict()` run leaves its batches
+        # in the buffer with nothing to drain them. `evaluate()` opens its own window below, so those leftovers
+        # cannot reach an evaluation average; what they do reach is the next `predict()` and any direct reader of
+        # `self._metrics`. Opening the window here makes each one self-contained whichever entry point started it.
+        # The prefix is recorded because `log()` cannot see it, and it is not always "eval": `evaluate()` takes it as
+        # an argument and `predict()` defaults it to "test". Both public entry points are hooked rather than
+        # `evaluation_loop`, because `use_legacy_prediction_loop` routes to `prediction_loop` instead on the older
+        # `transformers` versions this package still supports.
+        self._metrics["eval"].clear()
+        self._metric_key_prefix = metric_key_prefix
+
+    def predict(self, test_dataset, ignore_keys=None, metric_key_prefix="test"):
+        self._open_eval_window(metric_key_prefix)
+        return super().predict(test_dataset, ignore_keys, metric_key_prefix)
+
     def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
         mode = "train" if self.model.training else "eval"
         metrics = {key: sum(val) / len(val) for key, val in self._metrics[mode].items()}  # average the metrics
         # This method can be called both in training and evaluation. When called in evaluation, the keys in `logs`
-        # start with "eval_". We need to add the prefix "eval_" to the keys in `metrics` to match the format.
+        # already carry the caller's `metric_key_prefix`, which defaults to "eval" but is "test" for `predict()`
+        # and arbitrary when passed explicitly. Match that prefix rather than assuming "eval", so these metrics
+        # land beside the ones `transformers` produced instead of in a separate `eval_` namespace.
         if mode == "eval":
-            metrics = {f"eval_{key}": val for key, val in metrics.items()}
+            metrics = {f"{self._metric_key_prefix}_{key}": val for key, val in metrics.items()}
         logs.update(metrics)
         super().log(logs, start_time)
         self._metrics[mode].clear()

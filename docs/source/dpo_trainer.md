@@ -142,6 +142,7 @@ While training and evaluating, we record the following metrics:
 * `rewards/rejected`: The average implicit reward computed for the rejected completion, computed as  \\( \beta \log \frac{\pi_{\theta}(y^{-}\!\mid x)}{\pi_{\mathrm{ref}}(y^{-}\!\mid x)} \\).
 * `rewards/margins`: The average implicit reward margin between the chosen and rejected completions.
 * `rewards/accuracies`: The proportion of examples where the implicit reward for the chosen completion is higher than that for the rejected completion.
+* `frac_nonfinite_loss`: The fraction of loss computations in the logging interval whose loss was not finite (NaN or Inf), counted once per rank per micro-batch, so it is a rate over loss computations rather than a count of affected optimizer steps. Any non-zero value is worth investigating: `logging_nan_inf_filter` is enabled by default and, when `is_torch_xla_available()` is false, substitutes a finite value for a non-finite loss in the reported `loss`, which leaves the failing step invisible in the loss curve.
 
 ## Customization
 

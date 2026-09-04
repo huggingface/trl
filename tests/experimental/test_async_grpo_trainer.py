@@ -29,6 +29,7 @@ from accelerate import PartialState
 from datasets import Dataset, load_dataset
 from transformers import AutoTokenizer, PreTrainedModel
 from transformers.testing_utils import torch_device
+from transformers.utils import is_torch_xla_available
 
 import trl.experimental.async_grpo.async_rollout_worker as worker
 from trl.experimental.async_grpo import AsyncGRPOConfig, AsyncGRPOTrainer
@@ -200,6 +201,69 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    def test_nonfinite_loss_is_visible_in_log_history(self):
+        """A non-finite loss must reach `log_history`, which `logging_nan_inf_filter` otherwise hides."""
+        model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
+
+        class NonFiniteLossAsyncGRPOTrainer(AsyncGRPOTrainer):
+            # Only NaN is injected here. The guard runs inside the loss computation, so the poison has to land
+            # upstream of it, on the model's log-probabilities. Those are then differenced against
+            # `inputs["old_log_probs"]`, which the collator builds from the rollout worker's values and which no
+            # forward pass touches, so the poisoned value never meets a second poisoned one. An injected `inf` would
+            # therefore give `-inf - finite = -inf` and then `exp(-inf) = 0.0`, a finite coefficient that never
+            # reaches the guard as non-finite at all. NaN is the only value that survives this seam. The trainers
+            # whose poison reaches the loss as a distinct Inf are parametrized over both values instead.
+            def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+                if self.state.global_step == 1:
+
+                    def poison_logps(module, args, output):
+                        output["log_probs"] = output["log_probs"] * float("nan")
+                        return output
+
+                    handle = model.register_forward_hook(poison_logps)
+                    try:
+                        return super().compute_loss(model, inputs, return_outputs, num_items_in_batch)
+                    finally:
+                        handle.remove()
+                return super().compute_loss(model, inputs, return_outputs, num_items_in_batch)
+
+        training_args = AsyncGRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,
+            per_device_train_batch_size=3,
+            num_generations=3,
+            max_completion_length=8,
+            token_budget=256,
+            vllm_server_timeout=5.0,
+            max_steps=2,
+            logging_steps=1,
+            report_to="none",
+        )
+        trainer = NonFiniteLossAsyncGRPOTrainer(
+            model=model_id,
+            reward_funcs=dummy_reward_func,
+            args=training_args,
+            train_dataset=dataset,
+            rollout_worker=_StubRolloutWorker(AutoTokenizer.from_pretrained(model_id), dataset, num_generations=3),
+            weight_transfer=_StubWeightTransfer(),
+        )
+
+        trainer.train()
+
+        healthy_step, poisoned_step = trainer.state.log_history[0], trainer.state.log_history[1]
+        assert healthy_step["frac_nonfinite_loss"] == 0.0
+        assert poisoned_step["frac_nonfinite_loss"] == 1.0
+        # `logging_nan_inf_filter` is enabled by default, so `transformers` discards the step's own non-finite loss
+        # and substitutes a value derived from the loss accumulated since the last log. The reported loss therefore
+        # stays finite and the failing step is invisible, which is why the metric above is needed. The filter is
+        # gated on `not is_torch_xla_available()`, so under XLA the non-finite loss reaches the log unchanged and
+        # the substitution this metric compensates for does not happen.
+        if is_torch_xla_available():
+            assert not torch.isfinite(torch.tensor(poisoned_step["loss"]))
+        else:
+            assert torch.isfinite(torch.tensor(poisoned_step["loss"]))
 
     def test_resume_from_checkpoint(self):
         # Checks that ignore_data_skip is True and that resume doesn't crash. The stub worker is not an

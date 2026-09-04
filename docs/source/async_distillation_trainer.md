@@ -270,6 +270,7 @@ What the objective itself measures, averaged over the trained tokens of the wind
 | `teacher_entropy`               | the teacher's entropy over the candidates it reported. Bounded below the true value, since only `teacher_top_k` candidates cross the wire                             |
 | `teacher_jsd/<id>`              | MOPD only: `jsd` restricted to the tokens that teacher scored. Teachers in different domains can diverge at very different rates, which the blended `jsd` conflates  |
 | `teacher_entropy/<id>`          | MOPD only: the same breakdown of `teacher_entropy`                                                                                                                  |
+| `frac_nonfinite_loss`           | the fraction of loss computations in the window whose loss was not finite (NaN or Inf), one flag per rank per micro-batch. `logging_nan_inf_filter` is on by default and, when `is_torch_xla_available()` is false, hides such a step from the reported loss, so any non-zero value is worth investigating   |
 
 There is no per-teacher `entropy`: the student's entropy is a property of its own policy, not of which teacher scored the sample, so the blended metric already covers it.
 

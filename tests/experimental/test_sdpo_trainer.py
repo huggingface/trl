@@ -19,6 +19,7 @@ import pytest
 import torch
 from datasets import Dataset, DatasetDict, load_dataset
 from transformers import HfArgumentParser, TrainerCallback
+from transformers.utils import is_torch_xla_available
 
 from trl.experimental.sdpo import SDPOConfig, SDPOTrainer
 
@@ -173,6 +174,57 @@ class TestSDPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             if param.sum() != 0:
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @pytest.mark.parametrize("poison", [float("nan"), float("inf")])
+    def test_nonfinite_loss_is_visible_in_log_history(self, poison):
+        """A non-finite loss must reach `log_history`, which `logging_nan_inf_filter` otherwise hides."""
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        class NonFiniteLossSDPOTrainer(SDPOTrainer):
+            # Both NaN and Inf are injected, because the guard tests `~isfinite` and a suite that only ever injects
+            # one of them is passed by the matching `isnan` or `isinf` implementation. Adding rather than
+            # multiplying leaves the gradients finite, so the poisoned step does not corrupt the weights, and is
+            # invariant to a loss of exactly `0.0`, for which `0.0 * inf` would be NaN.
+            # `distillation_weight` defaults to 1.0, and that branch returns the self-distillation loss
+            # without ever calling `_compute_policy_loss`, so poison the method the default path uses.
+            def _compute_self_distillation_loss(self, model, inputs, distillation_logits):
+                loss = super()._compute_self_distillation_loss(model, inputs, distillation_logits)
+                return loss + poison if self.state.global_step == 1 else loss
+
+        training_args = SDPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,
+            per_device_train_batch_size=3,
+            num_generations=3,
+            max_completion_length=8,
+            distillation_mode="topk_logits",
+            distillation_topk=5,
+            distillation_is_clip=None,
+            max_steps=2,
+            logging_steps=1,
+            report_to="none",
+        )
+        trainer = NonFiniteLossSDPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        trainer.train()
+
+        healthy_step, poisoned_step = trainer.state.log_history[0], trainer.state.log_history[1]
+        assert healthy_step["frac_nonfinite_loss"] == 0.0
+        assert poisoned_step["frac_nonfinite_loss"] == 1.0
+        # `logging_nan_inf_filter` is enabled by default, so `transformers` discards the step's own non-finite loss
+        # and substitutes a value derived from the loss accumulated since the last log. The reported loss therefore
+        # stays finite and the failing step is invisible, which is why the metric above is needed. The filter is
+        # gated on `not is_torch_xla_available()`, so under XLA the non-finite loss reaches the log unchanged and
+        # the substitution this metric compensates for does not happen.
+        if is_torch_xla_available():
+            assert not torch.isfinite(torch.tensor(poisoned_step["loss"]))
+        else:
+            assert torch.isfinite(torch.tensor(poisoned_step["loss"]))
 
     @pytest.mark.parametrize("eval_dataset_type", ["dataset", "dataset_dict", "dict_of_dataset", "none"])
     def test_init_with_eval_dataset(self, eval_dataset_type):

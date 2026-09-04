@@ -408,6 +408,44 @@ class GKDTrainer(SFTTrainer):
             # Release hidden states after loss computation
             del student_hidden, teacher_hidden, true_labels
             empty_cache()
+            mode = "train" if self.model.training else "eval"
+            # A non-finite training loss can pass through the logs as a plausible number. When `logging_nan_inf_filter`
+            # is enabled, which is the default, and `is_torch_xla_available()` is false, `transformers` discards the
+            # step's own loss and logs a value derived from the losses accumulated since the last log, so the curve
+            # never shows the step that failed. Report the condition here instead. Gather first, so a rank whose loss
+            # went non-finite is counted even when the other ranks are finite.
+            # Widen before the reduction: a low-precision dtype such as `float8_e5m2` has no `mean` kernel, and
+            # narrowing instead would report a finite `float64` loss above `float32`'s maximum as non-finite.
+            nonfinite = self.accelerator.gather((~torch.isfinite(loss.detach().double().mean())).float())
+            self._metrics[mode]["frac_nonfinite_loss"].append(nonfinite.mean().item())
+            if nonfinite.any():
+                # `logging_nan_inf_filter` and the optimizer step belong to the training loop only, so each mode gets
+                # its own message. `warning_once` keys its cache on the message text, so the two do not suppress each
+                # other and an evaluation warning cannot stop a later training warning from being emitted.
+                if mode == "train":
+                    logger.warning_once(
+                        "The training loss is not finite (NaN or Inf) for at least one step. The logged loss may not "
+                        "show it: when `logging_nan_inf_filter` is enabled, which is the default, and "
+                        "`is_torch_xla_available()` is false, `transformers` discards the step's own loss and logs a "
+                        "value derived from the losses accumulated since the last training log. The backward pass "
+                        "still runs on the non-finite value; whether that ultimately produces a parameter update "
+                        "depends on the resulting gradients and the configured scaler, optimizer and backend. "
+                        "`frac_nonfinite_loss` reports the fraction of ranks whose loss was non-finite, averaged over "
+                        "every loss computation since the last log, so it is a rate rather than a count of affected "
+                        "optimizer steps."
+                    )
+                else:
+                    logger.warning_once(
+                        "The evaluation loss is not finite (NaN or Inf) for at least one batch. It is neither "
+                        "backpropagated nor used for an optimizer step, so it does not itself change the weights, but "
+                        "any metric derived from it may be affected, including the reported evaluation loss and "
+                        "anything downstream of it such as best-model selection, early stopping and metric-driven "
+                        "schedulers. `frac_nonfinite_loss` reports the fraction of ranks whose loss was non-finite, "
+                        "averaged over this evaluation. It records one flag per rank per loss computation, while the "
+                        "reported loss is gathered per sample with padded positions trimmed, so the two can disagree. "
+                        "Only `evaluate()` logs it, never `predict()`."
+                    )
+
             if return_outputs:
                 return (loss, ModelOutput(logits=None, last_hidden_state=student_outputs.last_hidden_state))
             else:
@@ -449,6 +487,43 @@ class GKDTrainer(SFTTrainer):
         empty_cache()
 
         # Return loss
+        mode = "train" if self.model.training else "eval"
+        # A non-finite training loss can pass through the logs as a plausible number. When `logging_nan_inf_filter` is
+        # enabled, which is the default, and `is_torch_xla_available()` is false, `transformers` discards the step's
+        # own loss and logs a value derived from the losses accumulated since the last log, so the curve never shows
+        # the step that failed. Report the condition here instead. Gather first, so a rank whose loss went non-finite
+        # is counted even when the other ranks are finite.
+        # Widen before the reduction: a low-precision dtype such as `float8_e5m2` has no `mean` kernel, and
+        # narrowing instead would report a finite `float64` loss above `float32`'s maximum as non-finite.
+        nonfinite = self.accelerator.gather((~torch.isfinite(loss.detach().double().mean())).float())
+        self._metrics[mode]["frac_nonfinite_loss"].append(nonfinite.mean().item())
+        if nonfinite.any():
+            # `logging_nan_inf_filter` and the optimizer step belong to the training loop only, so each mode gets its
+            # own message. `warning_once` keys its cache on the message text, so the two do not suppress each other and
+            # an evaluation warning cannot stop a later training warning from being emitted.
+            if mode == "train":
+                logger.warning_once(
+                    "The training loss is not finite (NaN or Inf) for at least one step. The logged loss may not show "
+                    "it: when `logging_nan_inf_filter` is enabled, which is the default, and "
+                    "`is_torch_xla_available()` is false, `transformers` discards the step's own loss and logs a "
+                    "value derived from the losses accumulated since the last training log. The backward pass still "
+                    "runs on the non-finite value; whether that ultimately produces a parameter update depends on the "
+                    "resulting gradients and the configured scaler, optimizer and backend. `frac_nonfinite_loss` "
+                    "reports the fraction of ranks whose loss was non-finite, averaged over every loss computation "
+                    "since the last log, so it is a rate rather than a count of affected optimizer steps."
+                )
+            else:
+                logger.warning_once(
+                    "The evaluation loss is not finite (NaN or Inf) for at least one batch. It is neither "
+                    "backpropagated nor used for an optimizer step, so it does not itself change the weights, but any "
+                    "metric derived from it may be affected, including the reported evaluation loss and anything "
+                    "downstream of it such as best-model selection, early stopping and metric-driven schedulers. "
+                    "`frac_nonfinite_loss` reports the fraction of ranks whose loss was non-finite, averaged over "
+                    "this evaluation. It records one flag per rank per loss computation, while the reported loss is "
+                    "gathered per sample with padded positions trimmed, so the two can disagree. Only `evaluate()` "
+                    "logs it, never `predict()`."
+                )
+
         return (loss, student_outputs) if return_outputs else loss
 
     def _liger_student_forward(self, student, inputs):

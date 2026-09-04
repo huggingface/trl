@@ -1058,6 +1058,9 @@ class GRPOTrainer(_BaseTrainer):
 
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
+        # Set by `_open_eval_window`, because `log` cannot see the caller's prefix and has to file eval
+        # metrics under the prefix the caller actually asked for.
+        self._metric_key_prefix = "eval"
         self._total_train_tokens = 0
         self._current_train_step_time = 0.0
         self.log_completions = args.log_completions
@@ -3022,13 +3025,55 @@ class GRPOTrainer(_BaseTrainer):
 
     @profiling_decorator
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
-        if return_outputs:
+        # `return_outputs` reaches every rank from the same caller, so today all of them raise together. Agree
+        # across ranks anyway: the loss path below now ends in a collective, and a raise that skips it on one rank
+        # only would leave the others waiting for a gather that never comes.
+        if self.accelerator.gather(torch.tensor(float(return_outputs), device=self.accelerator.device)).any():
             raise ValueError("The GRPOTrainer does not support returning outputs")
         if self.use_liger_kernel:
             # Compute the loss using the liger grpo loss
             unwrapped_model = self.accelerator.unwrap_model(model)
-            return self._forward_redirection(model, unwrapped_model, self.compute_liger_loss, unwrapped_model, inputs)
-        return self._compute_loss(model, inputs)
+            loss = self._forward_redirection(model, unwrapped_model, self.compute_liger_loss, unwrapped_model, inputs)
+        else:
+            loss = self._compute_loss(model, inputs)
+
+        mode = "train" if self.model.training else "eval"
+        # A non-finite training loss can pass through the logs as a plausible number. When `logging_nan_inf_filter` is
+        # enabled, which is the default, and `is_torch_xla_available()` is false, `transformers` discards the step's
+        # own loss and logs a value derived from the losses accumulated since the last log, so the curve never shows
+        # the step that failed. Report the condition here instead. Gather first, so a rank whose loss went non-finite
+        # is counted even when the other ranks are finite.
+        # Widen before the reduction: a low-precision dtype such as `float8_e5m2` has no `mean` kernel, and
+        # narrowing instead would report a finite `float64` loss above `float32`'s maximum as non-finite.
+        nonfinite = self.accelerator.gather((~torch.isfinite(loss.detach().double().mean())).float())
+        self._metrics[mode]["frac_nonfinite_loss"].append(nonfinite.mean().item())
+        if nonfinite.any():
+            # `logging_nan_inf_filter` and the optimizer step belong to the training loop only, so each mode gets its
+            # own message. `warning_once` keys its cache on the message text, so the two do not suppress each other and
+            # an evaluation warning cannot stop a later training warning from being emitted.
+            if mode == "train":
+                logger.warning_once(
+                    "The training loss is not finite (NaN or Inf) for at least one step. The logged loss may not show "
+                    "it: when `logging_nan_inf_filter` is enabled, which is the default, and "
+                    "`is_torch_xla_available()` is false, `transformers` discards the step's own loss and logs a "
+                    "value derived from the losses accumulated since the last training log. The backward pass still "
+                    "runs on the non-finite value; whether that ultimately produces a parameter update depends on the "
+                    "resulting gradients and the configured scaler, optimizer and backend. `frac_nonfinite_loss` "
+                    "reports the fraction of ranks whose loss was non-finite, averaged over every loss computation "
+                    "since the last log, so it is a rate rather than a count of affected optimizer steps."
+                )
+            else:
+                logger.warning_once(
+                    "The evaluation loss is not finite (NaN or Inf) for at least one batch. It is neither "
+                    "backpropagated nor used for an optimizer step, so it does not itself change the weights, but any "
+                    "metric derived from it may be affected, including the reported evaluation loss and anything "
+                    "downstream of it such as best-model selection, early stopping and metric-driven schedulers. "
+                    "`frac_nonfinite_loss` reports the fraction of ranks whose loss was non-finite, averaged over "
+                    "this evaluation. It records one flag per rank per loss computation, while the reported loss is "
+                    "gathered per sample with padded positions trimmed, so the two can disagree. Only `evaluate()` "
+                    "logs it, never `predict()`."
+                )
+        return loss
 
     @staticmethod
     def get_off_policy_mask(
@@ -3388,6 +3433,26 @@ class GRPOTrainer(_BaseTrainer):
             loss = loss.mean().detach()
         return loss, None, None
 
+    def _open_eval_window(self, metric_key_prefix):
+        # `log()` drains `self._metrics` but `predict()` never calls it, so a `predict()` run leaves its batches
+        # in the buffer with nothing to drain them. `evaluate()` opens its own window below, so those leftovers
+        # cannot reach an evaluation average; what they do reach is the next `predict()` and any direct reader of
+        # `self._metrics`. Opening the window here makes each one self-contained whichever entry point started it.
+        # The prefix is recorded because `log()` cannot see it, and it is not always "eval": `evaluate()` takes it as
+        # an argument and `predict()` defaults it to "test". Both public entry points are hooked rather than
+        # `evaluation_loop`, because `use_legacy_prediction_loop` routes to `prediction_loop` instead on the older
+        # `transformers` versions this package still supports.
+        self._metrics["eval"].clear()
+        self._metric_key_prefix = metric_key_prefix
+
+    def evaluate(self, eval_dataset=None, ignore_keys=None, metric_key_prefix="eval"):
+        self._open_eval_window(metric_key_prefix)
+        return super().evaluate(eval_dataset, ignore_keys, metric_key_prefix)
+
+    def predict(self, test_dataset, ignore_keys=None, metric_key_prefix="test"):
+        self._open_eval_window(metric_key_prefix)
+        return super().predict(test_dataset, ignore_keys, metric_key_prefix)
+
     def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
         mode = "train" if self.model.training else "eval"
         # Average the metrics
@@ -3401,9 +3466,11 @@ class GRPOTrainer(_BaseTrainer):
             metrics[key] = sum(valid) / len(valid) if valid else None
 
         # This method can be called both in training and evaluation. When called in evaluation, the keys in `logs`
-        # start with "eval_". We need to add the prefix "eval_" to the keys in `metrics` to match the format.
+        # already carry the caller's `metric_key_prefix`, which defaults to "eval" but is "test" for `predict()`
+        # and arbitrary when passed explicitly. Match that prefix rather than assuming "eval", so these metrics
+        # land beside the ones `transformers` produced instead of in a separate `eval_` namespace.
         if mode == "eval":
-            metrics = {f"eval_{key}": val for key, val in metrics.items()}
+            metrics = {f"{self._metric_key_prefix}_{key}": val for key, val in metrics.items()}
 
         logs.update(metrics)
         super().log(logs, start_time)

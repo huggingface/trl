@@ -352,6 +352,7 @@ class OnlineDPOTrainer(_BaseTrainer):
             "logps/rejected": [],
             "val/contain_eos_token": [],
             "beta": [],
+            "frac_nonfinite_loss": [],
         }
         if self.reward_funcs is not None:
             self.stats["objective/rlhf_reward"] = []
@@ -1309,6 +1310,29 @@ class OnlineDPOTrainer(_BaseTrainer):
 
         if self.args.n_gpu > 1:
             loss = loss.mean()  # mean() to average on multi-gpu parallel training
+
+        # A non-finite training loss can pass through the logs as a plausible number. When `logging_nan_inf_filter` is
+        # enabled, which is the default, and `is_torch_xla_available()` is false, `transformers` discards the step's
+        # own loss and logs a value derived from the losses accumulated since the last log, so the curve never shows
+        # the step that failed. Report the condition here instead. Gather first, so a rank whose loss went non-finite
+        # is counted even when the other ranks are finite. This trainer computes the loss in `training_step` and logs
+        # through `self.stats`. Evaluation goes through `prediction_step`, which never reaches this code, so only
+        # training arrives here and the rate belongs under training.
+        # Widen before the reduction: a low-precision dtype such as `float8_e5m2` has no `mean` kernel, and
+        # narrowing instead would report a finite `float64` loss above `float32`'s maximum as non-finite.
+        nonfinite = self.accelerator.gather((~torch.isfinite(loss.detach().double().mean())).float())
+        self.stats["frac_nonfinite_loss"].append(nonfinite.mean().item())
+        if nonfinite.any():
+            logger.warning_once(
+                "The training loss is not finite (NaN or Inf) for at least one step. The logged loss may not show it: "
+                "when `logging_nan_inf_filter` is enabled, which is the default, and `is_torch_xla_available()` is "
+                "false, `transformers` discards the step's own loss and logs a value derived from the losses "
+                "accumulated since the last training log. The backward pass still runs on the non-finite value; "
+                "whether that ultimately produces a parameter update depends on the resulting gradients and the "
+                "configured scaler, optimizer and backend. `frac_nonfinite_loss` reports the fraction of ranks whose "
+                "loss was non-finite, averaged over every loss computation since the last log, so it is a rate rather "
+                "than a count of affected optimizer steps."
+            )
 
         self.accelerator.backward(loss, **kwargs)
 

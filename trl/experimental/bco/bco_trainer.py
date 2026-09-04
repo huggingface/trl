@@ -1114,6 +1114,18 @@ class BCOTrainer(_BaseTrainer):
                         padded_batch["completion_input_ids"], attention_mask=padded_batch["completion_attention_mask"]
                     ).logits
 
+        # This check reads this rank's own tensor shapes, so raising on one rank alone would leave the others blocked in
+        # the next collective with no error to explain it. Agree across ranks first, so a mismatch anywhere raises
+        # everywhere.
+        shape_mismatch = torch.tensor(
+            completion_logits.shape[:-1] != padded_batch["completion_labels"].shape,
+            device=completion_logits.device,
+        )
+        shape_mismatch = self.accelerator.gather(shape_mismatch.any().reshape(1).float())
+        if shape_mismatch.any():
+            raise ValueError(
+                "Logits (batch and sequence length dim) and labels have different shapes on at least one rank."
+            )
         completion_logps = self.get_batch_logps(
             completion_logits,
             padded_batch["completion_labels"],
@@ -1192,6 +1204,18 @@ class BCOTrainer(_BaseTrainer):
         )
         completion_logits = outputs.logits
 
+        # This check reads this rank's own tensor shapes, so raising on one rank alone would leave the others blocked in
+        # the next collective with no error to explain it. Agree across ranks first, so a mismatch anywhere raises
+        # everywhere.
+        shape_mismatch = torch.tensor(
+            completion_logits.shape[:-1] != batch["completion_labels"].shape,
+            device=completion_logits.device,
+        )
+        shape_mismatch = self.accelerator.gather(shape_mismatch.any().reshape(1).float())
+        if shape_mismatch.any():
+            raise ValueError(
+                "Logits (batch and sequence length dim) and labels have different shapes on at least one rank."
+            )
         completion_logps = self.get_batch_logps(
             completion_logits,
             batch["completion_labels"],
@@ -1199,12 +1223,18 @@ class BCOTrainer(_BaseTrainer):
             is_encoder_decoder=self.is_encoder_decoder,
         )
 
-        if completion_logps.shape[0] != len(batch["label"]):
+        # This check reads this rank's own tensor shapes, so raising on one rank alone would leave the others blocked in
+        # the next collective with no error to explain it. Agree across ranks first, so a mismatch anywhere raises
+        # everywhere.
+        batch_size_mismatch = torch.tensor(
+            completion_logps.shape[0] != len(batch["label"]), device=completion_logps.device
+        )
+        batch_size_mismatch = self.accelerator.gather(batch_size_mismatch.any().reshape(1).float())
+        if batch_size_mismatch.any():
             raise ValueError(
-                "There is a mismatch between the number of examples in this batch and the number of "
-                "examples for which an output sequence was predicted."
+                "There is a mismatch on at least one rank between the number of examples in this batch and the number "
+                "of examples for which an output sequence was predicted."
             )
-
         chosen_idx = [i for i in range(completion_logps.shape[0]) if batch["label"][i] is True]
         rejected_idx = [i for i in range(completion_logps.shape[0]) if batch["label"][i] is False]
 
@@ -1397,6 +1427,29 @@ class BCOTrainer(_BaseTrainer):
         # force log the metrics
         if self.accelerator.is_main_process:
             self.store_metrics(metrics, train_eval="train")
+
+        # A non-finite training loss can pass through the logs as a plausible number. When `logging_nan_inf_filter` is
+        # enabled, which is the default, and `is_torch_xla_available()` is false, `transformers` discards the step's
+        # own loss and logs a value derived from the losses accumulated since the last log, so the curve never shows
+        # the step that failed. Report the condition here instead. Gather first, so a rank whose loss went non-finite
+        # is counted even when the other ranks are finite. This trainer logs through `store_metrics`. Evaluation goes
+        # through `prediction_step`, which never calls this method, so only training reaches here and the rate belongs
+        # under training.
+        # Widen before the reduction: a low-precision dtype such as `float8_e5m2` has no `mean` kernel, and
+        # narrowing instead would report a finite `float64` loss above `float32`'s maximum as non-finite.
+        nonfinite = self.accelerator.gather((~torch.isfinite(loss.detach().double().mean())).float())
+        self.store_metrics({"frac_nonfinite_loss": nonfinite.mean().item()}, train_eval="train")
+        if nonfinite.any():
+            logger.warning_once(
+                "The training loss is not finite (NaN or Inf) for at least one step. The logged loss may not show it: "
+                "when `logging_nan_inf_filter` is enabled, which is the default, and `is_torch_xla_available()` is "
+                "false, `transformers` discards the step's own loss and logs a value derived from the losses "
+                "accumulated since the last training log. The backward pass still runs on the non-finite value; "
+                "whether that ultimately produces a parameter update depends on the resulting gradients and the "
+                "configured scaler, optimizer and backend. `frac_nonfinite_loss` reports the fraction of ranks whose "
+                "loss was non-finite, averaged over every loss computation since the last log, so it is a rate rather "
+                "than a count of affected optimizer steps."
+            )
 
         if return_outputs:
             return (loss, metrics)

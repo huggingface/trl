@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import math
+
 import pytest
 import torch
 import transformers
@@ -19,7 +21,7 @@ from datasets import Dataset, DatasetDict, IterableDatasetDict, load_dataset
 from packaging.version import Version
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 from transformers.testing_utils import torch_device
-from transformers.utils import is_peft_available
+from transformers.utils import is_peft_available, is_torch_xla_available
 
 from trl import DPOConfig, DPOTrainer
 from trl.trainer.dpo_trainer import DataCollatorForPreference, DataCollatorForVisionPreference
@@ -31,6 +33,7 @@ from .testing_utils import (
     require_kernels,
     require_liger_kernel,
     require_peft,
+    require_torch_accelerator,
     require_vision,
 )
 
@@ -377,6 +380,144 @@ class TestDPOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    def test_nonfinite_loss_is_visible_in_log_history(self):
+        """A non-finite loss must reach `log_history`, which `logging_nan_inf_filter` otherwise hides."""
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+
+        class NonFiniteLossDPOTrainer(DPOTrainer):
+            # Only NaN is injected here. The poison has to land upstream of the guard, on the logits or the
+            # log-probabilities, and the poisoned values meet each other on the
+            # way in, where `inf - inf` and `inf / inf` are both NaN. An injected `inf` therefore arrives at the loss
+            # as NaN, so this test cannot tell `~isfinite` from an `isnan` implementation. The trainers whose poison
+            # reaches the loss as a distinct Inf are parametrized over both values instead.
+            def _compute_loss(self, model, inputs, return_outputs):
+                if self.state.global_step == 1:
+
+                    def poison_logits(module, args, output):
+                        output.logits = output.logits * float("nan")
+                        return output
+
+                    handle = model.register_forward_hook(poison_logits)
+                    try:
+                        return super()._compute_loss(model, inputs, return_outputs)
+                    finally:
+                        handle.remove()
+                return super()._compute_loss(model, inputs, return_outputs)
+
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,
+            max_steps=2,
+            logging_steps=1,
+            report_to="none",
+        )
+        trainer = NonFiniteLossDPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        trainer.train()
+
+        healthy_step, poisoned_step = trainer.state.log_history[0], trainer.state.log_history[1]
+        assert healthy_step["frac_nonfinite_loss"] == 0.0
+        assert poisoned_step["frac_nonfinite_loss"] == 1.0
+        # `logging_nan_inf_filter` is enabled by default, so `transformers` discards the step's own non-finite loss
+        # and substitutes a value derived from the loss accumulated since the last log. The reported loss therefore
+        # stays finite and the failing step is invisible, which is why the metric above is needed. The filter is
+        # gated on `not is_torch_xla_available()`, so under XLA the non-finite loss reaches the log unchanged and
+        # the substitution this metric compensates for does not happen.
+        if is_torch_xla_available():
+            assert not torch.isfinite(torch.tensor(poisoned_step["loss"]))
+        else:
+            assert torch.isfinite(torch.tensor(poisoned_step["loss"]))
+
+    def test_a_large_finite_loss_is_not_reported_as_non_finite(self):
+        """The guard widens to `float64` before reducing, so a finite loss above `float32`'s maximum stays finite.
+
+        Narrowing to `float32` first turns any finite value above roughly `3.4e38` into `inf`, which would report a
+        healthy step as non-finite and emit the warning. The loss has to be large before the guard sees it, so it is
+        produced by the trainer itself rather than substituted afterwards: the model runs in `float64`, and the IPO
+        loss `(delta - 1 / (2 * beta)) ** 2` with `beta=1e-20` is about `2.5e39` whatever the log-ratios are. The
+        evaluation path is used because the value is never backpropagated there.
+        """
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            max_steps=1,
+            loss_type="ipo",
+            beta=1e-20,
+            model_init_kwargs={"dtype": torch.float64},
+            report_to="none",
+        )
+        trainer = DPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset,
+            eval_dataset=dataset,
+        )
+
+        metrics = trainer.evaluate()
+
+        # The case is only meaningful if the loss really is finite and really is above what `float32` can hold.
+        assert math.isfinite(metrics["eval_loss"])
+        assert metrics["eval_loss"] > torch.finfo(torch.float32).max
+        assert metrics["eval_frac_nonfinite_loss"] == 0.0
+
+    @pytest.mark.parametrize("poison", [float("nan"), float("inf")])
+    @require_torch_accelerator
+    @require_liger_kernel
+    def test_nonfinite_loss_is_visible_in_log_history_liger(self, poison):
+        """The Liger path owns a second guard, and the test above cannot reach it.
+
+        `_compute_loss_liger` replaces `_compute_loss` when `use_liger_kernel=True`, so the test above leaves that
+        guard unexercised: inverting it alone keeps that test green. Poison the Liger path directly so the second guard
+        has its own coverage.
+
+        The poison replaces the fused loss rather than the model output. A forward hook cannot be used here: the Liger
+        path calls the backbone and reads `last_hidden_state`, never the wrapper whose output carries `logits`, so a
+        hook registered on the model it is handed would never fire. Poisoning the loss directly also means an injected
+        `inf` arrives as a distinct `inf` rather than collapsing to NaN, so both values are worth covering.
+        """
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+
+        class NonFiniteLossLigerDPOTrainer(DPOTrainer):
+            def _compute_loss_liger(self, model, inputs, return_outputs=False):
+                if self.state.global_step == 1:
+                    healthy_liger_loss = self.liger_loss
+
+                    def poisoned_liger_loss(*args, **kwargs):
+                        loss, metrics = healthy_liger_loss(*args, **kwargs)
+                        return loss + poison, metrics
+
+                    self.liger_loss = poisoned_liger_loss
+                    try:
+                        return super()._compute_loss_liger(model, inputs, return_outputs)
+                    finally:
+                        self.liger_loss = healthy_liger_loss
+                return super()._compute_loss_liger(model, inputs, return_outputs)
+
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,
+            max_steps=2,
+            logging_steps=1,
+            use_liger_kernel=True,
+            report_to="none",
+        )
+        trainer = NonFiniteLossLigerDPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        trainer.train()
+
+        healthy_step, poisoned_step = trainer.state.log_history[0], trainer.state.log_history[1]
+        assert healthy_step["frac_nonfinite_loss"] == 0.0
+        assert poisoned_step["frac_nonfinite_loss"] == 1.0
 
     # Special case for harmony
     def test_train_gpt_oss(self):

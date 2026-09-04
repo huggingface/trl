@@ -145,6 +145,7 @@ While training and evaluating, we record the following metrics:
 * `margin`: The average margin (difference between chosen and rejected rewards) over the last logging interval.
 * `learning_rate`: The current learning rate, which may change dynamically if a scheduler is used.
 * `grad_norm`: The L2 norm of the gradients, computed before gradient clipping.
+* `frac_nonfinite_loss`: The fraction of loss computations in the logging interval whose loss was not finite (NaN or Inf), counted once per rank per micro-batch, so it is a rate over loss computations rather than a count of affected optimizer steps. Any non-zero value is worth investigating: `logging_nan_inf_filter` is enabled by default and, when `is_torch_xla_available()` is false, substitutes a finite value for a non-finite loss in the reported `loss`, which leaves the failing step invisible in the loss curve.
 
 ## Customization
 

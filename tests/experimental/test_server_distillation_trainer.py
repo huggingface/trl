@@ -20,6 +20,7 @@ import torch
 import torch.nn.functional as F
 from datasets import Dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers.utils import is_torch_xla_available
 
 from trl.experimental.server_distillation import (
     ServerDistillationConfig,
@@ -292,3 +293,66 @@ class TestServerDistillationTrainerRaggedGrad(TrlTestCase):
         for record in records:
             assert math.isfinite(record["grad_norm"]), f"grad_norm={record['grad_norm']} leaked -inf into backward"
             assert math.isfinite(record["loss"])
+
+    @pytest.mark.parametrize("poison", [float("nan"), float("inf")])
+    def test_nonfinite_loss_is_visible_in_log_history(self, monkeypatch, poison):
+        """A non-finite loss must reach `log_history`, which `logging_nan_inf_filter` otherwise hides."""
+        from trl.generation import vllm_client as vllm_client_module
+
+        fake_client = MagicMock()
+        fake_client.get_sequence_logprobs.side_effect = _canned_teacher_logprobs
+        monkeypatch.setattr(vllm_client_module, "VLLMClient", lambda *args, **kwargs: fake_client)
+
+        class NonFiniteLossServerDistillationTrainer(ServerDistillationTrainer):
+            # Both NaN and Inf are injected, because the guard tests `~isfinite` and a suite that only ever injects
+            # one of them is passed by the matching `isnan` or `isinf` implementation. Adding rather than
+            # multiplying leaves the gradients finite, so the poisoned step does not corrupt the weights, and is
+            # invariant to a loss of exactly `0.0`, for which `0.0 * inf` would be NaN.
+            def _compute_server_sparse_top_1_divergence_loss(
+                self, teacher_result, student_log_probs, completion_tokens, labels
+            ):
+                loss = super()._compute_server_sparse_top_1_divergence_loss(
+                    teacher_result, student_log_probs, completion_tokens, labels
+                )
+                return loss + poison if self.state.global_step == 1 else loss
+
+        config = ServerDistillationConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            gradient_accumulation_steps=1,
+            learning_rate=1e-4,
+            max_completion_length=32,
+            teacher_model_server_url="http://fake-teacher.invalid:8000",
+            loss_top_k=1,
+            beta=1.0,
+            loss_add_tail=True,
+            max_steps=2,
+            save_strategy="no",
+            report_to="none",
+            logging_steps=1,
+            use_cpu=not torch.cuda.is_available(),
+            bf16=False,
+        )
+        model = AutoModelForCausalLM.from_pretrained(self.model_id, dtype=torch.float32).to(self.device)
+        trainer = NonFiniteLossServerDistillationTrainer(
+            model=model,
+            args=config,
+            train_dataset=_variable_length_dataset(),
+            processing_class=self.tokenizer,
+        )
+        trainer.teacher_client = fake_client
+
+        trainer.train()
+
+        healthy_step, poisoned_step = trainer.state.log_history[0], trainer.state.log_history[1]
+        assert healthy_step["frac_nonfinite_loss"] == 0.0
+        assert poisoned_step["frac_nonfinite_loss"] == 1.0
+        # `logging_nan_inf_filter` is enabled by default, so `transformers` discards the step's own non-finite loss
+        # and substitutes a value derived from the loss accumulated since the last log. The reported loss therefore
+        # stays finite and the failing step is invisible, which is why the metric above is needed. The filter is
+        # gated on `not is_torch_xla_available()`, so under XLA the non-finite loss reaches the log unchanged and
+        # the substitution this metric compensates for does not happen.
+        if is_torch_xla_available():
+            assert not torch.isfinite(torch.tensor(poisoned_step["loss"]))
+        else:
+            assert torch.isfinite(torch.tensor(poisoned_step["loss"]))

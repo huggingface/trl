@@ -16,10 +16,14 @@ from typing import Any
 
 import torch
 import torch.nn.functional as F
+from accelerate.logging import get_logger
 
 from ...extras.profiling import profiling_decorator
 from ...trainer.distillation_trainer import DistillationTrainer
 from .server_distillation_config import ServerDistillationConfig
+
+
+logger = get_logger(__name__)
 
 
 # Self-contained copy of the base trainer's `_jsd_divergence` (together with the `_compute_prompt_length` /
@@ -323,6 +327,28 @@ class ServerDistillationTrainer(DistillationTrainer):
         trimmed_labels = labels[:, :comp_len]
 
         if self.beta > 0:
+            required = trimmed_labels != -100
+            missing_actual = (required & ~torch.isfinite(teacher_result["actual_logprobs"])).sum()
+            missing_top1 = torch.zeros_like(missing_actual)
+            if self.beta < 1:
+                missing_top1 = (required & ~torch.isfinite(teacher_result["topk_logprobs"].squeeze(-1))).sum()
+            # These checks read this rank's own tensors, so raising on one rank alone would leave the others blocked in
+            # the next collective with no error to explain it. Agree across ranks first, so missing logprobs anywhere
+            # raise everywhere. Counts rather than flags are gathered so the message can still say how much is missing,
+            # which is what decides whether to retry the server or reconfigure it.
+            missing_teacher = torch.stack((missing_actual, missing_top1, required.sum())).reshape(1, -1)
+            missing_teacher = self.accelerator.gather(missing_teacher.float())
+            total_required = int(missing_teacher[:, 2].sum().item())
+            if missing_teacher[:, 0].any():
+                raise ValueError(
+                    "Teacher server is missing actual-token logprobs for required reverse-KL positions on at least "
+                    f"one rank: {int(missing_teacher[:, 0].sum().item())}/{total_required} across all ranks."
+                )
+            if missing_teacher[:, 1].any():
+                raise ValueError(
+                    "Teacher server is missing top-1 logprobs for required forward-KL positions on at least one "
+                    f"rank: {int(missing_teacher[:, 1].sum().item())}/{total_required} across all ranks."
+                )
             loss = self._compute_server_sparse_top_1_divergence_loss(
                 teacher_result=teacher_result,
                 student_log_probs=student_log_probs[:, :comp_len, :],
@@ -341,6 +367,43 @@ class ServerDistillationTrainer(DistillationTrainer):
         # not consume `num_items_in_batch`, so it must re-apply that scaling itself.
         if self.model.training:
             loss = loss / self.current_gradient_accumulation_steps
+
+        mode = "train" if self.model.training else "eval"
+        # A non-finite training loss can pass through the logs as a plausible number. When `logging_nan_inf_filter` is
+        # enabled, which is the default, and `is_torch_xla_available()` is false, `transformers` discards the step's
+        # own loss and logs a value derived from the losses accumulated since the last log, so the curve never shows
+        # the step that failed. Report the condition here instead. Gather first, so a rank whose loss went non-finite
+        # is counted even when the other ranks are finite.
+        # Widen before the reduction: a low-precision dtype such as `float8_e5m2` has no `mean` kernel, and
+        # narrowing instead would report a finite `float64` loss above `float32`'s maximum as non-finite.
+        nonfinite = self.accelerator.gather((~torch.isfinite(loss.detach().double().mean())).float())
+        self._metrics[mode]["frac_nonfinite_loss"].append(nonfinite.mean().item())
+        if nonfinite.any():
+            # `logging_nan_inf_filter` and the optimizer step belong to the training loop only, so each mode gets its
+            # own message. `warning_once` keys its cache on the message text, so the two do not suppress each other and
+            # an evaluation warning cannot stop a later training warning from being emitted.
+            if mode == "train":
+                logger.warning_once(
+                    "The training loss is not finite (NaN or Inf) for at least one step. The logged loss may not show "
+                    "it: when `logging_nan_inf_filter` is enabled, which is the default, and "
+                    "`is_torch_xla_available()` is false, `transformers` discards the step's own loss and logs a "
+                    "value derived from the losses accumulated since the last training log. The backward pass still "
+                    "runs on the non-finite value; whether that ultimately produces a parameter update depends on the "
+                    "resulting gradients and the configured scaler, optimizer and backend. `frac_nonfinite_loss` "
+                    "reports the fraction of ranks whose loss was non-finite, averaged over every loss computation "
+                    "since the last log, so it is a rate rather than a count of affected optimizer steps."
+                )
+            else:
+                logger.warning_once(
+                    "The evaluation loss is not finite (NaN or Inf) for at least one batch. It is neither "
+                    "backpropagated nor used for an optimizer step, so it does not itself change the weights, but any "
+                    "metric derived from it may be affected, including the reported evaluation loss and anything "
+                    "downstream of it such as best-model selection, early stopping and metric-driven schedulers. "
+                    "`frac_nonfinite_loss` reports the fraction of ranks whose loss was non-finite, averaged over "
+                    "this evaluation. It records one flag per rank per loss computation, while the reported loss is "
+                    "gathered per sample with padded positions trimmed, so the two can disagree. Only `evaluate()` "
+                    "logs it, never `predict()`."
+                )
 
         return (loss, student_outputs) if return_outputs else loss
 
@@ -454,25 +517,6 @@ class ServerDistillationTrainer(DistillationTrainer):
         topk_token_ids = teacher_result["topk_token_ids"]  # (B, T, 1)
         actual_teacher_lps = teacher_result["actual_logprobs"]  # (B, T)
         required = labels != -100
-
-        missing_actual = required & ~torch.isfinite(actual_teacher_lps)
-        if missing_actual.any():
-            missing_count = int(missing_actual.sum().item())
-            total_required = int(required.sum().item())
-            raise ValueError(
-                "Teacher server is missing actual-token logprobs for required reverse-KL positions: "
-                f"{missing_count}/{total_required}."
-            )
-        if self.beta < 1:
-            teacher_top1_logprobs = topk_teacher_lps.squeeze(-1)
-            missing_top1 = required & ~torch.isfinite(teacher_top1_logprobs)
-            if missing_top1.any():
-                missing_count = int(missing_top1.sum().item())
-                total_required = int(required.sum().item())
-                raise ValueError(
-                    "Teacher server is missing top-1 logprobs for required forward-KL positions: "
-                    f"{missing_count}/{total_required}."
-                )
 
         # Replace -inf teacher logprobs at intra-batch padding (labels == -100) with 0 so
         # reverse-KL's student_probs·(log_s - log_t) does not leak +inf into the backward pass.

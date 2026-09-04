@@ -16,6 +16,7 @@ import collections
 import copy
 import gc
 import json
+import logging
 import pathlib
 from unittest.mock import MagicMock, patch
 
@@ -23,6 +24,7 @@ import pytest
 import torch
 import torch.nn.functional as F
 import transformers
+from accelerate.logging import MultiProcessAdapter
 from accelerate.utils.memory import release_memory
 from datasets import Dataset, DatasetDict, IterableDatasetDict, load_dataset
 from packaging.version import Version
@@ -34,7 +36,7 @@ from transformers import (
     TrainingArguments,
 )
 from transformers.testing_utils import backend_device_count, backend_empty_cache, torch_device
-from transformers.utils import is_peft_available
+from transformers.utils import is_peft_available, is_torch_xla_available
 
 from trl import SFTConfig, SFTTrainer
 from trl.trainer.sft_trainer import (
@@ -286,6 +288,31 @@ class TestDataCollatorForLanguageModeling(TrlTestCase):
 
 
 class TestSFTTrainer(TrlTestCase):
+    def test_evaluate_prepares_each_split_of_a_dict_once(self):
+        """`evaluate` prepares a dict of raw eval datasets split by split. Handing the prepared dict to
+        `Trainer.evaluate` made it call `self.evaluate` again per split, re-entering this override on data it had
+        already prepared: the tokenizing steps skip an already-tokenized split, but `packing` re-packs it. The override
+        now runs `super().evaluate` once per split itself, so each split is prepared exactly once and the metrics carry
+        the per-split prefix `Trainer.evaluate` would have produced."""
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling")
+        training_args = SFTConfig(output_dir=self.tmp_dir, max_steps=1, report_to="none")
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset["train"]
+        )
+        prepare = trainer._prepare_dataset
+        prepared_splits = []
+
+        def counting_prepare(dataset, processing_class, args, packing, formatting_func, dataset_name):
+            prepared_splits.append(dataset_name)
+            return prepare(dataset, processing_class, args, packing, formatting_func, dataset_name)
+
+        trainer._prepare_dataset = counting_prepare
+
+        metrics = trainer.evaluate({"first": dataset["test"], "second": dataset["test"]})
+
+        assert prepared_splits == ["first", "second"], f"each split must be prepared once, got {prepared_splits}"
+        assert "eval_first_loss" in metrics and "eval_second_loss" in metrics
+
     def test_init_with_training_arguments(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
         args = TrainingArguments(output_dir=self.tmp_dir, report_to="none")
@@ -378,6 +405,258 @@ class TestSFTTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @pytest.mark.parametrize("poison", [float("nan"), float("inf")])
+    def test_nonfinite_loss_is_visible_in_log_history(self, poison):
+        """A non-finite loss must reach `log_history`, which `logging_nan_inf_filter` otherwise hides."""
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+
+        class NonFiniteLossSFTTrainer(SFTTrainer):
+            # The guard runs inside `compute_loss`, so the poison has to land before it: hook the forward and
+            # perturb the loss it returns. Both NaN and Inf are injected, because the guard tests `~isfinite` and a
+            # suite that only ever injects one of them is passed by the matching `isnan` or `isinf` implementation.
+            # Adding rather than multiplying leaves the gradients finite, so the poisoned step does not corrupt the
+            # weights, and is invariant to a loss of exactly `0.0`, for which `0.0 * inf` would be NaN.
+            def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+                if self.state.global_step == 1:
+
+                    def poison_loss(module, args, output):
+                        output.loss = output.loss + poison
+                        return output
+
+                    handle = model.register_forward_hook(poison_loss)
+                    try:
+                        return super().compute_loss(model, inputs, return_outputs, num_items_in_batch)
+                    finally:
+                        handle.remove()
+                return super().compute_loss(model, inputs, return_outputs, num_items_in_batch)
+
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            max_steps=2,
+            logging_steps=1,
+            report_to="none",
+        )
+        trainer = NonFiniteLossSFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        trainer.train()
+
+        healthy_step, poisoned_step = trainer.state.log_history[0], trainer.state.log_history[1]
+        assert healthy_step["frac_nonfinite_loss"] == 0.0
+        assert poisoned_step["frac_nonfinite_loss"] == 1.0
+        # `logging_nan_inf_filter` is enabled by default, so `transformers` discards the step's own non-finite loss
+        # and substitutes a value derived from the loss accumulated since the last log. The reported loss therefore
+        # stays finite and the failing step is invisible, which is why the metric above is needed. The filter is
+        # gated on `not is_torch_xla_available()`, so under XLA the non-finite loss reaches the log unchanged and
+        # the substitution this metric compensates for does not happen.
+        if is_torch_xla_available():
+            assert not torch.isfinite(torch.tensor(poisoned_step["loss"]))
+        else:
+            assert torch.isfinite(torch.tensor(poisoned_step["loss"]))
+
+    def test_nonfinite_loss_warns_once_per_mode(self, caplog):
+        """Both warnings must fire. `warning_once` keys its cache on the message text, so a single shared message
+        would let an evaluation warning suppress every later training warning."""
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+
+        class NonFiniteLossSFTTrainer(SFTTrainer):
+            def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+                def poison_loss(module, args, output):
+                    output.loss = output.loss + float("nan")
+                    return output
+
+                handle = model.register_forward_hook(poison_loss)
+                try:
+                    return super().compute_loss(model, inputs, return_outputs, num_items_in_batch)
+                finally:
+                    handle.remove()
+
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            max_steps=1,
+            logging_steps=1,
+            eval_strategy="steps",
+            eval_steps=1,
+            report_to="none",
+        )
+        trainer = NonFiniteLossSFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset,
+            eval_dataset=dataset,
+        )
+
+        # `warning_once` is an `lru_cache` on `MultiProcessAdapter`, so it is shared process-wide and any earlier
+        # test that emitted these same messages would suppress them here. Clear it so this test observes the
+        # trainer's own behaviour rather than whatever ran before it.
+        MultiProcessAdapter.warning_once.cache_clear()
+        with caplog.at_level(logging.WARNING, logger="trl.trainer.sft_trainer"):
+            trainer.train()
+
+        training_warnings = [message for message in caplog.messages if "The training loss is not finite" in message]
+        evaluation_warnings = [
+            message for message in caplog.messages if "The evaluation loss is not finite" in message
+        ]
+        assert len(training_warnings) == 1
+        assert len(evaluation_warnings) == 1
+
+    def test_nonfinite_loss_metric_is_a_rate_over_the_logging_window(self):
+        """The metric averages one flag per loss computation, so one bad micro-batch out of four reads 0.25.
+        With `gradient_accumulation_steps=1` every window holds one computation and the averaging is invisible. The
+        split is deliberately uneven: an even one averages to 0.5 whichever way the guard's predicate points, so it
+        cannot tell `~isfinite` from `isfinite` and would pass against an inverted guard."""
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+
+        class NonFiniteLossSFTTrainer(SFTTrainer):
+            # Poison the first micro-batch of the step only. The optimizer step spans four of them, so the window
+            # the metric averages over holds one non-finite loss and three finite ones.
+            microbatches = 0
+
+            def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+                NonFiniteLossSFTTrainer.microbatches += 1
+                if NonFiniteLossSFTTrainer.microbatches == 1:
+
+                    def poison_loss(module, args, output):
+                        output.loss = output.loss + float("nan")
+                        return output
+
+                    handle = model.register_forward_hook(poison_loss)
+                    try:
+                        return super().compute_loss(model, inputs, return_outputs, num_items_in_batch)
+                    finally:
+                        handle.remove()
+                return super().compute_loss(model, inputs, return_outputs, num_items_in_batch)
+
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=1,
+            gradient_accumulation_steps=4,
+            max_steps=1,
+            logging_steps=1,
+            report_to="none",
+        )
+        trainer = NonFiniteLossSFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        trainer.train()
+
+        assert trainer.state.log_history[0]["frac_nonfinite_loss"] == 0.25
+
+    def test_truncated_image_tokens_raise_with_the_max_length_hint(self):
+        """The forward's image-token error is re-raised with the `max_length` hint, and its cause is preserved.
+
+        `compute_loss` no longer raises directly from the `except`: it records the failure, agrees across ranks, then
+        re-raises. That keeps a rank whose forward failed from leaving the others in the metric's gather. This test
+        pins the single-process behaviour the rewrite has to preserve, since a gather over one rank is the identity.
+        """
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+
+        class ImageTokenMismatchSFTTrainer(SFTTrainer):
+            def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+                def raise_mismatch(module, args, output):
+                    raise ValueError("Image features and image tokens do not match: 3 vs 4")
+
+                handle = model.register_forward_hook(raise_mismatch)
+                try:
+                    return super().compute_loss(model, inputs, return_outputs, num_items_in_batch)
+                finally:
+                    handle.remove()
+
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            max_steps=1,
+            max_length=512,
+            report_to="none",
+        )
+        trainer = ImageTokenMismatchSFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        with pytest.raises(ValueError, match="is too short and causes image placeholder"):
+            trainer.train()
+
+    def test_unrelated_forward_error_keeps_its_own_message(self):
+        """A forward error that is not the image-token mismatch propagates unchanged.
+
+        The rewrite routes every forward exception through one gather, so this guards against the unrelated ones being
+        swallowed or relabelled on the way out.
+        """
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+
+        class UnrelatedErrorSFTTrainer(SFTTrainer):
+            def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+                def raise_unrelated(module, args, output):
+                    raise ValueError("something unrelated went wrong")
+
+                handle = model.register_forward_hook(raise_unrelated)
+                try:
+                    return super().compute_loss(model, inputs, return_outputs, num_items_in_batch)
+                finally:
+                    handle.remove()
+
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            max_steps=1,
+            max_length=512,
+            report_to="none",
+        )
+        trainer = UnrelatedErrorSFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        with pytest.raises(ValueError, match="something unrelated went wrong"):
+            trainer.train()
+
+    @pytest.mark.parametrize("metric_key_prefix", ["eval", "test", "holdout"])
+    def test_nonfinite_loss_metric_uses_the_callers_prefix(self, metric_key_prefix):
+        """During evaluation the metric must carry the prefix the caller asked for, not a hardcoded `eval_`."""
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+
+        class NonFiniteLossSFTTrainer(SFTTrainer):
+            # Poison every evaluation step, so the metric is 1.0 whenever the guard ran. `evaluate` takes one pass
+            # over the eval set, so there is no healthy step to compare against here; the training-side test above
+            # already covers the healthy case.
+            def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+                if model.training:
+                    return super().compute_loss(model, inputs, return_outputs, num_items_in_batch)
+
+                def poison_loss(module, args, output):
+                    output.loss = output.loss + float("nan")
+                    return output
+
+                handle = model.register_forward_hook(poison_loss)
+                try:
+                    return super().compute_loss(model, inputs, return_outputs, num_items_in_batch)
+                finally:
+                    handle.remove()
+
+        training_args = SFTConfig(output_dir=self.tmp_dir, max_steps=1, report_to="none")
+        trainer = NonFiniteLossSFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset,
+            eval_dataset=dataset,
+        )
+
+        metrics = trainer.evaluate(metric_key_prefix=metric_key_prefix)
+
+        # `predict()` passes "test" and a caller may pass anything, so a guard that hardcoded "eval_" would file the
+        # metric under a prefix nobody asked for and leave it out of the returned mapping under the right one.
+        assert f"{metric_key_prefix}_frac_nonfinite_loss" in metrics
+        assert metrics[f"{metric_key_prefix}_frac_nonfinite_loss"] == 1.0
 
     def test_trust_remote_code(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")

@@ -503,3 +503,48 @@ class TestDistributed(TrlTestCase):
             os.environ.copy(),
         )
         # fmt: on
+
+    def test_nonfinite_loss(self, get_config_path):
+        # `frac_nonfinite_loss` is gathered across ranks so that a loss going non-finite on one rank is visible on all
+        # of them. Only a multi-process run can check that: with one rank `gather` is the identity, so deleting it
+        # leaves every single-process test green. The child poisons the last rank and asserts, on every rank, that the
+        # logged fraction accounts for the whole world. It is not named `test_*.py` so pytest does not collect it here,
+        # where the sole rank is also the poisoned one, so its assertion would pass whether or not the gather is there.
+        # fmt: off
+        run_command(
+            [
+                "accelerate", "launch", "--config_file", get_config_path("ddp"),
+                "tests/distributed/nonfinite_loss.py",
+            ],
+            os.environ.copy(),
+        )
+        # fmt: on
+
+    @pytest.mark.parametrize(
+        "case",
+        [
+            "dpo_forward",
+            pytest.param("dpo_liger_loss", marks=require_liger_kernel),
+            "kto_forward",
+            "kto_reference_forward",
+            pytest.param("kto_liger_forward", marks=require_liger_kernel),
+            pytest.param("kto_liger_loss", marks=require_liger_kernel),
+            "sft_forward",
+        ],
+    )
+    def test_rank_local_forward_failure(self, case, get_config_path):
+        # A rank whose own forward fails has to make the other ranks raise too. They are already inside a loss path
+        # that runs metric gathers, so a rank-local raise leaves them waiting in the first one and the run stalls
+        # instead of reporting the failure. Only a multi-process run can check that: with one rank the gather is the
+        # identity and the sole rank is also the failing one, so the raise happens either way. Each case fails one of
+        # the seven guarded paths on the last rank and asserts, on every rank, that the run ended in an exception. The
+        # child is not named `test_*.py` so pytest does not collect it here.
+        # fmt: off
+        run_command(
+            [
+                "accelerate", "launch", "--config_file", get_config_path("ddp"),
+                "tests/distributed/rank_local_forward_failure.py", case,
+            ],
+            os.environ.copy(),
+        )
+        # fmt: on

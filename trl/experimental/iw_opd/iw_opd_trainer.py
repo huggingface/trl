@@ -25,6 +25,7 @@ import torch
 import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
+from accelerate.logging import get_logger
 from accelerate.utils import DistributedType, broadcast_object_list, gather_object
 from datasets import Dataset
 from packaging.version import Version
@@ -48,6 +49,9 @@ from ...models.utils import _ForwardRedirection, unwrap_model_for_generation
 from ...trainer.base_trainer import _BaseTrainer
 from ...trainer.utils import RepeatSampler, create_model_from_path, disable_dropout_in_model, pad, split_tensor_dict
 from .iw_opd_config import IWOPDConfig
+
+
+logger = get_logger(__name__)
 
 
 if is_liger_kernel_available():
@@ -639,6 +643,9 @@ class IWOPDTrainer(_BaseTrainer):
 
         # ── Metrics & Logging ──
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
+        # Set by `_open_eval_window`, because `log` cannot see the caller's prefix and has to file eval
+        # metrics under the prefix the caller actually asked for.
+        self._metric_key_prefix = "eval"
         self._total_train_tokens = 0
         self.log_completions = args.log_completions
         self.log_completions_steps = args.log_completions_steps
@@ -1490,25 +1497,6 @@ class IWOPDTrainer(_BaseTrainer):
         actual_teacher_lps = teacher_result["actual_logprobs"]  # (B, T)
         required = labels != -100
 
-        missing_actual = required & ~torch.isfinite(actual_teacher_lps)
-        if missing_actual.any():
-            missing_count = int(missing_actual.sum().item())
-            total_required = int(required.sum().item())
-            raise ValueError(
-                "Teacher server is missing actual-token logprobs for required reverse-KL positions: "
-                f"{missing_count}/{total_required}."
-            )
-        if self.beta < 1:
-            teacher_top1_logprobs = topk_teacher_lps.squeeze(-1)
-            missing_top1 = required & ~torch.isfinite(teacher_top1_logprobs)
-            if missing_top1.any():
-                missing_count = int(missing_top1.sum().item())
-                total_required = int(required.sum().item())
-                raise ValueError(
-                    "Teacher server is missing top-1 logprobs for required forward-KL positions: "
-                    f"{missing_count}/{total_required}."
-                )
-
         # Replace -inf teacher logprobs at intra-batch padding (labels == -100) with 0 so
         # reverse-KL's student_probs·(log_s - log_t) does not leak +inf into the backward pass.
         pad_mask_2d = ~required
@@ -1581,6 +1569,44 @@ class IWOPDTrainer(_BaseTrainer):
 
         if self.use_liger_loss:
             loss = self._compute_liger_loss(model, inputs, num_items_in_batch=num_items_in_batch)
+            mode = "train" if self.model.training else "eval"
+            # A non-finite training loss can pass through the logs as a plausible number. When `logging_nan_inf_filter`
+            # is enabled, which is the default, and `is_torch_xla_available()` is false, `transformers` discards the
+            # step's own loss and logs a value derived from the losses accumulated since the last log, so the curve
+            # never shows the step that failed. Report the condition here instead. Gather first, so a rank whose loss
+            # went non-finite is counted even when the other ranks are finite.
+            # Widen before the reduction: a low-precision dtype such as `float8_e5m2` has no `mean` kernel, and
+            # narrowing instead would report a finite `float64` loss above `float32`'s maximum as non-finite.
+            nonfinite = self.accelerator.gather((~torch.isfinite(loss.detach().double().mean())).float())
+            self._metrics[mode]["frac_nonfinite_loss"].append(nonfinite.mean().item())
+            if nonfinite.any():
+                # `logging_nan_inf_filter` and the optimizer step belong to the training loop only, so each mode gets
+                # its own message. `warning_once` keys its cache on the message text, so the two do not suppress each
+                # other and an evaluation warning cannot stop a later training warning from being emitted.
+                if mode == "train":
+                    logger.warning_once(
+                        "The training loss is not finite (NaN or Inf) for at least one step. The logged loss may not "
+                        "show it: when `logging_nan_inf_filter` is enabled, which is the default, and "
+                        "`is_torch_xla_available()` is false, `transformers` discards the step's own loss and logs a "
+                        "value derived from the losses accumulated since the last training log. The backward pass "
+                        "still runs on the non-finite value; whether that ultimately produces a parameter update "
+                        "depends on the resulting gradients and the configured scaler, optimizer and backend. "
+                        "`frac_nonfinite_loss` reports the fraction of ranks whose loss was non-finite, averaged over "
+                        "every loss computation since the last log, so it is a rate rather than a count of affected "
+                        "optimizer steps."
+                    )
+                else:
+                    logger.warning_once(
+                        "The evaluation loss is not finite (NaN or Inf) for at least one batch. It is neither "
+                        "backpropagated nor used for an optimizer step, so it does not itself change the weights, but "
+                        "any metric derived from it may be affected, including the reported evaluation loss and "
+                        "anything downstream of it such as best-model selection, early stopping and metric-driven "
+                        "schedulers. `frac_nonfinite_loss` reports the fraction of ranks whose loss was non-finite, "
+                        "averaged over this evaluation. It records one flag per rank per loss computation, while the "
+                        "reported loss is gathered per sample with padded positions trimmed, so the two can disagree. "
+                        "Only `evaluate()` logs it, never `predict()`."
+                    )
+
             return (loss, None) if return_outputs else loss
 
         # Student forward pass
@@ -1617,10 +1643,24 @@ class IWOPDTrainer(_BaseTrainer):
                 # Unlike the JSD server losses, IW-OPD raises on missing teacher coverage instead of skipping
                 # positions, so once the window is verified to cover every valid token, num_items_in_batch is
                 # the correct gradient-accumulation denominator here too.
-                if (labels[:, comp_len:] != -100).any():
+                # The coverage and validity checks read this rank's own tensors, so raising on one rank alone would
+                # leave the others blocked in the next collective with no error to explain it. Agree across ranks
+                # first, so a problem anywhere raises everywhere.
+                teacher_issues = torch.stack(
+                    (
+                        (labels[:, comp_len:] != -100).any(),
+                        ((trimmed_labels != -100) & ~torch.isfinite(teacher_result["actual_logprobs"])).any(),
+                    )
+                ).reshape(1, -1)
+                teacher_issues = self.accelerator.gather(teacher_issues.float())
+                if teacher_issues[:, 0].any():
                     raise ValueError(
                         "Teacher server returned fewer completion logprobs than the student completion length; "
                         "IW-OPD requires teacher logprobs for every completion token."
+                    )
+                if teacher_issues[:, 1].any():
+                    raise ValueError(
+                        "Teacher logprobs are missing for required IW-OPD positions on at least one rank."
                     )
                 loss = self._compute_iw_opd_loss(
                     student_logits=student_logits[:, :comp_len, :],
@@ -1631,6 +1671,28 @@ class IWOPDTrainer(_BaseTrainer):
                     num_items_in_batch=num_items_in_batch,
                 )
             elif self.beta > 0:
+                required = trimmed_labels != -100
+                missing_actual = (required & ~torch.isfinite(teacher_result["actual_logprobs"])).sum()
+                missing_top1 = torch.zeros_like(missing_actual)
+                if self.beta < 1:
+                    missing_top1 = (required & ~torch.isfinite(teacher_result["topk_logprobs"].squeeze(-1))).sum()
+                # These checks read this rank's own tensors, so raising on one rank alone would leave the others blocked in
+                # the next collective with no error to explain it. Agree across ranks first, so missing logprobs anywhere
+                # raise everywhere. Counts rather than flags are gathered so the message can still say how much is missing,
+                # which is what decides whether to retry the server or reconfigure it.
+                missing_teacher = torch.stack((missing_actual, missing_top1, required.sum())).reshape(1, -1)
+                missing_teacher = self.accelerator.gather(missing_teacher.float())
+                total_required = int(missing_teacher[:, 2].sum().item())
+                if missing_teacher[:, 0].any():
+                    raise ValueError(
+                        "Teacher server is missing actual-token logprobs for required reverse-KL positions on at least "
+                        f"one rank: {int(missing_teacher[:, 0].sum().item())}/{total_required} across all ranks."
+                    )
+                if missing_teacher[:, 1].any():
+                    raise ValueError(
+                        "Teacher server is missing top-1 logprobs for required forward-KL positions on at least one "
+                        f"rank: {int(missing_teacher[:, 1].sum().item())}/{total_required} across all ranks."
+                    )
                 loss = self._compute_server_sparse_top_1_divergence_loss(
                     teacher_result=teacher_result,
                     student_log_probs=student_log_probs[:, :comp_len, :],
@@ -1653,6 +1715,16 @@ class IWOPDTrainer(_BaseTrainer):
                 teacher_actual_logprobs = teacher_log_probs.gather(
                     dim=-1, index=completion_tokens.unsqueeze(-1)
                 ).squeeze(-1)
+                # This check reads this rank's own tensors, so raising on one rank alone would leave the others
+                # blocked in the next collective with no error to explain it. Agree across ranks first, so missing
+                # logprobs anywhere raise everywhere.
+                missing_teacher = self.accelerator.gather(
+                    ((labels != -100) & ~torch.isfinite(teacher_actual_logprobs)).any().reshape(1).float()
+                )
+                if missing_teacher.any():
+                    raise ValueError(
+                        "Teacher logprobs are missing for required IW-OPD positions on at least one rank."
+                    )
                 loss = self._compute_iw_opd_loss(
                     student_logits=student_logits,
                     completion_tokens=completion_tokens,
@@ -1679,6 +1751,43 @@ class IWOPDTrainer(_BaseTrainer):
                     top_k=self.loss_top_k,
                     add_tail=self.loss_add_tail,
                     num_items_in_batch=num_items_in_batch,
+                )
+
+        mode = "train" if self.model.training else "eval"
+        # A non-finite training loss can pass through the logs as a plausible number. When `logging_nan_inf_filter` is
+        # enabled, which is the default, and `is_torch_xla_available()` is false, `transformers` discards the step's
+        # own loss and logs a value derived from the losses accumulated since the last log, so the curve never shows
+        # the step that failed. Report the condition here instead. Gather first, so a rank whose loss went non-finite
+        # is counted even when the other ranks are finite.
+        # Widen before the reduction: a low-precision dtype such as `float8_e5m2` has no `mean` kernel, and
+        # narrowing instead would report a finite `float64` loss above `float32`'s maximum as non-finite.
+        nonfinite = self.accelerator.gather((~torch.isfinite(loss.detach().double().mean())).float())
+        self._metrics[mode]["frac_nonfinite_loss"].append(nonfinite.mean().item())
+        if nonfinite.any():
+            # `logging_nan_inf_filter` and the optimizer step belong to the training loop only, so each mode gets its
+            # own message. `warning_once` keys its cache on the message text, so the two do not suppress each other and
+            # an evaluation warning cannot stop a later training warning from being emitted.
+            if mode == "train":
+                logger.warning_once(
+                    "The training loss is not finite (NaN or Inf) for at least one step. The logged loss may not show "
+                    "it: when `logging_nan_inf_filter` is enabled, which is the default, and "
+                    "`is_torch_xla_available()` is false, `transformers` discards the step's own loss and logs a "
+                    "value derived from the losses accumulated since the last training log. The backward pass still "
+                    "runs on the non-finite value; whether that ultimately produces a parameter update depends on the "
+                    "resulting gradients and the configured scaler, optimizer and backend. `frac_nonfinite_loss` "
+                    "reports the fraction of ranks whose loss was non-finite, averaged over every loss computation "
+                    "since the last log, so it is a rate rather than a count of affected optimizer steps."
+                )
+            else:
+                logger.warning_once(
+                    "The evaluation loss is not finite (NaN or Inf) for at least one batch. It is neither "
+                    "backpropagated nor used for an optimizer step, so it does not itself change the weights, but any "
+                    "metric derived from it may be affected, including the reported evaluation loss and anything "
+                    "downstream of it such as best-model selection, early stopping and metric-driven schedulers. "
+                    "`frac_nonfinite_loss` reports the fraction of ranks whose loss was non-finite, averaged over "
+                    "this evaluation. It records one flag per rank per loss computation, while the reported loss is "
+                    "gathered per sample with padded positions trimmed, so the two can disagree. Only `evaluate()` "
+                    "logs it, never `predict()`."
                 )
 
         return (loss, student_outputs) if return_outputs else loss
@@ -1827,6 +1936,26 @@ class IWOPDTrainer(_BaseTrainer):
 
         return loss
 
+    def _open_eval_window(self, metric_key_prefix):
+        # `log()` drains `self._metrics` but `predict()` never calls it, so a `predict()` run leaves its batches
+        # in the buffer with nothing to drain them. `evaluate()` opens its own window below, so those leftovers
+        # cannot reach an evaluation average; what they do reach is the next `predict()` and any direct reader of
+        # `self._metrics`. Opening the window here makes each one self-contained whichever entry point started it.
+        # The prefix is recorded because `log()` cannot see it, and it is not always "eval": `evaluate()` takes it as
+        # an argument and `predict()` defaults it to "test". Both public entry points are hooked rather than
+        # `evaluation_loop`, because `use_legacy_prediction_loop` routes to `prediction_loop` instead on the older
+        # `transformers` versions this package still supports.
+        self._metrics["eval"].clear()
+        self._metric_key_prefix = metric_key_prefix
+
+    def evaluate(self, eval_dataset=None, ignore_keys=None, metric_key_prefix="eval"):
+        self._open_eval_window(metric_key_prefix)
+        return super().evaluate(eval_dataset, ignore_keys, metric_key_prefix)
+
+    def predict(self, test_dataset, ignore_keys=None, metric_key_prefix="test"):
+        self._open_eval_window(metric_key_prefix)
+        return super().predict(test_dataset, ignore_keys, metric_key_prefix)
+
     def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
         mode = "train" if self.model.training else "eval"
         metrics = {key: sum(val) / len(val) for key, val in self._metrics[mode].items()}
@@ -1861,8 +1990,12 @@ class IWOPDTrainer(_BaseTrainer):
             self._on_policy_loss_total = self._off_policy_loss_total = 0.0
             self._on_policy_step_equiv = self._off_policy_step_equiv = 0.0
 
+        # This method can be called both in training and evaluation. When called in evaluation, the keys in `logs`
+        # already carry the caller's `metric_key_prefix`, which defaults to "eval" but is "test" for `predict()`
+        # and arbitrary when passed explicitly. Match that prefix rather than assuming "eval", so these metrics
+        # land beside the ones `transformers` produced instead of in a separate `eval_` namespace.
         if mode == "eval":
-            metrics = {f"eval_{key}": val for key, val in metrics.items()}
+            metrics = {f"{self._metric_key_prefix}_{key}": val for key, val in metrics.items()}
 
         logs.update(metrics)
         super().log(logs, start_time)

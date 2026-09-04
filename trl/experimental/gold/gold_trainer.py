@@ -28,6 +28,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import transformers
 from accelerate import PartialState
+from accelerate.logging import get_logger
 from accelerate.utils import (
     DistributedType,
     broadcast_object_list,
@@ -84,6 +85,9 @@ from ..utils import (
     piece_byte_len,
 )
 from .gold_config import GOLDConfig
+
+
+logger = get_logger(__name__)
 
 
 if is_liger_kernel_available():
@@ -1060,6 +1064,9 @@ class GOLDTrainer(SFTTrainer):
 
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
+        # Set by `_open_eval_window`, because `log` cannot see the caller's prefix and has to file eval
+        # metrics under the prefix the caller actually asked for.
+        self._metric_key_prefix = "eval"
         self._total_train_tokens = 0
         self.log_completions = args.log_completions
         self.log_completion_steps = args.log_completions_steps
@@ -2454,7 +2461,14 @@ class GOLDTrainer(SFTTrainer):
             if self._teacher_processor is not None:
                 # VLM teacher: render the prompt through the teacher's own processor so image
                 # placeholders and pixel tensors match the teacher model.
-                if "_raw_images" not in inputs or "_raw_prompts" not in inputs:
+                # This reads this rank's own batch, so raising here alone would leave the other ranks in the loss
+                # path's gather with no error to explain it. Agree across ranks first, so a missing key on any rank
+                # raises on all of them. The gather sits in the condition, which is what makes every rank reach it.
+                missing_vlm_inputs = torch.tensor(
+                    float("_raw_images" not in inputs or "_raw_prompts" not in inputs),
+                    device=self.accelerator.device,
+                )
+                if self.accelerator.gather(missing_vlm_inputs).any():
                     raise ValueError(
                         "VLM ULD distillation requires `_raw_images` and `_raw_prompts` in the batch so teacher "
                         "inputs can be rendered with the teacher processor. Use the default GOLD VLM data collator "
@@ -2593,7 +2607,14 @@ class GOLDTrainer(SFTTrainer):
             student_labels = inputs["labels"]
 
             student_byte_offsets = inputs.get("byte_offsets")
-            if self.uld_loss_fn.use_extended_uld and student_byte_offsets is None:
+            # `byte_offsets` comes from the collator, so it is this rank's own batch that decides. Agree across ranks
+            # first, so a batch missing it on any rank raises on all of them rather than stranding the others in the
+            # loss path's gather. The gather sits in the condition, which is what makes every rank reach it.
+            missing_byte_offsets = torch.tensor(
+                float(self.uld_loss_fn.use_extended_uld and student_byte_offsets is None),
+                device=self.accelerator.device,
+            )
+            if self.accelerator.gather(missing_byte_offsets).any():
                 raise ValueError("Input batches must include `byte_offsets` when `use_extended_uld=True`.")
 
             loss = self.uld_loss_fn(
@@ -2627,6 +2648,43 @@ class GOLDTrainer(SFTTrainer):
                 self._unmatched_step_eq += step_eq
 
         empty_cache()
+
+        mode = "train" if self.model.training else "eval"
+        # A non-finite training loss can pass through the logs as a plausible number. When `logging_nan_inf_filter` is
+        # enabled, which is the default, and `is_torch_xla_available()` is false, `transformers` discards the step's
+        # own loss and logs a value derived from the losses accumulated since the last log, so the curve never shows
+        # the step that failed. Report the condition here instead. Gather first, so a rank whose loss went non-finite
+        # is counted even when the other ranks are finite.
+        # Widen before the reduction: a low-precision dtype such as `float8_e5m2` has no `mean` kernel, and
+        # narrowing instead would report a finite `float64` loss above `float32`'s maximum as non-finite.
+        nonfinite = self.accelerator.gather((~torch.isfinite(loss.detach().double().mean())).float())
+        self._metrics[mode]["frac_nonfinite_loss"].append(nonfinite.mean().item())
+        if nonfinite.any():
+            # `logging_nan_inf_filter` and the optimizer step belong to the training loop only, so each mode gets its
+            # own message. `warning_once` keys its cache on the message text, so the two do not suppress each other and
+            # an evaluation warning cannot stop a later training warning from being emitted.
+            if mode == "train":
+                logger.warning_once(
+                    "The training loss is not finite (NaN or Inf) for at least one step. The logged loss may not show "
+                    "it: when `logging_nan_inf_filter` is enabled, which is the default, and "
+                    "`is_torch_xla_available()` is false, `transformers` discards the step's own loss and logs a "
+                    "value derived from the losses accumulated since the last training log. The backward pass still "
+                    "runs on the non-finite value; whether that ultimately produces a parameter update depends on the "
+                    "resulting gradients and the configured scaler, optimizer and backend. `frac_nonfinite_loss` "
+                    "reports the fraction of ranks whose loss was non-finite, averaged over every loss computation "
+                    "since the last log, so it is a rate rather than a count of affected optimizer steps."
+                )
+            else:
+                logger.warning_once(
+                    "The evaluation loss is not finite (NaN or Inf) for at least one batch. It is neither "
+                    "backpropagated nor used for an optimizer step, so it does not itself change the weights, but any "
+                    "metric derived from it may be affected, including the reported evaluation loss and anything "
+                    "downstream of it such as best-model selection, early stopping and metric-driven schedulers. "
+                    "`frac_nonfinite_loss` reports the fraction of ranks whose loss was non-finite, averaged over "
+                    "this evaluation. It records one flag per rank per loss computation, while the reported loss is "
+                    "gathered per sample with padded positions trimmed, so the two can disagree. Only `evaluate()` "
+                    "logs it, never `predict()`."
+                )
 
         return (loss, outputs_student) if return_outputs else loss
 
@@ -2808,6 +2866,26 @@ class GOLDTrainer(SFTTrainer):
             self._off_policy_step_equiv += step_equiv
         return loss
 
+    def _open_eval_window(self, metric_key_prefix):
+        # `log()` drains `self._metrics` but `predict()` never calls it, so a `predict()` run leaves its batches
+        # in the buffer with nothing to drain them. `evaluate()` opens its own window below, so those leftovers
+        # cannot reach an evaluation average; what they do reach is the next `predict()` and any direct reader of
+        # `self._metrics`. Opening the window here makes each one self-contained whichever entry point started it.
+        # The prefix is recorded because `log()` cannot see it, and it is not always "eval": `evaluate()` takes it as
+        # an argument and `predict()` defaults it to "test". Both public entry points are hooked rather than
+        # `evaluation_loop`, because `use_legacy_prediction_loop` routes to `prediction_loop` instead on the older
+        # `transformers` versions this package still supports.
+        self._metrics["eval"].clear()
+        self._metric_key_prefix = metric_key_prefix
+
+    def evaluate(self, eval_dataset=None, ignore_keys=None, metric_key_prefix="eval"):
+        self._open_eval_window(metric_key_prefix)
+        return super().evaluate(eval_dataset, ignore_keys, metric_key_prefix)
+
+    def predict(self, test_dataset, ignore_keys=None, metric_key_prefix="test"):
+        self._open_eval_window(metric_key_prefix)
+        return super().predict(test_dataset, ignore_keys, metric_key_prefix)
+
     def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
         mode = "train" if self.model.training else "eval"
         metrics = {key: sum(val) / len(val) for key, val in self._metrics[mode].items()}  # average the metrics
@@ -2863,9 +2941,11 @@ class GOLDTrainer(SFTTrainer):
             self._matched_step_eq = self._unmatched_step_eq = 0.0
 
         # This method can be called both in training and evaluation. When called in evaluation, the keys in `logs`
-        # start with "eval_". We need to add the prefix "eval_" to the keys in `metrics` to match the format.
+        # already carry the caller's `metric_key_prefix`, which defaults to "eval" but is "test" for `predict()`
+        # and arbitrary when passed explicitly. Match that prefix rather than assuming "eval", so these metrics
+        # land beside the ones `transformers` produced instead of in a separate `eval_` namespace.
         if mode == "eval":
-            metrics = {f"eval_{key}": val for key, val in metrics.items()}
+            metrics = {f"{self._metric_key_prefix}_{key}": val for key, val in metrics.items()}
 
         logs.update(metrics)
         super().log(logs, start_time)
