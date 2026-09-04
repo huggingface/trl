@@ -147,6 +147,7 @@ class FusedLMHeadKTO(torch.nn.Module):
         ref_bias: bool = False,
         ignore_index: int = -100,
         beta: float = 0.1,
+        chunk_size: int = 2,
     ):
         super().__init__()
         self.lin = torch.nn.Linear(in_features=H, out_features=V, bias=bias, dtype=dtype)
@@ -156,6 +157,7 @@ class FusedLMHeadKTO(torch.nn.Module):
             beta=beta,
             use_ref_model=True,
             average_log_prob=True,
+            chunk_size=chunk_size,
         )
 
     def forward(self, x, ref_x, y, preference_labels, kl=None):
