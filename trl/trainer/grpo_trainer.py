@@ -3260,7 +3260,8 @@ class GRPOTrainer(_BaseTrainer):
             if mode == "train":  # in eval, the batch is neither split across steps nor accumulated
                 normalizer = normalizer * self.current_gradient_accumulation_steps / self.args.steps_per_generation
             loss = (per_token_loss * mask).sum() / normalizer
-            policy_loss = loss.detach()
+            accumulation_factor = self.current_gradient_accumulation_steps if mode == "train" else 1.0
+            policy_loss = loss.detach() * accumulation_factor
         elif self.loss_type == "luspo":
             # `per_token_loss` is (B, 1) only in the recommended sequence-level setup; importance_sampling_level=
             # "token" (the config default), the KL term, token-level vLLM IS ratios, and the entropy mask all

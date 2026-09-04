@@ -427,6 +427,71 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @pytest.mark.parametrize("loss_type", ["cispo", "dapo", "vespo"])
+    def test_policy_loss_uses_optimizer_window_scale(self, loss_type):
+        dataset = Dataset.from_dict({"prompt": ["p"] * 12})
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,
+            num_generations=3,
+            max_completion_length=2,
+            steps_per_generation=4,
+            gradient_accumulation_steps=2,
+            loss_type=loss_type,
+            entropy_coef=0.2,
+            use_cpu=True,
+            bf16=False,
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs=lambda completions, **kwargs: [0.0] * len(completions),
+            args=training_args,
+            train_dataset=dataset,
+        )
+        trainer.current_gradient_accumulation_steps = training_args.gradient_accumulation_steps
+        trainer.model.train()
+        inputs = {
+            "prompt_ids": torch.tensor([[1]] * 3),
+            "prompt_mask": torch.ones(3, 1, dtype=torch.long),
+            "completion_ids": torch.tensor([[2, 3]] * 3),
+            "completion_mask": torch.tensor([[1, 0], [1, 1], [1, 1]]),
+            "advantages": torch.tensor([-1.0, 0.0, 1.0]),
+            "num_items_in_batch": torch.tensor(10.0),
+        }
+
+        input_ids = torch.cat([inputs["prompt_ids"], inputs["completion_ids"]], dim=1)
+        attention_mask = torch.cat([inputs["prompt_mask"], inputs["completion_mask"]], dim=1)
+        per_token_logps, entropies, _ = trainer._get_per_token_logps_and_entropies(
+            trainer.model,
+            input_ids,
+            attention_mask,
+            logits_to_keep=inputs["completion_ids"].size(1),
+            compute_entropy=True,
+        )
+        if loss_type == "dapo":
+            per_token_loss = -inputs["advantages"].unsqueeze(1).expand_as(per_token_logps)
+        else:
+            per_token_loss = -inputs["advantages"].unsqueeze(1) * per_token_logps
+            if loss_type == "cispo":
+                per_token_loss = per_token_loss * min(1.0, trainer.epsilon_high)
+        expected_policy_loss = (
+            (per_token_loss * inputs["completion_mask"]).sum()
+            * training_args.steps_per_generation
+            / inputs["num_items_in_batch"]
+        )
+        expected_entropy = (entropies * inputs["completion_mask"]).sum() / inputs["completion_mask"].sum()
+        expected_loss = (
+            expected_policy_loss - training_args.entropy_coef * expected_entropy
+        ) / training_args.gradient_accumulation_steps
+
+        loss = trainer._compute_loss(trainer.model, inputs)
+
+        policy_loss = trainer._metrics["train"]["policy_loss"][-1]
+        assert expected_policy_loss.abs() > 1e-3
+        torch.testing.assert_close(loss, expected_loss)
+        assert policy_loss == pytest.approx(expected_policy_loss.item())
+
     @require_liger_kernel
     @pytest.mark.parametrize(
         "loss_type, beta",
