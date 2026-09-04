@@ -257,28 +257,41 @@ class VLLMClient:
     def check_server(self, total_timeout: float = 0.0, retry_interval: float = 2.0):
         """
         Check server availability with retries on failure, within a total timeout duration. If the server is not up
-        after the total timeout duration, raise a `ConnectionError`.
+        after the total timeout duration, raise a `ConnectionError`. A server that is reachable but not ready, which
+        vLLM reports as HTTP 503 while it loads, counts as not up.
 
         Args:
-            retry_interval (`float`, *optional*, defaults to `2.0`):
-                Interval in seconds between retries.
             total_timeout (`float`, *optional*, defaults to `0.0`):
-                Total timeout duration in seconds.
+                Total timeout duration in seconds, measured from the first attempt. The default of `0.0` makes a single
+                attempt and then gives up, so that attempt is still bounded by `retry_interval` rather than by the
+                deadline.
+            retry_interval (`float`, *optional*, defaults to `2.0`):
+                Interval in seconds between retries, and the upper bound on how long any single attempt may take. Must
+                be positive. `requests` applies it to the connect and to each read separately, so a server that keeps
+                sending bytes can hold one attempt past it.
         """
+        if retry_interval <= 0.0:
+            raise ValueError(f"`retry_interval` must be positive, got {retry_interval}: it bounds every attempt.")
         url = f"{self.base_url}/health"
-        start_time = time.time()  # Record the start time
+        start_time = time.monotonic()  # Deadlines use the monotonic clock so a system clock change cannot move them
+        not_ready = (
+            f"The vLLM server at {self.base_url} was not ready within {total_timeout} seconds. Make sure the server "
+            "is running by running `vllm serve`, and that it has finished loading."
+        )
 
         while True:
+            # Bound each probe by the retry interval so a server that accepts the connection and then stalls cannot
+            # block forever, and by whatever is left of the deadline so a single slow probe cannot overshoot it. A
+            # non-positive remainder means the deadline has already passed, and the check below ends the loop right
+            # after this attempt; `total_timeout` defaults to 0.0, which is exactly "try once, then give up".
+            remaining = total_timeout - (time.monotonic() - start_time)
+            cause = None
             try:
-                response = requests.get(url)
+                response = requests.get(
+                    url, timeout=min(retry_interval, remaining) if remaining > 0 else retry_interval
+                )
             except requests.exceptions.RequestException as exc:
-                # Check if the total timeout duration has passed
-                elapsed_time = time.time() - start_time
-                if elapsed_time >= total_timeout:
-                    raise ConnectionError(
-                        f"The vLLM server can't be reached at {self.base_url} after {total_timeout} seconds. Make "
-                        "sure the server is running by running `vllm serve`."
-                    ) from exc
+                cause = exc
             else:
                 if response.status_code == 200:
                     if "X-Forwarded-For" in response.headers:
@@ -286,9 +299,21 @@ class VLLMClient:
                     logger.info("Server is up!")
                     return
 
-            # Retry logic: wait before trying again
-            logger.info(f"Server is not up yet. Retrying in {retry_interval} seconds...")
-            time.sleep(retry_interval)
+            # The attempt failed, either by raising or by answering with a non-200 status. A server that is
+            # reachable but still loading answers 503, so checking the deadline here rather than in the except
+            # branch is what bounds that case.
+            elapsed_time = time.monotonic() - start_time
+            if elapsed_time >= total_timeout:
+                raise ConnectionError(not_ready) from cause
+
+            # Retry logic: wait before trying again, never past the deadline. The sleep can still land on the
+            # deadline, and a probe started then would run for a full `retry_interval` and could accept a server that
+            # came up after the budget, so check once more before probing.
+            delay = min(retry_interval, total_timeout - elapsed_time)
+            logger.info(f"Server is not up yet. Retrying in {delay} seconds...")
+            time.sleep(delay)
+            if time.monotonic() - start_time >= total_timeout:
+                raise ConnectionError(not_ready) from cause
 
     def get_world_size(self) -> int:
         """
