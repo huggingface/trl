@@ -18,7 +18,7 @@ from time import strftime
 
 import pytest
 import transformers
-from datasets import Dataset, DatasetDict
+from datasets import Dataset, DatasetDict, IterableDataset, IterableDatasetDict
 from packaging.version import Version
 from transformers import AutoProcessor, AutoTokenizer, is_vision_available
 
@@ -1082,6 +1082,36 @@ class TestUnpairPreferenceDataset(TrlTestCase):
             dict(zip(expected.keys(), vals, strict=False)) for vals in zip(*expected.values(), strict=False)
         ]
 
+    def test_unpair_preference_dataset_iterable_dict(self):
+        # Test that an IterableDatasetDict is correctly unpaired
+        paired_dataset_dict = IterableDatasetDict({"abc": self.paired_dataset.to_iterable_dataset()})
+        unpaired_dataset_dict = unpair_preference_dataset(paired_dataset_dict)
+        assert list(unpaired_dataset_dict["abc"]) == [
+            dict(zip(self.unpaired_dataset.column_names, vals, strict=False))
+            for vals in zip(*self.unpaired_dataset.to_dict().values(), strict=False)
+        ]
+
+    def test_unpair_preference_dataset_iterable_dict_without_column_names(self):
+        # Test that an IterableDatasetDict without schema metadata is correctly unpaired
+        def generate_examples():
+            for prompt, chosen, rejected in zip(
+                self.paired_dataset["prompt"],
+                self.paired_dataset["chosen"],
+                self.paired_dataset["rejected"],
+                strict=True,
+            ):
+                yield {"prompt": prompt, "chosen": chosen, "rejected": rejected}
+
+        paired_dataset_dict = IterableDatasetDict({"abc": IterableDataset.from_generator(generate_examples)})
+        assert paired_dataset_dict["abc"].column_names is None
+
+        unpaired_dataset_dict = unpair_preference_dataset(paired_dataset_dict)
+
+        assert list(unpaired_dataset_dict["abc"]) == [
+            dict(zip(self.unpaired_dataset.column_names, vals, strict=False))
+            for vals in zip(*self.unpaired_dataset.to_dict().values(), strict=False)
+        ]
+
     def test_unpair_preference_dataset_dict(self):
         # Test that a paired dataset dict is correctly converted to unpaired
         paired_dataset_dict = DatasetDict({"abc": self.paired_dataset})
@@ -1104,6 +1134,35 @@ class TestUnpairPreferenceDataset(TrlTestCase):
         assert unpaired_dataset_dict["abc"].to_dict() == self.unpaired_dataset.to_dict(), (
             "The paired dataset should be converted to unpaired."
         )
+
+    def test_maybe_unpair_preference_dataset_iterable_dict(self):
+        # Test that a paired iterable dataset dict is correctly converted to unpaired
+        paired_dataset_dict = IterableDatasetDict({"abc": self.paired_dataset.to_iterable_dataset()})
+        unpaired_dataset_dict = maybe_unpair_preference_dataset(paired_dataset_dict)
+        assert list(unpaired_dataset_dict["abc"]) == [
+            dict(zip(self.unpaired_dataset.column_names, vals, strict=False))
+            for vals in zip(*self.unpaired_dataset.to_dict().values(), strict=False)
+        ]
+
+    def test_maybe_unpair_preference_dataset_iterable_dict_without_column_names(self):
+        # Test that a schema-less paired iterable dataset dict is correctly converted to unpaired
+        def generate_examples():
+            for prompt, chosen, rejected in zip(
+                self.paired_dataset["prompt"],
+                self.paired_dataset["chosen"],
+                self.paired_dataset["rejected"],
+                strict=False,
+            ):
+                yield {"prompt": prompt, "chosen": chosen, "rejected": rejected}
+
+        paired_dataset_dict = IterableDatasetDict({"abc": IterableDataset.from_generator(generate_examples)})
+        assert paired_dataset_dict["abc"].column_names is None
+
+        unpaired_dataset_dict = maybe_unpair_preference_dataset(paired_dataset_dict)
+        assert list(unpaired_dataset_dict["abc"]) == [
+            dict(zip(self.unpaired_dataset.column_names, vals, strict=False))
+            for vals in zip(*self.unpaired_dataset.to_dict().values(), strict=False)
+        ]
 
     def test_maybe_unpair_preference_dataset_already_paired(self):
         # Test that a paired dataset remains unchanged with maybe_unpair_preference_dataset
