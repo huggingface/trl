@@ -937,7 +937,6 @@ class TestKTOTrainer(TrlTestCase):
             train_dataset=dataset,
             peft_config=LoraConfig(target_modules=["q_proj", "v_proj"]),
         )
-        assert trainer.liger_loss.use_ref_model
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
         trainer.train()
         assert trainer.state.log_history[-1]["train_loss"] is not None
@@ -951,7 +950,7 @@ class TestKTOTrainer(TrlTestCase):
     @require_liger_kernel
     @require_peft
     def test_liger_kernel_with_peft_lm_head_raises(self):
-        # The Liger fused KTO loss reads `lm_head.weight` directly, so a LoRA adapter on `lm_head` is silently
+        # The chunked projection reads `lm_head.weight` directly, so a LoRA adapter on `lm_head` is silently
         # ignored and never trained. The trainer must fail fast instead of training a silently-frozen head.
         dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
         training_args = KTOConfig(output_dir=self.tmp_dir, use_liger_kernel=True, report_to="none")
@@ -975,7 +974,7 @@ class TestKTOTrainer(TrlTestCase):
     @require_liger_kernel
     @require_peft
     def test_liger_kernel_with_peft_prompt_learning_raises(self):
-        # Prompt-learning methods inject virtual tokens via PeftModel.forward(), which the Liger KTO loss bypasses.
+        # Prompt-learning methods inject virtual tokens via PeftModel.forward(), which the chunked path bypasses.
         # The trainer must fail fast to avoid computing the loss on the wrong (truncated) sequence.
         dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
         training_args = KTOConfig(output_dir=self.tmp_dir, use_liger_kernel=True, report_to="none")
@@ -1006,28 +1005,68 @@ class TestKTOTrainer(TrlTestCase):
             )
 
     @require_liger_kernel
-    @pytest.mark.parametrize("weight", ["desirable_weight", "undesirable_weight"])
-    def test_init_fails_with_weighted_liger_loss(self, weight):
+    @pytest.mark.parametrize(
+        "loss_type, desirable_weight, undesirable_weight",
+        [("kto", 0.7, 1.3), ("apo_zero_unpaired", 1.0, 1.0)],
+    )
+    def test_liger_loss_matches_non_liger_loss(self, loss_type, desirable_weight, undesirable_weight):
         dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
         training_args = KTOConfig(
             output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
             use_liger_kernel=True,
+            loss_type=loss_type,
+            desirable_weight=desirable_weight,
+            undesirable_weight=undesirable_weight,
             report_to="none",
-            **{weight: 2.0},
         )
+        trainer = KTOTrainer(model=self.model_id, args=training_args, train_dataset=dataset)
+        trainer.model.train()
+        inputs = trainer._prepare_inputs(next(iter(trainer.get_train_dataloader())))
 
-        with pytest.raises(ValueError, match=weight):
-            KTOTrainer(
-                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-                args=training_args,
-                train_dataset=dataset,
-            )
+        chunked_loss = trainer.compute_loss(trainer.model, inputs)
+        chunked_loss.backward()
+        chunked_grads = {
+            name: param.grad.detach().clone()
+            for name, param in trainer.model.named_parameters()
+            if param.grad is not None
+        }
+
+        trainer.model.zero_grad()
+        trainer._metrics["train"].clear()
+        trainer.use_liger_kernel = False
+        loss = trainer.compute_loss(trainer.model, inputs)
+        loss.backward()
+        grads = {name: param.grad for name, param in trainer.model.named_parameters() if param.grad is not None}
+
+        assert chunked_loss.abs() > 0
+        torch.testing.assert_close(chunked_loss, loss, rtol=1e-4, atol=1e-5)
+        assert chunked_grads.keys() == grads.keys()
+        for name, grad in grads.items():
+            torch.testing.assert_close(chunked_grads[name], grad, rtol=1e-4, atol=1e-5)
+
+    @require_liger_kernel
+    def test_train_with_liger_and_precomputed_ref_logps(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
+        training_args = KTOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            max_steps=1,
+            use_liger_kernel=True,
+            precompute_ref_log_probs=True,
+            report_to="none",
+        )
+        trainer = KTOTrainer(model=self.model_id, args=training_args, train_dataset=dataset)
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
     @require_liger_kernel
     def test_init_fails_with_moe_aux_loss_and_liger(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
 
-        # The MoE auxiliary loss is on by default; it is incompatible with the Liger fused loss.
+        # The MoE auxiliary loss is on by default; the chunked path bypasses the wrapper that computes it.
         training_args = KTOConfig(
             output_dir=self.tmp_dir,
             use_liger_kernel=True,

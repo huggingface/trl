@@ -153,10 +153,9 @@ While training and evaluating, we record the following metrics:
 Some argument combinations are intentionally restricted in the current [`KTOTrainer`] implementation:
 
 * With `use_liger_kernel=True`:
-  * only `loss_type="kto"` is supported (not `"apo_zero_unpaired"`),
   * `compute_metrics` is not supported,
-  * `precompute_ref_log_probs=True` is not supported,
-  * PEFT models are not supported.
+  * PEFT adapters targeting `lm_head` and prompt-learning PEFT methods are not supported,
+  * the MoE load-balancing auxiliary loss is not supported.
 * `sync_ref_model=True` is not supported when training with PEFT models that do not keep a standalone `ref_model`.
 * `sync_ref_model=True` cannot be combined with `precompute_ref_log_probs=True`.
 * `precompute_ref_log_probs=True` is not supported with `IterableDataset` (train or eval) or with vision datasets.
