@@ -505,6 +505,7 @@ class TestGRPOTrainer(TrlTestCase):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
+            bf16=False,
             per_device_train_batch_size=2,
             num_generations=2,
             use_liger_kernel=True,
