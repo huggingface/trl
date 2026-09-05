@@ -2681,6 +2681,33 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert torch.equal(param, new_param), f"Parameter {n} has changed."
 
+    def test_samplers_use_data_seed(self):
+        """
+        Like `transformers.Trainer`, the data samplers must follow `data_seed` when it is set (so that changing `seed`
+        does not change the order in which prompts are visited) and fall back to `seed` otherwise.
+        """
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        training_args = GRPOConfig(output_dir=self.tmp_dir, seed=7, data_seed=123, report_to="none")
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+        assert trainer._get_train_sampler().seed == 123
+        assert trainer._get_eval_sampler(dataset).seed == 123
+
+        training_args = GRPOConfig(output_dir=self.tmp_dir, seed=7, report_to="none")
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+        assert trainer._get_train_sampler().seed == 7
+        assert trainer._get_eval_sampler(dataset).seed == 7
+
     def test_warning_raised_all_rewards_none(self, caplog):
         """Test that a proper warning is raised when all rewards are None."""
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
