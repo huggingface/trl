@@ -1286,6 +1286,17 @@ class KTOTrainer(_BaseTrainer):
 
     def compute_ref_log_probs(self, model, inputs):
         """Computes reference log probabilities for a single padded batch."""
+        if self.use_liger_kernel:
+            # Precomputation runs outside `compute_loss`, so a distributed wrapper has not yet armed the hooks that
+            # gather the backbone parameters read by the chunked forward.
+            unwrapped_model = self.accelerator.unwrap_model(model)
+            if model is not unwrapped_model:
+                return self._forward_redirection(
+                    model, unwrapped_model, self._compute_ref_log_probs, unwrapped_model, inputs
+                )
+        return self._compute_ref_log_probs(model, inputs)
+
+    def _compute_ref_log_probs(self, model, inputs):
         adapter_context = contextlib.nullcontext()
         if self.ref_model is None and is_peft_model(self.model):
             unwrapped_model = self.accelerator.unwrap_model(self.model)
