@@ -727,15 +727,15 @@ class SDPOTrainer(_BaseTrainer):
 
         if self._use_peft_ema_teacher_adapter():
             # Must run after super().__init__ so self.callback_handler exists.
-            self.add_callback(
-                PEFTAdapterEMACallback(
-                    model=self.model,
-                    teacher_adapter_name="teacher",
-                    update_rate=self.args.teacher_update_rate,
-                    sync_steps=self.args.teacher_sync_steps,
-                    accelerator=self.accelerator,
-                )
+            ema_callback = PEFTAdapterEMACallback(
+                model=self.model,
+                teacher_adapter_name="teacher",
+                update_rate=self.args.teacher_update_rate,
+                sync_steps=self.args.teacher_sync_steps,
+                accelerator=self.accelerator,
             )
+            ema_callback._initialize_teacher_adapter()
+            self.add_callback(ema_callback)
             self.teacher_model = self.model
             return
 
