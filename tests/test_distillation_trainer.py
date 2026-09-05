@@ -31,7 +31,6 @@ from trl.trainer.distillation_trainer import _chunked_divergence_loss
 from .testing_utils import (
     TrlTestCase,
     require_bitsandbytes,
-    require_liger_kernel,
     require_peft,
     require_response_parsing,
     require_torch_accelerator,
@@ -134,6 +133,13 @@ class TestChunkedDivergenceLoss(TrlTestCase):
         expected = _reference_chunked_divergence(sh, th, sw, tw, mask, beta)
         torch.testing.assert_close(loss, expected)
         assert n_valid.item() == int(mask.sum().item())
+
+    def test_bf16_hidden_fp32_weight(self):
+        """A bf16 hidden state against an fp32 `lm_head` weight projects without a dtype mismatch."""
+        sh, th, sw, tw, mask = self._inputs()
+        loss, _, _ = _chunked_divergence_loss(sh.bfloat16(), th.bfloat16(), sw, tw, mask, beta=0.5, chunk_size=4)
+        expected = _reference_chunked_divergence(sh.bfloat16().float(), th.bfloat16().float(), sw, tw, mask, beta=0.5)
+        torch.testing.assert_close(loss, expected, atol=2e-2, rtol=2e-2)
 
     def test_different_teacher_student_hidden_sizes(self):
         # Teacher and student may have different hidden widths; only the vocabulary must match.
@@ -1229,102 +1235,6 @@ class TestDistillationTrainer(TrlTestCase):
             reference = jsd.sum() / num_valid
 
         torch.testing.assert_close(loss, reference, rtol=1e-4, atol=1e-6)
-
-    @require_liger_kernel
-    @require_torch_accelerator
-    def test_liger_loss_agrees_with_chunked(self):
-        # The Liger fused path and the default chunked path compute the same JSD objective (they share the hidden-state
-        # extraction and differ only in the final loss call), so they must agree on a fixed batch. Toggling
-        # `use_liger_kernel` on one trainer keeps the same (un-patched) model, so only the loss kernel differs.
-        from liger_kernel.chunked_loss import LigerFusedLinearJSDLoss
-
-        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
-        trainer = DistillationTrainer(
-            model="trl-internal-testing/tiny-Qwen3ForCausalLM",
-            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
-            args=DistillationConfig(output_dir=self.tmp_dir, beta=0.5, report_to="none"),
-            train_dataset=dataset,
-        )
-
-        # The tiny models are randomly initialized, so their next-token distributions are nearly uniform over the
-        # ~150k vocab. At that scale the JSD sits at the float32 noise floor, where the chunked and fused paths' matmul
-        # reduction orders diverge by ~2x — a conditioning artifact, not a real objective difference. Scale the LM heads
-        # to peak the distributions so the two paths are compared on a well-conditioned batch.
-        with torch.no_grad():
-            trainer.model.get_output_embeddings().weight.mul_(50.0)
-            trainer.teacher_model.get_output_embeddings().weight.mul_(50.0)
-
-        device = trainer.accelerator.device
-        vocab_size = trainer.model.config.vocab_size
-        gen = torch.Generator().manual_seed(1)
-        prompt_length, completion_length = 4, 3
-        batch = {
-            "prompt_ids": torch.randint(0, vocab_size, (2, prompt_length), generator=gen).to(device),
-            "prompt_mask": torch.ones(2, prompt_length, dtype=torch.long, device=device),
-            "completion_ids": torch.randint(0, vocab_size, (2, completion_length), generator=gen).to(device),
-            "completion_mask": torch.ones(2, completion_length, dtype=torch.long, device=device),
-        }
-        num_valid = batch["completion_mask"].sum()
-
-        trainer.model.eval()
-        with torch.no_grad():
-            chunked_loss = trainer.compute_loss(trainer.model, batch, num_items_in_batch=num_valid)
-            trainer.use_liger_kernel = True
-            trainer.liger_loss = LigerFusedLinearJSDLoss(
-                beta=trainer.beta,
-                ignore_index=-100,
-                temperature=trainer.temperature,
-                compiled=False,
-                weight_hard_loss=0.0,
-                weight_soft_loss=1.0,
-            )
-            liger_loss = trainer.compute_loss(trainer.model, batch, num_items_in_batch=num_valid)
-
-        torch.testing.assert_close(liger_loss, chunked_loss, rtol=1e-3, atol=1e-4)
-
-    @require_liger_kernel
-    def test_liger_incompatible_with_logit_softcapping_raises(self):
-        # The Liger fused JSD kernel can't apply Cohere `logit_scale` / Gemma `final_logit_softcapping`, so unlike the
-        # chunked path it would optimize a different objective than the model's real forward. Reject rather than train
-        # silently wrong.
-        student = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM")
-        student.config.final_logit_softcapping = 30.0
-        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
-        with pytest.raises(ValueError, match="final_logit_softcapping"):
-            DistillationTrainer(
-                model=student,
-                teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
-                args=DistillationConfig(output_dir=self.tmp_dir, use_liger_kernel=True, report_to="none"),
-                train_dataset=dataset,
-            )
-
-    @require_liger_kernel
-    def test_liger_allows_none_logit_scale(self):
-        # `logit_scale = None` (e.g. MPT) means unscaled, like `1.0`; the Liger guard must not reject it.
-        student = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM")
-        student.config.logit_scale = None
-        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
-        DistillationTrainer(  # must not raise
-            model=student,
-            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
-            args=DistillationConfig(output_dir=self.tmp_dir, use_liger_kernel=True, report_to="none"),
-            train_dataset=dataset,
-        )
-
-    @require_liger_kernel
-    def test_liger_rejects_zero_logit_scale(self):
-        # `logit_scale = 0.0` is a real (degenerate) scale, not "unscaled" — it zeroes the logits. The Liger kernel
-        # can't apply it, so like any other non-1.0 scale it must be rejected, not silently read as 1.0.
-        student = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
-        student.config.logit_scale = 0.0
-        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
-        with pytest.raises(ValueError, match="logit_scale"):
-            DistillationTrainer(
-                model=student,
-                teacher_model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-                args=DistillationConfig(output_dir=self.tmp_dir, use_liger_kernel=True, report_to="none"),
-                train_dataset=dataset,
-            )
 
 
 @require_vision

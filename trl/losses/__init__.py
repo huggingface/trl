@@ -12,19 +12,26 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .modeling_value_head import (
-    AutoModelForCausalLMWithValueHead,
-    AutoModelForSeq2SeqLMWithValueHead,
-    PreTrainedModelWrapper,
-)
-from .ppo_config import PPOConfig
-from .ppo_trainer import PPOTrainer
+import sys
+from typing import TYPE_CHECKING
+
+from .._lazy_module import _LazyModule
 
 
-__all__ = [
-    "AutoModelForCausalLMWithValueHead",
-    "AutoModelForSeq2SeqLMWithValueHead",
-    "PreTrainedModelWrapper",
-    "PPOConfig",
-    "PPOTrainer",
-]
+_import_structure = {
+    "dpo_loss": ["FusedLinearDPOLoss"],
+    "grpo_loss": ["FusedLinearGRPOLoss"],
+    "jsd_loss": ["FusedLinearJSDLoss"],
+    "kto_loss": ["FusedLinearKTOLoss"],
+}
+
+
+if TYPE_CHECKING:
+    from .dpo_loss import FusedLinearDPOLoss
+    from .grpo_loss import FusedLinearGRPOLoss
+    from .jsd_loss import FusedLinearJSDLoss
+    from .kto_loss import FusedLinearKTOLoss
+
+
+else:
+    sys.modules[__name__] = _LazyModule(__name__, __file__, _import_structure, module_spec=__spec__)

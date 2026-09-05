@@ -208,6 +208,9 @@ Padding-free batching is an alternative approach for reducing memory usage. In t
 <hfoptions id="padding-free">
 <hfoption id="DPO">
 
+> [!WARNING]
+> Padding-free is temporarily unavailable in [`DPOTrainer`]: since the DPO refactor, setting `padding_free=True` warns and falls back to standard padding. It is planned to return in a future update.
+
 ```python
 from trl import DPOConfig
 
@@ -291,15 +294,6 @@ training_args = GRPOConfig(..., ds3_gather_for_generation=False)
 from trl.experimental.online_dpo import OnlineDPOConfig
 
 training_args = OnlineDPOConfig(..., ds3_gather_for_generation=False)
-```
-
-</hfoption>
-<hfoption id="PPO">
-
-```python
-from trl.experimental.ppo import PPOConfig
-
-training_args = PPOConfig(..., ds3_gather_for_generation=False)
 ```
 
 </hfoption>

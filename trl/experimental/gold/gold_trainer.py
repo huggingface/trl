@@ -49,7 +49,6 @@ from transformers.tokenization_utils_base import PreTrainedTokenizerBase
 from transformers.trainer_utils import EvalPrediction, seed_worker
 from transformers.utils import (
     is_datasets_available,
-    is_liger_kernel_available,
     is_peft_available,
     is_rich_available,
 )
@@ -63,6 +62,7 @@ from ...data_utils import (
 from ...extras.profiling import profiling_decorator
 from ...generation.vllm_generation import VLLMGeneration
 from ...import_utils import is_vllm_available
+from ...losses import FusedLinearJSDLoss
 from ...models import prepare_deepspeed
 from ...models.utils import _ForwardRedirection, unwrap_model_for_generation
 from ...trainer.sft_trainer import SFTTrainer
@@ -84,10 +84,6 @@ from ..utils import (
     piece_byte_len,
 )
 from .gold_config import GOLDConfig
-
-
-if is_liger_kernel_available():
-    from liger_kernel.chunked_loss import LigerFusedLinearJSDLoss
 
 
 if is_peft_available():
@@ -923,7 +919,7 @@ class GOLDTrainer(SFTTrainer):
                     "cross-tokenizer case. Either set `use_uld_loss=False` (if your student and teacher are from the "
                     "same family and the standard JSD loss applies), or set `use_liger_kernel=False`."
                 )
-            self.liger_loss = LigerFusedLinearJSDLoss(
+            self.liger_loss = FusedLinearJSDLoss(
                 beta=args.beta,
                 ignore_index=-100,
                 temperature=args.temperature,
