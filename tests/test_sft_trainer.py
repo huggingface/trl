@@ -343,7 +343,9 @@ class TestDataCollatorForVisionLanguageModeling(TrlTestCase):
         assert result["pixel_values"].shape[0] == sum(sample["pixel_values"].shape[0] for sample in samples)
         for key in set(batched) - {"input_ids", "labels", "attention_mask", "token_type_ids", "mm_token_type_ids"}:
             if isinstance(batched[key], torch.Tensor):
-                torch.testing.assert_close(result[key], batched[key])
+                # transformers 4.56 pads Idefics2's `pixel_attention_mask` as float64 when image counts differ, while
+                # each single example yields int64; the values are what matter here.
+                torch.testing.assert_close(result[key], batched[key], check_dtype=False)
             else:
                 assert result[key] == batched[key]
         if completion_only_loss:
