@@ -4327,10 +4327,10 @@ class TestGRPOTrainerVLM(TrlTestCase):
             peft_config=peft_config,
         )
 
-        from liger_kernel.chunked_loss import LigerFusedLinearGRPOLoss
+        from trl.losses import FusedLinearGRPOLoss
 
-        assert isinstance(trainer.model, PeftModel)
-        assert isinstance(trainer.liger_loss, LigerFusedLinearGRPOLoss)
+        assert isinstance(trainer.model, peft.PeftModel)
+        assert isinstance(trainer.liger_loss, FusedLinearGRPOLoss)
 
         previous_trainable_params = {
             name: param.clone() for name, param in trainer.model.named_parameters() if param.requires_grad
