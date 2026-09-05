@@ -1063,6 +1063,31 @@ class TestKTOTrainer(TrlTestCase):
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
     @require_liger_kernel
+    def test_compute_ref_log_probs_redirects_wrapped_liger_model(self, monkeypatch):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
+        training_args = KTOConfig(output_dir=self.tmp_dir, use_liger_kernel=True, report_to="none")
+        trainer = KTOTrainer(model=self.model_id, args=training_args, train_dataset=dataset)
+        inputs = trainer._prepare_inputs(next(iter(trainer.get_train_dataloader())))
+        wrapped_model = object()
+        redirected = False
+
+        monkeypatch.setattr(trainer.accelerator, "unwrap_model", lambda model: trainer.model)
+
+        def forward_redirection(wrapper, unwrapped, method, *args):
+            nonlocal redirected
+            redirected = True
+            assert wrapper is wrapped_model
+            assert unwrapped is trainer.model
+            return method(*args)
+
+        monkeypatch.setattr(trainer, "_forward_redirection", forward_redirection)
+        trainer.compute_ref_log_probs(wrapped_model, inputs)
+
+        # A distributed wrapper owns the hooks that gather its sharded backbone parameters, so the chunked reference
+        # forward must enter through that wrapper even though the loss itself operates on the unwrapped model.
+        assert redirected
+
+    @require_liger_kernel
     def test_init_fails_with_moe_aux_loss_and_liger(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
 
