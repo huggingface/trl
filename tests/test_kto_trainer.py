@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from unittest.mock import patch
+
 import multiprocess
 import pytest
 import torch
@@ -22,7 +24,11 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 from transformers.utils import is_peft_available
 
 from trl import KTOConfig, KTOTrainer
-from trl.trainer.kto_trainer import DataCollatorForUnpairedPreference, DataCollatorForVisionUnpairedPreference
+from trl.trainer.kto_trainer import (
+    DataCollatorForUnpairedPreference,
+    DataCollatorForVisionUnpairedPreference,
+    _ChunkedLogProbFunction,
+)
 
 from .testing_utils import TrlTestCase, require_bitsandbytes, require_liger_kernel, require_peft, require_vision
 
@@ -1044,6 +1050,58 @@ class TestKTOTrainer(TrlTestCase):
         assert chunked_grads.keys() == grads.keys()
         for name, grad in grads.items():
             torch.testing.assert_close(chunked_grads[name], grad, rtol=1e-4, atol=1e-5)
+
+    @require_liger_kernel
+    def test_chunked_logps_honor_output_multiplier_and_bound_tokens(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
+        training_args = KTOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            use_liger_kernel=True,
+            report_to="none",
+        )
+        trainer = KTOTrainer(model=self.model_id, args=training_args, train_dataset=dataset)
+        inputs = trainer._prepare_inputs(next(iter(trainer.get_train_dataloader())))
+        input_ids = inputs["input_ids"]
+        completion_mask = inputs["completion_mask"]
+        model_kwargs = {
+            "input_ids": input_ids,
+            "attention_mask": inputs["attention_mask"],
+            "use_cache": False,
+        }
+        text_config = trainer.model.config.get_text_config()
+        text_config.logit_scale = None
+        text_config.output_multiplier = 0.5
+
+        # Make the production token bound tiny so this short test proves that one large projection cannot slip
+        # through. Recording the rows also checks the final uneven chunk rather than merely counting calls.
+        chunk_rows = []
+        chunked_apply = _ChunkedLogProbFunction.apply
+
+        def record_chunk(*args):
+            chunk_rows.append(args[0].size(0))
+            return chunked_apply(*args)
+
+        with (
+            patch("trl.trainer.kto_trainer._CHUNKED_LOGPROB_TOKEN_CHUNK_SIZE", 3),
+            patch("trl.trainer.kto_trainer._ChunkedLogProbFunction.apply", side_effect=record_chunk),
+            torch.no_grad(),
+        ):
+            logps, _, _ = trainer._get_per_token_logps_and_entropies(
+                trainer.model, model_kwargs, input_ids, completion_mask
+            )
+
+        hidden_states = trainer.model.base_model(**model_kwargs).last_hidden_state[:, :-1]
+        labels = input_ids[:, 1:]
+        mask = completion_mask[:, 1:].bool()
+        logits = trainer.model.get_output_embeddings()(hidden_states[mask]).float() * text_config.output_multiplier
+        expected_valid = torch.log_softmax(logits, dim=-1).gather(-1, labels[mask].unsqueeze(-1)).squeeze(-1)
+        expected = torch.zeros_like(logps)
+        expected[mask] = expected_valid
+
+        assert len(chunk_rows) > 1
+        assert max(chunk_rows) <= 3
+        torch.testing.assert_close(logps, expected, atol=1e-5, rtol=1e-5)
 
     @require_liger_kernel
     def test_train_with_liger_and_precomputed_ref_logps(self):
