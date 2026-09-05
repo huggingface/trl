@@ -25,7 +25,7 @@ import torch.nn.functional as F
 import transformers
 from datasets import IterableDataset
 from packaging.version import Version
-from transformers import AutoConfig, AutoModelForCausalLM, PretrainedConfig
+from transformers import AutoConfig, AutoModelForCausalLM, MixtralConfig, PretrainedConfig, Qwen2MoeConfig
 from transformers.testing_utils import torch_device
 from transformers.utils import is_peft_available
 
@@ -1635,10 +1635,44 @@ class TestComputeFlopsPerToken(TrlTestCase):
         f_lo = compute_flops_per_token(cfg, 16384)
         cfg.num_experts_per_tok = 2
         f_hi = compute_flops_per_token(cfg, 16384)
-        moe_layers = sum(1 for i in range(cfg.num_hidden_layers) if i % cfg.decoder_sparse_step == 0)
+        moe_layers = sum(1 for i in range(cfg.num_hidden_layers) if (i + 1) % cfg.decoder_sparse_step == 0)
         per_expert_per_layer = 2 * 3 * cfg.hidden_size * cfg.moe_intermediate_size
         expected_delta = 3 * moe_layers * (2 - 1) * per_expert_per_layer
         assert f_hi - f_lo == expected_delta
+
+    def test_moe_config_attribute_spellings(self):
+        # MoE families spell the expert count and size differently: Mixtral uses `num_local_experts`
+        # with `intermediate_size`, Qwen2-MoE uses `num_experts` with `moe_intermediate_size`. Both
+        # must be counted, not raise.
+        mixtral = MixtralConfig(hidden_size=64, num_hidden_layers=2, intermediate_size=128, vocab_size=100)
+        qwen2_moe = Qwen2MoeConfig(hidden_size=64, num_hidden_layers=2, moe_intermediate_size=32, vocab_size=100)
+        assert compute_flops_per_token(mixtral, 512) > 0
+        assert compute_flops_per_token(qwen2_moe, 512) > 0
+
+    def test_moe_expert_size_from_intermediate_size(self):
+        # Mixtral has no `moe_intermediate_size`; its experts are `intermediate_size` wide. Doubling
+        # that must double the routed-expert term.
+        cfg = MixtralConfig(hidden_size=64, num_hidden_layers=2, intermediate_size=128, vocab_size=100)
+        f_lo = compute_flops_per_token(cfg, 512)
+        cfg.intermediate_size = 256
+        f_hi = compute_flops_per_token(cfg, 512)
+        per_layer = cfg.num_experts_per_tok * 2 * 3 * cfg.hidden_size * 128
+        assert f_hi - f_lo == 3 * cfg.num_hidden_layers * per_layer
+
+    def test_moe_sparse_step_and_mlp_only_layers(self):
+        # transformers puts the sparse block on layer `i` when `(i + 1) % decoder_sparse_step == 0`
+        # and `i` is not in `mlp_only_layers`, so both settings change how many layers are MoE.
+        cfg = Qwen2MoeConfig(
+            hidden_size=64, num_hidden_layers=4, intermediate_size=128, moe_intermediate_size=32, vocab_size=100
+        )
+        all_moe = compute_flops_per_token(cfg, 512)
+        cfg.decoder_sparse_step = 2
+        half_moe = compute_flops_per_token(cfg, 512)
+        cfg.decoder_sparse_step = 1
+        cfg.mlp_only_layers = [0, 1]
+        two_dense = compute_flops_per_token(cfg, 512)
+        assert half_moe < all_moe
+        assert half_moe == two_dense
 
     def test_config_without_head_dim(self):
         # `head_dim` is optional on configs: Qwen2 doesn't declare it. Falling back to `hidden_size //
