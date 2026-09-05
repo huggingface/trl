@@ -13,15 +13,17 @@
 # limitations under the License.
 
 import asyncio
+import copy
+import functools
 import hashlib
 import importlib.resources as pkg_resources
 import os
 import random
 import socket
 import threading
-from collections.abc import Mapping, Sequence, Sized
-from contextlib import contextmanager
-from dataclasses import dataclass
+import types
+from collections.abc import Callable, Mapping, Sequence, Sized
+from contextlib import contextmanager, nullcontext
 from importlib.metadata import version
 from itertools import accumulate
 from typing import TypeVar
@@ -31,27 +33,34 @@ import pandas as pd
 import torch
 import torch.nn.functional as F
 import transformers
-from accelerate import PartialState, logging
-from accelerate.state import AcceleratorState
+from accelerate import PartialState
+from accelerate.logging import get_logger
+from datasets import IterableDataset
 from huggingface_hub import ModelCard, ModelCardData
+from packaging.version import Version
 from torch.utils.data import Sampler
 from transformers import (
     AutoConfig,
+    AutoModelForCausalLM,
+    AutoModelForImageTextToText,
     BitsAndBytesConfig,
     PretrainedConfig,
     PreTrainedModel,
     is_comet_available,
     is_trackio_available,
 )
-from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast
 from transformers.models.auto.auto_factory import _BaseAutoModelClass
-from transformers.utils import (
-    is_peft_available,
-    is_rich_available,
-    is_torch_xpu_available,
-)
+from transformers.utils import is_peft_available, is_rich_available
 
 from ..trainer.model_config import ModelConfig
+
+
+if is_comet_available():
+    import comet_ml
+
+
+if is_peft_available():
+    from peft import LoraConfig, PeftConfig, PeftModel
 
 
 if is_rich_available():
@@ -60,14 +69,8 @@ if is_rich_available():
     from rich.table import Table
     from rich.text import Text
 
-if is_comet_available():
-    import comet_ml
 
-if is_peft_available():
-    from peft import LoraConfig, PeftConfig, PeftModel
-
-
-logger = logging.get_logger(__name__)
+logger = get_logger(__name__)
 
 
 def _is_port_free(port: int, host: str = "127.0.0.1") -> bool:
@@ -183,6 +186,53 @@ def disable_dropout_in_model(model: torch.nn.Module) -> None:
             module.p = 0
 
 
+def maybe_gather_lm_head_ctx(*params: torch.nn.Parameter):
+    """
+    Context manager that allgathers ZeRO-3 partitioned `lm_head` weight/bias for a fused loss.
+
+    Fused losses (e.g. Liger) read `lm_head.weight` directly and hand it to the kernel without ever calling the
+    `lm_head` module. Under DeepSpeed ZeRO-3 every parameter is sharded to `numel 0` and only re-materialized inside
+    its owning module's forward hook, so the head's gather hook never fires and the kernel receives an empty weight.
+    This gathers the given parameters for the duration of a direct access, so the matmul sees the full weight. Fused
+    losses compute and stash their gradients during the forward; custom autograd functions that recompute during the
+    backward must enter this context again. The backward's gradient reduction relies on the ZeRO-3 pre-forward hooks
+    being armed, so the caller must run the loss inside the model's forward (e.g. via `_ForwardRedirection`).
+
+    Returns a null context when ZeRO-3 is not enabled, or when the parameters are already gathered — with tied
+    embeddings `embed_tokens` keeps the weight `AVAILABLE`, and re-partitioning it on exit would collide with
+    `embed_tokens`' active-submodule tracking.
+
+    Args:
+        *params (`torch.nn.Parameter`):
+            Parameters to gather (e.g. `lm_head.weight` and `lm_head.bias`). `None` values are ignored.
+    """
+    from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
+
+    if not is_deepspeed_zero3_enabled():
+        return nullcontext()
+
+    import deepspeed
+    from deepspeed.runtime.zero.partition_parameters import ZeroParamStatus
+
+    # Deduplicate by identity: with a shared reference (e.g. PEFT with no separate `ref_model`, or tied embeddings)
+    # the same parameter is passed more than once, and ZeRO-3 mishandles duplicate entries in the gather list.
+    to_gather = {id(p): p for p in params if p is not None and p.ds_status != ZeroParamStatus.AVAILABLE}
+    if not to_gather:
+        return nullcontext()
+    return deepspeed.zero.GatheredParameters(list(to_gather.values()))
+
+
+def get_callable_name(func: Callable) -> str:
+    """
+    Return a display name for a callable, supporting the picklable reward forms: module-level functions,
+    [`functools.partial`](https://docs.python.org/3/library/functools.html#functools.partial) (unwrapped to the wrapped
+    function's name), and callable class instances (which fall back to their class name).
+    """
+    while isinstance(func, functools.partial):
+        func = func.func
+    return getattr(func, "__name__", type(func).__name__)
+
+
 def get_quantization_config(model_args: ModelConfig) -> BitsAndBytesConfig | None:
     if model_args.load_in_4bit:
         quantization_config = BitsAndBytesConfig(
@@ -200,13 +250,6 @@ def get_quantization_config(model_args: ModelConfig) -> BitsAndBytesConfig | Non
         quantization_config = None
 
     return quantization_config
-
-
-def get_kbit_device_map() -> dict[str, int] | None:
-    if torch.cuda.is_available() or is_torch_xpu_available():
-        return {"": PartialState().local_process_index}
-    else:
-        return None
 
 
 def get_peft_config(model_args: ModelConfig) -> "PeftConfig | None":
@@ -233,64 +276,6 @@ def get_peft_config(model_args: ModelConfig) -> "PeftConfig | None":
     )
 
     return peft_config
-
-
-def prepare_deepspeed(
-    model: torch.nn.Module, per_device_train_batch_size: int, fp16: bool = False, bf16: bool = False
-) -> torch.nn.Module:
-    """
-    Prepares the model for training with DeepSpeed (both for stage 2 and 3), configuring the appropriate settings based
-    on the model and batch size.
-
-    Args:
-        model (`torch.nn.Module`):
-            The model to be prepared for DeepSpeed training.
-        per_device_train_batch_size (`int`):
-            The training batch size per device.
-        fp16 (`bool`, defaults to `False`):
-            Whether to use FP16 precision.
-        bf16 (`bool`, defaults to `False`):
-            Whether to use BF16 precision.
-
-    Returns:
-        `torch.nn.Module`:
-            The model initialized and configured with DeepSpeed for training.
-    """
-    import deepspeed
-
-    deepspeed_plugin = AcceleratorState().deepspeed_plugin
-    config_kwargs = deepspeed_plugin.deepspeed_config
-    if config_kwargs["zero_optimization"]["stage"] != 3:
-        config_kwargs["train_micro_batch_size_per_gpu"] = per_device_train_batch_size
-        config_kwargs = {
-            "train_micro_batch_size_per_gpu": config_kwargs["train_micro_batch_size_per_gpu"],
-            "prescale_gradients": False,
-            "wall_clock_breakdown": False,
-        }
-        if bf16:
-            config_kwargs["bf16"] = {"enabled": True}
-        elif fp16:
-            config_kwargs["fp16"] = {"enabled": True}
-    else:
-        if hasattr(model, "config"):
-            hidden_size = (
-                max(model.config.hidden_sizes)
-                if getattr(model.config, "hidden_sizes", None)
-                else getattr(model.config, "hidden_size", None)
-            )
-            if hidden_size is not None and config_kwargs["zero_optimization"]["stage"] == 3:
-                # Note that `stage3_prefetch_bucket_size` can produce DeepSpeed messages like: `Invalidate trace cache @ step 0: expected module 1, but got module 0`
-                # This is expected and is not an error, see: https://github.com/microsoft/DeepSpeed/discussions/4081
-                config_kwargs.update(
-                    {
-                        "zero_optimization.reduce_bucket_size": hidden_size * hidden_size,
-                        "zero_optimization.stage3_param_persistence_threshold": 10 * hidden_size,
-                        "zero_optimization.stage3_prefetch_bucket_size": 0,
-                    }
-                )
-    model, *_ = deepspeed.initialize(model=model, config=config_kwargs)
-    model.eval()
-    return model
 
 
 def generate_model_card(
@@ -580,9 +565,10 @@ def print_prompt_completions_sample(
     prompts: list,
     completions: list,
     rewards: dict[str, list[float]],
-    advantages: list[float],
+    advantages: list[float] | None,
     step: int,
     num_samples: int = None,
+    extra: dict[str, list] | None = None,
 ) -> None:
     """
     Print out a sample of model completions to the console with multiple reward metrics.
@@ -597,12 +583,17 @@ def print_prompt_completions_sample(
             List of completions corresponding to the prompts. Can be either strings or lists of messages.
         rewards (`dict[str, list[float]]`):
             Dictionary where keys are reward names and values are lists of rewards.
-        advantages (`list[float]`):
-            List of advantages corresponding to the prompts and completions.
+        advantages (`list[float]` or `None`):
+            List of advantages corresponding to the prompts and completions. If `None`, the advantage column is omitted
+            (e.g. for distillation, which has no advantages).
         step (`int`):
             Current training step number, used in the output title.
         num_samples (`int`, *optional*):
             Number of random samples to display. If `None` (default), all items will be displayed.
+        extra (`dict[str, list]`, *optional*):
+            Additional columns to display after the advantage column. Keys are column names and values are lists of
+            per-completion data (strings or any value convertible to string). Typically populated via `log_extra` in
+            reward functions. If `None` (default), no extra columns are shown.
 
     Example:
     ```python
@@ -612,16 +603,17 @@ def print_prompt_completions_sample(
     >>> completions = [" blue.", " in the sky."]
     >>> rewards = {"Correctness": [0.123, 0.456], "Format": [0.789, 0.101]}
     >>> advantages = [0.987, 0.654]
-    >>> print_prompt_completions_sample(prompts, completions, rewards, advantages, 42)
-    ╭──────────────────────────── Step 42 ─────────────────────────────╮
-    │ ┏━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━━━┓ │
-    │ ┃ Prompt     ┃ Completion   ┃ Correctness ┃ Format ┃ Advantage ┃ │
-    │ ┡━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━━━━━┩ │
-    │ │ The sky is │  blue.       │        0.12 │   0.79 │      0.99 │ │
-    │ ├────────────┼──────────────┼─────────────┼────────┼───────────┤ │
-    │ │ The sun is │  in the sky. │        0.46 │   0.10 │      0.65 │ │
-    │ └────────────┴──────────────┴─────────────┴────────┴───────────┘ │
-    ╰──────────────────────────────────────────────────────────────────╯
+    >>> extra = {"source": ["dataset_A", "dataset_B"]}
+    >>> print_prompt_completions_sample(prompts, completions, rewards, advantages, 42, extra=extra)
+    ╭────────────────────────────────── Step 42 ───────────────────────────────────╮
+    │ ┏━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━━━┳━━━━━━━━━━━┓ │
+    │ ┃ Prompt     ┃ Completion   ┃ Correctness ┃ Format ┃ Advantage ┃ source    ┃ │
+    │ ┡━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━━━━━╇━━━━━━━━━━━┩ │
+    │ │ The sky is │  blue.       │        0.12 │   0.79 │      0.99 │ dataset_A │ │
+    │ ├────────────┼──────────────┼─────────────┼────────┼───────────┼───────────┤ │
+    │ │ The sun is │  in the sky. │        0.46 │   0.10 │      0.65 │ dataset_B │ │
+    │ └────────────┴──────────────┴─────────────┴────────┴───────────┴───────────┘ │
+    ╰──────────────────────────────────────────────────────────────────────────────╯
     ```
     """
     if not is_rich_available():
@@ -632,12 +624,17 @@ def print_prompt_completions_sample(
     console = Console()
     table = Table(show_header=True, header_style="bold white", expand=True)
 
+    extra = extra or {}
+
     # Add columns
     table.add_column("Prompt", style="bright_yellow")
     table.add_column("Completion", style="bright_green")
     for reward_name in rewards.keys():
         table.add_column(reward_name, style="bold cyan", justify="right")
-    table.add_column("Advantage", style="bold magenta", justify="right")
+    if advantages is not None:
+        table.add_column("Advantage", style="bold magenta", justify="right")
+    for extra_name in extra.keys():
+        table.add_column(extra_name, style="bright_white")
 
     def format_entry(entry) -> Text:
         t = Text()
@@ -679,16 +676,18 @@ def print_prompt_completions_sample(
         prompts = [prompts[i] for i in indices]
         completions = [completions[i] for i in indices]
         rewards = {key: [val[i] for i in indices] for key, val in rewards.items()}
-        advantages = [advantages[i] for i in indices]
+        if advantages is not None:
+            advantages = [advantages[i] for i in indices]
+        extra = {key: [val[i] for i in indices] for key, val in extra.items()}
 
     for i in range(len(prompts)):
         reward_values = [f"{rewards[key][i]:.2f}" for key in rewards.keys()]  # 2 decimals
-        table.add_row(
-            format_entry(prompts[i]),
-            format_entry(completions[i]),
-            *reward_values,
-            f"{advantages[i]:.2f}",
-        )
+        extra_values = [format_entry(extra[key][i]) for key in extra.keys()]
+        row = [format_entry(prompts[i]), format_entry(completions[i]), *reward_values]
+        if advantages is not None:
+            row.append(f"{advantages[i]:.2f}")
+        row.extend(extra_values)
+        table.add_row(*row)
         table.add_section()  # Adds a separator between rows
 
     panel = Panel(table, expand=False, title=f"Step {step}", border_style="bold white")
@@ -789,6 +788,71 @@ class RepeatSampler(Sampler):
 
     def __len__(self) -> int:
         return (self.num_samples // self.batch_size) * self.batch_size * self.mini_repeat_count * self.repeat_count
+
+
+def repeat_iterable_dataset(
+    dataset: IterableDataset, mini_repeat_count: int, batch_size: int = 1, repeat_count: int = 1
+):
+    """
+    Streaming counterpart of [`RepeatSampler`] for [`~datasets.IterableDataset`].
+
+    An [`~datasets.IterableDataset`] cannot be indexed, so a sampler cannot be attached to it. Instead of reordering
+    indices, this reorders the *stream* itself with [`~datasets.IterableDataset.map`], producing records in exactly the
+    same order that [`RepeatSampler`] yields indices for a map-style dataset with the same arguments. Because the
+    transform stays chained to `dataset`, `set_epoch` propagates to an upstream [`~datasets.IterableDataset.shuffle`]
+    and the order is reshuffled every epoch, as [`RepeatSampler`] does.
+
+    Shuffling is intentionally left out: it is handled upstream via [`~datasets.IterableDataset.shuffle`] (buffered
+    shuffling), the streaming equivalent of the full permutation done by [`RepeatSampler`].
+
+    Args:
+        dataset (`datasets.IterableDataset`):
+            Dataset to stream from.
+        mini_repeat_count (`int`):
+            Number of times to repeat each record per batch.
+        batch_size (`int`, *optional*, defaults to `1`):
+            Number of unique records per batch.
+        repeat_count (`int`, *optional*, defaults to `1`):
+            Number of times to repeat the full batch.
+
+    Returns:
+        `datasets.IterableDataset`: Dataset yielding the records of `dataset`, repeated and reordered.
+
+    Example:
+    ```python
+    >>> from datasets import IterableDataset
+
+    >>> dataset = IterableDataset.from_generator(lambda: ({"x": i} for i in range(7)))
+    >>> repeated = repeat_iterable_dataset(dataset, mini_repeat_count=2, batch_size=3, repeat_count=4)
+    >>> [record["x"] for record in repeated]
+    [0, 0, 1, 1, 2, 2,
+     0, 0, 1, 1, 2, 2,
+     0, 0, 1, 1, 2, 2,
+     0, 0, 1, 1, 2, 2,
+     3, 3, 4, 4, 5, 5,
+     3, 3, 4, 4, 5, 5,
+     3, 3, 4, 4, 5, 5,
+     3, 3, 4, 4, 5, 5]
+    ```
+    """
+
+    def repeat_batch(batch: dict) -> dict:
+        # `batch` maps each column to a list of `batch_size` values (fewer for the trailing batch, which is dropped to
+        # match RepeatSampler). Transpose it back to records, repeating them as RepeatSampler repeats indices. Records
+        # are deep-copied so repeats stay independent, matching the map-style path where the dataset re-materializes a
+        # fresh object per access.
+        keys = list(batch)
+        if len(batch[keys[0]]) < batch_size:
+            return {key: [] for key in keys}
+        repeated = {key: [] for key in keys}
+        for _ in range(repeat_count):
+            for values in zip(*(batch[key] for key in keys), strict=True):
+                for _ in range(mini_repeat_count):
+                    for key, value in zip(keys, values, strict=True):
+                        repeated[key].append(copy.deepcopy(value))
+        return repeated
+
+    return dataset.map(repeat_batch, batched=True, batch_size=batch_size)
 
 
 # torch.nanstd doesn't exist, so we define it here
@@ -932,23 +996,68 @@ def identity(x):
 
 def split_pixel_values_by_grid(batch: dict[str, torch.Tensor]) -> dict[str, torch.Tensor | list[torch.Tensor]]:
     """
-    Splits `batch["pixel_values"]` into a list of tensors based on the product of each row in `batch["image_grid_thw"]`
-    and batch["num_images"] while keeping other entries unchanged.
+    Splits `batch["pixel_values"]` into a list of tensors, one per sample, based on `batch["num_images"]`.
+
+    For models with `image_grid_thw` (e.g. Qwen), the grid dimensions determine how many rows of `pixel_values` belong
+    to each image. For models with `image_position_ids` instead (e.g. Gemma), `pixel_values` is indexed directly by
+    image count. For models with `spatial_shapes` (e.g. LFM2-VL) or with `num_tiles` alone (e.g. InternVL),
+    tile-indexed tensors are split using `num_tiles`. Models with none of these store `pixel_values` either flat, one
+    row per image (e.g. LLaVA), in which case it is split by image count, or already padded to one row per sample (e.g.
+    Idefics), in which case it is left as is.
     """
-    if "image_grid_thw" not in batch or "pixel_values" not in batch or "num_images" not in batch:
+    if "pixel_values" not in batch or "num_images" not in batch:
         return batch
 
-    lengths = batch["image_grid_thw"].prod(-1).tolist()  # [num_images]
+    num_images = batch["num_images"]
     pixel_values = batch["pixel_values"]  # [total, feature_dim]
 
-    if sum(lengths) != pixel_values.size(0):
-        raise ValueError(f"Mismatch: sum(lengths) = {sum(lengths)} != pixel_values.size(0) = {pixel_values.size(0)}")
+    if "image_grid_thw" in batch:
+        lengths = batch["image_grid_thw"].prod(-1).tolist()  # [num_images]
+        if sum(lengths) != pixel_values.size(0):
+            raise ValueError(
+                f"Mismatch: sum(lengths) = {sum(lengths)} != pixel_values.size(0) = {pixel_values.size(0)}"
+            )
 
-    boundaries = [0, *accumulate(batch["num_images"])]  # [3, 4, 5] -> [0, 3, 7, 12]
-    sections = [sum(lengths[boundaries[i] : boundaries[i + 1]]) for i in range(len(batch["num_images"]))]
-    split_values = list(torch.split(batch["pixel_values"], sections, dim=0))
-    image_grid_thw = list(torch.split(batch["image_grid_thw"], batch["num_images"], dim=0))
-    return {**batch, "pixel_values": split_values, "image_grid_thw": image_grid_thw}
+        boundaries = [0, *accumulate(num_images)]
+        image_grid_thw = batch["image_grid_thw"]  # [total, 3]
+        sections = [sum(lengths[boundaries[i] : boundaries[i + 1]]) for i in range(len(num_images))]
+        split_pixel_values = list(torch.split(pixel_values, sections, dim=0))
+        split_image_grid_thw = list(torch.split(image_grid_thw, num_images, dim=0))
+        return {**batch, "pixel_values": split_pixel_values, "image_grid_thw": split_image_grid_thw}
+
+    if "image_position_ids" in batch:
+        image_position_ids = batch["image_position_ids"]  # [total]
+        split_pixel_values = list(torch.split(pixel_values, num_images, dim=0))
+        split_image_position_ids = list(torch.split(image_position_ids, num_images, dim=0))
+        return {**batch, "pixel_values": split_pixel_values, "image_position_ids": split_image_position_ids}
+
+    if "spatial_shapes" in batch:
+        num_tiles = batch["num_tiles"]
+        pixel_attention_mask = batch["pixel_attention_mask"]
+        spatial_shapes = batch["spatial_shapes"]
+        split_pixel_values = list(torch.split(pixel_values, num_tiles, dim=0))
+        split_pixel_attention_mask = list(torch.split(pixel_attention_mask, num_tiles, dim=0))
+        split_spatial_shapes = list(torch.split(spatial_shapes, num_tiles, dim=0))
+        return {
+            **batch,
+            "pixel_values": split_pixel_values,
+            "pixel_attention_mask": split_pixel_attention_mask,
+            "spatial_shapes": split_spatial_shapes,
+        }
+
+    if "num_tiles" in batch:
+        num_tiles = batch["num_tiles"]
+        return {**batch, "pixel_values": list(torch.split(pixel_values, num_tiles, dim=0))}
+
+    # Models without extra metadata store pixel_values either flat, one row per image (e.g. LLaVA), or already
+    # padded to one row per sample (e.g. Idefics, SmolVLM). Only the flat layout needs splitting.
+    if pixel_values.size(0) != sum(num_images):
+        return batch
+
+    batch = {**batch, "pixel_values": list(torch.split(pixel_values, num_images, dim=0))}
+    if "image_sizes" in batch:
+        batch = {**batch, "image_sizes": list(torch.split(batch["image_sizes"], num_images, dim=0))}
+    return batch
 
 
 def unsplit_pixel_values_by_grid(batch: dict[str, torch.Tensor | list[torch.Tensor]]) -> dict[str, torch.Tensor]:
@@ -965,6 +1074,26 @@ def unsplit_pixel_values_by_grid(batch: dict[str, torch.Tensor | list[torch.Tens
     if isinstance(image_grid_thw, list):
         merged = torch.cat(image_grid_thw, dim=0)
         batch = {**batch, "image_grid_thw": merged}
+
+    image_position_ids = batch.get("image_position_ids")
+    if isinstance(image_position_ids, list):
+        merged = torch.cat(image_position_ids, dim=0)
+        batch = {**batch, "image_position_ids": merged}
+
+    pixel_attention_mask = batch.get("pixel_attention_mask")
+    if isinstance(pixel_attention_mask, list):
+        merged = torch.cat(pixel_attention_mask, dim=0)
+        batch = {**batch, "pixel_attention_mask": merged}
+
+    spatial_shapes = batch.get("spatial_shapes")
+    if isinstance(spatial_shapes, list):
+        merged = torch.cat(spatial_shapes, dim=0)
+        batch = {**batch, "spatial_shapes": merged}
+
+    image_sizes = batch.get("image_sizes")
+    if isinstance(image_sizes, list):
+        merged = torch.cat(image_sizes, dim=0)
+        batch = {**batch, "image_sizes": merged}
 
     return batch
 
@@ -1044,10 +1173,24 @@ def create_model_from_path(
             "Invalid `dtype` passed to the config. Expected either 'auto' or a string representing "
             f"a valid `torch.dtype` (e.g., 'float32'), but got {dtype}."
         )
-    kwargs["device_map"] = kwargs.get("device_map", "auto")
+    # Respect CPU-only execution: device_map="auto" dispatches the model to the GPU even when the user requested
+    # use_cpu=True, which later splits models across devices (e.g. a teacher placed on CPU vs. a student on GPU).
+    if "device_map" not in kwargs:
+        kwargs["device_map"] = None if PartialState().device.type == "cpu" else "auto"
     if architecture is None:
-        config = AutoConfig.from_pretrained(model_id)
-        architecture = getattr(transformers, config.architectures[0])
+        # Best effort to infer architecture from config, but we fall back to AutoModelForCausalLM if we can't find it
+        config = AutoConfig.from_pretrained(model_id, trust_remote_code=kwargs.get("trust_remote_code", False))
+        architecture = getattr(transformers, config.architectures[0], None)
+        if architecture is None:
+            # Remote-code checkpoint: the architecture name lives in the dynamic module, not in
+            # `transformers`. Pick the most specific auto class declared in `config.auto_map`.
+            auto_map = config.auto_map or {}
+            for candidate in (AutoModelForImageTextToText, AutoModelForCausalLM):
+                if candidate.__name__ in auto_map:
+                    architecture = candidate
+                    break
+            else:
+                architecture = AutoModelForCausalLM
     model = architecture.from_pretrained(model_id, **kwargs)
     return model
 
@@ -1076,66 +1219,6 @@ def get_config_model_id(config: PretrainedConfig) -> str:
             The model identifier associated with the model configuration.
     """
     return getattr(config, "_name_or_path", "")
-
-
-@dataclass
-class CausalLMOutputWithPastAndFlatLogits(CausalLMOutputWithPast):
-    flat_logits: torch.Tensor | None = None
-
-
-def forward_masked_logits(
-    model: PreTrainedModel, logits_mask: torch.LongTensor, **kwargs
-) -> CausalLMOutputWithPastAndFlatLogits:
-    """
-    Run a Causal LM forward pass while computing logits only for masked positions to reduce memory usage.
-
-    These are always equal:
-
-    ```python
-    full_outputs = model(input_ids=input_ids)
-    masked_outputs = forward_masked_logits(model, mask, input_ids=input_ids)
-
-    assert torch.equal(
-        masked_outputs.flat_logits,
-        full_outputs.logits[mask.bool()],
-    )
-    ```
-
-    Args:
-        model ([`~transformers.PreTrainedModel`]):
-            A causal language model.
-        logits_mask (`torch.LongTensor`):
-            Boolean-like tensor indicating which token positions should have logits computed. Shape should match the
-            input sequence shape in `kwargs` (typically `[batch, seq_len]`).
-        **kwargs:
-            Keyword arguments forwarded to the inner decoder (e.g., `input_ids`, `attention_mask`, `past_key_values`).
-
-    Returns:
-        `CausalLMOutputWithPastAndFlatLogits`: Output containing logits only for the unmasked positions.
-
-    Raises:
-        ValueError: If `logits_to_keep` or `labels` are provided in `kwargs`.
-    """
-    if kwargs.get("logits_to_keep") is not None:
-        raise ValueError("`logits_to_keep` is not supported by this forward helper.")
-    if kwargs.get("labels") is not None:
-        raise ValueError("`labels` is not yet supported by this forward helper.")
-
-    outputs: BaseModelOutputWithPast = model.get_decoder()(**kwargs)
-    hidden_states = outputs.last_hidden_state
-
-    # Only compute necessary logits, and do not upcast them to float if we are not computing the loss
-    flat_logits = model.lm_head(hidden_states[logits_mask.bool()])
-    if hasattr(model, "logit_scale"):  # CohereForCausalLM has this attribute
-        flat_logits = flat_logits * model.logit_scale
-
-    return CausalLMOutputWithPastAndFlatLogits(
-        flat_logits=flat_logits,
-        # We use .get(...) because some models like FalconMambaForCausalLM don't return past_key_values or attentions
-        past_key_values=outputs.get("past_key_values"),
-        hidden_states=outputs.hidden_states,
-        attentions=outputs.get("attentions"),
-    )
 
 
 @contextmanager
@@ -1228,3 +1311,381 @@ def shutdown_event_loop_in_daemon(
         return
     loop.call_soon_threadsafe(loop.stop)
     thread.join(timeout=5)
+
+
+class _ChunkedLogProbFunction(torch.autograd.Function):
+    """Compute per-token log-probs and entropy without materializing [N, V] logits.
+
+    Processes the lm_head in chunks and uses online logsumexp
+    """
+
+    @staticmethod
+    def forward(
+        ctx,
+        last_hidden: torch.Tensor,  # [N, H]
+        weight: torch.Tensor,  # [V, H]
+        bias: torch.Tensor | None,  # [V]
+        targets: torch.Tensor,  # [N]
+        temperature: float,
+        chunk_size: int,
+        final_logit_softcapping: float | None = None,
+        logit_scale: float = 1.0,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        # entropy is often computed for logging only (no grad required); without this, autograd would
+        # materialize its incoming gradient as zeros and backward would waste compute on a no-op term
+        ctx.set_materialize_grads(False)
+
+        device = last_hidden.device
+        N, _ = last_hidden.shape
+        vocab, _ = weight.shape
+        inv_t = 1 / temperature
+
+        # NOTE(@aminediro): always acc in fp32 for stability
+        max_old = torch.full((N,), float("-inf"), device=device, dtype=torch.float32)
+        sum_exp = torch.zeros((N,), device=device, dtype=torch.float32)
+        x_sum_exp = torch.zeros((N,), device=device, dtype=torch.float32)
+        target_logit = torch.zeros((N,), device=device, dtype=torch.float32)
+
+        # Pre-allocate reusable buffers to avoid per-chunk allocation
+        mm_buf = torch.empty((N, chunk_size), device=device, dtype=last_hidden.dtype)
+        logits_buf = torch.empty((N, chunk_size), device=device, dtype=torch.float32)
+
+        for start in range(0, vocab, chunk_size):
+            end = min(start + chunk_size, vocab)
+            C = end - start
+            # using fp16=True, the model's hidden states get cast to float16 by autocast, but the mm_buf is allocated
+            # with last_hidden.dtype (float16) while w_chunk (the lm_head weights) is not auto casted
+            w_chunk = weight[start:end].to(last_hidden.dtype)  # [C, H]
+            torch.mm(last_hidden, w_chunk.t(), out=mm_buf[:, :C])
+            if bias is not None:
+                mm_buf[:, :C].add_(bias[start:end].to(last_hidden.dtype))
+            logits_chunk = logits_buf[:, :C]
+            logits_chunk.copy_(mm_buf[:, :C])
+
+            logits_chunk.mul_(logit_scale)
+            if final_logit_softcapping is not None:
+                logits_chunk.div_(final_logit_softcapping).tanh_().mul_(final_logit_softcapping)
+
+            logits_chunk.mul_(inv_t)  # [N, C]
+
+            # Online logsumexp update
+            chunk_max = logits_chunk.amax(dim=-1)  # [N]
+            max_new = torch.maximum(max_old, chunk_max)
+            rescale = torch.exp(max_old - max_new)
+            chunk_exp = torch.exp(logits_chunk - max_new.unsqueeze(-1))  # [N, C]
+
+            sum_exp = sum_exp * rescale + chunk_exp.sum(dim=-1)
+            x_sum_exp = x_sum_exp * rescale + (chunk_exp * logits_chunk).sum(dim=-1)
+            max_old = max_new
+
+            # Gather target logits for labels in this chunk
+            in_chunk_cond = (targets >= start) & (targets < end)
+            local_idx = torch.clamp(targets - start, 0, end - start - 1)
+            # take the new logit if target_idx is in this chunk bounds else 0
+            target_logit += logits_chunk[torch.arange(N, device=device), local_idx] * in_chunk_cond
+
+        log_z = max_old + torch.log(sum_exp)
+        logprobs = target_logit - log_z
+        entropy = log_z - x_sum_exp / sum_exp
+
+        ctx.save_for_backward(last_hidden, weight, bias, targets, log_z, entropy)
+        ctx.temperature = temperature
+        ctx.chunk_size = chunk_size
+        ctx.logit_scale = logit_scale
+        ctx.final_logit_softcapping = final_logit_softcapping
+
+        return logprobs, entropy
+
+    @staticmethod
+    def backward(ctx, grad_logprobs: torch.Tensor | None, grad_entropy: torch.Tensor | None):  # type: ignore
+        hidden, weight, bias, labels, log_z, entropy = ctx.saved_tensors
+        temperature: float = ctx.temperature
+        chunk_size: int = ctx.chunk_size
+        logit_scale: float = ctx.logit_scale
+        final_logit_softcapping: float = ctx.final_logit_softcapping
+        inv_t = 1 / temperature
+
+        N, _ = hidden.shape
+        with maybe_gather_lm_head_ctx(weight, bias):
+            vocab = weight.shape[0]
+
+            # NOTE(@aminediro): always acc in fp32 even if input is not
+            grad_hidden = torch.zeros(hidden.shape, device=hidden.device, dtype=torch.float32)
+            grad_weight = torch.zeros(weight.shape, device=weight.device, dtype=torch.float32)
+            grad_bias = torch.zeros(bias.shape, device=bias.device, dtype=torch.float32) if bias is not None else None
+
+            # Pre-allocate reusable buffers to avoid per-chunk allocation
+            mm_buf = torch.empty((N, chunk_size), device=hidden.device, dtype=hidden.dtype)
+            logits_buf = torch.empty((N, chunk_size), device=hidden.device, dtype=torch.float32)
+
+            g = grad_logprobs.to(torch.float32) if grad_logprobs is not None else None  # [N]
+            g_entropy = grad_entropy.to(torch.float32) if grad_entropy is not None else None  # [N]
+            row_idx = torch.arange(N, device=hidden.device)
+
+            for start in range(0, vocab, chunk_size):
+                end = min(start + chunk_size, vocab)
+                C = end - start
+                w_chunk = weight[start:end]  # [C, H]
+
+                torch.mm(hidden, w_chunk.t(), out=mm_buf[:, :C])
+                if bias is not None:
+                    mm_buf[:, :C].add_(bias[start:end].to(hidden.dtype))
+                logits_chunk = logits_buf[:, :C]
+                logits_chunk.copy_(mm_buf[:, :C])
+
+                logits_chunk.mul_(logit_scale)
+                if final_logit_softcapping is not None:
+                    tanh_scaled = torch.tanh(logits_chunk / final_logit_softcapping)
+                    logits_chunk.copy_(tanh_scaled * final_logit_softcapping)
+
+                logits_chunk.mul_(inv_t)  # [N, C]
+                probs = torch.exp(logits_chunk - log_z.unsqueeze(-1))  # [N, C]
+
+                if g is not None:
+                    # dL/d(logits) = g * (1_[label] - p)
+                    grad_logits = (-g).unsqueeze(-1) * probs  # [N, C]
+
+                    in_chunk_cond = (labels >= start) & (labels < end)
+                    local_idx = torch.clamp(labels - start, 0, end - start - 1)
+                    # If label in chunk add g to grad else it stays the same
+                    grad_logits[row_idx, local_idx] += g * in_chunk_cond
+                else:
+                    grad_logits = torch.zeros_like(probs)
+
+                if g_entropy is not None:
+                    # d(entropy)/d(logits_j) = -p_j * (log_p_j + entropy), entropy = -sum_k p_k * log_p_k
+                    log_p_chunk = logits_chunk - log_z.unsqueeze(-1)  # [N, C]
+                    grad_logits += (-g_entropy).unsqueeze(-1) * probs * (log_p_chunk + entropy.unsqueeze(-1))
+
+                grad_logits = grad_logits * inv_t
+                if final_logit_softcapping is not None:
+                    grad_logits.mul_(1 - tanh_scaled.pow(2))
+
+                grad_logits = grad_logits * logit_scale
+
+                grad_hidden.add_(grad_logits @ w_chunk.float())
+                grad_weight[start:end].add_(grad_logits.t() @ hidden.float())
+                if grad_bias is not None:
+                    grad_bias[start:end].add_(grad_logits.sum(dim=0))
+
+        return (
+            grad_hidden.to(hidden.dtype),
+            grad_weight.to(weight.dtype),
+            grad_bias.to(bias.dtype) if grad_bias is not None else None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+
+
+def patch_chunked_lm_head(
+    model: torch.nn.Module, chunk_size: int, temperature: float, output_router_logits: bool = False
+) -> None:
+    text_config = model.config.get_text_config()
+    final_logit_softcapping = getattr(text_config, "final_logit_softcapping", None)
+
+    def _chunked_forward(
+        self: torch.nn.Module,
+        input_ids: torch.Tensor | None = None,
+        attention_mask: torch.Tensor | None = None,
+        labels: torch.Tensor | None = None,
+        completion_mask: torch.Tensor | None = None,
+        use_cache: bool = False,
+        **kwargs,
+    ) -> dict[str, torch.Tensor]:
+        assert labels is not None, "requires labels to not be None for logprob computation"
+
+        decoder_kwargs = {"output_router_logits": True} if output_router_logits else {}
+        outputs = self.model(
+            input_ids=input_ids, attention_mask=attention_mask, use_cache=use_cache, **decoder_kwargs, **kwargs
+        )
+        # NOTE(@aminediro): supporting Cohere2 models
+        logit_scale = getattr(text_config, "logit_scale", 1.0)
+        hidden_states = outputs.last_hidden_state  # [B, S+1, H]
+
+        # Shift: predict next token
+        hidden_states = hidden_states[:, :-1, :]  # [B, S-1, H]
+        labels = labels[:, 1:]  # [B, S-1]
+
+        b, s, h = hidden_states.shape
+        hidden_flat = hidden_states.reshape(b * s, h)
+        targets_flat = labels.reshape(b * s)
+
+        # Filter to completion tokens only to avoid expensive matmuls on prompt tokens and tool results
+        valid_mask = None
+        if completion_mask is not None:
+            completion_mask = completion_mask[:, 1:]  # same shift as labels
+            valid_mask = completion_mask.bool().reshape(b * s)
+            hidden_flat = hidden_flat[valid_mask]  # [N_valid, H]
+            targets_flat = targets_flat[valid_mask]  # [N_valid]
+
+        logprobs_valid, entropy_valid = _ChunkedLogProbFunction.apply(
+            hidden_flat,
+            self.lm_head.weight,
+            self.lm_head.bias,
+            targets_flat,
+            temperature,
+            chunk_size,
+            final_logit_softcapping,
+            logit_scale,
+        )
+
+        if valid_mask is not None:
+            logprobs = torch.zeros(b * s, device=logprobs_valid.device, dtype=logprobs_valid.dtype)
+            entropy = torch.zeros(b * s, device=entropy_valid.device, dtype=entropy_valid.dtype)
+            logprobs[valid_mask] = logprobs_valid
+            entropy[valid_mask] = entropy_valid
+        else:
+            logprobs = logprobs_valid
+            entropy = entropy_valid
+
+        aux_loss = None
+        if output_router_logits:
+            # Mirror the per-family MoE forward: add `router_aux_loss_coef * load_balancing_loss_func(...)` to
+            # the main loss. Mixtral is the source of truth — every MoE family (Qwen3Moe, GptOss, OLMoE,
+            # Qwen2Moe, DBRX, JetMoE, PhiMoE, …) pulls this function from mixtral via the modular system, so a
+            # single import keeps us in lockstep with upstream for every family we test.
+            from transformers.models.mixtral.modeling_mixtral import load_balancing_loss_func
+
+            if Version(transformers.__version__) < Version("5.0.0"):
+                num_experts = self.num_experts
+                num_experts_per_tok = self.num_experts_per_tok
+            else:
+                # Upstream bug AttributeError: 'GptOssConfig' object has no attribute 'num_experts'; see #5754
+                if text_config.model_type == "gpt_oss" and Version("5.0.0") <= Version(
+                    transformers.__version__
+                ) < Version("5.6.0"):
+                    num_experts = self.num_experts
+                else:
+                    num_experts = text_config.num_experts
+                num_experts_per_tok = text_config.num_experts_per_tok
+            # Padding-free packs all real tokens into a single row, so `attention_mask` is None and every token counts.
+            aux_loss = load_balancing_loss_func(
+                outputs.router_logits, num_experts, num_experts_per_tok, attention_mask
+            )
+
+        return {
+            "log_probs": logprobs.reshape(b, s),
+            "entropy": entropy.reshape(b, s),
+            "aux_loss": aux_loss,
+        }
+
+    model.forward = types.MethodType(_chunked_forward, model)
+
+
+def compute_flops_per_token(config: PretrainedConfig, seq_len: int) -> int:
+    """
+    Estimate training FLOPs per token for a causal language model (forward + backward).
+
+    Supports dense and MoE architectures. Backward is assumed to cost 2× the forward pass, so total training FLOPs = 3
+    × forward FLOPs. The attention-score term uses the non-causal convention (every token attends to the full
+    `seq_len`, matching PaLM / Megatron / nanoGPT); pass the resulting MFU through [`adjusted_mfu`] for the Llama /
+    DeepSpeed Ulysses causal-corrected convention.
+
+    Args:
+        config ([`~transformers.PretrainedConfig`]):
+            The model configuration.
+        seq_len (`int`):
+            The sequence length used for training.
+
+    Returns:
+        `int`: Estimated training FLOPs per token.
+    """
+    h = config.hidden_size
+    L = config.num_hidden_layers
+    V = config.vocab_size
+    n_heads = config.num_attention_heads
+    n_kv_heads = config.num_key_value_heads
+    # `head_dim` is optional on configs: Llama and Mistral declare it, Qwen2 doesn't. Derive it when missing, like
+    # transformers' own modeling code does.
+    head_dim = getattr(config, "head_dim", None) or h // n_heads
+
+    # Attention: Q/K/V/O projections + attention score (Q·Kᵀ and attn·V).
+    qkv_flops = 2 * h * (n_heads * head_dim + 2 * n_kv_heads * head_dim)
+    o_proj_flops = 2 * n_heads * head_dim * h
+    attn_score_flops = 2 * 2 * n_heads * head_dim * seq_len
+    attn_flops = qkv_flops + o_proj_flops + attn_score_flops
+
+    # MoE dispatch: `num_experts_per_tok` is the canonical MoE marker — present on Mixtral,
+    # Qwen3-MoE, DeepSeek-V2, etc.; absent on dense configs.
+    num_experts_per_tok = getattr(config, "num_experts_per_tok", None)
+    if num_experts_per_tok is None:
+        mlp_flops = 2 * 3 * h * config.intermediate_size
+        total_layer_flops = L * (attn_flops + mlp_flops)
+    else:
+        # Routed experts (gate + up + down, 3 matmuls each) + router.
+        if Version(transformers.__version__) >= Version("5.1.0"):
+            num_experts = config.num_local_experts
+        else:
+            num_experts = config.num_experts
+        moe_mlp_flops = num_experts_per_tok * 2 * 3 * h * config.moe_intermediate_size
+        moe_mlp_flops += 2 * h * num_experts
+        dense_mlp_flops = 2 * 3 * h * config.intermediate_size  # interspersed dense layers
+        sparse_step = config.decoder_sparse_step
+        total_layer_flops = sum(
+            attn_flops + (moe_mlp_flops if layer_idx % sparse_step == 0 else dense_mlp_flops) for layer_idx in range(L)
+        )
+
+    embed_flops = 2 * V * h
+    lm_head_flops = 0 if config.tie_word_embeddings else 2 * V * h
+
+    forward_flops = total_layer_flops + embed_flops + lm_head_flops
+    return 3 * forward_flops
+
+
+def compute_mfu(
+    flops_per_token: int,
+    tokens_per_second: float,
+    world_size: int,
+    peak_flops_per_device: float = 989.5e12,
+) -> float:
+    """
+    Compute Model FLOPs Utilization (MFU) as a percentage.
+
+    The caller is responsible for correcting `tokens_per_second` for any parallelism dimension that causes the
+    trainer's token counter to over-count (e.g. context parallelism, sequence parallelism, tensor parallelism — every
+    rank in those dims sees the same input tokens).
+
+    Args:
+        flops_per_token (`int`):
+            Training FLOPs per token (from [`compute_flops_per_token`]).
+        tokens_per_second (`float`):
+            Aggregate tokens per second across all devices, after any parallelism corrections.
+        world_size (`int`):
+            Number of devices (GPUs).
+        peak_flops_per_device (`float`, *optional*, defaults to `989.5e12`):
+            Theoretical peak FLOPs per device in bf16. Defaults to H100 SXM5.
+
+    Returns:
+        `float`: MFU as a percentage (0-100).
+    """
+    return 100 * (flops_per_token * tokens_per_second) / (peak_flops_per_device * world_size)
+
+
+def adjusted_mfu(mfu: float, config: PretrainedConfig, seq_len: int) -> float:
+    """
+    Apply a causal-masking correction to an MFU computed with [`compute_flops_per_token`].
+
+    [`compute_flops_per_token`] uses the non-causal attention convention (every token treated as attending to the full
+    `seq_len`, matching PaLM / Megatron / nanoGPT). With causal masking, only half of the attention-score FLOPs (`Q·Kᵀ`
+    and `attn·V`) are actually performed. This function subtracts that half from the per-token total and rescales `mfu`
+    accordingly. Use it to compare against reports that follow the Llama 2/3 / DeepSpeed Ulysses convention.
+
+    Args:
+        mfu (`float`):
+            MFU as a percentage, computed via [`compute_mfu`] (i.e., using the non-causal [`compute_flops_per_token`]).
+        config ([`~transformers.PretrainedConfig`]):
+            The model configuration.
+        seq_len (`int`):
+            The sequence length used for training.
+
+    Returns:
+        `float`: Causal-corrected MFU as a percentage.
+    """
+    flops_full = compute_flops_per_token(config, seq_len)
+    # Half of the attention-score FLOPs (Q·Kᵀ and attn·V), per layer, ×3 for fwd+bwd.
+    head_dim = getattr(config, "head_dim", None) or config.hidden_size // config.num_attention_heads
+    half_attn_score = config.num_hidden_layers * 3 * 2 * config.num_attention_heads * head_dim * seq_len
+    return mfu * (flops_full - half_attn_score) / flops_full

@@ -20,7 +20,6 @@ from ...trainer.base_config import _BaseConfig
 
 @dataclass
 class BCOConfig(_BaseConfig):
-    # docstyle-ignore
     r"""
     Configuration class for the [`experimental.bco.BCOTrainer`].
 
@@ -56,6 +55,9 @@ class BCOConfig(_BaseConfig):
         model_init_kwargs (`dict[str, Any]`, *optional*):
             Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the model and
             reference model from strings.
+        trust_remote_code (`bool`, *optional*, defaults to `False`):
+            Whether to allow loading models that ship custom Python code from the Hub. Forwarded to
+            [`~transformers.AutoModelForCausalLM.from_pretrained`] for both the model and reference model.
         dataset_num_proc (`int`, *optional*):
             Number of processes to use for processing the dataset.
         prompt_sample_size (`int`, *optional*, defaults to `1024`):
@@ -134,6 +136,13 @@ class BCOConfig(_BaseConfig):
         metadata={
             "help": "Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the "
             "model from a string."
+        },
+    )
+    trust_remote_code: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to allow loading models that ship custom Python code from the Hub. Forwarded to "
+            "`AutoModelForCausalLM.from_pretrained` for both the model and reference model."
         },
     )
     dataset_num_proc: int | None = field(

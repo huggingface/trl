@@ -27,15 +27,10 @@ def print_env():
     import torch
     from accelerate.commands.config import default_config_file, load_config_from_file
     from transformers import is_bitsandbytes_available
-    from transformers.utils import is_openai_available, is_peft_available
+    from transformers.utils import is_peft_available
 
     from trl import __version__
-    from trl.import_utils import (
-        is_deepspeed_available,
-        is_liger_kernel_available,
-        is_llm_blender_available,
-        is_vllm_available,
-    )
+    from trl.import_utils import is_deepspeed_available, is_liger_kernel_available, is_vllm_available
     from trl.scripts.utils import get_git_commit_hash
 
     devices = None
@@ -74,8 +69,6 @@ def print_env():
         "bitsandbytes version": version("bitsandbytes") if is_bitsandbytes_available() else "not installed",
         "DeepSpeed version": version("deepspeed") if is_deepspeed_available() else "not installed",
         "Liger-Kernel version": version("liger_kernel") if is_liger_kernel_available() else "not installed",
-        "LLM-Blender version": version("llm_blender") if is_llm_blender_available() else "not installed",
-        "OpenAI version": version("openai") if is_openai_available() else "not installed",
         "PEFT version": version("peft") if is_peft_available() else "not installed",
         "vLLM version": version("vllm") if is_vllm_available() else "not installed",
     }

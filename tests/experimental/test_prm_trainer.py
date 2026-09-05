@@ -250,27 +250,52 @@ class TestPRMTrainer(TrlTestCase):
 
     @pytest.mark.parametrize("train_on_last_step_only", [True, False])
     def test_train_full(self, train_on_last_step_only):
-        dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_stepwise_supervision", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "standard_stepwise_supervision", split="train")
         training_args = PRMConfig(
             output_dir=self.tmp_dir,
             report_to="none",
             train_on_last_step_only=train_on_last_step_only,
         )
         trainer = PRMTrainer(
-            model=self.model, args=training_args, processing_class=self.tokenizer, train_dataset=dummy_dataset
+            model=self.model, args=training_args, processing_class=self.tokenizer, train_dataset=dataset
         )
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
         trainer.train()
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
-        # Check that the parameters have changed
+        # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if param.sum() != 0:  # ignore 0 biases
-                assert not torch.allclose(param, new_param, rtol=1e-12, atol=1e-12)
+                assert not torch.equal(param, new_param)
+
+    @pytest.mark.parametrize("eval_dataset_type", ["dataset", "none"])
+    def test_init_with_eval_dataset(self, eval_dataset_type):
+        # PRM tokenizes the eval dataset at init by calling `.map(..., remove_columns=eval_dataset.features)` directly
+        # on it, so streaming (iterable) and dict eval datasets are not yet supported; only a plain `Dataset` is tested.
+        train_dataset = load_dataset("trl-internal-testing/zen", "standard_stepwise_supervision", split="train")
+
+        if eval_dataset_type == "none":
+            eval_dataset = None
+        else:
+            eval_dataset = load_dataset("trl-internal-testing/zen", "standard_stepwise_supervision", split="test")
+
+        training_args = PRMConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = PRMTrainer(
+            model=self.model,
+            args=training_args,
+            processing_class=self.tokenizer,
+            train_dataset=train_dataset,
+            eval_dataset=eval_dataset,
+        )
+
+        if eval_dataset_type == "none":
+            assert trainer.eval_dataset is None
+        else:
+            assert "input_ids" in next(iter(trainer.eval_dataset))
 
     def test_train_full_pretokenized(self):
-        dummy_dataset = Dataset.from_dict(
+        dataset = Dataset.from_dict(
             {
                 "labels": [
                     [-100, -100, -100, -100, -100, -100, -100, -100, -100, 0, -100, -100, 1],
@@ -309,18 +334,18 @@ class TestPRMTrainer(TrlTestCase):
 
         training_args = PRMConfig(output_dir=self.tmp_dir, report_to="none")
         trainer = PRMTrainer(
-            model=self.model, args=training_args, processing_class=self.tokenizer, train_dataset=dummy_dataset
+            model=self.model, args=training_args, processing_class=self.tokenizer, train_dataset=dataset
         )
 
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
         trainer.train()
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
-        # Check that the parameters have changed
+        # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if param.sum() != 0:  # ignore 0 biases
-                assert not torch.allclose(param, new_param, rtol=1e-12, atol=1e-12)
+                assert not torch.equal(param, new_param)
 
     @require_peft
     def test_train_lora(self):
@@ -331,13 +356,13 @@ class TestPRMTrainer(TrlTestCase):
             lora_alpha=32,
             lora_dropout=0.1,
         )
-        dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_stepwise_supervision", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "standard_stepwise_supervision", split="train")
         training_args = PRMConfig(output_dir=self.tmp_dir, max_steps=3, report_to="none")
         trainer = PRMTrainer(
             model=self.model,
             args=training_args,
             processing_class=self.tokenizer,
-            train_dataset=dummy_dataset,
+            train_dataset=dataset,
             peft_config=peft_config,
         )
         previous_trainable_params = {}
@@ -357,10 +382,10 @@ class TestPRMTrainer(TrlTestCase):
 
         assert trainer.state.log_history[(-1)]["train_loss"] is not None
 
-        # Check that the parameters have changed
+        # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            assert not torch.allclose(param, new_param, atol=1e-12, rtol=1e-12)
+            assert not torch.equal(param, new_param)
 
         # Check that the non trainable parameters have not changed
         for n, param in previous_non_trainable_params.items():
@@ -368,9 +393,9 @@ class TestPRMTrainer(TrlTestCase):
             torch.testing.assert_close(param, new_param, atol=1e-12, rtol=1e-12)
 
     def test_tags(self):
-        dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_stepwise_supervision", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "standard_stepwise_supervision", split="train")
         training_args = PRMConfig(output_dir=self.tmp_dir, report_to="none")
         trainer = PRMTrainer(
-            model=self.model, args=training_args, processing_class=self.tokenizer, train_dataset=dummy_dataset
+            model=self.model, args=training_args, processing_class=self.tokenizer, train_dataset=dataset
         )
         assert trainer.model.model_tags == trainer._tag_names

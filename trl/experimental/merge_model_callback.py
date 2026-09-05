@@ -308,11 +308,11 @@ class MergeModelCallback(TrainerCallback):
     Example:
 
     ```python
-    from trl.experimental.merge_model_callback import MergeConfig, MergeModelCallback
+    >>> from trl.experimental.merge_model_callback import MergeConfig, MergeModelCallback
 
-    config = MergeConfig()
-    merge_callback = MergeModelCallback(config)
-    trainer = DPOTrainer(..., callbacks=[merge_callback])
+    >>> config = MergeConfig()
+    >>> merge_callback = MergeModelCallback(config)
+    >>> trainer = DPOTrainer(..., callbacks=[merge_callback])
     ```
     """
 

@@ -14,7 +14,7 @@
 
 import pytest
 import torch
-from datasets import load_dataset
+from datasets import DatasetDict, load_dataset
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer, GenerationConfig
 from transformers.utils import is_peft_available
 
@@ -22,8 +22,7 @@ from trl.experimental.nash_md import NashMDConfig, NashMDTrainer
 from trl.experimental.nash_md.nash_md_trainer import GeometricMixtureWrapper
 from trl.experimental.utils import create_reference_model
 
-from ..testing_utils import TrlTestCase, require_llm_blender, require_peft
-from .testing_utils import RandomPairwiseJudge
+from ..testing_utils import TrlTestCase, require_peft
 
 
 if is_peft_available():
@@ -96,10 +95,9 @@ class TestNashMDTrainer(TrlTestCase):
             remove_unused_columns=False,
             gradient_accumulation_steps=1,
             learning_rate=9e-1,
-            eval_strategy="steps",
             report_to="none",
         )
-        dummy_dataset = load_dataset("trl-internal-testing/zen", config_name)
+        dataset = load_dataset("trl-internal-testing/zen", config_name, split="train")
 
         trainer = NashMDTrainer(
             model=self.model,
@@ -107,55 +105,81 @@ class TestNashMDTrainer(TrlTestCase):
             reward_funcs=self.reward_model,
             args=training_args,
             processing_class=self.tokenizer,
-            train_dataset=dummy_dataset["train"],
-            eval_dataset=dummy_dataset["test"],
+            train_dataset=dataset,
         )
 
         trainer.train()
 
-        # Check if training loss is available
         assert "train_loss" in trainer.state.log_history[-1]
 
+    @pytest.mark.parametrize("eval_dataset_type", ["dataset", "dataset_dict", "dict_of_dataset", "none"])
+    def test_init_with_eval_dataset(self, eval_dataset_type):
+        # Streaming datasets are not yet supported in NashMD
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
+
+        if eval_dataset_type == "none":
+            eval_dataset = None
+        elif eval_dataset_type == "dataset":
+            eval_dataset = dataset["test"]
+        elif eval_dataset_type == "dataset_dict":
+            eval_dataset = DatasetDict({"data1": dataset["test"], "data2": dataset["test"]})
+        else:  # "dict_of_dataset"
+            eval_dataset = {"data1": dataset["test"], "data2": dataset["test"]}
+
+        training_args = NashMDConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = NashMDTrainer(
+            model=self.model,
+            ref_model=self.ref_model,
+            reward_funcs=self.reward_model,
+            args=training_args,
+            processing_class=self.tokenizer,
+            train_dataset=dataset["train"],
+            eval_dataset=eval_dataset,
+        )
+
+        if eval_dataset_type == "none":
+            assert trainer.eval_dataset is None
+        elif isinstance(trainer.eval_dataset, dict):
+            assert set(trainer.eval_dataset.keys()) == {"data1", "data2"}
+        else:
+            assert trainer.eval_dataset is eval_dataset
+
     @require_peft
-    def test_training_with_peft(self):
+    def test_train_with_peft(self):
         lora_config = LoraConfig(r=16, lora_alpha=32, lora_dropout=0.05, bias="none", task_type="CAUSAL_LM")
         training_args = NashMDConfig(
             output_dir=self.tmp_dir,
             per_device_train_batch_size=2,
             max_steps=3,
             learning_rate=5.0e-7,
-            eval_strategy="steps",
             report_to="none",
         )
-        dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         trainer = NashMDTrainer(
             model=self.model,
             reward_funcs=self.reward_model,
             args=training_args,
             processing_class=self.tokenizer,
-            train_dataset=dummy_dataset["train"],
-            eval_dataset=dummy_dataset["test"],
+            train_dataset=dataset,
             peft_config=lora_config,
         )
 
         trainer.train()
 
-        # Check if training loss is available
         assert "train_loss" in trainer.state.log_history[-1]
 
     @require_peft
-    def test_training_with_peft_and_ref_model(self):
+    def test_train_with_peft_and_ref_model(self):
         lora_config = LoraConfig(r=16, lora_alpha=32, lora_dropout=0.05, bias="none", task_type="CAUSAL_LM")
         training_args = NashMDConfig(
             output_dir=self.tmp_dir,
             per_device_train_batch_size=2,
             max_steps=3,
             learning_rate=5.0e-7,
-            eval_strategy="steps",
             report_to="none",
         )
-        dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         trainer = NashMDTrainer(
             model=self.model,
@@ -163,18 +187,16 @@ class TestNashMDTrainer(TrlTestCase):
             reward_funcs=self.reward_model,
             args=training_args,
             processing_class=self.tokenizer,
-            train_dataset=dummy_dataset["train"],
-            eval_dataset=dummy_dataset["test"],
+            train_dataset=dataset,
             peft_config=lora_config,
         )
 
         trainer.train()
 
-        # Check if training loss is available
         assert "train_loss" in trainer.state.log_history[-1]
 
     @require_peft
-    def test_training_pre_pefted_model_implicit_ref_with_reward_model(self):
+    def test_train_pre_pefted_model_implicit_ref_with_reward_model(self):
         lora_config = LoraConfig(r=8, lora_alpha=16, lora_dropout=0.1, bias="none", task_type="CAUSAL_LM")
         # self.model from setUp is a base AutoModelForCausalLM
         peft_model_instance = get_peft_model(self.model, lora_config)
@@ -188,7 +210,7 @@ class TestNashMDTrainer(TrlTestCase):
             report_to="none",
             remove_unused_columns=False,  # Important for the dummy dataset
         )
-        dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")["train"]
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         trainer = NashMDTrainer(
             model=peft_model_instance,  # Pass the already PEFT model
@@ -196,41 +218,10 @@ class TestNashMDTrainer(TrlTestCase):
             reward_funcs=self.reward_model,  # To trigger GeometricMixtureWrapper path
             args=training_args,
             processing_class=self.tokenizer,
-            train_dataset=dummy_dataset,
+            train_dataset=dataset,
             # peft_config is not passed, as model is already PEFT
         )
 
         trainer.train()
 
-        assert "train_loss" in trainer.state.log_history[-1]
-
-    @pytest.mark.parametrize("config_name", ["standard_prompt_only", "conversational_prompt_only"])
-    @require_llm_blender
-    def test_nash_md_trainer_judge_training(self, config_name):
-        training_args = NashMDConfig(
-            output_dir=self.tmp_dir,
-            per_device_train_batch_size=2,
-            max_steps=3,
-            remove_unused_columns=False,
-            gradient_accumulation_steps=1,
-            learning_rate=9e-1,
-            eval_strategy="steps",
-            report_to="none",
-        )
-        dummy_dataset = load_dataset("trl-internal-testing/zen", config_name)
-        judge = RandomPairwiseJudge()
-
-        trainer = NashMDTrainer(
-            model=self.model,
-            ref_model=self.ref_model,
-            judge=judge,
-            args=training_args,
-            processing_class=self.tokenizer,
-            train_dataset=dummy_dataset["train"],
-            eval_dataset=dummy_dataset["test"],
-        )
-
-        trainer.train()
-
-        # Check if training loss is available
         assert "train_loss" in trainer.state.log_history[-1]

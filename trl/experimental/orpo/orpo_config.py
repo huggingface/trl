@@ -20,7 +20,6 @@ from ...trainer.base_config import _BaseConfig
 
 @dataclass
 class ORPOConfig(_BaseConfig):
-    # docstyle-ignore
     r"""
     Configuration class for the [`experimental.orpo.ORPOTrainer`].
 
@@ -55,6 +54,9 @@ class ORPOConfig(_BaseConfig):
         model_init_kwargs (`dict[str, Any]`, *optional*):
             Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the model from a
             string.
+        trust_remote_code (`bool`, *optional*, defaults to `False`):
+            Whether to allow loading models that ship custom Python code from the Hub. Forwarded to
+            [`~transformers.AutoModelForCausalLM.from_pretrained`].
         dataset_num_proc (`int`, *optional*):
             Number of processes to use for processing the dataset.
 
@@ -116,6 +118,13 @@ class ORPOConfig(_BaseConfig):
         metadata={
             "help": "Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the model "
             "from a string."
+        },
+    )
+    trust_remote_code: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to allow loading models that ship custom Python code from the Hub. Forwarded to "
+            "`AutoModelForCausalLM.from_pretrained`."
         },
     )
     dataset_num_proc: int | None = field(

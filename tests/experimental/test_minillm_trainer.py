@@ -14,7 +14,7 @@
 
 import pytest
 import torch
-from datasets import load_dataset
+from datasets import DatasetDict, load_dataset
 
 from trl.experimental.minillm import MiniLLMConfig, MiniLLMTrainer
 
@@ -24,10 +24,8 @@ from ..testing_utils import TrlTestCase
 @pytest.mark.low_priority
 class TestMiniLLMTrainer(TrlTestCase):
     def test_train(self):
-        # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
-        # Initialize the trainer
         training_args = MiniLLMConfig(
             output_dir=self.tmp_dir,
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
@@ -42,16 +40,43 @@ class TestMiniLLMTrainer(TrlTestCase):
             train_dataset=dataset,
         )
 
-        # Save the initial parameters to compare them later
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
-        # Train the model
         trainer.train()
 
-        # Check that the training loss is not None
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
-        # Check the params have changed
+        # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @pytest.mark.parametrize("eval_dataset_type", ["dataset", "dataset_dict", "dict_of_dataset", "none"])
+    def test_init_with_eval_dataset(self, eval_dataset_type):
+        # Streaming datasets are not yet supported in MiniLLM
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
+
+        if eval_dataset_type == "none":
+            eval_dataset = None
+        elif eval_dataset_type == "dataset":
+            eval_dataset = dataset["test"]
+        elif eval_dataset_type == "dataset_dict":
+            eval_dataset = DatasetDict({"data1": dataset["test"], "data2": dataset["test"]})
+        else:  # "dict_of_dataset"
+            eval_dataset = {"data1": dataset["test"], "data2": dataset["test"]}
+
+        training_args = MiniLLMConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = MiniLLMTrainer(
+            model="trl-internal-testing/small-Qwen3ForCausalLM",
+            teacher_model="trl-internal-testing/tiny-Qwen3ForCausalLM",
+            args=training_args,
+            train_dataset=dataset["train"],
+            eval_dataset=eval_dataset,
+        )
+
+        if eval_dataset_type == "none":
+            assert trainer.eval_dataset is None
+        elif isinstance(trainer.eval_dataset, dict):
+            assert set(trainer.eval_dataset.keys()) == {"data1", "data2"}
+        else:
+            assert trainer.eval_dataset is eval_dataset

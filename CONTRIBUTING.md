@@ -95,7 +95,7 @@ Based on the community and maintainer feedback, the next step will be to impleme
 
 * Paired preference optimisation: [`dpo_trainer.py`](./trl/trainer/dpo_trainer.py) and [`dpo_config.py`](./trl/trainer/dpo_config.py)
 * RL-based optimisation: [`rloo_trainer.py`](./trl/trainer/rloo_trainer.py) and [`rloo_config.py`](./trl/trainer/rloo_config.py)
-* Online optimisation: [`online_dpo_trainer.py`](./trl/trainer/online_dpo_trainer.py) and [`online_dpo_config.py`](./trl/trainer/online_dpo_config.py)
+* Online optimisation: [`online_dpo_trainer.py`](./trl/experimental/online_dpo/online_dpo_trainer.py) and [`online_dpo_config.py`](./trl/experimental/online_dpo/online_dpo_config.py)
 
 ## Do you want to add documentation?
 
@@ -421,10 +421,12 @@ By following this classification, you ensure that warnings, information, and exc
 
 ## Coding with AI agents
 
-This repository keeps AI-agent configuration in `.ai/` and exposes local agent files via symlinks.
+This repository keeps AI-agent configuration in `.ai/` and skills in `.agents/skills/`.
 
-Skills can be exposed to agents by running `make codex` or `make claude`
+`AGENTS.md`, `CLAUDE.md`, and `.cursor/BUGBOT.md` all point to `.ai/AGENTS.md`. Cursor reads `AGENTS.md` and Bugbot reads `.cursor/BUGBOT.md`.
 
-`AGENTS.md`, `CLAUDE.md`, and `.cursor/BUGBOT.md` all point to `.ai/AGENTS.md`.
+Codex, Cursor and Gemini CLI read `.agents/skills/` directly. Claude Code reads `.claude/skills/`, so run `make claude` to symlink it to `.agents/skills/` (and `make clean-ai` to remove it).
 
-Cursor reads `AGENTS.md` and Bugbot reads `.cursor/BUGBOT.md`. Cursor reads skills from Claude or Codex paths, so setting up the repository for Claude or Codex will work for Cursor.
+`.agents/skills/` holds contributor skills maintained by the repository. Personal skills belong in `~/.agents/skills`, which Codex, Cursor, Gemini CLI and Copilot all read as user scope; for a personal skill that has to be repo-scoped, `.agents/skills/local-*/` is git-ignored.
+
+A skill that describes a workflow is updated in the PR that changes that workflow, the same rule that applies to `paper_index.md`.

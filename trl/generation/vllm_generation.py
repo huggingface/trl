@@ -22,12 +22,17 @@ from typing import TYPE_CHECKING
 
 import torch
 from accelerate.utils import broadcast_object_list, gather_object, is_peft_model
-from packaging.version import Version
 from torch import nn
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from transformers import PreTrainedModel, PreTrainedTokenizerBase, ProcessorMixin, is_bitsandbytes_available
-from transformers.utils import is_torch_mlu_available, is_torch_npu_available, is_torch_xpu_available
+from transformers.utils import (
+    is_torch_mlu_available,
+    is_torch_mps_available,
+    is_torch_npu_available,
+    is_torch_xpu_available,
+)
 
+from ..distributed import DistributedBackend
 from ..extras.profiling import ProfilingContext
 from ..import_utils import is_vllm_available
 from ..trainer.utils import ensure_master_addr_port
@@ -36,6 +41,7 @@ from .vllm_client import VLLMClient
 
 if is_vllm_available():
     from vllm import LLM, RequestOutput, SamplingParams
+    from vllm.sampling_params import StructuredOutputsParams
 
 
 logger = logging.getLogger(__name__)
@@ -44,17 +50,19 @@ logger = logging.getLogger(__name__)
 def empty_cache() -> None:
     """Empties the cache of the available torch device.
 
-    This function checks for the availability of different torch devices (XPU, MLU, NPU, CUDA) and empties the cache of
-    the first available device it finds.
+    This function checks for the availability of different torch devices (CUDA, MLU, MPS, NPU, XPU) and empties the
+    cache of the first available device it finds.
 
     If none of the specific devices are available, it defaults to emptying the CUDA cache.
     """
-    if is_torch_xpu_available():
-        torch.xpu.empty_cache()
-    elif is_torch_mlu_available():
+    if is_torch_mlu_available():
         torch.mlu.empty_cache()
+    elif is_torch_mps_available():
+        torch.mps.empty_cache()
     elif is_torch_npu_available():
         torch.npu.empty_cache()
+    elif is_torch_xpu_available():
+        torch.xpu.empty_cache()
     else:
         torch.cuda.empty_cache()
 
@@ -111,8 +119,6 @@ class VLLMGeneration:
             Model to use for generation.
         accelerator ([`~accelerate.Accelerator`]):
             Accelerator for distributed training.
-        is_fsdp_enabled (`bool`):
-            Whether FSDP is enabled.
         processing_class ([`~transformers.PreTrainedTokenizerBase`] or [`~transformers.ProcessorMixin`]):
             Tokenizer or processor for the model.
 
@@ -123,8 +129,8 @@ class VLLMGeneration:
 
             - `"colocate"`: vLLM will run in the same process and share the training GPUs. This avoids the need for a
               separate server but may cause resource contention with training.
-            - `"server"`: The trainer will send generation requests to a separate vLLM server. Make sure a TRL vLLM
-              server is running (start with `trl vllm-serve`).
+            - `"server"`: The trainer will send generation requests to a separate vLLM server. Make sure a vLLM server
+              is running (start with `vllm serve`).
 
         structured_outputs_regex (`str`, *optional*):
             Regex for vLLM structured outputs. If `None` (default), structured outputs is disabled.
@@ -172,6 +178,8 @@ class VLLMGeneration:
             - "vllm" will use the vLLM model implementation.
             - "transformers" will use the Transformers model implementation.
             - "terratorch" will use the TerraTorch model implementation.
+        trust_remote_code (`bool`, *optional*, defaults to `False`):
+            Trust remote code (e.g., from HuggingFace) when downloading the model and tokenizer.
 
         > Parameters for generation:
 
@@ -179,10 +187,10 @@ class VLLMGeneration:
             Parameter for repetition penalty. It penalizes new tokens based on whether they appear in the prompt and
             the generated text so far. Values > 1 encourage the model to use new tokens, while values < 1 encourage the
             model to repeat tokens. Default `1.0` means no penalty.
-        temperature(`float`, *optional*, defaults to `1.0`):
+        temperature (`float`, *optional*, defaults to `1.0`):
             Sampling temperature. It controls the randomness of the sampling. Lower values make the model more
             deterministic, while higher values make the model more random and increase diversity.
-        top_p: (`float`, *optional*, defaults to `1.0`):
+        top_p (`float`, *optional*, defaults to `1.0`):
             Top-p sampling parameter. It controls the cumulative probability of the top tokens to consider. Defaults to
             `1.0` to consider all tokens.
         top_k (`int`, *optional*, defaults to `0`):
@@ -203,21 +211,12 @@ class VLLMGeneration:
             `seed`, `frequency_penalty`, etc. If it contains keys that conflict with the other parameters, they will
             override them.
 
-        > Parameters for chat/tools:
-
-        chat_template (`str`, *optional*):
-            Template to use for structuring the chat. If not provided, the model's default chat template will be used.
-        chat_template_kwargs (`dict`, *optional*):
-            Additional keyword arguments to customize the chat template used by the model.
-        tools (`list`, *optional*):
-            Tools available for tool calling during chat generation.
     """
 
     def __init__(
         self,
         model: "PreTrainedModel | PeftModel",
         accelerator: "Accelerator",
-        is_fsdp_enabled: bool,
         processing_class: PreTrainedTokenizerBase | ProcessorMixin,
         # vLLM configuration
         mode: str = "colocate",
@@ -235,6 +234,7 @@ class VLLMGeneration:
         max_num_seqs: int | None = None,
         enable_sleep_mode: bool = False,
         model_impl: str = "auto",
+        trust_remote_code: bool = False,
         # Generation configuration
         repetition_penalty: float = 1.0,
         temperature: float = 1.0,
@@ -247,7 +247,7 @@ class VLLMGeneration:
     ):
         self.model = model
         self.accelerator = accelerator
-        self.is_fsdp_enabled = is_fsdp_enabled
+        self._dist = DistributedBackend(accelerator)
         self.processing_class = processing_class
 
         # vLLM configuration
@@ -268,6 +268,7 @@ class VLLMGeneration:
         self.max_num_seqs = max_num_seqs
         self.enable_sleep_mode = enable_sleep_mode
         self.model_impl = model_impl
+        self.trust_remote_code = trust_remote_code
 
         # Generation configuration
         self.repetition_penalty = repetition_penalty
@@ -278,6 +279,10 @@ class VLLMGeneration:
         self.max_completion_length = max_completion_length
         self.logprobs = logprobs
         self.generation_kwargs = generation_kwargs or {}
+
+        # Tensor names, dtypes and shapes streamed to the server on each weight sync. Collected on the first sync, as
+        # it requires gathering the parameters, and constant afterwards.
+        self._weight_metadata = None
 
         self._init_vllm()
 
@@ -301,7 +306,7 @@ class VLLMGeneration:
                 self.vllm_client = VLLMClient(
                     base_url=base_url, group_port=self.group_port, connection_timeout=self.server_timeout
                 )
-                self.vllm_client.init_communicator(device=torch.cuda.current_device())
+                self.vllm_client.init_communicator(device=accelerator.device)
 
         elif self.mode == "colocate":
             # Make sure tensor_parallel_size group size evenly divides the world size - each group should have
@@ -355,9 +360,12 @@ class VLLMGeneration:
                 # Important so temperature scaling/logit tweaking affects the TIS log probs
                 logprobs_mode="processed_logprobs",
                 quantization=quantization,
+                trust_remote_code=self.trust_remote_code,
             )
             if self.enable_sleep_mode:
                 self.llm.sleep(level=2)
+            # Sleep level 2 discards the weights; track it so that generate() knows it must re-push them
+            self._llm_weights_sleeping = self.enable_sleep_mode
         else:
             raise ValueError(f"vllm_mode must be either 'server' or 'colocate', got '{self.mode}'.")
 
@@ -374,16 +382,14 @@ class VLLMGeneration:
             name = name.replace(prefix, "")
         return name
 
-    def _sync_fsdp1_params_to_vllm(self, module: nn.Module, prefix: str = "", visited: set[str] | None = None):
-        """Memory-efficient post-order traversal of FSDP modules to extract full parameters and sync with vLLM."""
+    def _iter_fsdp1_params(self, module: nn.Module, prefix: str = "", visited: set[str] | None = None):
+        """Memory-efficient post-order traversal of FSDP modules to extract full parameters."""
         # For FSDP1, we need to recurse into children and also use summon_full_params
-        accelerator = self.accelerator
-
         if visited is None:
             visited = set()
         for child_name, child_module in module.named_children():
             child_prefix = f"{prefix}.{child_name}" if prefix else child_name
-            self._sync_fsdp1_params_to_vllm(
+            yield from self._iter_fsdp1_params(
                 child_module, prefix=child_prefix, visited=visited
             )  # recurse into the child
 
@@ -397,16 +403,10 @@ class VLLMGeneration:
                         continue  # skip FSDP subtrees already traversed
                     visited.add(full_name)
 
-                    if self.mode == "server" and accelerator.is_main_process:
-                        self.vllm_client.update_named_param(full_name, param.data)
-                    elif self.mode == "colocate":
-                        llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
-                        llm_model.load_weights([(full_name, param.data)])
+                    yield full_name, param.data
 
-    def _sync_fsdp2_params_to_vllm(self, module: nn.Module):
-        """FSDP2-specific parameter synchronization."""
-        accelerator = self.accelerator
-
+    def _iter_fsdp2_params(self, module: nn.Module):
+        """FSDP2-specific parameter iteration."""
         # For FSDP2, module.state_dict() already covers all parameters, so no need for recursion
         for name, param in module.state_dict().items():
             # When using PEFT, we need to recover the original parameter name
@@ -420,58 +420,37 @@ class VLLMGeneration:
             name = self._fix_param_name_to_vllm(name, extra_prefixes=["modules_to_save.default."])
 
             if param.is_cpu:
-                param = param.to(torch.device("cuda"))
+                param = param.to(self.accelerator.device)
             param = param.full_tensor()
 
-            if self.mode == "server" and accelerator.is_main_process:
-                self.vllm_client.update_named_param(name, param)
-            elif self.mode == "colocate":
-                llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
-                llm_model.load_weights([(name, param)])
+            yield name, param
 
-    def sync_weights(self):
-        """Synchronize model weights to vLLM.
+    def _iter_fsdp_params(self, model: nn.Module):
+        """Dispatch FSDP parameter iteration to the version-appropriate method."""
+        if self._dist.fsdp_version == 1:
+            yield from self._iter_fsdp1_params(model)
+        elif self._dist.fsdp_version == 2:
+            yield from self._iter_fsdp2_params(model)
 
-        Handles FSDP, DeepSpeed, PEFT weight synchronization.
+    def _iter_named_params(self):
+        """Iterate over the model parameters, materialized one at a time under the name vLLM expects.
+
+        Handles FSDP, DeepSpeed and PEFT. Gathering a parameter is a collective operation, so every process must
+        iterate, even the ones that don't push the weights anywhere.
         """
-        # Wake up vLLM weights before loading to ensure device memory is mapped. Without this, load_weights() writes to
-        # freed/unmapped memory when sleep mode is active, which crashes on backends with strict physical memory
-        # management (e.g., Ascend NPU). See https://github.com/huggingface/trl/issues/5142
-        if self.mode == "colocate" and self.enable_sleep_mode:
-            empty_cache()  # required to avoid OOM in some cases
-            self.llm.wake_up(tags=["weights"])
-
         model = self.model
-        accelerator = self.accelerator
-        is_fsdp_enabled = self.is_fsdp_enabled
-
-        # For DeepSpeed ZeRO-3 and FSDP, we need to gather all parameters before operations
-        deepspeed_plugin = accelerator.state.deepspeed_plugin
-        zero_stage_3 = deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3
-        if zero_stage_3:
-            import deepspeed
-
-            gather_if_zero3 = deepspeed.zero.GatheredParameters
-        else:
-            gather_if_zero3 = nullcontext
 
         if is_peft_model(model):
             # With PEFT and FSDP/DeepSpeed ZeRO Stage 3, we must gather the full model at once before merging, as
             # merging adapters in a sharded manner is not supported.
             # TODO: does this work with FSDP?
-            with gather_if_zero3(list(model.parameters())):
+            with self._dist.gather_params(list(model.parameters())):
                 model.merge_adapter()
 
-                # Update vLLM weights while parameters are gathered
-                if is_fsdp_enabled:  # note if using FSDP, gather_if_zero3 is nullcontext
-                    # Update vLLM weights while parameters are gathered
+                # Read the vLLM weights while parameters are gathered
+                if self._dist.is_fsdp:  # note if using FSDP, gather_params is a no-op
                     # For PEFT with FSDP we need to use the memory efficient post-order traversal
-                    fsdp_plugin = getattr(accelerator.state, "fsdp_plugin", None)
-                    fsdp_version = getattr(fsdp_plugin, "fsdp_version", 1) if fsdp_plugin else 1
-                    if fsdp_version == 1:
-                        self._sync_fsdp1_params_to_vllm(model)  # use memory-efficient post-order traversal for FSDP
-                    elif fsdp_version == 2:
-                        self._sync_fsdp2_params_to_vllm(model)
+                    yield from self._iter_fsdp_params(model)
                 else:
                     # DeepSpeed ZeRO-3 with PEFT
                     for name, param in model.named_parameters():
@@ -485,38 +464,88 @@ class VLLMGeneration:
                             continue
                         name = self._fix_param_name_to_vllm(name, extra_prefixes=["modules_to_save.default."])
 
-                        if self.mode == "server" and accelerator.is_main_process:
-                            self.vllm_client.update_named_param(name, param.data)
-                        elif self.mode == "colocate":
-                            llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
-                            llm_model.load_weights([(name, param.data)])
+                        yield name, param.data
                 # Unmerge adapters while parameters are still gathered
                 model.unmerge_adapter()
                 # Parameters will automatically be repartitioned when exiting the context
         else:
-            # For non-PEFT models, simply gather (if needed) and update each parameter individually.
-            if is_fsdp_enabled:
-                fsdp_plugin = getattr(accelerator.state, "fsdp_plugin", None)
-                fsdp_version = getattr(fsdp_plugin, "fsdp_version", 1) if fsdp_plugin else 1
-                if fsdp_version == 1:
-                    self._sync_fsdp1_params_to_vllm(model)  # use memory-efficient post-order traversal for FSDP
-                elif fsdp_version == 2:
-                    self._sync_fsdp2_params_to_vllm(model)
+            # For non-PEFT models, simply gather (if needed) and read each parameter individually.
+            if self._dist.is_fsdp:
+                yield from self._iter_fsdp_params(model)
             else:
                 for name, param in model.named_parameters():
                     name = self._fix_param_name_to_vllm(name)
-                    with gather_if_zero3([param]):
-                        if self.mode == "server" and accelerator.is_main_process:
-                            self.vllm_client.update_named_param(name, param.data)
-                        elif self.mode == "colocate":
-                            llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
-                            llm_model.load_weights([(name, param.data)])
+                    with self._dist.gather_params([param]):
+                        yield name, param.data
+
+    def sync_weights(self):
+        """Synchronize model weights to vLLM.
+
+        Handles FSDP, DeepSpeed, PEFT weight synchronization.
+        """
+        # Wake up vLLM weights before loading to ensure device memory is mapped. Without this, load_weights() writes to
+        # freed/unmapped memory when sleep mode is active, which crashes on backends with strict physical memory
+        # management (e.g., Ascend NPU). See https://github.com/huggingface/trl/issues/5142
+        if self.mode == "colocate" and self.enable_sleep_mode:
+            empty_cache()  # required to avoid OOM in some cases
+            self.llm.wake_up(tags=["weights"])
+            self._llm_weights_sleeping = False
+
+        accelerator = self.accelerator
+
+        if self.mode == "server":
+            # The server must know every tensor it is about to receive before the first one is broadcast, so the
+            # parameters are walked once to collect their metadata, and streamed on subsequent passes.
+            if self._weight_metadata is None:
+                self._weight_metadata = [
+                    (name, str(param.dtype).removeprefix("torch."), list(param.shape))
+                    for name, param in self._iter_named_params()
+                ]
+            if accelerator.is_main_process:
+                self.vllm_client.update_named_params(self._weight_metadata, self._iter_named_params())
+            else:
+                for _ in self._iter_named_params():  # take part in the gather collectives
+                    pass
+        elif self.mode == "colocate":
+            for name, param in self._iter_named_params():
+                self.llm.llm_engine.model_executor.driver_worker.model_runner.model.load_weights([(name, param)])
 
         # Reset cache on vLLM
         if self.mode == "server" and accelerator.is_main_process:
             self.vllm_client.reset_prefix_cache()
         elif self.mode == "colocate":
             self.llm.reset_prefix_cache()
+
+    def _place_features(self, features: dict | None, prompt_ids: list[int]) -> dict | None:
+        """Point the image features at the image tokens of `prompt_ids`.
+
+        The server reports where the images sit in the throwaway conversation it processed them in, which says nothing
+        about the prompt being trained on, so their positions are recomputed from the runs of image tokens in the
+        trainer's own token IDs.
+        """
+        if features is None:
+            return None
+
+        image_token_id = self.processing_class.image_token_id
+        placeholders = []
+        offset = 0
+        while offset < len(prompt_ids):
+            if prompt_ids[offset] == image_token_id:
+                length = 0
+                while offset + length < len(prompt_ids) and prompt_ids[offset + length] == image_token_id:
+                    length += 1
+                placeholders.append({"offset": offset, "length": length})
+                offset += length
+            else:
+                offset += 1
+
+        expected = len(features["mm_placeholders"]["image"])
+        if len(placeholders) != expected:
+            raise ValueError(
+                f"Found {len(placeholders)} runs of image tokens in the prompt but {expected} images were processed. "
+                "The prompt must contain one run of image tokens per image."
+            )
+        return {**features, "mm_placeholders": {**features["mm_placeholders"], "image": placeholders}}
 
     def generate(
         self,
@@ -545,17 +574,6 @@ class VLLMGeneration:
             `num_logprobs` is 1 when `logprobs=0`, or up to N+1 when `logprobs=N` (the sampled token is always included
             and may fall outside the top-N).
         """
-        import vllm
-
-        if Version(vllm.__version__) <= Version("0.10.2"):
-            from vllm.sampling_params import GuidedDecodingParams as StructuredOutputsParams
-
-            structured_outputs_key = "guided_decoding"
-        else:
-            from vllm.sampling_params import StructuredOutputsParams
-
-            structured_outputs_key = "structured_outputs"
-
         profiler = profiler or nullcontext()
         accelerator = self.accelerator
         temperature = self.temperature
@@ -565,16 +583,11 @@ class VLLMGeneration:
         repetition_penalty = self.repetition_penalty
         max_completion_length = self.max_completion_length
 
-        # Wake up colocated vLLM weights if needed (idempotent if already awake from sync_weights)
-        if self.mode == "colocate" and self.enable_sleep_mode:
-            empty_cache()  # required to avoid OOM in some cases
-            self.llm.wake_up(tags=["weights"])
-            # Work around for https://github.com/vllm-project/vllm/issues/29341
-            try:
-                self.llm.collective_rpc("reload_weights")
-            except NotImplementedError:
-                # Non-CUDA vLLM backends (e.g., vllm-ascend's NPUWorkerV1), don't implement reload_weights
-                pass
+        # Sleep level 2 discards the weights, so waking up isn't enough: they must be re-pushed from the training
+        # model. vLLM's `reload_weights` can't be used here, as it reloads the initial checkpoint from disk rather
+        # than the current training weights. See https://github.com/vllm-project/vllm/issues/29341
+        if self.mode == "colocate" and self.enable_sleep_mode and self._llm_weights_sleeping:
+            self.sync_weights()
 
         # Generate completions using vLLM: gather all prompts and use them in a single call in the main process
         if self.mode == "server":
@@ -590,7 +603,16 @@ class VLLMGeneration:
                 # generate num_generations outputs for each one. This is faster than generating outputs for each
                 # duplicate prompt individually.
                 ordered_set_of_prompt_ids = all_prompts[::num_generations]
-                ordered_set_of_images = all_images[::num_generations] if all_images is not None else None
+
+                # The server generates from either token IDs or images, so images are processed on their own first
+                # and the resulting features are paired with the token IDs.
+                features = None
+                if all_images is not None:
+                    features = self.vllm_client.image_features(all_images[::num_generations])
+                    features = [
+                        self._place_features(prompt_features, prompt_ids)
+                        for prompt_features, prompt_ids in zip(features, ordered_set_of_prompt_ids, strict=True)
+                    ]
 
                 sampling_params = {
                     "n": num_generations,
@@ -606,9 +628,7 @@ class VLLMGeneration:
                 }
                 with profiler:
                     output = self.vllm_client.generate(
-                        prompts=ordered_set_of_prompt_ids,
-                        images=ordered_set_of_images,
-                        **sampling_params,
+                        prompts=ordered_set_of_prompt_ids, features=features, **sampling_params
                     )
                     payload = (
                         output["prompt_ids"],
@@ -652,16 +672,14 @@ class VLLMGeneration:
             generation_kwargs.update(self.generation_kwargs)
 
             if self.structured_outputs_regex is not None:
-                if generation_kwargs.get(structured_outputs_key) is not None:
+                if generation_kwargs.get("structured_outputs") is not None:
                     logger.warning(
-                        f"Both `structured_outputs_regex` and `generation_kwargs['{structured_outputs_key}']` are set; "
+                        "Both `structured_outputs_regex` and `generation_kwargs['structured_outputs']` are set; "
                         "`structured_outputs_regex` takes precedence."
                     )
-                generation_kwargs[structured_outputs_key] = StructuredOutputsParams(
-                    regex=self.structured_outputs_regex
-                )
-            elif isinstance(structured_outputs_kwargs := generation_kwargs.get(structured_outputs_key), dict):
-                generation_kwargs[structured_outputs_key] = StructuredOutputsParams(**structured_outputs_kwargs)
+                generation_kwargs["structured_outputs"] = StructuredOutputsParams(regex=self.structured_outputs_regex)
+            elif isinstance(structured_outputs_kwargs := generation_kwargs.get("structured_outputs"), dict):
+                generation_kwargs["structured_outputs"] = StructuredOutputsParams(**structured_outputs_kwargs)
             sampling_params = SamplingParams(**generation_kwargs)
 
             if self.tensor_parallel_size > 1:
@@ -697,6 +715,16 @@ class VLLMGeneration:
             else:
                 vllm_prompts = [{"prompt_token_ids": ids} for ids in all_prompts]
 
+            # When PEFT is used, DDP gradient all-reduce only covers the small LoRA parameters, so
+            # NCCL operations complete very quickly. On non-NVLink hardware (e.g. A40/A100), vLLM's
+            # TP NCCL collective can race with NCCL's internal P2P/SHM channel cleanup from that
+            # all-reduce, causing llm.generate() to hang. A barrier on the default process group
+            # forces NCCL to fully drain before vLLM's TP communication starts. We pass device_ids
+            # so NCCL uses this rank's device rather than guessing, which itself risks a hang.
+            # See https://github.com/huggingface/trl/issues/3671
+            if is_peft_model(self.model) and self.tensor_parallel_size > 1:
+                torch.distributed.barrier(device_ids=[accelerator.local_process_index])
+
             with profiler:
                 all_outputs = self.llm.generate(vllm_prompts, sampling_params=sampling_params, use_tqdm=False)
 
@@ -721,5 +749,6 @@ class VLLMGeneration:
 
             if self.enable_sleep_mode:
                 self.llm.sleep(level=2)
+                self._llm_weights_sleeping = True
 
         return prompt_ids, completion_ids, logprobs, logprob_token_ids
