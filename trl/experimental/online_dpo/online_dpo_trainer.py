@@ -711,7 +711,7 @@ class OnlineDPOTrainer(_BaseTrainer):
         """Generate completions using vLLM colocate mode"""
         if self.args.vllm_enable_sleep_mode:
             # wake up colocated vLLM instances if needed
-            torch.cuda.empty_cache()  # required to avoid OOM in some cases
+            empty_cache()  # required to avoid OOM in some cases
             self.llm.wake_up(tags=["weights"])
 
         # Update model weights if needed - only after gradient accumulation completes
