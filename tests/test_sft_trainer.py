@@ -29,6 +29,7 @@ from packaging.version import Version
 from transformers import (
     AutoModelForCausalLM,
     AutoModelForImageTextToText,
+    AutoProcessor,
     AutoTokenizer,
     BitsAndBytesConfig,
     TrainingArguments,
@@ -39,6 +40,7 @@ from transformers.utils import is_peft_available
 from trl import SFTConfig, SFTTrainer
 from trl.trainer.sft_trainer import (
     DataCollatorForLanguageModeling,
+    DataCollatorForVisionLanguageModeling,
     _chunked_cross_entropy_loss,
     _patch_chunked_ce_lm_head,
     dft_loss,
@@ -283,6 +285,73 @@ class TestDataCollatorForLanguageModeling(TrlTestCase):
         assert len(result) == 2
         assert torch.equal(result[0], torch.tensor([0, 1, 0, 1]))
         assert torch.equal(result[1], torch.arange(3))
+
+
+class TestDataCollatorForVisionLanguageModeling(TrlTestCase):
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",
+            "trl-internal-testing/tiny-Idefics2ForConditionalGeneration",
+            "trl-internal-testing/tiny-Idefics3ForConditionalGeneration",
+        ],
+    )
+    @pytest.mark.parametrize("completion_only_loss", [None, False, True])
+    @pytest.mark.parametrize("image_counts", [(1, 1), (1, 2)])
+    @require_vision
+    def test_padding_free_vision(self, model_id, completion_only_loss, image_counts):
+        from PIL import Image
+
+        processor = AutoProcessor.from_pretrained(model_id)
+        # Keep image processing small enough for CPU tests, including Idefics image splitting.
+        if "Idefics2" in model_id:
+            processor.image_processor.size = {"longest_edge": 56, "shortest_edge": 56}
+        elif "Idefics3" in model_id:
+            processor.image_processor.size = {"longest_edge": 56}
+            processor.image_processor.max_image_size = {"longest_edge": 56}
+
+        examples = []
+        for index, image_count in enumerate(image_counts):
+            prompt = [{"role": "user", "content": "Describe these images."}]
+            completion = [{"role": "assistant", "content": "A red square." * (index + 1)}]
+            example = {
+                "images": [Image.new("RGB", (56 + 28 * index, 56), ("red", "blue")[index]) for _ in range(image_count)]
+            }
+            if completion_only_loss is None:
+                example["messages"] = prompt + completion
+            else:
+                example.update(prompt=prompt, completion=completion)
+            examples.append(example)
+
+        collator = DataCollatorForVisionLanguageModeling(processor, completion_only_loss=bool(completion_only_loss))
+        samples = [collator([copy.deepcopy(example)]) for example in examples]
+        batched = collator(copy.deepcopy(examples))
+        collator.padding_free = True
+        result = collator(copy.deepcopy(examples))
+
+        lengths = [sample["input_ids"].shape[1] for sample in samples]
+        assert lengths[0] != lengths[1]
+        assert result["input_ids"].shape == (1, sum(lengths))
+        assert "attention_mask" not in result
+        assert set(result) == (set(batched) - {"attention_mask"}) | {"position_ids"}
+        torch.testing.assert_close(result["position_ids"], torch.cat([torch.arange(n) for n in lengths]).unsqueeze(0))
+        for key in {"input_ids", "token_type_ids", "mm_token_type_ids"} & set(result):
+            torch.testing.assert_close(result[key], torch.cat([sample[key] for sample in samples], dim=1))
+        expected_labels = torch.cat([sample["labels"] for sample in samples], dim=1)
+        expected_labels[result["position_ids"] == 0] = -100
+        torch.testing.assert_close(result["labels"], expected_labels)
+        assert result["pixel_values"].shape[0] == sum(sample["pixel_values"].shape[0] for sample in samples)
+        for key in set(batched) - {"input_ids", "labels", "attention_mask", "token_type_ids", "mm_token_type_ids"}:
+            if isinstance(batched[key], torch.Tensor):
+                # transformers 4.56 pads Idefics2's `pixel_attention_mask` as float64 when image counts differ, while
+                # each single example yields int64; the values are what matter here.
+                torch.testing.assert_close(result[key], batched[key], check_dtype=False)
+            else:
+                assert result[key] == batched[key]
+        if completion_only_loss:
+            for sample in samples:
+                assert (sample["labels"] == -100).any()
+                assert (sample["labels"] != -100).any()
 
 
 class TestSFTTrainer(TrlTestCase):
@@ -1092,6 +1161,58 @@ class TestSFTTrainer(TrlTestCase):
             SFTTrainer(model=model, args=training_args, train_dataset=dataset)
 
         assert ("supported Flash Attention variant" in caplog.text) == expect_warning
+
+    @pytest.mark.parametrize(
+        "attn_implementation, expect_warning",
+        [("kernels-community/flash-attn2", False), ("kernels-community/flash-attn2@v2", False), ("eager", True)],
+    )
+    @require_vision
+    def test_padding_free_vision_init(self, attn_implementation, expect_warning, caplog):
+        from PIL import Image
+
+        dataset = Dataset.from_dict(
+            {
+                "image": [Image.new("RGB", (56, 56), "red")],
+                "messages": [[{"role": "user", "content": "Describe this image."}]],
+            }
+        )
+        model = AutoModelForImageTextToText.from_pretrained(
+            "trl-internal-testing/tiny-Idefics3ForConditionalGeneration"
+        )
+        # Only the config value matters here: the warning is emitted at init, so no attention kernel is ever loaded.
+        model.config._attn_implementation = attn_implementation
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir, padding_free=True, max_length=None, bf16=False, report_to="none"
+        )
+
+        with caplog.at_level("WARNING", logger="trl.trainer.sft_trainer"):
+            trainer = SFTTrainer(model=model, args=training_args, train_dataset=dataset)
+
+        assert trainer._is_vision_dataset
+        assert trainer.padding_free
+        assert isinstance(trainer.data_collator, DataCollatorForVisionLanguageModeling)
+        assert trainer.data_collator.padding_free
+        assert ("supported Flash Attention variant" in caplog.text) == expect_warning
+
+    @require_vision
+    def test_padding_free_vision_rejects_multimodal_rope(self):
+        from PIL import Image
+
+        dataset = Dataset.from_dict(
+            {
+                "image": [Image.new("RGB", (56, 56), "red")],
+                "messages": [[{"role": "user", "content": "Describe this image."}]],
+            }
+        )
+        model = AutoModelForImageTextToText.from_pretrained(
+            "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration"
+        )
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir, padding_free=True, max_length=None, bf16=False, report_to="none"
+        )
+
+        with pytest.raises(ValueError, match="multimodal RoPE"):
+            SFTTrainer(model=model, args=training_args, train_dataset=dataset)
 
     def test_train_with_iterable_dataset(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train", streaming=True)

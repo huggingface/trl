@@ -571,11 +571,13 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
 
     The collator outputs a dictionary including:
     - `"input_ids"`: Tensor of token IDs.
-    - `"attention_mask"`: Tensor indicating attention mask.
+    - `"attention_mask"`: Tensor indicating attention mask. Omitted when `padding_free=True`.
     - `"pixel_values"`: Tensor representing image pixel values.
     - `"labels"`: Tensor for training labels.
 
     Additional keys may be present depending on the processor, such as `"image_grid_thw"` or `"image_position_ids"`.
+    When `padding_free=True`, token sequences are flattened into a single sequence and `"position_ids"` restart at zero
+    for each example.
 
     Args:
         processor ([`~transformers.ProcessorMixin`]):
@@ -594,6 +596,9 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
             datasets format](dataset_formats#standard).
         return_tensors (`str`, *optional*, defaults to `"pt"`):
             Type of Tensor to return. Only `"pt"` is currently supported.
+        padding_free (`bool`, *optional*, defaults to `False`):
+            Whether to flatten the batch into a single sequence without padding. Requires a Flash Attention
+            implementation that uses position IDs to separate examples.
 
     Example:
     ```python
@@ -639,6 +644,7 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
     pad_to_multiple_of: int | None = None
     dataset_text_field: str = "text"
     return_tensors: str = "pt"
+    padding_free: bool = False
 
     def torch_call(self, examples: list[dict[str, Any]]) -> dict[str, Any]:
         if "messages" in examples[0] or self.dataset_text_field in examples[0]:
@@ -646,11 +652,42 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
                 raise ValueError(
                     "The `completion_only_loss` argument is not supported for language modeling datasets."
                 )
-            return self._collate_language_modeling(examples)
+            collate = self._collate_language_modeling
         elif "prompt" in examples[0] and "completion" in examples[0]:
-            return self._collate_prompt_completion(examples)
+            collate = self._collate_prompt_completion
         else:
             raise KeyError(f"Unexpected input keys in examples: {list(examples[0].keys())}.")
+
+        if not self.padding_free:
+            return collate(examples)
+
+        outputs = [collate([example]) for example in examples]
+        attention_masks = [output.pop("attention_mask").bool() for output in outputs]
+        seq_lengths = [int(mask.sum()) for mask in attention_masks]
+        output = {}
+        for key in dict.fromkeys(key for sample in outputs for key in sample):
+            if key in {"input_ids", "labels", "token_type_ids", "mm_token_type_ids"}:
+                output[key] = torch.cat(
+                    [sample[key][mask] for sample, mask in zip(outputs, attention_masks, strict=True)]
+                ).unsqueeze(0)
+            else:
+                values = [sample[key] for sample in outputs if key in sample]
+                if key == "pixel_attention_mask" or (key == "pixel_values" and values[0].ndim == 5):
+                    # Idefics processors pad the image count and spatial dimensions within a batch.
+                    output[key] = pad([row for value in values for row in value], padding_value=0)
+                elif isinstance(values[0], torch.Tensor):
+                    output[key] = torch.cat(values, dim=0)
+                else:
+                    output[key] = [item for value in values for item in value]
+
+        # For padding-free, we should NOT create attention_mask as it causes FlashAttention to ignore position_ids and
+        # compute wrong cu_seq_lens from the all-1s mask
+        output["position_ids"] = DataCollatorForLanguageModeling.get_position_ids_from_packed_seq_lengths(
+            [seq_lengths]
+        )[0].unsqueeze(0)
+        # The first token of each example would otherwise be predicted from the last token of the previous one.
+        output["labels"][output["position_ids"] == 0] = -100
+        return output
 
     def _collate_language_modeling(self, examples: list[dict[str, Any]]) -> dict[str, Any]:
         if "image" in examples[0]:
@@ -1048,10 +1085,15 @@ class SFTTrainer(_BaseTrainer):
             raise ValueError(
                 "Packing is not supported for vision datasets. Please set `packing=False` in the SFTConfig."
             )
-        if self._is_vision_dataset and args.padding_free:
+        if (
+            self._is_vision_dataset
+            and args.padding_free
+            and "mrope_section" in (model.config.get_text_config().rope_scaling or {})
+        ):
             raise ValueError(
-                "Padding-free training is yet not supported for vision datasets. Please set `padding_free=False` in "
-                "the `SFTConfig`."
+                "Padding-free training is not yet supported for vision datasets with models that use multimodal RoPE "
+                "(such as the Qwen-VL family): these models derive their 3D position ids from the batch and drop the "
+                "position ids that separate the packed examples. Please set `padding_free=False` in the `SFTConfig`."
             )
         if self._is_vision_dataset and args.assistant_only_loss:
             raise ValueError(
@@ -1232,6 +1274,7 @@ class SFTTrainer(_BaseTrainer):
                 completion_only_loss=self.completion_only_loss,
                 pad_to_multiple_of=args.pad_to_multiple_of,
                 dataset_text_field=args.dataset_text_field,
+                padding_free=self.padding_free,
             )
 
         if args.packing and args.packing_strategy in {"bfd", "bfd_split"} and not use_flash_attention:

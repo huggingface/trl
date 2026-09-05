@@ -339,6 +339,12 @@ trainer.train()
 >
 > Only use `max_length` when you've verified that truncation won't remove image tokens for the entire dataset.
 
+Vision datasets support `padding_free=True` in [`SFTConfig`]. Each example is processed individually, then the token
+sequences are concatenated without padding, with position IDs restarting at each example boundary. This requires a
+supported Flash Attention implementation, configured through the model's `attn_implementation`. The model must preserve
+these position resets when preparing its attention inputs, so models that use multimodal RoPE (such as the Qwen-VL
+family) are rejected for now. Example packing (`packing=True`) remains unsupported for vision datasets.
+
 ## SFTTrainer
 
 [[autodoc]] SFTTrainer
