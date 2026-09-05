@@ -70,7 +70,6 @@ from ..distributed import DistributedBackend
 from ..extras.profiling import profiling_context, profiling_decorator
 from ..generation.vllm_generation import VLLMGeneration
 from ..import_utils import is_jmespath_available, is_liger_kernel_available
-from ..losses import FusedLinearGRPOLoss
 from ..models import prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
 from ..models.utils import _ForwardRedirection, disable_gradient_checkpointing
 from .base_trainer import _BaseTrainer
@@ -78,6 +77,7 @@ from .callbacks import SyncRefModelCallback
 from .grpo_config import GRPOConfig
 from .utils import (
     RepeatSampler,
+    _ChunkedLogProbFunction,
     create_model_from_path,
     disable_dropout_in_model,
     entropy_from_logits,
@@ -117,6 +117,9 @@ if is_wandb_available():
 
 
 logger = get_logger(__name__)
+
+
+_CHUNKED_LOGPROB_CHUNK_SIZE = 8192
 
 # A reward function can be a string, interpreted as a model ID and loaded as a pretrained model, a pretrained model, or
 # a callable that returns a list of floats (the rewards). The callable receives prompts, completions, and additional
@@ -788,10 +791,8 @@ class GRPOTrainer(_BaseTrainer):
         self.scale_rewards = args.scale_rewards
         self.importance_sampling_level = args.importance_sampling_level
         self.off_policy_mask_threshold = args.off_policy_mask_threshold
-        if self.use_liger_kernel and self.off_policy_mask_threshold is not None:
-            raise ValueError("Liger kernel does not support off-policy sequence masking yet.")
         if self.use_liger_kernel and is_peft_model(model):
-            # The Liger fused GRPO loss multiplies the hidden states by `lm_head.weight` directly. When the LM head is
+            # The chunked projection multiplies the hidden states by `lm_head.weight` directly. When the LM head is
             # targeted by a PEFT adapter (`"lm_head"` in `target_modules`), `lm_head.weight` is the frozen base weight
             # and the trainable adapter parameters live in separate submodules that Liger never sees. The head adapter
             # would silently receive no gradient, so the model trains as if `lm_head` were frozen. Fail loudly rather
@@ -799,28 +800,24 @@ class GRPOTrainer(_BaseTrainer):
             output_embeddings = model.get_output_embeddings()
             if isinstance(output_embeddings, BaseTunerLayer):
                 raise ValueError(
-                    "`use_liger_kernel=True` is incompatible with applying a PEFT adapter to `lm_head`. The Liger "
-                    "fused GRPO loss reads `lm_head.weight` directly, so the adapter on the head is ignored and never "
+                    "`use_liger_kernel=True` is incompatible with applying a PEFT adapter to `lm_head`. The chunked "
+                    "projection reads `lm_head.weight` directly, so the adapter on the head is ignored and never "
                     "trained. Either remove `'lm_head'` from your `target_modules`, or set `use_liger_kernel=False`."
                 )
             # Prompt-learning methods (PromptTuning, PrefixTuning, P-Tuning) inject virtual tokens via
-            # `PeftModel.forward()`. The Liger GRPO loss bypasses `PeftModel.forward()` by calling the backbone
+            # `PeftModel.forward()`. The chunked path bypasses `PeftModel.forward()` by calling the backbone
             # directly, so virtual tokens are never prepended and the loss is computed on the wrong sequence.
             # Fail loudly rather than train on a silently corrupted input.
             if any(isinstance(cfg, PromptLearningConfig) for cfg in model.peft_config.values()):
                 raise ValueError(
                     "`use_liger_kernel=True` is incompatible with prompt-learning PEFT methods (PromptTuning, "
-                    "PrefixTuning, P-Tuning). The Liger GRPO loss bypasses `PeftModel.forward()` by calling the "
+                    "PrefixTuning, P-Tuning). The chunked path bypasses `PeftModel.forward()` by calling the "
                     "backbone directly, so virtual tokens are never prepended and the loss is computed on the "
                     "wrong sequence. Use a weight-based adapter such as LoRA instead, or set "
                     "`use_liger_kernel=False`."
                 )
         self.mask_truncated_completions = args.mask_truncated_completions
         self.top_entropy_quantile = args.top_entropy_quantile
-        if self.use_liger_kernel and self.top_entropy_quantile < 1.0:
-            raise NotImplementedError(
-                "Liger Kernels don't currently support masking token positions based on entropy."
-            )
         if self.use_liger_kernel and self.importance_sampling_level not in ("token", "sequence"):
             raise ValueError(
                 f"Unknown importance sampling level: {self.importance_sampling_level}. "
@@ -838,8 +835,6 @@ class GRPOTrainer(_BaseTrainer):
         # accumulation window, so the adaptive controller sees the exact window-global entropy (not just the
         # last micro-batch). Reset to None at each optimizer step.
         self._entropy_window_stats = None
-        if self.use_liger_kernel and self._entropy_bonus_enabled:
-            raise NotImplementedError("Entropy bonus is not supported with Liger kernel.")
 
         # Datasets
         self.shuffle_dataset = args.shuffle_dataset
@@ -1024,34 +1019,15 @@ class GRPOTrainer(_BaseTrainer):
             if self.ref_model is not None:
                 _cast_lm_head_to_fp32(self.ref_model)
 
-        # Liger loss
+        # Chunked log-probability path
         if self.use_liger_kernel:
             if not is_liger_kernel_available():
                 raise ImportError(
                     "Liger is required to use `use_liger_kernel` as the GRPO loss. Run `pip install liger-kernel`."
                 )
             # Redirect the model.module forward to the model forward to ensure pre-forward hooks are called, so that
-            # under ZeRO-3 the parameter coordinator gathers/reduces `lm_head.weight` around the fused loss.
+            # under ZeRO-3 the parameter coordinator gathers/reduces `lm_head.weight` around the chunked projection.
             self._forward_redirection = _ForwardRedirection()
-
-            self.liger_loss = FusedLinearGRPOLoss(
-                beta=self.beta,
-                epsilon_low=self.epsilon_low,
-                epsilon_high=self.epsilon_high,
-                temperature=self.temperature,
-                use_ref_model=self.beta != 0.0,
-                loss_type=self.loss_type,
-                max_completion_length=self.max_completion_length,
-                importance_sampling_level=self.importance_sampling_level,
-                delta=args.delta,
-                use_bias_correction_kl=args.use_bias_correction_kl,
-                sapo_temperature_pos=args.sapo_temperature_pos,
-                sapo_temperature_neg=args.sapo_temperature_neg,
-                vespo_k_pos=args.vespo_k_pos,
-                vespo_lambda_pos=args.vespo_lambda_pos,
-                vespo_k_neg=args.vespo_k_neg,
-                vespo_lambda_neg=args.vespo_lambda_neg,
-            )
 
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
@@ -1342,67 +1318,6 @@ class GRPOTrainer(_BaseTrainer):
             if isinstance(eval_dataset, IterableDataset):
                 self.args.dataloader_num_workers = num_workers
 
-    @profiling_decorator
-    def _get_last_hidden_state(
-        self,
-        unwrapped_model,
-        input_ids,
-        attention_mask,
-        logits_to_keep,
-        pixel_values=None,
-        image_grid_thw=None,
-        pixel_attention_mask=None,
-        spatial_shapes=None,
-        image_sizes=None,
-        image_position_ids=None,
-    ):
-        if is_peft_model(unwrapped_model):
-            unwrapped_model = unwrapped_model.base_model.model
-
-        # Build model inputs - check if the model supports logits_to_keep (some models and VLMs don't)
-        model_inputs = {"input_ids": input_ids, "attention_mask": attention_mask}
-
-        # For Qwen models:
-        if image_grid_thw is not None and pixel_values is not None:
-            model_inputs["image_grid_thw"] = image_grid_thw
-        # For Gemma, SmolVLM2, LLaVa-Next etc.:
-        if pixel_values is not None:
-            model_inputs["pixel_values"] = pixel_values
-        # For SmolVLM2
-        if pixel_attention_mask is not None:
-            model_inputs["pixel_attention_mask"] = pixel_attention_mask
-        # For LFM2-VL
-        if spatial_shapes is not None:
-            model_inputs["spatial_shapes"] = spatial_shapes
-        # For LLaVa-Next
-        if image_sizes is not None:
-            model_inputs["image_sizes"] = image_sizes
-        if image_position_ids is not None:
-            model_inputs["image_position_ids"] = image_position_ids
-
-        # Only add logits_to_keep if the model supports it
-        if "logits_to_keep" in self.model_kwarg_keys:
-            # We add 1 to `logits_to_keep` because the last logits of the sequence is later excluded
-            model_inputs["logits_to_keep"] = logits_to_keep + 1
-
-        model_inputs["use_cache"] = False  # only used in generation; set False to suppress warnings
-
-        # `base_model` gives the backbone model (skipping `lm_head`) — text decoder for LMs, multimodal wrapper for
-        # VLMs (so vision-token injection runs before the text decoder). `get_decoder()` won't do: on VLMs it
-        # returns just the text stack and feeds image-placeholder IDs through it.
-        # Pre-5.0 transformers VLMs set `base_model_prefix = ""` so `base_model is self` (re-runs `lm_head`).
-        # Fall back to `.model` there.
-        if self._is_vlm and Version(transformers.__version__) < Version("5.0.0"):
-            backbone = unwrapped_model.model
-        else:
-            backbone = unwrapped_model.base_model
-        last_hidden_state = backbone(**model_inputs).last_hidden_state
-        # Exclude the last value: it corresponds to the next token pred
-        last_hidden_state = last_hidden_state[:, :-1, :]  # (B, L-1, H)
-        # Only keep the last logits_to_keep. For model that support logits_to_keep, this is a no-op.
-        last_hidden_state = last_hidden_state[:, -logits_to_keep:, :]  # (B, logits_to_keep, H)
-        return last_hidden_state
-
     def get_high_entropy_mask(self, entropies: torch.Tensor, mask: torch.Tensor, threshold: float) -> torch.Tensor:
         """
         Returns a binary mask identifying tokens whose entropy exceeds a given quantile threshold.
@@ -1442,7 +1357,25 @@ class GRPOTrainer(_BaseTrainer):
         return entropy_mask & mask.bool()  # ensure padding tokens are always masked out
 
     @profiling_decorator
-    def _get_per_token_logps_and_entropies(
+    def _get_per_token_logps_and_entropies(self, model, *args, **kwargs):
+        """Compute log-probs, (optionally) entropies, and (optionally) the MoE load-balancing aux loss."""
+        if self.use_liger_kernel:
+            unwrapped_model = self.accelerator.unwrap_model(model)
+            if model is not unwrapped_model or self.is_fsdp_enabled:
+                # Scoring runs outside `compute_loss`, so enter through distributed wrappers before reading the
+                # backbone and LM head directly.
+                return self._forward_redirection(
+                    model,
+                    unwrapped_model,
+                    self._get_per_token_logps_and_entropies_impl,
+                    unwrapped_model,
+                    *args,
+                    **kwargs,
+                )
+            model = unwrapped_model
+        return self._get_per_token_logps_and_entropies_impl(model, *args, **kwargs)
+
+    def _get_per_token_logps_and_entropies_impl(
         self,
         model,
         input_ids,
@@ -1462,7 +1395,6 @@ class GRPOTrainer(_BaseTrainer):
         mm_token_type_ids=None,
         image_position_ids=None,
     ) -> tuple[torch.Tensor, torch.Tensor | None, torch.Tensor | None]:
-        """Compute log-probs, (optionally) entropies, and (optionally) the MoE load-balancing aux loss."""
         batch_size = batch_size or input_ids.size(0)  # Chunk inputs into smaller batches to reduce memory peak
         all_logps = []
         all_entropies = []
@@ -1525,29 +1457,66 @@ class GRPOTrainer(_BaseTrainer):
             if compute_aux_loss:
                 model_inputs["output_router_logits"] = True
 
-            outputs = model(**model_inputs)
-            logits = outputs.logits
-            # Exclude the last value: it corresponds to the next token pred
-            logits = logits[:, :-1, :]  # (B, L-1, H)
-            # Only keep the last logits_to_keep. For model that support logits_to_keep, this is a no-op.
-            logits = logits[:, -logits_to_keep:, :]  # (B, logits_to_keep, H)
-            # Divide logits by sampling temperature.
-            # See https://huggingface.co/blog/the_n_implementation_details_of_rlhf_with_ppo#policy-training-implementation-details
-            logits = logits / self.temperature
             completion_ids = input_ids_batch[:, -logits_to_keep:]
-            logps = selective_log_softmax(logits, completion_ids)  # compute logprobs
-            all_logps.append(logps)
-
-            if compute_entropy:
-                # The entropy bonus is a differentiable loss term, so entropies must carry grad when it is
-                # active. Otherwise they only feed logging and the top_entropy_quantile mask (neither
-                # differentiable), so we skip grad to avoid retaining the memory-heavy full-vocab softmax.
-                if self._entropy_bonus_enabled:
-                    entropies = entropy_from_logits(logits)
+            if self.use_liger_kernel and not compute_aux_loss:
+                inner_model = model.base_model.model if is_peft_model(model) else model
+                if self._is_vlm and Version(transformers.__version__) < Version("5.0.0"):
+                    backbone = inner_model.model
                 else:
-                    with torch.no_grad():
+                    backbone = inner_model.base_model
+                outputs = backbone(**model_inputs)
+                hidden_states = outputs.last_hidden_state[:, :-1]
+                hidden_states = hidden_states[:, -logits_to_keep:]
+                completion_mask = attention_mask_batch[:, -logits_to_keep:].bool()
+
+                hidden_states = hidden_states[completion_mask]
+                labels = completion_ids[completion_mask]
+                lm_head = inner_model.get_output_embeddings()
+                text_config = inner_model.config.get_text_config()
+                final_logit_softcapping = getattr(text_config, "final_logit_softcapping", None)
+                logit_scale = getattr(text_config, "logit_scale", 1.0)
+                with maybe_gather_lm_head_ctx(lm_head.weight, lm_head.bias):
+                    valid_logps, valid_entropies = _ChunkedLogProbFunction.apply(
+                        hidden_states,
+                        lm_head.weight,
+                        lm_head.bias,
+                        labels,
+                        self.temperature,
+                        _CHUNKED_LOGPROB_CHUNK_SIZE,
+                        final_logit_softcapping,
+                        logit_scale,
+                    )
+
+                logps = torch.zeros_like(completion_mask, dtype=valid_logps.dtype)
+                logps[completion_mask] = valid_logps
+                all_logps.append(logps)
+                if compute_entropy:
+                    entropies = torch.zeros_like(completion_mask, dtype=valid_entropies.dtype)
+                    entropies[completion_mask] = valid_entropies
+                    all_entropies.append(entropies)
+            else:
+                outputs = model(**model_inputs)
+                logits = outputs.logits
+                # Exclude the last value: it corresponds to the next token pred
+                logits = logits[:, :-1, :]  # (B, L-1, H)
+                # Only keep the last logits_to_keep. For model that support logits_to_keep, this is a no-op.
+                logits = logits[:, -logits_to_keep:, :]  # (B, logits_to_keep, H)
+                # Divide logits by sampling temperature.
+                # See https://huggingface.co/blog/the_n_implementation_details_of_rlhf_with_ppo#policy-training-implementation-details
+                logits = logits / self.temperature
+                logps = selective_log_softmax(logits, completion_ids)  # compute logprobs
+                all_logps.append(logps)
+
+                if compute_entropy:
+                    # The entropy bonus is a differentiable loss term, so entropies must carry grad when it is
+                    # active. Otherwise they only feed logging and the top_entropy_quantile mask (neither
+                    # differentiable), so we skip grad to avoid retaining the memory-heavy full-vocab softmax.
+                    if self._entropy_bonus_enabled:
                         entropies = entropy_from_logits(logits)
-                all_entropies.append(entropies)
+                    else:
+                        with torch.no_grad():
+                            entropies = entropy_from_logits(logits)
+                    all_entropies.append(entropies)
 
             if compute_aux_loss:
                 all_aux_losses.append(outputs.aux_loss)
@@ -2953,78 +2922,15 @@ class GRPOTrainer(_BaseTrainer):
             output["tool_mask"] = tool_mask
         return output
 
-    def compute_liger_loss(self, unwrapped_model, inputs):
-        # Compute the per-token log probabilities for the model
-        prompt_ids, prompt_mask = inputs["prompt_ids"], inputs["prompt_mask"]
-        completion_ids, completion_mask = inputs["completion_ids"], inputs["completion_mask"]
-        input_ids = torch.cat([prompt_ids, completion_ids], dim=1)
-        attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
-        logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
-
-        # Get the last hidden state of the model
-        last_hidden_state = self._get_last_hidden_state(
-            unwrapped_model,
-            input_ids,
-            attention_mask,
-            logits_to_keep,
-            inputs.get("pixel_values"),
-            inputs.get("image_grid_thw"),
-            inputs.get("pixel_attention_mask"),
-            inputs.get("spatial_shapes"),
-            inputs.get("image_sizes"),
-            inputs.get("image_position_ids"),
-        )
-
-        # Apply tool_mask (from env_mask) for loss computation in multi-turn training scenarios
-        loss_mask = completion_mask if "tool_mask" not in inputs else completion_mask * inputs["tool_mask"]
-        lm_head_weight = unwrapped_model.lm_head.weight
-        lm_head_bias = unwrapped_model.lm_head.bias
-        # Liger reads `lm_head` directly instead of through `model.forward()`, so its ZeRO-3 gather hook never fires and
-        # the fused matmul gets an empty shard. Gather the weight/bias ourselves for the call (the weight grad is
-        # computed during this forward, so it isn't needed in the backward).
-        with maybe_gather_lm_head_ctx(lm_head_weight, lm_head_bias):
-            loss, metrics = self.liger_loss(
-                _input=last_hidden_state,
-                lin_weight=lm_head_weight,
-                selected_token_ids=completion_ids,
-                # The attention_mask parameter in liger loss is actually used as a loss mask (not model attention)
-                attention_mask=loss_mask,
-                advantages=inputs["advantages"],
-                bias=lm_head_bias,
-                old_per_token_logps=inputs.get("old_per_token_logps"),
-                ref_per_token_logps=inputs.get("ref_per_token_logps"),
-                vllm_is_ratio=inputs.get("importance_sampling_ratio"),
-                num_items_in_batch=inputs.get("num_items_in_batch"),
-            )
-        # Extract metrics from the liger_grpo_loss output
-        # KL divergence is the first metric when beta is non-zero
-        mean_kl = metrics[0] if self.beta != 0.0 else None
-        clip_ratio = metrics[-1]
-
-        mode = "train" if self.model.training else "eval"
-        if self.beta != 0.0:
-            self._metrics[mode]["kl"].append(self.accelerator.gather(mean_kl).mean().item())
-        self._metrics[mode]["clip_ratio"].append(self.accelerator.gather(clip_ratio).mean().item())
-        # DAPO/CISPO/VESPO normalize by num_items_in_batch / num_processes (applied internally by
-        # the Liger loss), then need a `current_gradient_accumulation_steps / steps_per_generation`
-        # rescale to land on the per-window token-mean — matching the non-Liger path
-        # (see `_compute_loss`).
-        if self.loss_type in ["cispo", "dapo", "vespo"]:
-            normalizer = (
-                self.current_gradient_accumulation_steps / self.args.steps_per_generation if mode == "train" else 1.0
-            )
-        else:
-            normalizer = self.current_gradient_accumulation_steps if mode == "train" else 1.0  # no accum in eval
-        return loss / normalizer
-
     @profiling_decorator
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         if return_outputs:
             raise ValueError("The GRPOTrainer does not support returning outputs")
         if self.use_liger_kernel:
-            # Compute the loss using the liger grpo loss
             unwrapped_model = self.accelerator.unwrap_model(model)
-            return self._forward_redirection(model, unwrapped_model, self.compute_liger_loss, unwrapped_model, inputs)
+            if model is not unwrapped_model or self.is_fsdp_enabled:
+                return self._forward_redirection(model, unwrapped_model, self._compute_loss, unwrapped_model, inputs)
+            model = unwrapped_model
         return self._compute_loss(model, inputs)
 
     @staticmethod
