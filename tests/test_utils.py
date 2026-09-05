@@ -25,7 +25,7 @@ import torch.nn.functional as F
 import transformers
 from datasets import IterableDataset
 from packaging.version import Version
-from transformers import AutoConfig, AutoModelForCausalLM, PretrainedConfig
+from transformers import AutoConfig, AutoModelForCausalLM, GPT2Config, GPT2LMHeadModel, PretrainedConfig
 from transformers.testing_utils import torch_device
 from transformers.utils import is_peft_available
 
@@ -36,6 +36,7 @@ from trl.trainer.utils import (
     adjusted_mfu,
     compute_flops_per_token,
     compute_mfu,
+    create_model_from_path,
     entropy_from_logits,
     flush_left,
     generate_model_card,
@@ -113,6 +114,26 @@ class TestUseAdapter(TrlTestCase):
 
         assert torch.equal(output_1, expected_1)
         assert torch.equal(output_2, expected_2)
+
+
+class TestCreateModelFromPathSubfolder:
+    @pytest.mark.parametrize("subfolder", ["", "checkpoint"])
+    def test_loads_model_and_config_from_same_directory(self, tmp_path, subfolder):
+        config = GPT2Config(
+            vocab_size=32, n_positions=16, n_embd=16, n_layer=1, n_head=2, bos_token_id=0, eos_token_id=1
+        )
+        model = GPT2LMHeadModel(config).eval()
+        model.save_pretrained(tmp_path / subfolder)
+
+        loaded_model = create_model_from_path(
+            str(tmp_path), subfolder=subfolder, local_files_only=True, device_map=None
+        )
+
+        input_ids = torch.tensor([[1, 2, 3]])
+        with torch.no_grad():
+            expected = model(input_ids).logits
+            actual = loaded_model(input_ids).logits
+        torch.testing.assert_close(actual, expected)
 
 
 class TestPad(TrlTestCase):
