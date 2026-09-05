@@ -1000,8 +1000,14 @@ class SFTTrainer(_BaseTrainer):
 
         # Processing class
         if processing_class is None:
+            model_id = get_config_model_id(model.config)
+            if not model_id:
+                raise ValueError(
+                    "The model configuration has an empty `_name_or_path`. When training a model instantiated "
+                    "from a config (e.g. `from_config`), `processing_class` must be passed explicitly."
+                )
             processing_class = AutoProcessor.from_pretrained(
-                get_config_model_id(model.config), trust_remote_code=args.trust_remote_code
+                model_id, trust_remote_code=args.trust_remote_code
             )
 
         # Handle pad token for processors or tokenizers
