@@ -1243,14 +1243,26 @@ class TestChunkedLogProbFunction:
         hidden = torch.randn(self.N, self.H)
         weight = torch.randn(self.V, self.H)
         labels = torch.randint(0, self.V, (self.N,))
+        chunk_rows = []
+        torch_mm = torch.mm
 
-        logprobs_chunked, entropy_chunked = _ChunkedLogProbFunction.apply(
-            hidden, weight, None, labels, temperature, self.CHUNK_SIZE
-        )
+        def record_chunk(input, mat2, *, out=None):
+            chunk_rows.append(input.size(0))
+            return torch_mm(input, mat2, out=out)
+
+        with (
+            patch("trl.trainer.utils._CHUNKED_LOGPROB_TOKEN_CHUNK_SIZE", 17),
+            patch("trl.trainer.utils.torch.mm", side_effect=record_chunk),
+        ):
+            logprobs_chunked, entropy_chunked = _ChunkedLogProbFunction.apply(
+                hidden, weight, None, labels, temperature, self.CHUNK_SIZE
+            )
         logprobs_ref, entropy_ref = self._reference_logprobs_and_entropy(hidden, weight, labels, temperature)
 
         torch.testing.assert_close(logprobs_chunked, logprobs_ref, atol=1e-5, rtol=1e-5)
         torch.testing.assert_close(entropy_chunked, entropy_ref, atol=1e-5, rtol=1e-5)
+        assert max(chunk_rows) <= 17
+        assert chunk_rows[-1] == 13
 
     @pytest.mark.parametrize("temperature", [1.0, 0.7])
     def test_backward(self, temperature):
@@ -1298,6 +1310,26 @@ class TestChunkedLogProbFunction:
         torch.testing.assert_close(grad_hidden_chunked, hidden.grad, atol=1e-2, rtol=1e-2)
         torch.testing.assert_close(grad_weight_chunked, weight.grad, atol=1e-2, rtol=1e-2)
 
+    def test_backward_bfloat16_hidden_float32_weight(self):
+        torch.manual_seed(42)
+        hidden = torch.randn(self.N, self.H, dtype=torch.bfloat16, requires_grad=True)
+        weight = torch.randn(self.V, self.H, dtype=torch.float32, requires_grad=True)
+        labels = torch.randint(0, self.V, (self.N,))
+
+        logprobs, _ = _ChunkedLogProbFunction.apply(hidden, weight, None, labels, 1.0, self.CHUNK_SIZE)
+        logprobs.sum().backward()
+        grad_hidden = hidden.grad.clone()
+        grad_weight = weight.grad.clone()
+
+        hidden.grad = None
+        weight.grad = None
+        reference, _ = self._reference_logprobs_and_entropy(hidden, weight.to(hidden.dtype), labels, 1.0)
+        reference.sum().backward()
+
+        torch.testing.assert_close(logprobs, reference, atol=1e-2, rtol=1e-2)
+        torch.testing.assert_close(grad_hidden, hidden.grad, atol=1e-2, rtol=1e-2)
+        torch.testing.assert_close(grad_weight, weight.grad, atol=1e-2, rtol=1e-2)
+
     @pytest.mark.parametrize("temperature", [1.0, 0.7])
     def test_backward_entropy(self, temperature):
         """Backprop through the `entropy` output alone (as opposed to `logprobs`, covered above)."""
@@ -1332,10 +1364,11 @@ class TestChunkedLogProbFunction:
         labels = torch.randint(0, self.V, (self.N,))
 
         # Chunked backward
-        logprobs_chunked, entropy_chunked = _ChunkedLogProbFunction.apply(
-            hidden, weight, None, labels, temperature, self.CHUNK_SIZE
-        )
-        (2.0 * logprobs_chunked + 0.5 * entropy_chunked).sum().backward()
+        with patch("trl.trainer.utils._CHUNKED_LOGPROB_TOKEN_CHUNK_SIZE", 17):
+            logprobs_chunked, entropy_chunked = _ChunkedLogProbFunction.apply(
+                hidden, weight, None, labels, temperature, self.CHUNK_SIZE
+            )
+            (2.0 * logprobs_chunked + 0.5 * entropy_chunked).sum().backward()
         grad_hidden_chunked = hidden.grad.clone()
         grad_weight_chunked = weight.grad.clone()
 

@@ -12,8 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from unittest.mock import patch
-
 import multiprocess
 import pytest
 import torch
@@ -27,10 +25,16 @@ from trl import KTOConfig, KTOTrainer
 from trl.trainer.kto_trainer import (
     DataCollatorForUnpairedPreference,
     DataCollatorForVisionUnpairedPreference,
-    _ChunkedLogProbFunction,
 )
 
-from .testing_utils import TrlTestCase, require_bitsandbytes, require_liger_kernel, require_peft, require_vision
+from .testing_utils import (
+    TrlTestCase,
+    is_bf16_supported,
+    require_bitsandbytes,
+    require_liger_kernel,
+    require_peft,
+    require_vision,
+)
 
 
 if is_peft_available():
@@ -1019,6 +1023,7 @@ class TestKTOTrainer(TrlTestCase):
         dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
         training_args = KTOConfig(
             output_dir=self.tmp_dir,
+            bf16=False,  # keep exact gradient parity separate from the mixed-precision coverage below
             per_device_train_batch_size=2,
             use_liger_kernel=True,
             loss_type=loss_type,
@@ -1052,10 +1057,11 @@ class TestKTOTrainer(TrlTestCase):
             torch.testing.assert_close(chunked_grads[name], grad, rtol=1e-4, atol=1e-5)
 
     @require_liger_kernel
-    def test_chunked_logps_honor_output_multiplier_and_bound_tokens(self):
+    def test_chunked_logps_honor_output_multiplier_and_empty_completion(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
         training_args = KTOConfig(
             output_dir=self.tmp_dir,
+            bf16=False,
             per_device_train_batch_size=2,
             use_liger_kernel=True,
             report_to="none",
@@ -1073,20 +1079,7 @@ class TestKTOTrainer(TrlTestCase):
         text_config.logit_scale = None
         text_config.output_multiplier = 0.5
 
-        # Make the production token bound tiny so this short test proves that one large projection cannot slip
-        # through. Recording the rows also checks the final uneven chunk rather than merely counting calls.
-        chunk_rows = []
-        chunked_apply = _ChunkedLogProbFunction.apply
-
-        def record_chunk(*args):
-            chunk_rows.append(args[0].size(0))
-            return chunked_apply(*args)
-
-        with (
-            patch("trl.trainer.kto_trainer._CHUNKED_LOGPROB_TOKEN_CHUNK_SIZE", 3),
-            patch("trl.trainer.kto_trainer._ChunkedLogProbFunction.apply", side_effect=record_chunk),
-            torch.no_grad(),
-        ):
+        with torch.no_grad():
             logps, _, _ = trainer._get_per_token_logps_and_entropies(
                 trainer.model, model_kwargs, input_ids, completion_mask
             )
@@ -1099,9 +1092,47 @@ class TestKTOTrainer(TrlTestCase):
         expected = torch.zeros_like(logps)
         expected[mask] = expected_valid
 
-        assert len(chunk_rows) > 1
-        assert max(chunk_rows) <= 3
         torch.testing.assert_close(logps, expected, atol=1e-5, rtol=1e-5)
+
+        empty_completion_mask = torch.zeros_like(completion_mask)
+        with torch.no_grad():
+            empty_logps, _, _ = trainer._get_per_token_logps_and_entropies(
+                trainer.model, model_kwargs, input_ids, empty_completion_mask
+            )
+        assert empty_logps.shape == logps.shape
+        assert empty_logps.count_nonzero() == 0
+
+    @require_liger_kernel
+    @pytest.mark.skipif(not is_bf16_supported(), reason="test requires bf16 support")
+    def test_chunked_logps_use_mixed_precision(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
+        training_args = KTOConfig(
+            output_dir=self.tmp_dir,
+            bf16=True,
+            per_device_train_batch_size=2,
+            use_liger_kernel=True,
+            report_to="none",
+        )
+        trainer = KTOTrainer(model=self.model_id, args=training_args, train_dataset=dataset)
+        inputs = trainer._prepare_inputs(next(iter(trainer.get_train_dataloader())))
+        model_kwargs = {
+            "input_ids": inputs["input_ids"],
+            "attention_mask": inputs["attention_mask"],
+            "use_cache": False,
+        }
+        projection = next(module for name, module in trainer.model.named_modules() if name.endswith("q_proj"))
+        projection_dtypes = []
+
+        def record_projection_dtype(_module, _args, output):
+            projection_dtypes.append(output.dtype)
+
+        with projection.register_forward_hook(record_projection_dtype), torch.no_grad():
+            logps, _, _ = trainer._get_per_token_logps_and_entropies(
+                trainer.model, model_kwargs, inputs["input_ids"], inputs["completion_mask"]
+            )
+
+        assert projection_dtypes == [torch.bfloat16]
+        assert torch.isfinite(logps).all()
 
     @require_liger_kernel
     def test_train_with_liger_and_precomputed_ref_logps(self):
