@@ -1373,6 +1373,46 @@ class TestChunkedLogProbFunction:
         for actual, expected in zip(chunked_grads, (hidden.grad, weight.grad, bias.grad), strict=True):
             torch.testing.assert_close(actual, expected, atol=atol, rtol=rtol)
 
+    def test_backward_skips_frozen_parameter_gradients(self):
+        torch.manual_seed(42)
+        hidden = torch.randn(self.N, self.H, requires_grad=True)
+        weight = torch.randn(self.V, self.H)
+        bias = torch.randn(self.V)
+        labels = torch.randint(0, self.V, (self.N,))
+
+        logprobs, _ = _ChunkedLogProbFunction.apply(hidden, weight, bias, labels, 1.0, self.CHUNK_SIZE)
+        with patch.object(torch, "zeros", wraps=torch.zeros) as mock_zeros:
+            logprobs.sum().backward()
+
+        # A frozen LM head should not allocate full-vocabulary gradient buffers. These shapes are distinct from the
+        # per-token accumulators and the hidden-state gradient allocated by the same backward pass.
+        allocated_shapes = [call.args[0] for call in mock_zeros.call_args_list]
+        assert weight.shape not in allocated_shapes
+        assert bias.shape not in allocated_shapes
+        assert hidden.grad is not None
+
+    @pytest.mark.parametrize("requires_grad", [(True, False, False), (False, True, False), (False, False, True)])
+    def test_backward_with_partially_frozen_inputs(self, requires_grad):
+        torch.manual_seed(42)
+        hidden = torch.randn(self.N, self.H, requires_grad=requires_grad[0])
+        weight = torch.randn(self.V, self.H, requires_grad=requires_grad[1])
+        bias = torch.randn(self.V, requires_grad=requires_grad[2])
+        labels = torch.randint(0, self.V, (self.N,))
+
+        logprobs, _ = _ChunkedLogProbFunction.apply(hidden, weight, bias, labels, 1.0, self.CHUNK_SIZE)
+        logprobs.sum().backward()
+        chunked_grads = hidden.grad, weight.grad, bias.grad
+
+        hidden_ref = hidden.detach().clone().requires_grad_(requires_grad[0])
+        weight_ref = weight.detach().clone().requires_grad_(requires_grad[1])
+        bias_ref = bias.detach().clone().requires_grad_(requires_grad[2])
+        logprobs_ref, _ = self._reference_logprobs_and_entropy(hidden_ref, weight_ref, labels, 1.0, bias_ref)
+        logprobs_ref.sum().backward()
+
+        for actual, expected in zip(chunked_grads, (hidden_ref.grad, weight_ref.grad, bias_ref.grad), strict=True):
+            if expected is not None:
+                torch.testing.assert_close(actual, expected, atol=1e-5, rtol=1e-5)
+
 
 class _FakeTransformerModel(nn.Module):
     """Minimal stand-in for a transformer body: returns random hidden states of the right shape."""
