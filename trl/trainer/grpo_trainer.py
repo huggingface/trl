@@ -120,7 +120,6 @@ logger = get_logger(__name__)
 
 
 _CHUNKED_LOGPROB_CHUNK_SIZE = 8192
-_CHUNKED_LOGPROB_TOKEN_CHUNK_SIZE = 2048
 
 # A reward function can be a string, interpreted as a model ID and loaded as a pretrained model, a pretrained model, or
 # a callable that returns a list of floats (the rewards). The callable receives prompts, completions, and additional
@@ -1465,7 +1464,8 @@ class GRPOTrainer(_BaseTrainer):
                     backbone = inner_model.model
                 else:
                     backbone = inner_model.base_model
-                outputs = backbone(**model_inputs)
+                with self.accelerator.autocast():
+                    outputs = backbone(**model_inputs)
                 hidden_states = outputs.last_hidden_state[:, :-1]
                 hidden_states = hidden_states[:, -logits_to_keep:]
                 completion_mask = attention_mask_batch[:, -logits_to_keep:].bool()
@@ -1491,28 +1491,17 @@ class GRPOTrainer(_BaseTrainer):
                     if lm_head_bias is not None:
                         lm_head_bias = lm_head_bias.full_tensor()
 
-                logps_chunks = []
-                entropy_chunks = []
-                with maybe_gather_lm_head_ctx(lm_head_weight, lm_head_bias):
-                    for hidden_chunk, labels_chunk in zip(
-                        hidden_states.split(_CHUNKED_LOGPROB_TOKEN_CHUNK_SIZE),
-                        labels.split(_CHUNKED_LOGPROB_TOKEN_CHUNK_SIZE),
-                        strict=True,
-                    ):
-                        logps_chunk, entropy_chunk = _ChunkedLogProbFunction.apply(
-                            hidden_chunk,
-                            lm_head_weight,
-                            lm_head_bias,
-                            labels_chunk,
-                            self.temperature,
-                            _CHUNKED_LOGPROB_CHUNK_SIZE,
-                            final_logit_softcapping,
-                            logit_scale,
-                        )
-                        logps_chunks.append(logps_chunk)
-                        entropy_chunks.append(entropy_chunk)
-                valid_logps = torch.cat(logps_chunks)
-                valid_entropies = torch.cat(entropy_chunks)
+                with self.accelerator.autocast(), maybe_gather_lm_head_ctx(lm_head_weight, lm_head_bias):
+                    valid_logps, valid_entropies = _ChunkedLogProbFunction.apply(
+                        hidden_states,
+                        lm_head_weight,
+                        lm_head_bias,
+                        labels,
+                        self.temperature,
+                        _CHUNKED_LOGPROB_CHUNK_SIZE,
+                        final_logit_softcapping,
+                        logit_scale,
+                    )
 
                 logps = torch.zeros_like(completion_mask, dtype=valid_logps.dtype)
                 logps[completion_mask] = valid_logps
