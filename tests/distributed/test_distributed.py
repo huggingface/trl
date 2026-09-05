@@ -14,12 +14,23 @@
 
 import os
 import subprocess
+import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import torch
+import torch.nn as nn
 import transformers
 from packaging.version import Version
+
+
+try:
+    from torch.distributed.tensor import DTensor
+except ImportError:  # torch < 2.5
+    from torch.distributed._tensor import DTensor
+
+from trl.generation.vllm_generation import VLLMGeneration
 
 from ..testing_utils import TrlTestCase, require_liger_kernel, require_torch_multi_accelerator
 
@@ -503,3 +514,49 @@ class TestDistributed(TrlTestCase):
             os.environ.copy(),
         )
         # fmt: on
+
+
+def test_fsdp2_vllm_sync_with_ignored_params():
+    """FSDP2 sync to vLLM must not call `full_tensor()` on ignored (non-`DTensor`) parameters.
+
+    Regression test for GH-6622. Single-process, CPU-only; requires no GPU or vLLM.
+    """
+    fully_shard = pytest.importorskip("torch.distributed._composable.fsdp").fully_shard
+
+    torch.manual_seed(0)
+
+    class TinyModel(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.emb = nn.Embedding(50, 8)
+            self.linear = nn.Linear(8, 8)
+            self.head = nn.Linear(8, 50)
+
+    model = TinyModel()
+    ignored_params = set(model.head.parameters())
+
+    with tempfile.TemporaryDirectory() as store_dir:
+        torch.distributed.init_process_group(
+            "gloo",
+            rank=0,
+            world_size=1,
+            store=torch.distributed.FileStore(os.path.join(store_dir, "store"), 1),
+        )
+        try:
+            fully_shard(model, ignored_params=ignored_params)
+
+            # Instantiate the backend without starting vLLM; the crash happened inside the FSDP2
+            # parameter iteration, before any vLLM call.
+            sync = object.__new__(VLLMGeneration)
+            sync.accelerator = SimpleNamespace(device=torch.device("cpu"))
+
+            yielded = dict(sync._iter_fsdp2_params(model))
+
+            # Every parameter must be yielded, including the ignored `head.*` ones, and ignored
+            # params must pass through as plain tensors instead of being gathered.
+            expected = set(model.state_dict().keys())
+            assert set(yielded) == expected, f"yielded={sorted(yielded)}, expected={sorted(expected)}"
+            for name in ("head.weight", "head.bias"):
+                assert not isinstance(yielded[name], DTensor), f"{name} must be a plain tensor"
+        finally:
+            torch.distributed.destroy_process_group()
