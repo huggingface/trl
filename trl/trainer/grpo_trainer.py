@@ -2652,12 +2652,15 @@ class GRPOTrainer(_BaseTrainer):
             # samples may come from an earlier version of the model. In that case, we need to track old_per_token_logps
             # for importance sampling. If the steps are aligned, importance sampling isn't necessary and we set
             # old_per_token_logps to None.
-            # When using vLLM, we always compute old_per_token_logps for importance sampling, it was shown that the
-            # distribution mismatch between vLLM and the training model can be large and harm the training.
+            # When using vLLM with importance sampling correction, the liger kernel path needs old_per_token_logps
+            # here, since liger computes logprobs internally. On the non-liger path, _compute_loss already computes
+            # per_token_logps (== old_per_token_logps when on-policy), so the ratio is computed inline there instead,
+            # skipping this extra forward pass.
             generate_every = self.args.steps_per_generation * self.num_iterations  # generation frequency
-            if self.args.gradient_accumulation_steps % generate_every != 0 or (
-                self.use_vllm and self.vllm_importance_sampling_correction
-            ):
+            needs_old_logps_for_liger = (
+                self.use_liger_kernel and self.use_vllm and self.vllm_importance_sampling_correction
+            )
+            if self.args.gradient_accumulation_steps % generate_every != 0 or needs_old_logps_for_liger:
                 old_per_token_logps, _, _ = self._get_per_token_logps_and_entropies(
                     self.model,
                     prompt_completion_ids,
@@ -2671,8 +2674,10 @@ class GRPOTrainer(_BaseTrainer):
             else:
                 old_per_token_logps = None
 
-            # Compute the importance sampling ratio when using vLLM, to correct for potential distribution mismatch
-            if self.use_vllm and self.vllm_importance_sampling_correction:
+            # Compute the importance sampling ratio when using vLLM, to correct for potential distribution mismatch.
+            # Only pre-computed on the liger kernel path; the non-liger path computes it in _compute_loss.
+            vllm_importance_sampling_ratio = None
+            if needs_old_logps_for_liger:
                 mask = completion_mask if tool_mask is None else completion_mask * tool_mask
                 per_token_logps_diff = (old_per_token_logps - sampling_per_token_logps) * mask
                 # Tokens whose sampling logprob was NaN (unavailable from vLLM) get a zero difference, so their
@@ -2875,7 +2880,8 @@ class GRPOTrainer(_BaseTrainer):
         if images is not None and self.log_multimodal:
             self._logs["images"].extend(gather_object(images))
 
-        if self.use_vllm and self.vllm_importance_sampling_correction:
+        # On the non-liger path these are logged in _compute_loss instead, once per generation batch.
+        if needs_old_logps_for_liger:
             delta = torch.abs(old_per_token_logps - sampling_per_token_logps)
             mask = completion_mask.bool() if tool_mask is None else (completion_mask * tool_mask).bool()
             # Tokens vLLM could not score carry NaN, so exclude them rather than let them turn the reported
@@ -2923,7 +2929,7 @@ class GRPOTrainer(_BaseTrainer):
         }
         if old_per_token_logps is not None:
             output["old_per_token_logps"] = old_per_token_logps
-        if self.use_vllm and self.vllm_importance_sampling_correction:
+        if vllm_importance_sampling_ratio is not None:
             output["importance_sampling_ratio"] = vllm_importance_sampling_ratio
         if sampling_per_token_logps is not None:
             output["sampling_per_token_logps"] = sampling_per_token_logps
@@ -3143,13 +3149,72 @@ class GRPOTrainer(_BaseTrainer):
         # provide advantages with shape (B, T) (e.g., MiniLLM), we *conditionally* unsqueeze the tensor.
         if advantages.dim() == 1:
             advantages = advantages.unsqueeze(1)
-        # When num_iterations == 1 and steps_per_generation <= gradient_accumulation_steps,
-        # old_per_token_logps == per_token_logps. In this case we can skip its computation
-        # (see _generate_and_score_completions) and instead use per_token_logps.detach().
-        # The exception is when using vLLM, where we always compute old_per_token_logps
-        # for importance sampling
+        # When gradient_accumulation_steps % generate_every == 0 (on-policy),
+        # old_per_token_logps == per_token_logps on the first iteration. In this case we can skip
+        # its computation (see _generate_and_score_completions) and instead use per_token_logps.detach().
+        # The exception is the liger kernel path with vLLM importance sampling correction,
+        # where old_per_token_logps is always pre-computed.
         old_per_token_logps = inputs.get("old_per_token_logps")
         old_per_token_logps = per_token_logps.detach() if old_per_token_logps is None else old_per_token_logps
+
+        # Compute inline IS ratio for non-liger vLLM path. This must happen before the loss type switch
+        # because vespo needs it in get_gamma_weights. For the liger path, IS ratio is pre-computed in
+        # _generate_and_score_completions and passed via inputs["importance_sampling_ratio"]. Store
+        # old_per_token_logps and the ratio back into inputs so that subsequent iterations (num_iterations > 1)
+        # reuse the same generation-time values.
+        vllm_importance_sampling_ratio = None
+        if self.use_vllm and self.vllm_importance_sampling_correction:
+            sampling_per_token_logps = inputs.get("sampling_per_token_logps")
+            if sampling_per_token_logps is not None and inputs.get("importance_sampling_ratio") is None:
+                inputs["old_per_token_logps"] = old_per_token_logps
+                per_token_logps_diff = (old_per_token_logps - sampling_per_token_logps) * mask
+                # Tokens whose sampling logprob was NaN (unavailable from vLLM) get a zero difference, so their
+                # importance ratio is exactly 1 (no correction) rather than propagating NaN through the loss.
+                per_token_logps_diff = torch.nan_to_num(per_token_logps_diff, nan=0.0)
+
+                sequence_level_is = self.vllm_importance_sampling_mode in ["sequence_mask", "sequence_truncate"]
+                if sequence_level_is:
+                    per_sequence_logps_diff = per_token_logps_diff.sum(dim=-1, keepdim=True)
+                    logps_diff = per_sequence_logps_diff
+                else:
+                    logps_diff = per_token_logps_diff
+
+                vllm_importance_sampling_ratio = torch.exp(logps_diff)
+
+                # vllm_importance_sampling_ratio.shape:
+                #   token_* modes:     (B, T)  (per-token ratio)
+                #   sequence_* modes:  (B, 1)  (per-sequence ratio)
+
+                if self.vllm_importance_sampling_mode in ["sequence_truncate", "token_truncate"]:
+                    vllm_importance_sampling_ratio = torch.clamp(
+                        vllm_importance_sampling_ratio,
+                        min=self.vllm_importance_sampling_clip_min,
+                        max=self.vllm_importance_sampling_clip_max,
+                    )
+                elif self.vllm_importance_sampling_mode in ["sequence_mask", "token_mask"]:
+                    min_val = (
+                        self.vllm_importance_sampling_clip_min
+                        if self.vllm_importance_sampling_clip_min is not None
+                        else -math.inf
+                    )
+                    max_val = (
+                        self.vllm_importance_sampling_clip_max
+                        if self.vllm_importance_sampling_clip_max is not None
+                        else math.inf
+                    )
+
+                    invalid_mis_mask = (vllm_importance_sampling_ratio < min_val) | (
+                        vllm_importance_sampling_ratio > max_val
+                    )
+                    vllm_importance_sampling_ratio = vllm_importance_sampling_ratio.masked_fill(
+                        invalid_mis_mask, value=0.0
+                    )
+                else:
+                    raise ValueError(
+                        f"Unknown vLLM importance sampling level: {self.vllm_importance_sampling_mode}. Possible values are 'token_truncate', 'token_mask', 'sequence_truncate', and 'sequence_mask'."
+                    )
+
+                inputs["importance_sampling_ratio"] = vllm_importance_sampling_ratio
 
         if self.off_policy_mask_threshold is not None:
             # OPSM should use inference-time logprobs to detect both sources of off-policyness:
@@ -3372,6 +3437,56 @@ class GRPOTrainer(_BaseTrainer):
             self._metrics[mode]["cispo_clip_ratio"].append(global_masked_mean(is_cispo_clipped.float()))
         elif self.loss_type == "vespo":
             self._metrics[mode]["vespo/phi_seq_mean"].append(global_masked_mean(phi_seq))
+
+        # The vLLM importance sampling diagnostics are logged once per generation batch: on the liger path by
+        # _generate_and_score_completions, and on the non-liger path here, once the last micro-batch of the generation
+        # batch has been through the loss, over the generation batch reassembled from the buffered micro-batches
+        # (each of which stored its old_per_token_logps and ratio in inputs above).
+        if vllm_importance_sampling_ratio is not None:
+            batches = self._buffered_inputs if mode == "train" else [inputs]
+            if all("importance_sampling_ratio" in batch for batch in batches):
+                old_per_token_logps = torch.cat([batch["old_per_token_logps"] for batch in batches])
+                sampling_per_token_logps = torch.cat([batch["sampling_per_token_logps"] for batch in batches])
+                vllm_importance_sampling_ratio = torch.cat([batch["importance_sampling_ratio"] for batch in batches])
+                completion_mask = torch.cat([batch["completion_mask"] for batch in batches])
+                tool_mask = torch.cat([batch["tool_mask"] for batch in batches]) if "tool_mask" in inputs else None
+                device = self.accelerator.device
+                delta = torch.abs(old_per_token_logps - sampling_per_token_logps)
+                mask = completion_mask.bool() if tool_mask is None else (completion_mask * tool_mask).bool()
+                # Tokens vLLM could not score carry NaN, so exclude them rather than let them turn the reported
+                # divergence into NaN. Counting them as zero instead would understate the divergence.
+                delta = delta[mask & ~torch.isnan(delta)]
+                mean_delta = torch.mean(delta) if delta.numel() > 0 else torch.tensor(0.0, device=device)
+                max_delta = torch.max(delta) if delta.numel() > 0 else torch.tensor(0.0, device=device)
+                self._metrics[mode]["sampling/sampling_logp_difference/mean"].append(
+                    self.accelerator.gather(mean_delta).mean().item()
+                )
+                self._metrics[mode]["sampling/sampling_logp_difference/max"].append(
+                    self.accelerator.gather(max_delta).max().item()
+                )
+                if sequence_level_is:
+                    flat_is_ratio = vllm_importance_sampling_ratio.flatten()
+                else:
+                    flat_is_ratio = vllm_importance_sampling_ratio[mask]
+
+                min_importance_sampling_ratio = (
+                    torch.min(flat_is_ratio) if flat_is_ratio.numel() > 0 else torch.tensor(0.0, device=device)
+                )
+                mean_importance_sampling_ratio = (
+                    torch.mean(flat_is_ratio) if flat_is_ratio.numel() > 0 else torch.tensor(0.0, device=device)
+                )
+                max_importance_sampling_ratio = (
+                    torch.max(flat_is_ratio) if flat_is_ratio.numel() > 0 else torch.tensor(0.0, device=device)
+                )
+                self._metrics[mode]["sampling/importance_sampling_ratio/min"].append(
+                    nanmin(self.accelerator.gather(min_importance_sampling_ratio)).item()
+                )
+                self._metrics[mode]["sampling/importance_sampling_ratio/mean"].append(
+                    self.accelerator.gather(mean_importance_sampling_ratio).nanmean().item()
+                )
+                self._metrics[mode]["sampling/importance_sampling_ratio/max"].append(
+                    nanmax(self.accelerator.gather(max_importance_sampling_ratio)).item()
+                )
 
         return loss
 

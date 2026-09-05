@@ -1746,14 +1746,21 @@ class TestGRPOTrainer(TrlTestCase):
         trainer._generate = generate_with_one_unscorable_token
 
         # Snapshot the divergence metric as soon as it is produced. Reading `_metrics` after training is useless,
-        # because the dict is cleared on every log.
+        # because the dict is cleared on every log. It is logged by `_generate_and_score_completions` when
+        # `old_per_token_logps` is pre-computed there, and by `_compute_loss` on the on-policy non-liger path (which
+        # skips that forward pass), so snapshot after both and keep each entry once.
         original_score = trainer._generate_and_score_completions
         recorded_metrics = []
 
+        def snapshot_metrics():
+            for key in ["sampling/sampling_logp_difference/mean", "sampling/sampling_logp_difference/max"]:
+                for value in trainer._metrics["train"][key]:
+                    if (key, value) not in recorded_metrics:
+                        recorded_metrics.append((key, value))
+
         def record_metrics(inputs):
             outputs = original_score(inputs)
-            for key in ["sampling/sampling_logp_difference/mean", "sampling/sampling_logp_difference/max"]:
-                recorded_metrics.extend((key, value) for value in trainer._metrics["train"][key])
+            snapshot_metrics()
             return outputs
 
         trainer._generate_and_score_completions = record_metrics
@@ -1777,6 +1784,7 @@ class TestGRPOTrainer(TrlTestCase):
         def record_loss(model, inputs):
             loss = original_compute_loss(model, inputs)
             losses.append(loss)
+            snapshot_metrics()
             return loss
 
         trainer._compute_loss = record_loss
@@ -1805,6 +1813,136 @@ class TestGRPOTrainer(TrlTestCase):
                 "an unscorable token caused sequences to be dropped by the off-policy mask, even though the "
                 "threshold is high enough to keep every sequence"
             )
+
+    @pytest.mark.parametrize(
+        "vllm_importance_sampling_mode", ["token_truncate", "token_mask", "sequence_truncate", "sequence_mask"]
+    )
+    def test_on_policy_vllm_importance_sampling_skips_forward_and_logs_once_per_generation(
+        self, vllm_importance_sampling_mode
+    ):
+        # On the on-policy non-liger path, old_per_token_logps == per_token_logps.detach(), so the trainer skips the
+        # no_grad forward pass over the completion batch in `_generate_and_score_completions` and computes the vLLM
+        # importance sampling ratio inline in `_compute_loss`. `_compute_loss` runs per micro-batch whereas the
+        # sampling diagnostics are per generation batch, so this checks that (1) no forward pass happens while
+        # generating and scoring, (2) the diagnostics are logged exactly once per generation batch, at the last
+        # micro-batch of the first pass and not again on later iterations, and (3) they are computed over the whole
+        # generation batch rather than over the last micro-batch.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        steps_per_generation, num_iterations = 3, 2
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,
+            num_generations=3,
+            # On-policy: gradient_accumulation_steps is a multiple of steps_per_generation * num_iterations
+            gradient_accumulation_steps=steps_per_generation * num_iterations,
+            steps_per_generation=steps_per_generation,
+            num_iterations=num_iterations,
+            max_completion_length=8,
+            max_steps=1,
+            beta=0.0,  # no reference-model forward, so any forward while scoring is the old_per_token_logps one
+            logging_steps=1000,  # never log during the run, so that `_metrics` is not cleared
+            report_to="none",
+        )
+
+        def varied_reward(completions, **kwargs):
+            return [float(i) for i in range(len(completions))]
+
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs=varied_reward,
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        # Enable the correction after construction so that no vLLM server is required.
+        trainer.use_vllm = True
+        trainer.vllm_importance_sampling_correction = True
+        trainer.vllm_importance_sampling_mode = vllm_importance_sampling_mode
+
+        # Inject sampling logprobs into the trainer's own generation output, including one unscorable token.
+        original_generate = trainer._generate
+
+        def generate_with_sampling_logps(prompts):
+            trainer.use_vllm = False
+            try:
+                outputs = list(original_generate(prompts))
+            finally:
+                trainer.use_vllm = True
+            completion_ids = outputs[1]
+            outputs[4] = [[-0.5] * len(ids) for ids in completion_ids]
+            outputs[4][0][0] = None  # vLLM returned no logprob for this token
+            return tuple(outputs)
+
+        trainer._generate = generate_with_sampling_logps
+
+        # (1) Count the forward passes made while generating and scoring.
+        original_score = trainer._generate_and_score_completions
+        original_get_logps = trainer._get_per_token_logps_and_entropies
+        scoring = False
+        forward_passes_while_scoring = 0
+
+        def score(inputs):
+            nonlocal scoring
+            scoring = True
+            try:
+                return original_score(inputs)
+            finally:
+                scoring = False
+
+        def get_logps(*args, **kwargs):
+            nonlocal forward_passes_while_scoring
+            if scoring:
+                forward_passes_while_scoring += 1
+            return original_get_logps(*args, **kwargs)
+
+        trainer._generate_and_score_completions = score
+        trainer._get_per_token_logps_and_entropies = get_logps
+
+        # (2) After every micro-batch, snapshot how many diagnostics have been logged and their values, since `log`
+        # clears `_metrics` at the end of training.
+        keys = [
+            "sampling/sampling_logp_difference/mean",
+            "sampling/sampling_logp_difference/max",
+            "sampling/importance_sampling_ratio/min",
+            "sampling/importance_sampling_ratio/mean",
+            "sampling/importance_sampling_ratio/max",
+        ]
+        original_compute_loss = trainer._compute_loss
+        num_logged_after_each_micro_batch = []
+        logged = {}
+
+        def record_loss(model, inputs):
+            loss = original_compute_loss(model, inputs)
+            num_logged_after_each_micro_batch.append(len(trainer._metrics["train"][keys[0]]))
+            logged.update({key: list(trainer._metrics["train"][key]) for key in keys})
+            return loss
+
+        trainer._compute_loss = record_loss
+
+        trainer.train()
+
+        assert forward_passes_while_scoring == 0, "the on-policy path must not recompute old_per_token_logps"
+        # 3 micro-batches x 2 iterations: logged at the third micro-batch, neither before nor again on iteration 2
+        assert num_logged_after_each_micro_batch == [0, 0, 1, 1, 1, 1]
+
+        # (3) Recompute the diagnostics over the whole generation batch, reassembled from the buffered micro-batches.
+        batches = trainer._buffered_inputs
+        old_per_token_logps = torch.cat([batch["old_per_token_logps"] for batch in batches])
+        sampling_per_token_logps = torch.cat([batch["sampling_per_token_logps"] for batch in batches])
+        importance_sampling_ratio = torch.cat([batch["importance_sampling_ratio"] for batch in batches])
+        mask = torch.cat([batch["completion_mask"] for batch in batches]).bool()
+        delta = torch.abs(old_per_token_logps - sampling_per_token_logps)
+        delta = delta[mask & ~torch.isnan(delta)]
+        if vllm_importance_sampling_mode in ["sequence_mask", "sequence_truncate"]:
+            flat_ratio = importance_sampling_ratio.flatten()
+        else:
+            flat_ratio = importance_sampling_ratio[mask]
+        expected = [delta.mean(), delta.max(), flat_ratio.min(), flat_ratio.mean(), flat_ratio.max()]
+        for key, value in zip(keys, expected, strict=True):
+            assert len(logged[key]) == 1, f"{key} must be logged exactly once per generation batch"
+            # the logged value is a Python float; compare on CPU so this also holds when training on an accelerator
+            torch.testing.assert_close(torch.tensor(logged[key][0]), value.cpu(), rtol=1e-5, atol=0.0)
 
     def test_train_with_off_policy_mask(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
