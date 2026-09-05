@@ -101,6 +101,9 @@ where the first term represents the scaled advantage and the second term penaliz
 > [!TIP]
 > Note that compared to the original formulation in [DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models](https://huggingface.co/papers/2402.03300), we use  \\( \beta = 0.0 \\) by default, meaning that the KL divergence term is not used. This choice is motivated by several recent studies (e.g., [Open-Reasoner-Zero: An Open Source Approach to Scaling Up Reinforcement Learning on the Base Model](https://huggingface.co/papers/2503.24290)) which have shown that the KL divergence term is not essential for training with GRPO. As a result, it has become common practice to exclude it (e.g. [Understanding R1-Zero-Like Training: A Critical Perspective](https://huggingface.co/papers/2503.20783), [DAPO: An Open-Source LLM Reinforcement Learning System at Scale](https://huggingface.co/papers/2503.14476)). If you wish to include the KL divergence term, you can set `beta` in [`GRPOConfig`] to a non-zero value.
 
+> [!TIP]
+> When  \\( \beta > 0 \\), a prompt group whose completions all receive the same reward has  \\( \hat{A}_{i,t} = 0 \\) for every token, so the first term above drops out — but the KL term still applies per-token regardless of the advantage, so that group still contributes a gradient. [Revisiting Group Relative Policy Optimization](https://huggingface.co/papers/2505.22257) proposes masking these zero-variance groups out of the loss entirely. You can enable this by setting `mask_zero_advantage_groups=True` in [`GRPOConfig`]; it's disabled by default to preserve the objective above exactly as written.
+
 In the original paper, this formulation is generalized to account for multiple updates after each generation (denoted  \\( \mu \\), can be set with `num_iterations` in [`GRPOConfig`]) by leveraging the **clipped surrogate objective**:
 
 $$
