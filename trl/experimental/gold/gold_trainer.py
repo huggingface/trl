@@ -2518,6 +2518,10 @@ class GOLDTrainer(SFTTrainer):
                 student_hidden = student_outputs.last_hidden_state[:, :-1]
                 teacher_hidden = teacher_outputs.last_hidden_state[:, :-1]
 
+                # The shared return below hands these back when `return_outputs=True`, and
+                # `Trainer.prediction_step` slices `outputs[1:]` when `prediction_loss_only=False`; neither works on
+                # a name this branch never bound.
+                outputs_student = student_outputs
                 del student_outputs, teacher_outputs
 
                 student_hidden = student_hidden.reshape(-1, student_hidden.shape[-1])
@@ -2758,7 +2762,10 @@ class GOLDTrainer(SFTTrainer):
         inputs = self._prepare_inputs(inputs)
         with torch.no_grad():
             with self.compute_loss_context_manager():
-                loss = self.compute_loss(model, inputs)
+                # Same gather as `training_step`: the fused JSD projects through the lm_head, which stays sharded
+                # under Liger + ZeRO-3 unless it is gathered first.
+                with self._get_liger_zero3_lm_head_gather_ctx(model):
+                    loss = self.compute_loss(model, inputs)
             loss = loss.mean().detach()
         return loss, None, None
 

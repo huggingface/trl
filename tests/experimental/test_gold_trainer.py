@@ -3572,6 +3572,30 @@ class TestGOLDTrainerLoss(TrlTestCase):
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
         self.tokenizer.pad_token = self.tokenizer.eos_token
 
+    def test_prediction_step_gathers_liger_zero3_lm_head_like_training_step(self, monkeypatch):
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion")
+        trainer = GOLDTrainer(
+            model=self.model_id,
+            teacher_model=self.model_id,
+            args=GOLDConfig(output_dir=self.tmp_dir, report_to="none", per_device_eval_batch_size=2),
+            train_dataset=dataset["train"],
+            eval_dataset=dataset["test"],
+            processing_class=self.tokenizer,
+        )
+
+        call_count = 0
+        original_gather_ctx = trainer._get_liger_zero3_lm_head_gather_ctx
+
+        def counting_gather_ctx(model):
+            nonlocal call_count
+            call_count += 1
+            return original_gather_ctx(model)
+
+        monkeypatch.setattr(trainer, "_get_liger_zero3_lm_head_gather_ctx", counting_gather_ctx)
+
+        trainer.evaluate()
+        assert call_count > 0
+
     def test_loss_normalizes_by_num_items_in_batch(self):
         # When `num_items_in_batch` is passed (as under gradient accumulation), the JSD loss must be reduced as
         # sum / num_items_in_batch rather than the local per-microbatch mean. The batch uses variable-length prompts
