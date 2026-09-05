@@ -1425,7 +1425,7 @@ class _ChunkedLogProbFunction(torch.autograd.Function):
             for start in range(0, vocab, chunk_size):
                 end = min(start + chunk_size, vocab)
                 C = end - start
-                w_chunk = weight[start:end]  # [C, H]
+                w_chunk = weight[start:end].to(hidden.dtype)  # [C, H]
 
                 torch.mm(hidden, w_chunk.t(), out=mm_buf[:, :C])
                 if bias is not None:

@@ -38,6 +38,7 @@ from transformers.utils import is_peft_available
 
 from trl import GRPOConfig, GRPOTrainer
 from trl.import_utils import is_liger_kernel_available
+from trl.trainer.grpo_trainer import _ChunkedLogProbFunction
 
 from .testing_utils import (
     TrlTestCase,
@@ -495,6 +496,68 @@ class TestGRPOTrainer(TrlTestCase):
         assert chunked_grads.keys() == grads.keys()
         for name, grad in grads.items():
             torch.testing.assert_close(chunked_grads[name], grad, rtol=1e-4, atol=1e-5)
+
+        release_memory(trainer.model, trainer)
+
+    @require_liger_kernel
+    def test_chunked_logps_honor_output_multiplier_and_bound_tokens(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            num_generations=2,
+            use_liger_kernel=True,
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        torch.manual_seed(42)
+        input_ids = torch.randint(0, trainer.model.config.vocab_size, (2, 8), device=trainer.accelerator.device)
+        attention_mask = torch.ones_like(input_ids)
+        logits_to_keep = 4
+        text_config = trainer.model.config.get_text_config()
+        text_config.logit_scale = None
+        text_config.output_multiplier = 0.5
+
+        # Make the production token bound tiny so this short test proves that one large projection cannot slip
+        # through. Recording the rows also checks the final uneven chunk rather than merely counting calls.
+        chunk_rows = []
+        chunked_apply = _ChunkedLogProbFunction.apply
+
+        def record_chunk(*args):
+            chunk_rows.append(args[0].size(0))
+            return chunked_apply(*args)
+
+        with (
+            patch("trl.trainer.grpo_trainer._CHUNKED_LOGPROB_TOKEN_CHUNK_SIZE", 3),
+            patch("trl.trainer.grpo_trainer._ChunkedLogProbFunction.apply", side_effect=record_chunk),
+            torch.no_grad(),
+        ):
+            logps, _, _ = trainer._get_per_token_logps_and_entropies(
+                trainer.model,
+                input_ids,
+                attention_mask,
+                logits_to_keep,
+                compute_entropy=False,
+            )
+
+        inner_model = trainer.model
+        hidden_states = inner_model.base_model(
+            input_ids=input_ids, attention_mask=attention_mask, use_cache=False
+        ).last_hidden_state[:, :-1]
+        hidden_states = hidden_states[:, -logits_to_keep:]
+        labels = input_ids[:, -logits_to_keep:]
+        logits = inner_model.get_output_embeddings()(hidden_states).float() * text_config.output_multiplier
+        expected = torch.log_softmax(logits / trainer.temperature, dim=-1)
+        expected = expected.gather(-1, labels.unsqueeze(-1)).squeeze(-1)
+
+        assert chunk_rows == [3, 3, 2]
+        torch.testing.assert_close(logps, expected, atol=1e-5, rtol=1e-5)
 
         release_memory(trainer.model, trainer)
 
@@ -1950,12 +2013,13 @@ class TestGRPOTrainer(TrlTestCase):
         with pytest.raises(ValueError, match="returned 1 rewards"):
             trainer.train()
 
+    @pytest.mark.parametrize("use_liger_kernel", [False, pytest.param(True, marks=require_liger_kernel)])
     @pytest.mark.parametrize(
         "model_name",
         ["trl-internal-testing/tiny-Qwen3ForCausalLM", "trl-internal-testing/tiny-Gemma2ForCausalLM"],
         # Gemma2 has the input word embeddings and lm_head tied, Qwen3 does not
     )
-    def test_train_with_cast_lm_head_to_fp32(self, model_name):
+    def test_train_with_cast_lm_head_to_fp32(self, model_name, use_liger_kernel):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
@@ -1965,6 +2029,7 @@ class TestGRPOTrainer(TrlTestCase):
             max_completion_length=8,  # reduce the completion length to reduce memory usage
             report_to="none",
             cast_lm_head_to_fp32=True,
+            use_liger_kernel=use_liger_kernel,
         )
         trainer = GRPOTrainer(
             model=model_name,

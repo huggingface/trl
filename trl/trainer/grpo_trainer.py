@@ -120,6 +120,7 @@ logger = get_logger(__name__)
 
 
 _CHUNKED_LOGPROB_CHUNK_SIZE = 8192
+_CHUNKED_LOGPROB_TOKEN_CHUNK_SIZE = 2048
 
 # A reward function can be a string, interpreted as a model ID and loaded as a pretrained model, a pretrained model, or
 # a callable that returns a list of floats (the rewards). The callable receives prompts, completions, and additional
@@ -1474,18 +1475,44 @@ class GRPOTrainer(_BaseTrainer):
                 lm_head = inner_model.get_output_embeddings()
                 text_config = inner_model.config.get_text_config()
                 final_logit_softcapping = getattr(text_config, "final_logit_softcapping", None)
-                logit_scale = getattr(text_config, "logit_scale", 1.0)
-                with maybe_gather_lm_head_ctx(lm_head.weight, lm_head.bias):
-                    valid_logps, valid_entropies = _ChunkedLogProbFunction.apply(
-                        hidden_states,
-                        lm_head.weight,
-                        lm_head.bias,
-                        labels,
-                        self.temperature,
-                        _CHUNKED_LOGPROB_CHUNK_SIZE,
-                        final_logit_softcapping,
-                        logit_scale,
-                    )
+                # `logit_scale` is None on models that don't scale (e.g. MPT); read that as unscaled (1.0). A real
+                # 0.0 is kept as-is. Muse Glimmer applies the same pre-softcap multiplier as `output_multiplier`.
+                logit_scale = getattr(text_config, "logit_scale", None)
+                if logit_scale is None:
+                    logit_scale = getattr(text_config, "output_multiplier", None)
+                logit_scale = 1.0 if logit_scale is None else logit_scale
+
+                lm_head_weight = lm_head.weight
+                lm_head_bias = lm_head.bias
+                # FSDP2 exposes sharded parameters as DTensors, while the backbone output is a regular tensor.
+                # Gather the head once before splitting tokens so every projection uses compatible tensor types.
+                if isinstance(lm_head_weight, torch.distributed.tensor.DTensor):
+                    lm_head_weight = lm_head_weight.full_tensor()
+                    if lm_head_bias is not None:
+                        lm_head_bias = lm_head_bias.full_tensor()
+
+                logps_chunks = []
+                entropy_chunks = []
+                with maybe_gather_lm_head_ctx(lm_head_weight, lm_head_bias):
+                    for hidden_chunk, labels_chunk in zip(
+                        hidden_states.split(_CHUNKED_LOGPROB_TOKEN_CHUNK_SIZE),
+                        labels.split(_CHUNKED_LOGPROB_TOKEN_CHUNK_SIZE),
+                        strict=True,
+                    ):
+                        logps_chunk, entropy_chunk = _ChunkedLogProbFunction.apply(
+                            hidden_chunk,
+                            lm_head_weight,
+                            lm_head_bias,
+                            labels_chunk,
+                            self.temperature,
+                            _CHUNKED_LOGPROB_CHUNK_SIZE,
+                            final_logit_softcapping,
+                            logit_scale,
+                        )
+                        logps_chunks.append(logps_chunk)
+                        entropy_chunks.append(entropy_chunk)
+                valid_logps = torch.cat(logps_chunks)
+                valid_entropies = torch.cat(entropy_chunks)
 
                 logps = torch.zeros_like(completion_mask, dtype=valid_logps.dtype)
                 logps[completion_mask] = valid_logps
