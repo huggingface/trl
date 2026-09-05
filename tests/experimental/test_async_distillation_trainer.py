@@ -863,6 +863,20 @@ class TestEpochStop:
 
         assert control.should_training_stop is should_stop
 
+    def test_stops_before_the_first_step_when_the_checkpoint_reached_the_target(self):
+        trainer = AsyncDistillationTrainer.__new__(AsyncDistillationTrainer)
+        trainer.accelerator = types.SimpleNamespace(device="cpu", reduce=lambda tensor, reduction: tensor)
+        trainer._trained_prompts = set()
+        trainer._prompts_before_resume = 4
+        trainer.control = types.SimpleNamespace(should_training_stop=False)
+
+        _EpochStopCallback(trainer, target_prompts=4).on_train_begin(None, None, trainer.control)
+
+        assert trainer.control.should_training_stop
+        with patch.object(_BaseTrainer, "_run_epoch") as run_epoch:
+            trainer._run_epoch()
+        run_epoch.assert_not_called()
+
 
 class TestRolloutStateCheckpoint(TrlTestCase):
     """Prompt-index checkpoint/resume logic — no GPU or vLLM required."""
