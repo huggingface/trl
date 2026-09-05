@@ -157,7 +157,7 @@ def test_default_weight_transfer_validates_vllm_before_model_load():
 
     with (
         patch.object(async_grpo_trainer_module, "is_vllm_available", return_value=False),
-        patch.object(async_grpo_trainer_module.AutoModelForCausalLM, "from_pretrained") as model_loader,
+        patch.object(async_grpo_trainer_module, "create_model_from_path") as model_loader,
         pytest.raises(ImportError, match="vLLM >= 0.22.0"),
     ):
         AsyncGRPOTrainer(
@@ -177,8 +177,8 @@ def test_custom_weight_transfer_skips_vllm_validation():
     with (
         patch.object(async_grpo_trainer_module, "is_vllm_available", return_value=False),
         patch.object(
-            async_grpo_trainer_module.AutoModelForCausalLM,
-            "from_pretrained",
+            async_grpo_trainer_module,
+            "create_model_from_path",
             side_effect=RuntimeError("model load reached"),
         ),
         pytest.raises(RuntimeError, match="model load reached"),
