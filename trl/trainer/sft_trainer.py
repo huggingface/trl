@@ -45,6 +45,7 @@ from transformers import (
     TrainingArguments,
 )
 from transformers.data.data_collator import DataCollatorMixin
+from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
 from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast
 from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_peft_available
@@ -203,6 +204,11 @@ def _chunked_cross_entropy_loss(
     # GPU. At least one chunk always runs: under context parallelism a rank can hold only masked positions, and its
     # zero loss still has to reach every trainable parameter for `.backward()` and gradient sync to work.
     n_padded = (n_valid_tensor / chunk_size).ceil().clamp(min=1).to(torch.int64) * chunk_size
+    if is_deepspeed_zero3_enabled() and torch.distributed.is_initialized():
+        torch.distributed.all_reduce(
+            n_padded,
+            op=torch.distributed.ReduceOp.MAX,
+        )
 
     loss = hidden.new_zeros((), dtype=torch.float32)
 
