@@ -2880,7 +2880,7 @@ class GRPOTrainer(_BaseTrainer):
         if images is not None and self.log_multimodal:
             self._logs["images"].extend(gather_object(images))
 
-        # On the non-liger path these are logged in _compute_loss instead.
+        # On the non-liger path these are logged in _compute_loss instead, once per generation batch.
         if needs_old_logps_for_liger:
             delta = torch.abs(old_per_token_logps - sampling_per_token_logps)
             mask = completion_mask.bool() if tool_mask is None else (completion_mask * tool_mask).bool()
@@ -3297,46 +3297,6 @@ class GRPOTrainer(_BaseTrainer):
         if self.use_vllm and self.vllm_importance_sampling_correction and self.loss_type != "vespo":
             per_token_loss = per_token_loss * inputs["importance_sampling_ratio"]
 
-        # Log IS correction metrics for inline-computed IS ratio (non-liger path)
-        if self.use_vllm and self.vllm_importance_sampling_correction and vllm_importance_sampling_ratio is not None:
-            mode = "train" if self.model.training else "eval"
-            device = per_token_logps.device
-            delta = torch.abs(old_per_token_logps - sampling_per_token_logps)
-            # Tokens vLLM could not score carry NaN, so exclude them rather than let them turn the reported
-            # divergence into NaN. Counting them as zero instead would understate the divergence.
-            delta = delta[mask.bool() & ~torch.isnan(delta)]
-            mean_delta = torch.mean(delta) if delta.numel() > 0 else torch.tensor(0.0, device=device)
-            max_delta = torch.max(delta) if delta.numel() > 0 else torch.tensor(0.0, device=device)
-            self._metrics[mode]["sampling/sampling_logp_difference/mean"].append(
-                self.accelerator.gather(mean_delta).mean().item()
-            )
-            self._metrics[mode]["sampling/sampling_logp_difference/max"].append(
-                self.accelerator.gather(max_delta).max().item()
-            )
-            if sequence_level_is:
-                flat_is_ratio = vllm_importance_sampling_ratio.flatten()
-            else:
-                flat_is_ratio = vllm_importance_sampling_ratio[mask.bool()]
-
-            min_importance_sampling_ratio = (
-                torch.min(flat_is_ratio) if flat_is_ratio.numel() > 0 else torch.tensor(0.0, device=device)
-            )
-            mean_importance_sampling_ratio = (
-                torch.mean(flat_is_ratio) if flat_is_ratio.numel() > 0 else torch.tensor(0.0, device=device)
-            )
-            max_importance_sampling_ratio = (
-                torch.max(flat_is_ratio) if flat_is_ratio.numel() > 0 else torch.tensor(0.0, device=device)
-            )
-            self._metrics[mode]["sampling/importance_sampling_ratio/min"].append(
-                nanmin(self.accelerator.gather(min_importance_sampling_ratio)).item()
-            )
-            self._metrics[mode]["sampling/importance_sampling_ratio/mean"].append(
-                self.accelerator.gather(mean_importance_sampling_ratio).nanmean().item()
-            )
-            self._metrics[mode]["sampling/importance_sampling_ratio/max"].append(
-                nanmax(self.accelerator.gather(max_importance_sampling_ratio)).item()
-            )
-
         if self.beta != 0.0:
             per_token_loss = per_token_loss + self.beta * per_token_kl
 
@@ -3477,6 +3437,56 @@ class GRPOTrainer(_BaseTrainer):
             self._metrics[mode]["cispo_clip_ratio"].append(global_masked_mean(is_cispo_clipped.float()))
         elif self.loss_type == "vespo":
             self._metrics[mode]["vespo/phi_seq_mean"].append(global_masked_mean(phi_seq))
+
+        # The vLLM importance sampling diagnostics are logged once per generation batch: on the liger path by
+        # _generate_and_score_completions, and on the non-liger path here, once the last micro-batch of the generation
+        # batch has been through the loss, over the generation batch reassembled from the buffered micro-batches
+        # (each of which stored its old_per_token_logps and ratio in inputs above).
+        if vllm_importance_sampling_ratio is not None:
+            batches = self._buffered_inputs if mode == "train" else [inputs]
+            if all("importance_sampling_ratio" in batch for batch in batches):
+                old_per_token_logps = torch.cat([batch["old_per_token_logps"] for batch in batches])
+                sampling_per_token_logps = torch.cat([batch["sampling_per_token_logps"] for batch in batches])
+                vllm_importance_sampling_ratio = torch.cat([batch["importance_sampling_ratio"] for batch in batches])
+                completion_mask = torch.cat([batch["completion_mask"] for batch in batches])
+                tool_mask = torch.cat([batch["tool_mask"] for batch in batches]) if "tool_mask" in inputs else None
+                device = self.accelerator.device
+                delta = torch.abs(old_per_token_logps - sampling_per_token_logps)
+                mask = completion_mask.bool() if tool_mask is None else (completion_mask * tool_mask).bool()
+                # Tokens vLLM could not score carry NaN, so exclude them rather than let them turn the reported
+                # divergence into NaN. Counting them as zero instead would understate the divergence.
+                delta = delta[mask & ~torch.isnan(delta)]
+                mean_delta = torch.mean(delta) if delta.numel() > 0 else torch.tensor(0.0, device=device)
+                max_delta = torch.max(delta) if delta.numel() > 0 else torch.tensor(0.0, device=device)
+                self._metrics[mode]["sampling/sampling_logp_difference/mean"].append(
+                    self.accelerator.gather(mean_delta).mean().item()
+                )
+                self._metrics[mode]["sampling/sampling_logp_difference/max"].append(
+                    self.accelerator.gather(max_delta).max().item()
+                )
+                if sequence_level_is:
+                    flat_is_ratio = vllm_importance_sampling_ratio.flatten()
+                else:
+                    flat_is_ratio = vllm_importance_sampling_ratio[mask]
+
+                min_importance_sampling_ratio = (
+                    torch.min(flat_is_ratio) if flat_is_ratio.numel() > 0 else torch.tensor(0.0, device=device)
+                )
+                mean_importance_sampling_ratio = (
+                    torch.mean(flat_is_ratio) if flat_is_ratio.numel() > 0 else torch.tensor(0.0, device=device)
+                )
+                max_importance_sampling_ratio = (
+                    torch.max(flat_is_ratio) if flat_is_ratio.numel() > 0 else torch.tensor(0.0, device=device)
+                )
+                self._metrics[mode]["sampling/importance_sampling_ratio/min"].append(
+                    nanmin(self.accelerator.gather(min_importance_sampling_ratio)).item()
+                )
+                self._metrics[mode]["sampling/importance_sampling_ratio/mean"].append(
+                    self.accelerator.gather(mean_importance_sampling_ratio).nanmean().item()
+                )
+                self._metrics[mode]["sampling/importance_sampling_ratio/max"].append(
+                    nanmax(self.accelerator.gather(max_importance_sampling_ratio)).item()
+                )
 
         return loss
 
