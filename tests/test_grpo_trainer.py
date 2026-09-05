@@ -4290,6 +4290,63 @@ class TestGRPOTrainerVLM(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @pytest.mark.skipif(
+        Version(transformers.__version__) < Version("5.2.0"),
+        reason="Qwen3.5 models were introduced in transformers-5.2.0",
+    )
+    @require_liger_kernel
+    @require_peft
+    def test_train_qwen3_5_vlm_with_liger_and_peft(self):
+        model_id = "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink"
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
+
+        def reward_func(completions, **kwargs):
+            """Reward function that rewards longer completions."""
+            return [float(len(completion[0]["content"])) for completion in completions]
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,
+            per_device_train_batch_size=2,
+            num_generations=2,
+            max_completion_length=8,
+            use_liger_kernel=True,
+            max_steps=1,
+            report_to="none",
+        )
+        peft_config = LoraConfig(
+            r=8,
+            lora_alpha=32,
+            target_modules=["q_proj", "v_proj"],
+        )
+        trainer = GRPOTrainer(
+            model=model_id,
+            reward_funcs=reward_func,
+            args=training_args,
+            train_dataset=dataset,
+            peft_config=peft_config,
+        )
+
+        from trl.losses import FusedLinearGRPOLoss
+
+        assert isinstance(trainer.model, peft.PeftModel)
+        assert isinstance(trainer.liger_loss, FusedLinearGRPOLoss)
+
+        previous_trainable_params = {
+            name: param.clone() for name, param in trainer.model.named_parameters() if param.requires_grad
+        }
+        assert previous_trainable_params
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+        changed_params = [
+            name
+            for name, param in previous_trainable_params.items()
+            if not torch.equal(param, trainer.model.get_parameter(name))
+        ]
+        assert changed_params, "No trainable PEFT parameters have changed."
+
     @pytest.mark.parametrize(
         "model_id",
         [
