@@ -27,6 +27,7 @@ from accelerate.utils import is_peft_model
 from datasets import Dataset, features
 from packaging.version import Version
 from transformers import (
+    AutoTokenizer,
     BaseImageProcessor,
     DataCollator,
     DataCollatorForTokenClassification,
@@ -40,7 +41,7 @@ from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_peft_available
 
 from ...trainer.base_trainer import _BaseTrainer
-from ...trainer.utils import disable_dropout_in_model
+from ...trainer.utils import disable_dropout_in_model, get_config_model_id
 from ..utils import prepare_peft_model
 from .prm_config import PRMConfig
 
@@ -117,7 +118,7 @@ class PRMTrainer(_BaseTrainer):
         processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.BaseImageProcessor`], [`~transformers.FeatureExtractionMixin`] or [`~transformers.ProcessorMixin`], *optional*):
             Processing class used to process the data. If provided, will be used to automatically process the inputs
             for the model, and it will be saved along the model to make it easier to rerun an interrupted training or
-            reuse the fine-tuned model.
+            reuse the fine-tuned model. If `None`, the tokenizer is loaded from the model.
         model_init (`Callable[[], transformers.PreTrainedModel]`):
             The model initializer to use for training. If None is specified, the default model initializer will be
             used.
@@ -194,14 +195,15 @@ class PRMTrainer(_BaseTrainer):
         if args.disable_dropout:
             disable_dropout_in_model(model)
 
+        if processing_class is None:
+            processing_class = AutoTokenizer.from_pretrained(
+                get_config_model_id(model.config), trust_remote_code=args.trust_remote_code
+            )
+
         if compute_metrics is None:
             compute_metrics = compute_accuracy
 
         if data_collator is None:
-            if processing_class is None:
-                raise ValueError(
-                    "A processing_class must be specified when using the default DataCollatorForTokenClassification"
-                )
             data_collator = DataCollatorForTokenClassification(processing_class)
 
         if "input_ids" not in train_dataset.column_names:
