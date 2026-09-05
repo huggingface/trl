@@ -31,6 +31,8 @@ from transformers import (
     AutoModelForImageTextToText,
     AutoTokenizer,
     BitsAndBytesConfig,
+    LlamaConfig,
+    LlamaForCausalLM,
     TrainingArguments,
 )
 from transformers.testing_utils import backend_device_count, backend_empty_cache, torch_device
@@ -1040,6 +1042,23 @@ class TestSFTTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    def test_from_config_model_requires_processing_class(self):
+        # from_config leaves `_name_or_path` empty, so auto-loading the processor would hit the Hub with repo id "".
+        config = LlamaConfig(
+            vocab_size=32,
+            hidden_size=32,
+            intermediate_size=64,
+            num_hidden_layers=1,
+            num_attention_heads=4,
+            max_position_embeddings=32,
+        )
+        model = LlamaForCausalLM(config)
+        dataset = Dataset.from_dict({"text": ["hello world"]})
+        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none", use_cpu=True)
+
+        with pytest.raises(ValueError, match=r"config\._name_or_path.*processing_class"):
+            SFTTrainer(model=model, args=training_args, train_dataset=dataset)
 
     def test_dataset_with_transform_requires_skip_prepare_dataset(self):
         dataset = Dataset.from_dict({"text": ["hello world"]})
