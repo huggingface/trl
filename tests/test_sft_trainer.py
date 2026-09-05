@@ -1280,6 +1280,24 @@ class TestSFTTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    def test_init_with_empty_name_or_path_raises(self):
+        from transformers import LlamaConfig, LlamaForCausalLM
+
+        config = LlamaConfig(
+            vocab_size=32,
+            hidden_size=32,
+            intermediate_size=64,
+            num_hidden_layers=1,
+            num_attention_heads=4,
+            max_position_embeddings=32,
+        )
+        model = LlamaForCausalLM(config)
+        assert model.config._name_or_path == ""
+        dataset = Dataset.from_dict({"text": ["hello world"]})
+        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none", use_cpu=True)
+        with pytest.raises(ValueError, match="processing_class"):
+            SFTTrainer(model=model, args=training_args, train_dataset=dataset)
+
     def test_train_assistant_only(self):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
 
