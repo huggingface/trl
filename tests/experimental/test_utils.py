@@ -13,15 +13,22 @@
 # limitations under the License.
 
 
+import pytest
 import torch
 from datasets import Dataset, load_dataset
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import (
+    AutoModelForCausalLM,
+    AutoModelForSequenceClassification,
+    AutoProcessor,
+    AutoTokenizer,
+)
 
 from trl.experimental.utils import (
     DataCollatorForChatML,
     create_reference_model,
     prepare_peft_model,
     truncate_dataset,
+    validate_reward_processing_class_shares_vocab,
 )
 
 from ..testing_utils import TrlTestCase, require_bitsandbytes, require_peft, require_torch_accelerator
@@ -164,6 +171,36 @@ class TestTruncateExamples(TrlTestCase):
         }
         dataset = truncate_dataset(dataset, max_length)
         assert dataset.to_dict() == expected_output
+
+
+class TestValidateRewardProcessingClassSharesVocab(TrlTestCase):
+    def setup_method(self):
+        self.reward_func = AutoModelForSequenceClassification.from_pretrained(
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", num_labels=1
+        )
+
+    def test_accepts_processor_mixin_reward_processing_class_with_matching_vocab(self):
+        # Regression test for #6951: `NashMDTrainer` defaults `reward_processing_class` to `processing_class`,
+        # which can itself be a `ProcessorMixin` (e.g. for VLM policies), not just a tokenizer. The reward side
+        # must be unwrapped to its `.tokenizer` the same way the policy side already is, or `get_vocab()` raises
+        # `AttributeError` (`ProcessorMixin` doesn't define it) instead of comparing vocabularies -- even when
+        # it's the exact same tokenizer on both sides.
+        processor = AutoProcessor.from_pretrained("trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration")
+
+        validate_reward_processing_class_shares_vocab(
+            self.reward_func, reward_processing_class=processor, policy_processing_class=processor.tokenizer
+        )  # must not raise (and, before the fix, raised AttributeError instead of passing)
+
+    def test_rejects_processor_mixin_reward_processing_class_with_mismatched_vocab(self):
+        # A `ProcessorMixin` on the reward side must still be compared correctly (not skipped, not crash) when its
+        # underlying tokenizer's vocabulary actually differs from the policy's.
+        processor = AutoProcessor.from_pretrained("trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration")
+        mismatched_tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-GPT2LMHeadModel")
+
+        with pytest.raises(ValueError, match="vocabulary"):
+            validate_reward_processing_class_shares_vocab(
+                self.reward_func, reward_processing_class=processor, policy_processing_class=mismatched_tokenizer
+            )
 
 
 class TestPreparePeftModel(TrlTestCase):

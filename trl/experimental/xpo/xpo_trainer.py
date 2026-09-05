@@ -36,7 +36,7 @@ from ...data_utils import maybe_apply_chat_template
 from ...models.utils import unwrap_model_for_generation
 from ...trainer.utils import selective_log_softmax
 from ..online_dpo import OnlineDPOTrainer
-from ..utils import empty_cache, get_reward, truncate_right
+from ..utils import empty_cache, get_reward, truncate_right, validate_reward_processing_class_shares_vocab
 from .xpo_config import XPOConfig
 
 
@@ -82,6 +82,12 @@ class XPOTrainer(OnlineDPOTrainer):
 
             If set to `None`, the tokenizer for each model-based reward function is automatically loaded using
             [`~transformers.AutoTokenizer.from_pretrained`].
+
+            Note: `XPOTrainer` scores completions by feeding token IDs produced by `processing_class` directly to the
+            reward model, instead of decoding and re-tokenizing with `reward_processing_classes` (unlike
+            [`~trl.experimental.online_dpo.OnlineDPOTrainer`]). Because of this, the reward model must share the exact
+            same vocabulary as the policy model; this is validated at init time and raises a `ValueError` if the
+            vocabularies don't match.
         peft_config ([`~peft.PeftConfig`], *optional*):
             The peft config to use for training.
         compute_metrics (`Callable[[EvalPrediction], dict]`, *optional*):
@@ -176,6 +182,11 @@ class XPOTrainer(OnlineDPOTrainer):
         if len(self.reward_funcs) != 1:
             raise ValueError("XPOTrainer only supports one reward function/model.")
         self.reward_funcs = self.reward_funcs[0]
+        # self.reward_funcs may already be wrapped (DeepSpeed engine / DDP) by the super().__init__() call above,
+        # which would make it fail the PreTrainedModel check below; unwrap first so the check still fires.
+        validate_reward_processing_class_shares_vocab(
+            self.accelerator.unwrap_model(self.reward_funcs), self.reward_processing_classes[0], self.processing_class
+        )
 
     @property
     def alpha(self):

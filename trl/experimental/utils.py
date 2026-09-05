@@ -793,6 +793,43 @@ def get_reward(
     )
 
 
+def validate_reward_processing_class_shares_vocab(
+    reward_func: Any,
+    reward_processing_class: PreTrainedTokenizerBase | ProcessorMixin | None,
+    policy_processing_class: PreTrainedTokenizerBase | ProcessorMixin,
+) -> None:
+    """
+    Validate that a model-based reward function's tokenizer shares its vocabulary with the policy's tokenizer.
+
+    Some trainers (e.g. `XPOTrainer`, `NashMDTrainer`) score completions with [`get_reward`], which feeds token IDs
+    produced by the *policy*'s tokenizer directly to the reward model, instead of decoding and re-tokenizing with the
+    reward model's own tokenizer (as [`~trl.experimental.online_dpo.OnlineDPOTrainer`] does). This is only correct if
+    the reward model uses the exact same vocabulary (token -> ID mapping) as the policy model; otherwise the reward
+    model scores the wrong tokens, which silently produces meaningless rewards or raises a cryptic out-of-range error
+    deep inside the model's embedding lookup. This raises an informative error at init time instead.
+    """
+    if not isinstance(reward_func, PreTrainedModel) or reward_processing_class is None:
+        return  # only model-based reward functions read token IDs produced by the policy's tokenizer this way
+    policy_tokenizer = (
+        policy_processing_class.tokenizer
+        if isinstance(policy_processing_class, ProcessorMixin)
+        else policy_processing_class
+    )
+    reward_tokenizer = (
+        reward_processing_class.tokenizer
+        if isinstance(reward_processing_class, ProcessorMixin)
+        else reward_processing_class
+    )
+    if reward_tokenizer.get_vocab() != policy_tokenizer.get_vocab():
+        raise ValueError(
+            "The reward model's tokenizer vocabulary does not match the policy model's tokenizer vocabulary. This "
+            "trainer feeds token IDs produced by the policy's tokenizer directly to the reward model (it does not "
+            "decode and re-tokenize per reward model), so the reward model must share the exact same vocabulary as "
+            "the policy model. Use a reward model that shares a tokenizer with the policy model, or pass a "
+            "`reward_processing_classes` whose vocabulary matches `processing_class`."
+        )
+
+
 def prepare_model_for_kbit_training(model, use_gradient_checkpointing=True, gradient_checkpointing_kwargs=None):
     r"""
     Prepare a k-bit quantized transformers model for training (PEFT/QLoRA).
