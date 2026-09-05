@@ -665,6 +665,7 @@ class BEMACallback(TrainerCallback):
         self.theta0_params = []  # θ₀ buffers (on self.device)
         self.ema_params = []  # EMA buffers (on self.device)
         self.running_model = None  # a copy of the model to run BEMA on
+        self.running_params = []  # references to running model params, matched by name with thetat_params
 
     @staticmethod
     def _unwrap_model(model):
@@ -698,12 +699,15 @@ class BEMACallback(TrainerCallback):
         self.running_model = type(model)(model.config).to(self.device)
         self.running_model.load_state_dict(model.state_dict())
 
-        # Cache trainable parameters once in a fixed order
+        # Cache trainable parameters once in a fixed order, along with their counterparts in the running model. Frozen
+        # parameters are skipped, so the two must be matched by name rather than by position.
+        running_params = dict(self.running_model.named_parameters())
         for name, param in model.named_parameters():
             if not param.requires_grad:
                 continue
             self.param_names.append(name)
             self.thetat_params.append(param)
+            self.running_params.append(running_params[name])
 
             # Clone θ₀ and EMA on the same device as model
             theta0 = param.detach().clone().to(self.device)
@@ -725,7 +729,7 @@ class BEMACallback(TrainerCallback):
 
         # Compute EMA + BEMA in-place and write directly to running_model
         for thetat, theta0, ema, run_param in zip(
-            self.thetat_params, self.theta0_params, self.ema_params, self.running_model.parameters(), strict=True
+            self.thetat_params, self.theta0_params, self.ema_params, self.running_params, strict=True
         ):
             thetat = thetat.detach().to(self.device)
             ema.mul_(1 - beta).add_(thetat, alpha=beta)  # EMA update: ema = (1 - beta) * ema + beta * θₜ
