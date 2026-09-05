@@ -1006,6 +1006,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
                     top_k=self.args.top_k,
                     min_p=self.args.min_p,
                     repetition_penalty=self.args.repetition_penalty,
+                    generation_kwargs=self.args.generation_kwargs,
                     request_timeout=self.args.request_timeout,
                     chat_template_kwargs=self.args.chat_template_kwargs,
                     max_tool_calling_iterations=self.args.max_tool_calling_iterations,

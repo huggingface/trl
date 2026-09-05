@@ -67,6 +67,11 @@ class AsyncGRPOConfig(_BaseConfig):
         min_p (`float`, *optional*):
             Minimum token probability, which will be scaled by the probability of the most likely token. It must be a
             value between 0.0 and 1.0. Typical values are in the 0.01-0.2 range.
+        generation_kwargs (`dict[str, Any]`, *optional*):
+            Additional keyword arguments to pass to [`~transformers.GenerationConfig`] (if using transformers) or
+            `SamplingParams` (if using vLLM) when sampling completions. This can be used to further customize the
+            generation behavior, such as setting `suppress_tokens`, `num_beams`, etc. If it contains keys that conflict
+            with the other generation parameters (like `min_p`, `top_p`, etc.), they will override them.
         repetition_penalty (`float`, *optional*, defaults to `1.0`):
             Float that penalizes new tokens based on whether they appear in the prompt and the generated text so far.
             Values > 1.0 encourage the model to use new tokens, while values < 1.0 encourage the model to repeat
@@ -260,6 +265,15 @@ class AsyncGRPOConfig(_BaseConfig):
         metadata={
             "help": "Minimum token probability, which will be scaled by the probability of the most likely token. It "
             "must be a value between 0.0 and 1.0. Typical values are in the 0.01-0.2 range."
+        },
+    )
+    generation_kwargs: dict | None = field(
+        default=None,
+        metadata={
+            "help": "Additional keyword arguments to pass to `GenerationConfig` (if using transformers) or "
+            "`SamplingParams` (if using vLLM) when sampling completions. This can be used to further customize the "
+            "generation behavior, such as setting `suppress_tokens`, `num_beams`, etc. If it contains keys that "
+            "conflict with the other generation parameters (like `min_p`, `top_p`, etc.), they will override them."
         },
     )
     repetition_penalty: float = field(
