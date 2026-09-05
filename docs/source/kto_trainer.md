@@ -138,8 +138,8 @@ While training and evaluating, we record the following metrics:
 * `kl`: The average estimated KL divergence between the policy and reference model, used as the reference point in the KTO loss.
 * `learning_rate`: The current learning rate, which may change dynamically if a scheduler is used.
 * `grad_norm`: The L2 norm of the gradients, computed before gradient clipping.
-* `logits/chosen`: The average logit values assigned by the model to the tokens in the chosen (desirable) completion.
-* `logits/rejected`: The average logit values assigned by the model to the tokens in the rejected (undesirable) completion.
+* `logits/chosen`: The average logit values assigned by the model to the tokens in the chosen (desirable) completion. This metric is omitted when `use_liger_kernel=True` because the chunked path does not materialize logits.
+* `logits/rejected`: The average logit values assigned by the model to the tokens in the rejected (undesirable) completion. This metric is omitted when `use_liger_kernel=True` because the chunked path does not materialize logits.
 * `logps/chosen`: The average log-probability assigned by the model to the tokens in the chosen (desirable) completion.
 * `logps/rejected`: The average log-probability assigned by the model to the tokens in the rejected (undesirable) completion.
 * `rewards/chosen`: The average implicit reward computed for the chosen (desirable) completion, computed as  \\( \beta \log \frac{\pi_{\theta}(y\mid x)}{\pi_{\mathrm{ref}}(y\mid x)} \\).
@@ -153,10 +153,9 @@ While training and evaluating, we record the following metrics:
 Some argument combinations are intentionally restricted in the current [`KTOTrainer`] implementation:
 
 * With `use_liger_kernel=True`:
-  * only `loss_type="kto"` is supported (not `"apo_zero_unpaired"`),
   * `compute_metrics` is not supported,
-  * `precompute_ref_log_probs=True` is not supported,
-  * PEFT models are not supported.
+  * PEFT adapters targeting `lm_head` and prompt-learning PEFT methods are not supported,
+  * the MoE load-balancing auxiliary loss is not supported.
 * `sync_ref_model=True` is not supported when training with PEFT models that do not keep a standalone `ref_model`.
 * `sync_ref_model=True` cannot be combined with `precompute_ref_log_probs=True`.
 * `precompute_ref_log_probs=True` is not supported with `IterableDataset` (train or eval) or with vision datasets.
