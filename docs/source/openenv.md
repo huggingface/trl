@@ -13,7 +13,7 @@ This guide covers **how to integrate OpenEnv with TRL**. For more on OpenEnv its
 
 ## Choosing an environment integration
 
-OpenEnv is the native path documented here. Two further integrations — [OpenReward](openreward) and [Harbor](harbor) — conform to the same `environment_factory` contract and are interchangeable at the TRL level. See the [comparison of environment integrations](grpo_trainer#agent-training) in the GRPO guide to pick the one whose ecosystem fits your task.
+OpenEnv is the native path documented here. [OpenReward](openreward) conforms to the same `environment_factory` contract and is interchangeable at the TRL level. See the [comparison of environment integrations](grpo_trainer#agent-training) in the GRPO guide to pick the one whose ecosystem fits your task.
 
 ## Installation
 
