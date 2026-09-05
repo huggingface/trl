@@ -653,13 +653,8 @@ class OnlineDPOTrainer(_BaseTrainer):
         # Gather all prompts to main process
         all_prompts = gather_object(prompts_text)
         if has_images:
-            # The server can't take images alongside text prompts, so multimodal prompts are sent as messages, with
-            # the images inlined in place of their placeholders.
-            messages = [
-                prepare_multimodal_messages(prompt, images=[image] if image is not None else None)
-                for prompt, image in zip(prompts, images, strict=True)
-            ]
-            all_messages = gather_object(messages)
+            # The server can't take images alongside text prompts, so multimodal prompts are sent as messages.
+            all_messages = gather_object(prompts)
 
         if self.accelerator.is_main_process:
             sampling_kwargs = {
@@ -963,7 +958,7 @@ class OnlineDPOTrainer(_BaseTrainer):
         # Prepare kwargs for processing class
         kwargs = {}
         if images is not None:
-            kwargs = {"images": [[img] for img in images]}
+            kwargs = {"images": images}
 
         # Process inputs using the processing class (handles both VLM and LLM)
         prompt_inputs = self.processing_class(
@@ -1122,40 +1117,44 @@ class OnlineDPOTrainer(_BaseTrainer):
         batch_size = len(prompts)
 
         # Handle images for VLM support
-        has_images = "image" in inputs
         images = None
-        if has_images:
+        image_lists = None
+        if "image" in inputs:
             images = inputs["image"]
-            # Convert conversational prompts to include image tokens
-            for prompt in prompts:
-                if isinstance(prompt, list):
-                    for message in prompt:
-                        if not isinstance(message, dict):
-                            continue
-                        content = message.get("content")
-                        role = message.get("role")
-                        if isinstance(content, str):
-                            if role == "user":
-                                message["content"] = [{"type": "image"}, {"type": "text", "text": content}]
-                            elif role == "system":
-                                message["content"] = [{"type": "text", "text": content}]
+            image_lists = [[image] if image is not None else [] for image in images]
+            if all(image_list == [] for image_list in image_lists):
+                images = None
+                image_lists = None
+
+        if images is not None:
+            if not is_conversational({"prompt": prompts[0]}):
+                raise ValueError(
+                    "Multimodal training requires conversational prompts. It looks like the dataset contains "
+                    "non-conversational inputs, likely because a chat template was applied before passing the dataset "
+                    "to the trainer. Please provide the raw conversational prompts and let the trainer apply the chat "
+                    "template internally."
+                )
+            prompts = [
+                prepare_multimodal_messages(prompt, images=image_list)
+                for prompt, image_list in zip(prompts, image_lists, strict=True)
+            ]
 
         if self.args.use_vllm:
             prompt_ids, prompt_mask, completion_ids, completion_mask = self._generate_vllm(prompts, images)
         else:
-            prompt_ids, prompt_mask, completion_ids, completion_mask = self._generate(model, prompts, images)
+            prompt_ids, prompt_mask, completion_ids, completion_mask = self._generate(model, prompts, image_lists)
 
         contain_eos_token = torch.any(completion_ids == self._tokenizer.eos_token_id, dim=-1)
 
         # Extract vision inputs if available for VLM support
         vision_inputs = None
-        if has_images and self.is_vision_model and not self.args.use_vllm:
+        if images is not None and self.is_vision_model and not self.args.use_vllm:
             # For vision models with transformers generation, we need to prepare vision inputs
             # Process the images to get vision inputs that can be passed through the forward pass
             vision_inputs = {}
-            kwargs = {"images": [[img] for img in images]}
+            kwargs = {"images": image_lists}
             processed = self.processing_class(
-                text=[""] * len(images),  # Dummy text for vision processing
+                text=[""] * len(image_lists),  # Dummy text for vision processing
                 return_tensors="pt",
                 **kwargs,
             )
