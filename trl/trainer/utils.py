@@ -1180,11 +1180,11 @@ def create_model_from_path(
     if architecture is None:
         # Best effort to infer architecture from config, but we fall back to AutoModelForCausalLM if we can't find it
         config = AutoConfig.from_pretrained(model_id, trust_remote_code=kwargs.get("trust_remote_code", False))
-        architecture = getattr(transformers, config.architectures[0], None)
+        architecture = getattr(transformers, config.architectures[0], None) if config.architectures else None
         if architecture is None:
             # Remote-code checkpoint: the architecture name lives in the dynamic module, not in
             # `transformers`. Pick the most specific auto class declared in `config.auto_map`.
-            auto_map = config.auto_map or {}
+            auto_map = getattr(config, "auto_map", None) or {}
             for candidate in (AutoModelForImageTextToText, AutoModelForCausalLM):
                 if candidate.__name__ in auto_map:
                     architecture = candidate
