@@ -84,7 +84,6 @@ logger = get_logger(__name__)
 
 
 _CHUNKED_LOGPROB_CHUNK_SIZE = 8192
-_CHUNKED_LOGPROB_TOKEN_CHUNK_SIZE = 2048
 
 
 @dataclass
@@ -1256,7 +1255,8 @@ class KTOTrainer(_BaseTrainer):
         else:
             backbone = inner_model.base_model
 
-        outputs = backbone(**model_kwargs)
+        with self.accelerator.autocast():
+            outputs = backbone(**model_kwargs)
         hidden_states = outputs.last_hidden_state[:, :-1]
         labels = input_ids[:, 1:]
         mask = completion_mask[:, 1:].bool()
@@ -1282,28 +1282,17 @@ class KTOTrainer(_BaseTrainer):
             if lm_head_bias is not None:
                 lm_head_bias = lm_head_bias.full_tensor()
 
-        logps_chunks = []
-        entropy_chunks = []
-        with maybe_gather_lm_head_ctx(lm_head_weight, lm_head_bias):
-            for hidden_chunk, labels_chunk in zip(
-                hidden_states.split(_CHUNKED_LOGPROB_TOKEN_CHUNK_SIZE),
-                labels.split(_CHUNKED_LOGPROB_TOKEN_CHUNK_SIZE),
-                strict=True,
-            ):
-                logps_chunk, entropy_chunk = _ChunkedLogProbFunction.apply(
-                    hidden_chunk,
-                    lm_head_weight,
-                    lm_head_bias,
-                    labels_chunk,
-                    1.0,
-                    _CHUNKED_LOGPROB_CHUNK_SIZE,
-                    final_logit_softcapping,
-                    logit_scale,
-                )
-                logps_chunks.append(logps_chunk)
-                entropy_chunks.append(entropy_chunk)
-        logps = torch.cat(logps_chunks)
-        entropies = torch.cat(entropy_chunks)
+        with self.accelerator.autocast(), maybe_gather_lm_head_ctx(lm_head_weight, lm_head_bias):
+            logps, entropies = _ChunkedLogProbFunction.apply(
+                hidden_states,
+                lm_head_weight,
+                lm_head_bias,
+                labels,
+                1.0,
+                _CHUNKED_LOGPROB_CHUNK_SIZE,
+                final_logit_softcapping,
+                logit_scale,
+            )
 
         per_token_logps = torch.zeros_like(completion_mask[:, 1:], dtype=logps.dtype)
         per_token_entropies = torch.zeros_like(completion_mask[:, 1:], dtype=entropies.dtype)
