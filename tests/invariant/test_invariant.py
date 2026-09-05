@@ -198,9 +198,10 @@ def _build(
 
 # Equivalence classes: each maps to a `members` list plus per-field `tol` (max |Δ|) and `residual_tol` (mean Δ)
 # dicts. The first member is the canonical config — it owns the class's reference snapshot and is the only one
-# re-recorded under `--update-references`. Every other member is asserted to match that snapshot.
-# Tuning tip: run `python tests/invariant/test_invariant.py <klass> --report` to see actual Δs and set tolerances
-# to ~1.5–2× the observed noise.
+# re-recorded by `python -m tests.invariant.test_invariant <klass>`. Every other member is asserted to match that
+# snapshot.
+# Tuning tip: `pytest tests/invariant/ -m invariant -k <klass>` reports the observed max |Δ| per field when it
+# exceeds the tolerance; set tolerances to ~1.5-2x that noise.
 EQUIVALENCE_CLASSES: dict[str, dict] = {
     "sft": {
         "tol": {"loss": 1e-3, "grad_norm": 1e-1},
