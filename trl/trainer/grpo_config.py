@@ -240,6 +240,13 @@ class GRPOConfig(_BaseConfig):
             - `False` or `"none"`: no scaling is applied. The [Dr. GRPO
               paper](https://huggingface.co/papers/2503.20783) recommends not scaling rewards, as scaling by the
               standard deviation introduces a question-level difficulty bias.
+        mask_zero_advantage_groups (`bool`, *optional*, defaults to `False`):
+            Whether to zero out the completion mask for prompt groups whose reward std is zero (i.e.,
+            zero-variance/zero-advantage groups), so they contribute no gradient from either the policy loss or,
+            when `beta > 0`, the KL penalty term. This matches the zero-variance masking proposed in [Revisiting
+            Group Relative Policy Optimization](https://huggingface.co/papers/2505.22257), Section 3.2. Disabled by
+            default: the canonical GRPO objective applies the KL term per-token independently of the advantage, so a
+            zero-std group with `beta > 0` still contributes a KL gradient unless this is enabled.
         loss_type (`str`, *optional*, defaults to `"dapo"`):
             Specifies the loss formulation to use. Supported values are:
 
@@ -789,6 +796,17 @@ class GRPOConfig(_BaseConfig):
             "PPO Lite paper. "
             "`False` or `'none'`: no scaling is applied. The Dr. GRPO paper recommends not scaling rewards, as "
             "scaling by the standard deviation introduces a question-level difficulty bias."
+        },
+    )
+    mask_zero_advantage_groups: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to zero out the completion mask for prompt groups whose reward std is zero (i.e., "
+            "zero-variance/zero-advantage groups), so they contribute no gradient from either the policy loss or, "
+            "when `beta > 0`, the KL penalty term. This matches the zero-variance masking proposed in 'Revisiting "
+            "Group Relative Policy Optimization' (https://huggingface.co/papers/2505.22257), Section 3.2. Disabled by "
+            "default: the canonical GRPO objective applies the KL term per-token independently of the advantage, "
+            "so a zero-std group with `beta > 0` still contributes a KL gradient unless this is enabled."
         },
     )
     loss_type: str = field(

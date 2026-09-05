@@ -816,6 +816,7 @@ class GRPOTrainer(_BaseTrainer):
                     "`use_liger_kernel=False`."
                 )
         self.mask_truncated_completions = args.mask_truncated_completions
+        self.mask_zero_advantage_groups = args.mask_zero_advantage_groups
         self.top_entropy_quantile = args.top_entropy_quantile
         if self.use_liger_kernel and self.top_entropy_quantile < 1.0:
             raise NotImplementedError(
@@ -2913,13 +2914,14 @@ class GRPOTrainer(_BaseTrainer):
                 nanmax(self.accelerator.gather(max_importance_sampling_ratio)).item()
             )
 
-        # When all completions in a reward group receive identical rewards, advantages
-        # are zero and the policy loss contributes no gradient. However, the per-token
-        # KL penalty (beta * per_token_kl in compute_loss) still fires because
-        # per_token_logps retains gradients while ref_per_token_logps is detached.
-        # Zeroing completion_mask for zero-std groups suppresses both the policy loss
-        # and the spurious KL gradient simultaneously. See issue #5588.
-        if self.beta != 0.0:
+        # Opt-in zero-variance masking (mask_zero_advantage_groups): when all completions in a reward
+        # group receive identical rewards, the group's advantage is already zero, so the policy loss
+        # contributes no gradient. If beta > 0, though, the per-token KL penalty in compute_loss still
+        # fires for that group, since per_token_logps retains gradients while ref_per_token_logps is
+        # detached. Zeroing completion_mask for zero-std groups suppresses both the (already-zero) policy
+        # loss and that KL gradient. Disabled by default: the canonical GRPO objective applies KL
+        # per-token independently of the advantage, so this is left opt-in rather than a default.
+        if self.mask_zero_advantage_groups:
             is_std_zero_local = is_std_zero[process_slice]  # shape: (local_completions,)
             completion_mask = completion_mask * (~is_std_zero_local).unsqueeze(1).int()
 

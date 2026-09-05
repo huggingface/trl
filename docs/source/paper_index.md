@@ -235,6 +235,21 @@ training_args = GRPOConfig(
 )
 ```
 
+### Revisiting Group Relative Policy Optimization
+
+**📜 Paper**: https://huggingface.co/papers/2505.22257
+
+Section 3.2 ("On-Policy Clipped Objective with Zero Variance Masking à la DAPO") observes that when every completion in a group receives the same reward, the group's advantage is exactly zero, so the policy loss contributes no gradient — but a KL-regularized objective (`beta > 0`) still applies its per-token KL penalty to that group regardless, since it doesn't depend on the advantage. The paper proposes masking these zero-variance groups out of the objective entirely, hybridizing DAPO's oversampling-based zero-variance handling with a KL-regularized loss. Use [`GRPOConfig`]'s `mask_zero_advantage_groups` to reproduce this:
+
+```python
+from trl import GRPOConfig
+
+training_args = GRPOConfig(
+    beta=0.001,  # illustrative, not paper-specified: masking only matters when beta > 0 (it's a no-op at beta=0.0)
+    mask_zero_advantage_groups=True,
+)
+```
+
 ### Skywork-OR1: Open Reasoning Models
 
 **📜 Paper**: https://huggingface.co/papers/2505.22312

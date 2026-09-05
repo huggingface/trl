@@ -2681,6 +2681,49 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert torch.equal(param, new_param), f"Parameter {n} has changed."
 
+    @pytest.mark.parametrize("mask_zero_advantage_groups", [False, True])
+    def test_train_with_mask_zero_advantage_groups(self, mask_zero_advantage_groups):
+        """
+        With beta > 0 and a reward function that returns the same value for every completion, every group has zero
+        reward std, so the advantage (and hence the policy loss) is exactly zero. With
+        mask_zero_advantage_groups=False (default), the per-token KL penalty still applies to these groups and
+        updates the model; with mask_zero_advantage_groups=True, those groups are masked out of the loss entirely
+        and the model does not update.
+        """
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        def constant_reward_func(completions, **kwargs):
+            return [1.0] * len(completions)
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            beta=0.1,  # KL regularization must be enabled for the spurious gradient to occur
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            mask_zero_advantage_groups=mask_zero_advantage_groups,
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs=constant_reward_func,
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        params_changed = any(
+            not torch.equal(param, trainer.model.get_parameter(n)) for n, param in previous_trainable_params.items()
+        )
+        if mask_zero_advantage_groups:
+            assert not params_changed, "Params should not change: zero-std groups were masked out of the loss."
+        else:
+            assert params_changed, "Params should change from the unmasked KL gradient on the zero-std groups."
+
     def test_warning_raised_all_rewards_none(self, caplog):
         """Test that a proper warning is raised when all rewards are None."""
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
