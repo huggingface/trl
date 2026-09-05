@@ -31,6 +31,8 @@ from transformers import (
     AutoModelForImageTextToText,
     AutoTokenizer,
     BitsAndBytesConfig,
+    LlamaConfig,
+    LlamaForCausalLM,
     TrainingArguments,
 )
 from transformers.testing_utils import backend_device_count, backend_empty_cache, torch_device
@@ -286,6 +288,26 @@ class TestDataCollatorForLanguageModeling(TrlTestCase):
 
 
 class TestSFTTrainer(TrlTestCase):
+    def test_empty_model_name_or_path_requires_processing_class(self):
+        model = LlamaForCausalLM(
+            LlamaConfig(
+                vocab_size=32,
+                hidden_size=32,
+                intermediate_size=64,
+                num_hidden_layers=1,
+                num_attention_heads=4,
+                max_position_embeddings=32,
+            )
+        )
+        dataset = Dataset.from_dict({"text": ["hello world"]})
+
+        with pytest.raises(ValueError, match=r"`model\.config\._name_or_path` is empty"):
+            SFTTrainer(
+                model=model,
+                args=SFTConfig(output_dir=self.tmp_dir, report_to="none", use_cpu=True),
+                train_dataset=dataset,
+            )
+
     def test_init_with_training_arguments(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
         args = TrainingArguments(output_dir=self.tmp_dir, report_to="none")

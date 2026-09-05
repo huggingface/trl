@@ -296,8 +296,14 @@ class RLOOTrainer(_BaseTrainer):
 
         # Processing class
         if processing_class is None:
+            model_id = get_config_model_id(model.config)
+            if not model_id:
+                raise ValueError(
+                    "Cannot infer the processing class because `model.config._name_or_path` is empty. "
+                    "Please pass `processing_class` explicitly."
+                )
             processing_class = AutoProcessor.from_pretrained(
-                get_config_model_id(model.config),
+                model_id,
                 truncation_side="left",
                 padding_side="left",
                 trust_remote_code=args.trust_remote_code,

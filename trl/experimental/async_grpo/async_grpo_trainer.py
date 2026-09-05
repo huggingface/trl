@@ -843,9 +843,13 @@ class AsyncGRPOTrainer(_BaseTrainer):
 
         # Processing class
         if processing_class is None:
-            processing_class = AutoTokenizer.from_pretrained(
-                get_config_model_id(model.config), trust_remote_code=args.trust_remote_code
-            )
+            model_id = get_config_model_id(model.config)
+            if not model_id:
+                raise ValueError(
+                    "Cannot infer the processing class because `model.config._name_or_path` is empty. "
+                    "Please pass `processing_class` explicitly."
+                )
+            processing_class = AutoTokenizer.from_pretrained(model_id, trust_remote_code=args.trust_remote_code)
         if processing_class.pad_token is None:
             processing_class.pad_token = processing_class.eos_token
 

@@ -457,6 +457,11 @@ class DistillationTrainer(_BaseTrainer):
 
         # Processing class
         if processing_class is None:
+            if not model_name_or_path:
+                raise ValueError(
+                    "Cannot infer the processing class because `model.config._name_or_path` is empty. "
+                    "Please pass `processing_class` explicitly."
+                )
             processing_class = AutoProcessor.from_pretrained(
                 model_name_or_path,
                 truncation_side="left",

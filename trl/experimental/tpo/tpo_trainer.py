@@ -335,9 +335,13 @@ class TPOTrainer(_BaseTrainer):
 
         # Processing class
         if processing_class is None:
-            processing_class = AutoProcessor.from_pretrained(
-                get_config_model_id(model.config), trust_remote_code=args.trust_remote_code
-            )
+            model_id = get_config_model_id(model.config)
+            if not model_id:
+                raise ValueError(
+                    "Cannot infer the processing class because `model.config._name_or_path` is empty. "
+                    "Please pass `processing_class` explicitly."
+                )
+            processing_class = AutoProcessor.from_pretrained(model_id, trust_remote_code=args.trust_remote_code)
         if not isinstance(processing_class, PreTrainedTokenizerBase):
             raise TypeError(
                 "The `processing_class` must be a `PreTrainedTokenizerBase`. `TPOTrainer` does not currently "
