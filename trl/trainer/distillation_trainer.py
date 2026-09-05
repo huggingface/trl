@@ -479,13 +479,13 @@ class DistillationTrainer(_BaseTrainer):
 
         # Resolve vision placeholder token IDs once. Used by the forward pass to rebuild mm_token_type_ids
         # when tool responses inject images into the completion (see _generate forward_kwargs block).
-        self._image_pad_token_id = None
+        self._image_token_id = None
         self._video_pad_token_id = None
         if self._is_vlm:
-            for candidate in ("<|image_pad|>", "<|image|>"):
+            for candidate in ("<IMG_CONTEXT>", "<image_soft_token>", "<image>", "<|image|>", "<|image_pad|>"):
                 tid = self._tokenizer.convert_tokens_to_ids(candidate)
                 if tid != self._tokenizer.unk_token_id:
-                    self._image_pad_token_id = tid
+                    self._image_token_id = tid
                     break
             tid = self._tokenizer.convert_tokens_to_ids("<|video_pad|>")
             if tid != self._tokenizer.unk_token_id:
@@ -1066,8 +1066,8 @@ class DistillationTrainer(_BaseTrainer):
             # For VLM tool images: build token type IDs from the padded input IDs.
             if self._is_vlm and self.tools and has_tool_images:
                 mm_ids = torch.zeros_like(padded_ids)
-                if self._image_pad_token_id is not None:
-                    mm_ids[padded_ids == self._image_pad_token_id] = 1
+                if self._image_token_id is not None:
+                    mm_ids[padded_ids == self._image_token_id] = 1
                 if self._video_pad_token_id is not None:
                     mm_ids[padded_ids == self._video_pad_token_id] = 2
 
@@ -1685,8 +1685,8 @@ class DistillationTrainer(_BaseTrainer):
         if self.tools and any(imgs for imgs in tool_images) and self._is_vlm:
             prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)  # (B, P+C)
             mm_ids = torch.zeros_like(prompt_completion_ids)
-            if self._image_pad_token_id is not None:
-                mm_ids[prompt_completion_ids == self._image_pad_token_id] = 1
+            if self._image_token_id is not None:
+                mm_ids[prompt_completion_ids == self._image_token_id] = 1
             if self._video_pad_token_id is not None:
                 mm_ids[prompt_completion_ids == self._video_pad_token_id] = 2
 

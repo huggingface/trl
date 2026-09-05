@@ -1240,10 +1240,11 @@ class TestDistillationTrainer(TrlTestCase):
 @require_vision
 class TestDistillationTrainerVLM(TrlTestCase):
     @pytest.mark.parametrize(
-        "model_id",
+        "model_id,image_token",
         [
             pytest.param(
                 "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
+                "<image_soft_token>",
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("4.57.0"),
                     reason="transformers<4.57 Gemma3 image processor can't batch variable-size images",
@@ -1251,17 +1252,19 @@ class TestDistillationTrainerVLM(TrlTestCase):
             ),
             pytest.param(
                 "trl-internal-testing/tiny-Gemma4ForConditionalGeneration",
+                "<|image|>",
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.5.0"),
                     reason="Gemma4 models were introduced in transformers-5.5.0",
                 ),
             ),
-            "trl-internal-testing/tiny-InternVLForConditionalGeneration",
-            "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
-            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
-            "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",
+            ("trl-internal-testing/tiny-InternVLForConditionalGeneration", "<IMG_CONTEXT>"),
+            ("trl-internal-testing/tiny-LlavaNextForConditionalGeneration", "<image>"),
+            ("trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration", "<|image_pad|>"),
+            ("trl-internal-testing/tiny-Qwen2VLForConditionalGeneration", "<|image_pad|>"),
             pytest.param(
                 "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
+                "<|image_pad|>",
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.2.0"),
                     reason="Qwen3.5 models were introduced in transformers-5.2.0",
@@ -1269,6 +1272,7 @@ class TestDistillationTrainerVLM(TrlTestCase):
             ),
             pytest.param(
                 "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
+                "<|image_pad|>",
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.2.0"),
                     reason="Qwen3.5 models were introduced in transformers-5.2.0",
@@ -1277,7 +1281,7 @@ class TestDistillationTrainerVLM(TrlTestCase):
             # "trl-internal-testing/tiny-SmolVLMForConditionalGeneration", seems not to support bf16 properly
         ],
     )
-    def test_train_vlm(self, model_id):
+    def test_train_vlm(self, model_id, image_token):
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
         training_args = DistillationConfig(
@@ -1292,6 +1296,7 @@ class TestDistillationTrainerVLM(TrlTestCase):
             args=training_args,
             train_dataset=dataset,
         )
+        assert trainer._image_token_id == trainer._tokenizer.convert_tokens_to_ids(image_token)
 
         trainer.train()
 

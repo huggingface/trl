@@ -3944,22 +3944,24 @@ class TestGRPOTrainer(TrlTestCase):
 @require_vision
 class TestGRPOTrainerVLM(TrlTestCase):
     @pytest.mark.parametrize(
-        "model_id",
+        "model_id,image_token",
         [
-            "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
+            ("trl-internal-testing/tiny-Gemma3ForConditionalGeneration", "<image_soft_token>"),
             pytest.param(
                 "trl-internal-testing/tiny-Gemma4ForConditionalGeneration",
+                "<|image|>",
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.5.0"),
                     reason="Gemma4 models were introduced in transformers-5.5.0",
                 ),
             ),
-            "trl-internal-testing/tiny-InternVLForConditionalGeneration",
-            "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
-            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
-            "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",
+            ("trl-internal-testing/tiny-InternVLForConditionalGeneration", "<IMG_CONTEXT>"),
+            ("trl-internal-testing/tiny-LlavaNextForConditionalGeneration", "<image>"),
+            ("trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration", "<|image_pad|>"),
+            ("trl-internal-testing/tiny-Qwen2VLForConditionalGeneration", "<|image_pad|>"),
             pytest.param(
                 "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
+                "<|image_pad|>",
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.2.0"),
                     reason="Qwen3.5 models were introduced in transformers-5.2.0",
@@ -3967,6 +3969,7 @@ class TestGRPOTrainerVLM(TrlTestCase):
             ),
             pytest.param(
                 "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
+                "<|image_pad|>",
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.2.0"),
                     reason="Qwen3.5 models were introduced in transformers-5.2.0",
@@ -3975,7 +3978,7 @@ class TestGRPOTrainerVLM(TrlTestCase):
             # "trl-internal-testing/tiny-SmolVLMForConditionalGeneration", seems not to support bf16 properly
         ],
     )
-    def test_train_vlm(self, model_id):
+    def test_train_vlm(self, model_id, image_token):
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
         def reward_func(completions, **kwargs):
@@ -3997,6 +4000,7 @@ class TestGRPOTrainerVLM(TrlTestCase):
             args=training_args,
             train_dataset=dataset,
         )
+        assert trainer._image_token_id == trainer._tokenizer.convert_tokens_to_ids(image_token)
 
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
