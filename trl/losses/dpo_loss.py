@@ -309,6 +309,7 @@ class _CachedReferenceDPOFunction(FusedLinearDPOFunction):
             discopop_tau=discopop_tau,
             ref_chosen_logps=ref_chosen_logps,
             ref_rejected_logps=ref_rejected_logps,
+            _use_storage_backed_autograd=True,
         )
 
     @staticmethod

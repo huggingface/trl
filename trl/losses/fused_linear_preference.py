@@ -109,6 +109,7 @@ class FusedLinearPreferenceBase(torch.autograd.Function):
         CHUNK_SIZE = chunk_size
         cached_ref_chosen_logps = loss_kwargs.pop("ref_chosen_logps", None)
         cached_ref_rejected_logps = loss_kwargs.pop("ref_rejected_logps", None)
+        use_storage_backed_autograd = loss_kwargs.pop("_use_storage_backed_autograd", False)
 
         # Gradients to be accumulated
         grad_weight = torch.zeros_like(weight)
@@ -154,6 +155,28 @@ class FusedLinearPreferenceBase(torch.autograd.Function):
             """
             Fused forward and backward pass for a chunk of input and target.
             """
+            if use_storage_backed_autograd:
+                with torch.enable_grad():
+                    input_for_grad = input_chunk.detach().requires_grad_(True)
+                    weight_for_grad = weight.detach().requires_grad_(True)
+                    bias_for_grad = bias.detach().requires_grad_(True) if bias is not None else None
+                    value = compute_loss(
+                        input_for_grad,
+                        weight_for_grad,
+                        target_chunk,
+                        bias_for_grad,
+                        ref_input_chunk=ref_input_chunk,
+                        chosen_nll_target_chunk=chosen_nll_target_chunk,
+                        ref_chosen_logps=ref_chosen_logps_chunk,
+                        ref_rejected_logps=ref_rejected_logps_chunk,
+                    )
+                    grad_inputs = (input_for_grad, weight_for_grad)
+                    if bias_for_grad is not None:
+                        grad_inputs += (bias_for_grad,)
+                    grads = torch.autograd.grad(value[0], grad_inputs)
+                detached_value = (value[0].detach(), tuple(output.detach() for output in value[1]))
+                return grads, detached_value
+
             if bias is not None:
                 return torch.func.grad_and_value(compute_loss, argnums=(0, 1, 3), has_aux=True)(
                     input_chunk,
