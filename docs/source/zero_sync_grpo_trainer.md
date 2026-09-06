@@ -161,7 +161,12 @@ view costs no extra memory.
 
 Which knob to turn depends on whether generation or training is the bottleneck, and
 `generation_wait_s` tells you which regime you are in: it logs how long each step waited for the
-engine.
+engine. Under tensor parallelism three more numbers say where a step's time goes: `generation/pause_s`
+is how long the pause took to be granted (one engine step, tens of milliseconds), `batch/pool_exchange_s`
+is the time spent handing samples between replicas, which grows when replicas reach the exchange at
+different moments, and `memory/alloc_retries` counts the allocator's retries, which stay at zero unless
+the KV pool leaves the training step too little room (then lower `max_memory_percent` in
+`continuous_batching_config`).
 
 When it is near zero, generation is fully hidden and the throughput lever is the batch. Measured on
 one H100 with Qwen3-0.6B, GSM8K, 512-token completions, 8 generations per prompt, where the wait
