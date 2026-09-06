@@ -171,6 +171,12 @@ longer completions move the balance further towards generation; more processes a
 change it, since every replica generates for itself. Read the metric for your own setup rather than
 copying these numbers.
 
+On the training side, every micro-step pays a fixed host cost for dispatching the forward and backward, so
+`per_device_train_batch_size` should be the largest that fits, with gradient accumulation making up the
+rest. At the same samples per step, doubling it from 8 to 16 gave 5% on Qwen3-8B at `tp_size=2` and 22%
+on Qwen3-30B-A3B at `tp_size=4`, whose 48 sparse layers make the dispatch the longer part of a small
+micro-step.
+
 ## Debugging
 
 The generation engine runs in a background thread that is not a daemon, so a crash in the
