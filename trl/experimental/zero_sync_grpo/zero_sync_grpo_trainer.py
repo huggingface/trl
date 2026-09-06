@@ -653,8 +653,9 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         """Park the engine for the training step that follows, until the next `_prepare_inputs` resumes it.
 
         Generation and training take turns: the forward, backward and optimizer step get the device to themselves,
-        and under tensor parallelism the trainer's collectives never run next to the engine's. Every rank receives
-        every completion, so every rank reaches this point on the same sample count and enters the pause together.
+        and under tensor parallelism the trainer's collectives never run next to the engine's. The engine grants the
+        pause at the same step on every rank of a tensor parallel group, whichever rank asked first, so once it is
+        granted every rank of the group holds the same completions; what each rank had read by then can differ.
         """
         if self._pause is not None:
             return
@@ -898,6 +899,10 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         # and the training step are fighting over memory, which slows both.
         self._metrics[mode]["memory/alloc_retries"].append(torch.cuda.memory_stats().get("num_alloc_retries", 0))
         self._pause_generation(mode)
+        # The engine paused at the same step on every rank of a tensor parallel group and delivered the same results
+        # to each, but the loop above stops on a count, so one rank may have read a result its peer has not yet. The
+        # ranks of a group must train on the same samples: read everything delivered before taking any.
+        self._drain(timeout=0)
         if self._replica_group is not None:
             pool_start = time.perf_counter()
             samples = self._take_from_pool(num_samples)
