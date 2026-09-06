@@ -307,12 +307,12 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         )
         self.rollouts_in_flight = args.rollouts_in_flight
         self.tp_size = args.tp_size
-        # Giving the KV cache memory to the training step only works when generation is quiescent while it runs, which
-        # is what the trainer owning the engine gives us.
+        # Giving the KV cache memory to the training step only works when generation is paused while it runs, which
+        # is the case under tensor parallelism (see `_pause_generation`).
         if args.release_kv_cache_during_step and args.tp_size == 1:
             raise ValueError(
                 "`release_kv_cache_during_step` requires `tp_size > 1`, since generation otherwise runs "
-                "in its own thread and is never quiescent."
+                "alongside the training step and is never paused."
             )
         self.release_kv_cache_during_step = args.release_kv_cache_during_step
 
@@ -342,11 +342,11 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
                 for shard in range(args.tp_size)
             ]
             self._replica_group = groups[rank % args.tp_size]
-        # Under tensor parallelism the trainer advances generation itself, through a second view of the model, so
-        # that every rank issues its collectives in the same order. Both are built in `_init_manager`.
+        # The engine decodes through a second view of the model (built in `_init_manager`); under tensor parallelism the
+        # trainer pauses it for the duration of its own step, see `_pause_generation`.
         self._generation_view = None
+        self._pause = None
         self._request_counter = 0
-        self._decode_steps = 0
         self.max_tool_calling_iterations = args.max_tool_calling_iterations
 
         # Tools. `add_response_schema` teaches the tokenizer how to parse tool calls back out of a
@@ -503,7 +503,8 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
                 # The generation thread is not a daemon, and Python joins those before it runs any atexit hook, so
                 # the process would never exit. A flush would wait for every rollout still in flight, and there are
                 # always some, since the trainer keeps `rollouts_in_flight` rollouts generating; none of them will be
-                # trained on now.
+                # trained on now. The engine cannot stop while it is paused, so generation resumes first.
+                self._resume_generation()
                 self._manager.stop(block=True, timeout=30, hard_stop=True)
                 self._manager = None
 
@@ -573,30 +574,23 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         # and activations; the engine's own default claims most of the free memory.
         cb_kwargs.setdefault("max_memory_percent", 0.2)
         if self.tp_size > 1:
-            # step() runs prepare, compute and update back to back, so the async double-buffer has nothing to overlap
-            # there, and the engine does not bootstrap it in step mode (requests finish with no tokens). The thread
-            # mode used at tp_size == 1 keeps the engine's default.
-            cb_kwargs["use_async_batching"] = False
             # The engine turns NCCL's graph-mixing support off, which fits a pure-decode server but slows the
-            # training collectives here (measured 3.62 against 3.71 s/step at batch 128). The trainer strictly
-            # alternates generation and training, so captured and eager collectives are never in flight together
-            # and the NCCL default, which is also the safe setting, can stay.
+            # training collectives here (measured 3.62 against 3.71 s/step at batch 128). Generation is paused while
+            # the training collectives run, so captured and eager collectives are never in flight together and the
+            # NCCL default, which is also the safe setting, can stay.
             cb_kwargs.setdefault("disable_nccl_graph_mixing", False)
-        # Under tensor parallelism the engine decodes through its own view of the model, and the trainer steps it
-        # rather than letting it run in the background. The engine and the trainer then hold one NCCL communicator
-        # each, and NCCL requires every rank to issue the operations on its communicators in the same host-side order,
-        # recommending "a deterministic order issued from a single host thread per-device". Two racing threads cannot
-        # promise that, and when the orders disagree the run deadlocks inside an ordinary kernel launch rather than
-        # inside a collective. The trainer is that single thread: it runs the engine between its own steps, so the
-        # forward and backward have the device to themselves and generation is quiescent while they run.
+        # The engine decodes in its own thread through its own view of the model. Under tensor parallelism the engine
+        # and the trainer hold one NCCL communicator each, and NCCL requires every rank to issue the operations on its
+        # communicators in the same host-side order, so the two cannot run at the same time: the trainer pauses the
+        # engine for its step (`_pause_generation`), and the engine waits for its in-flight step on the device before
+        # it reports itself paused, so the forward and backward have the device to themselves.
         self._generation_view = self._make_generation_view(model)
         self._manager = self._generation_view.init_continuous_batching(
             generation_config=generation_config,
             continuous_batching_config=ContinuousBatchingConfig(**cb_kwargs),
         )
         self._manager.warmup()
-        if self.tp_size == 1:
-            self._manager.start()
+        self._manager.start()
 
     def _tokenize_conversation(self, messages: list[dict[str, Any]]) -> list[int]:
         # Re-tokenize the WHOLE conversation each turn: the reconciler in `_chain_to_sequences` catches template
@@ -659,16 +653,38 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         self._request_counter += 1
         return f"zero-sync-{self._request_counter}"
 
+    def _pause_generation(self, mode: str) -> None:
+        """Park the engine for the training step that follows, until the next `_prepare_inputs` resumes it.
+
+        Under tensor parallelism the trainer's collectives must not run next to the engine's, and the pause gives the
+        forward, backward and optimizer step the device to themselves. Every rank receives every completion, so every
+        rank reaches this point on the same sample count and enters the pause together. Without tensor parallelism the
+        engine keeps decoding alongside the step.
+        """
+        if self.tp_size == 1 or self._pause is not None:
+            return
+        self._pause = self._manager.pause()
+        self._pause.__enter__()
+        if self.release_kv_cache_during_step:
+            # Generation is done for this step, so hand its memory to the forward and backward that come next. The
+            # rollouts in flight lose their cache and re-prefill when they are next scheduled, which is what the
+            # option costs: the weights move during the step anyway, so the cache it throws away was already stale.
+            released = self._manager.release_memory()
+            self._metrics[mode]["generation/kv_released_gib"].append(released / 2**30)
+
+    def _resume_generation(self) -> None:
+        if self._pause is None:
+            return
+        if self.release_kv_cache_during_step:
+            self._manager.restore_memory()  # generation needs its cache back before it can run
+        self._pause.__exit__(None, None, None)
+        self._pause = None
+
     def _drain(self, timeout: float) -> None:
         # Collect and score every completion the engine has finished; a group's advantages are computed once its last
         # completion lands. A dead background thread never raises from `get_result` (it returns None forever,
         # transformers#48334), so poll `fatal_error` to fail fast instead of spinning.
         while True:
-            if self.tp_size > 1:
-                # Nothing else advances the engine: the trainer owns it, and this is the only place it runs.
-                if self._manager.step():
-                    self._decode_steps += 1
-                timeout = 0.0
             result = self._manager.get_result(timeout=timeout)
             if result is None:
                 fatal_error = self._manager.background_thread_status.fatal_error
@@ -844,6 +860,7 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
 
         if self._manager is None:
             self._init_manager()
+        self._resume_generation()
 
         # A step queues one batch of prompts and consumes one batch of samples, so the depth of the pipeline is
         # whatever it starts with. It is filled once, here, by reading prompts ahead of the training loop; from then
@@ -869,8 +886,6 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         # Time spent waiting for the engine. Near zero means generation is fully hidden behind the training step; a
         # large value means the engine is the bottleneck, so raise `rollouts_in_flight` (more requests generating at
         # once) or give it a bigger KV pool.
-        if self.release_kv_cache_during_step:
-            self._manager.restore_memory()  # generation needs its cache back before it can run
         wait_start = time.perf_counter()
         if self._replica_group is None:
             while len(self._ready) < num_samples:
@@ -894,17 +909,7 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
                 self._drain(timeout=1.0)
                 drained += 1
         self._metrics[mode]["generation_wait_s"].append(time.perf_counter() - wait_start)
-        if self.tp_size > 1:
-            # How far generation got for this step. Under tensor parallelism the trainer advances the engine itself,
-            # between its own steps, so this counts the decode steps taken while waiting for enough scored samples.
-            self._metrics[mode]["generation/decode_steps"].append(self._decode_steps)
-            self._decode_steps = 0
-        if self.release_kv_cache_during_step:
-            # Generation is done for this step, so hand its memory to the forward and backward that come next. The
-            # rollouts in flight lose their cache and re-prefill when they are next scheduled, which is what the
-            # option costs: the weights move during the step anyway, so the cache it throws away was already stale.
-            released = self._manager.release_memory()
-            self._metrics[mode]["generation/kv_released_gib"].append(released / 2**30)
+        self._pause_generation(mode)
         if self._replica_group is not None:
             samples = self._take_from_pool(num_samples)
         else:

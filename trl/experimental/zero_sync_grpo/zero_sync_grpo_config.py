@@ -204,8 +204,8 @@ class ZeroSyncGRPOConfig(_BaseConfig):
         default=False,
         metadata={
             "help": "Free the generation KV cache while the training step runs, so the forward and backward can use "
-            "that memory, and reallocate it before generating again. Only with `tp_size > 1`, where the trainer owns "
-            "the engine and generation is quiescent during the step. The rollouts in flight lose their cache and "
+            "that memory, and reallocate it before generating again. Only with `tp_size > 1`, where the trainer pauses "
+            "the engine for the step. The rollouts in flight lose their cache and "
             "re-prefill when they are next scheduled, so this buys room to train on longer completions or larger "
             "batches at the cost of paying for those prefills again."
         },

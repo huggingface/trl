@@ -41,7 +41,7 @@ ZeroSyncGRPOConfig(
 
 An oversized pool is not free: it starves the training step, which shows up as an out-of-memory error in the backward pass, not as slow generation.
 
-Under `tp_size > 1` the pool does not have to be held for the whole step. Generation is quiescent while the forward and backward run, so the cache can be freed and handed to them:
+Under `tp_size > 1` the pool does not have to be held for the whole step. Generation is paused while the forward and backward run, so the cache can be freed and handed to them:
 
 ```python
 ZeroSyncGRPOConfig(tp_size=2, release_kv_cache_during_step=True)
@@ -49,7 +49,7 @@ ZeroSyncGRPOConfig(tp_size=2, release_kv_cache_during_step=True)
 
 The rollouts in flight lose their cache: they keep their place in the queue and re-prefill when they are next scheduled, so what the option costs is those prefills, paid again every step. The cache being thrown away was already stale, since the weights move during the step. Measured with 128-token completions it is free: 1.43 against 1.44 s/step, while handing 5.36 GiB to the training step. `generation/kv_released_gib` logs how much is handed over each step.
 
-This turns off `use_async_batching`, since a batch still in flight cannot have its cache taken from under it. That costs nothing here (1.52 against 1.53 s/step).
+The cache is released inside the pause the trainer holds for its step, so no batch is in flight when it goes. That costs nothing here (1.52 against 1.53 s/step).
 
 With 512-token completions and 8 rollouts per prompt it is also free: 2.52 and 2.40 s/step with it, against 2.51 and 2.45 without.
 
@@ -118,17 +118,19 @@ When the orders disagree the run deadlocks, and it does so in a way that is hard
 blocks inside an ordinary kernel launch, not inside a collective, because a CUDA call waits on the
 resident NCCL kernel and so prevents the other communicator's kernel from ever launching.
 
-So under `tp_size > 1` the trainer drives the engine itself, between its own steps, rather than
-letting it run in a background thread. That is the single deterministic host thread NCCL asks for:
-every rank runs the same program, so every rank issues the same collectives in the same order by
-construction. `generation/decode_steps` reports how far generation got each step. Nothing is drained
-and no request is lost.
+So under `tp_size > 1` the two take turns. The engine keeps decoding in its own thread while the
+trainer collects and scores completions; once a step's samples are in, the trainer pauses the engine
+(`ContinuousBatchingManager.pause`), runs its forward, backward and optimizer step, and resumes it.
+The pause is agreed on by every rank at the same engine step, and the engine finishes the step it had
+in flight on the device before it reports itself paused, so the trainer's collectives never share the
+device with the engine's. Nothing is drained and no request is lost: the rollouts in flight keep their
+cache and carry on after the step. Every rank receives every completion, so every rank reaches the
+pause on the same sample count without any signal between them.
 
-Generation is therefore quiescent while the forward and backward run. Interleaving it through the
-step instead, a decode step at every layer boundary, was measured and is not worth it: identical
-throughput on short completions (1.55 against 1.54 s/step) and about 7% better on long ones (2.28
-against 2.44 s/step with 512-token completions and 8 rollouts per prompt), at the cost of a design
-that cannot ever hand the KV cache memory to the training step.
+Interleaving generation through the step instead, a decode step at every layer boundary, was measured
+and is not worth it: identical throughput on short completions (1.55 against 1.54 s/step) and about 7%
+better on long ones (2.28 against 2.44 s/step with 512-token completions and 8 rollouts per prompt),
+at the cost of a design that cannot ever hand the KV cache memory to the training step.
 
 The two combine. `tp_size` only has to divide the world, and the ranks the model is not split across
 hold replicas of it: they draw their own prompts, and their gradients are summed. Pick the smallest
