@@ -54,6 +54,7 @@ from ..data_utils import (
     unpair_preference_dataset,
 )
 from ..import_utils import is_liger_kernel_available
+from ..losses import FusedLinearKTOLoss
 from ..models import get_act_offloading_ctx_manager, prepare_deepspeed, prepare_fsdp
 from ..models.utils import _ForwardRedirection, disable_gradient_checkpointing
 from .base_trainer import _BaseTrainer
@@ -71,10 +72,6 @@ from .utils import (
     selective_log_softmax,
     use_adapter,
 )
-
-
-if is_liger_kernel_available():
-    from liger_kernel.chunked_loss import LigerFusedLinearKTOLoss
 
 
 if is_peft_available():
@@ -835,6 +832,11 @@ class KTOTrainer(_BaseTrainer):
                     "compute_metrics is not supported with the Liger kernel. compute_metrics requires to be able to "
                     "recover the logits from the forward pass, but Liger kernel does not materialize logits."
                 )
+            if self.desirable_weight != 1.0 or self.undesirable_weight != 1.0:
+                raise ValueError(
+                    "The Liger KTO loss does not support `desirable_weight` or `undesirable_weight` other than 1.0. "
+                    "Either keep the default weights or set `use_liger_kernel` to False."
+                )
             if self.precompute_ref_logps:
                 raise ValueError(
                     "Liger KTO loss does not support precomputing reference log probabilities. Either disable "
@@ -985,7 +987,7 @@ class KTOTrainer(_BaseTrainer):
 
         # The Liger loss is built here, because it needs `self.ref_model`
         if self.use_liger_kernel:
-            self.liger_loss = LigerFusedLinearKTOLoss(beta=self.beta, use_ref_model=(self.ref_model is not None))
+            self.liger_loss = FusedLinearKTOLoss(beta=self.beta, use_ref_model=True)
             # Redirect the model.module forward to the model forward to ensure pre-forward hooks are called, so that
             # under ZeRO-3 the parameter coordinator gathers/reduces `lm_head.weight` around the fused loss.
             self._forward_redirection = _ForwardRedirection()

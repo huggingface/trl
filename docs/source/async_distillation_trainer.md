@@ -52,6 +52,8 @@ example.
 > Qwen2.5-Coder experts) satisfy this; a teacher with a different vocabulary trains the student against the wrong
 > tokens, silently unless its vocabulary is larger than the student's.
 
+**Checkpoint and resume**: `ignore_data_skip` defaults to `True`; the base Trainer's skip-and-replay loop does not apply to a live rollout queue. Instead, the index of the first prompt not yet trained on is saved to `rollout_state.json` alongside each checkpoint and restored on resume, so the worker fast-forwards to that prompt without replaying samples. It is the *trained* position, not the generator's: the worker runs ahead of training by the rollout queue depth, and those buffered samples are lost when the run ends, so resuming from the generator's position would skip prompts that were generated but never trained on. Streaming datasets (`IterableDataset`) cannot be repositioned; their worker restarts from prompt 0 on resume.
+
 ## How it differs from [`~trl.experimental.distillation.DistillationTrainer`]
 
 In [`~trl.experimental.distillation.DistillationTrainer`], the teacher is a locally loaded model: generation,
