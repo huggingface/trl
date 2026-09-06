@@ -147,12 +147,12 @@ view costs no extra memory.
 Which knob to turn depends on whether generation or training takes the step's time, and
 `generation_wait_s` says which: it logs how long each step waited for the engine after resuming it.
 Generation and training take turns, so a step costs the training step plus that wait, and the wait
-is the time to decode what was still missing when the previous step ended. Under tensor parallelism three more numbers say where a step's time goes: `generation/pause_s`
-is how long the pause took to be granted (one engine step, tens of milliseconds), `batch/pool_exchange_s`
-is the time spent handing samples between replicas, which grows when replicas reach the exchange at
-different moments, and `memory/alloc_retries` counts the allocator's retries, which stay at zero unless
-the KV pool leaves the training step too little room (then lower `max_memory_percent` in
-`continuous_batching_config`).
+is the time to decode what was still missing when the previous step ended. Under tensor parallelism
+three more numbers say where a step's time goes: `generation/pause_s` is how long the pause took to be
+granted (one engine step, tens of milliseconds), `batch/pool_exchange_s` is the time spent handing
+samples between replicas, which grows when replicas reach the exchange at different moments, and
+`memory/alloc_retries` counts the allocator's retries, which stay at zero unless the KV pool leaves the
+training step too little room (then lower `max_memory_percent` in `continuous_batching_config`).
 
 On one GPU the wait is where most of the step goes, and the generation-side lever is
 `rollouts_in_flight`: a decode step costs about the same whatever number of sequences it carries, so
@@ -171,11 +171,11 @@ longer completions move the balance further towards generation; more processes a
 change it, since every replica generates for itself. Read the metric for your own setup rather than
 copying these numbers.
 
-On the training side, every micro-step pays a fixed host cost for dispatching the forward and backward, so
-`per_device_train_batch_size` should be the largest that fits, with gradient accumulation making up the
-rest. At the same samples per step, doubling it from 8 to 16 gave 5% on Qwen3-8B at `tp_size=2` and 22%
-on Qwen3-30B-A3B at `tp_size=4`, whose 48 sparse layers make the dispatch the longer part of a small
-micro-step.
+On the training side, every micro-step pays a fixed host cost for dispatching the forward and
+backward, so `per_device_train_batch_size` should be the largest that fits, with gradient accumulation
+making up the rest. At the same samples per step, doubling it from 8 to 16 gave 5% on Qwen3-8B at
+`tp_size=2` and 22% on Qwen3-30B-A3B at `tp_size=4`, whose 48 sparse layers make the dispatch the
+longer part of a small micro-step.
 
 ## Debugging
 
