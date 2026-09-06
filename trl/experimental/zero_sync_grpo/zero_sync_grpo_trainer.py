@@ -307,7 +307,6 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         )
         self.rollouts_in_flight = args.rollouts_in_flight
         self.tp_size = args.tp_size
-        self.release_kv_cache_during_step = args.release_kv_cache_during_step
 
         # The ranks a model is not split across hold replicas of it, which train on their own prompts and have to
         # agree on the update. Their gradients are summed over a group holding one rank per replica: the ranks that
@@ -664,20 +663,11 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         self._pause = self._manager.pause()
         self._pause.__enter__()
         self._metrics[mode]["generation/pause_s"].append(time.perf_counter() - pause_start)
-        if self.release_kv_cache_during_step:
-            # Generation is done for this step, so hand its memory to the forward and backward that come next. The
-            # rollouts in flight lose their cache and re-prefill when they are next scheduled, which is what the
-            # option costs: the weights move during the step anyway, so the cache it throws away was already stale.
-            released = self._manager.release_memory()
-            self._metrics[mode]["generation/kv_released_gib"].append(released / 2**30)
 
     def _resume_generation(self) -> None:
-        if self._pause is None:
-            return
-        if self.release_kv_cache_during_step:
-            self._manager.restore_memory()  # generation needs its cache back before it can run
-        self._pause.__exit__(None, None, None)
-        self._pause = None
+        if self._pause is not None:
+            self._pause.__exit__(None, None, None)
+            self._pause = None
 
     def _drain(self, timeout: float) -> None:
         # Collect and score every completion the engine has finished; a group's advantages are computed once its last
