@@ -36,8 +36,11 @@ Usage (server vLLM, single-node 2+2 GPU split):
 
 ```sh
 # Terminal 1 — vLLM
-CUDA_VISIBLE_DEVICES=2,3 trl vllm-serve --model Qwen/Qwen3-4B \
-    --tensor-parallel-size 2 --port 8000
+CUDA_VISIBLE_DEVICES=2,3 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen3-4B \
+    --tensor-parallel-size 2 --port 8000 \
+    --weight-transfer-config '{"backend": "nccl"}' \
+    --logprobs-mode processed_logprobs \
+    --max-logprobs -1
 
 # Terminal 2 — training
 CUDA_VISIBLE_DEVICES=0,1 accelerate launch \

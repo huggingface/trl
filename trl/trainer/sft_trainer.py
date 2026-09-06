@@ -49,6 +49,7 @@ from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutpu
 from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_peft_available
 
+from .._compat import _is_package_version_below
 from ..chat_template_utils import (
     clone_chat_template,
     get_training_chat_template,
@@ -99,7 +100,10 @@ class _ChunkedCELMHeadOutput(CausalLMOutputWithPast):
 
 def _chunk(h, w, b, lbl, logit_scale, final_logit_softcapping):
     with maybe_gather_lm_head_ctx(w, b):
-        logits = h.float() @ w.float().t()
+        # Project in the compute dtype and upcast only for the softmax, like `"nll"` and
+        # `transformers`' own `ForCausalLMLoss` do. Matching the weight to the hidden-states dtype keeps the
+        # matmul in that dtype, which is what `lm_head`'s own forward computes in.
+        logits = (h @ w.to(h.dtype).t()).float()
         if b is not None:
             logits = logits + b.float()
     if logit_scale != 1.0:
@@ -134,8 +138,8 @@ def _chunked_cross_entropy_loss(
     whole chunk so masked positions land in a skippable tail. Each chunk's `[chunk_size, vocab_size]` logits are kept
     alive only during its own forward/backward via gradient checkpointing, so peak logits memory is `chunk_size *
     vocab_size` instead of `batch_size * seq_len * vocab_size`. Quantizing the chunk count to a multiple of
-    `chunk_size` keeps this XLA/Neuron-safe (at most `total / chunk_size` distinct traced shapes, not one per
-    valid-token count) while still dropping fully-masked chunks on GPU.
+    `chunk_size` bounds recompilation to `total / chunk_size` traced shapes. The trip count is read on the host, so
+    each call costs one device-to-host synchronization (one graph execution under XLA).
 
     At least one of `labels` or `shift_labels` must be provided. `labels` triggers the internal `labels[..., 1:]` /
     `hidden_states[..., :-1, :]` shift; `shift_labels` skips it, assuming the caller already aligned labels with hidden
@@ -188,15 +192,6 @@ def _chunked_cross_entropy_loss(
 
     correct = hidden.new_zeros((), dtype=torch.float32)
     entropy_sum = hidden.new_zeros((), dtype=torch.float32)
-    if n_valid_tensor == 0:
-        # Whole micro-batch masked (e.g. completion-only loss + truncation). Keep the loss connected
-        # to the autograd graph through every trainable parameter so `.backward()` succeeds and DDP /
-        # FSDP gradient sync doesn't hang on a missing param.
-        with maybe_gather_lm_head_ctx(lm_head_weight, lm_head_bias):
-            loss = (hidden_states.float().sum() + lm_head_weight.float().sum()) * 0.0
-            if lm_head_bias is not None:
-                loss = loss + lm_head_bias.float().sum() * 0.0
-        return loss, correct, entropy_sum, n_valid_tensor
 
     # Pack valid tokens to the front so masked positions form whole trailing chunks. `argsort` on the boolean mask is
     # a static-shape op (unlike `hidden[valid]`, whose output shape is data-dependent and poisons XLA compilation).
@@ -204,8 +199,10 @@ def _chunked_cross_entropy_loss(
     hidden = hidden[order]
     labels = labels[order]
 
-    # Process only the whole chunks covering the valid prefix: bounds XLA recompiles and drops fully-masked chunks on GPU.
-    n_padded = (n_valid_tensor / chunk_size).ceil().to(torch.int64) * chunk_size
+    # Process only the whole chunks covering the valid prefix: bounds XLA recompiles and drops fully-masked chunks on
+    # GPU. At least one chunk always runs: under context parallelism a rank can hold only masked positions, and its
+    # zero loss still has to reach every trainable parameter for `.backward()` and gradient sync to work.
+    n_padded = (n_valid_tensor / chunk_size).ceil().clamp(min=1).to(torch.int64) * chunk_size
 
     loss = hidden.new_zeros((), dtype=torch.float32)
 
@@ -227,7 +224,8 @@ def _chunked_cross_entropy_loss(
         entropy_sum = entropy_sum + chunk_entropy
 
     if num_items_in_batch is None:
-        loss = loss / n_valid_tensor
+        # Clamped for the same reason: a fully-masked rank reduces to a finite zero rather than `0 / 0`.
+        loss = loss / n_valid_tensor.clamp(min=1)
     else:
         if isinstance(num_items_in_batch, torch.Tensor):
             num_items_in_batch = num_items_in_batch.to(loss.device)
@@ -324,6 +322,7 @@ def _patch_chunked_ce_lm_head(model: torch.nn.Module, chunk_size: int, is_vlm: b
         # into the gradient-checkpointed chunk loop causes FSDP2 to re-gather it once per chunk
         # during backward recomputation. full_tensor() converts it to a plain tensor once; all
         # chunks reference that tensor, so only one all-gather occurs (in full_tensor()'s backward).
+        # `_chunk` casts the weight to the hidden-states dtype per chunk.
         if isinstance(lm_head_weight, torch.distributed.tensor.DTensor):
             lm_head_weight = lm_head_weight.full_tensor()
             if lm_head_bias is not None:
@@ -1173,7 +1172,10 @@ class SFTTrainer(_BaseTrainer):
         # BFD packing requires padding-free mode; otherwise, the collator outputs padded attention masks, causing
         # FlashAttention to ignore position_ids and recompute them incorrectly from the padded attention mask.
         self.padding_free = args.padding_free or (args.packing and args.packing_strategy in {"bfd", "bfd_split"})
-        use_flash_attention = model.config._attn_implementation in FLASH_ATTENTION_VARIANTS
+        # A hub kernel can be requested with a revision and/or a kernel name (`repo_id@revision:kernel_name`), while
+        # the variants above are bare repo ids, so compare against the repo id alone.
+        attn_implementation = model.config._attn_implementation.split("@")[0].split(":")[0]
+        use_flash_attention = attn_implementation in FLASH_ATTENTION_VARIANTS
         if self.padding_free:
             if data_collator is not None:
                 raise ValueError("Passing a custom data collator is not supported when using padding-free.")
@@ -1371,6 +1373,25 @@ class SFTTrainer(_BaseTrainer):
             optimizer_cls_and_kwargs=optimizer_cls_and_kwargs,
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         )
+
+        # Context parallelism can only express full causal attention: the per-layer attention mask is dropped
+        # and replaced by `is_causal=True`. Packed sequences rely on a block-diagonal mask to keep documents
+        # from attending to each other, so a packed batch would silently train with documents attending across
+        # their boundaries. Read the parallelism config off the accelerator rather than off `args`: when
+        # context parallelism is configured through an accelerate YAML, `args.parallelism_config` stays None.
+        if not _is_package_version_below("accelerate", "1.10.1"):
+            parallelism_config = self.accelerator.parallelism_config
+            if (
+                parallelism_config is not None
+                and parallelism_config.cp_enabled
+                and (args.packing or args.eval_packing)
+            ):
+                raise ValueError(
+                    "Packing is not compatible with context parallelism (`cp_size > 1`). Packing relies on a "
+                    "block-diagonal attention mask to keep packed documents separate, and context parallelism "
+                    "drops that mask, so documents would attend across their boundaries. Set `packing=False` "
+                    "and `eval_packing=False`, or disable context parallelism."
+                )
 
         # Sequence parallelism (Ulysses/ALST) shards batches along the sequence dimension and requires
         # `position_ids` in every batch to preserve each token's global position. Sequence parallelism was added in

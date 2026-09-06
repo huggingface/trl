@@ -116,7 +116,7 @@ class GOLDConfig(SFTConfig):
         use_vllm (`bool`, *optional*, defaults to `False`):
             Whether to use vLLM for generating completions from the student model. Requires `vllm` to be installed.
         vllm_mode (`str`, *optional*, defaults to `"colocate"`):
-            Mode for student vLLM integration. Either `"server"` (connect to a running TRL vLLM server) or `"colocate"`
+            Mode for student vLLM integration. Either `"server"` (connect to a running vLLM server) or `"colocate"`
             (run vLLM in the same process).
         vllm_server_host (`str`, *optional*, defaults to `"0.0.0.0"`):
             Host of the vLLM server for the student model (if `vllm_mode="server"`).
@@ -366,7 +366,7 @@ class GOLDConfig(SFTConfig):
     vllm_mode: str = field(
         default="colocate",
         metadata={
-            "help": 'Mode for vLLM integration. Either "server" (connect to a running TRL vLLM server) or "colocate" (run vLLM in the same process).'
+            "help": 'Mode for vLLM integration. Either "server" (connect to a running vLLM server) or "colocate" (run vLLM in the same process).'
         },
     )
     vllm_server_base_url: str | None = field(

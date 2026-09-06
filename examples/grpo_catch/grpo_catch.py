@@ -49,7 +49,10 @@ python examples/grpo_catch/grpo_catch.py --env-mode space --env-host https://ope
 
 # Spin up vLLM server (Terminal 1)
 ```sh
-CUDA_VISIBLE_DEVICES=0 trl vllm-serve --model Qwen/Qwen2.5-0.5B-Instruct --host 0.0.0.0 --port 8000
+CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen2.5-0.5B-Instruct --host 0.0.0.0 --port 8000 \
+    --weight-transfer-config '{"backend": "nccl"}' \
+    --logprobs-mode processed_logprobs \
+    --max-logprobs -1
 ```
 
 # Run training (Terminal 2)

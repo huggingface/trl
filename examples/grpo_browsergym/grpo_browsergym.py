@@ -42,7 +42,10 @@ python examples/grpo_browsergym/grpo_browsergym.py
 python examples/grpo_browsergym/grpo_browsergym.py --use-vllm
 
 # With vLLM server (2 GPUs)
-CUDA_VISIBLE_DEVICES=0 trl vllm-serve --model Qwen/Qwen3.5-2B --host 0.0.0.0 --port 8000
+CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen3.5-2B --host 0.0.0.0 --port 8000 \
+    --weight-transfer-config '{"backend": "nccl"}' \
+    --logprobs-mode processed_logprobs \
+    --max-logprobs -1
 CUDA_VISIBLE_DEVICES=1 python examples/grpo_browsergym/grpo_browsergym.py --use-vllm --vllm-mode server
 ```
 """
