@@ -4244,6 +4244,7 @@ class TestGRPOTrainerVLM(TrlTestCase):
     @pytest.mark.parametrize(
         "model_id",
         [
+            "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
             pytest.param(
                 "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
                 marks=pytest.mark.xfail(
@@ -4281,9 +4282,13 @@ class TestGRPOTrainerVLM(TrlTestCase):
 
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
-        trainer.train()
+        with patch.object(trainer, "_get_last_hidden_state", wraps=trainer._get_last_hidden_state) as get_hidden_state:
+            trainer.train()
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
+        if model_id == "trl-internal-testing/tiny-Gemma3ForConditionalGeneration":
+            token_type_ids = get_hidden_state.call_args.kwargs.get("token_type_ids")
+            assert token_type_ids is not None
 
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
