@@ -333,15 +333,19 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             # cannot do to a tensor-parallel one.
             args.parallelism_config = ParallelismConfig(dp_replicate_size=self.dp_size, tp_size=args.tp_size)
         self._replica_group = None
+        self._replica_cpu_group = None
         self._parameter_owner: dict[str, int] = {}
         if self.dp_size > 1:
             rank = int(os.environ.get("RANK", "0"))
-            # Every rank builds every group, in the same order, and keeps the one it belongs to
-            groups = [
-                torch.distributed.new_group([r for r in range(world_size) if r % args.tp_size == shard])
-                for shard in range(args.tp_size)
-            ]
+            # Every rank builds every group, in the same order, and keeps the one it belongs to. The gradients and
+            # the updated parameters travel over NCCL inside the pause; the sample counts the replicas exchange while
+            # the engine is decoding travel over gloo, so that no NCCL work of the trainer's is ever in flight next
+            # to the engine's.
+            ranks = [[r for r in range(world_size) if r % args.tp_size == shard] for shard in range(args.tp_size)]
+            groups = [torch.distributed.new_group(group_ranks) for group_ranks in ranks]
+            cpu_groups = [torch.distributed.new_group(group_ranks, backend="gloo") for group_ranks in ranks]
             self._replica_group = groups[rank % args.tp_size]
+            self._replica_cpu_group = cpu_groups[rank % args.tp_size]
         # The engine decodes through a second view of the model (built in `_init_manager`); under tensor parallelism the
         # trainer pauses it for the duration of its own step, see `_pause_generation`.
         self._generation_view = None
@@ -902,8 +906,8 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             drained = 0
             while True:
                 if drained % 8 == 0:
-                    counts = torch.tensor([len(self._ready)], device=self.accelerator.device)
-                    torch.distributed.all_reduce(counts, group=self._replica_group)
+                    counts = torch.tensor([len(self._ready)])
+                    torch.distributed.all_reduce(counts, group=self._replica_cpu_group)
                     if int(counts.item()) >= num_samples * self.dp_size:
                         break
                 self._drain(timeout=1.0)
