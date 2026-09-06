@@ -200,7 +200,6 @@ class TestVLLMGenerationLLMKwargs(TrlTestCase):
         "enable_sleep_mode",
         "logprobs_mode",
         "model",
-        "quantization",
         "seed",
         "tensor_parallel_size",
     ]
@@ -228,6 +227,105 @@ class TestVLLMGenerationLLMKwargs(TrlTestCase):
         # the engine side would silently desynchronize the two.
         with pytest.raises(ValueError, match=f"`{key}` cannot be set in `vllm_llm_kwargs`"):
             self._build(monkeypatch, {key: 2})
+
+    def test_fp8_quantization_reaches_the_llm_constructor(self, monkeypatch):
+        captured = self._build(monkeypatch, {"quantization": "fp8"})
+
+        assert captured["quantization"] == "fp8"
+
+    @pytest.mark.parametrize("quantization", [None, "awq", "bitsandbytes", "gptq"])
+    def test_other_quantization_values_are_rejected(self, monkeypatch, quantization):
+        with pytest.raises(ValueError, match='only supports `"fp8"`'):
+            self._build(monkeypatch, {"quantization": quantization})
+
+
+class TestVLLMGenerationWeightReload(TrlTestCase):
+    def _build(self, quantization, fail_on=None):
+        events = []
+
+        class RecordingModel:
+            def load_weights(self, weights):
+                [(name, param)] = weights
+                events.append(("load", name, param))
+                if name == fail_on:
+                    raise RuntimeError("load failed")
+
+        model = RecordingModel()
+
+        class RecordingModelRunner:
+            def get_model(self):
+                events.append(("get_model",))
+                return model
+
+            def reload_weights(self, *, weights_iterator):
+                events.append(("reload",))
+                for name, param in weights_iterator:
+                    events.append(("load", name, param))
+                    if name == fail_on:
+                        raise RuntimeError("load failed")
+
+        model_runner = RecordingModelRunner()
+        driver_worker = SimpleNamespace(model_runner=model_runner)
+        model_executor = SimpleNamespace(driver_worker=driver_worker)
+        llm_engine = SimpleNamespace(model_executor=model_executor)
+        llm = SimpleNamespace(
+            llm_engine=llm_engine,
+            model_config=SimpleNamespace(quantization=quantization),
+            reset_prefix_cache=lambda: events.append(("reset",)),
+        )
+
+        generation = object.__new__(vllm_generation.VLLMGeneration)
+        generation.mode = "colocate"
+        generation.enable_sleep_mode = False
+        generation.accelerator = SimpleNamespace(is_main_process=True)
+        generation.llm = llm
+        params = [("layer.a", object()), ("layer.b", object())]
+
+        def iter_named_params():
+            events.append(("iterate",))
+            yield from params
+
+        generation._iter_named_params = iter_named_params
+        return generation, events, params
+
+    def test_sync_weights_reloads_then_resets_cache(self):
+        generation, events, params = self._build(quantization="fp8")
+
+        generation.sync_weights()
+
+        assert events == [
+            ("reload",),
+            ("iterate",),
+            ("load", *params[0]),
+            ("load", *params[1]),
+            ("reset",),
+        ]
+
+    def test_sync_weights_does_not_reset_cache_after_failed_reload(self):
+        generation, events, params = self._build(quantization="fp8", fail_on="layer.b")
+
+        with pytest.raises(RuntimeError, match="load failed"):
+            generation.sync_weights()
+
+        assert events == [
+            ("reload",),
+            ("iterate",),
+            ("load", *params[0]),
+            ("load", *params[1]),
+        ]
+
+    def test_sync_weights_unquantized_uses_load_weights_fast_path(self):
+        generation, events, params = self._build(quantization=None)
+
+        generation.sync_weights()
+
+        assert events == [
+            ("get_model",),
+            ("iterate",),
+            ("load", *params[0]),
+            ("load", *params[1]),
+            ("reset",),
+        ]
 
 
 @pytest.mark.slow

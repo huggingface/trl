@@ -88,6 +88,7 @@ else:
 
 if is_vllm_available():
     from vllm import LLM, SamplingParams
+    from vllm.model_executor.model_loader.reload import finalize_layerwise_reload, initialize_layerwise_reload
     from vllm.sampling_params import StructuredOutputsParams
 
 
@@ -774,7 +775,7 @@ class OnlineDPOTrainer(_BaseTrainer):
             if self.vllm_mode == "server" and self.accelerator.is_main_process:
                 self.vllm_client.update_named_param(name, param)
             elif self.vllm_mode == "colocate":
-                llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
+                llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.get_model()
                 llm_model.load_weights([(name, param)])
 
     def _move_model_to_vllm(self):
@@ -784,6 +785,13 @@ class OnlineDPOTrainer(_BaseTrainer):
             # the parameter gathers below.
             with self.vllm_client.weight_update():
                 self._move_model_to_vllm_inner()
+        elif self.vllm_mode == "colocate" and self.llm.model_config.quantization == "fp8":
+            model_runner = self.llm.llm_engine.model_executor.driver_worker.model_runner
+            llm_model = model_runner.get_model()
+            # Bracket every existing PEFT and FSDP load path with one FP8 reload lifecycle.
+            initialize_layerwise_reload(llm_model)
+            self._move_model_to_vllm_inner()
+            finalize_layerwise_reload(llm_model, self.llm.model_config)
         else:
             self._move_model_to_vllm_inner()
 
@@ -839,7 +847,7 @@ class OnlineDPOTrainer(_BaseTrainer):
                         if self.vllm_mode == "server" and self.accelerator.is_main_process:
                             self.vllm_client.update_named_param(name, param.data)
                         elif self.vllm_mode == "colocate":
-                            llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
+                            llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.get_model()
                             llm_model.load_weights([(name, param.data)])
                 # Unmerge adapters while parameters are still gathered
                 self.model.unmerge_adapter()
@@ -860,7 +868,7 @@ class OnlineDPOTrainer(_BaseTrainer):
                         if self.vllm_mode == "server" and self.accelerator.is_main_process:
                             self.vllm_client.update_named_param(name, param.data)
                         elif self.vllm_mode == "colocate":
-                            llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
+                            llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.get_model()
                             llm_model.load_weights([(name, param.data)])
 
     def _sync_fsdp1_params_to_vllm(self, module: nn.Module, prefix: str = "", visited=None):
@@ -887,7 +895,7 @@ class OnlineDPOTrainer(_BaseTrainer):
                     if self.vllm_mode == "server" and self.accelerator.is_main_process:
                         self.vllm_client.update_named_param(full_name, param.data)
                     elif self.vllm_mode == "colocate":
-                        llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
+                        llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.get_model()
                         llm_model.load_weights([(full_name, param.data)])
 
     def _fix_param_name_to_vllm(self, name, extra_prefixes: list[str] | None = None):

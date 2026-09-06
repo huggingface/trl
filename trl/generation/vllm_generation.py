@@ -110,21 +110,20 @@ if is_bitsandbytes_available():
 
 # `LLM` constructor arguments that `vllm_llm_kwargs` may not override, each with the reason. TRL reads every one of
 # them back after the engine is built, or the weight sync relies on it, so overriding only the engine side would
-# silently desynchronize the two.
+# silently desynchronize the two. `quantization` is validated separately because FP8 is supported.
 RESERVED_LLM_KWARGS = {
     "model": "the weight sync pushes the training model's parameters into the engine",
     "tensor_parallel_size": "TRL builds the tensor-parallel process groups from `vllm_tensor_parallel_size`",
     "distributed_executor_backend": "TRL drives the colocated driver worker directly",
     "seed": "TRL seeds each tensor-parallel group identically so its workers sample the same completions",
     "logprobs_mode": "the importance-sampling correction expects processed log probabilities",
-    "quantization": "TRL derives it from the training model's own quantization",
     "enable_sleep_mode": "TRL drives the sleep/wake cycle from `vllm_enable_sleep_mode`",
 }
 
 
 def _check_llm_kwargs(llm_kwargs: dict | None) -> dict:
     """
-    Return the user-supplied `LLM` constructor arguments as a dict, refusing the keys in `RESERVED_LLM_KWARGS`.
+    Return the user-supplied `LLM` constructor arguments as a dict, refusing unsupported or reserved values.
 
     Args:
         llm_kwargs (`dict`, *optional*):
@@ -134,9 +133,11 @@ def _check_llm_kwargs(llm_kwargs: dict | None) -> dict:
         `dict`: `llm_kwargs`, or an empty dict when it is `None`.
 
     Raises:
-        `ValueError`: if any key of `llm_kwargs` is in `RESERVED_LLM_KWARGS`.
+        `ValueError`: if any key of `llm_kwargs` is in `RESERVED_LLM_KWARGS`, or if `quantization` is not `"fp8"`.
     """
     llm_kwargs = llm_kwargs or {}
+    if "quantization" in llm_kwargs and llm_kwargs["quantization"] != "fp8":
+        raise ValueError('`quantization` in `vllm_llm_kwargs` only supports `"fp8"`.')
     for key in sorted(llm_kwargs.keys() & RESERVED_LLM_KWARGS.keys()):
         raise ValueError(f"`{key}` cannot be set in `vllm_llm_kwargs`: {RESERVED_LLM_KWARGS[key]}.")
     return llm_kwargs
@@ -248,6 +249,7 @@ class VLLMGeneration:
             Additional keyword arguments for the vLLM `LLM` constructor, used only in colocate mode, where TRL builds
             the engine. Useful for engine arguments TRL does not expose, such as `hf_overrides`. Keys that conflict
             with the arguments TRL sets override them, except the keys in `RESERVED_LLM_KWARGS`, which raise.
+            `quantization` may only be set to `"fp8"`.
 
     """
 
@@ -551,8 +553,14 @@ class VLLMGeneration:
                 for _ in self._iter_named_params():  # take part in the gather collectives
                     pass
         elif self.mode == "colocate":
-            for name, param in self._iter_named_params():
-                self.llm.llm_engine.model_executor.driver_worker.model_runner.model.load_weights([(name, param)])
+            model_runner = self.llm.llm_engine.model_executor.driver_worker.model_runner
+            if self.llm.model_config.quantization == "fp8":
+                # vLLM rebuilds the FP8 weights and scales inside its reload lifecycle.
+                model_runner.reload_weights(weights_iterator=self._iter_named_params())
+            else:
+                llm_model = model_runner.get_model()
+                for name, param in self._iter_named_params():
+                    llm_model.load_weights([(name, param)])
 
         # Reset cache on vLLM
         if self.mode == "server" and accelerator.is_main_process:
@@ -627,9 +635,8 @@ class VLLMGeneration:
         repetition_penalty = self.repetition_penalty
         max_completion_length = self.max_completion_length
 
-        # Sleep level 2 discards the weights, so waking up isn't enough: they must be re-pushed from the training
-        # model. vLLM's `reload_weights` can't be used here, as it reloads the initial checkpoint from disk rather
-        # than the current training weights. See https://github.com/vllm-project/vllm/issues/29341
+        # Sleep level 2 discards the weights, so waking up isn't enough. `sync_weights()` pushes the current training
+        # parameters back to vLLM before generation.
         if self.mode == "colocate" and self.enable_sleep_mode and self._llm_weights_sleeping:
             self.sync_weights()
 

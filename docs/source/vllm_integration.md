@@ -283,6 +283,20 @@ training_args = RLOOConfig(
 </hfoption>
 </hfoptions>
 
+To store the colocated vLLM copy in FP8 without changing the training model's dtype, pass the FP8 quantization setting to vLLM:
+
+```python
+from trl import GRPOConfig
+
+training_args = GRPOConfig(
+    ...,
+    use_vllm=True,
+    vllm_llm_kwargs={"quantization": "fp8"},
+)
+```
+
+vLLM quantizes the checkpoint when the engine starts. During weight synchronization, TRL sends the current training weights through vLLM's reload path so vLLM recomputes the FP8 weights and scales. This affects the generation copy only. It does not enable FP8 training.
+
 #### Server Mode
 
 In **server mode**, vLLM runs as a separate process on dedicated GPUs and communicates with the trainer via HTTP.
