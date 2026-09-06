@@ -19,6 +19,7 @@ from transformers import set_seed
 from transformers.testing_utils import torch_device
 
 from trl.losses import FusedLinearDPOLoss
+from trl.losses import dpo_loss as dpo_loss_module
 from trl.losses.dpo_loss import FusedLinearDPOFunction
 
 from .testing_utils import HFAlignmentLoss, assert_verbose_allclose
@@ -1445,3 +1446,46 @@ def test_label_smoothing_validation():
 
     with pytest.raises(ValueError, match=r"label_smoothing must lie in \[0\.0, 0\.5\) for loss_type='robust'"):
         FusedLinearDPOLoss(loss_type="robust", label_smoothing=-0.1)
+
+
+def test_native_dispatch_counts_reference_projection():
+    weight = torch.empty((65536, 1), device="meta", dtype=torch.bfloat16)
+    inputs = torch.empty((2, 2048, 1), device="meta", dtype=torch.bfloat16)
+
+    assert dpo_loss_module._should_use_native_dpo(inputs, weight)
+    assert not dpo_loss_module._should_use_native_dpo(inputs, weight, use_ref_model=True)
+
+
+def test_cached_reference_zero3_path_matches_native():
+    base_input = torch.randn(4, 7, 11, device=device)
+    base_weight = torch.randn(29, 11, device=device)
+    base_bias = torch.randn(29, device=device)
+    target = torch.randint(0, 29, (4, 7), device=device)
+    target[0, :2] = -100
+    ref_chosen_logps = torch.randn(2, device=device)
+    ref_rejected_logps = torch.randn(2, device=device)
+
+    def run(zero3_parameter):
+        _input = base_input.detach().clone().requires_grad_(True)
+        weight = base_weight.detach().clone().requires_grad_(True)
+        bias = base_bias.detach().clone().requires_grad_(True)
+        if zero3_parameter:
+            weight.ds_id = 0
+        loss, outputs = FusedLinearDPOLoss(compiled=False)(
+            weight,
+            _input,
+            target,
+            bias,
+            ref_chosen_logps=ref_chosen_logps,
+            ref_rejected_logps=ref_rejected_logps,
+        )
+        loss.backward()
+        return loss.detach(), tuple(output.detach() for output in outputs), _input.grad, weight.grad, bias.grad
+
+    native = run(False)
+    zero3_safe = run(True)
+    assert_verbose_allclose(native[0], zero3_safe[0], atol=1e-5, rtol=1e-4)
+    for native_output, zero3_output in zip(native[1], zero3_safe[1], strict=True):
+        assert_verbose_allclose(native_output, zero3_output, atol=1e-5, rtol=1e-4)
+    for native_grad, zero3_grad in zip(native[2:], zero3_safe[2:], strict=True):
+        assert_verbose_allclose(native_grad, zero3_grad, atol=1e-5, rtol=1e-4)
