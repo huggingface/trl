@@ -83,7 +83,8 @@ What remains is that the KV cache of a rollout's prefix was computed with older 
 
 Every process holds a full copy of the weights and runs its own generation engine, so the default
 scaling is data parallel: `accelerate launch --num_processes N`. Generation issues no collectives
-there, so the engine free-runs in its background thread and never waits for the trainer.
+there, so nothing ties one process's engine to another's: each pauses for its own training step and
+resumes after it.
 
 Tensor parallelism splits one copy of the weights across processes instead, with `tp_size`:
 
@@ -143,29 +144,32 @@ decodes through a second view of the model, sharing every parameter, because con
 switches a model to a paged attention implementation that cannot serve the training forward; that
 view costs no extra memory.
 
-Which knob to turn depends on whether generation or training is the bottleneck, and
-`generation_wait_s` tells you which regime you are in: it logs how long each step waited for the
-engine. Under tensor parallelism three more numbers say where a step's time goes: `generation/pause_s`
+Which knob to turn depends on whether generation or training takes the step's time, and
+`generation_wait_s` says which: it logs how long each step waited for the engine after resuming it.
+Generation and training take turns, so a step costs the training step plus that wait, and the wait
+is the time to decode what was still missing when the previous step ended. Under tensor parallelism three more numbers say where a step's time goes: `generation/pause_s`
 is how long the pause took to be granted (one engine step, tens of milliseconds), `batch/pool_exchange_s`
 is the time spent handing samples between replicas, which grows when replicas reach the exchange at
 different moments, and `memory/alloc_retries` counts the allocator's retries, which stay at zero unless
 the KV pool leaves the training step too little room (then lower `max_memory_percent` in
 `continuous_batching_config`).
 
-When it is near zero, the engine had the step's samples ready before the trainer asked for them, and the
-throughput lever is the batch. Measured on one H100 with Qwen3-0.6B, GSM8K, 512-token completions,
-8 generations per prompt:
+On one GPU the wait is where most of the step goes, and the generation-side lever is
+`rollouts_in_flight`: a decode step costs about the same whatever number of sequences it carries, so
+more rollouts in flight means more tokens per second while the engine runs. Measured on one H100 with
+Qwen3-0.6B, GSM8K, 512-token completions, 8 generations per prompt, 64 samples per step:
 
-| samples per step | steps/s | completion tokens/s |
-|---|---|---|
-| 16 | 0.95 | 2,800 |
-| 32 | 0.71 | 4,400 |
-| 64 | 0.53 | 6,000 |
+| rollouts in flight | wait, share of the step | steps/s | completion tokens/s |
+|---|---|---|---|
+| 64 | 69% | 0.46 | 5,600 |
+| 512 | 57% | 0.57 | 7,100 |
 
-Do not assume that regime. A bigger model, longer completions or more generations per prompt make
-decoding dominate, and then the wait grows and the levers reverse: a larger batch only makes the
-trainer wait longer, while `rollouts_in_flight` and the size of the KV pool are what help. Read the
-metric for your own setup rather than copying these numbers.
+What it costs is staleness rather than time: a rollout spans every optimizer step that happens before
+it finishes, about `rollouts_in_flight / samples per step` of them (1 and 8 in the rows above), and
+the KV pool has to hold them all, or decode slows instead of the batch filling. A bigger model or
+longer completions move the balance further towards generation; more processes at `tp_size=1` do not
+change it, since every replica generates for itself. Read the metric for your own setup rather than
+copying these numbers.
 
 ## Debugging
 
