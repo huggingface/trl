@@ -2,9 +2,6 @@
 
 [![model badge](https://img.shields.io/badge/All_models-PRM-blue)](https://huggingface.co/models?other=prm,trl)
 
-> [!TIP]
-> PRMTrainer has been moved to `trl.experimental.prm.PRMTrainer`. The `trl.trainer` version is deprecated and will be removed in TRL 0.29.0. Please update your imports to use `trl.experimental.prm.PRMTrainer` instead. See [issue #4467](https://github.com/huggingface/trl/issues/4467) for more information.
-
 > [!WARNING]
 > PRM Trainer is an experimental API which is subject to change at any time.
 
@@ -97,21 +94,7 @@ It's a win!
 PRM requires a [stepwise supervision](dataset_formats#stepwise-supervision).
 The dataset should contain the following columns: `prompt`, `completions` and `labels`, where `completions` contains a list of reasoning steps and `labels` a list of booleans or floats indicating the correctness of each step.
 
-The [`PRMTrainer`] only supports [standard](dataset_formats#standard) dataset format.
-
-## Example script
-
-We provide an example script to train a model using the PRM method. The script is available in [`examples/scripts/prm.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/prm.py)
-
-To use the PRM script with the [Qwen2 0.5B model](https://huggingface.co/Qwen/Qwen2-0.5B) on the [Math Shepherd dataset](https://huggingface.co/datasets/trl-lib/math_shepherd), run the following command:
-
-```bash
-accelerate launch examples/scripts/prm.py \
-    --model_name_or_path Qwen/Qwen2-0.5B \
-    --dataset_name trl-lib/math_shepherd \
-    --num_train_epochs 1 \
-    --output_dir Qwen2-0.5B-Reward-Math-Sheperd
-```
+The [`experimental.prm.PRMTrainer`] only supports [standard](dataset_formats#standard) dataset format.
 
 ## PRMTrainer
 

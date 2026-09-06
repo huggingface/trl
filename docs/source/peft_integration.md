@@ -4,7 +4,7 @@ TRL supports [PEFT](https://github.com/huggingface/peft) (Parameter-Efficient Fi
 
 This guide covers how to use PEFT with different TRL trainers, including LoRA, QLoRA, and prompt tuning techniques.
 
-For a complete working example, see the [SFT with LoRA/QLoRA notebook](https://github.com/huggingface/trl/blob/main/examples/notebooks/sft_trl_lora_qlora.ipynb).
+For a complete working example, see the [SFT with LoRA/QLoRA notebook](https://github.com/huggingface/trl/blob/main/examples/sft_qlora/sft_qlora.ipynb).
 
 ## Installation
 
@@ -207,7 +207,7 @@ peft_config = LoraConfig(
     lora_dropout=0.05,
     bias="none",
     task_type="CAUSAL_LM",
-    target_modules=["q_proj", "v_proj"],  # Optional: specify target modules
+    target_modules=["q_proj", "v_proj"],  # optional: specify target modules
 )
 
 # Configure training with higher learning rate for LoRA
@@ -218,12 +218,11 @@ training_args = SFTConfig(
 
 # Create trainer with PEFT config
 trainer = SFTTrainer(
-    model=model,
+    model="Qwen/Qwen2-0.5B",  # can pass model name or loaded model
     args=training_args,
     train_dataset=dataset,
-    peft_config=peft_config,  # Pass PEFT config here
+    peft_config=peft_config,  # pass PEFT config here
 )
-
 trainer.train()
 ```
 
@@ -232,7 +231,7 @@ trainer.train()
 
 ### Direct Preference Optimization (DPO)
 
-The `DPOTrainer` implements preference learning from human feedback.
+The [`DPOTrainer`] implements preference learning from human feedback.
 
 #### With LoRA
 
@@ -272,13 +271,11 @@ training_args = DPOConfig(
 
 # Create trainer with PEFT config
 trainer = DPOTrainer(
-    model=model,
-    ref_model=None,  # Not needed when using PEFT
+    model="Qwen/Qwen2-0.5B",  # can pass model name or loaded model
     args=training_args,
     train_dataset=dataset,
-    peft_config=peft_config,  # Pass PEFT config here
+    peft_config=peft_config,  # pass PEFT config here
 )
-
 trainer.train()
 ```
 
@@ -328,98 +325,16 @@ training_args = GRPOConfig(
 
 # Create trainer with PEFT config
 trainer = GRPOTrainer(
-    model="Qwen/Qwen2-0.5B",  # Can pass model name or loaded model
+    model="Qwen/Qwen2-0.5B",  # can pass model name or loaded model
     args=training_args,
     train_dataset=dataset,
-    peft_config=peft_config,  # Pass PEFT config here
+    peft_config=peft_config,  # pass PEFT config here
 )
-
 trainer.train()
 ```
 
 </hfoption>
 </hfoptions>
-
-### Proximal Policy Optimization (PPO)
-
-#### Multi-Adapter RL Training
-
-You can use a single base model with multiple PEFT adapters for the entire PPO algorithm - including retrieving reference logits, computing active logits, and calculating rewards. This approach is useful for memory-efficient RL training.
-
-> [!WARNING]
-> This feature is experimental and convergence has not been extensively tested. We encourage the community to share feedback and report any issues.
-
-**Requirements**
-
-Install PEFT and optionally bitsandbytes for 8-bit models:
-
-```bash
-pip install peft bitsandbytes
-```
-
-**Training Workflow**
-
-The multi-adapter approach requires three stages:
-
-1. **Supervised Fine-Tuning (SFT)**: Train a base model on your target domain (e.g., IMDB dataset) using `SFTTrainer`
-2. **Reward Model Training**: Train a reward model adapter using PEFT and `RewardTrainer` (see [reward modeling example](https://github.com/huggingface/trl/tree/main/examples/scripts/reward_modeling.py))
-3. **PPO Training**: Fine-tune new adapters using PPO with the reward adapter
-
-> [!IMPORTANT]
-> Use the same base model (architecture and weights) for stages 2 & 3.
-
-**Basic Usage**
-
-After training your reward adapter and pushing it to the Hub:
-
-```python
-from peft import LoraConfig
-from trl.experimental.ppo import PPOTrainer, AutoModelForCausalLMWithValueHead
-
-model_name = "huggyllama/llama-7b"
-rm_adapter_id = "trl-lib/llama-7b-hh-rm-adapter"
-
-# Configure PPO adapter
-lora_config = LoraConfig(
-    r=16,
-    lora_alpha=32,
-    lora_dropout=0.05,
-    bias="none",
-    task_type="CAUSAL_LM",
-)
-
-# Load model with reward adapter
-model = AutoModelForCausalLMWithValueHead.from_pretrained(
-    model_name,
-    peft_config=lora_config,
-    reward_adapter=rm_adapter_id,
-)
-
-trainer = PPOTrainer(model=model, ...)
-```
-
-In your training loop, compute rewards using:
-
-```python
-rewards = trainer.model.compute_reward_score(**inputs)
-```
-
-**Advanced Features**
-
-**Quantized Base Models**
-
-For memory-efficient training, load the base model in 8-bit or 4-bit while keeping adapters in float32:
-
-```python
-from transformers import BitsAndBytesConfig
-
-model = AutoModelForCausalLMWithValueHead.from_pretrained(
-    model_name,
-    peft_config=lora_config,
-    reward_adapter=rm_adapter_id,
-    quantization_config=BitsAndBytesConfig(load_in_8bit=True),
-)
-```
 
 ## QLoRA: Quantized Low-Rank Adaptation
 
@@ -453,11 +368,13 @@ python trl/scripts/sft.py \
 
 #### Python Example
 
+Pass the `quantization_config` directly to the trainer alongside `peft_config` — the trainer loads and quantizes the model for you. The same `quantization_config` argument is available on [`SFTTrainer`], [`DPOTrainer`], [`GRPOTrainer`], and [`RLOOTrainer`].
+
 ```python
 import torch
 
 from peft import LoraConfig
-from transformers import AutoModelForCausalLM, BitsAndBytesConfig
+from transformers import BitsAndBytesConfig
 from trl import SFTConfig, SFTTrainer
 
 # Configure 4-bit quantization
@@ -466,13 +383,6 @@ bnb_config = BitsAndBytesConfig(
     bnb_4bit_quant_type="nf4",
     bnb_4bit_compute_dtype=torch.bfloat16,
     bnb_4bit_use_double_quant=True,
-)
-
-# Load model with quantization
-model = AutoModelForCausalLM.from_pretrained(
-    "meta-llama/Llama-2-7b-hf",
-    quantization_config=bnb_config,
-    device_map="auto",
 )
 
 # Configure LoRA
@@ -490,11 +400,12 @@ training_args = SFTConfig(
     ...
 )
 
-# Create trainer with PEFT config
+# Create trainer with quantization and PEFT config
 trainer = SFTTrainer(
-    model=model,
+    model="meta-llama/Llama-2-7b-hf",
     args=training_args,
     train_dataset=dataset,
+    quantization_config=bnb_config,
     peft_config=peft_config,
 )
 
@@ -587,7 +498,7 @@ trainer = SFTTrainer(
     model=model,
     args=training_args,
     train_dataset=dataset,
-    peft_config=peft_config,  # Pass PEFT config here
+    peft_config=peft_config,  # pass PEFT config here
 )
 
 trainer.train()
@@ -809,7 +720,7 @@ model = AutoModelForCausalLM.from_pretrained(
 
 ### TRL Examples and Notebooks
 
-- **[SFT with LoRA/QLoRA Notebook](https://github.com/huggingface/trl/blob/main/examples/notebooks/sft_trl_lora_qlora.ipynb)** - Complete working example showing both LoRA and QLoRA implementations
+- **[SFT with LoRA/QLoRA Notebook](https://github.com/huggingface/trl/blob/main/examples/sft_qlora/sft_qlora.ipynb)** - Complete working example showing both LoRA and QLoRA implementations
 - **[TRL Examples Directory](https://github.com/huggingface/trl/tree/main/examples)** - Collection of training scripts demonstrating PEFT with different trainers
 - **[TRL Cookbook Recipes](https://github.com/huggingface/cookbook/tree/main/notebooks/transformers)** - Step-by-step guides for common PEFT training scenarios
 

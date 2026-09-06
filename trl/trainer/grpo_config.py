@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,12 +14,13 @@
 
 import warnings
 from dataclasses import dataclass, field
+from typing import Any
 
-from transformers import TrainingArguments
+from .base_config import _BaseConfig
 
 
 @dataclass
-class GRPOConfig(TrainingArguments):
+class GRPOConfig(_BaseConfig):
     r"""
     Configuration class for the [`GRPOTrainer`].
 
@@ -37,6 +38,14 @@ class GRPOConfig(TrainingArguments):
         model_init_kwargs (`str`, `dict[str, Any]`, *optional*):
             Keyword arguments for [`~transformers.AutoModelForCausalLM.from_pretrained`], used when the `model`
             argument of the [`GRPOTrainer`] is provided as a string.
+        trust_remote_code (`bool`, *optional*, defaults to `False`):
+            Whether to allow loading models and tokenizers that ship custom Python code from the Hub. Forwarded to
+            [`~transformers.AutoModelForCausalLM.from_pretrained`] and [`~transformers.AutoProcessor.from_pretrained`].
+            Also applied to reward-model and reward-tokenizer loads.
+        router_aux_loss_coef (`float`, *optional*, defaults to `0.001`):
+            Coefficient of the load-balancing auxiliary loss. Only has an effect when training a Mixture-of-Experts
+            (MoE) model; for other models it does nothing. The auxiliary loss is added to the training loss with this
+            weight. Set to `0.0` to disable it.
         disable_dropout (`bool`, *optional*, defaults to `False`):
             Whether to disable dropout in the model. This is useful for training with a reference model, as it prevents
             the model from generating different logprobs for the same input.
@@ -57,7 +66,7 @@ class GRPOConfig(TrainingArguments):
         num_generations_eval (`int` or `None`, *optional*):
             Number of generations to sample during evaluation. This allows using fewer generations during evaluation to
             save computation. If `None`, uses the value of `num_generations`.
-        max_completion_length (`int` or `None`, *optional*, defaults to `256`):
+        max_completion_length (`int` or `None`, *optional*, defaults to `512`):
             Maximum length of the generated completion.
         ds3_gather_for_generation (`bool`, *optional*, defaults to `True`):
             This setting applies to DeepSpeed ZeRO-3. If enabled, the policy model weights are gathered for generation,
@@ -66,14 +75,16 @@ class GRPOConfig(TrainingArguments):
             with vLLM generation.
         shuffle_dataset (`bool`, *optional*, defaults to `True`):
             Whether to shuffle the training dataset.
+        pad_to_multiple_of (`int`, *optional*):
+            If set, the prompts ids and completions ids will be padded to a multiple of this value.
 
         > Parameters that control generation
 
-        generation_batch_size: (`int`, *optional*):
+        generation_batch_size (`int`, *optional*):
             Batch size to use for generation. If `None`, it defaults to the effective training batch size:
             `per_device_train_batch_size * num_processes * steps_per_generation`. In other words, there is one
             generation batch processed per optimization step. Mutually exclusive with `steps_per_generation`.
-        steps_per_generation: (`int`, *optional*):
+        steps_per_generation (`int`, *optional*):
             Number of steps per generation. If `None`, it defaults to `gradient_accumulation_steps`. Mutually exclusive
             with `generation_batch_size`.
         temperature (`float`, defaults to `1.0`):
@@ -98,10 +109,6 @@ class GRPOConfig(TrainingArguments):
             Float that penalizes new tokens based on whether they appear in the prompt and the generated text so far.
             Values > `1.0` encourage the model to use new tokens, while values < `1.0` encourage the model to repeat
             tokens.
-        use_transformers_paged (`bool`, *optional*, defaults to `False`):
-            Whether to use the `transformers` paged implementation for generation. If set to `True`, the `transformers`
-            paged implementation will be used for generation instead of the default padded implementation. This
-            parameter is only effective when `use_vllm` is set to `False`.
         cache_implementation (`str`, *optional*):
             Implementation of the cache method for faster generation when `use_vllm` is set to `False`.
 
@@ -110,20 +117,20 @@ class GRPOConfig(TrainingArguments):
         use_vllm (`bool`, *optional*, defaults to `False`):
             Whether to use vLLM for generating completions. If set to `True`, the trainer will use vLLM for generation
             instead of the default model.generate(). Requires `vllm` to be installed.
-        vllm_mode (`str`, *optional*, defaults to `"server"`):
+        vllm_mode (`str`, *optional*, defaults to `"colocate"`):
             Mode to use for vLLM integration when `use_vllm` is set to `True`. Must be one of `"server"` or
             `"colocate"`.
 
-            - `"server"`: The trainer will send generation requests to a separate vLLM server. Make sure a TRL vLLM
-              server is running (start with `trl vllm-serve`).
+            - `"server"`: The trainer will send generation requests to a separate vLLM server. Make sure a vLLM server
+              is running (start with `vllm serve`).
             - `"colocate"`: vLLM will run in the same process and share the training GPUs. This avoids the need for a
               separate server but may cause resource contention with training.
         vllm_model_impl (`str`, *optional*, defaults to `"vllm"`):
             Model implementation to use for vLLM. Must be one of `"transformers"` or `"vllm"`. `"transformers"`: Use
             the `transformers` backend for model implementation. `"vllm"`: Use the `vllm` library for model
             implementation.
-        vllm_guided_decoding_regex (`str`, *optional*):
-            Regex for vLLM guided decoding. If `None` (default), guided decoding is disabled.
+        vllm_structured_outputs_regex (`str`, *optional*):
+            Regex for vLLM structured outputs. If `None` (default), structured outputs is disabled.
 
         > Parameters that control the vLLM server (only used when `vllm_mode` is `"server"`)
 
@@ -158,6 +165,14 @@ class GRPOConfig(TrainingArguments):
             Enable vLLM sleep mode to offload weights/cache during the optimizer step. Keeps GPU memory usage low, but
             waking the engine adds host–device transfer latency.
 
+        > Parameters that control generation acceleration powered by transformers continuous batching
+
+        use_transformers_continuous_batching (`bool`, *optional*, defaults to `False`):
+            Whether to use transformers' continuous batching engine for generating completions. Requires
+            `transformers>=5.8.0`.
+        transformers_continuous_batching_config (`dict`, *optional*):
+            Keyword arguments for [`~transformers.generation.ContinuousBatchingConfig`].
+
         > Parameters that control the training
 
         beta (`float`, *optional*, defaults to `0.0`):
@@ -183,6 +198,19 @@ class GRPOConfig(TrainingArguments):
         sapo_temperature_pos (`float`, *optional*, defaults to `1.0`):
             Temperature for tokens with positive advantage scores used in the `sapo` loss function. This parameter is
             introduced in the [Soft Adaptive Policy Optimization paper](https://huggingface.co/papers/2511.20347).
+        vespo_k_pos (`float`, *optional*, defaults to `2.0`):
+            k parameter for positive advantages, it is the power exponent in the VESPO loss. Controls how aggressively
+            we down-weight samples with low importance weights (when the importance sampling ratio < 1).
+        vespo_lambda_pos (`float`, *optional*, defaults to `3.0`):
+            lambda parameter for positive advantages, it is the decay factor in the VESPO loss. Controls how
+            aggressively we down-weight samples with high importance weights (when the importance sampling ratio > 1).
+        vespo_k_neg (`float`, *optional*, defaults to `3.0`):
+            k parameter for negative advantages, it is the power exponent in the VESPO loss. Controls how aggressively
+            we down-weight samples with low importance weights (when the importance sampling ratio < 1).
+        vespo_lambda_neg (`float`, *optional*, defaults to `2.0`):
+            lambda parameter for negative advantages, it is the exponential decay factor in the VESPO loss. Controls
+            how aggressively we down-weight samples with high importance weights (when the importance sampling ratio >
+            1).
         importance_sampling_level (`str`, *optional*, defaults to `"token"`):
             Controls whether importance sampling ratios are computed at the `"token"` or `"sequence"` level. `"token"`
             keeps the raw per-token log-probability ratios (one weight per token). `"sequence"` averages the
@@ -192,6 +220,16 @@ class GRPOConfig(TrainingArguments):
         reward_weights (`list[float]`, *optional*):
             Weights for each reward function. Must match the number of reward functions. If `None`, all rewards are
             weighted equally with weight `1.0`.
+        multi_objective_aggregation (`str`, *optional*, defaults to `"sum_then_normalize"`):
+            Method to aggregate multiple reward functions. Supported values are:
+
+            - `"sum_then_normalize"` (default): First sums the weighted rewards from each reward function, then applies
+              reward scaling/normalization as specified by `scale_rewards` (see `scale_rewards` for details).
+            - `"normalize_then_sum"`: First normalizes/scales each reward function across generations (within each
+              group), then sums the normalized rewards using the specified weights. The aggregated reward is then
+              normalized at the batch level when forming advantages. This is the suggested approach from the paper
+              [GDPO: Group reward-Decoupled Normalization Policy Optimization for Multi-reward RL
+              Optimization](https://huggingface.co/papers/2601.05242).
         scale_rewards (`str` or `bool`, *optional*, defaults to `"group"`):
             Specifies the scaling strategy for rewards. Supported values are:
 
@@ -223,9 +261,16 @@ class GRPOConfig(TrainingArguments):
               losses are aggregated by normalizing with the number of active tokens in the global accumulated batch.
               This method was introduced in the [MiniMax-M1 paper](https://huggingface.co/papers/2506.13585).
             - `"sapo"`: Soft Adaptive Policy Optimization loss, as introduced in the [Soft Adaptive Policy Optimization
-              paper](https://huggingface.co/papers/2506.13585). Replaces hard clipping with a smooth,
+              paper](https://huggingface.co/papers/2511.20347). Replaces hard clipping with a smooth,
               temperature-controlled gate that adaptively attenuates off-policy updates while preserving useful
               learning signals.
+            - `"luspo"`: Length-Unbiased Sequence Policy Optimization loss. A sequence-level loss that scales each
+              sequence's loss by its length. This is a modification of GSPO and requires
+              `importance_sampling_level="sequence"`. Introduced in the [LUSPO
+              paper](https://huggingface.co/papers/2602.05261).
+            - `"vespo"`: Variational Sequence-Level Soft Policy Optimization. Replaces hard clipping with a smooth,
+              asymmetric Gamma weighting function applied directly to sequence-level importance weights. Introduced in
+              the [VESPO paper](https://huggingface.co/papers/2602.10693).
         mask_truncated_completions (`bool`, *optional*, defaults to `False`):
             When enabled, truncated completions are excluded from the loss calculation, preventing them from being
             incorrectly penalized and introducing noise during training. According to the
@@ -249,15 +294,37 @@ class GRPOConfig(TrainingArguments):
             position, improving results. Range: `[0.0-1.0]`. A value of `0.0` masks all but the highest entropy token;
             `1.0` keeps all tokens. The paper recommends a value of `0.2`. If used with
             `mask_truncated_completions=True`, only tokens from non-truncated completions are considered.
-        use_liger_loss (`bool`, *optional*):
-            Whether to use Liger loss.
-
-            <Deprecated version="0.25.0">
-
-            Parameter `use_liger_loss` is deprecated and will be removed in version 0.28.0. Use `use_liger_kernel`
-            instead.
-
-            </Deprecated>
+        entropy_coef (`float`, *optional*, defaults to `0.0`):
+            Coefficient of the entropy regularization term in the loss. A positive value adds an entropy bonus that
+            encourages exploration by keeping the policy from collapsing to near-deterministic outputs. The bonus is
+            always the mean per-token entropy regardless of `loss_type`; it is not rescaled to match a loss type's
+            policy normalization, so `entropy_coef` has the same meaning for every loss type. When
+            `use_adaptive_entropy=True`, this serves as the initial coefficient and is updated each optimizer step. Has
+            no effect when set to `0.0` (default).
+        use_adaptive_entropy (`bool`, *optional*, defaults to `False`):
+            Whether to use adaptive entropy control, introduced in
+            [Skywork-OR1](https://huggingface.co/papers/2505.22312). When enabled, the entropy coefficient
+            `entropy_coef` is updated each optimizer step: incremented by `entropy_coef_delta` when the current entropy
+            is below `entropy_target`, and decremented otherwise. The coefficient is only applied when entropy is at or
+            below `entropy_target`.
+        entropy_coef_min (`float`, *optional*, defaults to `0.0`):
+            Lower bound for the entropy coefficient when using adaptive entropy control.
+        entropy_coef_max (`float`, *optional*, defaults to `1.0`):
+            Upper bound for the entropy coefficient when using adaptive entropy control.
+        entropy_coef_delta (`float`, *optional*, defaults to `0.005`):
+            Step size for adjusting the entropy coefficient at each optimizer step during adaptive entropy control.
+        entropy_target (`float`, *optional*, defaults to `0.2`):
+            Target mean per-token entropy (in nats) used by adaptive entropy control. The coefficient is only applied
+            when the current entropy falls at or below this value. Measured over the same token set as the policy loss:
+            all completion tokens by default, or only the high-entropy subset when `top_entropy_quantile < 1.0`.
+            Typical language models have per-token entropies in the range 2–10 nats, so the default of `0.2` almost
+            never triggers regularization (only on near-complete entropy collapse); set it close to the entropy you
+            observe early in training (logged as the `entropy` metric) so the bonus engages before the policy collapses
+            (and account for the token subset when using `top_entropy_quantile`).
+        max_tool_calling_iterations (`int`, *optional*):
+            Maximum number of tool-calling turns when training an agent. If `None`, there is no limit and generation
+            stops when the model generates a response turn with no tool calls or when the total response length reaches
+            `max_model_length`.
         vllm_importance_sampling_correction (`bool`, *optional*, defaults to `True`):
             Whether to apply Importance Sampling (IS) to correct for the mismatch between vLLM completion logprobs and
             recomputed training logprobs. If set to `False`, no IS is applied regardless of
@@ -267,18 +334,33 @@ class GRPOConfig(TrainingArguments):
             Specifies how Importance Sampling is performed when `vllm_importance_sampling_correction=True`. Possible
             values are:
 
-                - `"token_truncate"`: Token-level truncated IS (default). Per-token ratios are clipped from above at C.
-                - `"token_mask"`: Token-level masked IS. Per-token ratios above C are set to zero.
-                - `"sequence_truncate"`: Sequence-level truncated IS. A single sequence ratio is clipped from above at
-                  C and applied to all tokens in the sequence.
-                - `"sequence_mask"`: Sequence-level masked IS. Sequences with ratios above C are masked out.
-        vllm_importance_sampling_cap (`float`, *optional*, defaults to `3.0`):
-            Importance sampling cap C used by `vllm_importance_sampling_mode`. For `*_truncate` modes, importance
-            ratios are clipped from above at C. For `*_mask` modes, ratios larger than C are set to zero.
-        use_bias_correction_kl (`bool`, *optional*, defaults to `False`):
-            Whether to use the unbiased KL divergence estimator with importance sampling correction. This corrects the
-            KL divergence estimate by multiplying it with the importance sampling ratio. This is described in the
-            [DeepSeek-V3.2 paper](https://huggingface.co/papers/2512.02556).
+                - `"token_truncate"`: Token-level truncated IS (default). Per-token ratios are clipped to
+                [C_min, C_max].
+                - `"token_mask"`: Token-level masked IS. Per-token ratios outside [C_min, C_max] are set to zero.
+                - `"sequence_truncate"`: Sequence-level truncated IS. A single sequence ratio is clipped to
+                [C_min, C_max] and applied to all tokens in the sequence.
+                - `"sequence_mask"`: Sequence-level masked IS. Sequences with ratios outside [C_min, C_max] are masked
+                out.
+        vllm_importance_sampling_clip_max (`float`, *optional*, defaults to `3.0`):
+            Importance sampling upper bound C_max used by `vllm_importance_sampling_mode`. For `*_truncate` modes,
+            importance ratios are clipped from above at C_max. For `*_mask` modes, ratios larger than C_max are set to
+            zero.
+        vllm_importance_sampling_clip_min (`float`, *optional*):
+            Importance sampling lower bound C_min used by `vllm_importance_sampling_mode`. For `*_truncate` modes,
+            ratios are clipped from below at C_min. For `*_mask` modes, ratios below C_min are set to zero. To strictly
+            mask ratios below C_min without upper bound, set `vllm_importance_sampling_clip_max=None`.
+        off_policy_mask_threshold (`float`, *optional*):
+            Threshold for off-policy sequence masking. If `None`, off-policy sequence masking is disabled. When set,
+            sequences with negative advantages and high KL divergence are masked out to stabilize training. This
+            parameter corresponds to the `delta` threshold in Equation 9 of the [DeepSeek-V3.2
+            paper](https://huggingface.co/papers/2512.02556). It expects a positive value (e.g., 0.5).
+        use_bias_correction_kl (`bool`, *optional*, defaults to `True`):
+            Whether to multiply the KL term by the importance sampling ratio, so that the KL gradient becomes the
+            unbiased reverse-KL gradient, as described in the [DeepSeek-V3.2
+            paper](https://huggingface.co/papers/2512.02556). This changes the KL gradient whenever `beta != 0`,
+            including on-policy: the ratio is differentiable, so it affects the gradient even where its value is
+            exactly 1. The unbiased reverse-KL property holds for `importance_sampling_level="token"`; with
+            `"sequence"` a sequence-level weight is broadcast onto the per-token KL.
 
         > Parameters that control the logging
 
@@ -286,69 +368,83 @@ class GRPOConfig(TrainingArguments):
             Whether to log a sample of (prompt, completion) pairs every `logging_steps` steps. If `rich` is installed,
             it prints the sample. If `wandb` and/or `trackio` logging is enabled, it logs it to `wandb` and/or
             `trackio`.
+        log_multimodal (`bool`, *optional*, defaults to `True`):
+            Whether to log multimodal content (images, videos, etc.) together with completions. Disable this to reduce
+            log size when using high-resolution multimodal data.
         num_completions_to_print (`int`, *optional*):
             Number of completions to print with `rich`. If `None`, all completions are logged.
         log_unique_prompts (`bool`, *optional*, defaults to `False`):
             Whether to log unique prompts. If `True`, only unique prompts are logged. If `False`, all prompts are
             logged.
+        log_completions_hub_repo (`str`, *optional*):
+            Hugging Face Hub repository to save the completions. Should be a complete repository name like
+            `'username/reponame'` or `'orgname/reponame'`, or just `'reponame'` in which case the repository will be
+            created in the currently-logged-in Hugging Face user's namespace. Note that this repository will be public
+            unless you set `hub_private_repo=True` or your organization's default is to create private repositories."
 
-        > Deprecated arguments
+        > Deprecated parameters
 
-        max_prompt_length:
+        use_transformers_paged:
 
-            <Deprecated version="0.26.0">
+            <Deprecated version="1.2.0">
 
-            Parameter `max_prompt_length` is deprecated and will be removed in version 0.28.0. You should instead
-            filter your dataset before training to ensure that prompts do not exceed your desired length.
+            Parameter `use_transformers_paged` is deprecated and will be removed in version v2.0.0. Use
+            `use_transformers_continuous_batching` instead.
 
             </Deprecated>
+
+        vllm_importance_sampling_cap:
+
+            <Deprecated version="1.6.0">
+
+            Parameter `vllm_importance_sampling_cap` is deprecated and will be removed in v2.0.0. Use
+            `vllm_importance_sampling_clip_max` instead.
+
+            </Deprecated>
+
+    > [!NOTE]
+    > These parameters have default values different from [`~transformers.TrainingArguments`]:
+    > - `logging_steps`: Defaults to `10` instead of `500`.
+    > - `gradient_checkpointing`: Defaults to `True` instead of `False`.
+    > - `bf16`: Defaults to `True` if `fp16` is not set, instead of `False`.
+    > - `learning_rate`: Defaults to `1e-6` instead of `5e-5`.
     """
 
-    _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs"]
+    _VALID_DICT_FIELDS = _BaseConfig._VALID_DICT_FIELDS + [
+        "model_init_kwargs",
+        "transformers_continuous_batching_config",
+        "generation_kwargs",
+        "chat_template_kwargs",
+    ]
 
     # Parameters whose default values are overridden from TrainingArguments
     learning_rate: float = field(
         default=1e-6,
         metadata={"help": "The initial learning rate for AdamW."},
     )
-    logging_steps: float = field(
-        default=10,
-        metadata={
-            "help": "Log every X updates steps. Should be an integer or a float in range `[0,1)`. If smaller than 1, "
-            "will be interpreted as ratio of total training steps."
-        },
-    )
-    gradient_checkpointing: bool = field(
-        default=True,
-        metadata={
-            "help": "If True, use gradient checkpointing to save memory at the expense of slower backward pass."
-        },
-    )
-    bf16: bool | None = field(
-        default=None,
-        metadata={
-            "help": "Whether to use bf16 (mixed) precision instead of 32-bit. Requires Ampere or higher NVIDIA "
-            "architecture or Intel XPU or using CPU (use_cpu) or Ascend NPU. If not set, it defaults to `True` if "
-            "`fp16` is not set."
-        },
-    )
-    # Transformers 4.57.0 introduced a bug that caused the dtype of `lr_scheduler_kwargs` to be unparsable. This issue
-    # was fixed in https://github.com/huggingface/transformers/pull/41322, but the fix has not yet been released. We
-    # add a temporary workaround here, which can be removed once the fix is available—likely in Transformers 4.57.2.
-    lr_scheduler_kwargs: dict | str | None = field(
-        default=None,
-        metadata={
-            "help": "Additional parameters for the lr_scheduler, such as {'num_cycles': 1} for cosine with hard "
-            "restarts."
-        },
-    )
 
     # Parameters that control the model and reference model
-    model_init_kwargs: dict | str | None = field(
+    model_init_kwargs: dict[str, Any] | str | None = field(
         default=None,
         metadata={
             "help": "Keyword arguments for `transformers.AutoModelForCausalLM.from_pretrained`, used when the `model` "
             "argument of the `GRPOTrainer` is provided as a string."
+        },
+    )
+    trust_remote_code: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to allow loading models and tokenizers that ship custom Python code from the Hub. "
+            "Forwarded to `AutoModelForCausalLM.from_pretrained` and `AutoProcessor.from_pretrained`. Also applied to "
+            "reward-model and reward-tokenizer loads."
+        },
+    )
+    router_aux_loss_coef: float = field(
+        default=0.001,
+        metadata={
+            "help": "Coefficient of the load-balancing auxiliary loss. Only has an effect when training a "
+            "Mixture-of-Experts (MoE) model; for other models it does nothing. The auxiliary loss is added to the "
+            "training loss with this weight. Set to `0.0` to disable it."
         },
     )
     disable_dropout: bool = field(
@@ -393,7 +489,7 @@ class GRPOConfig(TrainingArguments):
         },
     )
     max_completion_length: int | None = field(
-        default=256,
+        default=512,
         metadata={"help": "Maximum length of the generated completion."},
     )
     ds3_gather_for_generation: bool = field(
@@ -408,6 +504,10 @@ class GRPOConfig(TrainingArguments):
     shuffle_dataset: bool | None = field(
         default=True,
         metadata={"help": "Whether to shuffle the training dataset."},
+    )
+    pad_to_multiple_of: int | None = field(
+        default=None,
+        metadata={"help": "If set, the prompts ids and completions ids will be padded to a multiple of this value."},
     )
 
     # Parameters that control generation
@@ -447,7 +547,7 @@ class GRPOConfig(TrainingArguments):
             "must be a value between 0.0 and 1.0. Typical values are in the 0.01-0.2 range."
         },
     )
-    generation_kwargs: dict | None = field(
+    generation_kwargs: dict | str | None = field(
         default=None,
         metadata={
             "help": "Additional keyword arguments to pass to `GenerationConfig` (if using transformers) or "
@@ -456,7 +556,7 @@ class GRPOConfig(TrainingArguments):
             "conflict with the other generation parameters (like `min_p`, `top_p`, etc.), they will override them."
         },
     )
-    chat_template_kwargs: dict | None = field(
+    chat_template_kwargs: dict | str | None = field(
         default=None,
         metadata={
             "help": "Additional keyword arguments to pass to the `apply_chat_template` function when generating "
@@ -469,14 +569,6 @@ class GRPOConfig(TrainingArguments):
             "help": "Float that penalizes new tokens based on whether they appear in the prompt and the generated "
             "text so far. Values > 1.0 encourage the model to use new tokens, while values < 1.0 encourage the model "
             "to repeat tokens."
-        },
-    )
-    use_transformers_paged: bool = field(
-        default=False,
-        metadata={
-            "help": "Whether to use the `transformers` paged implementation for generation. If set to `True`, the "
-            "`transformers` paged implementation will be used for generation instead of the default padded "
-            "implementation. This parameter is only effective when `use_vllm` is set to `False`."
         },
     )
     cache_implementation: str | None = field(
@@ -493,11 +585,11 @@ class GRPOConfig(TrainingArguments):
         },
     )
     vllm_mode: str = field(
-        default="server",
+        default="colocate",
         metadata={
             "help": "Mode to use for vLLM integration when `use_vllm` is set to `True`. Must be one of `'server'` or "
             "`'colocate'`. `'server'`: The trainer will send generation requests to a separate vLLM server. Make sure "
-            "a TRL vLLM server is running (start with `trl vllm-serve`). `'colocate'`: vLLM will run in the same "
+            "a vLLM server is running (start with `vllm serve`). `'colocate'`: vLLM will run in the same "
             "process and share the training GPUs. This avoids the need for a separate server but may cause resource "
             "contention with training."
         },
@@ -517,9 +609,9 @@ class GRPOConfig(TrainingArguments):
             "usage low, but waking the engine adds host–device transfer latency."
         },
     )
-    vllm_guided_decoding_regex: str | None = field(
+    vllm_structured_outputs_regex: str | None = field(
         default=None,
-        metadata={"help": "Regex for vLLM guided decoding. If `None` (default), guided decoding is disabled."},
+        metadata={"help": "Regex for vLLM structured outputs. If `None` (default), structured outputs is disabled."},
     )
 
     # Parameters that control the vLLM server (only used when `vllm_mode` is `"server"`)
@@ -608,8 +700,8 @@ class GRPOConfig(TrainingArguments):
         metadata={
             "help": "Upper-bound epsilon value for clipping. If not specified, it defaults to the same value as the "
             "lower-bound specified in argument `epsilon`. Paper DAPO recommends `0.28`. "
-            "When used with `loss_type='cispo'`, this corresponds to the ε_max param specified in the"
-            "[ScaleRL paper]https://huggingface.co/papers/2510.13786) and the recommended value is `5.0`."
+            "When used with `loss_type='cispo'`, this corresponds to the ε_max param specified in the "
+            "[ScaleRL paper](https://huggingface.co/papers/2510.13786) and the recommended value is `5.0`."
         },
     )
     sapo_temperature_neg: float = field(
@@ -626,6 +718,36 @@ class GRPOConfig(TrainingArguments):
             "help": "Temperature for tokens with positive advantage scores used in the `sapo` loss function. "
             "This parameter is introduced in the [Soft Adaptive Policy Optimization "
             "paper](https://huggingface.co/papers/2511.20347)."
+        },
+    )
+    vespo_k_pos: float = field(
+        default=2.0,
+        metadata={
+            "help": "k parameter for positive advantages, it is the power exponent in the VESPO loss. Controls how "
+            "aggressively we down-weight samples with low importance weights (when the importance sampling ratio < 1)."
+        },
+    )
+    vespo_lambda_pos: float = field(
+        default=3.0,
+        metadata={
+            "help": "lambda parameter for positive advantages, it is the decay factor in the VESPO loss. Controls "
+            "how aggressively we down-weight samples with high importance weights (when the importance sampling ratio "
+            "> 1)."
+        },
+    )
+    vespo_k_neg: float = field(
+        default=3.0,
+        metadata={
+            "help": "k parameter for negative advantages, it is the power exponent in the VESPO loss. Controls how "
+            "aggressively we down-weight samples with low importance weights (when the importance sampling ratio < 1)."
+        },
+    )
+    vespo_lambda_neg: float = field(
+        default=2.0,
+        metadata={
+            "help": "lambda parameter for negative advantages, it is the exponential decay factor in the VESPO loss. "
+            "Controls how aggressively we down-weight samples with high importance weights (when the importance "
+            "sampling ratio > 1)."
         },
     )
     importance_sampling_level: str = field(
@@ -645,6 +767,18 @@ class GRPOConfig(TrainingArguments):
             "rewards are weighted equally with weight `1.0`."
         },
     )
+    multi_objective_aggregation: str = field(
+        default="sum_then_normalize",
+        metadata={
+            "help": "Method to aggregate multiple reward functions. Supported values are: "
+            "`'sum_then_normalize'` (default): First sums the weighted rewards from each reward function, then "
+            "applies reward scaling/normalization as specified by `scale_rewards` (see `scale_rewards` for details). "
+            "`'normalize_then_sum'`: First normalizes/scales each reward function across generations (within each "
+            "group), then sums the normalized rewards using the specified weights. The aggregated reward is then "
+            "normalized at the batch level when forming advantages. This is the suggested approach from the paper "
+            "GDPO: Group reward-Decoupled Normalization Policy Optimization for Multi-reward RL Optimization."
+        },
+    )
     scale_rewards: str = field(
         default="group",
         metadata={
@@ -660,8 +794,8 @@ class GRPOConfig(TrainingArguments):
     loss_type: str = field(
         default="dapo",
         metadata={
-            "help": "Specifies the loss formulation to use. Supported values are 'grpo', 'dapo', 'bnpo', and "
-            "'dr_grpo'. "
+            "help": "Specifies the loss formulation to use. Supported values are 'grpo', 'dr_grpo', 'dapo', "
+            "'bnpo', 'cispo', 'sapo', 'luspo', and 'vespo'. "
             "'grpo': Aggregates token-level losses by normalizing over sequence length. Not recommended due to length "
             "bias—this approach tends to prefer shorter completions with positive advantages and longer ones with "
             "negative advantages. "
@@ -673,16 +807,23 @@ class GRPOConfig(TrainingArguments):
             "'bnpo': Aggregates token-level losses by normalizing with the number of active token in the local batch. "
             "Note that normalization is performed over the local batch only, so results may slightly vary depending "
             "on the local batch size, despite a constant effective batch size. When using "
-            "`per_device_train_batch_size==1`, the loss is equivalent to the GRPO loss."
+            "`per_device_train_batch_size==1`, the loss is equivalent to the GRPO loss. "
             "'cispo': Clips the importance sampling weights instead of the advantage scaled importance weights. "
             "The clipped weights are then multiplied with the advantages and policy model's log probs. "
             "Individual token losses are aggregated by normalizing with the number of active tokens in "
             "the global accumulated batch. This method was introduced in the "
-            "[MiniMax-M1 paper](https://huggingface.co/papers/2506.13585)."
+            "[MiniMax-M1 paper](https://huggingface.co/papers/2506.13585). "
             "'sapo': Soft Adaptive Policy Optimization loss, as introduced in the "
-            "[Soft Adaptive Policy Optimization paper](https://huggingface.co/papers/2506.13585). "
+            "[Soft Adaptive Policy Optimization paper](https://huggingface.co/papers/2511.20347). "
             "Replaces hard clipping with a smooth, temperature-controlled gate that adaptively attenuates "
-            "off-policy updates while preserving useful learning signals."
+            "off-policy updates while preserving useful learning signals. "
+            "'luspo': Length-Unbiased Sequence Policy Optimization loss. A sequence-level loss that scales each "
+            "sequence's loss by its length. This is a modification of GSPO and requires "
+            "`importance_sampling_level='sequence'`. Introduced in the [LUSPO "
+            "paper](https://huggingface.co/papers/2602.05261). "
+            "'vespo': Variational Sequence-Level Soft Policy Optimization. Replaces hard clipping with a smooth, "
+            "asymmetric Gamma weighting function applied directly to sequence-level importance weights. Introduced in "
+            "the [VESPO paper](https://huggingface.co/papers/2602.10693)."
         },
     )
     mask_truncated_completions: bool = field(
@@ -725,9 +866,54 @@ class GRPOConfig(TrainingArguments):
             "non-truncated completions are considered."
         },
     )
-    use_liger_loss: bool = field(
+    entropy_coef: float = field(
+        default=0.0,
+        metadata={
+            "help": "Coefficient of the entropy regularization term in the loss. A positive value adds an entropy "
+            "bonus that encourages exploration. The bonus is always the mean per-token entropy regardless of "
+            "`loss_type` (not rescaled to a loss type's policy normalization), so `entropy_coef` has the same "
+            "meaning for every loss type. When `use_adaptive_entropy=True`, this serves as the initial "
+            "coefficient and is updated each optimizer step. Has no effect when set to `0.0` (default)."
+        },
+    )
+    use_adaptive_entropy: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to use adaptive entropy control, introduced in Skywork-OR1 "
+            "(https://huggingface.co/papers/2505.22312). When enabled, `entropy_coef` is incremented by "
+            "`entropy_coef_delta` when entropy is below `entropy_target`, and decremented otherwise."
+        },
+    )
+    entropy_coef_min: float = field(
+        default=0.0,
+        metadata={"help": "Lower bound for the entropy coefficient when using adaptive entropy control."},
+    )
+    entropy_coef_max: float = field(
+        default=1.0,
+        metadata={"help": "Upper bound for the entropy coefficient when using adaptive entropy control."},
+    )
+    entropy_coef_delta: float = field(
+        default=0.005,
+        metadata={"help": "Step size for adjusting the entropy coefficient during adaptive entropy control."},
+    )
+    entropy_target: float = field(
+        default=0.2,
+        metadata={
+            "help": "Target mean per-token entropy (nats) for adaptive entropy control. The coefficient is only "
+            "applied when current entropy is at or below this value. Measured over the same token set as the "
+            "policy loss (all completion tokens, or the high-entropy subset when top_entropy_quantile < 1.0). "
+            "Typical language models have per-token entropies of 2–10 nats, so the default of 0.2 almost never "
+            "triggers regularization (only on near-complete collapse); set it close to the entropy observed "
+            "early in training and tune from there."
+        },
+    )
+    max_tool_calling_iterations: int | None = field(
         default=None,
-        metadata={"help": "Whether to use the Liger GRPO loss."},
+        metadata={
+            "help": "Maximum number of tool-calling turns when training an agent. If `None`, there is no limit and "
+            "generation stops when the model generates a response turn with no tool calls or when the total "
+            "response length reaches `max_model_length`."
+        },
     )
     vllm_importance_sampling_correction: bool = field(
         default=True,
@@ -738,34 +924,53 @@ class GRPOConfig(TrainingArguments):
             "IS ratios are computed and constrained."
         },
     )
-
     vllm_importance_sampling_mode: str = field(
         default="sequence_mask",
         metadata={
             "help": "Specifies how Importance Sampling (IS) is performed when "
             "vllm_importance_sampling_correction=True. Modes are defined along two orthogonal "
-            "dimensions: (1) constraint, which determines how to handle ratios above "
-            "vllm_importance_sampling_cap (C)—either truncation (clip from above, ρ ← min(ρ, C)) or "
-            "masking (set ratios above C to zero); and (2) granularity, which determines whether "
+            "dimensions: (1) constraint, which determines how to handle ratios outside the bounds "
+            "[C_min, C_max]—either truncation (clip to range, ρ ← clamp(ρ, C_min, C_max)) or "
+            "masking (set ratios above C_max or below C_min to zero); and (2) granularity, which determines whether "
             "ratios are computed per token or as a single sequence-level ratio applied to all tokens. "
             "Supported options are: 'token_truncate', 'token_mask', 'sequence_truncate', and "
             "'sequence_mask'."
         },
     )
-
-    vllm_importance_sampling_cap: float = field(
+    vllm_importance_sampling_clip_max: float | None = field(
         default=3.0,
         metadata={
-            "help": "Importance sampling cap C used by `vllm_importance_sampling_mode`. For '*_truncate' modes, "
-            "ratios are clipped from above at C. For '*_mask' modes, ratios larger than C are set to zero."
+            "help": "Importance sampling upper bound C_max used by `vllm_importance_sampling_mode`. For '*_truncate' "
+            "modes, ratios are clipped from above at C_max. For '*_mask' modes, ratios larger than C_max are set to "
+            "zero."
+        },
+    )
+    vllm_importance_sampling_clip_min: float | None = field(
+        default=None,
+        metadata={
+            "help": "Importance sampling lower bound C_min used by `vllm_importance_sampling_mode`. For `*_truncate` "
+            "modes, ratios are clipped from below at C_min. For `*_mask` modes, ratios below C_min are set to "
+            "zero. To strictly mask ratios below C_min without upper bound, set `vllm_importance_sampling_clip_max=None`."
+        },
+    )
+    off_policy_mask_threshold: float | None = field(
+        default=None,
+        metadata={
+            "help": "Threshold for off-policy sequence masking. If `None`, off-policy sequence masking is disabled. "
+            "When set, sequences with negative advantages and high KL divergence are masked out to stabilize "
+            "training. This parameter corresponds to the `delta` threshold in Equation 9 of the [DeepSeek-V3.2 "
+            "paper](https://huggingface.co/papers/2512.02556). It expects a positive value (e.g., 0.5)."
         },
     )
     use_bias_correction_kl: bool = field(
-        default=False,
+        default=True,
         metadata={
-            "help": "Whether to use the unbiased KL divergence estimator with importance sampling correction. This "
-            "corrects the KL divergence estimate by multiplying it with the importance sampling ratio. "
-            "This is described in the [DeepSeek-V3.2 paper](https://huggingface.co/papers/2512.02556)."
+            "help": "Whether to multiply the KL term by the importance sampling ratio, so that the KL gradient "
+            "becomes the unbiased reverse-KL gradient, as described in the [DeepSeek-V3.2 "
+            "paper](https://huggingface.co/papers/2512.02556). This changes the KL gradient whenever `beta != 0`, "
+            "including on-policy: the ratio is differentiable, so it affects the gradient even where its value is "
+            "exactly 1. The unbiased reverse-KL property holds for `importance_sampling_level='token'`; with "
+            "'sequence' a sequence-level weight is broadcast onto the per-token KL."
         },
     )
 
@@ -775,6 +980,13 @@ class GRPOConfig(TrainingArguments):
         metadata={
             "help": "Whether to log a sample of (prompt, completion) pairs every `logging_steps` steps. If `rich` is "
             "installed, it prints the sample. If `wandb` logging is enabled, it logs it to `wandb`."
+        },
+    )
+    log_multimodal: bool = field(
+        default=True,
+        metadata={
+            "help": "Whether to log multimodal content (images, videos, etc.) together with completions. Disable this "
+            "to reduce log size when using high-resolution multimodal data."
         },
     )
     num_completions_to_print: int | None = field(
@@ -788,30 +1000,83 @@ class GRPOConfig(TrainingArguments):
             "prompts are logged."
         },
     )
-
-    # Deprecated arguments
-    max_prompt_length: int | None = field(
+    log_completions_hub_repo: str | None = field(
         default=None,
         metadata={
-            "help": "Deprecated, filter your dataset before training to ensure that prompts do not exceed your "
-            "desired length."
+            "help": "Hugging Face Hub repository to save the completions. Should be a complete repository name like "
+            "`'username/reponame'` or `'orgname/reponame'`, or just `'reponame'` in which case the repository will "
+            "be created in the currently-logged-in Hugging Face user's namespace. Note that this repository will be "
+            "public unless you set `hub_private_repo=True` or your organization's default is to create private "
+            "repositories."
+        },
+    )
+
+    # Parameters that control generation acceleration powered by transformers continuous batching
+    use_transformers_continuous_batching: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to use transformers' continuous batching engine for generating completions. Requires "
+            "transformers>=5.8.0."
+        },
+    )
+    transformers_continuous_batching_config: dict | str | None = field(
+        default=None,
+        metadata={"help": "Keyword arguments for `transformers.generation.ContinuousBatchingConfig`."},
+    )
+
+    # Deprecated parameters
+    use_transformers_paged: bool = field(
+        default=False,
+        metadata={"help": "Deprecated. Use `use_transformers_continuous_batching` instead."},
+    )
+    vllm_importance_sampling_cap: float | None = field(
+        default=None,
+        metadata={
+            "help": "Deprecated, use `vllm_importance_sampling_clip_max` instead. "
+            "Importance sampling cap C used by `vllm_importance_sampling_mode`. For '*_truncate' modes, "
+            "ratios are clipped from above at C. For '*_mask' modes, ratios larger than C are set to zero."
         },
     )
 
     def __post_init__(self):
-        self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
-        if self.top_k is None:
-            self.top_k = 0
-            warnings.warn(
-                "The value `None` for `top_k` is deprecated and will raise an error in TRL 0.28. "
-                "Use `top_k=0` to disable top-k filtering instead.",
-                FutureWarning,
-                stacklevel=2,
-            )
-
         super().__post_init__()
 
+        if self.use_transformers_paged:
+            warnings.warn(
+                "`use_transformers_paged` is deprecated and will be removed in v2.0.0. Use "
+                "`use_transformers_continuous_batching` instead.",
+                FutureWarning,
+                stacklevel=3,
+            )
+            self.use_transformers_continuous_batching = True
+
+        if self.parallelism_config is not None and (
+            self.parallelism_config.cp_enabled or self.parallelism_config.sp_enabled
+        ):
+            raise ValueError(
+                "GRPOTrainer does not support sequence-dim parallelism (`parallelism_config.cp_size > 1` or "
+                "`parallelism_config.sp_size > 1`) yet. GRPO builds model inputs after generation inside the trainer, "
+                "so Transformers' context-parallel / Ulysses sequence-parallel input sharding cannot be applied to the "
+                "raw generation batch. Set both `cp_size=1` and `sp_size=1`, or disable `parallelism_config`."
+            )
+
         self.scale_rewards = {True: "group", False: "none"}.get(self.scale_rewards, self.scale_rewards)
+
+        if self.log_completions_hub_repo is not None and not self.log_completions:
+            raise ValueError(
+                "log_completions_hub_repo is set, but log_completions is False. Enable log_completions to upload "
+                "completions to the Hub, or unset log_completions_hub_repo."
+            )
+
+        # `auto_find_batch_size` halves the train batch size on OOM, and the generation batch is derived from it. The
+        # reduced batch is no longer guaranteed to hold full prompt groups, which breaks grouping the rewards by
+        # prompt. There's no way to preserve the invariant while shrinking the batch, so reject it up front.
+        if self.auto_find_batch_size:
+            raise ValueError(
+                "auto_find_batch_size is not supported by GRPO, because the generation batch must contain full "
+                "prompt groups of num_generations completions, and reducing the batch size on out-of-memory breaks "
+                "this invariant. Set auto_find_batch_size=False and lower per_device_train_batch_size instead."
+            )
 
         num_processes = self.world_size
         # The current default effective batch size
@@ -860,23 +1125,32 @@ class GRPOConfig(TrainingArguments):
                 f"{self.num_generations}, which is less than the minimum required."
             )
 
-        if self.use_liger_loss is not None:
+        if self.vllm_importance_sampling_cap is not None:
             warnings.warn(
-                "The `use_liger_loss` argument is deprecated and will be removed in version 0.28.0. Please use "
-                "`use_liger_kernel` instead.",
+                "The `vllm_importance_sampling_cap` argument is deprecated and will be removed in v2.0.0.  "
+                "Use `vllm_importance_sampling_clip_max` instead.",
                 FutureWarning,
                 stacklevel=2,
             )
-            self.use_liger_kernel = self.use_liger_loss
+            self.vllm_importance_sampling_clip_max = self.vllm_importance_sampling_cap
 
-        if self.delta is not None and self.use_liger_kernel:
-            raise ValueError("Liger kernel does not support two-sided GRPO loss yet.")
+        if (
+            self.vllm_importance_sampling_clip_min is not None
+            and self.vllm_importance_sampling_clip_max is not None
+            and self.vllm_importance_sampling_clip_min >= self.vllm_importance_sampling_clip_max
+        ):
+            raise ValueError(
+                f"vllm_importance_sampling_clip_min ({self.vllm_importance_sampling_clip_min}) must be less than "
+                f"vllm_importance_sampling_clip_max ({self.vllm_importance_sampling_clip_max})."
+            )
 
-        if self.max_prompt_length is not None:
-            warnings.warn(
-                "The `max_prompt_length` argument is deprecated and will be removed in version 0.28.0. You should "
-                "instead filter your dataset before training to ensure that prompts do not exceed your desired "
-                "length.",
-                FutureWarning,
-                stacklevel=2,
+        if (
+            self.vllm_importance_sampling_correction
+            and self.vllm_importance_sampling_mode in ("token_truncate", "sequence_truncate")
+            and self.vllm_importance_sampling_clip_min is None
+            and self.vllm_importance_sampling_clip_max is None
+        ):
+            raise ValueError(
+                "At least one of `vllm_importance_sampling_clip_min` or `vllm_importance_sampling_clip_max` "
+                "must be set when `vllm_importance_sampling_mode` is a `*_truncate` mode."
             )

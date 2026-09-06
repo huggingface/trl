@@ -1,32 +1,27 @@
 # Training customization
 
-TRL is designed with modularity in mind so that users are able to efficiently customize the training loop for their needs. Below are examples on how you can apply and test different techniques. 
+TRL is designed with modularity in mind so that users are able to efficiently customize the training loop for their needs. Below are examples on how you can apply and test different techniques.
 
 > [!NOTE]
 > Although these examples use the [`DPOTrainer`], these customization methods apply to most (if not all) trainers in TRL.
 
 ## Use different optimizers and schedulers
 
-By default, the `DPOTrainer` creates a `torch.optim.AdamW` optimizer. You can create and define a different optimizer and pass it to `DPOTrainer` as follows:
+By default, the [`DPOTrainer`] creates a `torch.optim.AdamW` optimizer. You can create and define a different optimizer and pass it to [`DPOTrainer`] as follows:
 
 ```python
 from datasets import load_dataset
-from transformers import AutoModelForCausalLM, AutoTokenizer
 from torch import optim
-from trl import DPOConfig, DPOTrainer
+from transformers import AutoModelForCausalLM
+from trl import DPOTrainer
 
-model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
-tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
 dataset = load_dataset("trl-lib/ultrafeedback_binarized", split="train")
-training_args = DPOConfig(output_dir="Qwen2.5-0.5B-DPO")
-
-optimizer = optim.SGD(model.parameters(), lr=training_args.learning_rate)
+model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
+optimizer = optim.SGD(model.parameters(), lr=1e-6)
 
 trainer = DPOTrainer(
     model=model,
-    args=training_args,
     train_dataset=dataset,
-    tokenizer=tokenizer,
     optimizers=(optimizer, None),
 )
 trainer.train()
@@ -39,22 +34,10 @@ You can also add learning rate schedulers by passing both optimizer and schedule
 ```python
 from torch import optim
 
-optimizer = optim.AdamW(model.parameters(), lr=training_args.learning_rate)
+optimizer = optim.AdamW(model.parameters(), lr=1e-6)
 lr_scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=30, gamma=0.1)
 
 trainer = DPOTrainer(..., optimizers=(optimizer, lr_scheduler))
-```
-
-## Memory efficient fine-tuning by sharing layers
-
-Another tool you can use for more memory efficient fine-tuning is to share layers between the reference model and the model you want to train.
-
-```python
-from trl import create_reference_model
-
-ref_model = create_reference_model(model, num_shared_layers=6)
-
-trainer = DPOTrainer(..., ref_model=ref_model)
 ```
 
 ## Pass 8-bit reference models
@@ -129,14 +112,66 @@ training_args = DPOConfig(
 )
 ```
 
-## Use a custom data collator
+## Change the training objective
 
-You can provide a custom data collator to handle special data preprocessing or padding strategies.
+Subclassing a trainer is the simplest way to customize training. The loss is defined in the `compute_loss` method, so to train with a different objective, subclass the trainer and override it. Data preparation, generation, logging, and checkpointing are inherited, so the subclass holds only what actually changes.
 
 ```python
-from trl.trainer.dpo_trainer import DataCollatorForPreference
+import torch
 
-data_collator = DataCollatorForPreference(pad_token_id=tokenizer.pad_token_id)
+from trl import DPOTrainer
+from trl.trainer.utils import selective_log_softmax
 
-trainer = DPOTrainer(..., data_collator=data_collator)
+
+class MyDPOTrainer(DPOTrainer):
+    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+        # In this example: the hinge loss from https://huggingface.co/papers/2309.06657
+        input_ids, attention_mask = inputs["input_ids"], inputs["attention_mask"]
+        shift_labels, shift_completion_mask = input_ids[:, 1:], inputs["completion_mask"][:, 1:]
+        logits = model(input_ids=input_ids, attention_mask=attention_mask).logits
+        with torch.no_grad():
+            ref_logits = self.ref_model(input_ids=input_ids, attention_mask=attention_mask).logits
+
+        # Sum the log-probs over the completion tokens, for the policy and for the reference model
+        logps = (selective_log_softmax(logits[:, :-1], shift_labels) * shift_completion_mask).sum(dim=1)
+        ref_logps = (selective_log_softmax(ref_logits[:, :-1], shift_labels) * shift_completion_mask).sum(dim=1)
+
+        chosen_logps, rejected_logps = logps.chunk(2, dim=0)  # batch is [chosen, rejected]
+        ref_chosen_logps, ref_rejected_logps = ref_logps.chunk(2, dim=0)
+        delta = (chosen_logps - ref_chosen_logps) - (rejected_logps - ref_rejected_logps)
+        return torch.relu(1 - self.beta * delta).mean()
 ```
+
+### Add parameters to the config
+
+Subclass the config to declare the parameters your loss needs:
+
+```python
+from dataclasses import dataclass, field
+
+from trl import DPOConfig
+
+
+@dataclass
+class MyDPOConfig(DPOConfig):
+    my_coef: float = field(default=0.1, metadata={"help": "Coefficient of the custom term."})
+```
+
+### Change the batch format
+
+When the loss needs inputs that the default collator doesn't produce, pass your own collator, and override `_prepare_dataset` to leave the dataset untouched when it is already in the expected format:
+
+```python
+class MyDPOTrainer(DPOTrainer):
+    def _prepare_dataset(self, dataset, *args, **kwargs):
+        return dataset
+
+
+trainer = MyDPOTrainer(..., data_collator=my_collator)
+```
+
+### Complete example
+
+The block-diffusion SFT example [`examples/sft_diffusion_gemma/sft_diffusion_gemma.py`](https://github.com/huggingface/trl/blob/main/examples/sft_diffusion_gemma/sft_diffusion_gemma.py) combines the three: `DiffusionGemmaSFTConfig` extends [`SFTConfig`] with the canvas and corruption parameters, and `DiffusionGemmaSFTTrainer` extends [`SFTTrainer`] and replaces the autoregressive cross-entropy with a block-diffusion denoising objective. Neither requires a change to the library.
+
+[Antidoom](https://github.com/Liquid4All/antidoom), an open-source tool from [Liquid AI](https://huggingface.co/LiquidAI), extends [`DPOTrainer`] with Final Token Preference Optimization ([Antislop](https://huggingface.co/papers/2510.15061)), a preference loss over a single token position that reduces repetition loops in reasoning models.

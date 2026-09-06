@@ -1,28 +1,8 @@
 # Data Utilities
 
-## prepare_multimodal_messages
-
-[[autodoc]] prepare_multimodal_messages
-
-## prepare_multimodal_messages_vllm
-
-[[autodoc]] prepare_multimodal_messages_vllm
-
 ## is_conversational
 
 [[autodoc]] is_conversational
-
-## is_conversational_from_value
-
-[[autodoc]] is_conversational_from_value
-
-## apply_chat_template
-
-[[autodoc]] apply_chat_template
-
-## maybe_apply_chat_template
-
-[[autodoc]] maybe_apply_chat_template
 
 ## maybe_convert_to_chatml
 
@@ -32,22 +12,6 @@
 
 [[autodoc]] extract_prompt
 
-## maybe_extract_prompt
-
-[[autodoc]] maybe_extract_prompt
-
 ## unpair_preference_dataset
 
 [[autodoc]] unpair_preference_dataset
-
-## maybe_unpair_preference_dataset
-
-[[autodoc]] maybe_unpair_preference_dataset
-
-## pack_dataset
-
-[[autodoc]] pack_dataset
-
-## truncate_dataset
-
-[[autodoc]] truncate_dataset

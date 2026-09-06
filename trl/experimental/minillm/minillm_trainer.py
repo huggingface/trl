@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -17,7 +17,9 @@ import textwrap
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import transformers
 from datasets import Dataset, IterableDataset
+from packaging.version import Version
 from transformers import (
     AutoModelForCausalLM,
     PreTrainedModel,
@@ -29,7 +31,8 @@ from transformers.utils import is_peft_available
 
 from ...models import prepare_deepspeed
 from ...trainer.grpo_trainer import GRPOTrainer, RewardFunc, RolloutFunc
-from ...trainer.utils import disable_dropout_in_model, empty_cache, get_config_model_id
+from ...trainer.utils import disable_dropout_in_model, get_config_model_id
+from ..utils import empty_cache
 from .minillm_config import MiniLLMConfig
 
 
@@ -50,17 +53,17 @@ class MiniLLMTrainer(GRPOTrainer):
     Example:
 
     ```python
-    from datasets import load_dataset
-    from trl.experimental.minillm import MiniLLMTrainer
+    >>> from datasets import load_dataset
+    >>> from trl.experimental.minillm import MiniLLMTrainer
 
-    dataset = load_dataset("trl-lib/tldr", split="train")
+    >>> dataset = load_dataset("trl-lib/tldr", split="train")
 
-    trainer = MiniLLMTrainer(
-        model="Qwen/Qwen3-0.6B",
-        teacher_model="Qwen/Qwen3-1.7B",
-        train_dataset=dataset,
-    )
-    trainer.train()
+    >>> trainer = MiniLLMTrainer(
+    ...     model="Qwen/Qwen3-0.6B",
+    ...     teacher_model="Qwen/Qwen3-1.7B",
+    ...     train_dataset=dataset,
+    ... )
+    >>> trainer.train()
     ```
 
     Args:
@@ -184,6 +187,14 @@ class MiniLLMTrainer(GRPOTrainer):
             model_name = model_name.split("/")[-1]
             args = MiniLLMConfig(f"{model_name}-MiniLLM")
 
+        # Transformers explicitly set use_reentrant=True in the past to silence a PyTorch warning, but the default was
+        # never updated once PyTorch switched to recommending use_reentrant=False. Until that change lands upstream
+        # (see https://github.com/huggingface/transformers/pull/43203) and is released (most likely in 5.0.0), we
+        # default to the recommended non-reentrant behavior here, while preserving any user-provided value.
+        if args.gradient_checkpointing and Version(transformers.__version__) < Version("5.0.0"):
+            args.gradient_checkpointing_kwargs = args.gradient_checkpointing_kwargs or {}
+            args.gradient_checkpointing_kwargs.setdefault("use_reentrant", False)
+
         super().__init__(
             model,
             reward_funcs,
@@ -213,6 +224,7 @@ class MiniLLMTrainer(GRPOTrainer):
             )
 
         if isinstance(teacher_model, str):
+            teacher_model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
             teacher_model = AutoModelForCausalLM.from_pretrained(teacher_model, **teacher_model_init_kwargs)
 
         # Disable dropout in the model
@@ -243,22 +255,20 @@ class MiniLLMTrainer(GRPOTrainer):
         https://huggingface.co/papers/2306.08543 for the definition.
 
         Args:
-            student_logits:
-                Tensor of shape (batch_size, sequence_length, vocab_size)
-            teacher_logits:
-                Tensor of shape (batch_size, sequence_length, vocab_size)
-            labels:
-                Tensor of shape (batch_size, sequence_length) with -100 for padding tokens to ignore when computing
-                loss
-            beta:
-                Interpolation coefficient between 0 and 1 (default: 0.5)
-            temperature:
-                Softmax temperature (default: 1.0)
+            student_log_probs:
+                Per-token log-probabilities from the student, of shape (batch_size, sequence_length)
+            teacher_log_probs:
+                Per-token log-probabilities from the teacher, of shape (batch_size, sequence_length)
+            mask:
+                Optional boolean tensor of shape (batch_size, sequence_length) selecting the tokens to include in the
+                loss (e.g. excluding padding)
             reduction:
-                Specifies the reduction to apply to the output (default: 'batchmean')
+                Specifies the reduction to apply to the output: 'batchmean' (default), 'sum' or 'mean'; any other value
+                returns the unreduced per-token loss
 
         Returns:
-            loss: Scalar tensor with the generalized JSD loss
+            loss: Scalar tensor with the single-step KL regularization loss (unreduced if `reduction` is not one of the
+            above)
         """
         reg_loss = F.kl_div(
             teacher_log_probs, student_log_probs, reduction="none", log_target=True

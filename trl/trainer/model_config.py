@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -29,7 +29,7 @@ class ModelConfig:
             Model checkpoint for weights initialization.
         model_revision (`str`, *optional*, defaults to `"main"`):
             Specific model version to use. It can be a branch name, a tag name, or a commit id.
-        dtype (`Literal["auto", "bfloat16", "float16", "float32"]`, *optional*):
+        dtype (`Literal["auto", "bfloat16", "float16", "float32"]`, *optional*, defaults to `"float32"`):
             Override the default `torch.dtype` and load the model under this dtype. Possible values are
 
                 - `"bfloat16"`: `torch.bfloat16`
@@ -37,10 +37,6 @@ class ModelConfig:
                 - `"float32"`: `torch.float32`
                 - `"auto"`: Automatically derive the dtype from the model's weights.
 
-        trust_remote_code (`bool`, *optional*, defaults to `False`):
-            Whether to allow for custom models defined on the Hub in their own modeling files. This option should only
-            be set to `True` for repositories you trust and in which you have read the code, as it will execute code
-            present on the Hub on your local machine.
         attn_implementation (`str`, *optional*):
             Which attention implementation to use. More information in the [Kernels Hub Integrations
             Guide](kernels_hub).
@@ -78,6 +74,8 @@ class ModelConfig:
             Quantization type (`"fp4"` or `"nf4"`).
         use_bnb_nested_quant (`bool`, *optional*, defaults to `False`):
             Whether to use nested quantization.
+        bnb_4bit_quant_storage (`str`, *optional*):
+            Quantization storage dtype.
     """
 
     model_name_or_path: str | None = field(
@@ -89,18 +87,10 @@ class ModelConfig:
         metadata={"help": "Specific model version to use. It can be a branch name, a tag name, or a commit id."},
     )
     dtype: str | None = field(
-        default=None,
+        default="float32",
         metadata={
-            "help": "Override the default `torch.dtype` and load the model under this dtype.",
+            "help": "Override the default `torch.dtype` and load the model under this dtype. It defaults to `'float32'`.",
             "choices": ["auto", "bfloat16", "float16", "float32"],
-        },
-    )
-    trust_remote_code: bool = field(
-        default=False,
-        metadata={
-            "help": "Whether to allow for custom models defined on the Hub in their own modeling files. This option "
-            "should only be set to `True` for repositories you trust and in which you have read the code, as it will "
-            "execute code present on the Hub on your local machine."
         },
     )
     attn_implementation: str | None = field(

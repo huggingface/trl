@@ -1,0 +1,2 @@
+distributed_type: MULTI_GPU
+num_processes: 2

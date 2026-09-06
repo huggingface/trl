@@ -8,10 +8,9 @@ repos:
       - id: ruff-format
         types_or: [ python, pyi ]
 
-  # - repo: https://github.com/codespell-project/codespell
-  #   rev: v2.1.0
-  #   hooks:
-  #     - id: codespell
-  #       args:
-  #         - --ignore-words-list=nd,reacher,thist,ths,magent,ba
-  #         - --skip=docs/css/termynal.css,docs/js/termynal.js
+  - repo: https://github.com/huggingface/doc-builder
+    rev: 1b16dac5e33043af565fdf4c1b5b0fe81d0891c8  # main
+    hooks:
+      - id: doc-builder-style
+        args: [--max_len, "119"]
+        files: ^(trl|tests|docs/source)/

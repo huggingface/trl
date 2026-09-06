@@ -1,0 +1,11 @@
+{#- Training variant of the Llava-Next chat template (see llava_next.jinja for the original).
+    Modifications vs the original:
+    - Added {% generation %} / {% endgeneration %} around the assistant message output to support
+      assistant-only loss masking in SFT training.
+-#}
+{% for message in messages %}{% if message['role'] == 'system' %}{{ '<<SYS>>
+' + message['content'][0]['text'] + '
+<</SYS>>
+
+' }}{% elif message['role'] == 'user' %}{{ '[INST] ' }}{# Render all images first #}{% for content in message['content'] | selectattr('type', 'equalto', 'image') %}{{ '<image>
+' }}{% endfor %}{# Render all text next #}{% for content in message['content'] | selectattr('type', 'equalto', 'text') %}{{ content['text'] }}{% endfor %}{{' [/INST]' }}{% elif message['role'] == 'assistant' %}{% generation %}{{ ' ' + message['content'][0]['text'] + '</s> '}}{% endgeneration %}{% else %}{{ raise_exception('Only user and assistant roles are supported!') }}{% endif %}{% endfor %}

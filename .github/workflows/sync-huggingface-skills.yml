@@ -1,0 +1,94 @@
+name: Sync TRL skill with huggingface/skills
+
+on:
+  push:
+    tags:
+      - 'v*'
+      - '!v*rc*'
+  workflow_dispatch:
+
+jobs:
+  sync-skills:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout trl repo
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Determine PR title
+        id: pr_title
+        run: |
+          if [[ "${{ github.event_name }}" == "push" && "${{ github.ref_type }}" == "tag" ]]; then
+            echo "title=Sync TRL Skill (${{ github.ref_name }})" >> $GITHUB_OUTPUT
+          else
+            echo "title=Sync TRL Skill (manual trigger)" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create GitHub App token
+        id: app_token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+        with:
+          client-id: ${{ secrets.APP_ID_HUB_SKILLS_REPO }}
+          private-key: ${{ secrets.APP_SECRET_PREM_HUB_SKILLS_REPO }}
+          owner: huggingface
+          repositories: huggingface/skills
+
+      - name: Checkout huggingface/skills repo
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          repository: huggingface/skills
+          token: ${{ steps.app_token.outputs.token }}
+          path: skills-repo
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
+
+      - name: Copy generated files
+        run: |
+          mkdir -p skills-repo/skills/trl-training
+          cp skills/trl-training/SKILL.md skills-repo/skills/trl-training/
+
+      - name: Check for TRL skill changes
+        id: check_changes
+        working-directory: skills-repo
+        # git status --porcelain prints nothing if there is no change
+        run: |
+          if [ -z "$(git status --porcelain -- skills/trl-training/)" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "No trl skill changes; skipping PR"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Regenerate skills repo artifacts
+        if: steps.check_changes.outputs.changed == 'true'
+        working-directory: skills-repo
+        run: |
+          ./scripts/publish.sh
+
+      - name: Create Pull Request
+        if: steps.check_changes.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1  # v8.1.1
+        with:
+          token: ${{ steps.app_token.outputs.token }}
+          path: skills-repo
+          branch: sync/hf-cli-${{ github.run_id }}
+          delete-branch: true
+          title: ${{ steps.pr_title.outputs.title }}
+          body: |
+            Auto-generated from [trl@${{ github.sha }}](https://github.com/huggingface/trl/commit/${{ github.sha }})
+
+            Triggered by changes to `skills/trl-training`
+
+            ---
+            This PR was created automatically by the [sync-huggingface-skills](https://github.com/huggingface/trl/blob/main/.github/workflows/sync-huggingface-skills.yml) workflow.
+          commit-message: "Sync TRL skill from trl@${{ github.sha }}"
+          labels: |
+            automated
+            cli-sync

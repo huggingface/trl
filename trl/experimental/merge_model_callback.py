@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -308,11 +308,11 @@ class MergeModelCallback(TrainerCallback):
     Example:
 
     ```python
-    from trl.experimental.merge_model_callback import MergeConfig, MergeModelCallback
+    >>> from trl.experimental.merge_model_callback import MergeConfig, MergeModelCallback
 
-    config = MergeConfig()
-    merge_callback = MergeModelCallback(config)
-    trainer = DPOTrainer(..., callbacks=[merge_callback])
+    >>> config = MergeConfig()
+    >>> merge_callback = MergeModelCallback(config)
+    >>> trainer = DPOTrainer(..., callbacks=[merge_callback])
     ```
     """
 

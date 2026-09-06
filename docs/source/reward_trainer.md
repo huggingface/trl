@@ -132,7 +132,7 @@ $$
 
 ## Logged metrics
 
-While training and evaluating we record the following reward metrics:
+While training and evaluating, we record the following metrics:
 
 * `global_step`: The total number of optimizer steps taken so far.
 * `epoch`: The current epoch number, based on dataset iteration.
@@ -232,7 +232,3 @@ For details on the expected dataset structure, see the [Dataset Format — Tool 
 ## RewardConfig
 
 [[autodoc]] RewardConfig
-
-## DataCollatoForPreference
-
-[[autodoc]] trainer.reward_trainer.DataCollatorForPreference

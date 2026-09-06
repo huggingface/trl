@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import logging
-import warnings
 
 import pandas as pd
 import torch
@@ -34,7 +33,7 @@ from transformers.trainer_utils import has_length
 from transformers.utils import is_rich_available
 
 from ..data_utils import maybe_apply_chat_template
-from ..import_utils import is_weave_available, suppress_experimental_warning
+from ..import_utils import is_weave_available
 from ..models.utils import unwrap_model_for_generation
 from .utils import log_table_to_comet_experiment
 
@@ -47,16 +46,16 @@ if is_rich_available():
     from rich.progress import Progress
     from rich.table import Table
 
+
 if is_wandb_available():
     import wandb
+
 
 if is_weave_available():
     import weave
     from weave import EvaluationLogger
     from weave.trace.context import weave_client_context
 
-with suppress_experimental_warning():
-    from ..experimental.winrate_callback import WinRateCallback as _WinRateCallback
 
 # Logger for module-level logging
 logger = logging.getLogger(__name__)
@@ -79,7 +78,7 @@ def _generate_completions(
         tokenizer (PreTrainedTokenizerBase): The tokenizer to be used for encoding and decoding.
         accelerator (Accelerator): The accelerator to be used for model execution.
         generation_config (GenerationConfig): Configuration for text generation.
-        batch_size (int, optional): The number of prompts to process in each batch. Default is 1.
+        batch_size (int, *optional*): The number of prompts to process in each batch. Default is 1.
 
     Returns:
         list[str]: A list of generated text completions corresponding to the input prompts.
@@ -254,28 +253,15 @@ class RichProgressCallback(TrainerCallback):
         self.current_step = None
 
 
-class WinRateCallback(_WinRateCallback):
-    def __init__(self, *args, **kwargs):
-        warnings.warn(
-            "The `WinRateCallback` is now located in `trl.experimental`. Please update your imports to "
-            "`from trl.experimental.winrate_callback import WinRateCallback`. The current import path will be removed "
-            "and no longer supported in TRL 0.29. For more information, see "
-            "https://github.com/huggingface/trl/issues/4223.",
-            FutureWarning,
-            stacklevel=2,
-        )
-        super().__init__(*args, **kwargs)
-
-
 class LogCompletionsCallback(TrainerCallback):
     r"""
     A [`~transformers.TrainerCallback`] that logs completions to Weights & Biases and/or Comet.
 
     Usage:
     ```python
-    trainer = DPOTrainer(...)
-    completions_callback = LogCompletionsCallback(trainer=trainer)
-    trainer.add_callback(completions_callback)
+    >>> trainer = DPOTrainer(...)
+    >>> completions_callback = LogCompletionsCallback(trainer=trainer)
+    >>> trainer.add_callback(completions_callback)
     ```
 
     Args:
@@ -627,7 +613,9 @@ class BEMACallback(TrainerCallback):
         ema_power (`float`, *optional*, defaults to `0.5`):
             Power for the EMA decay factor. Denoted  \\( \kappa \\) in the paper. To disable EMA, set this to `0.0`.
         bias_power (`float`, *optional*, defaults to `0.2`):
-            Power for the BEMA scaling factor. Denoted  \\( \eta \\) in the paper. To disable BEMA, set this to `0.0`.
+            Power for the BEMA scaling factor. Denoted  \\( \eta \\) in the paper. A large value (e.g.
+            `8.0`) makes  \\( \alpha_t \\) decay to `0`, approximating disabled bias-correction; `0.0`
+            instead pins  \\( \alpha_t \\) at `1` for every step (maximum, undecayed correction).
         lag (`int`, *optional*, defaults to `10`):
             Initial offset in the weight decay schedule that controls early-stage smoothness by acting as a virtual
             starting age for the updates. Denoted as  \\( \rho \\) in the paper.
@@ -644,9 +632,9 @@ class BEMACallback(TrainerCallback):
     Example:
 
     ```python
-    from trl import BEMACallback
+    >>> from trl import BEMACallback
 
-    trainer = Trainer(..., callbacks=[BEMACallback()])
+    >>> trainer = Trainer(..., callbacks=[BEMACallback()])
     ```
     """
 

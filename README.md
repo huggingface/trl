@@ -1,7 +1,10 @@
-# TRL - Transformer Reinforcement Learning
+# TRL - Transformers Reinforcement Learning
 
 <div style="text-align: center">
-    <img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/trl_banner_dark.png" alt="TRL Banner">
+    <picture>
+        <source media="(prefers-color-scheme: light)" srcset="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/trl_banner_light.png">
+        <img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/trl_banner_dark.png" alt="TRL Banner">
+    </picture>
 </div>
 
 <hr> <br>
@@ -19,9 +22,7 @@
 
 ## 🎉 What's New
 
-**OpenEnv Integration:** TRL now supports **[OpenEnv](https://huggingface.co/blog/openenv)**, the open-source framework from Meta for defining, deploying, and interacting with environments in reinforcement learning and agentic workflows.
-
-Explore how to seamlessly integrate TRL with OpenEnv in our [dedicated documentation](https://huggingface.co/docs/trl/openenv).
+**📜 Training beyond 1M tokens:** A new [long context guide](https://huggingface.co/docs/trl/long_context_training) walks through the four things that break as sequences grow — the loss, the positions, the activations and the memory of a single GPU — and ends on an example that trains Qwen3-8B on million-token sequences on one 8-GPU node.
 
 ## Overview
 
@@ -29,7 +30,7 @@ TRL is a cutting-edge library designed for post-training foundation models using
 
 ## Highlights
 
-- **Trainers**: Various fine-tuning methods are easily accessible via trainers like [`SFTTrainer`](https://huggingface.co/docs/trl/sft_trainer), [`GRPOTrainer`](https://huggingface.co/docs/trl/grpo_trainer), [`DPOTrainer`](https://huggingface.co/docs/trl/dpo_trainer), [`RewardTrainer`](https://huggingface.co/docs/trl/reward_trainer) and more.
+- **Trainers**: Various fine-tuning methods are easily accessible via trainers like [`SFTTrainer`](https://huggingface.co/docs/trl/sft_trainer), [`GRPOTrainer`](https://huggingface.co/docs/trl/grpo_trainer), [`DPOTrainer`](https://huggingface.co/docs/trl/dpo_trainer), [`KTOTrainer`](https://huggingface.co/docs/trl/kto_trainer) and more.
 
 - **Efficient and scalable**:
   - Leverages [🤗 Accelerate](https://github.com/huggingface/accelerate) to scale from single GPU to multi-node clusters using methods like [DDP](https://pytorch.org/tutorials/intermediate/ddp_tutorial.html) and [DeepSpeed](https://github.com/deepspeedai/DeepSpeed).
@@ -97,7 +98,7 @@ from trl.rewards import accuracy_reward
 dataset = load_dataset("trl-lib/DeepMath-103K", split="train")
 
 trainer = GRPOTrainer(
-    model="Qwen/Qwen2-0.5B-Instruct",
+    model="Qwen/Qwen2.5-0.5B-Instruct",
     reward_funcs=accuracy_reward,
     train_dataset=dataset,
 )
@@ -113,18 +114,30 @@ trainer.train()
 
 ```python
 from datasets import load_dataset
-from transformers import AutoModelForCausalLM, AutoTokenizer
-from trl import DPOConfig, DPOTrainer
+from trl import DPOTrainer
 
-model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
-tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
 dataset = load_dataset("trl-lib/ultrafeedback_binarized", split="train")
-training_args = DPOConfig(output_dir="Qwen2.5-0.5B-DPO")
+
 trainer = DPOTrainer(
-    model=model,
-    args=training_args,
+    model="Qwen/Qwen3-0.6B",
     train_dataset=dataset,
-    processing_class=tokenizer
+)
+trainer.train()
+```
+
+### `KTOTrainer`
+
+[`KTOTrainer`](https://huggingface.co/docs/trl/kto_trainer) implements the [Kahneman-Tversky Optimization (KTO) algorithm](https://huggingface.co/papers/2402.01306), which aligns models from simple binary (desirable / undesirable) feedback rather than paired preferences. Here is a basic example of how to use the `KTOTrainer`:
+
+```python
+from datasets import load_dataset
+from trl import KTOTrainer
+
+dataset = load_dataset("trl-lib/kto-mix-14k", split="train")
+
+trainer = KTOTrainer(
+    model="Qwen/Qwen3-0.6B",
+    train_dataset=dataset,
 )
 trainer.train()
 ```
@@ -166,6 +179,14 @@ trl dpo --model_name_or_path Qwen/Qwen2.5-0.5B-Instruct \
     --output_dir Qwen2.5-0.5B-DPO 
 ```
 
+**KTO:**
+
+```bash
+trl kto --model_name_or_path Qwen/Qwen2.5-0.5B-Instruct \
+    --dataset_name trl-lib/kto-mix-14k \
+    --output_dir Qwen2.5-0.5B-KTO
+```
+
 Read more about CLI in the [relevant documentation section](https://huggingface.co/docs/trl/clis) or use `--help` for more details.
 
 ## Development
@@ -193,13 +214,12 @@ Read more in the [Experimental docs](https://huggingface.co/docs/trl/experimenta
 ## Citation
 
 ```bibtex
-@misc{vonwerra2022trl,
-  author = {Leandro von Werra and Younes Belkada and Lewis Tunstall and Edward Beeching and Tristan Thrush and Nathan Lambert and Shengyi Huang and Kashif Rasul and Quentin Gallouédec},
-  title = {TRL: Transformer Reinforcement Learning},
-  year = {2020},
-  publisher = {GitHub},
-  journal = {GitHub repository},
-  howpublished = {\url{https://github.com/huggingface/trl}}
+@software{vonwerra2020trl,
+  title   = {{TRL: Transformers Reinforcement Learning}},
+  author  = {von Werra, Leandro and Belkada, Younes and Tunstall, Lewis and Beeching, Edward and Thrush, Tristan and Lambert, Nathan and Huang, Shengyi and Rasul, Kashif and Gallouédec, Quentin},
+  license = {Apache-2.0},
+  url     = {https://github.com/huggingface/trl},
+  year    = {2020}
 }
 ```
 

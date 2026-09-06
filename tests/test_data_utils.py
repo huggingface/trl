@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -17,7 +17,9 @@ import textwrap
 from time import strftime
 
 import pytest
+import transformers
 from datasets import Dataset, DatasetDict
+from packaging.version import Version
 from transformers import AutoProcessor, AutoTokenizer, is_vision_available
 
 from trl.data_utils import (
@@ -32,7 +34,6 @@ from trl.data_utils import (
     pack_dataset,
     prepare_multimodal_messages,
     prepare_multimodal_messages_vllm,
-    truncate_dataset,
     unpair_preference_dataset,
 )
 
@@ -201,6 +202,71 @@ class TestPrepareMultimodalMessages:
 
         assert messages == expected
 
+    def test_message_with_tool_calling_turns(self):
+        """Test that both the assistant tool call and the tool role turns messages are properly transformed."""
+        messages = [
+            {"role": "user", "content": "What's the weather like in New York?"},
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "type": "tool",
+                        "function": {"name": "get_current_weather", "arguments": {"location": "New York"}},
+                    }
+                ],
+            },
+            {"role": "tool", "name": "get_current_weather", "content": "22.0"},
+            {"role": "assistant", "content": "The current weather in New York is 22.0 degrees Celsius."},
+        ]
+
+        messages = prepare_multimodal_messages(messages)
+
+        expected = [
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "What's the weather like in New York?"}],
+            },
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "type": "tool",
+                        "function": {"name": "get_current_weather", "arguments": {"location": "New York"}},
+                    }
+                ],
+            },
+            {"role": "tool", "name": "get_current_weather", "content": [{"type": "text", "text": "22.0"}]},
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "The current weather in New York is 22.0 degrees Celsius."}],
+            },
+        ]
+
+        assert messages == expected
+
+    def test_prepared_image_blocks_without_new_images(self):
+        """Test that existing image payloads are preserved when no new images are provided."""
+        image = Image.new("RGB", (10, 10), color="blue")
+        messages = [
+            {
+                "role": "user",
+                "content": [{"type": "image", "image": image}, {"type": "text", "text": "What color is the sky?"}],
+            },
+            {"role": "assistant", "content": "It is blue."},
+        ]
+
+        messages = prepare_multimodal_messages(messages)
+
+        expected = [
+            {
+                "role": "user",
+                "content": [{"type": "image", "image": image}, {"type": "text", "text": "What color is the sky?"}],
+            },
+            {"role": "assistant", "content": [{"type": "text", "text": "It is blue."}]},
+        ]
+
+        assert messages == expected
+
 
 @require_vision
 class TestPrepareMultimodalMessagesVLLM:
@@ -295,6 +361,7 @@ class TestPrepareMultimodalMessagesVLLM:
 
 
 class TestIsConversational(TrlTestCase):
+    # fmt: off
     conversational_examples = [
         {  # Language modeling
             "messages": [
@@ -322,6 +389,30 @@ class TestIsConversational(TrlTestCase):
             "rejected": [
                 {"role": "user", "content": "What color is the sky?"},
                 {"role": "assistant", "content": "It is green."},
+            ],
+        },
+        {  # Preference with tool calls
+            "prompt": [{"role": "user", "content": "What color is the sky?"}],
+            "chosen": [
+                {"role": "assistant", "tool_calls": [{"type": "function", "function": {"name": "get_color", "arguments": {"what": "sky"}}}]},
+                {"role": "tool", "name": "get_color", "content": "blue"},
+                {"role": "assistant", "content": "It is blue."},
+            ],
+            "rejected": [
+                {"role": "assistant", "tool_calls": [{"type": "function", "function": {"name": "get_color", "arguments": {"what": "tree"}}}]},
+                {"role": "tool", "name": "get_color", "content": "green"},
+                {"role": "assistant", "content": "It is green."},
+            ],
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "description": "Gets the color.",
+                        "name": "get_color",
+                        "parameters": {"properties": {"what": {"description": "What to get the color of.", "type": "string"}}, "required": ["what"], "type": "object"},
+                        "return": {"description": "The color.", "type": "string"},
+                    },
+                },
             ],
         },
         {  # Unpaired preference
@@ -386,6 +477,7 @@ class TestIsConversational(TrlTestCase):
             "label": True,
         },
     ]
+    # fmt: on
 
     non_conversational_examples = [
         {"prompt": "The sky is", "completion": " blue."},
@@ -431,21 +523,94 @@ class TestIsConversationalFromValue(TrlTestCase):
 class TestApplyChatTemplate(TrlTestCase):
     tokenizers = [
         "trl-internal-testing/tiny-CohereForCausalLM",
-        "trl-internal-testing/tiny-DbrxForCausalLM",
+        "trl-internal-testing/tiny-Cohere2ForCausalLM",
         "trl-internal-testing/tiny-DeepseekV3ForCausalLM",
         "trl-internal-testing/tiny-DeepseekV3ForCausalLM-0528",
         "trl-internal-testing/tiny-FalconMambaForCausalLM",
         "trl-internal-testing/tiny-Gemma2ForCausalLM",
         "trl-internal-testing/tiny-GemmaForCausalLM",
         "trl-internal-testing/tiny-GptOssForCausalLM",
+        pytest.param(
+            "trl-internal-testing/tiny-Glm4MoeForCausalLM",
+            marks=pytest.mark.skipif(
+                Version(transformers.__version__) < Version("5.0.0"),
+                reason="GLM4 tokenizer requires transformers>=5.0.0",
+            ),
+        ),
+        "trl-internal-testing/tiny-Lfm2ForCausalLM",
+        pytest.param(
+            "trl-internal-testing/tiny-Lfm2ForCausalLM-2.5",
+            marks=pytest.mark.skipif(
+                Version(transformers.__version__) < Version("5.0.0"),
+                reason="LFM2.5 tokenizer requires transformers>=5.0.0",
+            ),
+        ),
         "trl-internal-testing/tiny-LlamaForCausalLM-3.1",
         "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
         "trl-internal-testing/tiny-LlamaForCausalLM-3",
         "trl-internal-testing/tiny-MistralForCausalLM-0.1",
         "trl-internal-testing/tiny-MistralForCausalLM-0.2",
-        "trl-internal-testing/tiny-Phi3ForCausalLM",
+        pytest.param(
+            "trl-internal-testing/tiny-NemotronHForCausalLM-nano",
+            marks=pytest.mark.skipif(
+                Version(transformers.__version__) < Version("5.3.0"),
+                reason="Nemotron 3 tokenizer requires transformers>=5.3.0",
+            ),
+        ),
+        pytest.param(
+            "trl-internal-testing/tiny-NemotronHForCausalLM-super",
+            marks=pytest.mark.skipif(
+                Version(transformers.__version__) < Version("5.3.0"),
+                reason="Nemotron 3 tokenizer requires transformers>=5.3.0",
+            ),
+        ),
+        pytest.param(
+            "trl-internal-testing/tiny-NemotronHForCausalLM-ultra",
+            marks=pytest.mark.skipif(
+                Version(transformers.__version__) < Version("5.3.0"),
+                reason="Nemotron 3 tokenizer requires transformers>=5.3.0",
+            ),
+        ),
+        pytest.param(
+            "trl-internal-testing/tiny-NemotronHForCausalLM-3.5-lightning",
+            marks=pytest.mark.skipif(
+                Version(transformers.__version__) < Version("5.3.0"),
+                reason="Nemotron 3.5 tokenizer requires transformers>=5.3.0",
+            ),
+        ),
+        pytest.param(
+            "trl-internal-testing/tiny-Olmo3ForCausalLM",
+            marks=pytest.mark.skipif(
+                Version(transformers.__version__) < Version("4.57.0"),
+                reason="Olmo 3 requires transformers>=4.57.0",
+            ),
+        ),
+        "trl-internal-testing/tiny-Phi3ForCausalLM-3",
+        "trl-internal-testing/tiny-Phi3ForCausalLM-3.5",
         "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
         "trl-internal-testing/tiny-Qwen3ForCausalLM",
+        "trl-internal-testing/tiny-Qwen3ForCausalLM-Instruct-2507",
+        pytest.param(
+            "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
+            marks=pytest.mark.skipif(
+                Version(transformers.__version__) < Version("5.0.0"),
+                reason="Qwen3.5 tokenizer requires transformers>=5.0.0",
+            ),
+        ),
+        pytest.param(
+            "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
+            marks=pytest.mark.skipif(
+                Version(transformers.__version__) < Version("5.0.0"),
+                reason="Qwen3.5 tokenizer requires transformers>=5.0.0",
+            ),
+        ),
+        pytest.param(
+            "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-3.8",
+            marks=pytest.mark.skipif(
+                Version(transformers.__version__) < Version("5.0.0"),
+                reason="Qwen3.5 tokenizer requires transformers>=5.0.0",
+            ),
+        ),
     ]
 
     conversational_examples = [
@@ -569,6 +734,33 @@ class TestApplyChatTemplate(TrlTestCase):
 
         assert result["prompt"] == expected
 
+    def test_apply_chat_template_preference_round_trips_with_generation_prompt_insertion(self):
+        # Regression test: when the generation prompt inserts extra tokens (e.g. an opening `<think>` tag, as in
+        # DeepSeek-R1-style templates), the prompt is reduced to the common prefix of the rendered prompt+chosen and
+        # prompt+rejected strings. The completions must be sliced against the *final* prompt; slicing `chosen` before
+        # the prompt shrinks again against `rejected` used to silently drop the leading `<think>` tag from `chosen`.
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM")
+        tokenizer.chat_template = (
+            "{% for message in messages %}"
+            "{{ message['role'] + ': ' + message['content'] + '\n' }}"
+            "{% endfor %}"
+            "{% if add_generation_prompt %}{{ 'assistant: <think>' }}{% endif %}"
+        )
+
+        example = {
+            "prompt": [{"role": "user", "content": "What is 2+2?"}],
+            # chosen keeps its reasoning trace, rejected doesn't: the common prefix of the two rendered strings ends
+            # before the `<think>` inserted by the generation prompt
+            "chosen": [{"role": "assistant", "content": "<think>2+2=4</think>It is 4."}],
+            "rejected": [{"role": "assistant", "content": "It is 4."}],
+        }
+        result = apply_chat_template(example, tokenizer)
+
+        expected_chosen = tokenizer.apply_chat_template(example["prompt"] + example["chosen"], tokenize=False)
+        expected_rejected = tokenizer.apply_chat_template(example["prompt"] + example["rejected"], tokenize=False)
+        assert result["prompt"] + result["chosen"] == expected_chosen
+        assert result["prompt"] + result["rejected"] == expected_rejected
+
     def test_apply_chat_template_with_tools(self):
         tokenizer = AutoProcessor.from_pretrained("trl-internal-testing/tiny-LlamaForCausalLM-3.2")
 
@@ -612,7 +804,7 @@ class TestApplyChatTemplateHarmony(TrlTestCase):
         }
         output = apply_chat_template(
             messages,
-            tokenizer=AutoTokenizer.from_pretrained("trl-internal-testing/tiny-GptOssForCausalLM"),
+            processing_class=AutoTokenizer.from_pretrained("trl-internal-testing/tiny-GptOssForCausalLM"),
             reasoning_effort="low",
             model_identity="You are HuggingGPT.",
         )
@@ -642,7 +834,7 @@ class TestApplyChatTemplateHarmony(TrlTestCase):
         }
         output = apply_chat_template(
             messages,
-            tokenizer=AutoTokenizer.from_pretrained("trl-internal-testing/tiny-GptOssForCausalLM"),
+            processing_class=AutoTokenizer.from_pretrained("trl-internal-testing/tiny-GptOssForCausalLM"),
             reasoning_effort="low",
             model_identity="You are HuggingGPT.",
         )
@@ -675,7 +867,7 @@ class TestApplyChatTemplateHarmony(TrlTestCase):
         }
         output = apply_chat_template(
             messages,
-            tokenizer=AutoTokenizer.from_pretrained("trl-internal-testing/tiny-GptOssForCausalLM"),
+            processing_class=AutoTokenizer.from_pretrained("trl-internal-testing/tiny-GptOssForCausalLM"),
             reasoning_effort="low",
             model_identity="You are HuggingGPT.",
         )
@@ -713,7 +905,7 @@ class TestApplyChatTemplateHarmony(TrlTestCase):
         }
         output = apply_chat_template(
             messages,
-            tokenizer=AutoTokenizer.from_pretrained("trl-internal-testing/tiny-GptOssForCausalLM"),
+            processing_class=AutoTokenizer.from_pretrained("trl-internal-testing/tiny-GptOssForCausalLM"),
             reasoning_effort="low",
             model_identity="You are HuggingGPT.",
         )
@@ -753,7 +945,7 @@ class TestApplyChatTemplateHarmony(TrlTestCase):
         }
         output = apply_chat_template(
             messages,
-            tokenizer=AutoTokenizer.from_pretrained("trl-internal-testing/tiny-GptOssForCausalLM"),
+            processing_class=AutoTokenizer.from_pretrained("trl-internal-testing/tiny-GptOssForCausalLM"),
             reasoning_effort="low",
             model_identity="You are HuggingGPT.",
         )
@@ -802,7 +994,7 @@ class TestApplyChatTemplateHarmony(TrlTestCase):
         }
         output = apply_chat_template(
             messages,
-            tokenizer=AutoTokenizer.from_pretrained("trl-internal-testing/tiny-GptOssForCausalLM"),
+            processing_class=AutoTokenizer.from_pretrained("trl-internal-testing/tiny-GptOssForCausalLM"),
             reasoning_effort="low",
             model_identity="You are HuggingGPT.",
         )
@@ -850,6 +1042,45 @@ class TestUnpairPreferenceDataset(TrlTestCase):
         assert unpaired_dataset.to_dict() == self.unpaired_dataset.to_dict(), (
             "The paired dataset should be converted to unpaired."
         )
+
+    def test_unpair_preference_dataset_extra_columns(self):
+        # Test that extra columns are preserved and duplicated for chosen and rejected rows
+        paired_dataset = Dataset.from_dict(
+            {
+                "prompt": ["The sky is", "The sun is"],
+                "chosen": [" blue.", " in the sky."],
+                "rejected": [" green.", " in the sea."],
+                "extra": [1, 2],
+            }
+        )
+        unpaired_dataset = unpair_preference_dataset(paired_dataset)
+        expected = {**self.unpaired_dataset.to_dict(), "extra": [1, 2, 1, 2]}
+        assert unpaired_dataset.to_dict() == expected
+
+    def test_unpair_preference_dataset_iterable(self):
+        # Test that an IterableDataset with extra columns is correctly unpaired
+        paired_dataset = self.paired_dataset.to_iterable_dataset()
+        unpaired_dataset = unpair_preference_dataset(paired_dataset)
+        assert list(unpaired_dataset) == [
+            dict(zip(self.unpaired_dataset.column_names, vals, strict=False))
+            for vals in zip(*self.unpaired_dataset.to_dict().values(), strict=False)
+        ]
+
+    def test_unpair_preference_dataset_iterable_extra_columns(self):
+        # Test that an IterableDataset with extra columns preserves and duplicates them
+        paired_iterable = Dataset.from_dict(
+            {
+                "prompt": ["The sky is", "The sun is"],
+                "chosen": [" blue.", " in the sky."],
+                "rejected": [" green.", " in the sea."],
+                "extra": [1, 2],
+            }
+        ).to_iterable_dataset()
+        unpaired_dataset = unpair_preference_dataset(paired_iterable)
+        expected = {**self.unpaired_dataset.to_dict(), "extra": [1, 2, 1, 2]}
+        assert list(unpaired_dataset) == [
+            dict(zip(expected.keys(), vals, strict=False)) for vals in zip(*expected.values(), strict=False)
+        ]
 
     def test_unpair_preference_dataset_dict(self):
         # Test that a paired dataset dict is correctly converted to unpaired
@@ -972,6 +1203,8 @@ class TestPackDatasetWrapped(TrlTestCase):
             "attention_mask": [[0, 1, 1], [0, 0, 1, 1], [1]],
         }
         dataset = Dataset.from_dict(examples)
+        dataset = dataset.with_format("numpy", dtype="float32")
+        format = dataset.format
         seq_length = 3
         expected_output = {
             "input_ids": [[1, 2, 3], [4, 5, 6], [7, 8]],
@@ -979,6 +1212,7 @@ class TestPackDatasetWrapped(TrlTestCase):
         }
         dataset = pack_dataset(dataset, seq_length, strategy="wrapped")
         assert dataset.to_dict() == expected_output
+        assert format == dataset.format
 
     def test_with_iterable_dataset(self):
         examples = {
@@ -986,6 +1220,8 @@ class TestPackDatasetWrapped(TrlTestCase):
             "attention_mask": [[0, 1, 1], [0, 0, 1, 1], [1]],
         }
         dataset = Dataset.from_dict(examples).to_iterable_dataset()
+        dataset = dataset.with_format("numpy")
+        formatting = dataset._formatting
         seq_length = 3
         expected_output = {
             "input_ids": [[1, 2, 3], [4, 5, 6], [7, 8]],
@@ -993,28 +1229,37 @@ class TestPackDatasetWrapped(TrlTestCase):
         }
         dataset = pack_dataset(dataset, seq_length, strategy="wrapped")
         num_examples = len(examples[next(iter(examples))])
-        assert next(iter(dataset.batch(batch_size=num_examples))) == expected_output
+        assert next(iter(dataset.with_format(None).batch(batch_size=num_examples))) == expected_output
+        assert formatting == dataset._formatting
 
 
 class TestPackDatasetBfd(TrlTestCase):
-    def test_simple(self):
+    def test_with_dataset(self):
         examples = {
             "input_ids": [[1, 2, 3], [4, 5, 6, 7], [8]],
         }
         dataset = Dataset.from_dict(examples)
+        dataset = dataset.with_format("numpy", dtype="float32")
+        format = dataset.format
         seq_length = 4
         expected_output = {
             "input_ids": [[4, 5, 6, 7], [1, 2, 3, 8]],
             "seq_lengths": [[4], [3, 1]],
         }
         dataset = pack_dataset(dataset, seq_length, strategy="bfd")
+        expected_format = dataset.format
         assert dataset.to_dict() == expected_output
+        assert "seq_lengths" in expected_format["columns"]
+        expected_format["columns"].remove("seq_lengths")
+        assert format == dataset.format
 
     def test_with_iterable_dataset(self):
         examples = {
             "input_ids": [[1, 2, 3], [4, 5, 6, 7], [8]],
         }
         dataset = Dataset.from_dict(examples).to_iterable_dataset()
+        dataset = dataset.with_format("numpy")
+        formatting = dataset._formatting
         seq_length = 4
         expected_output = {
             "input_ids": [[4, 5, 6, 7], [1, 2, 3, 8]],
@@ -1022,7 +1267,8 @@ class TestPackDatasetBfd(TrlTestCase):
         }
         dataset = pack_dataset(dataset, seq_length, strategy="bfd")
         num_examples = len(examples[next(iter(examples))])
-        assert next(iter(dataset.batch(batch_size=num_examples))) == expected_output
+        assert next(iter(dataset.with_format(None).batch(batch_size=num_examples))) == expected_output
+        assert formatting == dataset._formatting
 
     def test_with_overlong_0(self):
         examples = {
@@ -1034,7 +1280,7 @@ class TestPackDatasetBfd(TrlTestCase):
             "input_ids": [[1, 2, 3, 4], [8, 9, 10, 11], [6, 7, 5, 12]],
             "seq_lengths": [[4], [4], [2, 1, 1]],
         }
-        dataset = pack_dataset(dataset, seq_length, strategy="bfd")
+        dataset = pack_dataset(dataset, seq_length, strategy="bfd_split")
         assert dataset.to_dict() == expected_output
 
     def test_with_overlong_two_coluns(self):
@@ -1049,7 +1295,7 @@ class TestPackDatasetBfd(TrlTestCase):
             "col2": [[-1, 2, -3, 4], [-13, 14, -15, 16], [-7, 8, -9], [10, -11, 12], [-5, 6]],
             "seq_lengths": [[4], [4], [3], [3], [2]],
         }
-        dataset = pack_dataset(dataset, seq_length, strategy="bfd")
+        dataset = pack_dataset(dataset, seq_length, strategy="bfd_split")
         assert dataset.to_dict() == expected_output
 
     def test_with_non_power_of_2(self):
@@ -1062,54 +1308,35 @@ class TestPackDatasetBfd(TrlTestCase):
             "input_ids": [[1, 2, 3, 4, 5], [7, 8, 9, 10, 6], [11, 12, 13]],
             "seq_lengths": [[5], [4, 1], [3]],
         }
+        dataset = pack_dataset(dataset, seq_length, strategy="bfd_split")
+        assert dataset.to_dict() == expected_output
+
+    def test_default_no_split(self):
+        """Test default 'bfd' strategy for SFT datasets (truncates overflow)."""
+        examples = {
+            "input_ids": [[1, 2, 3, 4, 5], [6, 7], [8, 9, 10, 11], [12]],
+        }
+        dataset = Dataset.from_dict(examples)
+        seq_length = 4
+        # With default 'bfd' strategy, overflow tokens are discarded
+        expected_output = {
+            "input_ids": [[1, 2, 3, 4], [8, 9, 10, 11], [6, 7, 12]],
+            "seq_lengths": [[4], [4], [2, 1]],
+        }
         dataset = pack_dataset(dataset, seq_length, strategy="bfd")
         assert dataset.to_dict() == expected_output
 
-
-class TestTruncateExamples(TrlTestCase):
-    def test_with_dataset(self):
+    def test_with_empty_sequences(self):
         examples = {
-            "input_ids": [[1, 2, 3], [4, 5, 6, 7], [8]],
-            "attention_mask": [[0, 1, 1], [0, 0, 1, 1], [1]],
+            "input_ids": [[1, 2], [], [3, 4, 5], [], [6]],
         }
         dataset = Dataset.from_dict(examples)
-        max_length = 2
+        seq_length = 4
         expected_output = {
-            "input_ids": [[1, 2], [4, 5], [8]],
-            "attention_mask": [[0, 1], [0, 0], [1]],
+            "input_ids": [[3, 4, 5, 6], [1, 2]],
+            "seq_lengths": [[3, 1], [2]],
         }
-        dataset = truncate_dataset(dataset, max_length)
-        assert dataset.to_dict() == expected_output
-
-    def test_with_iterable_dataset(self):
-        examples = {
-            "input_ids": [[1, 2, 3], [4, 5, 6, 7], [8]],
-            "attention_mask": [[0, 1, 1], [0, 0, 1, 1], [1]],
-        }
-        dataset = Dataset.from_dict(examples).to_iterable_dataset()
-        max_length = 2
-        expected_output = {
-            "input_ids": [[1, 2], [4, 5], [8]],
-            "attention_mask": [[0, 1], [0, 0], [1]],
-        }
-        dataset = truncate_dataset(dataset, max_length)
-        num_examples = len(examples[next(iter(examples))])
-        assert next(iter(dataset.batch(batch_size=num_examples))) == expected_output
-
-    def test_with_extra_column(self):
-        examples = {
-            "input_ids": [[1, 2, 3], [4, 5, 6, 7], [8]],
-            "attention_mask": [[0, 1, 1], [0, 0, 1, 1], [1]],
-            "my_column": ["a", "b", "c"],
-        }
-        dataset = Dataset.from_dict(examples)
-        max_length = 2
-        expected_output = {
-            "input_ids": [[1, 2], [4, 5], [8]],
-            "attention_mask": [[0, 1], [0, 0], [1]],
-            "my_column": ["a", "b", "c"],
-        }
-        dataset = truncate_dataset(dataset, max_length)
+        dataset = pack_dataset(dataset, seq_length, strategy="bfd_split")
         assert dataset.to_dict() == expected_output
 
 
