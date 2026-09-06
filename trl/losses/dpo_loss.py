@@ -278,7 +278,7 @@ class _CachedReferenceDPOFunction(FusedLinearDPOFunction):
             ignore_index,
             beta,
             compute_nll_loss,
-            compiled,
+            _compiled,
             average_log_prob,
             chunk_size,
             loss_type,
@@ -286,6 +286,8 @@ class _CachedReferenceDPOFunction(FusedLinearDPOFunction):
             discopop_tau,
             alpha,
         ) = settings
+        # torch.compile cannot trace a Triton custom-autograd backward nested under torch.func.grad.
+        # Keep this rare bounded-memory path eager; the native small-shape fast path remains compiled.
         return FusedLinearPreferenceBase.forward(
             cls=cls,
             ctx=ctx,
@@ -297,7 +299,7 @@ class _CachedReferenceDPOFunction(FusedLinearDPOFunction):
             beta=beta,
             alpha=alpha,
             compute_nll_loss=compute_nll_loss,
-            compiled=compiled,
+            compiled=False,
             use_ref_model=False,
             average_log_prob=average_log_prob,
             chunk_size=chunk_size,
@@ -406,9 +408,14 @@ class FusedLinearDPOLoss(torch.nn.Module):
                 "provide either precomputed reference log-probs or reference model inputs and weights, not both"
             )
 
+        use_native = (has_precomputed_ref or self.loss_type == "sigmoid") and _should_use_native_dpo(
+            _input, lin_weight, use_ref_model=self.use_ref_model and not has_precomputed_ref
+        )
+
         # ZeRO-3 re-shards direct-access LM-head parameters as soon as the caller's gather context exits.
-        # Compute and stash gradients inside that context, as the established chunked custom-autograd path does.
-        if has_precomputed_ref and _is_zero3_parameter(lin_weight):
+        # Compute and stash gradients inside that context. The same bounded path protects large cached-reference
+        # workloads on every backend once materialized policy logits cross the measured dispatch threshold.
+        if has_precomputed_ref and (_is_zero3_parameter(lin_weight) or not use_native):
             settings = (
                 self.ignore_index,
                 self.beta,
@@ -431,12 +438,8 @@ class FusedLinearDPOLoss(torch.nn.Module):
                 settings,
             )
 
-        # Native autograd has lower fixed overhead for small BF16/FP16 sigmoid workloads. Larger shapes and other
-        # dtypes/losses keep the memory-bounded chunked path. Cached references always avoid the reference projection.
-        if has_precomputed_ref or (
-            self.loss_type == "sigmoid"
-            and _should_use_native_dpo(_input, lin_weight, use_ref_model=self.use_ref_model)
-        ):
+        # Native autograd has lower fixed overhead and no memory disadvantage below the measured crossover.
+        if use_native:
             loss, outputs = FusedLinearPreferenceBase._compute_loss(
                 _input,
                 lin_weight,
