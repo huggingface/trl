@@ -553,8 +553,7 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
 
     def _init_manager(self):
         # The manager is attached to the unwrapped training model: decoding reads the same parameter tensors the
-        # optimizer updates in place. warmup() must run before start() so the cuda graphs are captured on the main
-        # thread (transformers#48312).
+        # optimizer updates in place.
         model = self.accelerator.unwrap_model(self.model)
         generation_config = GenerationConfig(
             max_new_tokens=self.max_completion_length,
