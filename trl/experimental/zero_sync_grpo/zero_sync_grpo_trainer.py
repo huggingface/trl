@@ -307,13 +307,6 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         )
         self.rollouts_in_flight = args.rollouts_in_flight
         self.tp_size = args.tp_size
-        # Giving the KV cache memory to the training step only works when generation is paused while it runs, which
-        # is the case under tensor parallelism (see `_pause_generation`).
-        if args.release_kv_cache_during_step and args.tp_size == 1:
-            raise ValueError(
-                "`release_kv_cache_during_step` requires `tp_size > 1`, since generation otherwise runs "
-                "alongside the training step and is never paused."
-            )
         self.release_kv_cache_during_step = args.release_kv_cache_during_step
 
         # The ranks a model is not split across hold replicas of it, which train on their own prompts and have to
@@ -346,8 +339,8 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             cpu_groups = [torch.distributed.new_group(group_ranks, backend="gloo") for group_ranks in ranks]
             self._replica_group = groups[rank % args.tp_size]
             self._replica_cpu_group = cpu_groups[rank % args.tp_size]
-        # The engine decodes through a second view of the model (built in `_init_manager`); under tensor parallelism the
-        # trainer pauses it for the duration of its own step, see `_pause_generation`.
+        # The engine decodes through a second view of the model (built in `_init_manager`); the trainer pauses it for
+        # the duration of its own step, see `_pause_generation`.
         self._generation_view = None
         self._pause = None
         self._request_counter = 0
@@ -583,11 +576,11 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             # the training collectives run, so captured and eager collectives are never in flight together and the
             # NCCL default, which is also the safe setting, can stay.
             cb_kwargs.setdefault("disable_nccl_graph_mixing", False)
-        # The engine decodes in its own thread through its own view of the model. Under tensor parallelism the engine
-        # and the trainer hold one NCCL communicator each, and NCCL requires every rank to issue the operations on its
-        # communicators in the same host-side order, so the two cannot run at the same time: the trainer pauses the
-        # engine for its step (`_pause_generation`), and the engine waits for its in-flight step on the device before
-        # it reports itself paused, so the forward and backward have the device to themselves.
+        # The engine decodes in its own thread through its own view of the model, and the trainer pauses it for its
+        # step (`_pause_generation`): the engine waits for its in-flight step on the device before it reports itself
+        # paused, so the forward and backward have the device to themselves. Under tensor parallelism this is also
+        # what keeps the two NCCL communicators from racing: NCCL requires every rank to issue the operations on its
+        # communicators in the same host-side order.
         self._generation_view = self._make_generation_view(model)
         self._manager = self._generation_view.init_continuous_batching(
             generation_config=generation_config,
@@ -660,12 +653,11 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
     def _pause_generation(self, mode: str) -> None:
         """Park the engine for the training step that follows, until the next `_prepare_inputs` resumes it.
 
-        Under tensor parallelism the trainer's collectives must not run next to the engine's, and the pause gives the
-        forward, backward and optimizer step the device to themselves. Every rank receives every completion, so every
-        rank reaches this point on the same sample count and enters the pause together. Without tensor parallelism the
-        engine keeps decoding alongside the step.
+        Generation and training take turns: the forward, backward and optimizer step get the device to themselves,
+        and under tensor parallelism the trainer's collectives never run next to the engine's. Every rank receives
+        every completion, so every rank reaches this point on the same sample count and enters the pause together.
         """
-        if self.tp_size == 1 or self._pause is not None:
+        if self._pause is not None:
             return
         # The pause is granted at the engine's next step boundary, so this is the length of the step it had in flight
         pause_start = time.perf_counter()
