@@ -585,7 +585,6 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             generation_config=generation_config,
             continuous_batching_config=ContinuousBatchingConfig(**cb_kwargs),
         )
-        self._manager.warmup()
         self._manager.start()
 
     def _tokenize_conversation(self, messages: list[dict[str, Any]]) -> list[int]:
@@ -681,11 +680,7 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
                 if fatal_error is not None:
                     raise RuntimeError("The continuous batching background thread died.") from fatal_error
                 return
-            # Capturing the cuda graphs submits the engine's own warmup requests, and their results come back through
-            # this same queue. They are not rollouts, so drop them instead of looking them up.
-            rollout = self._inflight.pop(result.request_id, None)
-            if rollout is not None:
-                self._advance_rollout(rollout, result)
+            self._advance_rollout(self._inflight.pop(result.request_id), result)
             # A rollout that ended freed a slot; a rollout that called a tool took its own slot back
             self._fill_slots()
 
