@@ -899,10 +899,10 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             # fill its batch early, train, and then sit at the gradient sum waiting for a replica still decoding,
             # and it would carry a lighter forward while that one carries the heavy tail alone. Waiting for the
             # count to cover every replica, then handing the samples out, is what keeps the steps aligned.
-            # Asking every replica for its count costs a collective, and between two of them the engine takes one
-            # decode step, on the same devices through a different communicator. Asking once per decode step was
-            # enough to cost 10% of decoding. Asked once every eight instead, on the same schedule everywhere: a
-            # replica that skipped a collective the others were waiting on would hang them all.
+            # Asking every replica for its count costs a collective (over gloo, so the engine's NCCL work is never
+            # next to it); asking once per drain was enough to cost 10% of decoding. Asked once every eight instead,
+            # on the same schedule everywhere: a replica that skipped a collective the others were waiting on would
+            # hang them all.
             drained = 0
             while True:
                 if drained % 8 == 0:
