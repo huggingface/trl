@@ -154,10 +154,11 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
     generation/training memory duplication. The engine's per-token logprobs are the exact behavior-policy logprobs of
     the completions and are used as the old policy in the clipped loss.
 
-    Generation never stops. Prompts are submitted to the engine continuously, each completion is collected as it
-    finishes, a group's advantages are computed as soon as its last completion lands, and a training batch is formed
-    from whichever scored samples are ready first. A slow group never blocks a batch of fast ones; it simply lands in
-    a later batch. Completions therefore lag the policy by a bounded number of optimizer steps; the measured logprob
+    Generation and training take turns on those weights. Prompts are submitted to the engine continuously, each
+    completion is collected as it finishes, a group's advantages are computed as soon as its last completion lands,
+    and a training batch is formed from whichever scored samples are ready first; the engine is then paused for the
+    forward, backward and optimizer step and resumes where it left off, its in-flight requests intact. A slow group
+    never blocks a batch of fast ones; it simply lands in a later batch. Completions therefore lag the policy by a bounded number of optimizer steps; the measured logprob
     gap this introduces is small and concentrated in each completion's earliest tokens, and the clipped loss against
     the engine's own logprobs accounts for it.
 
@@ -509,9 +510,8 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
 
         `init_continuous_batching` switches a model to a paged attention implementation, which is written for the
         packed inputs the engine prepares and raises on the training forward. The switch is a setting on the config,
-        shared by every module and every thread, so it cannot be flipped around each forward: under tensor parallelism
-        there is no moment to flip it, and in the data parallel case the engine decodes in its own thread throughout.
-        Giving the engine its own view, with its own config, means the switch never has to happen. The view shares
+        shared by every module and read by the engine thread at every step, so flipping it around each training
+        forward is fragile. Giving the engine its own view, with its own config, means the switch never has to happen. The view shares
         every parameter, so an optimizer step is what the engine decodes from, and it costs no extra memory: only the
         module objects and the config are copied.
         """
@@ -872,9 +872,9 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
                     break
         self._fill_slots()
 
-        # Time spent waiting for the engine. Near zero means generation is fully hidden behind the training step; a
-        # large value means the engine is the bottleneck, so raise `rollouts_in_flight` (more requests generating at
-        # once) or give it a bigger KV pool.
+        # Time spent waiting for the engine. Near zero means the samples were ready before the trainer asked; a large
+        # value means the engine is the bottleneck, so raise `rollouts_in_flight` (more requests generating at once)
+        # or give it a bigger KV pool.
         wait_start = time.perf_counter()
         if self._replica_group is None:
             while len(self._ready) < num_samples:

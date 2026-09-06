@@ -2,7 +2,7 @@
 
 GRPO where generation and training share **one copy of the weights**. A transformers [continuous batching](https://huggingface.co/docs/transformers/main/en/continuous_batching) manager generates from the same parameter tensors the optimizer updates in place, so there is no inference server, no weight synchronization step, and no second copy of the model in memory.
 
-Generation never stops: prompts are submitted continuously, each completion is scored as it lands, a group's advantages are computed as soon as its last completion arrives, and a training batch is formed from whichever scored samples are ready first. A slow rollout never holds up a batch of fast ones, it simply lands in a later batch.
+Generation and training take turns on the same weights: prompts are submitted continuously, each completion is scored as it lands, a group's advantages are computed as soon as its last completion arrives, and once enough scored samples are ready the engine is paused, the trainer runs its step, and generation resumes where it left off. A training batch is formed from whichever scored samples are ready first. A slow rollout never holds up a batch of fast ones, it simply lands in a later batch.
 
 ## Usage
 
@@ -91,8 +91,8 @@ Tensor parallelism splits one copy of the weights across processes instead, with
 ZeroSyncGRPOConfig(tp_size=4)
 ```
 
-Generation still runs throughout the training step, but it gets there differently, and the reason is
-worth knowing. Under tensor parallelism both generation and training issue collectives, on separate
+The two never run at the same time, and under tensor parallelism that is not a choice but a
+requirement worth knowing about. Both generation and training issue collectives, on separate
 NCCL communicators. NCCL requires that every rank issue the operations on its communicators in the
 same host-side order: [its user guide](https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/usage/communicators.html)
 states that "to remain deadlock free, users must ensure the order of host-side launches matches for
@@ -102,12 +102,12 @@ When the orders disagree the run deadlocks, and it does so in a way that is hard
 blocks inside an ordinary kernel launch, not inside a collective, because a CUDA call waits on the
 resident NCCL kernel and so prevents the other communicator's kernel from ever launching.
 
-So under `tp_size > 1` the two take turns. The engine keeps decoding in its own thread while the
+So the two take turns, at every `tp_size`. The engine keeps decoding in its own thread while the
 trainer collects and scores completions; once a step's samples are in, the trainer pauses the engine
 (`ContinuousBatchingManager.pause`), runs its forward, backward and optimizer step, and resumes it.
 The pause is agreed on by every rank at the same engine step, and the engine finishes the step it had
 in flight on the device before it reports itself paused, so the trainer's collectives never share the
-device with the engine's. Nothing is drained and no request is lost: the rollouts in flight keep their
+device with the engine's, and the forward and backward have the device to themselves. Nothing is drained and no request is lost: the rollouts in flight keep their
 cache and carry on after the step. Every rank receives every completion, so every rank reaches the
 pause on the same sample count without any signal between them.
 
@@ -152,9 +152,9 @@ different moments, and `memory/alloc_retries` counts the allocator's retries, wh
 the KV pool leaves the training step too little room (then lower `max_memory_percent` in
 `continuous_batching_config`).
 
-When it is near zero, generation is fully hidden and the throughput lever is the batch. Measured on
-one H100 with Qwen3-0.6B, GSM8K, 512-token completions, 8 generations per prompt, where the wait
-stayed around a microsecond throughout:
+When it is near zero, the engine had the step's samples ready before the trainer asked for them, and the
+throughput lever is the batch. Measured on one H100 with Qwen3-0.6B, GSM8K, 512-token completions,
+8 generations per prompt:
 
 | samples per step | steps/s | completion tokens/s |
 |---|---|---|
