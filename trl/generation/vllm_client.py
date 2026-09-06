@@ -186,7 +186,7 @@ class VLLMClient:
         else:
             self.host = _resolve_communicator_host(host)
             self.server_port = server_port
-            self.base_url = f"http://{_format_http_host(self.host)}:{self.server_port}"
+            self.base_url = f"http://{_format_http_host(host)}:{self.server_port}"
         self.group_port = group_port
         self.check_server(connection_timeout)  # check server and fail after timeout
 
@@ -218,9 +218,7 @@ class VLLMClient:
             else:
                 if response.status_code == 200:
                     if "X-Forwarded-For" in response.headers:
-                        self.host = _resolve_communicator_host(
-                            response.headers["X-Forwarded-For"]
-                        )
+                        self.host = _strip_ipv6_brackets(response.headers["X-Forwarded-For"])
                     logger.info("Server is up!")
                     return None
 
