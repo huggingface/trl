@@ -333,7 +333,44 @@ class FusedLinearDPOLoss(torch.nn.Module):
         ref_input=None,
         ref_weight=None,
         ref_bias=None,
+        ref_chosen_logps=None,
+        ref_rejected_logps=None,
     ):
+        has_precomputed_ref = ref_chosen_logps is not None or ref_rejected_logps is not None
+        if (ref_chosen_logps is None) != (ref_rejected_logps is None):
+            raise ValueError("ref_chosen_logps and ref_rejected_logps must be provided together")
+        if has_precomputed_ref and any(value is not None for value in (ref_input, ref_weight, ref_bias)):
+            raise ValueError(
+                "provide either precomputed reference log-probs or reference model inputs and weights, not both"
+            )
+
+        # Cached references remove the reference-model projection entirely. Use native autograd for the remaining
+        # policy projection so the cached values participate directly in the preference loss without teaching the
+        # chunked custom-autograd API how to split a second, pair-shaped input.
+        if has_precomputed_ref:
+            loss, outputs = FusedLinearPreferenceBase._compute_loss(
+                _input,
+                lin_weight,
+                target,
+                bias,
+                preference_loss_fn=FusedLinearDPOFunction.preference_loss_fn,
+                full_target=target,
+                ignore_index=self.ignore_index,
+                alpha=self.alpha,
+                beta=self.beta,
+                compute_nll_loss=self.compute_nll_loss,
+                use_ref_model=False,
+                average_log_prob=self.average_log_prob,
+                loss_type=self.loss_type,
+                label_smoothing=self.label_smoothing,
+                discopop_tau=self.discopop_tau,
+                ref_chosen_logps=ref_chosen_logps,
+                ref_rejected_logps=ref_rejected_logps,
+            )
+            # Mean logits are logging-only; do not retain their graph after returning from the loss.
+            outputs = (outputs[0], outputs[1], outputs[2].detach(), outputs[3].detach(), *outputs[4:])
+            return loss, outputs
+
         return FusedLinearDPOFunction.apply(
             _input,
             lin_weight,

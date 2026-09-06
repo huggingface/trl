@@ -1041,6 +1041,26 @@ class TestKTOTrainer(TrlTestCase):
                 train_dataset=dataset,
             )
 
+    def test_precompute_ref_log_probs_preserves_rng_state(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
+        training_args = KTOConfig(output_dir=self.tmp_dir, loss_type="apo_zero_unpaired", report_to="none")
+        trainer = KTOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+        local_dataset = Dataset.from_dict(trainer.train_dataset[:4]).add_column(
+            "_rng_test_nonce", [str(self.tmp_dir)] * 4
+        )
+
+        torch.manual_seed(1234)
+        expected_rng_values = torch.rand(4)
+        torch.manual_seed(1234)
+
+        trainer._precompute_ref_logps(local_dataset, "rng-test", batch_size=2)
+
+        assert torch.equal(torch.rand(4), expected_rng_values)
+
     @pytest.mark.parametrize("iterable_as", ["train", "eval", "eval_dict", "eval_iterable_dataset_dict"])
     def test_precompute_ref_log_probs_raises_for_iterable_dataset(self, iterable_as):
         # `precompute_ref_log_probs=True` caches reference log-probs by index, which requires random access and is

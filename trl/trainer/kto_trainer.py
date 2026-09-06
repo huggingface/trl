@@ -1200,6 +1200,7 @@ class KTOTrainer(_BaseTrainer):
         if os.path.exists(cache_file):
             return concatenate_datasets([dataset, Dataset.from_file(cache_file)], axis=1)
 
+        data_seed = self.args.data_seed if self.args.data_seed is not None else self.args.seed
         dataloader = DataLoader(
             dataset,
             batch_size=batch_size,
@@ -1207,6 +1208,7 @@ class KTOTrainer(_BaseTrainer):
             num_workers=self.args.dataloader_num_workers,
             pin_memory=self.args.dataloader_pin_memory,
             shuffle=False,
+            generator=torch.Generator().manual_seed(data_seed),
         )
         data_loader = self.accelerator.prepare(dataloader)
 

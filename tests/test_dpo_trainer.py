@@ -923,6 +923,35 @@ class TestDPOTrainer(TrlTestCase):
         assert trainer.liger_loss.discopop_tau == 0.2
 
     @require_liger_kernel
+    def test_train_with_liger_and_precomputed_ref_log_probs(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,
+            max_steps=2,
+            precompute_ref_log_probs=True,
+            use_liger_kernel=True,
+            report_to="none",
+        )
+        trainer = DPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+        previous_trainable_params = {name: param.clone() for name, param in trainer.model.named_parameters()}
+
+        # Full fine-tuning caches the initial policy log-probs and does not retain a second reference model.
+        assert trainer.ref_model is None
+        assert {"ref_chosen_logps", "ref_rejected_logps"}.issubset(trainer.train_dataset.column_names)
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+        for name, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(name)
+            assert not torch.equal(param, new_param), f"Parameter {name} has not changed."
+
+    @require_liger_kernel
     @pytest.mark.skipif(torch_device != "cuda", reason="test requires a CUDA or ROCm device")
     def test_train_with_liger_uses_autocast(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
@@ -954,7 +983,6 @@ class TestDPOTrainer(TrlTestCase):
         assert all(autocast_enabled)
 
     @require_liger_kernel
-
     @require_peft
     def test_train_with_liger_kernel_and_peft(self):
         # A LoRA adapter that does not target lm_head leaves the head as a plain Linear, so Liger reads the real
@@ -1062,6 +1090,23 @@ class TestDPOTrainer(TrlTestCase):
             )
 
     @require_liger_kernel
+    def test_init_fails_with_ld_alpha_and_liger(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            use_liger_kernel=True,
+            ld_alpha=0.5,
+            report_to="none",
+        )
+
+        with pytest.raises(ValueError, match="incompatible with `ld_alpha`"):
+            DPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                args=training_args,
+                train_dataset=dataset,
+            )
+
+    @require_liger_kernel
     def test_init_fails_with_compute_metrics_and_liger(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
 
@@ -1078,6 +1123,26 @@ class TestDPOTrainer(TrlTestCase):
                 train_dataset=dataset,
                 compute_metrics=lambda _: {},
             )
+
+    def test_precompute_ref_log_probs_preserves_rng_state(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        training_args = DPOConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = DPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+        local_dataset = Dataset.from_dict(trainer.train_dataset[:4]).add_column(
+            "_rng_test_nonce", [str(self.tmp_dir)] * 4
+        )
+
+        torch.manual_seed(1234)
+        expected_rng_values = torch.rand(4)
+        torch.manual_seed(1234)
+
+        trainer._precompute_ref_logps(local_dataset, "rng-test", batch_size=2)
+
+        assert torch.equal(torch.rand(4), expected_rng_values)
 
     @pytest.mark.parametrize("iterable_as", ["train", "eval", "eval_dict", "eval_iterable_dataset_dict"])
     def test_precompute_ref_log_probs_raises_for_iterable_dataset(self, iterable_as):

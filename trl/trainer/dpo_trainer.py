@@ -809,15 +809,15 @@ class DPOTrainer(_BaseTrainer):
                     "DPO loss always uses the standard reverse-KL parameterization, so the requested divergence would "
                     "be silently ignored. Either set `f_divergence_type='reverse_kl'`, or set `use_liger_kernel=False`."
                 )
+            if self.ld_alpha is not None:
+                raise ValueError(
+                    "`use_liger_kernel=True` is incompatible with `ld_alpha` because the fused DPO loss does not "
+                    "implement LD-DPO token weighting. Set `ld_alpha=None` or `use_liger_kernel=False`."
+                )
             if compute_metrics is not None:
                 raise ValueError(
                     "compute_metrics is not supported with the Liger kernel. compute_metrics requires to be able to "
                     "recover the logits from the forward pass, but Liger kernel does not materialize logits."
-                )
-            if self.precompute_ref_logps:
-                raise ValueError(
-                    "Liger DPO loss does not support precomputing reference log probabilities. Either disable "
-                    "`precompute_ref_log_probs` or set `use_liger_kernel` to False."
                 )
             if is_peft_model(model):
                 # The Liger fused DPO loss multiplies the hidden states by `lm_head.weight` directly. When the LM head
@@ -1140,6 +1140,7 @@ class DPOTrainer(_BaseTrainer):
         if os.path.exists(cache_file):
             return concatenate_datasets([dataset, Dataset.from_file(cache_file)], axis=1)
 
+        data_seed = self.args.data_seed if self.args.data_seed is not None else self.args.seed
         dataloader = DataLoader(
             dataset,
             batch_size=batch_size,
@@ -1147,6 +1148,7 @@ class DPOTrainer(_BaseTrainer):
             num_workers=self.args.dataloader_num_workers,
             pin_memory=self.args.dataloader_pin_memory,
             shuffle=False,
+            generator=torch.Generator().manual_seed(data_seed),
         )
         data_loader = self.accelerator.prepare(dataloader)
 
@@ -1273,32 +1275,36 @@ class DPOTrainer(_BaseTrainer):
         weight = lm_head.weight
         bias = lm_head.bias
 
-        with torch.no_grad(), disable_gradient_checkpointing(self.model, self.args.gradient_checkpointing_kwargs):
-            if self.ref_model is None:
-                # PEFT model with no explicit reference model: recover reference behaviour by disabling / switching to
-                # the frozen "ref" adapter, exactly as _compute_loss does for logit-based reference computation.
-                model_unwrapped = self.accelerator.unwrap_model(self.model)
-                with use_adapter(
-                    model_unwrapped, adapter_name="ref" if "ref" in model_unwrapped.peft_config else None
-                ):
-                    ref_model_inner = model_unwrapped.base_model.model
+        ref_hidden_states = ref_weight = ref_bias = None
+        if not self.precompute_ref_logps:
+            with torch.no_grad(), disable_gradient_checkpointing(self.model, self.args.gradient_checkpointing_kwargs):
+                if self.ref_model is None:
+                    # PEFT model with no explicit reference model: recover reference behaviour by disabling / switching
+                    # to the frozen "ref" adapter, exactly as _compute_loss does for logit-based reference computation.
+                    model_unwrapped = self.accelerator.unwrap_model(self.model)
+                    with use_adapter(
+                        model_unwrapped, adapter_name="ref" if "ref" in model_unwrapped.peft_config else None
+                    ):
+                        ref_model_inner = model_unwrapped.base_model.model
+                        if self._is_vlm and Version(transformers.__version__) < Version("5.0.0"):
+                            ref_backbone = ref_model_inner.model
+                        else:
+                            ref_backbone = ref_model_inner.base_model
+                        ref_outputs = ref_backbone(**model_kwargs)
+                        ref_lm_head = model_unwrapped.get_output_embeddings()
+                else:
+                    ref_model_inner = (
+                        self.ref_model.base_model.model if is_peft_model(self.ref_model) else self.ref_model
+                    )
                     if self._is_vlm and Version(transformers.__version__) < Version("5.0.0"):
                         ref_backbone = ref_model_inner.model
                     else:
                         ref_backbone = ref_model_inner.base_model
                     ref_outputs = ref_backbone(**model_kwargs)
-                    ref_lm_head = model_unwrapped.get_output_embeddings()
-            else:
-                ref_model_inner = self.ref_model.base_model.model if is_peft_model(self.ref_model) else self.ref_model
-                if self._is_vlm and Version(transformers.__version__) < Version("5.0.0"):
-                    ref_backbone = ref_model_inner.model
-                else:
-                    ref_backbone = ref_model_inner.base_model
-                ref_outputs = ref_backbone(**model_kwargs)
-                ref_lm_head = self.ref_model.get_output_embeddings()
-            ref_hidden_states = ref_outputs.last_hidden_state[:, :-1].contiguous()
-            ref_weight = ref_lm_head.weight
-            ref_bias = ref_lm_head.bias
+                    ref_lm_head = self.ref_model.get_output_embeddings()
+                ref_hidden_states = ref_outputs.last_hidden_state[:, :-1].contiguous()
+                ref_weight = ref_lm_head.weight
+                ref_bias = ref_lm_head.bias
 
         input_ids = model_kwargs["input_ids"]
         completion_mask = inputs["completion_mask"]
@@ -1308,7 +1314,15 @@ class DPOTrainer(_BaseTrainer):
 
         with maybe_gather_lm_head_ctx(weight, bias, ref_weight, ref_bias):
             loss, metrics = self.liger_loss(
-                weight, hidden_states, labels, bias, ref_hidden_states, ref_weight, ref_bias
+                weight,
+                hidden_states,
+                labels,
+                bias,
+                ref_hidden_states,
+                ref_weight,
+                ref_bias,
+                ref_chosen_logps=inputs.get("ref_chosen_logps"),
+                ref_rejected_logps=inputs.get("ref_rejected_logps"),
             )
 
         (
