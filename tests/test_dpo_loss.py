@@ -1471,7 +1471,7 @@ def test_cached_reference_zero3_path_matches_native():
         bias = base_bias.detach().clone().requires_grad_(True)
         if zero3_parameter:
             weight.ds_id = 0
-        loss, outputs = FusedLinearDPOLoss(compiled=False)(
+        loss, outputs = FusedLinearDPOLoss()(
             weight,
             _input,
             target,
