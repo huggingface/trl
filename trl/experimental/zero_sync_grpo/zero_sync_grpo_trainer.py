@@ -158,9 +158,9 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
     completion is collected as it finishes, a group's advantages are computed as soon as its last completion lands,
     and a training batch is formed from whichever scored samples are ready first; the engine is then paused for the
     forward, backward and optimizer step and resumes where it left off, its in-flight requests intact. A slow group
-    never blocks a batch of fast ones; it simply lands in a later batch. Completions therefore lag the policy by a bounded number of optimizer steps; the measured logprob
-    gap this introduces is small and concentrated in each completion's earliest tokens, and the clipped loss against
-    the engine's own logprobs accounts for it.
+    never blocks a batch of fast ones; it simply lands in a later batch. Completions therefore lag the policy by a
+    bounded number of optimizer steps; the measured logprob gap this introduces is small and concentrated in each
+    completion's earliest tokens, and the clipped loss against the engine's own logprobs accounts for it.
 
     Groups are formed per process: each process generates and scores its own prompts, so advantages require no
     cross-process communication.
@@ -511,9 +511,9 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         `init_continuous_batching` switches a model to a paged attention implementation, which is written for the
         packed inputs the engine prepares and raises on the training forward. The switch is a setting on the config,
         shared by every module and read by the engine thread at every step, so flipping it around each training
-        forward is fragile. Giving the engine its own view, with its own config, means the switch never has to happen. The view shares
-        every parameter, so an optimizer step is what the engine decodes from, and it costs no extra memory: only the
-        module objects and the config are copied.
+        forward is fragile. Giving the engine its own view, with its own config, means the switch never has to happen.
+        The view shares every parameter, so an optimizer step is what the engine decodes from, and it costs no extra
+        memory: only the module objects and the config are copied.
         """
 
         # The deepcopy memo maps every original config object to its copy, sub-configs included, so each module
