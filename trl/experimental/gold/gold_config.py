@@ -147,8 +147,8 @@ class GOLDConfig(SFTConfig):
             where TRL builds the engine. Useful for engine arguments TRL does not expose a field for, such as
             `hf_overrides`. Keys that conflict with the arguments TRL sets override them, except the keys TRL reads
             back after building the engine (`model`, `tensor_parallel_size`, `distributed_executor_backend`, `seed`,
-            `logprobs_mode`, `quantization`, `enable_sleep_mode`), which raise. If you are using `vllm_mode="server"`,
-            pass these arguments when launching the server instead.
+            `logprobs_mode`, `enable_sleep_mode`), which raise. `quantization` may only be set to `"fp8"`. If you are
+            using `vllm_mode="server"`, pass these arguments when launching the server instead.
         vllm_sync_frequency (`int`, *optional*, defaults to `1`):
             Frequency (in training steps) to synchronize student model weights to vLLM engine. Set to 1 to sync after
             every step.
@@ -425,8 +425,9 @@ class GOLDConfig(SFTConfig):
             "`colocate`, where TRL builds the engine. Useful for engine arguments TRL does not expose a field for, "
             "such as `hf_overrides`. Keys that conflict with the arguments TRL sets override them, except the keys "
             "TRL reads back after building the engine (`model`, `tensor_parallel_size`, "
-            "`distributed_executor_backend`, `seed`, `logprobs_mode`, `quantization`, `enable_sleep_mode`), which "
-            "raise. If you are using `vllm_mode='server'`, pass these arguments when launching the server instead."
+            "`distributed_executor_backend`, `seed`, `logprobs_mode`, `enable_sleep_mode`), which raise. "
+            "`quantization` may only be set to `'fp8'`. If you are using `vllm_mode='server'`, pass these arguments "
+            "when launching the server instead."
         },
     )
     vllm_structured_outputs_regex: str | None = field(

@@ -12,12 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from contextlib import nullcontext
+from types import SimpleNamespace
+
 import pytest
 from datasets import Dataset, DatasetDict, features, load_dataset
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
 from transformers.utils import is_peft_available, is_vision_available
 
 from trl.experimental.online_dpo import OnlineDPOConfig, OnlineDPOTrainer
+from trl.experimental.online_dpo import online_dpo_trainer as online_dpo_trainer_module
 
 from ..testing_utils import TrlTestCase, require_peft, require_torch_accelerator, require_vision, require_vllm
 
@@ -30,6 +34,208 @@ if is_vision_available():
     import numpy as np
     from PIL import Image
     from transformers import AutoModelForImageTextToText, AutoProcessor
+
+
+class TestOnlineDPOWeightReload(TrlTestCase):
+    @staticmethod
+    def _build(monkeypatch, quantization, fail_on=None):
+        events = []
+        model_config = SimpleNamespace(quantization=quantization)
+        parameter_data = [object(), object()]
+        parameters = [
+            ("layer.a", SimpleNamespace(data=parameter_data[0])),
+            ("layer.b", SimpleNamespace(data=parameter_data[1])),
+        ]
+        training_model = SimpleNamespace(named_parameters=lambda: parameters)
+
+        class RecordingModel:
+            def load_weights(self, weights):
+                [(name, actual_parameter)] = weights
+                events.append(("load", name, actual_parameter))
+                if name == fail_on:
+                    raise RuntimeError("load failed")
+
+        model = RecordingModel()
+
+        class RecordingModelRunner:
+            def get_model(self):
+                events.append(("get_model",))
+                return model
+
+        model_runner = RecordingModelRunner()
+        driver_worker = SimpleNamespace(model_runner=model_runner)
+        model_executor = SimpleNamespace(driver_worker=driver_worker)
+        llm_engine = SimpleNamespace(model_executor=model_executor)
+        llm = SimpleNamespace(
+            llm_engine=llm_engine,
+            model_config=model_config,
+            reset_prefix_cache=lambda: events.append(("reset",)),
+        )
+
+        monkeypatch.setattr(
+            online_dpo_trainer_module,
+            "initialize_layerwise_reload",
+            lambda actual: events.append(("initialize", actual)),
+            raising=False,
+        )
+        monkeypatch.setattr(
+            online_dpo_trainer_module,
+            "finalize_layerwise_reload",
+            lambda actual, config: events.append(("finalize", actual, config)),
+            raising=False,
+        )
+        trainer = object.__new__(OnlineDPOTrainer)
+        trainer.vllm_mode = "colocate"
+        trainer.llm = llm
+        trainer.model = training_model
+        trainer.accelerator = SimpleNamespace(state=SimpleNamespace(deepspeed_plugin=None))
+        trainer.is_fsdp_enabled = False
+        trainer._fix_param_name_to_vllm = lambda name, extra_prefixes=None: name
+        monkeypatch.setattr(online_dpo_trainer_module, "is_peft_model", lambda actual: False)
+        return trainer, events, model, model_config, parameter_data
+
+    @staticmethod
+    def _build_specialized_path(monkeypatch, path):
+        trainer, events, model, model_config, parameter_data = TestOnlineDPOWeightReload._build(monkeypatch, "fp8")
+        parameters = [
+            ("layer.a", SimpleNamespace(data=parameter_data[0])),
+            ("layer.b", SimpleNamespace(data=parameter_data[1])),
+        ]
+        before_load = []
+        after_load = []
+
+        if path == "peft":
+            peft_parameters = [(f"base_model.model.{name}", parameter) for name, parameter in parameters]
+
+            class RecordingPeftModel:
+                prefix = "lora_"
+
+                def parameters(self):
+                    return [parameter for _, parameter in peft_parameters]
+
+                def named_parameters(self):
+                    return peft_parameters
+
+                def merge_adapter(self):
+                    events.append(("merge_adapter",))
+
+                def unmerge_adapter(self):
+                    events.append(("unmerge_adapter",))
+
+            trainer.model = RecordingPeftModel()
+            monkeypatch.setattr(online_dpo_trainer_module, "is_peft_model", lambda actual: actual is trainer.model)
+            before_load = [("merge_adapter",)]
+            after_load = [("unmerge_adapter",)]
+        elif path == "fsdp1":
+
+            class FakeFSDP:
+                def named_children(self):
+                    return []
+
+                def named_parameters(self):
+                    return parameters
+
+                @staticmethod
+                def summon_full_params(module, recurse, writeback):
+                    events.append(("summon_full_params", module, recurse, writeback))
+                    return nullcontext()
+
+            trainer.model = FakeFSDP()
+            trainer.is_fsdp_enabled = True
+            trainer.accelerator.state.fsdp_plugin = SimpleNamespace(fsdp_version=1)
+            monkeypatch.setattr(online_dpo_trainer_module, "FSDP", FakeFSDP)
+            before_load = [("summon_full_params", trainer.model, False, False)]
+        elif path == "fsdp2":
+
+            class FakeDTensor:
+                is_cpu = False
+
+                def __init__(self, data):
+                    self.data = data
+
+                def full_tensor(self):
+                    return self.data
+
+            state_dict = {name: FakeDTensor(parameter.data) for name, parameter in parameters}
+
+            class RecordingFSDP2Model:
+                def state_dict(self):
+                    events.append(("state_dict",))
+                    return state_dict
+
+            trainer.model = RecordingFSDP2Model()
+            trainer.is_fsdp_enabled = True
+            trainer.accelerator.state.fsdp_plugin = SimpleNamespace(fsdp_version=2)
+            trainer.accelerator.device = object()
+            before_load = [("state_dict",)]
+        else:
+            raise ValueError(f"Unknown path: {path}")
+
+        return trainer, events, model, model_config, parameter_data, before_load, after_load
+
+    def test_fp8_colocate_move_uses_one_reload_lifecycle(self, monkeypatch):
+        trainer, events, model, model_config, parameter_data = self._build(monkeypatch, quantization="fp8")
+
+        OnlineDPOTrainer._move_model_to_vllm(trainer)
+
+        assert events == [
+            ("get_model",),
+            ("initialize", model),
+            ("get_model",),
+            ("load", "layer.a", parameter_data[0]),
+            ("get_model",),
+            ("load", "layer.b", parameter_data[1]),
+            ("finalize", model, model_config),
+            ("reset",),
+        ]
+
+    def test_failed_fp8_colocate_move_does_not_finalize_or_reset_cache(self, monkeypatch):
+        trainer, events, model, _, parameter_data = self._build(monkeypatch, quantization="fp8", fail_on="layer.b")
+
+        with pytest.raises(RuntimeError, match="load failed"):
+            OnlineDPOTrainer._move_model_to_vllm(trainer)
+
+        assert events == [
+            ("get_model",),
+            ("initialize", model),
+            ("get_model",),
+            ("load", "layer.a", parameter_data[0]),
+            ("get_model",),
+            ("load", "layer.b", parameter_data[1]),
+        ]
+
+    def test_unquantized_colocate_move_uses_load_weights_fast_path(self, monkeypatch):
+        trainer, events, _, _, parameter_data = self._build(monkeypatch, quantization=None)
+
+        OnlineDPOTrainer._move_model_to_vllm(trainer)
+
+        assert events == [
+            ("get_model",),
+            ("load", "layer.a", parameter_data[0]),
+            ("get_model",),
+            ("load", "layer.b", parameter_data[1]),
+            ("reset",),
+        ]
+
+    @pytest.mark.parametrize("path", ["peft", "fsdp1", "fsdp2"])
+    def test_fp8_specialized_colocate_paths_share_one_reload_lifecycle(self, monkeypatch, path):
+        result = self._build_specialized_path(monkeypatch, path)
+        trainer, events, model, model_config, parameter_data, before_load, after_load = result
+
+        OnlineDPOTrainer._move_model_to_vllm(trainer)
+
+        assert events == [
+            ("get_model",),
+            ("initialize", model),
+            *before_load,
+            ("get_model",),
+            ("load", "layer.a", parameter_data[0]),
+            ("get_model",),
+            ("load", "layer.b", parameter_data[1]),
+            *after_load,
+            ("finalize", model, model_config),
+            ("reset",),
+        ]
 
 
 class TestOnlineDPOTrainer(TrlTestCase):
