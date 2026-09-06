@@ -667,8 +667,11 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         """
         if self.tp_size == 1 or self._pause is not None:
             return
+        # The pause is granted at the engine's next step boundary, so this is the length of the step it had in flight
+        pause_start = time.perf_counter()
         self._pause = self._manager.pause()
         self._pause.__enter__()
+        self._metrics[mode]["generation/pause_s"].append(time.perf_counter() - pause_start)
         if self.release_kv_cache_during_step:
             # Generation is done for this step, so hand its memory to the forward and backward that come next. The
             # rollouts in flight lose their cache and re-prefill when they are next scheduled, which is what the
@@ -899,23 +902,24 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             # fill its batch early, train, and then sit at the gradient sum waiting for a replica still decoding,
             # and it would carry a lighter forward while that one carries the heavy tail alone. Waiting for the
             # count to cover every replica, then handing the samples out, is what keeps the steps aligned.
-            # Asking every replica for its count costs a collective (over gloo, so the engine's NCCL work is never
-            # next to it); asking once per drain was enough to cost 10% of decoding. Asked once every eight instead,
-            # on the same schedule everywhere: a replica that skipped a collective the others were waiting on would
-            # hang them all.
-            drained = 0
+            # The count travels over gloo, a few microseconds, and is asked after every drain: a drain blocks on the
+            # engine for up to its timeout, so checking less often let replicas overshoot by seconds and meet late at
+            # the gather below (8 s per optimizer step at one check per eight drains of one second).
             while True:
-                if drained % 8 == 0:
-                    counts = torch.tensor([len(self._ready)])
-                    torch.distributed.all_reduce(counts, group=self._replica_cpu_group)
-                    if int(counts.item()) >= num_samples * self.dp_size:
-                        break
-                self._drain(timeout=1.0)
-                drained += 1
+                counts = torch.tensor([len(self._ready)])
+                torch.distributed.all_reduce(counts, group=self._replica_cpu_group)
+                if int(counts.item()) >= num_samples * self.dp_size:
+                    break
+                self._drain(timeout=0.2)
         self._metrics[mode]["generation_wait_s"].append(time.perf_counter() - wait_start)
+        # Allocator retries are the allocator freeing its cache and asking the driver again: a sign that the KV pool
+        # and the training step are fighting over memory, which slows both.
+        self._metrics[mode]["memory/alloc_retries"].append(torch.cuda.memory_stats().get("num_alloc_retries", 0))
         self._pause_generation(mode)
         if self._replica_group is not None:
+            pool_start = time.perf_counter()
             samples = self._take_from_pool(num_samples)
+            self._metrics[mode]["batch/pool_exchange_s"].append(time.perf_counter() - pool_start)
         else:
             # Packing already removes the padding, and picking like-length samples would concentrate the long
             # ones into a single batch, whose activations then blow past memory (a batch of 256 samples all near
