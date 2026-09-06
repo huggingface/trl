@@ -27,6 +27,24 @@ import torch
 from torch.nn import functional as F
 
 
+def _selective_log_softmax(logits, target):
+    if logits.device.type == "cuda":
+        try:
+            # Liger is optional, so keep this import on the Liger-only path.
+            from liger_kernel.ops.selective_log_softmax import liger_selective_log_softmax
+        except ImportError:
+            pass
+        else:
+            return liger_selective_log_softmax(logits, target)
+
+    # Compatibility fallback for CPU and Liger releases predating the selective kernel.
+    per_row_logps = []
+    for row_logits, row_target in zip(logits, target, strict=True):
+        row_logps = F.log_softmax(row_logits.float(), dim=-1)
+        per_row_logps.append(row_logps.gather(-1, row_target.unsqueeze(-1)).squeeze(-1))
+    return torch.stack(per_row_logps)
+
+
 class FusedLinearPreferenceBase(torch.autograd.Function):
     @abstractmethod
     def preference_loss_fn(*args, **kwargs):
@@ -304,29 +322,41 @@ class FusedLinearPreferenceBase(torch.autograd.Function):
         compute_nll_loss=True,
         chosen_nll_target_chunk=None,
         average_log_prob=True,
+        selective_log_softmax=False,
     ):
         len_chosen_chunk = target_chunk.shape[0] // 2
         logits_chunk = input_chunk @ weight.t()
         if bias is not None:
             logits_chunk = logits_chunk + bias
-        log_probs_chunk = F.log_softmax(logits_chunk.float(), dim=-1)
+        loss_mask = target_chunk != ignore_index
+        label_chunk = torch.where(loss_mask, target_chunk, 0)
+        if selective_log_softmax:
+            per_token_logps = _selective_log_softmax(logits_chunk, label_chunk)
+        else:
+            log_probs_chunk = F.log_softmax(logits_chunk.float(), dim=-1)
+            per_token_logps = log_probs_chunk.gather(-1, label_chunk.unsqueeze(-1)).squeeze(-1)
 
-        chosen_nll_loss = 0.0
+        chosen_nll_loss = per_token_logps.new_zeros(())
         if compute_nll_loss:
             nll_labels = (
                 chosen_nll_target_chunk if chosen_nll_target_chunk is not None else target_chunk[:len_chosen_chunk]
             )
-            chosen_nll_loss = F.nll_loss(
-                log_probs_chunk[:len_chosen_chunk].view(-1, log_probs_chunk.shape[-1]),
-                nll_labels.view(-1),
-                reduction="sum",
-                ignore_index=ignore_index,
-            )
-
-        loss_mask = target_chunk != ignore_index
-        label_chunk = torch.where(loss_mask, target_chunk, 0)
-
-        per_token_logps = log_probs_chunk.gather(-1, label_chunk.unsqueeze(-1)).squeeze(-1)
+            if selective_log_softmax and chosen_nll_target_chunk is not None:
+                nll_mask = nll_labels != ignore_index
+                safe_nll_labels = torch.where(nll_mask, nll_labels, 0)
+                chosen_nll_logps = _selective_log_softmax(
+                    logits_chunk[:len_chosen_chunk].contiguous(), safe_nll_labels
+                )
+                chosen_nll_loss = -(chosen_nll_logps * nll_mask).sum()
+            elif selective_log_softmax:
+                chosen_nll_loss = -(per_token_logps[:len_chosen_chunk] * loss_mask[:len_chosen_chunk]).sum()
+            else:
+                chosen_nll_loss = F.nll_loss(
+                    log_probs_chunk[:len_chosen_chunk].view(-1, log_probs_chunk.shape[-1]),
+                    nll_labels.view(-1),
+                    reduction="sum",
+                    ignore_index=ignore_index,
+                )
         if average_log_prob:
             log_prob = (per_token_logps * loss_mask).sum(-1) / loss_mask.sum(-1)
         else:
@@ -365,6 +395,8 @@ class FusedLinearPreferenceBase(torch.autograd.Function):
         full_nll_target=None,
         chosen_nll_target_chunk=None,
         average_log_prob=True,
+        detach_logits_mean=False,
+        selective_log_softmax=False,
         **loss_kwargs,
     ):
         """
@@ -407,18 +439,32 @@ class FusedLinearPreferenceBase(torch.autograd.Function):
             compute_nll_loss=compute_nll_loss,
             chosen_nll_target_chunk=chosen_nll_target_chunk,
             average_log_prob=average_log_prob,
+            selective_log_softmax=selective_log_softmax,
         )
-        if full_nll_target is not None:
-            chosen_nll_loss = (
-                chosen_nll_loss / (full_nll_target[: full_nll_target.shape[0] // 2] != ignore_index).sum()
-            )
-        else:
-            chosen_nll_loss = chosen_nll_loss / (full_target[: full_target.shape[0] // 2] != ignore_index).sum()
+        if compute_nll_loss:
+            if full_nll_target is not None:
+                chosen_nll_loss = (
+                    chosen_nll_loss / (full_nll_target[: full_nll_target.shape[0] // 2] != ignore_index).sum()
+                )
+            else:
+                chosen_nll_loss = chosen_nll_loss / (full_target[: full_target.shape[0] // 2] != ignore_index).sum()
 
-        chosen_logits_mean = chosen_logits.sum() / (full_target.shape[0] // 2 * input_chunk.shape[1] * weight.shape[0])
-        rejected_logits_mean = rejected_logits.sum() / (
-            full_target.shape[0] // 2 * input_chunk.shape[1] * weight.shape[0]
-        )
+        if detach_logits_mean:
+            with torch.no_grad():
+                chosen_logits_mean = chosen_logits.sum() / (
+                    full_target.shape[0] // 2 * input_chunk.shape[1] * weight.shape[0]
+                )
+                rejected_logits_mean = rejected_logits.sum() / (
+                    full_target.shape[0] // 2 * input_chunk.shape[1] * weight.shape[0]
+                )
+            del chosen_logits, rejected_logits
+        else:
+            chosen_logits_mean = chosen_logits.sum() / (
+                full_target.shape[0] // 2 * input_chunk.shape[1] * weight.shape[0]
+            )
+            rejected_logits_mean = rejected_logits.sum() / (
+                full_target.shape[0] // 2 * input_chunk.shape[1] * weight.shape[0]
+            )
 
         if use_ref_model:
             with torch.no_grad():
@@ -437,6 +483,7 @@ class FusedLinearPreferenceBase(torch.autograd.Function):
                     compute_nll_loss=False,  # We don't need NLL loss for the reference model
                     chosen_nll_target_chunk=None,
                     average_log_prob=average_log_prob,
+                    selective_log_softmax=selective_log_softmax,
                 )
             loss_kwargs["ref_chosen_logps"] = ref_chosen_logps
             loss_kwargs["ref_rejected_logps"] = ref_rejected_logps

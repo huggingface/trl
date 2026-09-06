@@ -26,6 +26,16 @@ import torch.nn.functional as F
 from .fused_linear_preference import FusedLinearPreferenceBase
 
 
+_NATIVE_DPO_MAX_LOGIT_ELEMENTS = 268_435_456
+
+
+def _should_use_native_dpo(_input, weight):
+    if _input.dtype not in (torch.float16, torch.bfloat16):
+        return False
+    total_logit_elements = (_input.numel() // _input.shape[-1]) * weight.shape[0]
+    return total_logit_elements <= _NATIVE_DPO_MAX_LOGIT_ELEMENTS
+
+
 class FusedLinearDPOFunction(FusedLinearPreferenceBase):
     @staticmethod
     def preference_loss_fn(
@@ -344,10 +354,9 @@ class FusedLinearDPOLoss(torch.nn.Module):
                 "provide either precomputed reference log-probs or reference model inputs and weights, not both"
             )
 
-        # Cached references remove the reference-model projection entirely. Use native autograd for the remaining
-        # policy projection so the cached values participate directly in the preference loss without teaching the
-        # chunked custom-autograd API how to split a second, pair-shaped input.
-        if has_precomputed_ref:
+        # Native autograd has lower fixed overhead for small BF16/FP16 sigmoid workloads. Larger shapes and other
+        # dtypes/losses keep the memory-bounded chunked path. Cached references always avoid the reference projection.
+        if has_precomputed_ref or (self.loss_type == "sigmoid" and _should_use_native_dpo(_input, lin_weight)):
             loss, outputs = FusedLinearPreferenceBase._compute_loss(
                 _input,
                 lin_weight,
@@ -359,16 +368,19 @@ class FusedLinearDPOLoss(torch.nn.Module):
                 alpha=self.alpha,
                 beta=self.beta,
                 compute_nll_loss=self.compute_nll_loss,
-                use_ref_model=False,
+                use_ref_model=self.use_ref_model and not has_precomputed_ref,
+                ref_input_chunk=ref_input,
+                ref_weight=ref_weight,
+                ref_bias=ref_bias,
                 average_log_prob=self.average_log_prob,
+                detach_logits_mean=True,
+                selective_log_softmax=True,
                 loss_type=self.loss_type,
                 label_smoothing=self.label_smoothing,
                 discopop_tau=self.discopop_tau,
                 ref_chosen_logps=ref_chosen_logps,
                 ref_rejected_logps=ref_rejected_logps,
             )
-            # Mean logits are logging-only; do not retain their graph after returning from the loss.
-            outputs = (outputs[0], outputs[1], outputs[2].detach(), outputs[3].detach(), *outputs[4:])
             return loss, outputs
 
         return FusedLinearDPOFunction.apply(
