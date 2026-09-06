@@ -1456,7 +1456,8 @@ def test_native_dispatch_counts_reference_projection():
     assert not dpo_loss_module._should_use_native_dpo(inputs, weight, use_ref_model=True)
 
 
-def test_cached_reference_zero3_path_matches_native():
+def test_cached_reference_zero3_path_matches_native(monkeypatch):
+    monkeypatch.setattr(dpo_loss_module, "_should_use_native_dpo", lambda *_args, **_kwargs: True)
     base_input = torch.randn(4, 7, 11, device=device)
     base_weight = torch.randn(29, 11, device=device)
     base_bias = torch.randn(29, device=device)
