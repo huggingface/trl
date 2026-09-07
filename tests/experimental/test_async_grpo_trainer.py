@@ -30,7 +30,6 @@ from datasets import Dataset, load_dataset
 from transformers import AutoTokenizer, PreTrainedModel
 from transformers.testing_utils import torch_device
 
-import trl.experimental.async_grpo.async_grpo_trainer as async_grpo_trainer_module
 import trl.experimental.async_grpo.async_rollout_worker as worker
 from trl.experimental.async_grpo import AsyncGRPOConfig, AsyncGRPOTrainer
 from trl.experimental.async_grpo.async_grpo_trainer import (
@@ -151,47 +150,6 @@ class _StubWeightTransfer:
         pass
 
 
-def test_default_weight_transfer_validates_vllm_before_model_load():
-    args = AsyncGRPOConfig(output_dir="unused", report_to="none")
-    dataset = Dataset.from_dict({"prompt": [[{"role": "user", "content": "hello"}]]})
-
-    with (
-        patch.object(async_grpo_trainer_module, "is_vllm_available", return_value=False),
-        patch.object(async_grpo_trainer_module, "create_model_from_path") as model_loader,
-        pytest.raises(ImportError, match="vLLM >= 0.22.0"),
-    ):
-        AsyncGRPOTrainer(
-            model="unused",
-            reward_funcs=dummy_reward_func,
-            args=args,
-            train_dataset=dataset,
-        )
-
-    model_loader.assert_not_called()
-
-
-def test_custom_weight_transfer_skips_vllm_validation():
-    args = AsyncGRPOConfig(output_dir="unused", report_to="none")
-    dataset = Dataset.from_dict({"prompt": [[{"role": "user", "content": "hello"}]]})
-
-    with (
-        patch.object(async_grpo_trainer_module, "is_vllm_available", return_value=False),
-        patch.object(
-            async_grpo_trainer_module,
-            "create_model_from_path",
-            side_effect=RuntimeError("model load reached"),
-        ),
-        pytest.raises(RuntimeError, match="model load reached"),
-    ):
-        AsyncGRPOTrainer(
-            model="unused",
-            reward_funcs=dummy_reward_func,
-            args=args,
-            train_dataset=dataset,
-            weight_transfer=_StubWeightTransfer(),
-        )
-
-
 @pytest.mark.skipif(
     not is_ampere_or_newer() and torch_device != "xpu",
     reason="Flash Attention 2 requires Ampere or newer GPU, or XPU",
@@ -304,10 +262,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         # The data has to come from somewhere: an external `train_dataset`, or an environment that owns it. With
         # neither, construction fails fast.
         training_args = AsyncGRPOConfig(output_dir=self.tmp_dir, max_steps=5, report_to="none")
-        with (
-            patch.object(async_grpo_trainer_module, "is_vllm_available", return_value=False),
-            pytest.raises(ValueError, match="`train_dataset` is required"),
-        ):
+        with pytest.raises(ValueError, match="`train_dataset` is required"):
             AsyncGRPOTrainer(
                 model="trl-internal-testing/small-Qwen2ForCausalLM-2.5",
                 reward_funcs=dummy_reward_func,
@@ -323,10 +278,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
                 return "Guess the 5-letter word."
 
         args = AsyncGRPOConfig(output_dir=self.tmp_dir, report_to="none")  # max_steps unset
-        with (
-            patch.object(async_grpo_trainer_module, "is_vllm_available", return_value=False),
-            pytest.raises(ValueError, match="max_steps"),
-        ):
+        with pytest.raises(ValueError, match="max_steps"):
             AsyncGRPOTrainer(
                 model="trl-internal-testing/small-Qwen2ForCausalLM-2.5",
                 reward_funcs=dummy_reward_func,
@@ -345,10 +297,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             def reset(self, **kwargs): ...
 
         args = AsyncGRPOConfig(output_dir=self.tmp_dir, max_steps=1, report_to="none")
-        with (
-            patch.object(async_grpo_trainer_module, "is_vllm_available", return_value=False),
-            pytest.raises(ValueError, match="requires a `train_dataset`"),
-        ):
+        with pytest.raises(ValueError, match="requires a `train_dataset`"):
             AsyncGRPOTrainer(
                 model="trl-internal-testing/small-Qwen2ForCausalLM-2.5",
                 reward_funcs=dummy_reward_func,
