@@ -4628,9 +4628,9 @@ class TestGRPOTrainerSlow(TrlTestCase):
             eval_dataset=self.eval_dataset,
             processing_class=tokenizer,
         )
-        from liger_kernel.chunked_loss import LigerFusedLinearGRPOLoss
+        from trl.losses import FusedLinearGRPOLoss
 
-        assert isinstance(trainer.liger_loss, LigerFusedLinearGRPOLoss)
+        assert isinstance(trainer.liger_loss, FusedLinearGRPOLoss)
 
         previous_trainable_params = {n: param.clone() for n, param in model.named_parameters()}
 
@@ -4688,9 +4688,9 @@ class TestGRPOTrainerSlow(TrlTestCase):
             processing_class=tokenizer,
             peft_config=peft_config,
         )
-        from liger_kernel.chunked_loss import LigerFusedLinearGRPOLoss
+        from trl.losses import FusedLinearGRPOLoss
 
-        assert isinstance(trainer.liger_loss, LigerFusedLinearGRPOLoss)
+        assert isinstance(trainer.liger_loss, FusedLinearGRPOLoss)
 
         # Verify PEFT adapter is properly initialized
         from peft import PeftModel
@@ -4740,9 +4740,9 @@ class TestGRPOTrainerSlow(TrlTestCase):
             eval_dataset=self.eval_dataset,
             processing_class=tokenizer,
         )
-        from liger_kernel.chunked_loss import LigerFusedLinearGRPOLoss
+        from trl.losses import FusedLinearGRPOLoss
 
-        assert isinstance(trainer.liger_loss, LigerFusedLinearGRPOLoss)
+        assert isinstance(trainer.liger_loss, FusedLinearGRPOLoss)
 
         previous_trainable_params = {n: param.clone() for n, param in model.named_parameters()}
 
