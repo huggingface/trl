@@ -493,11 +493,18 @@ class TestGRPOTrainer(TrlTestCase):
         grads = {name: param.grad for name, param in trainer.model.named_parameters() if param.grad is not None}
 
         assert chunked_loss.abs() > 0  # the comparison below would hold vacuously for two zero losses
-        torch.testing.assert_close(chunked_loss, loss, rtol=1e-4, atol=1e-5)
+        # VESPO's sequence weights amplify the small log-probability difference from streamed GEMM reductions.
+        loss_rtol = 1e-3 if loss_type == "vespo" else 1e-4
+        torch.testing.assert_close(chunked_loss, loss, rtol=loss_rtol, atol=1e-5)
         assert chunked_grads.keys() == grads.keys()
+        grad_atol = 2e-2 if loss_type in {"luspo", "vespo"} else 5e-4
         for name, grad in grads.items():
-            # Vocabulary streaming changes the GEMM reduction shape; PyTorch 2.8 differs by up to 4.5e-4 in fp32.
-            torch.testing.assert_close(chunked_grads[name], grad, rtol=1e-3, atol=5e-4)
+            # LUSPO/VESPO amplify the streamed-GEMM difference; PyTorch 2.8 differs by up to 1.4e-2 in fp32.
+            torch.testing.assert_close(chunked_grads[name], grad, rtol=1e-3, atol=grad_atol)
+        chunked_grad = torch.cat([grad.flatten() for grad in chunked_grads.values()])
+        full_grad = torch.cat([grad.flatten() for grad in grads.values()])
+        torch.testing.assert_close(chunked_grad.norm(), full_grad.norm(), rtol=1e-3, atol=1e-5)
+        assert torch.nn.functional.cosine_similarity(chunked_grad, full_grad, dim=0) > 0.999
 
         release_memory(trainer.model, trainer)
 
