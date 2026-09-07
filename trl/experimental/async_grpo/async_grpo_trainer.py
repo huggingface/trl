@@ -37,6 +37,7 @@ from transformers import AutoTokenizer, PreTrainedModel, PreTrainedTokenizerBase
 from transformers.data.data_collator import DataCollatorMixin
 from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR
 
+from ...import_utils import is_vllm_available
 from ...trainer.base_trainer import _BaseTrainer
 from ...trainer.utils import (
     compute_flops_per_token,
@@ -796,6 +797,12 @@ class AsyncGRPOTrainer(_BaseTrainer):
         if args is None:
             model_name = model.split("/")[-1]
             args = AsyncGRPOConfig(f"{model_name}-AsyncGRPO")
+
+        if weight_transfer is None and not is_vllm_available(min_version="0.22.0"):
+            raise ImportError(
+                "vLLM >= 0.22.0 is required to use the default Async GRPO weight transfer. "
+                "Install it with: pip install 'vllm>=0.22.0'"
+            )
 
         # Training arguments
         self.epsilon_low = args.epsilon
