@@ -106,6 +106,22 @@ logger = get_logger(__name__)
 RewardFunc = str | PreTrainedModel | Callable[..., list[float | None]]
 
 
+def _compute_per_token_kl(
+    old_per_token_logps: torch.Tensor,
+    ref_per_token_logps: torch.Tensor,
+    kl_estimator: str,
+) -> torch.Tensor:
+    """Per-token KL from old/current policy log-probs vs the reference, using k1 or k3."""
+    if kl_estimator == "k1":
+        # First-order log ratio from Ahmadian et al. (2024). Unbiased; can be negative per token.
+        return old_per_token_logps - ref_per_token_logps
+    if kl_estimator == "k3":
+        # Schulman estimator (http://joschu.net/blog/kl-approx.html), same form as GRPOTrainer.
+        log_ratio = ref_per_token_logps - old_per_token_logps
+        return log_ratio.exp() - log_ratio - 1
+    raise ValueError(f"kl_estimator must be 'k1' or 'k3', got {kl_estimator!r}.")
+
+
 class RLOOTrainer(_BaseTrainer):
     """
     Trainer for the Reinforce Leave One Out (RLOO) method. This algorithm was initially proposed in the paper [Back to
@@ -256,6 +272,9 @@ class RLOOTrainer(_BaseTrainer):
             model_name = model if isinstance(model, str) else get_config_model_id(model.config)
             model_name = model_name.split("/")[-1]
             args = RLOOConfig(f"{model_name}-RLOO")
+
+        if args.kl_estimator not in {"k1", "k3"}:
+            raise ValueError(f"kl_estimator must be either 'k1' or 'k3', got {args.kl_estimator!r}.")
 
         # Model
         if isinstance(model, str):
@@ -1569,11 +1588,10 @@ class RLOOTrainer(_BaseTrainer):
 
         # Include the KL penalty in the reward
         if self.beta != 0.0:
-            # RLOO uses the first-order log ratio for the per-token KL estimate, following the original RLOO paper
-            # (Ahmadian et al., 2024, https://huggingface.co/papers/2405.14782). Unlike GRPOTrainer's Schulman
-            # approximation (always >= 0), this can be negative per token. The divergence is intentional: RLOO applies
-            # KL as a reward penalty (summed across tokens per sequence), while GRPO adds it to the per-token loss.
-            per_token_kl = old_per_token_logps - ref_per_token_logps
+            # k1 matches the RLOO paper (log ratio, can be negative). k3 is the Schulman estimator used by
+            # GRPOTrainer (always >= 0, lower variance). Either way KL is a sequence-level reward penalty, not a
+            # per-token loss term.
+            per_token_kl = _compute_per_token_kl(old_per_token_logps, ref_per_token_logps, self.args.kl_estimator)
             # Apply sequence-level KL penalty to rewards (sum KL across tokens first, then apply to each sequence)
             kl = (per_token_kl * completion_mask).sum(-1)
             kl = gather(kl)  # rewards are gathered, so kl must be too

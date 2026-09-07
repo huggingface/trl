@@ -14,7 +14,7 @@
 
 import warnings
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 from .base_config import _BaseConfig
 
@@ -173,6 +173,10 @@ class RLOOConfig(_BaseConfig):
         beta (`float`, *optional*, defaults to `0.05`):
             KL coefficient. If `0.0`, the reference model is not loaded, reducing memory usage and improving training
             speed.
+        kl_estimator (`Literal["k1", "k3"]`, *optional*, defaults to `"k1"`):
+            Estimator for the KL penalty applied to rewards. `"k1"` is the first-order log ratio from the RLOO paper
+            (unbiased, can be negative per token). `"k3"` is the Schulman estimator used by [`GRPOTrainer`] (unbiased,
+            lower variance, always ≥ 0). See [Approximating KL Divergence](http://joschu.net/blog/kl-approx.html).
         num_iterations (`int`, *optional*, defaults to `1`):
             Number of iterations per batch (denoted as μ in the algorithm).
         epsilon (`float`, *optional*, defaults to `0.2`):
@@ -497,6 +501,14 @@ class RLOOConfig(_BaseConfig):
         metadata={
             "help": "KL coefficient. If `0.0`, the reference model is not loaded, reducing memory usage and improving "
             "training speed."
+        },
+    )
+    kl_estimator: Literal["k1", "k3"] = field(
+        default="k1",
+        metadata={
+            "help": "Estimator for the KL penalty applied to rewards. 'k1' is the first-order log ratio from the RLOO "
+            "paper (unbiased, can be negative per token). 'k3' is the Schulman estimator used by GRPOTrainer "
+            "(unbiased, lower variance, always >= 0). See http://joschu.net/blog/kl-approx.html."
         },
     )
     num_iterations: int = field(

@@ -29,6 +29,7 @@ from transformers import (
 from transformers.utils import is_peft_available
 
 from trl import RLOOConfig, RLOOTrainer
+from trl.trainer.rloo_trainer import _compute_per_token_kl
 
 from .testing_utils import TrlTestCase, require_bitsandbytes, require_peft, require_vision, require_vllm
 
@@ -36,6 +37,30 @@ from .testing_utils import TrlTestCase, require_bitsandbytes, require_peft, requ
 if is_peft_available():
     import peft
     from peft import LoraConfig, get_peft_model
+
+
+class TestRLOOKLEstimator(TrlTestCase):
+    def test_config_defaults_to_k1(self):
+        assert RLOOConfig(output_dir=self.tmp_dir).kl_estimator == "k1"
+
+    def test_k1_is_log_ratio(self):
+        old = torch.tensor([[0.0, -1.0], [0.5, 2.0]])
+        ref = torch.tensor([[0.2, 0.0], [0.5, 0.0]])
+        torch.testing.assert_close(_compute_per_token_kl(old, ref, "k1"), old - ref)
+
+    def test_k3_matches_schulman_estimator_and_is_non_negative(self):
+        old = torch.tensor([[0.0, -1.0], [0.5, 2.0]])
+        ref = torch.tensor([[0.2, 0.0], [0.5, 0.0]])
+        log_ratio = ref - old
+        expected = log_ratio.exp() - log_ratio - 1
+        kl = _compute_per_token_kl(old, ref, "k3")
+        torch.testing.assert_close(kl, expected)
+        assert torch.all(kl >= 0)
+        assert torch.any(_compute_per_token_kl(old, ref, "k1") < 0)
+
+    def test_invalid_estimator_raises(self):
+        with pytest.raises(ValueError, match="k1"):
+            _compute_per_token_kl(torch.zeros(1, 1), torch.zeros(1, 1), "k2")
 
 
 class TestRLOOTrainer(TrlTestCase):

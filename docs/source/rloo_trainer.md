@@ -69,6 +69,17 @@ $$
 \mathbb{D}_{\mathrm{KL}}\!\left[\pi_\theta\|\pi_{\mathrm{ref}}\right] = \sum_{t=1}^T \log \frac{\pi_\theta(o_{i,t} \mid q, o_{i,<t})}{\pi_{\mathrm{ref}}(o_{i,t} \mid q, o_{i,<t})}.
 $$
 
+This is the `k1` estimator from the RLOO paper, and the default (`kl_estimator="k1"`). Set
+`kl_estimator="k3"` in [`RLOOConfig`] to use the [Schulman et al. (2020)](http://joschu.net/blog/kl-approx.html)
+estimator, as in [`GRPOTrainer`]:
+
+$$
+\mathbb{D}_{\mathrm{KL}}\left[\pi_\theta \|\pi_{\mathrm{ref}}\right] = \sum_{t=1}^T \left( \frac{\pi_{\mathrm{ref}}(o_{i,t} \mid q, o_{i,<t})}{\pi_\theta(o_{i,t} \mid q, o_{i,<t})} - \log \frac{\pi_{\mathrm{ref}}(o_{i,t} \mid q, o_{i,<t})}{\pi_\theta(o_{i,t} \mid q, o_{i,<t})} - 1 \right).
+$$
+
+`k3` is unbiased, has lower variance, and is always non-negative. In either case the KL term is
+applied as a detached reward penalty; it does not backpropagate into the policy.
+
 The final reward assigned to sequence  \\( o_i \\) is then:
 
 $$
