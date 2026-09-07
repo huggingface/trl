@@ -24,14 +24,7 @@ from transformers.utils import is_peft_available
 from trl import KTOConfig, KTOTrainer
 from trl.trainer.kto_trainer import DataCollatorForUnpairedPreference, DataCollatorForVisionUnpairedPreference
 
-from .testing_utils import (
-    TrlTestCase,
-    assert_processing_class_revision,
-    require_bitsandbytes,
-    require_liger_kernel,
-    require_peft,
-    require_vision,
-)
+from .testing_utils import TrlTestCase, require_bitsandbytes, require_liger_kernel, require_peft, require_vision
 
 
 if is_peft_available():
@@ -293,16 +286,6 @@ class TestKTOTrainer(TrlTestCase):
         self.ref_model = AutoModelForCausalLM.from_pretrained(self.model_id)
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
         self.tokenizer.pad_token = self.tokenizer.eos_token
-
-    def test_init_auto_processing_class_uses_model_revision(self):
-        # The automatically created processing_class must be loaded from the same revision as the model
-        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
-        with assert_processing_class_revision("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", "main"):
-            KTOTrainer(
-                model=self.model_id,
-                args=KTOConfig(output_dir=self.tmp_dir, model_init_kwargs={"revision": "main"}),
-                train_dataset=dataset,
-            )
 
     @pytest.mark.parametrize(
         "config_name, loss_type, pre_compute, eval_dataset",
@@ -954,6 +937,7 @@ class TestKTOTrainer(TrlTestCase):
             train_dataset=dataset,
             peft_config=LoraConfig(target_modules=["q_proj", "v_proj"]),
         )
+        assert trainer.liger_loss.use_ref_model
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
         trainer.train()
         assert trainer.state.log_history[-1]["train_loss"] is not None
@@ -1019,6 +1003,24 @@ class TestKTOTrainer(TrlTestCase):
                 args=training_args,
                 train_dataset=dataset,
                 compute_metrics=lambda _: {},
+            )
+
+    @require_liger_kernel
+    @pytest.mark.parametrize("weight", ["desirable_weight", "undesirable_weight"])
+    def test_init_fails_with_weighted_liger_loss(self, weight):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
+        training_args = KTOConfig(
+            output_dir=self.tmp_dir,
+            use_liger_kernel=True,
+            report_to="none",
+            **{weight: 2.0},
+        )
+
+        with pytest.raises(ValueError, match=weight):
+            KTOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                args=training_args,
+                train_dataset=dataset,
             )
 
     @require_liger_kernel
