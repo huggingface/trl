@@ -33,6 +33,8 @@ config = Qwen2Config(
     num_key_value_heads=2,
     num_hidden_layers=2,
     intermediate_size=32,
+    rope_theta=1000000.0,
+    max_window_layers=70,
     bos_token_id=151643,
     eos_token_id=151645,
 )
