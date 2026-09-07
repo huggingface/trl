@@ -36,8 +36,9 @@ class RewardConfig(_BaseConfig):
         > Parameters that control the model
 
         model_init_kwargs (`dict[str, Any]`, *optional*):
-            Keyword arguments for [`~transformers.AutoModelForCausalLM.from_pretrained`], used when the `model`
-            argument of the [`RewardTrainer`] is provided as a string.
+            Keyword arguments for [`~transformers.AutoModelForSequenceClassification.from_pretrained`], used when the
+            `model` argument of the [`RewardTrainer`] is provided as a string. The `revision` value is also used when
+            loading the tokenizer.
         trust_remote_code (`bool`, *optional*, defaults to `False`):
             Whether to allow loading models and tokenizers that ship custom Python code from the Hub. Forwarded to
             [`~transformers.AutoModelForSequenceClassification.from_pretrained`] and
@@ -102,8 +103,9 @@ class RewardConfig(_BaseConfig):
     model_init_kwargs: dict[str, Any] | str | None = field(
         default=None,
         metadata={
-            "help": "Keyword arguments for `AutoModelForCausalLM.from_pretrained`, used when the `model` argument of "
-            "the `RewardTrainer` is provided as a string."
+            "help": "Keyword arguments for `AutoModelForSequenceClassification.from_pretrained`, used when the "
+            "`model` argument of the `RewardTrainer` is provided as a string. The `revision` value is also used when "
+            "loading the tokenizer."
         },
     )
     trust_remote_code: bool = field(
