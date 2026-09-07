@@ -115,6 +115,8 @@
     title: GKD
   - local: gmpo
     title: GMPO
+  - local: iw_opd_trainer
+    title: IW-OPD
   - local: gold_trainer
     title: GOLD
   - local: grpo_with_replay_buffer

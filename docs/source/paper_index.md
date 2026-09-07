@@ -1682,7 +1682,7 @@ Structures post-training as three stages: general SFT, independent per-domain RL
 
 **📜 Paper**: https://huggingface.co/papers/2606.22600
 
-Introduces Importance-Weighted On-Policy Distillation (IW-OPD), which addresses the position bias in OPD by reweighting sampled-token distillation updates according to accumulated teacher-student prefix discrepancy. Early tokens keep larger weights, while later tokens after high drift are downweighted. Used in TRL via [`experimental.iw_opd.IWOPDTrainer`] with `distillation_objective="iw_opd"`.
+Introduces Importance-Weighted On-Policy Distillation (IW-OPD), which addresses the position bias in OPD by reweighting sampled-token distillation updates according to accumulated teacher-student prefix discrepancy. Early tokens keep larger weights, while later tokens after high drift are downweighted. Used in TRL via [`experimental.iw_opd.IWOPDTrainer`] with `distillation_objective="iw_opd"`. For detailed usage, see the [IW-OPD Trainer documentation](iw_opd_trainer).
 
 The paper optimizes IW-OPD with a clipped policy-gradient setup (verl) and vLLM rollouts. `IWOPDTrainer` exposes the matching distillation and rollout settings below; policy-optimization settings from the paper such as clipping range `0.2`, dual-clip constant `3.0`, inner PPO epochs, entropy coefficient, KL reward penalty, auxiliary KL, and rollout importance correction are not `IWOPDConfig` parameters.
 
