@@ -44,7 +44,10 @@ from trl.experimental.async_grpo.async_grpo_trainer import (
     _balance_by_squared_length,
     _iter_vllm_named_params,
     _reduce_metric,
+    round_lora_rank,
+    save_lora_adapter,
     select_adapter_sync,
+    validate_lora_for_vllm_sync,
 )
 from trl.experimental.async_grpo.async_rollout_worker import (
     AsyncRolloutWorker,
@@ -59,7 +62,6 @@ from trl.experimental.async_grpo.async_rollout_worker import (
     _SampleBuilder,
 )
 from trl.trainer.base_trainer import _BaseTrainer
-from trl.trainer.utils import round_lora_rank, save_lora_adapter, validate_lora_for_vllm_sync
 
 from ..testing_utils import TrlTestCase, is_ampere_or_newer, require_peft
 
@@ -1447,7 +1449,11 @@ class TestSaveLoraAdapter(TrlTestCase):
 
         model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
         model = get_peft_model(model, LoraConfig(target_modules=["q_proj", "v_proj"]))
-        accelerator = SimpleNamespace(device=torch.device("cpu"), is_main_process=is_main_process)
+        # The model stays on CPU while the accelerator reports the runner's device, which is the `fsdp_offload_params`
+        # shape: `save_lora_adapter` has to move each shard to the device before gathering and bring the result back
+        # before writing. On a GPU runner that is a real round trip; hardcoding `cpu` here made it a no-op, so a
+        # tensor left on the wrong device could never have failed this test.
+        accelerator = SimpleNamespace(device=torch.device(torch_device), is_main_process=is_main_process)
         return model, accelerator
 
     def test_writes_a_flat_loadable_adapter_directory(self):
