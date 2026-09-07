@@ -624,12 +624,14 @@ class SDPOTrainer(_BaseTrainer):
         if not isinstance(reward_funcs, list):
             reward_funcs = [reward_funcs]
         self.reward_func_names = []
+        reward_model_revisions = [None] * len(reward_funcs)
         for i, reward_func in enumerate(reward_funcs):
             if isinstance(reward_func, str):
                 reward_model_init_kwargs = args.model_init_kwargs or {}
                 if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                     reward_model_init_kwargs["device_map"] = None
                 reward_model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
+                reward_model_revisions[i] = reward_model_init_kwargs.get("revision")
                 reward_funcs[i] = AutoModelForSequenceClassification.from_pretrained(
                     reward_func,
                     num_labels=1,
@@ -661,7 +663,9 @@ class SDPOTrainer(_BaseTrainer):
             if isinstance(reward_func, PreTrainedModel):
                 if reward_processing_class is None:
                     reward_processing_class = AutoTokenizer.from_pretrained(
-                        get_config_model_id(reward_func.config), trust_remote_code=args.trust_remote_code
+                        get_config_model_id(reward_func.config),
+                        revision=reward_model_revisions[i],
+                        trust_remote_code=args.trust_remote_code,
                     )
                 if reward_processing_class.pad_token_id is None:
                     reward_processing_class.pad_token = reward_processing_class.eos_token

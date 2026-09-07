@@ -799,11 +799,18 @@ class GOLDTrainer(SFTTrainer):
         peft_config: Optional["PeftConfig"] = None,
     ):
         self.model_name_or_path = model if isinstance(model, str) else model.config._name_or_path
-        self.model_revision = (args.model_init_kwargs or {}).get("revision")
+        self.model_revision = (args.model_init_kwargs or {}).get("revision") if isinstance(model, str) else None
+        teacher_revision = (
+            (args.teacher_model_init_kwargs or {}).get("revision", args.teacher_model_revision)
+            if isinstance(teacher_model, str)
+            else None
+        )
         dataset_sample = next(iter(train_dataset)) if train_dataset is not None else {}
         if processing_class is None:
             model_id = model if isinstance(model, str) else get_config_model_id(model.config)
-            processing_class = AutoProcessor.from_pretrained(model_id, trust_remote_code=args.trust_remote_code)
+            processing_class = AutoProcessor.from_pretrained(
+                model_id, revision=self.model_revision, trust_remote_code=args.trust_remote_code
+            )
             # simplified logic from SFTTrainer
         # Handle pad token for processors or tokenizers
         if isinstance(processing_class, ProcessorMixin):
@@ -824,7 +831,9 @@ class GOLDTrainer(SFTTrainer):
         if self._is_vlm:
             if isinstance(teacher_model, str):
                 # Teacher not yet instantiated -- validate it's a VLM
-                teacher_proc = AutoProcessor.from_pretrained(teacher_model, trust_remote_code=args.trust_remote_code)
+                teacher_proc = AutoProcessor.from_pretrained(
+                    teacher_model, revision=teacher_revision, trust_remote_code=args.trust_remote_code
+                )
                 if not isinstance(teacher_proc, ProcessorMixin):
                     raise ValueError(
                         "VLM distillation requires both student and teacher to be vision-language models. "
@@ -863,6 +872,7 @@ class GOLDTrainer(SFTTrainer):
                     if isinstance(teacher_model, str)
                     else AutoProcessor.from_pretrained(
                         teacher_model.config._name_or_path,
+                        revision=teacher_revision,
                         trust_remote_code=args.trust_remote_code,
                     )
                 )
@@ -972,6 +982,7 @@ class GOLDTrainer(SFTTrainer):
         elif args.use_uld_loss and args.teacher_tokenizer_name_or_path is not None:
             self.teacher_tokenizer = AutoTokenizer.from_pretrained(
                 args.teacher_tokenizer_name_or_path,
+                revision=teacher_revision,
                 trust_remote_code=args.trust_remote_code,
             )
             if self.teacher_tokenizer.pad_token is None:

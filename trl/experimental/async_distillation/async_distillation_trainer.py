@@ -964,6 +964,7 @@ class AsyncDistillationTrainer(_BaseTrainer):
         model_init_kwargs = args.model_init_kwargs or {}
         model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
         model_init_kwargs.setdefault("dtype", args.dtype)
+        model_revision = model_init_kwargs.get("revision")
         # FlashAttention is required: training runs in padding-free mode, where sequences are concatenated into a
         # single row and attention is derived from `position_ids` resets. SDPA/eager can't handle this. Unlike
         # AsyncGRPOTrainer, the student's own lm_head is NOT patched (via `patch_chunked_lm_head`) to a chunked
@@ -983,7 +984,9 @@ class AsyncDistillationTrainer(_BaseTrainer):
 
         # Processing class
         if processing_class is None:
-            processing_class = AutoTokenizer.from_pretrained(model_name, trust_remote_code=args.trust_remote_code)
+            processing_class = AutoTokenizer.from_pretrained(
+                model_name, revision=model_revision, trust_remote_code=args.trust_remote_code
+            )
         if processing_class.pad_token is None:
             processing_class.pad_token = processing_class.eos_token
 
