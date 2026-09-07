@@ -496,7 +496,8 @@ class TestGRPOTrainer(TrlTestCase):
         torch.testing.assert_close(chunked_loss, loss, rtol=1e-4, atol=1e-5)
         assert chunked_grads.keys() == grads.keys()
         for name, grad in grads.items():
-            torch.testing.assert_close(chunked_grads[name], grad, rtol=1e-4, atol=1e-5)
+            # Vocabulary streaming changes the GEMM reduction shape; PyTorch 2.8 differs by up to 4.5e-4 in fp32.
+            torch.testing.assert_close(chunked_grads[name], grad, rtol=1e-3, atol=5e-4)
 
         release_memory(trainer.model, trainer)
 

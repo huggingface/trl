@@ -1330,6 +1330,30 @@ class TestChunkedLogProbFunction:
         torch.testing.assert_close(grad_hidden, hidden.grad, atol=1e-2, rtol=1e-2)
         torch.testing.assert_close(grad_weight, weight.grad, atol=1e-2, rtol=1e-2)
 
+    def test_backward_uses_autocast_hidden_for_weight_gradient(self):
+        torch.manual_seed(42)
+        hidden = torch.linspace(1.0, 2.0, self.N * self.H).reshape(self.N, self.H).to(torch.bfloat16).float()
+        perturbed_hidden = hidden + 1e-4
+        assert torch.equal(hidden.to(torch.bfloat16), perturbed_hidden.to(torch.bfloat16))
+        hidden.requires_grad_()
+        perturbed_hidden.requires_grad_()
+        weight = torch.randn(self.V, self.H, requires_grad=True)
+        perturbed_weight = weight.detach().clone().requires_grad_()
+        labels = torch.randint(0, self.V, (self.N,))
+
+        # Autocast gives both inputs identical projected values. Their weight gradients must therefore also match;
+        # using the original fp32 hidden states in backward would make the gradients depend on the discarded bits.
+        with torch.autocast("cpu", dtype=torch.bfloat16):
+            logprobs, _ = _ChunkedLogProbFunction.apply(hidden, weight, None, labels, 1.0, self.CHUNK_SIZE)
+            perturbed_logprobs, _ = _ChunkedLogProbFunction.apply(
+                perturbed_hidden, perturbed_weight, None, labels, 1.0, self.CHUNK_SIZE
+            )
+        logprobs.sum().backward()
+        perturbed_logprobs.sum().backward()
+
+        torch.testing.assert_close(logprobs, perturbed_logprobs, rtol=0, atol=0)
+        torch.testing.assert_close(weight.grad, perturbed_weight.grad, rtol=0, atol=0)
+
     @pytest.mark.parametrize("temperature", [1.0, 0.7])
     def test_backward_entropy(self, temperature):
         """Backprop through the `entropy` output alone (as opposed to `logprobs`, covered above)."""
