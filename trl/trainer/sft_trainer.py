@@ -1220,6 +1220,10 @@ class SFTTrainer(_BaseTrainer):
                     "in the vocabulary before using it as a padding token."
                 )
             self._tokenizer.pad_token = pad_token
+            # Mirror the pad token onto the model configs: `Trainer` runs the same alignment at train time, so the end
+            # state is unchanged, but the model stays consistent with the tokenizer from the moment it is built.
+            model.config.pad_token_id = self._tokenizer.pad_token_id
+            model.generation_config.pad_token_id = self._tokenizer.pad_token_id
             data_collator = DataCollatorForLanguageModeling(
                 pad_token_id=self._tokenizer.pad_token_id,
                 padding_free=self.padding_free,
