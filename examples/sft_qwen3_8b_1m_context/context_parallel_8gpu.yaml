@@ -1,0 +1,10 @@
+# Context parallelism with FSDP2, 8 GPUs. Only non-default settings are listed.
+distributed_type: FSDP
+mixed_precision: bf16
+num_processes: 8  # one 8-GPU node
+fsdp_config:
+  fsdp_version: 2
+  fsdp_auto_wrap_policy: TRANSFORMER_BASED_WRAP
+  fsdp_cpu_ram_efficient_loading: true
+parallelism_config:
+  parallelism_config_cp_size: 8  # the whole node forms one context-parallel group
