@@ -41,9 +41,12 @@ class TestThinkFormatReward(TrlTestCase):
             "This is my reasoning.</think>\nThis is my answer.",
             "This is my reasoning.</think>This is my answer.",
             "First, 2 plus 2.\n</think>\nThe answer is 4.",
+            # Accepted deliberately: a bare or mentioned </think> also scores 1.0.
+            "</think>",
+            "An answer that merely mentions </think>.",
         ]
         completions = [[{"content": completion}] for completion in completions]
-        expected_rewards = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]  # All should be valid
+        expected_rewards = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]  # All should be valid
         rewards = think_format_reward(completions)
         assert rewards == expected_rewards
 
