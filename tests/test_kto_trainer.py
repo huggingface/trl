@@ -937,6 +937,7 @@ class TestKTOTrainer(TrlTestCase):
             train_dataset=dataset,
             peft_config=LoraConfig(target_modules=["q_proj", "v_proj"]),
         )
+        assert trainer.liger_loss.use_ref_model
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
         trainer.train()
         assert trainer.state.log_history[-1]["train_loss"] is not None
@@ -1002,6 +1003,24 @@ class TestKTOTrainer(TrlTestCase):
                 args=training_args,
                 train_dataset=dataset,
                 compute_metrics=lambda _: {},
+            )
+
+    @require_liger_kernel
+    @pytest.mark.parametrize("weight", ["desirable_weight", "undesirable_weight"])
+    def test_init_fails_with_weighted_liger_loss(self, weight):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
+        training_args = KTOConfig(
+            output_dir=self.tmp_dir,
+            use_liger_kernel=True,
+            report_to="none",
+            **{weight: 2.0},
+        )
+
+        with pytest.raises(ValueError, match=weight):
+            KTOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                args=training_args,
+                train_dataset=dataset,
             )
 
     @require_liger_kernel
