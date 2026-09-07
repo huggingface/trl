@@ -1447,6 +1447,7 @@ class _ChunkedLogProbFunction(torch.autograd.Function):
             for token_start in range(0, N, _CHUNKED_LOGPROB_TOKEN_CHUNK_SIZE):
                 token_end = min(token_start + _CHUNKED_LOGPROB_TOKEN_CHUNK_SIZE, N)
                 hidden_chunk = hidden[token_start:token_end]
+                hidden_chunk_compute = hidden_chunk.to(compute_dtype)
                 labels_chunk = labels[token_start:token_end]
                 log_z_chunk = log_z[token_start:token_end]
                 entropy_chunk = entropy[token_start:token_end]
@@ -1460,7 +1461,7 @@ class _ChunkedLogProbFunction(torch.autograd.Function):
                     C = end - start
                     w_chunk = weight[start:end].to(compute_dtype)  # [C, H]
 
-                    torch.mm(hidden_chunk.to(compute_dtype), w_chunk.t(), out=mm_buf[:n_chunk, :C])
+                    torch.mm(hidden_chunk_compute, w_chunk.t(), out=mm_buf[:n_chunk, :C])
                     if bias is not None:
                         mm_buf[:n_chunk, :C].add_(bias[start:end].to(compute_dtype))
                     logits_chunk = logits_buf[:n_chunk, :C]
@@ -1499,7 +1500,7 @@ class _ChunkedLogProbFunction(torch.autograd.Function):
                     grad_logits = grad_logits * logit_scale
 
                     grad_hidden[token_start:token_end].add_(grad_logits @ w_chunk.float())
-                    grad_weight[start:end].add_(grad_logits.t() @ hidden_chunk.float())
+                    grad_weight[start:end].add_(grad_logits.t() @ hidden_chunk_compute.float())
                     if grad_bias is not None:
                         grad_bias[start:end].add_(grad_logits.sum(dim=0))
 
