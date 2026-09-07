@@ -269,8 +269,9 @@ class A2POTrainer(_BaseTrainer):
         # so evaluation can still look up their V*.
         if self.args.filter_all_incorrect:
             self.train_dataset = self.train_dataset.filter(
-                lambda example: maybe_apply_chat_template(example, self.processing_class)["prompt"]
-                not in all_incorrect
+                lambda example: (
+                    maybe_apply_chat_template(example, self.processing_class)["prompt"] not in all_incorrect
+                )
             )
         logger.info(f"Stage 1 complete: estimated V* for {len(self._optimal_values)} prompts.")
 
