@@ -1073,6 +1073,26 @@ class TestSFTTrainer(TrlTestCase):
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
             )
 
+    @pytest.mark.parametrize(
+        "attn_implementation, expect_warning",
+        [
+            ("kernels-community/flash-attn2", False),
+            ("kernels-community/flash-attn2@v2", False),
+            ("eager", True),
+        ],
+    )
+    def test_padding_free_warns_only_for_unsupported_attention(self, attn_implementation, expect_warning, caplog):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train[:2]")
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
+        # Only the config value matters here: the warning is emitted at init, so no attention kernel is ever loaded.
+        model.config._attn_implementation = attn_implementation
+        training_args = SFTConfig(output_dir=self.tmp_dir, padding_free=True, max_length=None, report_to="none")
+
+        with caplog.at_level("WARNING", logger="trl.trainer.sft_trainer"):
+            SFTTrainer(model=model, args=training_args, train_dataset=dataset)
+
+        assert ("supported Flash Attention variant" in caplog.text) == expect_warning
+
     def test_train_with_iterable_dataset(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train", streaming=True)
 
@@ -2718,6 +2738,13 @@ class TestChunkedCrossEntropyLoss:
         torch.testing.assert_close(correct_c / n_valid_c, acc_r, atol=1e-5, rtol=1e-5)
         torch.testing.assert_close(ent_sum_c / n_valid_c, ent_r, atol=1e-5, rtol=1e-5)
         assert n_valid_c.item() == expected_n_valid.item()
+
+    def test_bf16_hidden_fp32_weight(self):
+        """A bf16 hidden state against an fp32 `lm_head` weight projects without a dtype mismatch."""
+        hidden, weight, labels = self._inputs()
+        loss_c, *_ = _chunked_cross_entropy_loss(hidden.bfloat16(), weight, self.CHUNK_SIZE, labels)
+        loss_r, *_ = self._reference(hidden.bfloat16().float(), weight, labels)
+        torch.testing.assert_close(loss_c, loss_r, atol=2e-2, rtol=2e-2)
 
     def test_num_items_in_batch_reduction(self):
         """When num_items_in_batch is provided, loss is sum / num_items_in_batch."""
