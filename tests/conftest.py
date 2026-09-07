@@ -101,6 +101,7 @@ def apply_model_revisions(monkeypatch):
         AutoConfig,
         AutoModelForCausalLM,
         AutoModelForSequenceClassification,
+        PretrainedConfig,
         PreTrainedModel,
         PreTrainedTokenizerBase,
         ProcessorMixin,
@@ -127,11 +128,15 @@ def apply_model_revisions(monkeypatch):
         # Re-wrap as classmethod
         return classmethod(wrapper)
 
-    # Patch all transformers Auto* classes
+    # Patch all transformers Auto* classes. `PretrainedConfig` is needed on top of `AutoConfig`: `AutoConfig` is a
+    # factory and is absent from a concrete config's MRO, so callers that reach for the concrete class, such as peft
+    # resolving the base model's vocab size via `model.config.__class__.from_pretrained`, would otherwise read the
+    # default branch instead of the revision under test.
     for cls in [
         AutoConfig,
         AutoModelForCausalLM,
         AutoModelForSequenceClassification,
+        PretrainedConfig,
         PreTrainedModel,
         PreTrainedTokenizerBase,
         ProcessorMixin,
