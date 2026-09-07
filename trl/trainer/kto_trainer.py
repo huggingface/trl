@@ -1306,7 +1306,9 @@ class KTOTrainer(_BaseTrainer):
             # Precomputation runs outside `compute_loss`, so a distributed wrapper has not yet armed the hooks that
             # gather the backbone parameters read by the chunked forward.
             unwrapped_model = self.accelerator.unwrap_model(model)
-            if model is not unwrapped_model:
+            # FSDP2 modifies the model in place, so unwrapping preserves object identity even though its root forward
+            # still has to run to distribute inputs and materialize parameters.
+            if self.is_fsdp_enabled or model is not unwrapped_model:
                 return self._forward_redirection(
                     model, unwrapped_model, self._compute_ref_log_probs, unwrapped_model, inputs
                 )
@@ -1490,15 +1492,37 @@ class KTOTrainer(_BaseTrainer):
                         else:
                             ref_outputs = self.model(**ref_model_kwargs)
                 else:
-                    ref_KL_logps = self._compute_kl_logps(self.ref_model, batch)
                     if self.use_liger_kernel:
-                        ref_per_token_logps, _, ref_outputs = self._get_per_token_logps_and_entropies(
-                            self.ref_model,
-                            ref_model_kwargs,
-                            batch["input_ids"],
-                            batch["completion_mask"],
-                        )
+                        ref_model_unwrapped = self.accelerator.unwrap_model(self.ref_model)
+                        if self.is_fsdp_enabled:
+                            # The reference model has its own FSDP wrapper. Route each direct-backbone pass through
+                            # that wrapper so FSDP2 distributes the inputs and materializes its sharded parameters.
+                            ref_KL_logps = self._forward_redirection(
+                                self.ref_model,
+                                ref_model_unwrapped,
+                                self._compute_kl_logps,
+                                ref_model_unwrapped,
+                                batch,
+                            )
+                            ref_per_token_logps, _, ref_outputs = self._forward_redirection(
+                                self.ref_model,
+                                ref_model_unwrapped,
+                                self._get_per_token_logps_and_entropies,
+                                ref_model_unwrapped,
+                                ref_model_kwargs,
+                                batch["input_ids"],
+                                batch["completion_mask"],
+                            )
+                        else:
+                            ref_KL_logps = self._compute_kl_logps(self.ref_model, batch)
+                            ref_per_token_logps, _, ref_outputs = self._get_per_token_logps_and_entropies(
+                                self.ref_model,
+                                ref_model_kwargs,
+                                batch["input_ids"],
+                                batch["completion_mask"],
+                            )
                     else:
+                        ref_KL_logps = self._compute_kl_logps(self.ref_model, batch)
                         ref_outputs = self.ref_model(**ref_model_kwargs)
             if not self.use_liger_kernel:
                 ref_shift_logits = ref_outputs.logits[:, :-1, :]
