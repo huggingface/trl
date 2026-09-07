@@ -47,7 +47,6 @@ from .tpo_config import TPOConfig
 
 
 if is_peft_available():
-    import peft
     from peft import PeftConfig, PeftModel, get_peft_model
 
 
@@ -382,12 +381,7 @@ class TPOTrainer(_BaseTrainer):
                 model, "is_loaded_in_8bit", False
             )
             get_peft_model_kwargs = {}
-            if (
-                args.deepspeed_plugin is not None
-                and args.deepspeed_plugin.zero_stage == 3
-                and not _is_quantized_model
-                and Version(peft.__version__) >= Version("0.12.0")
-            ):
+            if args.deepspeed_plugin is not None and args.deepspeed_plugin.zero_stage == 3 and not _is_quantized_model:
                 get_peft_model_kwargs["autocast_adapter_dtype"] = False
             model = get_peft_model(model, peft_config, **get_peft_model_kwargs)
 

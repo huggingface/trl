@@ -60,7 +60,7 @@ liger = [
     "liger-kernel>=0.8.2"
 ]
 peft = [
-    "peft>=0.8.0"
+    "peft>=0.13.0"
 ]
 quality = [
     "pre-commit",
@@ -114,7 +114,7 @@ dev = [
     # openreward (requires Python 3.11+)
     "openreward>=0.1.109; python_version >= '3.11'",
     # peft
-    "peft>=0.8.0",
+    "peft>=0.13.0",
     # quality
     "pre-commit",
     "hf-doc-builder",
