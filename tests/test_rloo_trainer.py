@@ -39,6 +39,35 @@ if is_peft_available():
 
 
 class TestRLOOTrainer(TrlTestCase):
+    def test_tokenize_prompts_normalizes_string_content_for_vlm(self):
+        class DummyProcessor:
+            def apply_chat_template(self, conversation, **kwargs):
+                assert kwargs["add_generation_prompt"] is True
+                assert kwargs["tokenize"] is True
+                assert kwargs["return_dict"] is True
+                assert conversation == [
+                    [
+                        {
+                            "role": "user",
+                            "content": [{"type": "text", "text": "What is in this image?"}],
+                        }
+                    ]
+                ]
+                return {"input_ids": [[1, 2, 3]], "attention_mask": [[1, 1, 1]]}
+
+        trainer = RLOOTrainer.__new__(RLOOTrainer)
+        trainer._is_vlm = True
+        trainer.processing_class = DummyProcessor()
+        trainer.chat_template_kwargs = {}
+
+        prompt_ids, images, multimodal_fields = trainer._tokenize_prompts(
+            [[{"role": "user", "content": "What is in this image?"}]]
+        )
+
+        assert prompt_ids == [[1, 2, 3]]
+        assert images is None
+        assert multimodal_fields == {}
+
     def test_init_minimal(self):
         # Test that RLOOTrainer can be instantiated with only model, reward_model and train_dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
