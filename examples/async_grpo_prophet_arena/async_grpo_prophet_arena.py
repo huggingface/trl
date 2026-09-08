@@ -80,12 +80,11 @@ def main() -> None:
     dataset = build_dataset()
 
     # RL loop hyperparameters mirror tinker-cookbook's recipe: 32 forecasts per question (`num_generations`) and
-    # 16 questions per optimizer step. `per_device_train_batch_size` counts rollout *samples*, not questions -- one
-    # question's full group is `num_generations` samples -- so getting 16 questions/step means
-    # `per_device_train_batch_size * gradient_accumulation_steps == 16 * 32 == 512`; the micro-batch itself stays at
-    # 16 samples so peak memory doesn't scale with the full 512. `num_train_epochs=2` (rather than an explicit
-    # `max_steps`) is what actually gives two passes over the 1,024-question training set: it counts distinct
-    # prompts trained on, independent of the samples-per-step arithmetic above (see `AsyncGRPOConfig`'s docstring).
+    # temperature 1.0. `num_train_epochs=2` gives two passes over the 1,024-question training set -- it counts
+    # distinct prompts actually trained on, independent of batch composition, so it holds regardless of how rows are
+    # packed for the forward pass. `per_device_train_batch_size` isn't a "questions per step" knob here: by default
+    # `token_budget` is set to the vLLM server's `max_model_len` and rows are packed by token count
+    # (`TokenBudgetBatcher`), not by a fixed sample count -- see `AsyncGRPOConfig`'s docstring.
     # `learning_rate=1e-4` is also theirs, but paired there with LoRA rank 32; AsyncGRPOTrainer has no `peft_config`
     # yet, so this trains the full 0.6B model at that rate -- lower it if training is unstable.
     # `max_completion_length` is capped well under their 24,576 (tuned for a 27B reasoning model at high effort);
@@ -95,7 +94,7 @@ def main() -> None:
         output_dir="async_grpo_prophet_arena",
         save_strategy="no",
         per_device_train_batch_size=16,
-        gradient_accumulation_steps=32,
+        gradient_accumulation_steps=1,
         num_generations=32,
         max_completion_length=2048,
         num_train_epochs=2,
