@@ -49,7 +49,6 @@ CUDA_VISIBLE_DEVICES=0 accelerate launch examples/async_grpo_timesx/async_grpo_t
 
 from __future__ import annotations
 
-import json
 import math
 import re
 
@@ -59,24 +58,24 @@ from datasets import Dataset
 from trl.experimental.async_grpo import AsyncGRPOConfig, AsyncGRPOTrainer
 
 
-_JSON_LIST_RE = re.compile(r"\[[^\[\]]*\]")
-
-
 def parse_forecast(text: str, expected_length: int) -> list[float] | None:
-    """Parse the completion's last JSON list of exactly `expected_length` finite numbers."""
-    for candidate in reversed(_JSON_LIST_RE.findall(text)):
-        try:
-            parsed = json.loads(candidate)
-        except json.JSONDecodeError:
-            continue
-        if (
-            isinstance(parsed, list)
-            and len(parsed) == expected_length
-            and all(isinstance(value, (int, float)) and not isinstance(value, bool) for value in parsed)
-            and all(math.isfinite(value) for value in parsed)
-        ):
-            return [float(value) for value in parsed]
-    return None
+    """Parse the completion's last non-empty line as `expected_length` space/comma-separated numbers.
+
+    A 0.6B model asked for a "JSON list" reliably ignores the brackets and just writes the numbers out, so this
+    parses what the model actually produces instead of what was asked for -- same reasoning as
+    `examples/async_grpo_prophet_arena`'s `parse_probability`.
+    """
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if not lines:
+        return None
+    parts = [part for part in re.split(r"[,\s\[\]]+", lines[-1]) if part]
+    if len(parts) != expected_length:
+        return None
+    try:
+        values = [float(part) for part in parts]
+    except ValueError:
+        return None
+    return values if all(math.isfinite(value) for value in values) else None
 
 
 def mase(forecast: list[float], future_values: list[float], past_values: list[float]) -> float:
@@ -132,6 +131,9 @@ def main() -> None:
         gradient_accumulation_steps=2,
         num_generations=8,
         max_completion_length=512,
+        # Qwen3 reasons by default, and here it never converges -- it just goes in circles second-guessing the
+        # timestamps instead of answering. Turning it off gets a real answer out most of the time instead.
+        chat_template_kwargs={"enable_thinking": False},
         # num_train_epochs, not max_steps: per_device_train_batch_size counts samples not questions here, and rows
         # are packed by token count by default, so a step count wouldn't map to a known number of epochs anyway.
         num_train_epochs=2,

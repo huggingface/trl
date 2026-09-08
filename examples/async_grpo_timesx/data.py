@@ -126,5 +126,5 @@ Historical values, oldest first:
 Forecast the value at each of the following timestamps, in order:
 {targets}
 
-Output only a JSON list of {len(example.future_timestamps)} numbers, one forecast per timestamp above, in the same
-order. Do not include units, timestamps, or any other text."""
+On the last line, output only the {len(example.future_timestamps)} forecast values, one per timestamp above, in the
+same order, separated by spaces. Do not include units, timestamps, or any other text on that line."""
