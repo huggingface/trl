@@ -467,7 +467,6 @@ class SDFTTrainer(_BaseTrainer):
                     "the per-vocabulary-entry divergences the pointwise clip applies to. Set "
                     "`distillation_kl_clip=None`."
                 )
-            self.liger_loss = LigerFusedLinearJSDLoss(
             self.liger_loss = FusedLinearJSDLoss(
                 beta=args.distillation_alpha,
                 ignore_index=-100,
