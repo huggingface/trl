@@ -178,7 +178,11 @@ class AsyncDistillationConfig(_BaseConfig):
     > - `ignore_data_skip`: Defaults to `True` instead of `False`; the base Trainer's skip-and-replay loop does not apply to the async rollout queue.
     """
 
-    _VALID_DICT_FIELDS = _BaseConfig._VALID_DICT_FIELDS + ["model_init_kwargs", "teacher_server_urls"]
+    _VALID_DICT_FIELDS = _BaseConfig._VALID_DICT_FIELDS + [
+        "model_init_kwargs",
+        "teacher_server_urls",
+        "chat_template_kwargs",
+    ]
 
     # Parameters that control the model
     model_init_kwargs: dict[str, Any] | str | None = field(
@@ -257,7 +261,7 @@ class AsyncDistillationConfig(_BaseConfig):
             "to repeat tokens."
         },
     )
-    chat_template_kwargs: dict | None = field(
+    chat_template_kwargs: dict | str | None = field(
         default=None,
         metadata={
             "help": "Additional keyword arguments to pass to the `apply_chat_template` function when generating "
