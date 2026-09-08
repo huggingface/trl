@@ -63,7 +63,7 @@ from trl.experimental.async_grpo.async_rollout_worker import (
 )
 from trl.trainer.base_trainer import _BaseTrainer
 
-from ..testing_utils import TrlTestCase, is_ampere_or_newer, require_peft
+from ..testing_utils import TrlTestCase, is_ampere_or_newer, require_peft, require_vllm
 
 
 # The trainer loads the model with Flash Attention, which requires a `head_size` multiple of 8. Hence the `small-*`
@@ -1730,6 +1730,7 @@ class TestAsyncGRPOTrainerPeft(TrlTestCase):
         assert trainer._lora_sync is False
         assert fake_vllm.requests == []
 
+    @require_vllm  # `AsyncRolloutWorker.__init__` refuses to build without vLLM installed
     @pytest.mark.parametrize(("lora_config", "expected"), [(SERVER_LORA_CONFIG, "trl-policy"), (None, None)])
     def test_the_rollout_worker_is_told_the_adapter_name(self, fake_vllm, lora_config, expected):
         # In vLLM's API an adapter *is* a model name: a rollout request that does not name it is served by the base
@@ -1819,6 +1820,7 @@ class TestAsyncGRPOTrainerPeft(TrlTestCase):
         # the base checkpoint's name — sending both would repeat that name and desync the packed transfer.
         assert len(sent) == len(set(sent))
 
+    @require_vllm  # the merged path builds the real `WeightTransferClient`, whose constructor requires vLLM
     def test_manifest_and_streaming_iter_agree_element_for_element(self, fake_vllm):
         # The server sizes its receive buffers from the manifest, so a name present in one and not the other
         # desyncs the transfer. The real `WeightTransferClient` is built here; it only touches the network on
