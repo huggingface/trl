@@ -60,6 +60,26 @@ class TestVLLMClientAddressing(TrlTestCase):
         assert _format_http_host("127.0.0.1") == "127.0.0.1"
         assert _format_http_host("localhost") == "localhost"
 
+    def test_host_constructor_keeps_ipv6_only_hostname(self):
+        with (
+            patch("trl.generation.vllm_client.is_vllm_available", return_value=True),
+            patch(
+                "trl.generation.vllm_client.socket.gethostbyname",
+                side_effect=OSError("no IPv4 record"),
+            ) as gethostbyname,
+            patch.object(VLLMClient, "check_server"),
+            patch.object(
+                VLLMClient,
+                "_get",
+                return_value={"data": [{"id": "test-model"}]},
+            ),
+        ):
+            client = VLLMClient(host="ipv6-only.example")
+
+        assert client.host == "ipv6-only.example"
+        assert client.base_url == "http://ipv6-only.example:8000"
+        gethostbyname.assert_not_called()
+
 
 class TestParseLogprobs(TrlTestCase):
     def test_completion_logprobs_sorted_by_probability(self):

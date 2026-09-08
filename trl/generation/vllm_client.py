@@ -258,7 +258,7 @@ class VLLMClient:
             scheme = parsed_url.scheme or "http"
             self.base_url = f"{scheme}://{parsed_url.netloc}{parsed_url.path}"
         else:
-            self.host = _resolve_communicator_host(host)
+            self.host = _strip_ipv6_brackets(host)
             self.server_port = server_port
             self.base_url = f"http://{_format_http_host(host)}:{self.server_port}"
         self.group_port = group_port
