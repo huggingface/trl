@@ -19,7 +19,7 @@
 # ]
 # ///
 
-"""AsyncGRPO training of a numeric time-series forecaster on TimesX (https://arxiv.org/abs/2607.06973).
+"""AsyncGRPO training of a numeric time-series forecaster on TimesX (https://huggingface.co/papers/2607.06973).
 
 TimesX is an eval benchmark, not a training set. The upstream repo doesn't have the paper's original 2018-2022
 training split, so the train/test split here is our own leakage-avoiding stand-in and isn't comparable to the

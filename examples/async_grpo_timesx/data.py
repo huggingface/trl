@@ -14,10 +14,10 @@
 
 """Load TimesX's train/test splits from the Hub.
 
-TimesX (https://arxiv.org/abs/2607.06973) is a context-enriched, multimodal time-series forecasting benchmark: each
-variable is a long numeric series with a rolling window of "prediction origins", and every origin comes with
-textual context (a domain description, calendar effects, related-series statistics, and time-stamped news events)
-that is not available to a plain numeric forecaster.
+TimesX (https://huggingface.co/papers/2607.06973) is a context-enriched, multimodal time-series forecasting
+benchmark: each variable is a long numeric series with a rolling window of "prediction origins", and every origin
+comes with textual context (a domain description, calendar effects, related-series statistics, and time-stamped
+news events) that is not available to a plain numeric forecaster.
 
 Data is loaded from https://huggingface.co/datasets/kashif/timesx, a flattened, typed mirror of
 https://github.com/haoxin1998/TimesX-project's per-variable JSON files -- see that dataset's card for field
