@@ -27,7 +27,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 from accelerate.utils import DistributedType, broadcast_object_list, gather_object
 from datasets import Dataset
-from packaging.version import Version
 from torch.utils.data import DataLoader
 from transformers import AutoTokenizer, TrainerCallback, is_trackio_available, is_wandb_available
 from transformers.data.data_collator import DataCollator
@@ -52,7 +51,6 @@ from .iw_opd_config import IWOPDConfig
 
 
 if is_peft_available():
-    import peft
     from peft import PeftConfig, get_peft_model
 
 
@@ -461,17 +459,11 @@ class IWOPDTrainer(_BaseTrainer):
             # - See:
             #   - TRL issue: https://github.com/huggingface/trl/issues/6089
             #   - Upstream issue: https://github.com/deepspeedai/DeepSpeed/issues/8072
-            # - autocast_adapter_dtype was introduced in PEFT 0.12.0; before, no upcast existed: no need to pass the kwarg
             _is_quantized_model = getattr(model, "is_loaded_in_4bit", False) or getattr(
                 model, "is_loaded_in_8bit", False
             )
             get_peft_model_kwargs = {}
-            if (
-                args.deepspeed_plugin is not None
-                and args.deepspeed_plugin.zero_stage == 3
-                and not _is_quantized_model
-                and Version(peft.__version__) >= Version("0.12.0")
-            ):
+            if args.deepspeed_plugin is not None and args.deepspeed_plugin.zero_stage == 3 and not _is_quantized_model:
                 get_peft_model_kwargs["autocast_adapter_dtype"] = False
             model = get_peft_model(model, peft_config, **get_peft_model_kwargs)
 
