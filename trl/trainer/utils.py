@@ -262,17 +262,22 @@ def get_peft_config(model_args: ModelConfig) -> "PeftConfig | None":
             "Make sure to run `pip install -U peft`."
         )
 
+    # `target_parameters` was added in PEFT 0.17.0, so only pass it when the user asked for it
+    lora_config_kwargs = {}
+    if model_args.lora_target_parameters is not None:
+        lora_config_kwargs["target_parameters"] = model_args.lora_target_parameters
+
     peft_config = LoraConfig(
         task_type=model_args.lora_task_type,
         r=model_args.lora_r,
         target_modules=model_args.lora_target_modules,
-        target_parameters=model_args.lora_target_parameters,
         lora_alpha=model_args.lora_alpha,
         lora_dropout=model_args.lora_dropout,
         bias="none",
         use_rslora=model_args.use_rslora,
         use_dora=model_args.use_dora,
         modules_to_save=model_args.lora_modules_to_save,
+        **lora_config_kwargs,
     )
 
     return peft_config
