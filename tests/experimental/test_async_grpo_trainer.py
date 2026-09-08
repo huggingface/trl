@@ -267,6 +267,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
                 model="trl-internal-testing/small-Qwen2ForCausalLM-2.5",
                 reward_funcs=dummy_reward_func,
                 args=training_args,
+                weight_transfer=_StubWeightTransfer(),
             )
 
     def test_environment_owned_data_requires_max_steps(self):
@@ -283,6 +284,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
                 reward_funcs=dummy_reward_func,
                 args=args,
                 environment_factory=DummyEnvironment,
+                weight_transfer=_StubWeightTransfer(),
             )
 
     def test_multiple_environments_without_dataset_raises(self):
@@ -301,6 +303,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
                 reward_funcs=dummy_reward_func,
                 args=args,
                 environment_factory={"a": EnvA, "b": EnvB},
+                weight_transfer=_StubWeightTransfer(),
             )
 
 

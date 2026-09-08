@@ -57,7 +57,6 @@ from .utils import create_model_from_path, disable_dropout_in_model, get_config_
 
 
 if is_peft_available():
-    import peft
     from peft import PeftConfig, PeftModel, get_peft_model
 
 
@@ -489,14 +488,8 @@ class RewardTrainer(_BaseTrainer):
             # - See:
             #   - TRL issue: https://github.com/huggingface/trl/issues/6089
             #   - Upstream issue: https://github.com/deepspeedai/DeepSpeed/issues/8072
-            # - autocast_adapter_dtype was introduced in PEFT 0.12.0; before, no upcast existed: no need to pass the kwarg
             get_peft_model_kwargs = {}
-            if (
-                args.deepspeed_plugin is not None
-                and args.deepspeed_plugin.zero_stage == 3
-                and not _is_quantized_model
-                and Version(peft.__version__) >= Version("0.12.0")
-            ):
+            if args.deepspeed_plugin is not None and args.deepspeed_plugin.zero_stage == 3 and not _is_quantized_model:
                 get_peft_model_kwargs["autocast_adapter_dtype"] = False
             model = get_peft_model(model, peft_config, **get_peft_model_kwargs)
 
@@ -699,8 +692,10 @@ class RewardTrainer(_BaseTrainer):
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Filtering {dataset_name} >{args.max_length} tokens"
                 dataset = dataset.filter(
-                    lambda example: len(example["chosen_ids"]) <= args.max_length
-                    and len(example["rejected_ids"]) <= args.max_length,
+                    lambda example: (
+                        len(example["chosen_ids"]) <= args.max_length
+                        and len(example["rejected_ids"]) <= args.max_length
+                    ),
                     **map_kwargs,
                 )
 

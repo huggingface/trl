@@ -70,6 +70,7 @@ from ..distributed import DistributedBackend
 from ..extras.profiling import profiling_context, profiling_decorator
 from ..generation.vllm_generation import VLLMGeneration
 from ..import_utils import is_jmespath_available, is_liger_kernel_available
+from ..losses import FusedLinearGRPOLoss
 from ..models import prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
 from ..models.utils import _ForwardRedirection, disable_gradient_checkpointing
 from .base_trainer import _BaseTrainer
@@ -99,10 +100,6 @@ from .utils import (
     unsplit_pixel_values_by_grid,
     use_adapter,
 )
-
-
-if is_liger_kernel_available():
-    from liger_kernel.chunked_loss import LigerFusedLinearGRPOLoss
 
 
 if is_peft_available():
@@ -435,14 +432,8 @@ class GRPOTrainer(_BaseTrainer):
             # - See:
             #   - TRL issue: https://github.com/huggingface/trl/issues/6089
             #   - Upstream issue: https://github.com/deepspeedai/DeepSpeed/issues/8072
-            # - autocast_adapter_dtype was introduced in PEFT 0.12.0; before, no upcast existed: no need to pass the kwarg
             get_peft_model_kwargs = {}
-            if (
-                args.deepspeed_plugin is not None
-                and args.deepspeed_plugin.zero_stage == 3
-                and not _is_quantized_model
-                and Version(peft.__version__) >= Version("0.12.0")
-            ):
+            if args.deepspeed_plugin is not None and args.deepspeed_plugin.zero_stage == 3 and not _is_quantized_model:
                 get_peft_model_kwargs["autocast_adapter_dtype"] = False
             model = get_peft_model(model, peft_config, **get_peft_model_kwargs)
 
@@ -1037,7 +1028,7 @@ class GRPOTrainer(_BaseTrainer):
             # under ZeRO-3 the parameter coordinator gathers/reduces `lm_head.weight` around the fused loss.
             self._forward_redirection = _ForwardRedirection()
 
-            self.liger_loss = LigerFusedLinearGRPOLoss(
+            self.liger_loss = FusedLinearGRPOLoss(
                 beta=self.beta,
                 epsilon_low=self.epsilon_low,
                 epsilon_high=self.epsilon_high,

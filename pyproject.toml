@@ -49,7 +49,7 @@ bco = [
     "joblib"
 ]
 deepspeed = [
-    "deepspeed>=0.14.4",
+    "deepspeed>=0.18.6",
     "transformers!=5.1.0",  # see transformers#43780
 ]
 kernels = [  # transformers renamed the "hub-kernels" extra to "kernels" in 5.1.0
@@ -60,7 +60,7 @@ liger = [
     "liger-kernel>=0.8.2"
 ]
 peft = [
-    "peft>=0.8.0"
+    "peft>=0.13.0"
 ]
 quality = [
     "pre-commit",
@@ -82,7 +82,7 @@ test = [
     "tabulate"  # test report rendering in scripts/log_reports.py
 ]
 vllm = [
-    "vllm>=0.19.0,<=0.27.1",
+    "vllm>=0.19.1,<=0.27.1",
     "aiohttp>=3.13.3",
     "requests",
 ]
@@ -105,7 +105,7 @@ dev = [
     "scikit-learn",
     "joblib",
     # deepspeed
-    "deepspeed>=0.14.4",
+    "deepspeed>=0.18.6",
     # kernels: transformers renamed the "hub-kernels" extra to "kernels" in 5.1.0
     "transformers[kernels]",  # transformers >= 5.1.0
     "transformers[hub-kernels]",  # transformers < 5.1.0
@@ -114,7 +114,7 @@ dev = [
     # openreward (requires Python 3.11+)
     "openreward>=0.1.109; python_version >= '3.11'",
     # peft
-    "peft>=0.8.0",
+    "peft>=0.13.0",
     # quality
     "pre-commit",
     "hf-doc-builder",
@@ -193,16 +193,6 @@ filterwarnings = [
     "ignore:builtin type SwigPyObject has no __module__ attribute:DeprecationWarning",
     "ignore:builtin type swigvarlink has no __module__ attribute:DeprecationWarning",
 
-    # PyTorch JIT deprecations (upstream, not actionable in TRL)
-    # Upstream issue: https://github.com/deepspeedai/DeepSpeed/issues/7835
-    # Upstream PR: https://github.com/deepspeedai/DeepSpeed/pull/7840
-    # Upstream fix released in deepspeed v0.18.6: https://github.com/deepspeedai/DeepSpeed/releases/tag/v0.18.6
-    # Remove once: deepspeed >= 0.18.6 is required
-    "ignore:`torch.jit.script_method` is deprecated:DeprecationWarning",
-    "ignore:`torch.jit.script` is deprecated:DeprecationWarning",
-    # On Python 3.14+ the same deprecation is reworded to "is not supported in Python 3.14+ and may break"
-    "ignore:`torch.jit.script_method` is not supported:DeprecationWarning",
-
     # PyTorch DataLoader pin_memory device argument deprecations
     # Triggered internally by torch.utils.data, not by our code
     # Upstream issue: https://github.com/pytorch/pytorch/issues/174546
@@ -258,4 +248,12 @@ filterwarnings = [
     # Upstream issue: https://github.com/pytorch/pytorch/issues/175484
     # Remove once: no supported torch version emits it
     "ignore:TensorFloat32 tensor cores for float32 matrix multiplication available but not enabled:UserWarning",
+
+    # torch's DataParallel warns that it is gathering the per-replica scalar losses into a vector, since scalars have
+    # to be unsqueezed first (upstream, not actionable in TRL: the gather happens entirely inside nn.DataParallel)
+    # Triggered by the SFT slow tests since the multi-GPU CI job moved to a runner with two visible devices:
+    # transformers' Trainer wraps the model in nn.DataParallel whenever n_gpu > 1 and no distributed launcher is used
+    # Tracking issue: https://github.com/huggingface/trl/issues/7018
+    # Remove once: the multi-GPU CI no longer exercises nn.DataParallel (https://github.com/huggingface/trl/issues/6836)
+    "ignore:Was asked to gather along dimension 0, but all input tensors were scalars:UserWarning",
 ]

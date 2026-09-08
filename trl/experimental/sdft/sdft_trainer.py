@@ -41,6 +41,7 @@ from transformers.trainer_utils import seed_worker
 from transformers.utils import is_datasets_available, is_liger_kernel_available, is_peft_available
 
 from ...data_utils import is_conversational
+from ...losses import FusedLinearJSDLoss
 from ...models import prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
 from ...models.utils import _ForwardRedirection
 from ...trainer.base_trainer import _BaseTrainer
@@ -67,10 +68,6 @@ from .loss_utils import (
 )
 from .sdft_config import SDFTConfig
 from .teacher_sync import PEFTAdapterEMACallback, SyncTeacherModelCallback, is_pure_lora_training
-
-
-if is_liger_kernel_available():
-    from liger_kernel.chunked_loss import LigerFusedLinearJSDLoss
 
 
 if is_peft_available():
@@ -471,6 +468,7 @@ class SDFTTrainer(_BaseTrainer):
                     "`distillation_kl_clip=None`."
                 )
             self.liger_loss = LigerFusedLinearJSDLoss(
+            self.liger_loss = FusedLinearJSDLoss(
                 beta=args.distillation_alpha,
                 ignore_index=-100,
                 temperature=args.temperature,
