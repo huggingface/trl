@@ -48,6 +48,7 @@ from transformers.utils import is_peft_available
 
 from ..data_utils import _tokenize, apply_chat_template, extract_prompt, is_conversational, prepare_multimodal_messages
 from ..import_utils import is_liger_kernel_available
+from ..losses import FusedLinearDPOLoss
 from ..models import get_act_offloading_ctx_manager, prepare_deepspeed, prepare_fsdp
 from ..models.utils import _ForwardRedirection, disable_gradient_checkpointing
 from .base_trainer import _BaseTrainer
@@ -65,10 +66,6 @@ from .utils import (
     selective_log_softmax,
     use_adapter,
 )
-
-
-if is_liger_kernel_available():
-    from liger_kernel.chunked_loss import LigerFusedLinearDPOLoss
 
 
 if is_peft_available():
@@ -848,7 +845,12 @@ class DPOTrainer(_BaseTrainer):
                         "wrong sequence. Use a weight-based adapter such as LoRA instead, or set "
                         "`use_liger_kernel=False`."
                     )
-            self.liger_loss = LigerFusedLinearDPOLoss(beta=args.beta, loss_type=self.loss_types[0])
+            self.liger_loss = FusedLinearDPOLoss(
+                beta=args.beta,
+                loss_type=self.loss_types[0],
+                label_smoothing=self.label_smoothing,
+                discopop_tau=args.discopop_tau,
+            )
             # Redirect the model.module forward to the model forward to ensure pre-forward hooks are called, so that
             # under ZeRO-3 the parameter coordinator gathers/reduces `lm_head.weight` around the fused loss.
             self._forward_redirection = _ForwardRedirection()
