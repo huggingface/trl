@@ -82,9 +82,12 @@ def main() -> None:
     # RL loop hyperparameters mirror tinker-cookbook's recipe: 32 forecasts per question (`num_generations`) and
     # temperature 1.0. `num_train_epochs=2` gives two passes over the 1,024-question training set -- it counts
     # distinct prompts actually trained on, independent of batch composition, so it holds regardless of how rows are
-    # packed for the forward pass. `per_device_train_batch_size` isn't a "questions per step" knob here: by default
-    # `token_budget` is set to the vLLM server's `max_model_len` and rows are packed by token count
-    # (`TokenBudgetBatcher`), not by a fixed sample count -- see `AsyncGRPOConfig`'s docstring.
+    # packed for the forward pass. There's no exact "16 questions per optimizer step" here the way tinker-cookbook
+    # has: by default `token_budget` is set to the vLLM server's `max_model_len` and rows are packed by token count
+    # (`TokenBudgetBatcher`), not by `per_device_train_batch_size` samples -- see `AsyncGRPOConfig`'s docstring.
+    # `gradient_accumulation_steps` still means what it always does (accumulate over that many packed micro-batches
+    # before stepping) regardless of how those micro-batches were packed, so it's set the same as
+    # `examples/async_grpo_math` rather than left at `1`, to avoid an effective-batch-size regression.
     # `learning_rate=1e-4` is also theirs, but paired there with LoRA rank 32; AsyncGRPOTrainer has no `peft_config`
     # yet, so this trains the full 0.6B model at that rate -- lower it if training is unstable.
     # `max_completion_length` is capped well under their 24,576 (tuned for a 27B reasoning model at high effort);
@@ -94,7 +97,7 @@ def main() -> None:
         output_dir="async_grpo_prophet_arena",
         save_strategy="no",
         per_device_train_batch_size=16,
-        gradient_accumulation_steps=1,
+        gradient_accumulation_steps=2,
         num_generations=32,
         max_completion_length=2048,
         num_train_epochs=2,
