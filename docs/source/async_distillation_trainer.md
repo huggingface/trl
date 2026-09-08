@@ -270,6 +270,7 @@ What the objective itself measures, averaged over the trained tokens of the wind
 | `teacher_entropy`               | the teacher's entropy over the candidates it reported. Bounded below the true value, since only `teacher_top_k` candidates cross the wire                             |
 | `teacher_jsd/<id>`              | MOPD only: `jsd` restricted to the tokens that teacher scored. Teachers in different domains can diverge at very different rates, which the blended `jsd` conflates  |
 | `teacher_entropy/<id>`          | MOPD only: the same breakdown of `teacher_entropy`                                                                                                                  |
+| `teacher_token_frac/<id>`       | MOPD only: the share of scored tokens that teacher took. Routing skew is otherwise invisible: a teacher starved of rows still reports a healthy `teacher_jsd/<id>`   |
 
 There is no per-teacher `entropy`: the student's entropy is a property of its own policy, not of which teacher scored the sample, so the blended metric already covers it.
 
