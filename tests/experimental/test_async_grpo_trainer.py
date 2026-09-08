@@ -39,7 +39,10 @@ from trl.experimental.async_grpo.async_grpo_trainer import (
     TokenBudgetBatcher,
     _balance_by_squared_length,
     _reduce_metric,
+    _sync_weight_dtype,
+    _vllm_param_name,
 )
+from trl.experimental.async_grpo.vllm_client import VLLMClient
 from trl.experimental.async_grpo.async_rollout_worker import (
     AsyncRolloutWorker,
     DriftKind,
@@ -382,7 +385,7 @@ class TestAsyncGRPOTrainerVLM(TrlTestCase):
         # `*ForConditionalGeneration` architecture (`model.language_model.*`), not the text tower alone
         # (`model.*`). Frozen vision weights never change, so they are not streamed at all.
         trainer = self._trainer(model_id)
-        streamed = dict(trainer._streaming_iter())
+        streamed = dict(trainer._gather_weight_items())
 
         assert streamed
         assert streamed.keys() == {n for n, p in trainer.model.named_parameters() if p.requires_grad}
@@ -1188,3 +1191,27 @@ class TestEpochStop(TrlTestCase):
         # steps for the same 2 epochs. If forks leaked into the epoch count, the forked run would instead
         # stop in FEWER prompt-passes (the pre-fix bug).
         assert forked.state.global_step > no_fork.state.global_step
+
+
+class TestFSDP2WeightSyncHelpers:
+    def test_vllm_param_name_strips_wrappers(self):
+        assert _vllm_param_name("module.model.layers.0.self_attn.q_proj.weight") == (
+            "model.layers.0.self_attn.q_proj.weight"
+        )
+        assert _vllm_param_name("model.layers.0._checkpoint_wrapped_module.self_attn.q_proj.weight") == (
+            "model.layers.0.self_attn.q_proj.weight"
+        )
+        assert _vllm_param_name("model.layers.0.self_attn.q_proj.weight") == "model.layers.0.self_attn.q_proj.weight"
+
+    def test_sync_weight_dtype_follows_mixed_precision(self):
+        assert _sync_weight_dtype(AsyncGRPOConfig(output_dir="out", bf16=True, report_to="none")) is torch.bfloat16
+        assert _sync_weight_dtype(AsyncGRPOConfig(output_dir="out", fp16=True, bf16=False, report_to="none")) is (
+            torch.float16
+        )
+
+    def test_start_weight_update_is_not_checkpoint_format(self):
+        client = VLLMClient("http://localhost:8000")
+        with patch("trl.experimental.async_grpo.vllm_client.requests.post") as post:
+            post.return_value.status_code = 200
+            client.start_weight_update(timeout=5)
+        assert post.call_args.kwargs["json"] == {"is_checkpoint_format": False}

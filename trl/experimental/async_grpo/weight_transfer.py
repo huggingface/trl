@@ -130,9 +130,13 @@ class WeightTransferClient:
 
         def trainer_send_weights():
             try:
+                send_kwargs = {"group": self.model_update_group, "packed": True}
+                # Default 1 GiB pack buffer is smaller than Qwen3 embed/lm_head rows (and 32B layers).
+                if hasattr(NCCLTrainerSendWeightsArgs, "packed_buffer_size_bytes"):
+                    send_kwargs["packed_buffer_size_bytes"] = 4 * 1024**3
                 NCCLWeightTransferEngine.trainer_send_weights(
                     iterator=iterator,
-                    trainer_args=NCCLTrainerSendWeightsArgs(group=self.model_update_group, packed=True),
+                    trainer_args=NCCLTrainerSendWeightsArgs(**send_kwargs),
                 )
             except BaseException as exc:  # noqa: BLE001
                 error.append(exc)

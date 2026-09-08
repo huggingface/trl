@@ -70,6 +70,24 @@ RewardFunc = Callable[..., list[float]]
 MetricValue = float | tuple[float, float]
 
 
+def _vllm_param_name(name: str) -> str:
+    """Strip DDP / FSDP / activation-checkpoint wrappers so the name matches vLLM's module tree."""
+    return (
+        name.removeprefix("module.")
+        .replace("._checkpoint_wrapped_module", "")
+        .replace("_checkpoint_wrapped_module.", "")
+    )
+
+
+def _sync_weight_dtype(args: Any) -> torch.dtype:
+    """Dtype vLLM should receive. FSDP2 mixed-precision often upcasts params to fp32."""
+    if getattr(args, "bf16", False):
+        return torch.bfloat16
+    if getattr(args, "fp16", False):
+        return torch.float16
+    return torch.float32
+
+
 def _reduce_metric(key: str, values: list[MetricValue]) -> float:
     """Reduce one logging window into the number that gets logged.
 
@@ -219,6 +237,8 @@ class _TrainBeginCallback(TrainerCallback):
         self._fired = True
         if self._trainer.accelerator.is_main_process and self._trainer.weight_transfer is not None:
             self._trainer.weight_transfer.init_weight_transfer()
+        # init_weight_transfer is rank-0 only; other ranks must not enter `_sync_weight` first.
+        self._trainer.accelerator.wait_for_everyone()
         self._trainer._sync_weight()
         if self._trainer.accelerator.is_main_process and self._trainer.rollout_worker is not None:
             self._trainer.rollout_worker.start()
@@ -977,9 +997,10 @@ class AsyncGRPOTrainer(_BaseTrainer):
                     if not param.requires_grad:
                         continue
                     # DDP/FSDP1 wrapping and gradient checkpointing, avoids vllm module not exist error
-                    name = name.removeprefix("module.").replace("_checkpoint_wrapped_module.", "")
+                    name = _vllm_param_name(name)
                     weight_names.append(name)
-                    weight_dtype_names.append(str(param.dtype).split(".")[-1])
+                    # Advertise the dtype we will cast to before send, not the FSDP-upcast storage dtype.
+                    weight_dtype_names.append(str(_sync_weight_dtype(self.args)).split(".")[-1])
                     weight_shapes.append(list(param.shape))
                 self.weight_transfer = WeightTransferClient(
                     vllm_client=self.vllm_client,
@@ -1330,19 +1351,28 @@ class AsyncGRPOTrainer(_BaseTrainer):
         super().log(logs, start_time)
         self._metrics[mode].clear()
 
-    def _streaming_iter(self):
-        # Iterate parameters one at a time. For FSDP2 (DTensor), full_tensor() all-gathers just this parameter across
-        # FSDP ranks, then frees it once the generator advances — avoiding materializing the full model in memory.
+    def _gather_weight_items(self) -> list[tuple[str, torch.Tensor]]:
+        # All ranks run `full_tensor()` here and only here. `send_weights()` talks to vLLM NCCL and can
+        # block rank 0 for a long time; if that is interleaved with FSDP all-gathers (the old streaming
+        # iterator), non-0 ranks race ahead and the default process group hangs.
         device = self.accelerator.device
+        target_dtype = _sync_weight_dtype(self.args)
+        gathered: list[tuple[str, torch.Tensor]] = []
         for name, param in self.model.named_parameters():
             if not param.requires_grad:
                 continue
-            # DDP/FSDP1 wrapping and gradient checkpointing, avoids vllm module not exist error
-            name = name.removeprefix("module.").replace("_checkpoint_wrapped_module.", "")
+            name = _vllm_param_name(name)
             full = param.full_tensor() if isinstance(param, DTensor) else param.detach()
             if full.device != device:
                 full = full.to(device)
-            yield name, full
+            if full.dtype != target_dtype:
+                full = full.to(target_dtype)
+            if self.accelerator.is_main_process:
+                gathered.append((name, full))
+            else:
+                del full
+        self.accelerator.wait_for_everyone()
+        return gathered
 
     def _sync_weight(self):
         t0 = time.time()
@@ -1355,18 +1385,18 @@ class AsyncGRPOTrainer(_BaseTrainer):
         self.accelerator.wait_for_everyone()
         t_barrier = time.time()
 
-        logger.info(f"Weight sync: transferring weights... (barrier took {t_barrier - t_pause:.1f}s)")
+        logger.info(f"Weight sync: gathering FSDP shards... (barrier took {t_barrier - t_pause:.1f}s)")
+        gathered = self._gather_weight_items()
+        t_gather = time.time()
+
+        logger.info(f"Weight sync: transferring weights... (gather took {t_gather - t_barrier:.1f}s)")
         if self.accelerator.is_main_process and self.weight_transfer:
-            self.weight_transfer.send_weights(self._streaming_iter())
-        else:
-            # Non-rank-0 processes must still participate in full_tensor() collectives for FSDP2.
-            for _ in self._streaming_iter():
-                pass
+            self.weight_transfer.send_weights(iter(gathered))
         t_transfer = time.time()
 
         self.accelerator.wait_for_everyone()
 
-        logger.info(f"Weight sync: resuming vLLM... (transfer took {t_transfer - t_barrier:.1f}s)")
+        logger.info(f"Weight sync: resuming vLLM... (transfer took {t_transfer - t_gather:.1f}s)")
         if self.accelerator.is_main_process:
             if self.weight_transfer:
                 self.weight_transfer.resume()
@@ -1374,11 +1404,11 @@ class AsyncGRPOTrainer(_BaseTrainer):
             if self.rollout_worker:
                 self.rollout_worker.update_model_version(self.model_version)
         weight_sync_s = time.time() - t0
-        # log the three phases  of weight sync
         self._metrics["train"]["perf/weight_sync_s"].append(weight_sync_s)
         self._metrics["train"]["perf/weight_sync_pause_s"].append(t_pause - t0)
         self._metrics["train"]["perf/weight_sync_barrier_s"].append(t_barrier - t_pause)
-        self._metrics["train"]["perf/weight_sync_transfer_s"].append(t_transfer - t_barrier)
+        self._metrics["train"]["perf/weight_sync_gather_s"].append(t_gather - t_barrier)
+        self._metrics["train"]["perf/weight_sync_transfer_s"].append(t_transfer - t_gather)
         logger.info(f"Weight sync: done. Total {weight_sync_s:.1f}s")
 
     def _save_checkpoint(self, model, trial):
