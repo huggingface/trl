@@ -986,7 +986,7 @@ All environments plug into the same `environment_factory` slot, so they are inte
 | [OpenReward](openreward) | An integration with ORS-speaking environments (the [openreward.ai](https://openreward.ai) catalog or your own ORS server); tasks **and** rewards are served over HTTP. | You want to train against an ORS environment: the catalog (e.g. `Eigent/SETA`), one you self-host on your own infra, or a local server you're developing. |
 | [Harbor](harbor) | An integration with Harbor task suites: each task is an instruction, a real sandbox image (`docker`, `e2b`, ...), and an in-sandbox verifier. | You want to train against a Harbor task suite: a tree of tasks, each a self-contained sandbox plus verifier (e.g. a data-analysis agent that explores files in a sandbox and writes an answer a grader checks). |
 
-## Vision-Language Model (VLM) Training
+## Training Vision Language Models
 
 GRPO supports training Vision-Language Models (VLMs) on multimodal datasets containing both text and images.
 
