@@ -1786,7 +1786,7 @@ class SFTTrainer(_BaseTrainer):
             # this prevents skipping logits during `predict()` where outputs are requested.
             # Keep logits when preprocess_logits_for_metrics is set, even if compute_metrics is None.
             # to prevent massive vRAM spikes from the lm_head projection.
-            # See: https://github.com/huggingface/trl/issues/4679
+            # See https://github.com/huggingface/trl/issues/4679
             inputs["skip_logits"] = (
                 self.model.training
                 or self.args.prediction_loss_only
