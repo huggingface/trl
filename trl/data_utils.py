@@ -191,7 +191,7 @@ def is_conversational(example: dict[str, Any]) -> bool:
         # It must be a list of messages
         if isinstance(maybe_messages, list):
             maybe_message = maybe_messages[0]
-            # Each message must a list of dictionaries with keys "role" and "content"
+            # Each message must be a list of dictionaries with keys "role" and "content"
             if isinstance(maybe_message, dict) and "role" in maybe_message:
                 return True
 
@@ -965,7 +965,7 @@ def is_conversational_from_value(example: dict[str, Any]) -> bool:
     # It must be a list of messages
     if isinstance(maybe_messages, list):
         maybe_message = maybe_messages[0]
-        # Each message must a list of dictionaries with keys "from" and "value"
+        # Each message must be a list of dictionaries with keys "from" and "value"
         if isinstance(maybe_message, dict) and "from" in maybe_message and "value" in maybe_message:
             return True
 
