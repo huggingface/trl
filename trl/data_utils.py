@@ -923,7 +923,7 @@ def pack_dataset(
     elif strategy == "wrapped":
         dataset = dataset.map(_pack_wrapped, batched=True, fn_kwargs={"seq_length": seq_length}, **map_kwargs)
     else:
-        raise ValueError(f"Invalid packing strategy: '{strategy}', must be one of {valid_strategies}.")
+        raise ValueError(f"Invalid packing strategy '{strategy}', must be one of {valid_strategies}.")
 
     if strategy in {"bfd", "bfd_split"} and "columns" in format:
         format["columns"] = format["columns"] + ["seq_lengths"]
