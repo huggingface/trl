@@ -29,6 +29,17 @@ if is_vllm_available(min_version="0.22.0"):
 
 logger = get_logger(__name__)
 
+# Keep in lockstep with [`~trl.experimental.async_grpo.weight_transfer.PACKED_NCCL_BUFFER_SIZE_BYTES`].
+PACKED_NCCL_BUFFER_SIZE_BYTES = 4 * 1024**3
+
+
+def with_packed_nccl_buffer(weight_update_info: dict) -> dict:
+    """Copy `weight_update_info` and, when packed, advertise the trainer's NCCL pack buffer size."""
+    info = dict(weight_update_info)
+    if info.get("packed"):
+        info["packed_buffer_size_bytes"] = PACKED_NCCL_BUFFER_SIZE_BYTES
+    return info
+
 
 class WeightTransferClient:
     """Streams the student's weights to its own vLLM server over NCCL.
@@ -65,7 +76,7 @@ class WeightTransferClient:
             )
         self.vllm = vllm_client
         self.weight_sync_timeout = weight_sync_timeout
-        self._weight_update_info = weight_update_info
+        self._weight_update_info = with_packed_nccl_buffer(weight_update_info)
         self.model_update_group = None
 
     def init_weight_transfer(self) -> None:
@@ -124,7 +135,11 @@ class WeightTransferClient:
             try:
                 NCCLWeightTransferEngine.trainer_send_weights(
                     iterator=iterator,
-                    trainer_args=NCCLTrainerSendWeightsArgs(group=self.model_update_group, packed=True),
+                    trainer_args=NCCLTrainerSendWeightsArgs(
+                        group=self.model_update_group,
+                        packed=True,
+                        packed_buffer_size_bytes=PACKED_NCCL_BUFFER_SIZE_BYTES,
+                    ),
                 )
             except BaseException as exc:  # noqa: BLE001
                 error.append(exc)

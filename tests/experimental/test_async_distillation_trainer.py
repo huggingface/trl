@@ -42,7 +42,11 @@ from trl.experimental.async_distillation.async_distillation_trainer import (
     _jsd_divergence,
     _narrow_top1_actual_support,
     _reduce_metric,
+    _sync_weight_dtype,
+    _vllm_param_name,
 )
+from trl.experimental.async_distillation.vllm_client import VLLMClient
+from trl.experimental.async_distillation.weight_transfer import PACKED_NCCL_BUFFER_SIZE_BYTES, with_packed_nccl_buffer
 from trl.experimental.async_distillation.async_rollout_worker import (
     AsyncRolloutWorker,
     RolloutSample,
@@ -1014,3 +1018,37 @@ class TestRolloutStateCheckpoint(TrlTestCase):
         assert trainer._prompts_before_resume == 77
         # The worker restarts `prompt_id` at 0, so ids left over from an earlier run would collide with this one's.
         assert trainer._trained_prompts == set()
+
+
+class TestFSDP2WeightSyncHelpers:
+    def test_vllm_param_name_strips_wrappers(self):
+        assert _vllm_param_name("module.model.layers.0.self_attn.q_proj.weight") == (
+            "model.layers.0.self_attn.q_proj.weight"
+        )
+        assert _vllm_param_name("model.layers.0._checkpoint_wrapped_module.self_attn.q_proj.weight") == (
+            "model.layers.0.self_attn.q_proj.weight"
+        )
+        assert _vllm_param_name("model.layers.0.self_attn.q_proj.weight") == "model.layers.0.self_attn.q_proj.weight"
+
+    def test_sync_weight_dtype_follows_mixed_precision(self):
+        assert _sync_weight_dtype(AsyncDistillationConfig(output_dir="out", bf16=True, report_to="none")) is (
+            torch.bfloat16
+        )
+        assert _sync_weight_dtype(AsyncDistillationConfig(output_dir="out", fp16=True, bf16=False, report_to="none")) is (
+            torch.float16
+        )
+
+    def test_start_weight_update_is_not_checkpoint_format(self):
+        client = VLLMClient("http://localhost:8000")
+        with patch("trl.experimental.async_distillation.vllm_client.requests.post") as post:
+            post.return_value.status_code = 200
+            client.start_weight_update(timeout=5)
+        assert post.call_args.kwargs["json"] == {"is_checkpoint_format": False}
+
+    def test_weight_update_info_advertises_packed_buffer_size(self):
+        info = with_packed_nccl_buffer(
+            {"names": ["w"], "dtype_names": ["bfloat16"], "shapes": [[2, 2]], "packed": True}
+        )
+        assert info["packed_buffer_size_bytes"] == PACKED_NCCL_BUFFER_SIZE_BYTES
+        assert PACKED_NCCL_BUFFER_SIZE_BYTES == 4 * 1024**3
+        assert with_packed_nccl_buffer({"packed": False}) == {"packed": False}

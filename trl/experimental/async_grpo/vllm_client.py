@@ -109,8 +109,10 @@ class VLLMClient:
 
     def start_weight_update(self, timeout: int = 1800) -> None:
         """Prepare the workers for a weight reload; must complete before any weights are sent."""
+        # NCCL streaming is not a checkpoint-file reload. True makes workers wait for a
+        # checkpoint path that never arrives and hangs `/update_weights` after the broadcast.
         response = requests.post(
-            f"{self.server_url}/start_weight_update", json={"is_checkpoint_format": True}, timeout=timeout
+            f"{self.server_url}/start_weight_update", json={"is_checkpoint_format": False}, timeout=timeout
         )
         if response.status_code != 200:
             raise Exception(f"Request failed: {response.status_code}, {response.text}")
