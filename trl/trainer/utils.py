@@ -316,18 +316,18 @@ def generate_model_card(
             Weights & Biases run URL.
         trackio_url (`str` or `None`):
             Trackio Space URL.
-        comet_url (`str` or `None`):
-            Comet experiment URL.
         trainer_name (`str`):
             Trainer name.
-        trainer_citation (`str` or `None`, defaults to `None`):
+        trainer_citation (`str`, *optional*):
             Trainer citation as a BibTeX entry.
-        template_file (`str` *optional*):
+        template_file (`str`, *optional*):
             Template file name located in the `trl/templates` directory. Defaults to `lm_model_card.md`.
-        paper_title (`str` or `None`, defaults to `None`):
+        paper_title (`str`, *optional*):
             Paper title.
-        paper_id (`str` or `None`, defaults to `None`):
+        paper_id (`str`, *optional*):
             ArXiv paper ID as `YYMM.NNNNN`.
+        comet_url (`str`, *optional*):
+            Comet experiment URL.
 
     Returns:
         [`~huggingface_hub.ModelCard`]:

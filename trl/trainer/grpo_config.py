@@ -398,7 +398,7 @@ class GRPOConfig(_BaseConfig):
 
             <Deprecated version="1.6.0">
 
-            Parameter `vllm_importance_sampling_cap` is deprecated and will be removed in v2.0.0. Use
+            Parameter `vllm_importance_sampling_cap` is deprecated and will be removed in version v2.0.0. Use
             `vllm_importance_sampling_clip_max` instead.
 
             </Deprecated>
