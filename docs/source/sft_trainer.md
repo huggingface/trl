@@ -122,14 +122,14 @@ Padding tokens (if present) are ignored in the loss computation by applying an i
 
 While training and evaluating, we record the following metrics:
 
-* `global_step`: The total number of optimizer steps taken so far.
-* `epoch`: The current epoch number, based on dataset iteration.
-* `num_tokens`: The total number of tokens processed so far.
-* `loss`: The average cross-entropy loss computed over non-masked tokens in the current logging interval.
-* `entropy`: The average entropy of the model's predicted token distribution over non-masked tokens.
-* `mean_token_accuracy`: The proportion of non-masked tokens for which the model’s top-1 prediction matches the ground truth token.
-* `learning_rate`: The current learning rate, which may change dynamically if a scheduler is used.
-* `grad_norm`: The L2 norm of the gradients, computed before gradient clipping.
+- `global_step`: The total number of optimizer steps taken so far.
+- `epoch`: The current epoch number, based on dataset iteration.
+- `num_tokens`: The total number of tokens processed so far.
+- `loss`: The average cross-entropy loss computed over non-masked tokens in the current logging interval.
+- `entropy`: The average entropy of the model's predicted token distribution over non-masked tokens.
+- `mean_token_accuracy`: The proportion of non-masked tokens for which the model’s top-1 prediction matches the ground truth token.
+- `learning_rate`: The current learning rate, which may change dynamically if a scheduler is used.
+- `grad_norm`: The L2 norm of the gradients, computed before gradient clipping.
 
 ## Customization
 
@@ -308,8 +308,8 @@ Alternatively, use the structured conversation format (recommended):
 
 The [`SFTTrainer`] fully supports fine-tuning models with _tool calling_ capabilities. In this case, each dataset example should include:
 
-* The conversation messages, including any tool calls (`tool_calls`) and tool responses (`tool` role messages)
-* The list of available tools in the `tools` column, typically provided as JSON schemas
+- The conversation messages, including any tool calls (`tool_calls`) and tool responses (`tool` role messages)
+- The list of available tools in the `tools` column, typically provided as JSON schemas
 
 For details on the expected dataset structure, see the [Dataset Format — Tool Calling](dataset_formats#tool-calling) section.
 

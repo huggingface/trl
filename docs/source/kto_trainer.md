@@ -130,21 +130,21 @@ Here  \\( x \\) is the prompt,  \\( y \\) is the completion,  \\( \pi_{\theta} \
 
 While training and evaluating, we record the following metrics:
 
-* `global_step`: The total number of optimizer steps taken so far.
-* `epoch`: The current epoch number, based on dataset iteration.
-* `num_tokens`: The total number of tokens processed so far.
-* `loss`: The average KTO loss over the current logging interval.
-* `entropy`: The average entropy of the model's predicted token distribution over non-masked tokens.
-* `kl`: The average estimated KL divergence between the policy and reference model, used as the reference point in the KTO loss.
-* `learning_rate`: The current learning rate, which may change dynamically if a scheduler is used.
-* `grad_norm`: The L2 norm of the gradients, computed before gradient clipping.
-* `logits/chosen`: The average logit values assigned by the model to the tokens in the chosen (desirable) completion.
-* `logits/rejected`: The average logit values assigned by the model to the tokens in the rejected (undesirable) completion.
-* `logps/chosen`: The average log-probability assigned by the model to the tokens in the chosen (desirable) completion.
-* `logps/rejected`: The average log-probability assigned by the model to the tokens in the rejected (undesirable) completion.
-* `rewards/chosen`: The average implicit reward computed for the chosen (desirable) completion, computed as  \\( \beta \log \frac{\pi_{\theta}(y\mid x)}{\pi_{\mathrm{ref}}(y\mid x)} \\).
-* `rewards/rejected`: The average implicit reward computed for the rejected (undesirable) completion, computed as  \\( \beta \log \frac{\pi_{\theta}(y\mid x)}{\pi_{\mathrm{ref}}(y\mid x)} \\).
-* `rewards/margins`: The average implicit reward margin between the chosen and rejected completions.
+- `global_step`: The total number of optimizer steps taken so far.
+- `epoch`: The current epoch number, based on dataset iteration.
+- `num_tokens`: The total number of tokens processed so far.
+- `loss`: The average KTO loss over the current logging interval.
+- `entropy`: The average entropy of the model's predicted token distribution over non-masked tokens.
+- `kl`: The average estimated KL divergence between the policy and reference model, used as the reference point in the KTO loss.
+- `learning_rate`: The current learning rate, which may change dynamically if a scheduler is used.
+- `grad_norm`: The L2 norm of the gradients, computed before gradient clipping.
+- `logits/chosen`: The average logit values assigned by the model to the tokens in the chosen (desirable) completion.
+- `logits/rejected`: The average logit values assigned by the model to the tokens in the rejected (undesirable) completion.
+- `logps/chosen`: The average log-probability assigned by the model to the tokens in the chosen (desirable) completion.
+- `logps/rejected`: The average log-probability assigned by the model to the tokens in the rejected (undesirable) completion.
+- `rewards/chosen`: The average implicit reward computed for the chosen (desirable) completion, computed as  \\( \beta \log \frac{\pi_{\theta}(y\mid x)}{\pi_{\mathrm{ref}}(y\mid x)} \\).
+- `rewards/rejected`: The average implicit reward computed for the rejected (undesirable) completion, computed as  \\( \beta \log \frac{\pi_{\theta}(y\mid x)}{\pi_{\mathrm{ref}}(y\mid x)} \\).
+- `rewards/margins`: The average implicit reward margin between the chosen and rejected completions.
 
 ## Customization
 
@@ -152,15 +152,15 @@ While training and evaluating, we record the following metrics:
 
 Some argument combinations are intentionally restricted in the current [`KTOTrainer`] implementation:
 
-* With `use_liger_kernel=True`:
-  * only `loss_type="kto"` is supported (not `"apo_zero_unpaired"`),
-  * `compute_metrics` is not supported,
-  * `precompute_ref_log_probs=True` is not supported,
-  * PEFT models are not supported.
-* `sync_ref_model=True` is not supported when training with PEFT models that do not keep a standalone `ref_model`.
-* `sync_ref_model=True` cannot be combined with `precompute_ref_log_probs=True`.
-* `precompute_ref_log_probs=True` is not supported with `IterableDataset` (train or eval) or with vision datasets.
-* Loss types that estimate the KL divergence term (all except `"apo_zero_unpaired"`) require `train_sampling_strategy="sequential"` and a per-device train batch size greater than 1.
+- With `use_liger_kernel=True`:
+  - only `loss_type="kto"` is supported (not `"apo_zero_unpaired"`),
+  - `compute_metrics` is not supported,
+  - `precompute_ref_log_probs=True` is not supported,
+  - PEFT models are not supported.
+- `sync_ref_model=True` is not supported when training with PEFT models that do not keep a standalone `ref_model`.
+- `sync_ref_model=True` cannot be combined with `precompute_ref_log_probs=True`.
+- `precompute_ref_log_probs=True` is not supported with `IterableDataset` (train or eval) or with vision datasets.
+- Loss types that estimate the KL divergence term (all except `"apo_zero_unpaired"`) require `train_sampling_strategy="sequential"` and a per-device train batch size greater than 1.
 
 ### Model initialization
 
@@ -215,8 +215,8 @@ Liger Kernel is a collection of Triton kernels for LLM training that boosts mult
 
 The [`KTOTrainer`] fully supports fine-tuning models with _tool calling_ capabilities. In this case, each dataset example should include:
 
-* The conversation messages (prompt and completion), including any tool calls (`tool_calls`) and tool responses (`tool` role messages)
-* The list of available tools in the `tools` column, typically provided as JSON schemas
+- The conversation messages (prompt and completion), including any tool calls (`tool_calls`) and tool responses (`tool` role messages)
+- The list of available tools in the `tools` column, typically provided as JSON schemas
 
 For details on the expected dataset structure, see the [Dataset Format — Tool Calling](dataset_formats#tool-calling) section.
 

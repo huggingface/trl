@@ -126,22 +126,22 @@ Several formulations of the objective have been proposed in the literature. Init
 
 While training and evaluating, we record the following metrics:
 
-* `global_step`: The total number of optimizer steps taken so far.
-* `epoch`: The current epoch number, based on dataset iteration.
-* `num_tokens`: The total number of tokens processed so far.
-* `loss`: The average DPO loss over the current logging interval.
-* `entropy`: The average entropy of the model's predicted token distribution over non-masked tokens.
-* `mean_token_accuracy`: The proportion of non-masked tokens for which the model’s top-1 prediction matches the token from the chosen completion.
-* `learning_rate`: The current learning rate, which may change dynamically if a scheduler is used.
-* `grad_norm`: The L2 norm of the gradients, computed before gradient clipping.
-* `logits/chosen`: The average logit values assigned by the model to the tokens in the chosen completion.
-* `logits/rejected`: The average logit values assigned by the model to the tokens in the rejected completion.
-* `logps/chosen`: The average log-probability assigned by the model to the tokens in the chosen completion.
-* `logps/rejected`: The average log-probability assigned by the model to the tokens in the rejected completion.
-* `rewards/chosen`: The average implicit reward computed for the chosen completion, computed as  \\( \beta \log \frac{\pi_{\theta}(y^{+}\!\mid x)}{\pi_{\mathrm{ref}}(y^{+}\!\mid x)} \\).
-* `rewards/rejected`: The average implicit reward computed for the rejected completion, computed as  \\( \beta \log \frac{\pi_{\theta}(y^{-}\!\mid x)}{\pi_{\mathrm{ref}}(y^{-}\!\mid x)} \\).
-* `rewards/margins`: The average implicit reward margin between the chosen and rejected completions.
-* `rewards/accuracies`: The proportion of examples where the implicit reward for the chosen completion is higher than that for the rejected completion.
+- `global_step`: The total number of optimizer steps taken so far.
+- `epoch`: The current epoch number, based on dataset iteration.
+- `num_tokens`: The total number of tokens processed so far.
+- `loss`: The average DPO loss over the current logging interval.
+- `entropy`: The average entropy of the model's predicted token distribution over non-masked tokens.
+- `mean_token_accuracy`: The proportion of non-masked tokens for which the model’s top-1 prediction matches the token from the chosen completion.
+- `learning_rate`: The current learning rate, which may change dynamically if a scheduler is used.
+- `grad_norm`: The L2 norm of the gradients, computed before gradient clipping.
+- `logits/chosen`: The average logit values assigned by the model to the tokens in the chosen completion.
+- `logits/rejected`: The average logit values assigned by the model to the tokens in the rejected completion.
+- `logps/chosen`: The average log-probability assigned by the model to the tokens in the chosen completion.
+- `logps/rejected`: The average log-probability assigned by the model to the tokens in the rejected completion.
+- `rewards/chosen`: The average implicit reward computed for the chosen completion, computed as  \\( \beta \log \frac{\pi_{\theta}(y^{+}\!\mid x)}{\pi_{\mathrm{ref}}(y^{+}\!\mid x)} \\).
+- `rewards/rejected`: The average implicit reward computed for the rejected completion, computed as  \\( \beta \log \frac{\pi_{\theta}(y^{-}\!\mid x)}{\pi_{\mathrm{ref}}(y^{-}\!\mid x)} \\).
+- `rewards/margins`: The average implicit reward margin between the chosen and rejected completions.
+- `rewards/accuracies`: The proportion of examples where the implicit reward for the chosen completion is higher than that for the rejected completion.
 
 ## Customization
 
@@ -149,14 +149,14 @@ While training and evaluating, we record the following metrics:
 
 Some argument combinations are intentionally restricted in the current [`DPOTrainer`] implementation:
 
-* `use_weighting=True` is not supported with `loss_type="aot"` or `loss_type="aot_unpaired"`.
-* With `use_liger_kernel=True`:
-  * only a single `loss_type` is supported,
-  * `compute_metrics` is not supported,
-  * `precompute_ref_log_probs=True` is not supported.
-* `sync_ref_model=True` is not supported when training with PEFT models that do not keep a standalone `ref_model`.
-* `sync_ref_model=True` cannot be combined with `precompute_ref_log_probs=True`.
-* `precompute_ref_log_probs=True` is not supported with `IterableDataset` (train or eval).
+- `use_weighting=True` is not supported with `loss_type="aot"` or `loss_type="aot_unpaired"`.
+- With `use_liger_kernel=True`:
+  - only a single `loss_type` is supported,
+  - `compute_metrics` is not supported,
+  - `precompute_ref_log_probs=True` is not supported.
+- `sync_ref_model=True` is not supported when training with PEFT models that do not keep a standalone `ref_model`.
+- `sync_ref_model=True` cannot be combined with `precompute_ref_log_probs=True`.
+- `precompute_ref_log_probs=True` is not supported with `IterableDataset` (train or eval).
 
 ### Multi-loss combinations
 
@@ -253,8 +253,8 @@ Unsloth is an open‑source framework for fine‑tuning and reinforcement learni
 
 The [`DPOTrainer`] fully supports fine-tuning models with _tool calling_ capabilities. In this case, each dataset example should include:
 
-* The conversation messages (prompt, chosen and rejected), including any tool calls (`tool_calls`) and tool responses (`tool` role messages)
-* The list of available tools in the `tools` column, typically provided as JSON schemas
+- The conversation messages (prompt, chosen and rejected), including any tool calls (`tool_calls`) and tool responses (`tool` role messages)
+- The list of available tools in the `tools` column, typically provided as JSON schemas
 
 For details on the expected dataset structure, see the [Dataset Format — Tool Calling](dataset_formats#tool-calling) section.
 
