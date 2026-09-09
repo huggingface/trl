@@ -21,8 +21,8 @@ def think_format_reward(completions: list[list[dict[str, str]]], **kwargs) -> li
     `"<think>"` tag. The function returns a reward of 1.0 if the format is correct, otherwise 0.0.
 
     The opening `"<think>"` tag is optional so that GRPO-style trainers still score well-formed completions when the
-    chat template already prefills that tag into the prompt (for example DeepSeek-R1 distill). In that case the
-    trainer only decodes generated tokens, so the completion starts mid-reasoning and only `"</think>"` is present.
+    chat template already prefills that tag into the prompt (for example DeepSeek-R1 distill). In that case the trainer
+    only decodes generated tokens, so the completion starts mid-reasoning and only `"</think>"` is present.
 
     The relaxation is unconditional: completions that omit the opening tag also score 1.0 under templates that do not
     prefill `"<think>"`.
