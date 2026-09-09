@@ -1068,7 +1068,7 @@ class KTOTrainer(_BaseTrainer):
 
                 dataset = dataset.map(add_eos, fn_kwargs={"eos_token": self._tokenizer.eos_token}, **map_kwargs)
 
-            # Tokenize dataset
+            # Tokenize the dataset
             if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                 map_kwargs["desc"] = f"Tokenizing {dataset_name} dataset"
 
