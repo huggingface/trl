@@ -986,6 +986,16 @@ All environments plug into the same `environment_factory` slot, so they are inte
 | [OpenReward](openreward) | An integration with ORS-speaking environments (the [openreward.ai](https://openreward.ai) catalog or your own ORS server); tasks **and** rewards are served over HTTP. | You want to train against an ORS environment: the catalog (e.g. `Eigent/SETA`), one you self-host on your own infra, or a local server you're developing. |
 | [Harbor](harbor) | An integration with Harbor task suites: each task is an instruction, a real sandbox image (`docker`, `e2b`, ...), and an in-sandbox verifier. | You want to train against a Harbor task suite: a tree of tasks, each a self-contained sandbox plus verifier (e.g. a data-analysis agent that explores files in a sandbox and writes an answer a grader checks). |
 
+Choosing between the built-in paths depends on who owns the rollout loop:
+
+| Need | Recommended path |
+|---|---|
+| Stateless helper calls, such as a calculator or retriever, with no per-episode state. | Pass functions through `tools`. |
+| TRL should generate every turn, execute tools, and feed observations back to the model. | Use `environment_factory` with an environment class. |
+| One run mixes tasks with different tool sets or state machines. | Pass `environment_factory` as a dictionary and route examples with an `environment` column. |
+| Tasks are packaged as sandbox images with held-out verifiers. | Use the [Harbor](harbor) integration. |
+| An external agent already owns planning, context management, and the tool loop. | Use the experimental loop-owning harness path described in [OpenEnv](openenv#training-on-harnesses-training-a-real-coding-agent-opencode). |
+
 ## Vision-Language Model (VLM) Training
 
 GRPO supports training Vision-Language Models (VLMs) on multimodal datasets containing both text and images.

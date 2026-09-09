@@ -19,6 +19,27 @@ pip install --upgrade trl[quantization]
 
 Check for additional optional dependencies [here](https://github.com/huggingface/trl/blob/main/pyproject.toml). Notebook-based examples are self-contained and can run on **free Colab**; script-based examples run on single-GPU, multi-GPU, or DeepSpeed setups (see [Distributed Training](#distributed-training) below).
 
+## Choosing an agentic RL example
+
+Several examples train models that interact with tools or environments. Pick the one that matches
+who owns the interaction loop:
+
+- Use [`grpo_echo`](https://github.com/huggingface/trl/tree/main/examples/grpo_echo) for the smallest
+  end-to-end `environment_factory` example.
+- Use [`grpo_wordle`](https://github.com/huggingface/trl/tree/main/examples/grpo_wordle),
+  [`grpo_sudoku`](https://github.com/huggingface/trl/tree/main/examples/grpo_sudoku), or
+  [`grpo_catch`](https://github.com/huggingface/trl/tree/main/examples/grpo_catch) when TRL should
+  drive each turn and the environment exposes stateful tools.
+- Use [`grpo_multi_env`](https://github.com/huggingface/trl/tree/main/examples/grpo_multi_env) when a
+  single training run mixes tasks that need different tool sets or environment classes.
+- Use [`grpo_sql_agent`](https://github.com/huggingface/trl/tree/main/examples/grpo_sql_agent) when
+  reward comes from a verifiable business-like workflow, such as answering by querying a database.
+- Use [`grpo_harbor`](https://github.com/huggingface/trl/tree/main/examples/grpo_harbor) when each
+  task is packaged as a sandbox plus verifier.
+- Use [`async_grpo_opencode`](https://github.com/huggingface/trl/tree/main/examples/async_grpo_opencode)
+  when the agent owns its own loop and TRL should train from captured proxy traces instead of driving
+  every tool call directly.
+
 ## Index
 
 | Example | Description | Open in Colab |
