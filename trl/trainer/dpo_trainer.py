@@ -1489,7 +1489,7 @@ class DPOTrainer(_BaseTrainer):
                 per_sequence_loss = (ipo_delta - 1 / (2 * self.beta)) ** 2
 
             elif loss_type == "exo_pair":
-                # Implements EXO-pref from the paper https://huggingface.co/papers/2402.00856, (Eq. 16)
+                # Implements EXO-pref from the paper https://huggingface.co/papers/2402.00856 (Eq. 16)
                 # Minimize KL(p_fθ || p_rh) for K=2; p_fθ = softmax(βπ * (log πθ − log π_ref)) over {chosen, rejected}
                 # p_rh = [(1−ε), ε]; expanded KL gives the weighted logsigmoid form below
                 epsilon = torch.tensor(self.label_smoothing, device=device)
