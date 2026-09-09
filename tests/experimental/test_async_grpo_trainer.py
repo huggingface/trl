@@ -43,6 +43,7 @@ from trl.experimental.async_grpo.async_grpo_trainer import (
     _vllm_param_name,
 )
 from trl.experimental.async_grpo.vllm_client import VLLMClient
+from trl.experimental.async_grpo.weight_transfer import PACKED_NCCL_BUFFER_SIZE_BYTES, with_packed_nccl_buffer
 from trl.experimental.async_grpo.async_rollout_worker import (
     AsyncRolloutWorker,
     DriftKind,
@@ -1215,3 +1216,11 @@ class TestFSDP2WeightSyncHelpers:
             post.return_value.status_code = 200
             client.start_weight_update(timeout=5)
         assert post.call_args.kwargs["json"] == {"is_checkpoint_format": False}
+
+    def test_weight_update_info_advertises_packed_buffer_size(self):
+        info = with_packed_nccl_buffer(
+            {"names": ["w"], "dtype_names": ["bfloat16"], "shapes": [[2, 2]], "packed": True}
+        )
+        assert info["packed_buffer_size_bytes"] == PACKED_NCCL_BUFFER_SIZE_BYTES
+        assert PACKED_NCCL_BUFFER_SIZE_BYTES == 4 * 1024**3
+        assert with_packed_nccl_buffer({"packed": False}) == {"packed": False}

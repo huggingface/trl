@@ -30,6 +30,18 @@ if is_vllm_available(min_version="0.22.0"):
 
 logger = get_logger(__name__)
 
+# Default 1 GiB pack buffer is smaller than Qwen3 embed/lm_head rows (and 32B layers).
+# Must match on trainer send and vLLM recv (`NCCLWeightTransferUpdateInfo`).
+PACKED_NCCL_BUFFER_SIZE_BYTES = 4 * 1024**3
+
+
+def with_packed_nccl_buffer(weight_update_info: dict) -> dict:
+    """Copy `weight_update_info` and, when packed, advertise the trainer's NCCL pack buffer size."""
+    info = dict(weight_update_info)
+    if info.get("packed"):
+        info["packed_buffer_size_bytes"] = PACKED_NCCL_BUFFER_SIZE_BYTES
+    return info
+
 
 class WeightTransferClient:
     """Streams the trainer's weights into the vLLM server over NCCL.
@@ -63,7 +75,8 @@ class WeightTransferClient:
             )
         self.vllm = vllm_client
         self.weight_sync_timeout = weight_sync_timeout
-        self._weight_update_info = weight_update_info
+        # Workers size their packed recv buffer from this payload; it must match trainer_send_weights.
+        self._weight_update_info = with_packed_nccl_buffer(weight_update_info)
         self.model_update_group = None
 
     def init_weight_transfer(self) -> None:
@@ -130,13 +143,13 @@ class WeightTransferClient:
 
         def trainer_send_weights():
             try:
-                send_kwargs = {"group": self.model_update_group, "packed": True}
-                # Default 1 GiB pack buffer is smaller than Qwen3 embed/lm_head rows (and 32B layers).
-                if hasattr(NCCLTrainerSendWeightsArgs, "packed_buffer_size_bytes"):
-                    send_kwargs["packed_buffer_size_bytes"] = 4 * 1024**3
                 NCCLWeightTransferEngine.trainer_send_weights(
                     iterator=iterator,
-                    trainer_args=NCCLTrainerSendWeightsArgs(**send_kwargs),
+                    trainer_args=NCCLTrainerSendWeightsArgs(
+                        group=self.model_update_group,
+                        packed=True,
+                        packed_buffer_size_bytes=PACKED_NCCL_BUFFER_SIZE_BYTES,
+                    ),
                 )
             except BaseException as exc:  # noqa: BLE001
                 error.append(exc)
