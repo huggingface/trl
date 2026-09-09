@@ -524,7 +524,8 @@ class TestIWOPDTrainer(TrlTestCase):
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
         assert trainer.state.log_history[0]["eval_loss"] is not None
-        assert train_result.metrics["train_loss"] >= 0.0
+        # Student and teacher are the same model, so the JSD is exactly zero up to float32 rounding.
+        assert train_result.metrics["train_loss"] == pytest.approx(0.0, abs=1e-6)
         assert "model.safetensors" in os.listdir(self.tmp_dir + "/checkpoint-2")
 
     @pytest.mark.parametrize(
