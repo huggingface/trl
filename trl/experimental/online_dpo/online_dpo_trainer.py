@@ -213,9 +213,11 @@ class OnlineDPOTrainer(_BaseTrainer):
         # Process reward functions (convert strings to models, collect names)
         model_init_kwargs = args.model_init_kwargs or {}
         model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
+        reward_model_revisions = [None] * len(reward_funcs)
         for i, reward_func in enumerate(reward_funcs):
             if isinstance(reward_func, str):
                 # Load model from string path
+                reward_model_revisions[i] = model_init_kwargs.get("revision")
                 reward_funcs[i] = AutoModelForSequenceClassification.from_pretrained(
                     reward_func, num_labels=1, **model_init_kwargs
                 )
@@ -235,11 +237,15 @@ class OnlineDPOTrainer(_BaseTrainer):
                 raise ValueError("The number of reward processing classes must match the number of reward functions.")
 
         self.reward_processing_classes = []
-        for reward_processing_class_i, reward_func in zip(reward_processing_classes, reward_funcs, strict=True):
+        for i, (reward_processing_class_i, reward_func) in enumerate(
+            zip(reward_processing_classes, reward_funcs, strict=True)
+        ):
             if isinstance(reward_func, PreTrainedModel):
                 if reward_processing_class_i is None:
                     reward_processing_class_i = AutoTokenizer.from_pretrained(
-                        reward_func.config._name_or_path, trust_remote_code=args.trust_remote_code
+                        reward_func.config._name_or_path,
+                        revision=reward_model_revisions[i],
+                        trust_remote_code=args.trust_remote_code,
                     )
                 if reward_processing_class_i.pad_token_id is None:
                     reward_processing_class_i.pad_token = reward_processing_class_i.eos_token

@@ -38,7 +38,8 @@ class SSDConfig(_BaseConfig):
         > Parameters that control generation and rollout reuse
 
         model_init_kwargs (`dict[str, Any]`, *optional*):
-            Keyword arguments used when the `model` argument is passed as a string.
+            Keyword arguments used when the `model` argument is passed as a string. The `revision` value is also used
+            when loading the processing class.
         trust_remote_code (`bool`, *optional*, defaults to `False`):
             Whether to allow loading models and tokenizers that ship custom Python code from the Hub. Forwarded to
             [`~transformers.AutoModelForCausalLM.from_pretrained`] and [`~transformers.AutoProcessor.from_pretrained`].
@@ -115,7 +116,10 @@ class SSDConfig(_BaseConfig):
 
     model_init_kwargs: dict[str, Any] | None = field(
         default=None,
-        metadata={"help": "Keyword arguments for model initialization when `model` is passed as a string."},
+        metadata={
+            "help": "Keyword arguments for model initialization when `model` is passed as a string. The `revision` "
+            "value is also used when loading the processing class."
+        },
     )
     trust_remote_code: bool = field(
         default=False,

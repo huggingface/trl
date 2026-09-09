@@ -418,9 +418,11 @@ class IWOPDTrainer(_BaseTrainer):
             import json
 
             teacher_model_init_kwargs = json.loads(teacher_model_init_kwargs)
+        model_revision = None
         if isinstance(model, str):
             model_name_or_path = model
             model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
+            model_revision = model_init_kwargs.get("revision")
             # Distributed training requires device_map=None ("auto" fails)
             if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 model_init_kwargs["device_map"] = None
@@ -431,7 +433,7 @@ class IWOPDTrainer(_BaseTrainer):
         # ── Processing class (tokenizer) ──
         if processing_class is None and model_name_or_path is not None:
             processing_class = AutoTokenizer.from_pretrained(
-                model_name_or_path, trust_remote_code=args.trust_remote_code
+                model_name_or_path, revision=model_revision, trust_remote_code=args.trust_remote_code
             )
         if processing_class is not None:
             if getattr(processing_class, "pad_token", None) is None:

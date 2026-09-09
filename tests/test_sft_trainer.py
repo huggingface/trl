@@ -292,6 +292,21 @@ class TestSFTTrainer(TrlTestCase):
         args = TrainingArguments(output_dir=self.tmp_dir, report_to="none")
         SFTTrainer(model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=args, train_dataset=dataset)
 
+    def test_init_auto_processing_class_uses_model_revision(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=SFTConfig(
+                output_dir=self.tmp_dir,
+                report_to="none",
+                model_init_kwargs={"revision": "8913f5819566"},
+            ),
+            train_dataset=dataset,
+        )
+        # This revision's chat template is 2558 chars; the one on `main` is 2507. Comparing the length is enough to
+        # catch the tokenizer being loaded from the default branch instead of the pinned revision.
+        assert len(trainer.processing_class.chat_template) == 2558
+
     @pytest.mark.parametrize(
         "model_id",
         [
