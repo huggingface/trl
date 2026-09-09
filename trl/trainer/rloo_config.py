@@ -168,6 +168,9 @@ class RLOOConfig(_BaseConfig):
         transformers_continuous_batching_config (`dict`, *optional*):
             Keyword arguments for [`~transformers.generation.ContinuousBatchingConfig`].
 
+        activation_offloading (`bool`, *optional*, defaults to `False`):
+            Whether to offload the activations to the CPU.
+
         > Parameters that control the training
 
         beta (`float`, *optional*, defaults to `0.05`):
@@ -601,6 +604,11 @@ class RLOOConfig(_BaseConfig):
     transformers_continuous_batching_config: dict | str | None = field(
         default=None,
         metadata={"help": "Keyword arguments for `transformers.generation.ContinuousBatchingConfig`."},
+    )
+
+    activation_offloading: bool = field(
+        default=False,
+        metadata={"help": "Whether to offload the activations to the CPU."},
     )
 
     # Deprecated parameters
