@@ -937,6 +937,7 @@ class TestKTOTrainer(TrlTestCase):
             train_dataset=dataset,
             peft_config=LoraConfig(target_modules=["q_proj", "v_proj"]),
         )
+        assert trainer.liger_loss.use_ref_model
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
         trainer.train()
         assert trainer.state.log_history[-1]["train_loss"] is not None
@@ -1002,6 +1003,24 @@ class TestKTOTrainer(TrlTestCase):
                 args=training_args,
                 train_dataset=dataset,
                 compute_metrics=lambda _: {},
+            )
+
+    @require_liger_kernel
+    @pytest.mark.parametrize("weight", ["desirable_weight", "undesirable_weight"])
+    def test_init_fails_with_weighted_liger_loss(self, weight):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
+        training_args = KTOConfig(
+            output_dir=self.tmp_dir,
+            use_liger_kernel=True,
+            report_to="none",
+            **{weight: 2.0},
+        )
+
+        with pytest.raises(ValueError, match=weight):
+            KTOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                args=training_args,
+                train_dataset=dataset,
             )
 
     @require_liger_kernel
@@ -1369,6 +1388,21 @@ class TestKTOTrainer(TrlTestCase):
             if "lora" in n:  # We expect the peft params to be different
                 assert param.dtype == torch.bfloat16, f"Parameter {n} is not in bfloat16."
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    def test_pad_token_id_synced_with_model_config(self):
+        # This model's tokenizer has no pad token, so the trainer falls back to the eos token. The model configs must
+        # follow: otherwise `Trainer` realigns them at train time and reports it as a change the user did not make.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
+
+        training_args = KTOConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = KTOTrainer(
+            model="trl-internal-testing/tiny-MistralForCausalLM-0.2", args=training_args, train_dataset=dataset
+        )
+
+        pad_token_id = trainer.processing_class.pad_token_id
+        assert pad_token_id is not None
+        assert trainer.model.config.pad_token_id == pad_token_id
+        assert trainer.model.generation_config.pad_token_id == pad_token_id
 
 
 @require_vision

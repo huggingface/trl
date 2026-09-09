@@ -33,14 +33,16 @@ from accelerate.logging import get_logger
 from datasets import Dataset, IterableDataset
 from torch.distributed._tensor import DTensor
 from torch.utils.data import DataLoader
-from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenizerBase, TrainerCallback
+from transformers import AutoTokenizer, PreTrainedModel, PreTrainedTokenizerBase, TrainerCallback
 from transformers.data.data_collator import DataCollatorMixin
 from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR
 
+from ...import_utils import is_vllm_available
 from ...trainer.base_trainer import _BaseTrainer
 from ...trainer.utils import (
     compute_flops_per_token,
     compute_mfu,
+    create_model_from_path,
     get_config_model_id,
     is_trackio_available,
     nanmax,
@@ -676,8 +678,10 @@ class AsyncGRPOTrainer(_BaseTrainer):
             Model to be trained. Must be a string, being the *model id* of a pretrained model hosted inside a model
             repo on huggingface.co, or a path to a *directory* containing model weights saved using
             [`~transformers.PreTrainedModel.save_pretrained`], e.g., `'./my_model_directory/'`. The model is loaded
-            using [`~transformers.AutoModelForCausalLM.from_pretrained`]. The model name is also used to identify the
-            model on the vLLM server used for generation.
+            with the architecture declared in its config: [`~transformers.AutoModelForImageTextToText`] for a
+            vision-language checkpoint (whose vision tower is loaded but frozen, see [Vision-language
+            models](async_grpo_trainer#vision-language-models)), [`~transformers.AutoModelForCausalLM`] otherwise. The
+            model name is also used to identify the model on the vLLM server used for generation.
         reward_funcs (`RewardFunc | list[RewardFunc]`, *optional*):
             Reward functions to be used for computing the rewards. To compute the rewards, we call all the reward
             functions with the prompts and completions and sum the rewards. May be omitted when the reward is supplied
@@ -801,6 +805,12 @@ class AsyncGRPOTrainer(_BaseTrainer):
             model_name = model.split("/")[-1]
             args = AsyncGRPOConfig(f"{model_name}-AsyncGRPO")
 
+        if weight_transfer is None and not is_vllm_available(min_version="0.22.0"):
+            raise ImportError(
+                "vLLM >= 0.22.0 is required to use the default Async GRPO weight transfer. "
+                "Install it with: pip install 'vllm>=0.22.0'"
+            )
+
         # Training arguments
         self.epsilon_low = args.epsilon
         self.epsilon_high = args.epsilon_high if args.epsilon_high is not None else args.epsilon
@@ -812,7 +822,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
         model_init_kwargs.setdefault("dtype", args.dtype)
         # FlashAttention is required: training runs in padding-free mode, where sequences are concatenated into a
         # single row and `cu_seq_lens` are derived from `position_ids` resets. SDPA/eager can't handle this.
-        model = AutoModelForCausalLM.from_pretrained(
+        model = create_model_from_path(
             model,
             device_map=None,
             attn_implementation="kernels-community/flash-attn3",
@@ -827,6 +837,19 @@ class AsyncGRPOTrainer(_BaseTrainer):
         is_moe = getattr(text_config, "output_router_logits", None) is not None
         self.aux_loss_enabled = is_moe and args.router_aux_loss_coef != 0.0
         self.router_aux_loss_coef = args.router_aux_loss_coef
+
+        self._is_vlm = text_config is not model.config
+        if self._is_vlm:
+            # Train the text model only. It is located through the text config, since module names differ across
+            # architectures (`model.language_model` for Qwen-VL and Gemma 3, `model.text_model` for SmolVLM).
+            text_model = next(
+                module
+                for module in model.modules()
+                if isinstance(module, PreTrainedModel) and module is not model and module.config is text_config
+            )
+            model.requires_grad_(False)
+            text_model.requires_grad_(True)
+            model.get_output_embeddings().requires_grad_(True)
 
         patch_chunked_lm_head(
             model, chunk_size=8192, temperature=self.temperature, output_router_logits=self.aux_loss_enabled
@@ -960,8 +983,11 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 # DTensor.shape returns the global shape without triggering any all-gather.
                 weight_names, weight_dtype_names, weight_shapes = [], [], []
                 for name, param in model.named_parameters():
-                    # DDP/FSDP1 wrapping, avoids vllm module not exist error
-                    name = name.removeprefix("module.")
+                    # Frozen parameters (a VLM's vision tower) never change, so they are never sent.
+                    if not param.requires_grad:
+                        continue
+                    # DDP/FSDP1 wrapping and gradient checkpointing, avoids vllm module not exist error
+                    name = name.removeprefix("module.").replace("_checkpoint_wrapped_module.", "")
                     weight_names.append(name)
                     weight_dtype_names.append(str(param.dtype).split(".")[-1])
                     weight_shapes.append(list(param.shape))
@@ -1278,7 +1304,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
         ## `_wall_clock` divides by `perf/step_s`: the whole step, rollout waits included  and says what fraction of the allocation actually became training.
         if self._step_forward_tokens > 0:
             mean_seq_len = self._step_seq_len_weighted / self._step_forward_tokens
-            flops_per_token = compute_flops_per_token(self.model.config, int(mean_seq_len))
+            flops_per_token = compute_flops_per_token(self.model.config.get_text_config(), int(mean_seq_len))
             world_size = self.accelerator.num_processes
             metrics["perf/forwarded_tok_s_fwd_bwd"].append((self._step_forward_tokens, fwd_bwd_s))
             metrics["perf/mfu_fwd_bwd"].append(
@@ -1331,7 +1357,10 @@ class AsyncGRPOTrainer(_BaseTrainer):
         # FSDP ranks, then frees it once the generator advances — avoiding materializing the full model in memory.
         device = self.accelerator.device
         for name, param in self.model.named_parameters():
-            name = name.removeprefix("module.")  # DDP/FSDP1 wrapping
+            if not param.requires_grad:
+                continue
+            # DDP/FSDP1 wrapping and gradient checkpointing, avoids vllm module not exist error
+            name = name.removeprefix("module.").replace("_checkpoint_wrapped_module.", "")
             full = param.full_tensor() if isinstance(param, DTensor) else param.detach()
             if full.device != device:
                 full = full.to(device)

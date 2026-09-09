@@ -81,7 +81,6 @@ from .utils import (
 
 
 if is_peft_available():
-    import peft
     from peft import PeftConfig, PeftModel, PeftType, get_peft_model
 
 
@@ -100,7 +99,10 @@ class _ChunkedCELMHeadOutput(CausalLMOutputWithPast):
 
 def _chunk(h, w, b, lbl, logit_scale, final_logit_softcapping):
     with maybe_gather_lm_head_ctx(w, b):
-        logits = h.float() @ w.float().t()
+        # Project in the compute dtype and upcast only for the softmax, like `"nll"` and
+        # `transformers`' own `ForCausalLMLoss` do. Matching the weight to the hidden-states dtype keeps the
+        # matmul in that dtype, which is what `lm_head`'s own forward computes in.
+        logits = (h @ w.to(h.dtype).t()).float()
         if b is not None:
             logits = logits + b.float()
     if logit_scale != 1.0:
@@ -319,6 +321,7 @@ def _patch_chunked_ce_lm_head(model: torch.nn.Module, chunk_size: int, is_vlm: b
         # into the gradient-checkpointed chunk loop causes FSDP2 to re-gather it once per chunk
         # during backward recomputation. full_tensor() converts it to a plain tensor once; all
         # chunks reference that tensor, so only one all-gather occurs (in full_tensor()'s backward).
+        # `_chunk` casts the weight to the hidden-states dtype per chunk.
         if isinstance(lm_head_weight, torch.distributed.tensor.DTensor):
             lm_head_weight = lm_head_weight.full_tensor()
             if lm_head_bias is not None:
@@ -1112,14 +1115,8 @@ class SFTTrainer(_BaseTrainer):
             # - See:
             #   - TRL issue: https://github.com/huggingface/trl/issues/6089
             #   - Upstream issue: https://github.com/deepspeedai/DeepSpeed/issues/8072
-            # - autocast_adapter_dtype was introduced in PEFT 0.12.0; before, no upcast existed: no need to pass the kwarg
             get_peft_model_kwargs = {}
-            if (
-                args.deepspeed_plugin is not None
-                and args.deepspeed_plugin.zero_stage == 3
-                and not _is_quantized_model
-                and Version(peft.__version__) >= Version("0.12.0")
-            ):
+            if args.deepspeed_plugin is not None and args.deepspeed_plugin.zero_stage == 3 and not _is_quantized_model:
                 get_peft_model_kwargs["autocast_adapter_dtype"] = False
             model = get_peft_model(model, peft_config, **get_peft_model_kwargs)
 
@@ -1168,7 +1165,10 @@ class SFTTrainer(_BaseTrainer):
         # BFD packing requires padding-free mode; otherwise, the collator outputs padded attention masks, causing
         # FlashAttention to ignore position_ids and recompute them incorrectly from the padded attention mask.
         self.padding_free = args.padding_free or (args.packing and args.packing_strategy in {"bfd", "bfd_split"})
-        use_flash_attention = model.config._attn_implementation in FLASH_ATTENTION_VARIANTS
+        # A hub kernel can be requested with a revision and/or a kernel name (`repo_id@revision:kernel_name`), while
+        # the variants above are bare repo ids, so compare against the repo id alone.
+        attn_implementation = model.config._attn_implementation.split("@")[0].split(":")[0]
+        use_flash_attention = attn_implementation in FLASH_ATTENTION_VARIANTS
         if self.padding_free:
             if data_collator is not None:
                 raise ValueError("Passing a custom data collator is not supported when using padding-free.")
@@ -1213,6 +1213,10 @@ class SFTTrainer(_BaseTrainer):
                     "in the vocabulary before using it as a padding token."
                 )
             self._tokenizer.pad_token = pad_token
+            # Mirror the pad token onto the model configs: `Trainer` runs the same alignment at train time, so the end
+            # state is unchanged, but the model stays consistent with the tokenizer from the moment it is built.
+            model.config.pad_token_id = self._tokenizer.pad_token_id
+            model.generation_config.pad_token_id = self._tokenizer.pad_token_id
             data_collator = DataCollatorForLanguageModeling(
                 pad_token_id=self._tokenizer.pad_token_id,
                 padding_free=self.padding_free,

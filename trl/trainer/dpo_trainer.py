@@ -48,6 +48,7 @@ from transformers.utils import is_peft_available
 
 from ..data_utils import _tokenize, apply_chat_template, extract_prompt, is_conversational, prepare_multimodal_messages
 from ..import_utils import is_liger_kernel_available
+from ..losses import FusedLinearDPOLoss
 from ..models import get_act_offloading_ctx_manager, prepare_deepspeed, prepare_fsdp
 from ..models.utils import _ForwardRedirection, disable_gradient_checkpointing
 from .base_trainer import _BaseTrainer
@@ -67,10 +68,6 @@ from .utils import (
 )
 
 
-if is_liger_kernel_available():
-    from liger_kernel.chunked_loss import LigerFusedLinearDPOLoss
-
-
 if is_peft_available():
     import peft
     from peft import LoraConfig, PeftConfig, PeftModel, PromptLearningConfig, get_peft_model
@@ -78,15 +75,6 @@ if is_peft_available():
 
 
 logger = get_logger(__name__)
-
-
-FLASH_ATTENTION_VARIANTS = {
-    "flash_attention_2",
-    "flash_attention_3",
-    "kernels-community/flash-attn2",
-    "kernels-community/flash-attn3",
-    "kernels-community/vllm-flash-attn3",
-}
 
 
 @dataclass
@@ -611,6 +599,11 @@ class DPOTrainer(_BaseTrainer):
         if self._tokenizer.pad_token is None:
             self._tokenizer.pad_token = self._tokenizer.eos_token
 
+        # Mirror the pad token onto the model configs: `Trainer` runs the same alignment at train time, so the end
+        # state is unchanged, but the model stays consistent with the tokenizer from the moment it is built.
+        model.config.pad_token_id = self._tokenizer.pad_token_id
+        model.generation_config.pad_token_id = self._tokenizer.pad_token_id
+
         # PEFT
         if peft_config is not None:
             if not is_peft_available():
@@ -640,14 +633,8 @@ class DPOTrainer(_BaseTrainer):
             # - See:
             #   - TRL issue: https://github.com/huggingface/trl/issues/6089
             #   - Upstream issue: https://github.com/deepspeedai/DeepSpeed/issues/8072
-            # - autocast_adapter_dtype was introduced in PEFT 0.12.0; before, no upcast existed: no need to pass the kwarg
             get_peft_model_kwargs = {}
-            if (
-                args.deepspeed_plugin is not None
-                and args.deepspeed_plugin.zero_stage == 3
-                and not _is_quantized_model
-                and Version(peft.__version__) >= Version("0.12.0")
-            ):
+            if args.deepspeed_plugin is not None and args.deepspeed_plugin.zero_stage == 3 and not _is_quantized_model:
                 get_peft_model_kwargs["autocast_adapter_dtype"] = False
             model = get_peft_model(model, peft_config, **get_peft_model_kwargs)
 
@@ -754,6 +741,10 @@ class DPOTrainer(_BaseTrainer):
                     "in the vocabulary before using it as a padding token."
                 )
             self._tokenizer.pad_token = pad_token
+            # Mirror the pad token onto the model configs: `Trainer` runs the same alignment at train time, so the end
+            # state is unchanged, but the model stays consistent with the tokenizer from the moment it is built.
+            model.config.pad_token_id = self._tokenizer.pad_token_id
+            model.generation_config.pad_token_id = self._tokenizer.pad_token_id
             data_collator = DataCollatorForPreference(
                 pad_token_id=self._tokenizer.pad_token_id,
                 max_length=args.max_length,
@@ -857,7 +848,12 @@ class DPOTrainer(_BaseTrainer):
                         "wrong sequence. Use a weight-based adapter such as LoRA instead, or set "
                         "`use_liger_kernel=False`."
                     )
-            self.liger_loss = LigerFusedLinearDPOLoss(beta=args.beta, loss_type=self.loss_types[0])
+            self.liger_loss = FusedLinearDPOLoss(
+                beta=args.beta,
+                loss_type=self.loss_types[0],
+                label_smoothing=self.label_smoothing,
+                discopop_tau=args.discopop_tau,
+            )
             # Redirect the model.module forward to the model forward to ensure pre-forward hooks are called, so that
             # under ZeRO-3 the parameter coordinator gathers/reduces `lm_head.weight` around the fused loss.
             self._forward_redirection = _ForwardRedirection()

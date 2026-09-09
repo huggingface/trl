@@ -19,7 +19,13 @@
 import torch
 from transformers import AutoTokenizer, GenerationConfig
 
-from .._common import check_transformers_version, init_weights_tiny_model, push_to_hub, smoke_test
+from .._common import (
+    check_transformers_version,
+    init_weights_tiny_model,
+    print_config_diff,
+    push_to_hub,
+    smoke_test,
+)
 from ._remote_code.configuration_remote import RemoteConfig
 from ._remote_code.modeling_remote import RemoteForCausalLM, RemoteForSequenceClassification, RemoteModel
 
@@ -37,12 +43,24 @@ RemoteForCausalLM.register_for_auto_class("AutoModelForCausalLM")
 RemoteForSequenceClassification.register_for_auto_class("AutoModelForSequenceClassification")
 
 config = RemoteConfig(
-    vocab_size=len(tokenizer.vocab),
+    vocab_size=128256,
     hidden_size=8,
     num_attention_heads=4,
     num_key_value_heads=2,
     num_hidden_layers=2,
     intermediate_size=32,
+    max_position_embeddings=131072,
+    rope_theta=500000.0,
+    rope_scaling={
+        "factor": 32.0,
+        "high_freq_factor": 4.0,
+        "low_freq_factor": 1.0,
+        "original_max_position_embeddings": 8192,
+        "rope_type": "llama3",
+    },
+    rms_norm_eps=1e-05,
+    bos_token_id=128000,
+    eos_token_id=[128001, 128008, 128009],
 )
 # `model.save_pretrained` only records auto-map entries for the saved class's own auto-classes.
 # Seed the AutoModel and SeqCls entries on the config so the Hub repo can also be loaded as
@@ -55,4 +73,5 @@ config.auto_map = {
 model = RemoteForCausalLM(config).to(dtype=torch.bfloat16)
 init_weights_tiny_model(model)
 smoke_test(model, tokenizer)
+print_config_diff(MODEL_ID, model)
 push_to_hub(model, tokenizer, generation_config, "tiny")

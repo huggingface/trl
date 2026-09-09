@@ -319,6 +319,11 @@ class RLOOTrainer(_BaseTrainer):
         if self._tokenizer.pad_token is None:
             self._tokenizer.pad_token = self._tokenizer.eos_token
 
+        # Mirror the pad token onto the model configs: `Trainer` runs the same alignment at train time, so the end
+        # state is unchanged, but the model stays consistent with the tokenizer from the moment it is built.
+        model.config.pad_token_id = self._tokenizer.pad_token_id
+        model.generation_config.pad_token_id = self._tokenizer.pad_token_id
+
         # PEFT
         if peft_config is not None:
             if not is_peft_available():
@@ -348,14 +353,8 @@ class RLOOTrainer(_BaseTrainer):
             # - See:
             #   - TRL issue: https://github.com/huggingface/trl/issues/6089
             #   - Upstream issue: https://github.com/deepspeedai/DeepSpeed/issues/8072
-            # - autocast_adapter_dtype was introduced in PEFT 0.12.0; before, no upcast existed: no need to pass the kwarg
             get_peft_model_kwargs = {}
-            if (
-                args.deepspeed_plugin is not None
-                and args.deepspeed_plugin.zero_stage == 3
-                and not _is_quantized_model
-                and Version(peft.__version__) >= Version("0.12.0")
-            ):
+            if args.deepspeed_plugin is not None and args.deepspeed_plugin.zero_stage == 3 and not _is_quantized_model:
                 get_peft_model_kwargs["autocast_adapter_dtype"] = False
             model = get_peft_model(model, peft_config, **get_peft_model_kwargs)
 

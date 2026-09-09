@@ -52,6 +52,8 @@ example.
 > Qwen2.5-Coder experts) satisfy this; a teacher with a different vocabulary trains the student against the wrong
 > tokens, silently unless its vocabulary is larger than the student's.
 
+**Checkpoint and resume**: `ignore_data_skip` defaults to `True`; the base Trainer's skip-and-replay loop does not apply to a live rollout queue. Instead, the index of the first prompt not yet trained on is saved to `rollout_state.json` alongside each checkpoint and restored on resume, so the worker fast-forwards to that prompt without replaying samples. It is the *trained* position, not the generator's: the worker runs ahead of training by the rollout queue depth, and those buffered samples are lost when the run ends, so resuming from the generator's position would skip prompts that were generated but never trained on. Streaming datasets (`IterableDataset`) cannot be repositioned; their worker restarts from prompt 0 on resume.
+
 ## How it differs from [`~trl.experimental.distillation.DistillationTrainer`]
 
 In [`~trl.experimental.distillation.DistillationTrainer`], the teacher is a locally loaded model: generation,
@@ -268,6 +270,7 @@ What the objective itself measures, averaged over the trained tokens of the wind
 | `teacher_entropy`               | the teacher's entropy over the candidates it reported. Bounded below the true value, since only `teacher_top_k` candidates cross the wire                             |
 | `teacher_jsd/<id>`              | MOPD only: `jsd` restricted to the tokens that teacher scored. Teachers in different domains can diverge at very different rates, which the blended `jsd` conflates  |
 | `teacher_entropy/<id>`          | MOPD only: the same breakdown of `teacher_entropy`                                                                                                                  |
+| `teacher_token_frac/<id>`       | MOPD only: the share of scored tokens that teacher took. Routing skew is otherwise invisible: a teacher starved of rows still reports a healthy `teacher_jsd/<id>`   |
 
 There is no per-teacher `entropy`: the student's entropy is a property of its own policy, not of which teacher scored the sample, so the blended metric already covers it.
 

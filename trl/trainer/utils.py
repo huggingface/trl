@@ -193,10 +193,10 @@ def maybe_gather_lm_head_ctx(*params: torch.nn.Parameter):
     Fused losses (e.g. Liger) read `lm_head.weight` directly and hand it to the kernel without ever calling the
     `lm_head` module. Under DeepSpeed ZeRO-3 every parameter is sharded to `numel 0` and only re-materialized inside
     its owning module's forward hook, so the head's gather hook never fires and the kernel receives an empty weight.
-    This gathers the given parameters for the duration of the forward, so the fused matmul sees the full weight. The
-    weight gradient is computed and stashed during this forward, so the parameters need not stay gathered for the
-    backward — but the backward's gradient reduction relies on the ZeRO-3 pre-forward hooks being armed, so the caller
-    must run the fused loss inside the model's forward (e.g. via `_ForwardRedirection`).
+    This gathers the given parameters for the duration of a direct access, so the matmul sees the full weight. Fused
+    losses compute and stash their gradients during the forward; custom autograd functions that recompute during the
+    backward must enter this context again. The backward's gradient reduction relies on the ZeRO-3 pre-forward hooks
+    being armed, so the caller must run the loss inside the model's forward (e.g. via `_ForwardRedirection`).
 
     Returns a null context when ZeRO-3 is not enabled, or when the parameters are already gathered — with tied
     embeddings `embed_tokens` keeps the weight `AVAILABLE`, and re-partitioning it on exit would collide with
@@ -1324,6 +1324,7 @@ class _ChunkedLogProbFunction(torch.autograd.Function):
         ctx,
         last_hidden: torch.Tensor,  # [N, H]
         weight: torch.Tensor,  # [V, H]
+        bias: torch.Tensor | None,  # [V]
         targets: torch.Tensor,  # [N]
         temperature: float,
         chunk_size: int,
@@ -1356,6 +1357,8 @@ class _ChunkedLogProbFunction(torch.autograd.Function):
             # with last_hidden.dtype (float16) while w_chunk (the lm_head weights) is not auto casted
             w_chunk = weight[start:end].to(last_hidden.dtype)  # [C, H]
             torch.mm(last_hidden, w_chunk.t(), out=mm_buf[:, :C])
+            if bias is not None:
+                mm_buf[:, :C].add_(bias[start:end].to(last_hidden.dtype))
             logits_chunk = logits_buf[:, :C]
             logits_chunk.copy_(mm_buf[:, :C])
 
@@ -1385,7 +1388,7 @@ class _ChunkedLogProbFunction(torch.autograd.Function):
         logprobs = target_logit - log_z
         entropy = log_z - x_sum_exp / sum_exp
 
-        ctx.save_for_backward(last_hidden, weight, targets, log_z, entropy)
+        ctx.save_for_backward(last_hidden, weight, bias, targets, log_z, entropy)
         ctx.temperature = temperature
         ctx.chunk_size = chunk_size
         ctx.logit_scale = logit_scale
@@ -1395,7 +1398,7 @@ class _ChunkedLogProbFunction(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, grad_logprobs: torch.Tensor | None, grad_entropy: torch.Tensor | None):  # type: ignore
-        hidden, weight, labels, log_z, entropy = ctx.saved_tensors
+        hidden, weight, bias, labels, log_z, entropy = ctx.saved_tensors
         temperature: float = ctx.temperature
         chunk_size: int = ctx.chunk_size
         logit_scale: float = ctx.logit_scale
@@ -1403,69 +1406,85 @@ class _ChunkedLogProbFunction(torch.autograd.Function):
         inv_t = 1 / temperature
 
         N, _ = hidden.shape
-        vocab = weight.shape[0]
+        with maybe_gather_lm_head_ctx(weight, bias):
+            vocab = weight.shape[0]
 
-        # NOTE(@aminediro): always acc in fp32 even if input is not
-        grad_hidden = torch.zeros(hidden.shape, device=hidden.device, dtype=torch.float32)
-        grad_weight = torch.zeros(weight.shape, device=weight.device, dtype=torch.float32)
+            # NOTE(@aminediro): always acc in fp32 even if input is not
+            grad_hidden = torch.zeros(hidden.shape, device=hidden.device, dtype=torch.float32)
+            grad_weight = torch.zeros(weight.shape, device=weight.device, dtype=torch.float32)
+            grad_bias = torch.zeros(bias.shape, device=bias.device, dtype=torch.float32) if bias is not None else None
 
-        # Pre-allocate reusable buffers to avoid per-chunk allocation
-        mm_buf = torch.empty((N, chunk_size), device=hidden.device, dtype=hidden.dtype)
-        logits_buf = torch.empty((N, chunk_size), device=hidden.device, dtype=torch.float32)
+            # Pre-allocate reusable buffers to avoid per-chunk allocation
+            mm_buf = torch.empty((N, chunk_size), device=hidden.device, dtype=hidden.dtype)
+            logits_buf = torch.empty((N, chunk_size), device=hidden.device, dtype=torch.float32)
 
-        g = grad_logprobs.to(torch.float32) if grad_logprobs is not None else None  # [N]
-        g_entropy = grad_entropy.to(torch.float32) if grad_entropy is not None else None  # [N]
-        row_idx = torch.arange(N, device=hidden.device)
+            g = grad_logprobs.to(torch.float32) if grad_logprobs is not None else None  # [N]
+            g_entropy = grad_entropy.to(torch.float32) if grad_entropy is not None else None  # [N]
+            row_idx = torch.arange(N, device=hidden.device)
 
-        for start in range(0, vocab, chunk_size):
-            end = min(start + chunk_size, vocab)
-            C = end - start
-            w_chunk = weight[start:end]  # [C, H]
+            for start in range(0, vocab, chunk_size):
+                end = min(start + chunk_size, vocab)
+                C = end - start
+                w_chunk = weight[start:end]  # [C, H]
 
-            torch.mm(hidden, w_chunk.t(), out=mm_buf[:, :C])
-            logits_chunk = logits_buf[:, :C]
-            logits_chunk.copy_(mm_buf[:, :C])
+                torch.mm(hidden, w_chunk.t(), out=mm_buf[:, :C])
+                if bias is not None:
+                    mm_buf[:, :C].add_(bias[start:end].to(hidden.dtype))
+                logits_chunk = logits_buf[:, :C]
+                logits_chunk.copy_(mm_buf[:, :C])
 
-            logits_chunk.mul_(logit_scale)
-            if final_logit_softcapping is not None:
-                tanh_scaled = torch.tanh(logits_chunk / final_logit_softcapping)
-                logits_chunk.copy_(tanh_scaled * final_logit_softcapping)
+                logits_chunk.mul_(logit_scale)
+                if final_logit_softcapping is not None:
+                    tanh_scaled = torch.tanh(logits_chunk / final_logit_softcapping)
+                    logits_chunk.copy_(tanh_scaled * final_logit_softcapping)
 
-            logits_chunk.mul_(inv_t)  # [N, C]
-            probs = torch.exp(logits_chunk - log_z.unsqueeze(-1))  # [N, C]
+                logits_chunk.mul_(inv_t)  # [N, C]
+                probs = torch.exp(logits_chunk - log_z.unsqueeze(-1))  # [N, C]
 
-            if g is not None:
-                # dL/d(logits) = g * (1_[label] - p)
-                grad_logits = (-g).unsqueeze(-1) * probs  # [N, C]
+                if g is not None:
+                    # dL/d(logits) = g * (1_[label] - p)
+                    grad_logits = (-g).unsqueeze(-1) * probs  # [N, C]
 
-                in_chunk_cond = (labels >= start) & (labels < end)
-                local_idx = torch.clamp(labels - start, 0, end - start - 1)
-                # If label in chunk add g to grad else it stays the same
-                grad_logits[row_idx, local_idx] += g * in_chunk_cond
-            else:
-                grad_logits = torch.zeros_like(probs)
+                    in_chunk_cond = (labels >= start) & (labels < end)
+                    local_idx = torch.clamp(labels - start, 0, end - start - 1)
+                    # If label in chunk add g to grad else it stays the same
+                    grad_logits[row_idx, local_idx] += g * in_chunk_cond
+                else:
+                    grad_logits = torch.zeros_like(probs)
 
-            if g_entropy is not None:
-                # d(entropy)/d(logits_j) = -p_j * (log_p_j + entropy), entropy = -sum_k p_k * log_p_k
-                log_p_chunk = logits_chunk - log_z.unsqueeze(-1)  # [N, C]
-                grad_logits += (-g_entropy).unsqueeze(-1) * probs * (log_p_chunk + entropy.unsqueeze(-1))
+                if g_entropy is not None:
+                    # d(entropy)/d(logits_j) = -p_j * (log_p_j + entropy), entropy = -sum_k p_k * log_p_k
+                    log_p_chunk = logits_chunk - log_z.unsqueeze(-1)  # [N, C]
+                    grad_logits += (-g_entropy).unsqueeze(-1) * probs * (log_p_chunk + entropy.unsqueeze(-1))
 
-            grad_logits = grad_logits * inv_t
-            if final_logit_softcapping is not None:
-                grad_logits.mul_(1 - tanh_scaled.pow(2))
+                grad_logits = grad_logits * inv_t
+                if final_logit_softcapping is not None:
+                    grad_logits.mul_(1 - tanh_scaled.pow(2))
 
-            grad_logits = grad_logits * logit_scale
+                grad_logits = grad_logits * logit_scale
 
-            grad_hidden.add_(grad_logits @ w_chunk.float())
-            grad_weight[start:end].add_(grad_logits.t() @ hidden.float())
+                grad_hidden.add_(grad_logits @ w_chunk.float())
+                grad_weight[start:end].add_(grad_logits.t() @ hidden.float())
+                if grad_bias is not None:
+                    grad_bias[start:end].add_(grad_logits.sum(dim=0))
 
-        return grad_hidden.to(hidden.dtype), grad_weight.to(weight.dtype), None, None, None, None, None
+        return (
+            grad_hidden.to(hidden.dtype),
+            grad_weight.to(weight.dtype),
+            grad_bias.to(bias.dtype) if grad_bias is not None else None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
 
 
 def patch_chunked_lm_head(
     model: torch.nn.Module, chunk_size: int, temperature: float, output_router_logits: bool = False
 ) -> None:
-    final_logit_softcapping = getattr(model.config, "final_logit_softcapping", None)
+    text_config = model.config.get_text_config()
+    final_logit_softcapping = getattr(text_config, "final_logit_softcapping", None)
 
     def _chunked_forward(
         self: torch.nn.Module,
@@ -1483,7 +1502,7 @@ def patch_chunked_lm_head(
             input_ids=input_ids, attention_mask=attention_mask, use_cache=use_cache, **decoder_kwargs, **kwargs
         )
         # NOTE(@aminediro): supporting Cohere2 models
-        logit_scale = getattr(self.config, "logit_scale", 1.0)
+        logit_scale = getattr(text_config, "logit_scale", 1.0)
         hidden_states = outputs.last_hidden_state  # [B, S+1, H]
 
         # Shift: predict next token
@@ -1505,6 +1524,7 @@ def patch_chunked_lm_head(
         logprobs_valid, entropy_valid = _ChunkedLogProbFunction.apply(
             hidden_flat,
             self.lm_head.weight,
+            self.lm_head.bias,
             targets_flat,
             temperature,
             chunk_size,
@@ -1534,13 +1554,13 @@ def patch_chunked_lm_head(
                 num_experts_per_tok = self.num_experts_per_tok
             else:
                 # Upstream bug AttributeError: 'GptOssConfig' object has no attribute 'num_experts'; see #5754
-                if self.config.model_type == "gpt_oss" and Version("5.0.0") <= Version(
+                if text_config.model_type == "gpt_oss" and Version("5.0.0") <= Version(
                     transformers.__version__
                 ) < Version("5.6.0"):
                     num_experts = self.num_experts
                 else:
-                    num_experts = self.config.num_experts
-                num_experts_per_tok = self.config.num_experts_per_tok
+                    num_experts = text_config.num_experts
+                num_experts_per_tok = text_config.num_experts_per_tok
             # Padding-free packs all real tokens into a single row, so `attention_mask` is None and every token counts.
             aux_loss = load_balancing_loss_func(
                 outputs.router_logits, num_experts, num_experts_per_tok, attention_mask
