@@ -144,7 +144,7 @@ class SyncRefModelCallback(TrainerCallback):
 
 class RichProgressCallback(TrainerCallback):
     """
-    A [`TrainerCallback`] that displays the progress of training or evaluation using Rich.
+    A [`~transformers.TrainerCallback`] that displays the progress of training or evaluation using Rich.
     """
 
     def __init__(self):
