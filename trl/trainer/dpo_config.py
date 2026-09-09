@@ -109,8 +109,8 @@ class DPOConfig(_BaseConfig):
             reference model. For the IPO loss (`loss_type='ipo'`), this value is the regularization parameter denoted
             by τ in the [paper](https://huggingface.co/papers/2310.12036).
         use_weighting (`bool`, *optional*, defaults to `False`):
-            Whether to apply WPO-style weighting (https://huggingface.co/papers/2406.11827) to preference pairs using
-            the policy's length-normalized sequence probabilities.
+            Whether to apply [WPO](https://huggingface.co/papers/2406.11827)-style weighting to preference pairs
+            using the policy's length-normalized sequence probabilities.
         discopop_tau (`float`, *optional*, defaults to `0.05`):
             τ/temperature parameter from the DiscoPOP paper, which controls the shape of the log-ratio modulated loss
             when using `loss_type='discopop'`. The paper recommends the default value `discopop_tau=0.05`.
@@ -126,8 +126,9 @@ class DPOConfig(_BaseConfig):
             reference policy during updates. The reference policy is updated according to the equation: `π_ref = α *
             π_θ + (1 - α) * π_ref_prev`. To use this parameter, you must set `sync_ref_model=True`.
         ref_model_sync_steps (`int`, *optional*, defaults to `512`):
-            τ parameter from the TR-DPO paper, which determines how frequently the current policy is synchronized with
-            the reference policy. To use this parameter, you must set `sync_ref_model=True`.
+            τ parameter from the [TR-DPO](https://huggingface.co/papers/2404.09656) paper, which determines how
+            frequently the current policy is synchronized with the reference policy. To use this parameter, you must
+            set `sync_ref_model=True`.
 
         > Deprecated parameters
 
@@ -300,7 +301,7 @@ class DPOConfig(_BaseConfig):
     use_weighting: bool = field(
         default=False,
         metadata={
-            "help": "Whether to apply WPO-style weighting (https://huggingface.co/papers/2406.11827) to preference "
+            "help": "Whether to apply [WPO](https://huggingface.co/papers/2406.11827)-style weighting to preference "
             "pairs using the policy's length-normalized sequence probabilities."
         },
     )

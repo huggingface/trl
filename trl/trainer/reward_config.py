@@ -68,7 +68,7 @@ class RewardConfig(_BaseConfig):
 
         center_rewards_coefficient (`float`, *optional*):
             Coefficient to incentivize the reward model to output mean-zero rewards (proposed by
-            https://huggingface.co/papers/2312.09244, Eq. 2). Recommended value: `0.01`.
+            [this paper](https://huggingface.co/papers/2312.09244), Eq. 2). Recommended value: `0.01`.
         activation_offloading (`bool`, *optional*, defaults to `False`):
             Whether to offload the activations to the CPU.
 
@@ -143,8 +143,8 @@ class RewardConfig(_BaseConfig):
     max_length: int | None = field(
         default=1024,
         metadata={
-            "help": "Maximum length of the tokenized sequence. Sequences longer than `max_length` are truncated from "
-            "the right. If `None`, no truncation is applied."
+            "help": "Maximum length of the tokenized sequence. Samples are filtered out if either chosen or rejected "
+            "sequence exceeds this value. If `None`, no filtering is applied."
         },
     )
     pad_to_multiple_of: int | None = field(
@@ -157,7 +157,7 @@ class RewardConfig(_BaseConfig):
         default=None,
         metadata={
             "help": "Coefficient to incentivize the reward model to output mean-zero rewards (proposed by "
-            "https://huggingface.co/papers/2312.09244, Eq. 2). Recommended value: `0.01`."
+            "[this paper](https://huggingface.co/papers/2312.09244), Eq. 2). Recommended value: `0.01`."
         },
     )
     activation_offloading: bool = field(

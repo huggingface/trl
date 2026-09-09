@@ -961,7 +961,7 @@ class GRPOTrainer(_BaseTrainer):
             optimizers=optimizers,
             # In Trainer, `training_step` scales the loss by `gradient_accumulation_steps` only if `compute_loss_func`
             # is None. For DAPO, loss scaling instead depends on the total number of completions tokens across the
-            # global accumulated batch. To control scaling ourselves, we must disable Trainer’s built-in scaling. The
+            # global accumulated batch. To control scaling ourselves, we must disable Trainer's built-in scaling. The
             # simplest (though a bit hacky) way is to set `compute_loss_func` to any non-None value, which bypasses
             # that behavior without rewriting `training_step`.
             compute_loss_func="non-None value to disable scaling",

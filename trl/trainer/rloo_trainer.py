@@ -363,7 +363,7 @@ class RLOOTrainer(_BaseTrainer):
 
         elif is_peft_model(model):
             # If the model is a PEFT model with a pretrained adapter, we need to create a "ref" adapter that is a copy
-            # of the "default" adapter, so that we can use it as the reference model during the training. Before PEFT
+            # of the "default" adapter, so that we can use it as the reference model during RLOO training. Before PEFT
             # 0.20.0, only one adapter per model was supported when the LoRA config uses `target_parameters` (see
             # peft#3340, fixed in peft#3350), so in that case we skip the "ref" adapter and compute the reference log
             # probs with adapters disabled, i.e. with the base model. The fix only allows adapters targeting the same
@@ -1428,8 +1428,8 @@ class RLOOTrainer(_BaseTrainer):
         # If mask_truncated_completions is enabled, zero out truncated completions in completion_mask
         if self.mask_truncated_completions:
             eos_and_pad = [self._tokenizer.eos_token_id, self._tokenizer.pad_token_id]
-            # Mask completion_mask for attention masking
             is_truncated = torch.tensor([ids[-1] not in eos_and_pad for ids in completion_ids_list], device=device)
+            # Mask completion_mask for attention masking
             completion_mask = completion_mask * (~is_truncated).unsqueeze(1).int()
 
         # Concatenate prompt_mask with completion_mask for logit computation
@@ -1441,7 +1441,7 @@ class RLOOTrainer(_BaseTrainer):
 
         num_images = [len(img_list) if img_list else 0 for img_list in images] if images is not None else None
 
-        # Get forward_kwargs for models with multimodal inputs
+        # Get forward_kwargs for models with multimodal inputs.
         if images is not None:
             prompts_text = [
                 apply_chat_template({"prompt": prompt}, self.processing_class, **self.chat_template_kwargs)["prompt"]

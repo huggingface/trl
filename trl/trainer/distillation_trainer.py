@@ -199,7 +199,7 @@ def _chunked_divergence_loss(
             Interpolation coefficient. `0.0` = forward KL, `1.0` = reverse KL, else generalized JSD.
         chunk_size (`int`):
             Number of valid positions processed per chunk. Peak memory scales linearly with this.
-        num_items_in_batch (`torch.Tensor`, `int` or `None`, *optional*):
+        num_items_in_batch (`torch.Tensor` or `int`, *optional*):
             Total number of valid tokens across the global batch. When provided, the loss is reduced as `sum /
             num_items_in_batch` (gradient-accumulation-correct); when `None`, reduction is `mean` over local valid
             positions.
@@ -335,7 +335,7 @@ class DistillationTrainer(_BaseTrainer):
             that supply the teacher another way (e.g. a remote server).
         args ([`DistillationConfig`], *optional*):
             Configuration for this trainer. If `None`, a default configuration is used.
-        train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`], *optional*):
+        train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
             Dataset to use for training. It must include a column `"prompt"`. Any additional columns in the dataset is
             ignored. The format of the samples can be either:
 
@@ -811,8 +811,8 @@ class DistillationTrainer(_BaseTrainer):
         if self.use_vllm:
             if not is_vllm_available():
                 raise ImportError(
-                    "vLLM is not available and use_vllm is set to True. Please install vLLM with "
-                    "`pip install vllm` to use it."
+                    "vLLM is not available and `use_vllm` is set to True. Please install vLLM with "
+                    "`pip install trl[vllm]` to use it."
                 )
             self.vllm_generation = VLLMGeneration(
                 model=self.model,
@@ -1727,7 +1727,7 @@ class DistillationTrainer(_BaseTrainer):
                     forward_kwargs["mm_token_type_ids"] = mm_ids
                     num_images = None
 
-        # Log the prompt and completion texts
+        # Log prompt and completion texts
         if self.log_completions:
             prompts_text = self.processing_class.batch_decode(prompt_ids, skip_special_tokens=True)
             completions_text = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)

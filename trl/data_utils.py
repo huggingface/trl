@@ -191,7 +191,7 @@ def is_conversational(example: dict[str, Any]) -> bool:
         # It must be a list of messages
         if isinstance(maybe_messages, list):
             maybe_message = maybe_messages[0]
-            # Each message must a list of dictionaries with keys "role" and "content"
+            # Each message must be a list of dictionaries with keys "role" and "content"
             if isinstance(maybe_message, dict) and "role" in maybe_message:
                 return True
 
@@ -923,7 +923,7 @@ def pack_dataset(
     elif strategy == "wrapped":
         dataset = dataset.map(_pack_wrapped, batched=True, fn_kwargs={"seq_length": seq_length}, **map_kwargs)
     else:
-        raise ValueError(f"Invalid packing strategy: '{strategy}', must be one of {valid_strategies}.")
+        raise ValueError(f"Invalid packing strategy '{strategy}', must be one of {valid_strategies}.")
 
     if strategy in {"bfd", "bfd_split"} and "columns" in format:
         format["columns"] = format["columns"] + ["seq_lengths"]
@@ -965,7 +965,7 @@ def is_conversational_from_value(example: dict[str, Any]) -> bool:
     # It must be a list of messages
     if isinstance(maybe_messages, list):
         maybe_message = maybe_messages[0]
-        # Each message must a list of dictionaries with keys "from" and "value"
+        # Each message must be a list of dictionaries with keys "from" and "value"
         if isinstance(maybe_message, dict) and "from" in maybe_message and "value" in maybe_message:
             return True
 

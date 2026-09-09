@@ -158,7 +158,7 @@ def _chunked_cross_entropy_loss(
         shift_labels (`torch.Tensor`, *optional*):
             Pre-shifted labels of shape `(B, S)`, aligned with `hidden_states` (position `i` predicts
             `shift_labels[i]`). Mutually exclusive with `labels`.
-        num_items_in_batch (`torch.Tensor`, `int` or `None`, *optional*):
+        num_items_in_batch (`torch.Tensor` or `int`, *optional*):
             Total number of valid tokens across the global batch, as plumbed by [`~transformers.Trainer`]. When
             provided, the loss is reduced as `sum / num_items_in_batch`, matching the gradient-accumulation-correct
             behavior of HF's default cross-entropy. When `None`, reduction is `mean` over local valid tokens.
@@ -533,7 +533,7 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
             batch_seq_lengths (`list[list[int]]`):
                 A list of lists containing the lengths of each individual document in the packed batch.
 
-        Return:
+        Returns:
             `list[torch.Tensor]`:
                 A list of tensors containing the position IDs for each packed sequence.
         """
@@ -874,7 +874,7 @@ class SFTTrainer(_BaseTrainer):
             A function that accepts the raw model outputs, labels, and the number of items in the entire accumulated
             batch (batch_size * gradient_accumulation_steps) and returns the loss. For example, see the default [loss
             function](https://github.com/huggingface/transformers/blob/052e652d6d53c2b26ffde87e039b723949a53493/src/transformers/trainer.py#L3618)
-            used by [`Trainer`].
+            used by [`~transformers.Trainer`].
         compute_metrics (`Callable[[EvalPrediction], dict]`, *optional*):
             The function that will be used to compute metrics at evaluation. Must take a
             [`~transformers.EvalPrediction`] and return a dictionary string to metric values. When passing
@@ -1786,7 +1786,7 @@ class SFTTrainer(_BaseTrainer):
             # this prevents skipping logits during `predict()` where outputs are requested.
             # Keep logits when preprocess_logits_for_metrics is set, even if compute_metrics is None.
             # to prevent massive vRAM spikes from the lm_head projection.
-            # See: https://github.com/huggingface/trl/issues/4679
+            # See https://github.com/huggingface/trl/issues/4679
             inputs["skip_logits"] = (
                 self.model.training
                 or self.args.prediction_loss_only
