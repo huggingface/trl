@@ -104,7 +104,7 @@ The loss used in SFT is the **token-level cross-entropy loss**, defined as:
 $$
 \mathcal{L}_{\text{SFT}}(\theta) = - \sum_{t=1}^{T} \log p_\theta(y_t \mid y_{<t}),
 $$
-  
+
 where  \\( y_t \\) is the target token at timestep  \\( t \\), and the model is trained to predict the next token given the previous ones. In practice, padding tokens are masked out during loss computation.
 
 > [!TIP]

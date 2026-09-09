@@ -157,7 +157,7 @@ $$
 The temperature  \\( \tau_{i,t} \\) is chosen based on the sign of the advantage  \\( \hat{A}_{i,t} \\):
 
 $$
-\tau_{i,t} = \begin{cases} 
+\tau_{i,t} = \begin{cases}
 \tau_{\text{pos}}, & \text{if } \hat{A}_{i,t} > 0 \\
 \tau_{\text{neg}}, & \text{otherwise}
 \end{cases}
@@ -999,7 +999,7 @@ Tested with:
 - **Qwen2-VL** — e.g., `Qwen/Qwen2-VL-2B-Instruct`
 - **Qwen2.5-VL** — e.g., `Qwen/Qwen2.5-VL-3B-Instruct`
 - **SmolVLM2** — e.g., `HuggingFaceTB/SmolVLM2-2.2B-Instruct`
-  
+
 > [!TIP]
 > Compatibility with all VLMs is not guaranteed. If you believe a model should be supported, feel free to open an issue on GitHub — or better yet, submit a pull request with the required changes.
 
