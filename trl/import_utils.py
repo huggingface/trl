@@ -61,10 +61,6 @@ def is_deepspeed_available() -> bool:
     return _is_package_available("deepspeed")
 
 
-def is_harbor_available() -> bool:
-    return _is_package_available("harbor")
-
-
 def is_jmespath_available() -> bool:
     return _is_package_available("jmespath")
 

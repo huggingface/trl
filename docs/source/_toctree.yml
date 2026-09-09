@@ -53,8 +53,6 @@
 - sections:
   - local: deepspeed_integration
     title: DeepSpeed
-  - local: harbor
-    title: Harbor
   - local: kernels_hub
     title: Kernels Hub
   - local: liger_kernel_integration
