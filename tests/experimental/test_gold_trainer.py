@@ -3566,6 +3566,42 @@ def test_vlm_uld_cross_arch_train_step_smoke(tmp_path, vlm_dataset):
     assert torch.isfinite(torch.tensor(train_output.training_loss))
 
 
+_TINY_QWEN2 = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+_TINY_QWEN2_REVISION = "8913f5819566"
+
+
+def _uld_revision_trainer(tmp_path, teacher_tokenizer_name_or_path):
+    args = GOLDConfig(
+        output_dir=str(tmp_path),
+        report_to="none",
+        use_vllm=False,
+        use_uld_loss=True,
+        teacher_model_revision=_TINY_QWEN2_REVISION,
+        teacher_tokenizer_name_or_path=teacher_tokenizer_name_or_path,
+    )
+    return GOLDTrainer(
+        model=_TINY_QWEN2,
+        teacher_model=_TINY_QWEN2,
+        args=args,
+        train_dataset=load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train[:3]"),
+    )
+
+
+def test_uld_teacher_tokenizer_keeps_the_teacher_revision_within_one_repo(tmp_path):
+    trainer = _uld_revision_trainer(tmp_path, _TINY_QWEN2)
+
+    assert len(trainer.teacher_tokenizer.chat_template) == 2558
+
+
+def test_uld_teacher_tokenizer_drops_the_teacher_revision_across_repos(tmp_path):
+    """A teacher commit exists only in the teacher's own repo, so pointing ULD's cross-tokenizer setup at another
+    repo must not carry it over: `revision` would 404 there.
+    """
+    trainer = _uld_revision_trainer(tmp_path, _TINY_LLAMA)
+
+    assert trainer.teacher_tokenizer.name_or_path == _TINY_LLAMA
+
+
 class TestGOLDTrainerLoss(TrlTestCase):
     def setup_method(self):
         self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"

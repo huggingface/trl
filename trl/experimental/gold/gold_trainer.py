@@ -964,6 +964,11 @@ class GOLDTrainer(SFTTrainer):
                     "`teacher_tokenizer_name_or_path` must be set when using ULD loss with a pre-instantiated teacher model."
                 )
 
+        # The teacher revision pins a commit in the teacher model's repo, so it only applies to a tokenizer served from
+        # that same repo. ULD's cross-tokenizer setup points `teacher_tokenizer_name_or_path` at a different repo, where
+        # that commit does not exist.
+        teacher_tokenizer_revision = teacher_revision if args.teacher_tokenizer_name_or_path == teacher_model else None
+
         if isinstance(teacher_model, str):
             init_kwargs = dict(teacher_model_init_kwargs)
             if args.teacher_model_revision is not None:
@@ -982,7 +987,7 @@ class GOLDTrainer(SFTTrainer):
         elif args.use_uld_loss and args.teacher_tokenizer_name_or_path is not None:
             self.teacher_tokenizer = AutoTokenizer.from_pretrained(
                 args.teacher_tokenizer_name_or_path,
-                revision=teacher_revision,
+                revision=teacher_tokenizer_revision,
                 trust_remote_code=args.trust_remote_code,
             )
             if self.teacher_tokenizer.pad_token is None:
