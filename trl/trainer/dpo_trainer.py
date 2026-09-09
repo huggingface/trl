@@ -445,7 +445,7 @@ class DPOTrainer(_BaseTrainer):
             Will default to [`~trainer.dpo_trainer.DataCollatorForPreference`] if the model is a language model and
             [`~trainer.dpo_trainer.DataCollatorForVisionPreference`] if the model is a vision-language model. Custom
             collators must truncate sequences before padding; the trainer does not apply post-collation truncation.
-        train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`], *optional*):
+        train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
             Dataset to use for training. This trainer supports both [language modeling](#language-modeling) type and
             [prompt-completion](#prompt-completion) type. The format of the samples can be either:
 
