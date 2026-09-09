@@ -1727,7 +1727,7 @@ class DistillationTrainer(_BaseTrainer):
                     forward_kwargs["mm_token_type_ids"] = mm_ids
                     num_images = None
 
-        # Log the prompt and completion texts
+        # Log prompt and completion texts
         if self.log_completions:
             prompts_text = self.processing_class.batch_decode(prompt_ids, skip_special_tokens=True)
             completions_text = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
