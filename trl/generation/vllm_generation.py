@@ -108,6 +108,40 @@ if is_bitsandbytes_available():
     import bitsandbytes as bnb
 
 
+# `LLM` constructor arguments that `vllm_llm_kwargs` may not override, each with the reason. TRL reads every one of
+# them back after the engine is built, or the weight sync relies on it, so overriding only the engine side would
+# silently desynchronize the two.
+RESERVED_LLM_KWARGS = {
+    "model": "the weight sync pushes the training model's parameters into the engine",
+    "tensor_parallel_size": "TRL builds the tensor-parallel process groups from `vllm_tensor_parallel_size`",
+    "distributed_executor_backend": "TRL drives the colocated driver worker directly",
+    "seed": "TRL seeds each tensor-parallel group identically so its workers sample the same completions",
+    "logprobs_mode": "the importance-sampling correction expects processed log probabilities",
+    "quantization": "TRL derives it from the training model's own quantization",
+    "enable_sleep_mode": "TRL drives the sleep/wake cycle from `vllm_enable_sleep_mode`",
+}
+
+
+def _check_llm_kwargs(llm_kwargs: dict | None) -> dict:
+    """
+    Return the user-supplied `LLM` constructor arguments as a dict, refusing the keys in `RESERVED_LLM_KWARGS`.
+
+    Args:
+        llm_kwargs (`dict`, *optional*):
+            Extra keyword arguments for the vLLM `LLM` constructor, typically `vllm_llm_kwargs` from a trainer config.
+
+    Returns:
+        `dict`: `llm_kwargs`, or an empty dict when it is `None`.
+
+    Raises:
+        `ValueError`: if any key of `llm_kwargs` is in `RESERVED_LLM_KWARGS`.
+    """
+    llm_kwargs = llm_kwargs or {}
+    for key in sorted(llm_kwargs.keys() & RESERVED_LLM_KWARGS.keys()):
+        raise ValueError(f"`{key}` cannot be set in `vllm_llm_kwargs`: {RESERVED_LLM_KWARGS[key]}.")
+    return llm_kwargs
+
+
 class VLLMGeneration:
     """Handles vLLM-based generation for trainers.
 
@@ -180,7 +214,6 @@ class VLLMGeneration:
             - "terratorch" will use the TerraTorch model implementation.
         trust_remote_code (`bool`, *optional*, defaults to `False`):
             Trust remote code (e.g., from HuggingFace) when downloading the model and tokenizer.
-
         > Parameters for generation:
 
         repetition_penalty (`float`, *optional*, defaults to `1.0`):
@@ -210,6 +243,11 @@ class VLLMGeneration:
             Additional generation parameters to pass to the vLLM `SamplingParams`. This can include parameters like
             `seed`, `frequency_penalty`, etc. If it contains keys that conflict with the other parameters, they will
             override them.
+
+        llm_kwargs (`dict`, *optional*):
+            Additional keyword arguments for the vLLM `LLM` constructor, used only in colocate mode, where TRL builds
+            the engine. Useful for engine arguments TRL does not expose, such as `hf_overrides`. Keys that conflict
+            with the arguments TRL sets override them, except the keys in `RESERVED_LLM_KWARGS`, which raise.
 
     """
 
@@ -244,6 +282,8 @@ class VLLMGeneration:
         max_completion_length: int = 16,
         logprobs: int | None = 0,
         generation_kwargs: dict | None = None,
+        # Extra `LLM()` arguments, kept last so callers that pass the older parameters by position are unaffected
+        llm_kwargs: dict | None = None,
     ):
         self.model = model
         self.accelerator = accelerator
@@ -269,6 +309,7 @@ class VLLMGeneration:
         self.enable_sleep_mode = enable_sleep_mode
         self.model_impl = model_impl
         self.trust_remote_code = trust_remote_code
+        self.llm_kwargs = _check_llm_kwargs(llm_kwargs)
 
         # Generation configuration
         self.repetition_penalty = repetition_penalty
@@ -344,7 +385,7 @@ class VLLMGeneration:
                         raise ValueError("vLLM does not support in-flight 8-bit quantization.")
 
             # Build LLM initialization kwargs
-            self.llm = LLM(
+            llm_kwargs = dict(
                 model=model.name_or_path,
                 tensor_parallel_size=self.tensor_parallel_size,
                 gpu_memory_utilization=self.gpu_memory_utilization,
@@ -362,6 +403,9 @@ class VLLMGeneration:
                 quantization=quantization,
                 trust_remote_code=self.trust_remote_code,
             )
+            # Any key set here overrides the corresponding default above; the reserved keys were refused in `__init__`
+            llm_kwargs.update(self.llm_kwargs)
+            self.llm = LLM(**llm_kwargs)
             if self.enable_sleep_mode:
                 self.llm.sleep(level=2)
             # Sleep level 2 discards the weights; track it so that generate() knows it must re-push them
