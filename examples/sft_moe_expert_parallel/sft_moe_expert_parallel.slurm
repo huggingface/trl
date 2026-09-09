@@ -14,7 +14,6 @@ MASTER_IP=$(getent ahostsv4 "$MASTER" | awk 'NR==1{print $1}')
 srun torchrun \
     --nnodes "$SLURM_NNODES" \
     --nproc_per_node 8 \
-    --node_rank "$SLURM_NODEID" \
     --rdzv_backend c10d \
     --rdzv_endpoint "$MASTER_IP:29700" \
     "$SLURM_SUBMIT_DIR/sft_moe_expert_parallel.py"
