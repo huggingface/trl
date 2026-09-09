@@ -533,7 +533,7 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
             batch_seq_lengths (`list[list[int]]`):
                 A list of lists containing the lengths of each individual document in the packed batch.
 
-        Return:
+        Returns:
             `list[torch.Tensor]`:
                 A list of tensors containing the position IDs for each packed sequence.
         """
