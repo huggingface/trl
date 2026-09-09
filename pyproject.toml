@@ -44,10 +44,6 @@ Homepage = "https://github.com/huggingface/trl"
 trl = "trl.cli:main"
 
 [project.optional-dependencies]
-bco = [
-    "scikit-learn",
-    "joblib"
-]
 deepspeed = [
     "deepspeed>=0.18.6",
     "transformers!=5.1.0",  # see transformers#43780
@@ -68,9 +64,6 @@ quality = [
 ]
 quantization = [
     "bitsandbytes"
-]
-scikit = [
-    "scikit-learn"
 ]
 test = [
     "pytest-cov",
@@ -101,9 +94,6 @@ harbor = [
     "harbor>=0.13.0; python_version >= '3.12'",  # harbor requires Python 3.12+ (pulls its sandbox backends)
 ]
 dev = [
-    # bco
-    "scikit-learn",
-    "joblib",
     # deepspeed
     "deepspeed>=0.18.6",
     # kernels: transformers renamed the "hub-kernels" extra to "kernels" in 5.1.0
@@ -120,7 +110,6 @@ dev = [
     "hf-doc-builder",
     # quantization
     "bitsandbytes",
-    # scikit: included in bco
     # test
     "pytest-cov",
     "pytest-datadir>=1.7.0",  # lazy datadirs

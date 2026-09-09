@@ -107,8 +107,6 @@
     title: Asynchronous GRPO
   - local: bema_for_reference_model
     title: BEMA for Reference Model
-  - local: bco_trainer
-    title: BCO
   - local: cpo_trainer
     title: CPO
   - local: gkd_trainer
