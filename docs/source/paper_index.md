@@ -151,6 +151,35 @@ training_args = GMPOConfig(
 )
 ```
 
+### GPG: A Simple and Strong Reinforcement Learning Baseline for Model Reasoning
+
+**📜 Paper**: https://huggingface.co/papers/2504.02546
+
+Group Policy Gradient (GPG) is a minimalist GRPO variant. It removes the critic and the reference model, drops the KL constraint, and optimizes the policy-gradient objective directly rather than through a surrogate. Those three simplifications are already expressible with [`GRPOConfig`] as `beta=0.0`, `scale_rewards="none"` and the default `num_iterations=1`: with a single iteration the importance ratio is exactly one at the point of evaluation and clipping around one is inert, so GRPO's surrogate is gradient-identical to the plain policy gradient GPG writes down.
+
+What GPG adds on top is a correction for the gradient bias caused by degenerate groups. A group whose completions all receive the same reward has a zero advantage and contributes nothing to the gradient, yet its tokens still count toward the loss denominator, scaling the update down by the fraction of such groups. GPG divides the loss by the fraction of non-degenerate groups:
+
+$$
+\mathcal{L}_{\text{GPG}}(\theta) = \frac{1}{\alpha} \mathcal{L}(\theta), \qquad \alpha = \frac{\left|\left\{ i : \hat{\mathbf{A}}_i \not\equiv \text{const} \right\}\right|}{G_{\text{groups}}}
+$$
+
+where  \\( \hat{\mathbf{A}}_i \\) are the advantages of group  \\( i \\). Invalidity is a property of the group, so the count is taken over groups rather than completions. A degenerate group is identified by its advantages carrying no spread rather than by their being zero: the two coincide in exact arithmetic, but in float every member subtracts the same group mean from the same reward and so lands on a shared rounding residual instead of on zero. Entries that are exactly zero are excluded from the spread, since they mark completions no reward function could score. TRL's `frac_reward_zero_std` metric is close to  \\( 1 - \alpha \\) but not equal: it is derived from the reward standard deviation, so a group no reward function could score has a NaN standard deviation and is counted valid although its advantages carry no spread.
+
+The paper pairs this correction with a second component that TRL does not implement: a threshold  \\( \beta_{th} \\) on the valid-group proportion, below which valid samples accumulate into the next resampled batch. See [Experimental - GPG](gpg) for what that omission costs.
+
+TRL provides an experimental implementation, see [Experimental - GPG](gpg):
+
+```python
+from trl.experimental.gpg import GPGConfig, GPGTrainer
+
+training_args = GPGConfig(
+    beta=0.0,  # no KL constraint and no reference model
+    scale_rewards="none",  # mean-centered advantage, no std scaling
+    loss_type="grpo",  # per-completion normalizer, which the correction cancels exactly
+    bias_correction=True,  # rescale by the fraction of completion slots that carry signal
+)
+```
+
 ### DAPO: An Open-Source LLM Reinforcement Learning System at Scale
 
 **📜 Paper**: https://huggingface.co/papers/2503.14476
