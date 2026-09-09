@@ -1156,7 +1156,7 @@ def create_model_from_path(
     Args:
         model_id (`str`):
             Path to the model. Can be either a local directory or a model identifier from the Hugging Face Hub.
-        architecture (`_BaseAutoModelClass` or `None`, *optional*):
+        architecture (`_BaseAutoModelClass`, *optional*):
             Model architecture class to instantiate. The model is initialized using the `from_pretrained` method of
             this class. If `None`, the architecture will be inferred from the model's configuration.
         kwargs (`dict`):

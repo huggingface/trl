@@ -35,7 +35,7 @@ class GRPOConfig(_BaseConfig):
     Parameters:
         > Parameters that control the model and reference model
 
-        model_init_kwargs (`str`, `dict[str, Any]`, *optional*):
+        model_init_kwargs (`str` or `dict[str, Any]`, *optional*):
             Keyword arguments for [`~transformers.AutoModelForCausalLM.from_pretrained`], used when the `model`
             argument of the [`GRPOTrainer`] is provided as a string. The `revision` value is also used when loading
             processing classes.
@@ -64,7 +64,7 @@ class GRPOConfig(_BaseConfig):
         num_generations (`int`, *optional*, defaults to `8`):
             Number of generations per prompt to sample. The effective batch size (num_processes * per_device_batch_size
             * gradient_accumulation_steps) must be evenly divisible by this value.
-        num_generations_eval (`int` or `None`, *optional*):
+        num_generations_eval (`int`, *optional*):
             Number of generations to sample during evaluation. This allows using fewer generations during evaluation to
             save computation. If `None`, uses the value of `num_generations`.
         max_completion_length (`int` or `None`, *optional*, defaults to `512`):
@@ -88,7 +88,7 @@ class GRPOConfig(_BaseConfig):
         steps_per_generation (`int`, *optional*):
             Number of steps per generation. If `None`, it defaults to `gradient_accumulation_steps`. Mutually exclusive
             with `generation_batch_size`.
-        temperature (`float`, defaults to `1.0`):
+        temperature (`float`, *optional*, defaults to `1.0`):
             Temperature for sampling. The higher the temperature, the more random the completions.
         top_p (`float`, *optional*, defaults to `1.0`):
             Float that controls the cumulative probability of the top tokens to consider. Must be in (0, 1]. Set to

@@ -380,7 +380,7 @@ def disable_gradient_checkpointing(model: PreTrainedModel, gradient_checkpointin
     Args:
         model (`PreTrainedModel`):
             Model for which to temporarily disable gradient checkpointing.
-        gradient_checkpointing_kwargs (`dict` or `None`, *optional*):
+        gradient_checkpointing_kwargs (`dict`, *optional*):
             Additional kwargs for gradient checkpointing enabling.
     """
     was_enabled = model.is_gradient_checkpointing
