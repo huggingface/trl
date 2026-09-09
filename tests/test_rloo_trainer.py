@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import inspect
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -26,11 +28,21 @@ from transformers import (
     AutoTokenizer,
     BitsAndBytesConfig,
 )
+from transformers.testing_utils import torch_device
 from transformers.utils import is_peft_available
 
 from trl import RLOOConfig, RLOOTrainer
 
-from .testing_utils import TrlTestCase, require_bitsandbytes, require_peft, require_vision, require_vllm
+from .testing_utils import (
+    TrlTestCase,
+    is_ampere_or_newer,
+    require_bitsandbytes,
+    require_kernels,
+    require_peft,
+    require_torch_accelerator,
+    require_vision,
+    require_vllm,
+)
 
 
 if is_peft_available():
@@ -2232,3 +2244,170 @@ class TestRLOOTrainerVLM(TrlTestCase):
         )
         trainer.train()
         assert len(trainer._logs["images"]) == 0
+
+
+def reward_length(completions, **kwargs):
+    return [float(len(completion)) for completion in completions]
+
+
+class TestRLOOTrainerPaddingFree(TrlTestCase):
+    def test_padding_free_matches_padded_forward(self):
+        # Eager attention ignores position-id resets, so packing two samples into one row would let them attend to
+        # each other. With one row per chunk the packed row is exactly that row without its padding, so the packed
+        # and padded forwards must agree token for token, which pins down the flatten, index and scatter logic.
+        torch.manual_seed(0)
+        model = AutoModelForCausalLM.from_pretrained(
+            "trl-internal-testing/tiny-Qwen3ForCausalLM", attn_implementation="eager"
+        ).eval()
+        model_kwarg_keys = set(inspect.signature(model.forward).parameters)
+        prompt_len, completion_len = 5, 4
+        prompt_ids = torch.randint(5, 100, (3, prompt_len))
+        prompt_mask = torch.ones(3, prompt_len, dtype=torch.long)
+        prompt_mask[0, :2] = 0  # left padding
+        prompt_mask[2, :3] = 0
+        completion_ids = torch.randint(5, 100, (3, completion_len))
+        completion_mask = torch.ones(3, completion_len, dtype=torch.long)
+        completion_mask[1, 2:] = 0  # right padding
+        completion_mask[2, :] = 0  # a fully masked completion, as `mask_truncated_completions` produces
+        input_ids = torch.cat([prompt_ids, completion_ids], dim=1)
+        attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
+
+        def forward(padding_free, keys):
+            trainer = SimpleNamespace(
+                model_kwarg_keys=keys, temperature=1.0, padding_free=padding_free, _entropy_bonus_enabled=False
+            )
+            return RLOOTrainer._get_per_token_logps_and_entropies(
+                trainer, model, input_ids, attention_mask, completion_len, batch_size=1, compute_entropy=True
+            )
+
+        with torch.no_grad():
+            dense_logps, dense_entropies, _ = forward(False, model_kwarg_keys)
+            packed_logps, packed_entropies, _ = forward(True, model_kwarg_keys)
+            # Models whose forward has no `logits_to_keep` take the full-logits path
+            sliced_logps, _, _ = forward(True, model_kwarg_keys - {"logits_to_keep"})
+
+        real = completion_mask.bool()
+        assert packed_logps.shape == dense_logps.shape == (3, completion_len)
+        torch.testing.assert_close(packed_logps[real], dense_logps[real])
+        torch.testing.assert_close(packed_entropies[real], dense_entropies[real])
+        torch.testing.assert_close(sliced_logps[real], dense_logps[real])
+        assert torch.all(packed_logps[~real] == 0)
+
+    def test_padding_free_backward(self):
+        # The scatter back to the padded layout must carry gradients to the model
+        model = AutoModelForCausalLM.from_pretrained(
+            "trl-internal-testing/tiny-Qwen3ForCausalLM", attn_implementation="eager"
+        )
+        trainer = SimpleNamespace(
+            model_kwarg_keys=set(inspect.signature(model.forward).parameters),
+            temperature=1.0,
+            padding_free=True,
+            _entropy_bonus_enabled=False,
+        )
+        input_ids = torch.randint(5, 100, (2, 6))
+        attention_mask = torch.tensor([[0, 1, 1, 1, 1, 1], [1, 1, 1, 1, 1, 0]])
+        logps, _, _ = RLOOTrainer._get_per_token_logps_and_entropies(
+            trainer, model, input_ids, attention_mask, 3, batch_size=1
+        )
+        logps.sum().backward()
+        assert model.get_input_embeddings().weight.grad is not None
+
+    def test_padding_free_rejects_empty_prompt(self):
+        # A sample without a prompt token has no in-row predecessor for its first completion token
+        model = AutoModelForCausalLM.from_pretrained(
+            "trl-internal-testing/tiny-Qwen3ForCausalLM", attn_implementation="eager"
+        )
+        trainer = SimpleNamespace(
+            model_kwarg_keys=set(inspect.signature(model.forward).parameters),
+            temperature=1.0,
+            padding_free=True,
+            _entropy_bonus_enabled=False,
+        )
+        input_ids = torch.randint(5, 100, (2, 5))
+        attention_mask = torch.tensor([[0, 0, 1, 1, 1], [1, 1, 1, 1, 1]])
+        with pytest.raises(ValueError, match="at least one prompt token per sample"):
+            RLOOTrainer._get_per_token_logps_and_entropies(trainer, model, input_ids, attention_mask, 3, batch_size=2)
+
+    def test_padding_free_requires_flash_attention(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        model = AutoModelForCausalLM.from_pretrained(
+            "trl-internal-testing/tiny-Qwen3ForCausalLM", attn_implementation="sdpa"
+        )
+        training_args = RLOOConfig(output_dir=self.tmp_dir, padding_free=True, report_to="none")
+        with pytest.raises(ValueError, match="requires a Flash Attention implementation, got 'sdpa'"):
+            RLOOTrainer(model=model, reward_funcs=reward_length, args=training_args, train_dataset=dataset)
+
+    @require_vision
+    def test_padding_free_rejects_vision_language_models(self):
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
+        model = AutoModelForImageTextToText.from_pretrained(
+            "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration"
+        )
+        model.config._attn_implementation = "flash_attention_2"  # pass the attention guard; no forward runs here
+        training_args = RLOOConfig(output_dir=self.tmp_dir, padding_free=True, report_to="none")
+        with pytest.raises(ValueError, match="not supported for vision-language models"):
+            RLOOTrainer(model=model, reward_funcs=reward_length, args=training_args, train_dataset=dataset)
+
+    @pytest.mark.slow
+    @require_torch_accelerator
+    @require_kernels
+    @pytest.mark.skipif(
+        not is_ampere_or_newer() and torch_device != "xpu",
+        reason="Flash Attention 2 requires Ampere or newer GPU, or XPU",
+    )
+    @pytest.mark.xfail(
+        reason="kernels-community/flash-attn2 is currently unusable for training: no build variant for torch 2.13 "
+        "(https://github.com/huggingface/kernels-community/issues/1082), and the v3 stable-ABI build raises in the "
+        "backward pass for GQA models (https://github.com/huggingface/kernels-community/issues/1085)",
+    )
+    def test_train_padding_free(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        # A pretrained model: the tiny random-weight models give the same log-probs whether or not the samples in a
+        # packed row are separated, so they cannot tell the position resets apart from a plain causal row.
+        model = AutoModelForCausalLM.from_pretrained(
+            "Qwen/Qwen2.5-0.5B-Instruct", attn_implementation="kernels-community/flash-attn2", dtype=torch.bfloat16
+        )
+        training_args = RLOOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,
+            per_device_train_batch_size=3,
+            num_generations=3,
+            max_completion_length=8,
+            padding_free=True,
+            bf16=True,
+            report_to="none",
+        )
+        trainer = RLOOTrainer(model=model, reward_funcs=reward_length, args=training_args, train_dataset=dataset)
+
+        # Several samples in one packed row: the position-id resets must keep them apart, so the packed forward has to
+        # match the dense forward on every completion token.
+        tokenizer = trainer.processing_class
+        prompts = tokenizer(["The sky is", "One two three four five six"], padding=True, padding_side="left")
+        completions = tokenizer(["blue.", "seven eight nine"], padding=True, padding_side="right")
+        device = trainer.model.device
+        input_ids = torch.tensor(
+            [p + c for p, c in zip(prompts["input_ids"], completions["input_ids"], strict=True)], device=device
+        )
+        attention_mask = torch.tensor(
+            [p + c for p, c in zip(prompts["attention_mask"], completions["attention_mask"], strict=True)],
+            device=device,
+        )
+        logits_to_keep = len(completions["input_ids"][0])
+        with torch.no_grad():
+            packed_logps, _, _ = trainer._get_per_token_logps_and_entropies(
+                trainer.model, input_ids, attention_mask, logits_to_keep, batch_size=2
+            )
+            trainer.padding_free = False
+            dense_logps, _, _ = trainer._get_per_token_logps_and_entropies(
+                trainer.model, input_ids, attention_mask, logits_to_keep, batch_size=2
+            )
+            trainer.padding_free = True
+        completion_mask = attention_mask[:, -logits_to_keep:].bool()
+        torch.testing.assert_close(packed_logps[completion_mask], dense_logps[completion_mask], atol=5e-2, rtol=5e-2)
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+        trainer.train()
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."

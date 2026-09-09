@@ -118,6 +118,17 @@ if is_wandb_available():
 
 logger = get_logger(__name__)
 
+# Attention implementations that derive `cu_seqlens` from position-id resets, which the padding-free forward relies on.
+FLASH_ATTENTION_VARIANTS = {
+    "flash_attention_2",
+    "flash_attention_3",
+    "kernels-community/flash-attn",
+    "kernels-community/flash-attn2",
+    "kernels-community/flash-attn3",
+    "kernels-community/vllm-flash-attn3",
+    "kernels-community/aiter-flash-attn",
+}
+
 # A reward function can be a string, interpreted as a model ID and loaded as a pretrained model, a pretrained model, or
 # a callable that returns a list of floats (the rewards). The callable receives prompts, completions, and additional
 # arguments from the trainer (refer to the trainer's source for details). To ensure forward compatibility, it should
@@ -810,6 +821,23 @@ class GRPOTrainer(_BaseTrainer):
                     "`use_liger_kernel=False`."
                 )
         self.mask_truncated_completions = args.mask_truncated_completions
+        self.padding_free = args.padding_free
+        if self.padding_free:
+            attn_implementation = model.config._attn_implementation.split("@")[0].split(":")[0]
+            if attn_implementation not in FLASH_ATTENTION_VARIANTS:
+                raise ValueError(
+                    f"`padding_free=True` requires a Flash Attention implementation, got {attn_implementation!r}. The "
+                    "packed forward carries no attention mask and separates the samples through position-id resets, "
+                    f"which only these implementations honor: {sorted(FLASH_ATTENTION_VARIANTS)}. Set "
+                    "`attn_implementation` in the model configuration or disable `padding_free`."
+                )
+            if self.use_liger_kernel:
+                raise ValueError("`padding_free=True` is not supported with `use_liger_kernel=True`.")
+            if self._is_vlm:
+                raise ValueError(
+                    "`padding_free=True` is not supported for vision-language models: the multimodal inputs are "
+                    "indexed per sample and stay on the padded forward."
+                )
         self.top_entropy_quantile = args.top_entropy_quantile
         if self.use_liger_kernel and self.top_entropy_quantile < 1.0:
             raise NotImplementedError(
@@ -1507,8 +1535,31 @@ class GRPOTrainer(_BaseTrainer):
             if mm_token_type_ids is not None:
                 model_inputs["mm_token_type_ids"] = mm_token_type_ids[start:end]
 
-            # Only add logits_to_keep if the model supports it
-            if "logits_to_keep" in self.model_kwarg_keys:
+            if self.padding_free:
+                # Pack the chunk's real tokens into one row: position ids restart per sample and no attention mask is
+                # passed, so a Flash Attention implementation derives `cu_seqlens` from the resets (a mask would make
+                # it ignore the position ids). The completion tokens sit in the last `logits_to_keep` columns of the
+                # dense block; the logit that predicts token t is at t - 1, and every completion token's predecessor
+                # lies in its own row, so `keep_idx - 1` selects exactly the logits the dense path keeps.
+                mask = attention_mask_batch.bool()
+                completion_mask_batch = mask.clone()
+                completion_mask_batch[:, :-logits_to_keep] = False
+                if (mask.sum(dim=1) == completion_mask_batch.sum(dim=1)).any():
+                    raise ValueError(
+                        "`padding_free=True` needs at least one prompt token per sample: the first completion token "
+                        "of a sample without one has no predecessor in the packed row to take its logit from."
+                    )
+                keep_idx = completion_mask_batch[mask].nonzero(as_tuple=True)[0]
+                seq_lengths = mask.sum(dim=1).tolist()
+                model_inputs = {
+                    "input_ids": input_ids_batch[mask].unsqueeze(0),
+                    "position_ids": torch.cat(
+                        [torch.arange(n, device=input_ids.device) for n in seq_lengths]
+                    ).unsqueeze(0),
+                }
+                if "logits_to_keep" in self.model_kwarg_keys:
+                    model_inputs["logits_to_keep"] = keep_idx - 1
+            elif "logits_to_keep" in self.model_kwarg_keys:
                 # We add 1 to `logits_to_keep` because the last logits of the sequence is later excluded
                 model_inputs["logits_to_keep"] = logits_to_keep + 1
 
@@ -1521,15 +1572,26 @@ class GRPOTrainer(_BaseTrainer):
 
             outputs = model(**model_inputs)
             logits = outputs.logits
-            # Exclude the last value: it corresponds to the next token pred
-            logits = logits[:, :-1, :]  # (B, L-1, H)
-            # Only keep the last logits_to_keep. For model that support logits_to_keep, this is a no-op.
-            logits = logits[:, -logits_to_keep:, :]  # (B, logits_to_keep, H)
+            if self.padding_free:
+                if "logits_to_keep" not in self.model_kwarg_keys:
+                    logits = logits[:, keep_idx - 1, :]  # (1, K, H)
+                completion_ids = model_inputs["input_ids"][:, keep_idx]
+            else:
+                # Exclude the last value: it corresponds to the next token pred
+                logits = logits[:, :-1, :]  # (B, L-1, H)
+                # Only keep the last logits_to_keep. For model that support logits_to_keep, this is a no-op.
+                logits = logits[:, -logits_to_keep:, :]  # (B, logits_to_keep, H)
+                completion_ids = input_ids_batch[:, -logits_to_keep:]
             # Divide logits by sampling temperature.
             # See https://huggingface.co/blog/the_n_implementation_details_of_rlhf_with_ppo#policy-training-implementation-details
             logits = logits / self.temperature
-            completion_ids = input_ids_batch[:, -logits_to_keep:]
             logps = selective_log_softmax(logits, completion_ids)  # compute logprobs
+            if self.padding_free:
+                # Scatter the packed values back into the padded (b, logits_to_keep) layout the callers expect.
+                target_mask = completion_mask_batch[:, -logits_to_keep:]
+                packed_logps = logps
+                logps = torch.zeros(target_mask.shape, dtype=packed_logps.dtype, device=packed_logps.device)
+                logps[target_mask] = packed_logps[0]
             all_logps.append(logps)
 
             if compute_entropy:
@@ -1541,6 +1603,12 @@ class GRPOTrainer(_BaseTrainer):
                 else:
                     with torch.no_grad():
                         entropies = entropy_from_logits(logits)
+                if self.padding_free:
+                    packed_entropies = entropies
+                    entropies = torch.zeros(
+                        target_mask.shape, dtype=packed_entropies.dtype, device=packed_entropies.device
+                    )
+                    entropies[target_mask] = packed_entropies[0]
                 all_entropies.append(entropies)
 
             if compute_aux_loss:

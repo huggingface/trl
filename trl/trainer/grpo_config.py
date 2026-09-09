@@ -275,6 +275,12 @@ class GRPOConfig(_BaseConfig):
             When enabled, truncated completions are excluded from the loss calculation, preventing them from being
             incorrectly penalized and introducing noise during training. According to the
             [DAPO](https://huggingface.co/papers/2503.14476) paper, this is a good practice for training stability.
+        padding_free (`bool`, *optional*, defaults to `False`):
+            Whether to run the per-token log-prob forward on a packed row: each micro-batch's real tokens are
+            concatenated into a single sequence with position ids that restart per sample and no attention mask, so a
+            Flash Attention implementation separates the samples from the position resets. Saves the padded compute.
+            Requires a Flash Attention `attn_implementation`; incompatible with `use_liger_kernel` and with
+            vision-language models.
         sync_ref_model (`bool`, *optional*, defaults to `False`):
             Whether to synchronize the reference model with the active model every `ref_model_sync_steps` steps, using
             the `ref_model_mixup_alpha` parameter. This synchronization originates from the
@@ -832,6 +838,16 @@ class GRPOConfig(_BaseConfig):
             "help": "When enabled, truncated completions are excluded from the loss calculation, preventing them from "
             "being incorrectly penalized and introducing noise during training. According to the DAPO paper, this is "
             "a good practice for training stability."
+        },
+    )
+    padding_free: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to run the per-token log-prob forward on a packed row: each micro-batch's real tokens are "
+            "concatenated into a single sequence with position ids that restart per sample and no attention mask, "
+            "so a Flash Attention implementation separates the samples from the position resets. Saves the padded "
+            "compute. Requires a Flash Attention `attn_implementation`; incompatible with `use_liger_kernel` and "
+            "with vision-language models."
         },
     )
     sync_ref_model: bool = field(
