@@ -109,8 +109,8 @@ class DPOConfig(_BaseConfig):
             reference model. For the IPO loss (`loss_type='ipo'`), this value is the regularization parameter denoted
             by τ in the [paper](https://huggingface.co/papers/2310.12036).
         use_weighting (`bool`, *optional*, defaults to `False`):
-            Whether to apply [WPO](https://huggingface.co/papers/2406.11827)-style weighting to preference pairs
-            using the policy's length-normalized sequence probabilities.
+            Whether to apply [WPO](https://huggingface.co/papers/2406.11827)-style weighting to preference pairs using
+            the policy's length-normalized sequence probabilities.
         discopop_tau (`float`, *optional*, defaults to `0.05`):
             τ/temperature parameter from the DiscoPOP paper, which controls the shape of the log-ratio modulated loss
             when using `loss_type='discopop'`. The paper recommends the default value `discopop_tau=0.05`.

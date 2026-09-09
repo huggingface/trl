@@ -67,8 +67,8 @@ class RewardConfig(_BaseConfig):
         > Parameters that control the training
 
         center_rewards_coefficient (`float`, *optional*):
-            Coefficient to incentivize the reward model to output mean-zero rewards (proposed by
-            [this paper](https://huggingface.co/papers/2312.09244), Eq. 2). Recommended value: `0.01`.
+            Coefficient to incentivize the reward model to output mean-zero rewards (proposed by [this
+            paper](https://huggingface.co/papers/2312.09244), Eq. 2). Recommended value: `0.01`.
         activation_offloading (`bool`, *optional*, defaults to `False`):
             Whether to offload the activations to the CPU.
 
