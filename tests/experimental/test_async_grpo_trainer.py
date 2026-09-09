@@ -1188,3 +1188,107 @@ class TestEpochStop(TrlTestCase):
         # steps for the same 2 epochs. If forks leaked into the epoch count, the forked run would instead
         # stop in FEWER prompt-passes (the pre-fix bug).
         assert forked.state.global_step > no_fork.state.global_step
+
+
+class TestImportanceSamplingGate(TrlTestCase):
+    """Unit tests for the combined-ratio importance-sampling gate (issue #6945)."""
+
+    def _gate(self, log_ratio, completion_mask, position_ids, mode, clip_min=None, clip_max=None):
+        from trl.experimental.async_grpo.async_grpo_trainer import _importance_sampling_gate
+
+        return _importance_sampling_gate(
+            torch.tensor([log_ratio], dtype=torch.float32),
+            torch.tensor([completion_mask], dtype=torch.float32),
+            torch.tensor([position_ids], dtype=torch.long),
+            mode,
+            clip_min,
+            clip_max,
+        )
+
+    def test_unchanged_policy_under_top_p_is_neutralized(self):
+        # The motivating case: for an unchanged policy sampled with top_p, vLLM's processed
+        # logprobs renormalize over the surviving mass S, so every token reads ratio S instead
+        # of 1.0. With S = 0.7 the raw ratio sits below 1 - epsilon_low and would clip on every
+        # negative-advantage token. The truncate gate lifts the effective weight to clip_min.
+        log_s = math.log(0.7)
+        gate = self._gate([log_s] * 4, [1.0] * 4, [0, 1, 2, 3], "token_truncate", clip_min=0.8, clip_max=1.25)
+        # gate = clamp(0.7, 0.8, 1.25) / 0.7 = 0.8 / 0.7, so the effective weight is exactly 0.8
+        expected = 0.8 / 0.7
+        torch.testing.assert_close(gate, torch.full_like(gate, expected))
+
+    def test_truncate_bounds_the_negative_advantage_branch(self):
+        # -min(r*A, clip(r)*A) with A < 0 grows linearly in r; the gate must cap the effective
+        # weight at clip_max no matter how large the combined ratio becomes.
+        for raw_ratio in (2.0, 10.0, 100.0):
+            gate = self._gate([math.log(raw_ratio)], [1.0], [0], "token_truncate", clip_max=3.0)
+            effective = raw_ratio * gate.item()
+            assert effective == pytest.approx(min(raw_ratio, 3.0), rel=1e-5)
+
+    def test_mask_zeroes_out_of_range_tokens_only(self):
+        gate = self._gate(
+            [math.log(0.5), 0.0, math.log(4.0)],
+            [1.0, 1.0, 1.0],
+            [0, 1, 2],
+            "token_mask",
+            clip_min=0.8,
+            clip_max=3.0,
+        )
+        torch.testing.assert_close(gate, torch.tensor([[0.0, 1.0, 0.0]]))
+
+    def test_in_range_ratio_passes_untouched(self):
+        for mode in ("token_truncate", "token_mask", "sequence_truncate", "sequence_mask"):
+            gate = self._gate([0.0, 0.0], [1.0, 1.0], [0, 1], mode, clip_min=0.5, clip_max=2.0)
+            torch.testing.assert_close(gate, torch.ones_like(gate))
+
+    def test_sequence_mode_uses_one_ratio_per_packed_sequence(self):
+        # Two sequences packed into one row: position_ids reset at the second sequence's start.
+        # Sequence 1 (three tokens, log-ratios 0.1 each) has product ratio exp(0.3), in range.
+        # Sequence 2 (two tokens, log-ratios 1.0 each) has product ratio exp(2.0) > clip_max = 3,
+        # so the mask zeroes both of its tokens while sequence 1 is untouched.
+        gate = self._gate(
+            [0.1, 0.1, 0.1, 1.0, 1.0],
+            [1.0] * 5,
+            [0, 1, 2, 0, 1],
+            "sequence_mask",
+            clip_max=3.0,
+        )
+        torch.testing.assert_close(gate, torch.tensor([[1.0, 1.0, 1.0, 0.0, 0.0]]))
+
+    def test_sequence_sum_ignores_prompt_tokens(self):
+        # Only completion tokens (mask 1) contribute to the sequence ratio: the huge log-ratio on
+        # the prompt token must not push the sequence over the bound.
+        gate = self._gate(
+            [50.0, 0.1, 0.1],
+            [0.0, 1.0, 1.0],
+            [0, 1, 2],
+            "sequence_mask",
+            clip_max=3.0,
+        )
+        torch.testing.assert_close(gate, torch.ones_like(gate))
+
+    def test_nan_sampler_logprob_means_no_correction(self):
+        gate = self._gate(
+            [float("nan"), math.log(10.0)],
+            [1.0, 1.0],
+            [0, 1],
+            "token_truncate",
+            clip_max=3.0,
+        )
+        assert gate[0, 0].item() == pytest.approx(1.0)
+        assert 10.0 * gate[0, 1].item() == pytest.approx(3.0, rel=1e-5)
+
+    def test_config_rejects_inverted_bounds_and_unbounded_truncate(self):
+        from trl.experimental.async_grpo import AsyncGRPOConfig
+
+        with pytest.raises(ValueError, match="must be less than"):
+            AsyncGRPOConfig(
+                output_dir=self.tmp_dir,
+                vllm_importance_sampling_clip_min=3.0,
+                vllm_importance_sampling_clip_max=1.0,
+            )
+        with pytest.raises(ValueError, match="at least one of|At least one of"):
+            AsyncGRPOConfig(
+                output_dir=self.tmp_dir,
+                vllm_importance_sampling_mode="token_truncate",
+                vllm_importance_sampling_clip_max=None,
+            )
