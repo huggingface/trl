@@ -170,7 +170,7 @@ class RLOOTrainer(_BaseTrainer):
             types within the list (e.g., a string model ID and a custom reward function) is allowed.
         args ([`RLOOConfig`], *optional*):
             Configuration for this trainer. If `None`, a default configuration is used.
-        train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
+        train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`], *optional*):
             Dataset to use for training. It must include a column `"prompt"`. Any additional columns in the dataset is
             ignored. The format of the samples can be either:
 

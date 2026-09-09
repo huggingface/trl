@@ -507,7 +507,7 @@ class KTOTrainer(_BaseTrainer):
             and [`~trainer.kto_trainer.DataCollatorForVisionUnpairedPreference`] if the model is a vision-language
             model. Custom collators must truncate sequences before padding; the trainer does not apply post-collation
             truncation.
-        train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
+        train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`], *optional*):
             Dataset to use for training. This trainer supports [unpaired preference](#unpaired-preference) type. The
             format of the samples can be either:
 

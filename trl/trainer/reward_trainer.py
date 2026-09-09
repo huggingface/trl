@@ -263,7 +263,7 @@ class RewardTrainer(_BaseTrainer):
         data_collator ([`~transformers.DataCollator`], *optional*):
             Function to use to form a batch from a list of elements of the processed `train_dataset` or `eval_dataset`.
             Will default to [`~trainer.reward_trainer.DataCollatorForPreference`].
-        train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
+        train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`], *optional*):
             Dataset to use for training. This trainer supports [preference](#preference) type (both implicit and
             explicit prompt). The format of the samples can be either:
 
