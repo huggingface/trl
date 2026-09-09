@@ -362,6 +362,40 @@ class AsyncGRPOConfig(_BaseConfig):
             "before being discarded."
         },
     )
+    vllm_importance_sampling_correction: bool = field(
+        default=True,
+        metadata={
+            "help": "Whether to gate the policy loss with an importance-sampling correction. Unlike the synchronous "
+            "GRPO trainer, AsyncGRPO cannot recompute the old log probabilities with the generation-time weights "
+            "(they are up to `max_staleness` versions gone by the time a sample is trained on), so the correction "
+            "applies to the combined ratio current-policy/vLLM-sampler, which folds policy drift and "
+            "training-inference mismatch into one number."
+        },
+    )
+    vllm_importance_sampling_mode: str = field(
+        default="sequence_mask",
+        metadata={
+            "help": "How to constrain the combined importance-sampling ratio. `'token_truncate'` caps each token's "
+            "effective gradient weight at the clip bounds; `'token_mask'` zeroes tokens whose ratio falls outside "
+            "them; `'sequence_truncate'` and `'sequence_mask'` do the same with one ratio per packed sequence "
+            "(the product of its token ratios).",
+            "choices": ["token_truncate", "token_mask", "sequence_truncate", "sequence_mask"],
+        },
+    )
+    vllm_importance_sampling_clip_max: float | None = field(
+        default=3.0,
+        metadata={
+            "help": "Upper bound for the importance-sampling ratio. Above it, `*_truncate` modes cap the effective "
+            "weight and `*_mask` modes zero the token or sequence. `None` means no upper bound."
+        },
+    )
+    vllm_importance_sampling_clip_min: float | None = field(
+        default=None,
+        metadata={
+            "help": "Lower bound for the importance-sampling ratio. Below it, `*_truncate` modes raise the effective "
+            "weight to the bound and `*_mask` modes zero the token or sequence. `None` means no lower bound."
+        },
+    )
     queue_maxsize: int = field(
         default=1024,
         metadata={"help": "Maximum number of rollout samples to buffer in the rollout queue."},
@@ -393,6 +427,32 @@ class AsyncGRPOConfig(_BaseConfig):
 
     def __post_init__(self):
         super().__post_init__()
+
+        valid_is_modes = ("token_truncate", "token_mask", "sequence_truncate", "sequence_mask")
+        if self.vllm_importance_sampling_mode not in valid_is_modes:
+            raise ValueError(
+                f"vllm_importance_sampling_mode ({self.vllm_importance_sampling_mode!r}) must be one of "
+                f"{valid_is_modes}."
+            )
+        if (
+            self.vllm_importance_sampling_clip_min is not None
+            and self.vllm_importance_sampling_clip_max is not None
+            and self.vllm_importance_sampling_clip_min >= self.vllm_importance_sampling_clip_max
+        ):
+            raise ValueError(
+                f"vllm_importance_sampling_clip_min ({self.vllm_importance_sampling_clip_min}) must be less than "
+                f"vllm_importance_sampling_clip_max ({self.vllm_importance_sampling_clip_max})."
+            )
+        if (
+            self.vllm_importance_sampling_correction
+            and self.vllm_importance_sampling_mode in ("token_truncate", "sequence_truncate")
+            and self.vllm_importance_sampling_clip_min is None
+            and self.vllm_importance_sampling_clip_max is None
+        ):
+            raise ValueError(
+                "At least one of `vllm_importance_sampling_clip_min` or `vllm_importance_sampling_clip_max` "
+                "must be set when `vllm_importance_sampling_mode` is a `*_truncate` mode."
+            )
 
         if self.parallelism_config is not None and (
             self.parallelism_config.cp_enabled or self.parallelism_config.sp_enabled
