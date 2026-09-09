@@ -3948,13 +3948,7 @@ class TestGRPOTrainer(TrlTestCase):
         def reward_func(completions, **kwargs):
             return [0.0] * len(completions)
 
-        training_args = GRPOConfig(
-            output_dir=self.tmp_dir,
-            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
-            num_generations=3,  # reduce the number of generations to reduce memory usage
-            max_completion_length=8,  # reduce the completion length to reduce memory usage
-            report_to="none",
-        )
+        training_args = GRPOConfig(output_dir=self.tmp_dir, report_to="none")
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-MistralForCausalLM-0.2",
             reward_funcs=reward_func,
