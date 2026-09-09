@@ -813,6 +813,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
         model_init_kwargs = args.model_init_kwargs or {}
         model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
         model_init_kwargs.setdefault("dtype", args.dtype)
+        model_revision = model_init_kwargs.get("revision")
         # FlashAttention is required: training runs in padding-free mode, where sequences are concatenated into a
         # single row and `cu_seq_lens` are derived from `position_ids` resets. SDPA/eager can't handle this.
         model = create_model_from_path(
@@ -851,7 +852,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
         # Processing class
         if processing_class is None:
             processing_class = AutoTokenizer.from_pretrained(
-                get_config_model_id(model.config), trust_remote_code=args.trust_remote_code
+                get_config_model_id(model.config), revision=model_revision, trust_remote_code=args.trust_remote_code
             )
         if processing_class.pad_token is None:
             processing_class.pad_token = processing_class.eos_token
