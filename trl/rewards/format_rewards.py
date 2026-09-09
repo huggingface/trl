@@ -17,8 +17,15 @@ import re
 
 def think_format_reward(completions: list[list[dict[str, str]]], **kwargs) -> list[float]:
     r"""
-    Reward function that checks if the reasoning process is enclosed within `"<think>"` and `"</think>"` tags. The
-    function returns a reward of 1.0 if the format is correct, otherwise 0.0.
+    Reward function that checks if the completion contains a `"</think>"` tag, with at most one optional leading
+    `"<think>"` tag. The function returns a reward of 1.0 if the format is correct, otherwise 0.0.
+
+    The opening `"<think>"` tag is optional so that GRPO-style trainers still score well-formed completions when the
+    chat template already prefills that tag into the prompt (for example DeepSeek-R1 distill). In that case the
+    trainer only decodes generated tokens, so the completion starts mid-reasoning and only `"</think>"` is present.
+
+    The relaxation is unconditional: completions that omit the opening tag also score 1.0 under templates that do not
+    prefill `"<think>"`.
 
     Args:
         completions (`list[list[dict[str, str]]]`):
@@ -38,13 +45,16 @@ def think_format_reward(completions: list[list[dict[str, str]]], **kwargs) -> li
 
     >>> completions = [
     ...     [{"content": "<think>\nThis is my reasoning.\n</think>\nThis is my answer."}],
+    ...     [{"content": "This is my reasoning.\n</think>\nThis is my answer."}],
     ...     [{"content": "<think>\nThis is my reasoning.\nThis is my answer."}],
     ... ]
     >>> think_format_reward(completions)
-    [1.0, 0.0]
+    [1.0, 1.0, 0.0]
     ```
     """
-    pattern = r"^<think>(?!.*<think>)(.*?)</think>.*$"
+    # Opening <think> is optional: GRPO decodes generated tokens only, and some chat templates already
+    # emit that tag in the prompt.
+    pattern = r"^(?:<think>)?(?!.*<think>)(.*?)</think>.*$"
     completion_contents = [completion[0]["content"] for completion in completions]
     matches = [re.match(pattern, content, re.DOTALL | re.MULTILINE) for content in completion_contents]
     return [1.0 if match else 0.0 for match in matches]
