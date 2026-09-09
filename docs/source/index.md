@@ -60,7 +60,6 @@ Below is an overview of TRL trainers, organized by maturity and method type.
 - [GSPO-token](gspo_token)
 - [`NashMDTrainer`](nash_md_trainer)
 - [`OnlineDPOTrainer`](online_dpo_trainer)
-- [`PPOTrainer`](ppo_trainer)
 - [`XPOTrainer`](xpo_trainer)
 
 #### Reward modeling
