@@ -1405,7 +1405,7 @@ class DPOTrainer(_BaseTrainer):
             # The reference forward only needs logits for log-probs. Drop `output_router_logits` so the frozen
             # reference model does not materialize router logits and compute a discarded MoE aux loss.
             ref_model_kwargs = {k: v for k, v in model_kwargs.items() if k != "output_router_logits"}
-            # When gradient checkpointing is enabled with use_reentrant=True (default), calling the model inside a
+            # When gradient checkpointing is enabled with use_reentrant=True (non default), calling the model inside a
             # torch.no_grad() block triggers a harmless PyTorch warning ("None of the inputs have requires_grad=True").
             # Temporarily disable checkpointing to avoid this warning during inference.
             with torch.no_grad(), disable_gradient_checkpointing(self.model, self.args.gradient_checkpointing_kwargs):
@@ -1489,7 +1489,7 @@ class DPOTrainer(_BaseTrainer):
                 per_sequence_loss = (ipo_delta - 1 / (2 * self.beta)) ** 2
 
             elif loss_type == "exo_pair":
-                # Implements EXO-pref from the paper https://huggingface.co/papers/2402.00856, (Eq. 16)
+                # Implements EXO-pref from the paper https://huggingface.co/papers/2402.00856 (Eq. 16)
                 # Minimize KL(p_fθ || p_rh) for K=2; p_fθ = softmax(βπ * (log πθ − log π_ref)) over {chosen, rejected}
                 # p_rh = [(1−ε), ε]; expanded KL gives the weighted logsigmoid form below
                 epsilon = torch.tensor(self.label_smoothing, device=device)
