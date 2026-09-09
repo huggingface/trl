@@ -510,13 +510,25 @@ def selective_log_softmax(logits, index) -> torch.Tensor:
         logsumexp_values = torch.stack([torch.logsumexp(lg, dim=-1) for lg in logits])
         per_token_logps = selected_logits - logsumexp_values.unsqueeze(-1)  # log_softmax(x_i) = x_i - logsumexp(x)
     else:
-        # logsumexp approach is unstable with bfloat16, fall back to slightly less efficient approach
-        per_token_logps = []
-        for row_logits, row_labels in zip(logits, index, strict=True):  # loop to reduce peak mem consumption
-            row_logps = F.log_softmax(row_logits, dim=-1)
-            row_per_token_logps = row_logps.gather(dim=-1, index=row_labels)
-            per_token_logps.append(row_per_token_logps)
-        per_token_logps = torch.stack(per_token_logps)
+        # logsumexp is numerically unstable in bfloat16/float16.  Instead we
+        # compute log_softmax in chunks of tokens so that only a small slice of
+        # (chunk_size, num_classes) lives in memory at one time, replacing the
+        # previous O(N) Python zip() loop over individual rows.
+        num_classes = logits.shape[-1]
+        flat_logits = logits.reshape(-1, num_classes)
+        flat_index = index.reshape(-1, index.shape[-1])
+
+        chunk_size = 512
+        chunks = []
+        for lg_chunk, idx_chunk in zip(
+            flat_logits.split(chunk_size, dim=0),
+            flat_index.split(chunk_size, dim=0),
+            strict=True,
+        ):
+            chunk_logps = F.log_softmax(lg_chunk, dim=-1)
+            chunks.append(chunk_logps.gather(dim=-1, index=idx_chunk))
+
+        per_token_logps = torch.cat(chunks, dim=0).reshape(index.shape)
 
     if squeeze:
         per_token_logps = per_token_logps.squeeze(-1)
@@ -554,8 +566,11 @@ def entropy_from_logits(logits: torch.Tensor, chunk_size: int = 128) -> torch.Te
     entropies = []
     for chunk in flat_logits.split(chunk_size, dim=0):
         logps = F.log_softmax(chunk, dim=-1)
-        chunk_entropy = -(torch.exp(logps) * logps).sum(-1)
-        entropies.append(chunk_entropy)
+        # Compute probs in-place from logps to avoid a separate exp() allocation:
+        #   entropy = -sum(exp(logps) * logps)  =>  probs.mul_(logps) then negate sum
+        probs = logps.exp()
+        probs.mul_(logps)
+        entropies.append(probs.sum(-1).neg_())
 
     entropies = torch.cat(entropies, dim=0)
     return entropies.reshape(original_shape)
