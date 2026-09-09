@@ -143,8 +143,8 @@ class RewardConfig(_BaseConfig):
     max_length: int | None = field(
         default=1024,
         metadata={
-            "help": "Maximum length of the tokenized sequence. Sequences longer than `max_length` are truncated from "
-            "the right. If `None`, no truncation is applied."
+            "help": "Maximum length of the tokenized sequence. Samples are filtered out if either chosen or rejected "
+            "sequence exceeds this value. If `None`, no filtering is applied."
         },
     )
     pad_to_multiple_of: int | None = field(
