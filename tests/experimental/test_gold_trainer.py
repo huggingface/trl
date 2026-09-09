@@ -14,6 +14,7 @@
 
 import copy
 from functools import partial
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -26,6 +27,9 @@ from trl.experimental.gold import gold_trainer as gold_trainer_module
 from trl.experimental.gold.gold_trainer import (
     GOLDTrainer,
     ULDLoss,
+    XTokenLoss,
+    _load_exact_token_map,
+    _load_sparse_projection_matrix,
     build_teacher_inputs_from_texts,
 )
 from trl.experimental.utils import (
@@ -841,6 +845,7 @@ def test_gold_trainer_init_defaults_vllm_max_model_length_to_max_length(monkeypa
         trust_remote_code=False,
         teacher_model_init_kwargs=None,
         use_uld_loss=False,
+        xtoken_loss_type="none",
         teacher_tokenizer_name_or_path=None,
         teacher_model_revision=None,
         disable_dropout=False,
@@ -1904,6 +1909,7 @@ def test_gold_trainer_init_rejects_llm_with_vision_dataset(monkeypatch):
         trust_remote_code=False,
         teacher_model_init_kwargs=None,
         use_uld_loss=False,
+        xtoken_loss_type="none",
         teacher_tokenizer_name_or_path=None,
         teacher_model_revision=None,
         disable_dropout=False,
@@ -2235,6 +2241,7 @@ def test_gold_trainer_init_rejects_non_vlm_teacher(monkeypatch):
         trust_remote_code=False,
         teacher_model_init_kwargs=None,
         use_uld_loss=False,
+        xtoken_loss_type="none",
         teacher_tokenizer_name_or_path=None,
         teacher_model_revision=None,
         disable_dropout=False,
@@ -2325,6 +2332,7 @@ def test_gold_trainer_init_rejects_keep_end_truncation_for_vlm(monkeypatch):
         use_liger_kernel=False,
         teacher_model_init_kwargs=None,
         use_uld_loss=False,
+        xtoken_loss_type="none",
         teacher_tokenizer_name_or_path=None,
         teacher_model_revision=None,
         disable_dropout=False,
@@ -2431,6 +2439,7 @@ def test_gold_trainer_vlm_vllm_init_uses_identity_collator(monkeypatch):
         trust_remote_code=False,
         teacher_model_init_kwargs=None,
         use_uld_loss=False,
+        xtoken_loss_type="none",
         teacher_tokenizer_name_or_path=None,
         teacher_model_revision=None,
         disable_dropout=False,
@@ -2502,9 +2511,11 @@ def _make_dummy_vlm_models(student_model_type, teacher_model_type):
         def __init__(self):
             self.config = SimpleNamespace(
                 _name_or_path="teacher",
+                vocab_size=17,
                 vision_config=True,
                 model_type=teacher_model_type,
             )
+            self.config.get_text_config = lambda: self.config
             self.resized_to = None
 
         def resize_token_embeddings(self, vocab_size):
@@ -2523,6 +2534,7 @@ def _make_vlm_trainer_args(use_vllm=False):
         trust_remote_code=False,
         teacher_model_init_kwargs=None,
         use_uld_loss=False,
+        xtoken_loss_type="none",
         teacher_tokenizer_name_or_path=None,
         teacher_model_revision=None,
         disable_dropout=False,
@@ -2563,12 +2575,18 @@ def _make_vlm_trainer_args(use_vllm=False):
         uld_skip_teacher_eos=False,
         use_extended_uld=False,
         uld_token_merge_strategy="observed",
+        xtoken_projection_matrix_path=None,
+        xtoken_temperature=1.0,
+        xtoken_dynamic_scaling=True,
+        xtoken_uncommon_topk=8192,
+        xtoken_vocab_topk=8192,
+        xtoken_kl_weight=1.0,
+        xtoken_ce_scale=0.1,
     )
 
 
 def test_cross_architecture_vlm_without_uld_raises_error(monkeypatch):
-    """When student and teacher have different model_type and use_uld_loss=False, GOLDTrainer should raise
-    a ValueError telling the user to enable ULD loss."""
+    """Standard JSD rejects student and teacher VLMs with different architectures."""
 
     def fake_sft_init(
         self,
@@ -2621,7 +2639,7 @@ def test_cross_architecture_vlm_without_uld_raises_error(monkeypatch):
     args = _make_vlm_trainer_args()  # use_uld_loss=False by default
 
     with pytest.warns(UserWarning, match="Cross-architecture VLM distillation"):
-        with pytest.raises(ValueError, match="Cross-architecture VLM distillation.*use_uld_loss=True"):
+        with pytest.raises(ValueError, match="Cross-architecture VLM distillation.*Enable ULD or X-Token"):
             GOLDTrainer(
                 model=student,
                 teacher_model=teacher,
@@ -2796,8 +2814,9 @@ def test_same_architecture_vlm_no_teacher_processor(monkeypatch):
     assert trainer._vlm_collator is not None
 
 
-def test_same_architecture_vlm_with_uld_sets_teacher_processor(monkeypatch):
-    """ULD VLM distillation should use a teacher processor even when the VLM model_type matches."""
+@pytest.mark.parametrize("loss_type", ["uld", "xtoken"])
+def test_same_architecture_vlm_cross_tokenizer_loss_sets_teacher_processor(monkeypatch, loss_type):
+    """Cross-tokenizer VLM losses use the teacher processor even when the model type matches."""
 
     def fake_sft_init(
         self,
@@ -2845,7 +2864,7 @@ def test_same_architecture_vlm_with_uld_sets_teacher_processor(monkeypatch):
         staticmethod(patched_auto_processor),
     )
 
-    sentinel_tokenizer = SimpleNamespace(pad_token="<pad>", eos_token="</s>")
+    sentinel_tokenizer = SimpleNamespace(pad_token="<pad>", eos_token="</s>", pad_token_id=0, eos_token_id=1)
     sentinel_processor.tokenizer = sentinel_tokenizer
     real_auto_tokenizer_from_pretrained = AutoTokenizer.from_pretrained
 
@@ -2863,7 +2882,10 @@ def test_same_architecture_vlm_with_uld_sets_teacher_processor(monkeypatch):
     vision_dataset = Dataset.from_dict({"messages": [["dummy"]], "image": ["fake_image"]})
     student, teacher = _make_dummy_vlm_models("smolvlm", "smolvlm")
     args = _make_vlm_trainer_args()
-    args.use_uld_loss = True
+    args.use_uld_loss = loss_type == "uld"
+    args.xtoken_loss_type = "p_kl" if loss_type == "xtoken" else "none"
+    args.xtoken_projection_matrix_path = "projection.pt"
+    args.lmbda = 0.0
     args.teacher_tokenizer_name_or_path = "teacher"
 
     trainer = GOLDTrainer(
@@ -3353,6 +3375,180 @@ def test_model_forward_kwargs_preserve_processor_tensor_fields():
     }
 
 
+# X-Token loss tests
+
+
+class TestXTokenLoss(TrlTestCase):
+    def _config(self, projection_path, loss_type="p_kl", dynamic_scaling=False):
+        return SimpleNamespace(
+            xtoken_loss_type=loss_type,
+            xtoken_projection_matrix_path=str(projection_path),
+            xtoken_temperature=1.0,
+            xtoken_dynamic_scaling=dynamic_scaling,
+            xtoken_uncommon_topk=0,
+            xtoken_vocab_topk=0,
+            xtoken_kl_weight=1.0,
+            xtoken_ce_scale=1.0,
+            uld_skip_student_eos=True,
+            uld_skip_teacher_eos=True,
+        )
+
+    def test_loss_is_finite_with_padded_model_vocabs(self):
+        student_vocab, teacher_vocab = 4, 5
+        projection_path = Path(self.tmp_dir) / "projection.pt"
+        torch.save(
+            {
+                "indices": torch.tensor([[idx % teacher_vocab, -1] for idx in range(student_vocab + 2)]),
+                "likelihoods": torch.tensor([[1.0, 0.0] for _ in range(student_vocab + 2)]),
+            },
+            projection_path,
+        )
+        student_logits = torch.randn(1, 3, student_vocab + 2)
+        teacher_logits = torch.randn(1, 3, teacher_vocab + 2)
+        labels = torch.tensor([[-100, 1, 2]])
+        byte_offsets = torch.tensor([[[0, 0], [0, 3], [3, 6]]])
+
+        for loss_type in ("p_kl", "h_kl"):
+            loss_fn = XTokenLoss(
+                self._config(projection_path, loss_type),
+                student_vocab_size=student_vocab,
+                teacher_vocab_size=teacher_vocab,
+            )
+            loss = loss_fn(
+                student_logits,
+                teacher_logits,
+                labels,
+                labels,
+                byte_offsets,
+                byte_offsets,
+            )
+            assert torch.isfinite(loss)
+
+    def test_sparse_counts_are_row_normalized(self):
+        projection_path = Path(self.tmp_dir) / "counts.pt"
+        torch.save({(0, 0): 1, (0, 1): 3, (1, 1): 2}, projection_path)
+
+        projection = _load_sparse_projection_matrix(
+            projection_path,
+            torch.device("cpu"),
+            student_vocab_size=2,
+            teacher_vocab_size=2,
+        ).to_dense()
+
+        torch.testing.assert_close(projection.sum(dim=1), torch.ones(2))
+        torch.testing.assert_close(projection[0], torch.tensor([0.25, 0.75]))
+
+    def test_identity_projection_has_zero_kd(self):
+        vocab_size = 6
+        projection_path = Path(self.tmp_dir) / "identity.pt"
+        torch.save(
+            {"indices": torch.arange(vocab_size).unsqueeze(1), "likelihoods": torch.ones(vocab_size, 1)},
+            projection_path,
+        )
+        logits = torch.randn(1, 4, vocab_size)
+        labels = torch.tensor([[-100, 1, 2, 3]])
+        byte_offsets = torch.tensor([[[0, 0], [0, 2], [2, 4], [4, 6]]])
+
+        for loss_type in ("p_kl", "h_kl"):
+            loss_fn = XTokenLoss(
+                self._config(projection_path, loss_type, dynamic_scaling=True),
+                student_vocab_size=vocab_size,
+                teacher_vocab_size=vocab_size,
+                student_eos_token_id=5,
+                teacher_eos_token_id=5,
+            )
+            loss = loss_fn(logits, logits, labels, labels, byte_offsets, byte_offsets)
+
+            assert torch.isfinite(loss)
+            assert loss_fn.last_kl_loss.abs().item() < 1e-5
+            if loss_type == "p_kl":
+                assert loss_fn.last_proj_accuracy_num == loss_fn.last_proj_accuracy_den
+
+    def test_empty_projection_is_rejected(self):
+        projection_path = Path(self.tmp_dir) / "empty.pt"
+        torch.save({}, projection_path)
+
+        with pytest.raises(ValueError, match="Unrecognised projection matrix format"):
+            _load_sparse_projection_matrix(
+                projection_path,
+                torch.device("cpu"),
+                student_vocab_size=2,
+                teacher_vocab_size=2,
+            )
+
+    def test_h_kl_partition_uses_model_vocab_sizes(self):
+        projection_path = Path(self.tmp_dir) / "short.pt"
+        torch.save(
+            {"indices": torch.tensor([[0], [1]]), "likelihoods": torch.ones(2, 1)},
+            projection_path,
+        )
+
+        mapping = _load_exact_token_map(
+            projection_path,
+            torch.device("cpu"),
+            student_vocab_size=4,
+            teacher_vocab_size=3,
+        )
+
+        torch.testing.assert_close(mapping["uncommon_student"], torch.tensor([2, 3]))
+        torch.testing.assert_close(mapping["uncommon_teacher"], torch.tensor([2]))
+
+    def test_h_kl_floors_negative_topk_approximation(self):
+        projection_path = Path(self.tmp_dir) / "hybrid.pt"
+        torch.save(
+            {
+                "indices": torch.tensor([[0], [1], [2]]),
+                "likelihoods": torch.tensor([[1.0], [0.5], [0.5]]),
+            },
+            projection_path,
+        )
+        config = self._config(projection_path, loss_type="h_kl")
+        config.xtoken_uncommon_topk = 1
+        loss_fn = XTokenLoss(config, student_vocab_size=3, teacher_vocab_size=3)
+        student_logits = torch.tensor([[0.8, 0.1, 0.1]]).log()
+        teacher_logits = torch.tensor([[0.4, 0.3, 0.3]]).log()
+
+        loss = loss_fn._compute_h_kl(
+            student_logits,
+            teacher_logits,
+            paired=[([0], [0])],
+            device=torch.device("cpu"),
+            T=1.0,
+        )
+
+        torch.testing.assert_close(loss, torch.tensor(0.0))
+
+    def test_ce_is_kept_without_teacher_span_and_only_actual_eos_is_skipped(self):
+        projection_path = Path(self.tmp_dir) / "identity.pt"
+        torch.save(
+            {"indices": torch.arange(4).unsqueeze(1), "likelihoods": torch.ones(4, 1)},
+            projection_path,
+        )
+        loss_fn = XTokenLoss(
+            self._config(projection_path),
+            student_vocab_size=4,
+            teacher_vocab_size=4,
+            student_eos_token_id=3,
+            teacher_eos_token_id=3,
+        )
+        student_logits = torch.randn(1, 3, 4)
+        student_labels = torch.tensor([[-100, 1, 2]])
+        teacher_labels = torch.full((1, 3), -100)
+        byte_offsets = torch.tensor([[[0, 0], [0, 1], [1, 2]]])
+
+        loss = loss_fn(
+            student_logits,
+            torch.randn(1, 3, 4),
+            student_labels,
+            teacher_labels,
+            byte_offsets,
+            byte_offsets,
+        )
+
+        expected = torch.nn.functional.cross_entropy(student_logits[:, :2].flatten(0, 1), torch.tensor([1, 2]))
+        torch.testing.assert_close(loss, expected)
+
+
 # End-to-end smoke tests: load tiny real VLMs from trl-internal-testing and run a single
 # off-policy training step (use_vllm=False, lmbda=0.0 → deterministic gold-completion path).
 
@@ -3407,6 +3603,61 @@ def test_vlm_jsd_same_family_train_step_smoke(tmp_path, vlm_dataset):
 
 
 _TINY_LLAMA = "trl-internal-testing/tiny-LlamaForCausalLM-3.2"
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("loss_type", ["p_kl", "h_kl"])
+def test_xtoken_train_step_smoke(tmp_path, loss_type):
+    """X-Token off-policy training runs one step end to end."""
+    try:
+        student = AutoModelForCausalLM.from_pretrained(_TINY_LLAMA, dtype=torch.bfloat16)
+        teacher = AutoModelForCausalLM.from_pretrained(_TINY_LLAMA, dtype=torch.bfloat16)
+        tokenizer = AutoTokenizer.from_pretrained(_TINY_LLAMA)
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train[:4]")
+    except Exception as exc:  # pragma: no cover - network/environment dependent
+        pytest.skip(f"tiny Llama / zen assets unavailable: {exc}")
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+    vocab_size = student.config.vocab_size
+    projection_path = tmp_path / "identity.pt"
+    torch.save(
+        {"indices": torch.arange(vocab_size).unsqueeze(1), "likelihoods": torch.ones(vocab_size, 1)},
+        projection_path,
+    )
+    args = GOLDConfig(
+        output_dir=str(tmp_path),
+        report_to="none",
+        bf16=True,
+        max_steps=1,
+        per_device_train_batch_size=1,
+        gradient_accumulation_steps=2,
+        max_completion_length=8,
+        max_length=512,
+        lmbda=0.0,
+        temperature=1.0,
+        num_generations=1,
+        use_vllm=False,
+        xtoken_loss_type=loss_type,
+        xtoken_projection_matrix_path=str(projection_path),
+        teacher_tokenizer_name_or_path=_TINY_LLAMA,
+        log_completions=False,
+        save_strategy="no",
+        eval_strategy="no",
+        logging_strategy="no",
+        dataloader_drop_last=True,
+    )
+    trainer = GOLDTrainer(
+        model=student,
+        teacher_model=teacher,
+        args=args,
+        train_dataset=dataset,
+        processing_class=tokenizer,
+    )
+
+    train_output = trainer.train()
+
+    assert torch.isfinite(torch.tensor(train_output.training_loss))
 
 
 @pytest.mark.slow
