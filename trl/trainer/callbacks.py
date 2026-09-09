@@ -400,9 +400,9 @@ class WeaveCallback(TrainerCallback):
             have signature: `scorer(prompt: str, completion: str) -> float | int`
         generation_config ([`~transformers.GenerationConfig`], *optional*):
             Generation config to use for generating completions.
-        num_prompts (`int` or `None`, *optional*):
-            Number of prompts to generate completions for. If not provided, defaults to the number of examples in the
-            evaluation dataset.
+        num_prompts (`int`, *optional*):
+            The number of prompts to generate completions for. If not provided, defaults to the number of examples in
+            the evaluation dataset.
         dataset_name (`str`, *optional*, defaults to `"eval_dataset"`):
             Name for the dataset metadata in Weave.
         model_name (`str`, *optional*):
