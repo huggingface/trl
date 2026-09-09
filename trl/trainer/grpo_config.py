@@ -166,14 +166,6 @@ class GRPOConfig(_BaseConfig):
             `"colocate"`. If you are using `vllm_mode="server"`, this parameter must be passed separately when
             launching the vLLM server via the `--vllm_tensor_parallel_size` flag.
 
-        > Parameters that control generation acceleration powered by transformers continuous batching
-
-        use_transformers_continuous_batching (`bool`, *optional*, defaults to `False`):
-            Whether to use transformers' continuous batching engine for generating completions. Requires
-            `transformers>=5.8.0`.
-        transformers_continuous_batching_config (`dict`, *optional*):
-            Keyword arguments for [`~transformers.generation.ContinuousBatchingConfig`].
-
         > Parameters that control the training
 
         beta (`float`, *optional*, defaults to `0.0`):
@@ -382,6 +374,14 @@ class GRPOConfig(_BaseConfig):
             `'username/reponame'` or `'orgname/reponame'`, or just `'reponame'` in which case the repository will be
             created in the currently-logged-in Hugging Face user's namespace. Note that this repository will be public
             unless you set `hub_private_repo=True` or your organization's default is to create private repositories."
+
+        > Parameters that control generation acceleration powered by transformers continuous batching
+
+        use_transformers_continuous_batching (`bool`, *optional*, defaults to `False`):
+            Whether to use transformers' continuous batching engine for generating completions. Requires
+            `transformers>=5.8.0`.
+        transformers_continuous_batching_config (`dict`, *optional*):
+            Keyword arguments for [`~transformers.generation.ContinuousBatchingConfig`].
 
         > Deprecated parameters
 
