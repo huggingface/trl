@@ -73,15 +73,22 @@ def _generate_completions(
     Generates completions for a list of pre-formatted prompts from the given model.
 
     Args:
-        prompts (list[str]): A list of input prompts for which completions are to be generated.
-        model (PreTrainedModel): The pre-trained model to be used for generation.
-        tokenizer (PreTrainedTokenizerBase): The tokenizer to be used for encoding and decoding.
-        accelerator (Accelerator): The accelerator to be used for model execution.
-        generation_config (GenerationConfig): Configuration for text generation.
-        batch_size (int, *optional*): The number of prompts to process in each batch. Default is 1.
+        prompts (`list[str]`):
+            A list of input prompts for which completions are to be generated.
+        model ([`~transformers.PreTrainedModel`]):
+            The pre-trained model to be used for generation.
+        tokenizer ([`~transformers.PreTrainedTokenizerBase`]):
+            The tokenizer to be used for encoding and decoding.
+        accelerator ([`~accelerate.Accelerator`]):
+            The accelerator to be used for model execution.
+        generation_config ([`~transformers.GenerationConfig`]):
+            Configuration for text generation.
+        batch_size (`int`, *optional*, defaults to `1`):
+            The number of prompts to process in each batch.
 
     Returns:
-        list[str]: A list of generated text completions corresponding to the input prompts.
+        `list[str]`:
+            A list of generated text completions corresponding to the input prompts.
     """
     completions = []
     # TODO: Override model.generation_config with generation_kwargs
