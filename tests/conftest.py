@@ -88,6 +88,10 @@ def pytest_runtest_makereport(item, call):
 
 MODEL_REVISIONS = {
     # Add model_id: revision mappings here to test PRs
+    "trl-internal-testing/tiny-LlamaForCausalLM-3.2": "refs/pr/2",
+    "trl-internal-testing/tiny-Qwen3ForCausalLM-Instruct-2507": "refs/pr/2",
+    "trl-internal-testing/tiny-RemoteForCausalLM": "refs/pr/3",
+    "trl-internal-testing/small-Qwen3ForCausalLM": "refs/pr/2",
 }
 
 
