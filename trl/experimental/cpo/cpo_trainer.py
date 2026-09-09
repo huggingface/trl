@@ -69,7 +69,6 @@ from .cpo_config import CPOConfig
 
 
 if is_peft_available():
-    import peft
     from peft import PeftConfig, get_peft_model, prepare_model_for_kbit_training
 
 
@@ -238,17 +237,11 @@ class CPOTrainer(_BaseTrainer):
             # - See:
             #   - TRL issue: https://github.com/huggingface/trl/issues/6089
             #   - Upstream issue: https://github.com/deepspeedai/DeepSpeed/issues/8072
-            # - autocast_adapter_dtype was introduced in PEFT 0.12.0; before, no upcast existed: no need to pass the kwarg
             _is_quantized_model = getattr(model, "is_loaded_in_4bit", False) or getattr(
                 model, "is_loaded_in_8bit", False
             )
             get_peft_model_kwargs = {}
-            if (
-                args.deepspeed_plugin is not None
-                and args.deepspeed_plugin.zero_stage == 3
-                and not _is_quantized_model
-                and Version(peft.__version__) >= Version("0.12.0")
-            ):
+            if args.deepspeed_plugin is not None and args.deepspeed_plugin.zero_stage == 3 and not _is_quantized_model:
                 get_peft_model_kwargs["autocast_adapter_dtype"] = False
             model = get_peft_model(model, peft_config, **get_peft_model_kwargs)
             if args.bf16 and getattr(model, "is_loaded_in_4bit", False):
@@ -338,6 +331,10 @@ class CPOTrainer(_BaseTrainer):
 
         if processing_class.pad_token is None:
             processing_class.pad_token = processing_class.eos_token
+        # Mirror the pad token onto the model configs: `Trainer` runs the same alignment at train time, so the end
+        # state is unchanged, but the model stays consistent with the tokenizer from the moment it is built.
+        model.config.pad_token_id = processing_class.pad_token_id
+        model.generation_config.pad_token_id = processing_class.pad_token_id
         self.pad_token_id = processing_class.pad_token_id
 
         if args.loss_type in ["hinge", "ipo"] and args.label_smoothing > 0:

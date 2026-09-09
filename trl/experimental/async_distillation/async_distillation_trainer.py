@@ -989,6 +989,10 @@ class AsyncDistillationTrainer(_BaseTrainer):
             )
         if processing_class.pad_token is None:
             processing_class.pad_token = processing_class.eos_token
+        # Mirror the pad token onto the model configs: `Trainer` runs the same alignment at train time, so the end
+        # state is unchanged, but the model stays consistent with the tokenizer from the moment it is built.
+        model.config.pad_token_id = processing_class.pad_token_id
+        model.generation_config.pad_token_id = processing_class.pad_token_id
 
         # Initialize the Trainer
         super().__init__(
@@ -1401,6 +1405,13 @@ class AsyncDistillationTrainer(_BaseTrainer):
                 per_teacher_stats = self.accelerator.reduce(local_per_teacher_stats, reduction="sum")
                 for i, teacher_id in enumerate(self._teacher_ids):
                     t_count, t_jsd_sum, t_teacher_entropy_sum = per_teacher_stats[3 * i : 3 * i + 3]
+                    # Logged as a `(numerator, denominator)` rate so the window reduces to the true share of tokens
+                    # each teacher scored, rather than a mean of per-step shares that micro-batches of unequal size
+                    # would skew. A teacher that scored nothing this step gets a real 0 share, not the NaN the
+                    # averages below use, since zero tokens is itself the answer here.
+                    self._metrics["train"][f"teacher_token_frac/{teacher_id}"].append(
+                        (t_count.item(), global_count.item())
+                    )
                     if t_count > 0:
                         self._metrics["train"][f"teacher_jsd/{teacher_id}"].append((t_jsd_sum / t_count).item())
                         self._metrics["train"][f"teacher_entropy/{teacher_id}"].append(
