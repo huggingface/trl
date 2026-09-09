@@ -1441,7 +1441,7 @@ class RLOOTrainer(_BaseTrainer):
 
         num_images = [len(img_list) if img_list else 0 for img_list in images] if images is not None else None
 
-        # Get forward_kwargs for models with multimodal inputs
+        # Get forward_kwargs for models with multimodal inputs.
         if images is not None:
             prompts_text = [
                 apply_chat_template({"prompt": prompt}, self.processing_class, **self.chat_template_kwargs)["prompt"]
