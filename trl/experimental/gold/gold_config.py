@@ -54,7 +54,7 @@ class GOLDConfig(SFTConfig):
             revision is used.
         teacher_model_init_kwargs (`dict[str, Any]`, *optional*):
             Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the teacher model
-            from a string.
+            from a string. The `revision` value is also used when loading the teacher processing class.
         teacher_tokenizer_name_or_path (`str`, *optional*):
             Tokenizer name or path for the teacher model. If None when using ULD loss, will use the same tokenizer as
             the student model (not recommended for cross-tokenizer distillation).
@@ -233,7 +233,7 @@ class GOLDConfig(SFTConfig):
         default=None,
         metadata={
             "help": "Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the "
-            "teacher model from a string."
+            "teacher model from a string. The `revision` value is also used when loading the teacher processing class."
         },
     )
     teacher_tokenizer_name_or_path: str | None = field(
