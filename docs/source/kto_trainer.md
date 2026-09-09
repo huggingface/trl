@@ -135,6 +135,7 @@ While training and evaluating, we record the following metrics:
 - `num_tokens`: The total number of tokens processed so far.
 - `loss`: The average KTO loss over the current logging interval.
 - `entropy`: The average entropy of the model's predicted token distribution over non-masked tokens.
+- `aux_loss`: The load-balancing auxiliary loss of a Mixture-of-Experts model, before it is scaled by `router_aux_loss_coef` and added to the loss. Logged only when the model is a MoE model and `router_aux_loss_coef` is nonzero.
 - `kl`: The average estimated KL divergence between the policy and reference model, used as the reference point in the KTO loss.
 - `learning_rate`: The current learning rate, which may change dynamically if a scheduler is used.
 - `grad_norm`: The L2 norm of the gradients, computed before gradient clipping.
