@@ -1389,7 +1389,7 @@ class KTOTrainer(_BaseTrainer):
         if is_peft_model(model):
             model = model.base_model.model
 
-        # `base_model` gives the inner module (skipping `lm_head`) — text decoder for LMs, multimodal wrapper for
+        # `base_model` gives the backbone model (skipping `lm_head`) — text decoder for LMs, multimodal wrapper for
         # VLMs (so vision-token injection runs before the text decoder). `get_decoder()` won't do: on VLMs it
         # returns just the text stack and feeds image-placeholder IDs through it.
         # Pre-5.0 transformers VLMs set `base_model_prefix = ""` so `base_model is self` (re-runs `lm_head`).
