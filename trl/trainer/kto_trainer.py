@@ -943,7 +943,7 @@ class KTOTrainer(_BaseTrainer):
         else:
             self.ref_model = ref_model
 
-        # Disable dropout in the model and reference model
+        # Disable dropout in the models
         if args.disable_dropout:
             disable_dropout_in_model(model)
             if self.ref_model is not None:
