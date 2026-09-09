@@ -303,6 +303,8 @@ class TestSFTTrainer(TrlTestCase):
             ),
             train_dataset=dataset,
         )
+        # This revision's chat template is 2558 chars; the one on `main` is 2507. Comparing the length is enough to
+        # catch the tokenizer being loaded from the default branch instead of the pinned revision.
         assert len(trainer.processing_class.chat_template) == 2558
 
     @pytest.mark.parametrize(
