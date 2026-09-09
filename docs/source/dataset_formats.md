@@ -418,7 +418,6 @@ Choosing the right dataset type depends on the task you are working on and the s
 | [`experimental.nash_md.NashMDTrainer`] | [Prompt-only](#prompt-only) |
 | [`experimental.online_dpo.OnlineDPOTrainer`] | [Prompt-only](#prompt-only) |
 | [`experimental.orpo.ORPOTrainer`] | [Preference (explicit prompt recommended)](#preference) |
-| [`experimental.prm.PRMTrainer`] | [Stepwise supervision](#stepwise-supervision) |
 | [`experimental.xpo.XPOTrainer`] | [Prompt-only](#prompt-only) |
 
 ## Using any dataset with TRL: preprocessing and conversion
