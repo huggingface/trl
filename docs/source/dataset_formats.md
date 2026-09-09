@@ -77,18 +77,6 @@ This guide provides an overview of the dataset formats and types supported by ea
  "label": False}</code></pre>
     </td>
   </tr>
-  </tr>
-    <td>Stepwise supervision</td>
-    <td>
-      <pre><code>{"prompt": "Which number is larger, 9.8 or 9.11?",
- "completions": ["The fractional part of 9.8 is 0.8.",
-                 "The fractional part of 9.11 is 0.11.",
-                 "0.11 is greater than 0.8.",
-                 "Hence, 9.11 > 9.8."],
- "labels": [True, True, False, False]}</code></pre>
-    </td>
-    <td></td>
-  </tr>
 </table>
 
 ### Formats
@@ -386,20 +374,6 @@ unpaired_preference_example = {"prompt": [{"role": "user", "content": "What colo
 
 For examples of unpaired preference datasets, refer to the [Unpaired preference datasets collection](https://huggingface.co/collections/trl-lib/unpaired-preference-datasets-677ea22bf5f528c125b0bcdf).
 
-#### Stepwise supervision
-
-A stepwise (or process) supervision dataset is similar to an [unpaired preference](#unpaired-preference) dataset but includes multiple steps of completions, each with its own label. This structure is useful for tasks that need detailed, step-by-step labeling, such as reasoning tasks. By evaluating each step separately and providing targeted labels, this approach helps identify precisely where the reasoning is correct and where errors occur, allowing for targeted feedback on each part of the reasoning process.
-
-```python
-stepwise_example = {
-    "prompt": "Which number is larger, 9.8 or 9.11?",
-    "completions": ["The fractional part of 9.8 is 0.8, while the fractional part of 9.11 is 0.11.", "Since 0.11 is greater than 0.8, the number 9.11 is larger than 9.8."],
-    "labels": [True, False]
-}
-```
-
-For examples of stepwise supervision datasets, refer to the [Stepwise supervision datasets collection](https://huggingface.co/collections/trl-lib/stepwise-supervision-datasets-677ea27fd4c5941beed7a96e).
-
 ## Which dataset type to use?
 
 Choosing the right dataset type depends on the task you are working on and the specific requirements of the TRL trainer you are using. Below is a brief overview of the dataset types supported by each TRL trainer.
@@ -464,15 +438,14 @@ This section provides example code to help you convert between different dataset
 
 For simplicity, some of the examples below do not follow this recommendation and use the standard format. However, the conversions can be applied directly to the conversational format without modification.
 
-| From \ To | Language modeling | Prompt-completion | Prompt-only | Preference with implicit prompt | Preference | Unpaired preference | Stepwise supervision |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| Language modeling | N/A | N/A | N/A | N/A | N/A | N/A | N/A |
-| Prompt-completion | [🔗](#from-prompt-completion-to-language-modeling-dataset) | N/A | [🔗](#from-prompt-completion-to-prompt-only-dataset) | N/A | N/A | N/A | N/A |
-| Prompt-only | N/A | N/A | N/A | N/A | N/A | N/A | N/A |
-| Preference with implicit prompt | [🔗](#from-preference-with-implicit-prompt-to-language-modeling-dataset) | [🔗](#from-preference-with-implicit-prompt-to-prompt-completion-dataset) | [🔗](#from-preference-with-implicit-prompt-to-prompt-only-dataset) | N/A | [🔗](#from-implicit-to-explicit-prompt-preference-dataset) | [🔗](#from-preference-with-implicit-prompt-to-unpaired-preference-dataset) | N/A |
-| Preference | [🔗](#from-preference-to-language-modeling-dataset) | [🔗](#from-preference-to-prompt-completion-dataset) | [🔗](#from-preference-to-prompt-only-dataset) | [🔗](#from-explicit-to-implicit-prompt-preference-dataset) | N/A | [🔗](#from-preference-to-unpaired-preference-dataset) | N/A |
-| Unpaired preference | [🔗](#from-unpaired-preference-to-language-modeling-dataset) | [🔗](#from-unpaired-preference-to-prompt-completion-dataset) | [🔗](#from-unpaired-preference-to-prompt-only-dataset) | N/A | N/A | N/A | N/A |
-| Stepwise supervision | [🔗](#from-stepwise-supervision-to-language-modeling-dataset) | [🔗](#from-stepwise-supervision-to-prompt-completion-dataset) | [🔗](#from-stepwise-supervision-to-prompt-only-dataset) | N/A | N/A | [🔗](#from-stepwise-supervision-to-unpaired-preference-dataset) | N/A |
+| From \ To | Language modeling | Prompt-completion | Prompt-only | Preference with implicit prompt | Preference | Unpaired preference |
+| --- | --- | --- | --- | --- | --- | --- |
+| Language modeling | N/A | N/A | N/A | N/A | N/A | N/A |
+| Prompt-completion | [🔗](#from-prompt-completion-to-language-modeling-dataset) | N/A | [🔗](#from-prompt-completion-to-prompt-only-dataset) | N/A | N/A | N/A |
+| Prompt-only | N/A | N/A | N/A | N/A | N/A | N/A |
+| Preference with implicit prompt | [🔗](#from-preference-with-implicit-prompt-to-language-modeling-dataset) | [🔗](#from-preference-with-implicit-prompt-to-prompt-completion-dataset) | [🔗](#from-preference-with-implicit-prompt-to-prompt-only-dataset) | N/A | [🔗](#from-implicit-to-explicit-prompt-preference-dataset) | [🔗](#from-preference-with-implicit-prompt-to-unpaired-preference-dataset) |
+| Preference | [🔗](#from-preference-to-language-modeling-dataset) | [🔗](#from-preference-to-prompt-completion-dataset) | [🔗](#from-preference-to-prompt-only-dataset) | [🔗](#from-explicit-to-implicit-prompt-preference-dataset) | N/A | [🔗](#from-preference-to-unpaired-preference-dataset) |
+| Unpaired preference | [🔗](#from-unpaired-preference-to-language-modeling-dataset) | [🔗](#from-unpaired-preference-to-prompt-completion-dataset) | [🔗](#from-unpaired-preference-to-prompt-only-dataset) | N/A | N/A | N/A |
 
 ### From prompt-completion to language modeling dataset
 
@@ -855,107 +828,6 @@ dataset = dataset.remove_columns(["completion", "label"])
 ```python
 >>> dataset[0]
 {'prompt': 'The sky is'}
-```
-
-### From stepwise supervision to language modeling dataset
-
-To convert a stepwise supervision dataset into a language modeling dataset, concatenate prompts with good completions into the `"text"` column.
-
-```python
-from datasets import Dataset
-
-dataset = Dataset.from_dict({
-    "prompt": ["Blue light", "Water"],
-    "completions": [[" scatters more in the atmosphere,", " so the sky is green."],
-                   [" forms a less dense structure in ice,", " which causes it to expand when it freezes."]],
-    "labels": [[True, False], [True, True]],
-})
-
-def concatenate_prompt_completions(example):
-    completion = "".join(example["completions"])
-    return {"text": example["prompt"] + completion}
-
-dataset = dataset.filter(lambda x: all(x["labels"])).map(concatenate_prompt_completions, remove_columns=["prompt", "completions", "labels"])
-```
-
-```python
->>> dataset[0]
-{'text': 'Blue light scatters more in the atmosphere, so the sky is green.'}
-```
-
-### From stepwise supervision to prompt-completion dataset
-
-To convert a stepwise supervision dataset into a prompt-completion dataset, join the good completions and remove the labels.
-
-```python
-from datasets import Dataset
-
-dataset = Dataset.from_dict({
-    "prompt": ["Blue light", "Water"],
-    "completions": [[" scatters more in the atmosphere,", " so the sky is green."],
-                   [" forms a less dense structure in ice,", " which causes it to expand when it freezes."]],
-    "labels": [[True, False], [True, True]],
-})
-
-def join_completions(example):
-    completion = "".join(example["completions"])
-    return {"completion": completion}
-
-dataset = dataset.filter(lambda x: all(x["labels"])).map(join_completions, remove_columns=["completions", "labels"])
-```
-
-```python
->>> dataset[0]
-{'prompt': 'Blue light', 'completion': ' scatters more in the atmosphere, so the sky is green.'}
-```
-
-### From stepwise supervision to prompt-only dataset
-
-To convert a stepwise supervision dataset into a prompt-only dataset, remove the completions and the labels.
-
-```python
-from datasets import Dataset
-
-dataset = Dataset.from_dict({
-    "prompt": ["Blue light", "Water"],
-    "completions": [[" scatters more in the atmosphere,", " so the sky is green."],
-                   [" forms a less dense structure in ice,", " which causes it to expand when it freezes."]],
-    "labels": [[True, False], [True, True]],
-})
-
-dataset = dataset.remove_columns(["completions", "labels"])
-```
-
-```python
->>> dataset[0]
-{'prompt': 'Blue light'}
-```
-
-### From stepwise supervision to unpaired preference dataset
-
-To convert a stepwise supervision dataset into an unpaired preference dataset, join the completions and merge the labels.
-
-The method for merging the labels depends on the specific task. In this example, we use the logical AND operation. This means that if the step labels indicate the correctness of individual steps, the resulting label will reflect the correctness of the entire sequence.
-
-```python
-from datasets import Dataset
-
-dataset = Dataset.from_dict({
-    "prompt": ["Blue light", "Water"],
-    "completions": [[" scatters more in the atmosphere,", " so the sky is green."],
-                   [" forms a less dense structure in ice,", " which causes it to expand when it freezes."]],
-    "labels": [[True, False], [True, True]],
-})
-
-def merge_completions_and_labels(example):
-    return {"prompt": example["prompt"], "completion": "".join(example["completions"]), "label": all(example["labels"])}
-
-dataset = dataset.map(merge_completions_and_labels, remove_columns=["completions", "labels"])
-```
-
-```python
->>> dataset[0]
-{'prompt': 'Blue light', 'completion': ' scatters more in the atmosphere, so the sky is green.', 'label': False}
 ```
 
 ## Vision datasets
