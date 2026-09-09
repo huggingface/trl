@@ -49,6 +49,7 @@ config = RemoteConfig(
     num_key_value_heads=2,
     num_hidden_layers=2,
     intermediate_size=32,
+    tie_word_embeddings=True,
     max_position_embeddings=131072,
     rope_theta=500000.0,
     rope_scaling={
