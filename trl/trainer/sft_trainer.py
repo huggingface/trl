@@ -1021,6 +1021,18 @@ class SFTTrainer(_BaseTrainer):
                     "in the vocabulary before using it as an EOS token."
                 )
             self._tokenizer.eos_token = args.eos_token
+            # Mirror the eos token onto the model configs: `Trainer` runs the same alignment at train time, so the end
+            # state is unchanged, but the model stays consistent with the tokenizer from the moment it is built. The
+            # generation config may hold several eos tokens, any of which halts generation, so the new one is added to
+            # the existing ones instead of replacing them.
+            model.config.eos_token_id = self._tokenizer.eos_token_id
+            eos_token_ids = model.generation_config.eos_token_id
+            if eos_token_ids is None:
+                eos_token_ids = []
+            elif isinstance(eos_token_ids, int):
+                eos_token_ids = [eos_token_ids]
+            if self._tokenizer.eos_token_id not in eos_token_ids:
+                model.generation_config.eos_token_id = [self._tokenizer.eos_token_id, *eos_token_ids]
 
         if args.chat_template_path is not None:
             if os.path.isfile(args.chat_template_path) and args.chat_template_path.endswith((".jinja", ".j2")):

@@ -2292,6 +2292,22 @@ class TestSFTTrainer(TrlTestCase):
         assert trainer.model.config.pad_token_id == pad_token_id
         assert trainer.model.generation_config.pad_token_id == pad_token_id
 
+    def test_eos_token_id_synced_with_model_config(self):
+        # The trainer sets the requested eos token on the tokenizer. The model configs must follow: otherwise
+        # `Trainer` realigns them at train time and reports it as a change the user did not make.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+
+        training_args = SFTConfig(output_dir=self.tmp_dir, eos_token="<|im_start|>", report_to="none")
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
+
+        eos_token_id = trainer.processing_class.eos_token_id
+        assert eos_token_id == 151644  # <|im_start|>
+        assert trainer.model.config.eos_token_id == eos_token_id
+        # The model's own eos tokens are kept, since any of them halts generation
+        assert trainer.model.generation_config.eos_token_id == [151644, 151645, 151643]
+
 
 @pytest.mark.slow
 @require_torch_accelerator
