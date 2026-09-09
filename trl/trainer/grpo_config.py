@@ -756,7 +756,7 @@ class GRPOConfig(_BaseConfig):
         default="token",
         metadata={
             "help": "Controls whether importance sampling ratios are computed at the `'token'` or `'sequence'` level. "
-            "`'token'` keeps the raw per-token log-probability ratios (one weight per token).  `'sequence'` averages "
+            "`'token'` keeps the raw per-token log-probability ratios (one weight per token). `'sequence'` averages "
             "the log-probability ratios across valid tokens to produce a single ratio per sequence. The GSPO paper "
             "shows that sequence-level sampling often yields more stable training and better alignment with "
             "sequence-level rewards."
@@ -1129,7 +1129,7 @@ class GRPOConfig(_BaseConfig):
 
         if self.vllm_importance_sampling_cap is not None:
             warnings.warn(
-                "The `vllm_importance_sampling_cap` argument is deprecated and will be removed in v2.0.0.  "
+                "The `vllm_importance_sampling_cap` argument is deprecated and will be removed in v2.0.0. "
                 "Use `vllm_importance_sampling_clip_max` instead.",
                 FutureWarning,
                 stacklevel=2,
