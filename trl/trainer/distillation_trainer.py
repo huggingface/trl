@@ -23,7 +23,7 @@ import warnings
 from collections import defaultdict, deque
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import numpy as np
 import torch
@@ -396,15 +396,15 @@ class DistillationTrainer(_BaseTrainer):
     def __init__(
         self,
         model: "str | PreTrainedModel | PeftModel",
-        teacher_model: str | PreTrainedModel = None,
+        teacher_model: str | PreTrainedModel | None = None,
         args: DistillationConfig | None = None,
         train_dataset: Dataset | None = None,
         eval_dataset: Dataset | dict[str, Dataset] | None = None,
         processing_class: PreTrainedTokenizerBase | ProcessorMixin | None = None,
         callbacks: list[TrainerCallback] | None = None,
-        optimizers: tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
+        optimizers: tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None] = (None, None),
         quantization_config: "BitsAndBytesConfig | None" = None,
-        peft_config: Optional["PeftConfig"] = None,
+        peft_config: "PeftConfig | None" = None,
         tools: list[Callable] | None = None,
     ):
         if args is None:
