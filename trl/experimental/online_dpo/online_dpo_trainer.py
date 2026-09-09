@@ -1261,27 +1261,31 @@ class OnlineDPOTrainer(_BaseTrainer):
             # When using reward_funcs, we have rewards instead of scores
             scores_margin = rewards[chosen_indices] - rewards[rejected_indices]
             self.stats["objective/scores_margin"].append(
-                self.accelerator.gather_for_metrics(scores_margin.mean()).mean().item()
+                self.accelerator.gather_for_metrics(scores_margin).mean().item()
             )
-            self.stats["objective/scores"].append(self.accelerator.gather_for_metrics(rewards.mean()).mean().item())
-        self.stats["val/contain_eos_token"].append(contain_eos_token.float().mean().item())
+            mean_rewards = rewards.view(2, batch_size).mean(dim=0)
+            self.stats["objective/scores"].append(self.accelerator.gather_for_metrics(mean_rewards).mean().item())
+        mean_contain_eos_token = contain_eos_token.float().view(2, batch_size).mean(dim=0)
+        self.stats["val/contain_eos_token"].append(
+            self.accelerator.gather_for_metrics(mean_contain_eos_token).mean().item()
+        )
         self.stats["logps/chosen"].append(self.accelerator.gather_for_metrics(chosen_logprobs_sum).mean().item())
         self.stats["logps/rejected"].append(self.accelerator.gather_for_metrics(rejected_logprobs_sum).mean().item())
 
-        kl = logprobs - ref_logprobs
-        mean_kl = kl.sum(1).mean()
+        kl = (logprobs - ref_logprobs) * ~padding_mask
+        mean_kl = kl.sum(1).view(2, batch_size).mean(dim=0)
         self.stats["objective/kl"].append(self.accelerator.gather_for_metrics(mean_kl).mean().item())
         non_score_reward = (-self.beta * kl).sum(1)
-        mean_non_score_reward = non_score_reward.mean()
+        mean_non_score_reward = non_score_reward.view(2, batch_size).mean(dim=0)
         self.stats["objective/non_score_reward"].append(
             self.accelerator.gather_for_metrics(mean_non_score_reward).mean().item()
         )
         if self.reward_funcs is not None:
             # Calculate RLHF reward by combining rewards with non_score_reward
-            rlhf_reward = rewards + non_score_reward
+            rlhf_reward = (rewards + non_score_reward).view(2, batch_size).mean(dim=0)
             self.stats["objective/rlhf_reward"].append(self.accelerator.gather_for_metrics(rlhf_reward).mean().item())
 
-        mean_entropy = -logprobs.sum(1).mean()
+        mean_entropy = -(logprobs * ~padding_mask).sum(1).view(2, batch_size).mean(dim=0)
         self.stats["objective/entropy"].append(self.accelerator.gather_for_metrics(mean_entropy).mean().item())
         chosen_rewards = self.beta * (chosen_logprobs_sum - chosen_ref_logprobs_sum)
         gathered_chosen_rewards = self.accelerator.gather_for_metrics(chosen_rewards)

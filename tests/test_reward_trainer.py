@@ -14,6 +14,8 @@
 
 import json
 import pathlib
+from collections import defaultdict
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -24,7 +26,7 @@ from transformers.utils import is_peft_available
 from trl import RewardConfig, RewardTrainer
 from trl.trainer.reward_trainer import DataCollatorForPreference
 
-from .testing_utils import TrlTestCase, require_bitsandbytes, require_peft
+from .testing_utils import TrlTestCase, drop_last_for_metrics, require_bitsandbytes, require_peft
 
 
 if is_peft_available():
@@ -108,6 +110,34 @@ class TestDataCollatorForPreference(TrlTestCase):
 
 
 class TestRewardTrainer(TrlTestCase):
+    def test_compute_loss_metrics_ignore_duplicate_padding(self):
+        chosen_rewards = torch.tensor([2.0, 4.0, -10.0])
+        rejected_rewards = torch.tensor([1.0, 1.0, 10.0])
+        logits = torch.cat((chosen_rewards, rejected_rewards)).unsqueeze(1)
+        model = SimpleNamespace(training=False)
+        trainer = SimpleNamespace(
+            model=model,
+            args=SimpleNamespace(center_rewards_coefficient=None),
+            accelerator=SimpleNamespace(gather=lambda tensor: tensor, gather_for_metrics=drop_last_for_metrics),
+            _metrics={"eval": defaultdict(list)},
+            _total_train_tokens=0,
+        )
+
+        RewardTrainer.compute_loss(
+            trainer,
+            lambda **kwargs: SimpleNamespace(logits=logits),
+            {"attention_mask": torch.ones(2 * len(chosen_rewards), 1)},
+        )
+
+        kept_chosen = chosen_rewards[:-1]
+        kept_rejected = rejected_rewards[:-1]
+        assert trainer._metrics["eval"]["accuracy"][-1] == (kept_chosen > kept_rejected).float().mean().item()
+        assert trainer._metrics["eval"]["margin"][-1] == (kept_chosen - kept_rejected).mean().item()
+        assert (
+            trainer._metrics["eval"]["mean_reward"][-1]
+            == torch.stack((kept_chosen, kept_rejected), dim=1).mean().item()
+        )
+
     def test_raises_error_when_model_num_labels_not_one(self):
         """Test that RewardTrainer raises ValueError when model doesn't have num_labels=1."""
         model = AutoModelForSequenceClassification.from_pretrained(

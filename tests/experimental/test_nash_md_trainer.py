@@ -12,6 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from collections import defaultdict
+from types import SimpleNamespace
+
 import pytest
 import torch
 from datasets import DatasetDict, load_dataset
@@ -22,11 +25,40 @@ from trl.experimental.nash_md import NashMDConfig, NashMDTrainer
 from trl.experimental.nash_md.nash_md_trainer import GeometricMixtureWrapper
 from trl.experimental.utils import create_reference_model
 
-from ..testing_utils import TrlTestCase, require_peft
+from ..testing_utils import TrlTestCase, drop_last_for_metrics, require_peft
 
 
 if is_peft_available():
     from peft import LoraConfig, get_peft_model
+
+
+def test_log_statistics_eos_metrics_ignore_duplicate_padding():
+    model_data = {"input_ids": torch.tensor([[1, 0], [1, 0], [1, 1]])}
+    mixture_data = {"input_ids": torch.tensor([[1, 0], [1, 0], [1, 1]])}
+    trainer = SimpleNamespace(
+        accelerator=SimpleNamespace(gather_for_metrics=drop_last_for_metrics),
+        stats=defaultdict(list),
+        beta=0.5,
+        mixture_coef=0.5,
+        processing_class=SimpleNamespace(eos_token_id=0),
+    )
+
+    NashMDTrainer._log_statistics(
+        trainer,
+        model_data,
+        mixture_data,
+        torch.ones(3, 1),
+        torch.ones(3, 1),
+        torch.ones(3),
+        torch.ones(3),
+        torch.ones(3),
+        1,
+        torch.ones(3),
+        torch.ones(3),
+    )
+
+    assert trainer.stats["val/model_contain_eos_token"][-1] == 1.0
+    assert trainer.stats["val/ref_contain_eos_token"][-1] == 1.0
 
 
 class TestGeometricMixtureWrapper(TrlTestCase):
