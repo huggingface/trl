@@ -381,7 +381,7 @@ class GRPOConfig(_BaseConfig):
             Hugging Face Hub repository to save the completions. Should be a complete repository name like
             `'username/reponame'` or `'orgname/reponame'`, or just `'reponame'` in which case the repository will be
             created in the currently-logged-in Hugging Face user's namespace. Note that this repository will be public
-            unless you set `hub_private_repo=True` or your organization's default is to create private repositories."
+            unless you set `hub_private_repo=True` or your organization's default is to create private repositories.
 
         > Deprecated parameters
 
@@ -459,7 +459,7 @@ class GRPOConfig(_BaseConfig):
     cast_lm_head_to_fp32: bool = field(
         default=False,
         metadata={
-            "help": "Whether to cast the language modeling head of the policy and reference, models to float32."
+            "help": "Whether to cast the language modeling head of the policy and reference models to float32. "
             "As recommended by the [ScaleRL](https://huggingface.co/papers/2510.13786) recipe. This flag is only "
             "supported when the model has untied word embedding and language modeling head layers i.e. "
             "`tie_word_embeddings` in the model config is False."
@@ -756,7 +756,7 @@ class GRPOConfig(_BaseConfig):
         default="token",
         metadata={
             "help": "Controls whether importance sampling ratios are computed at the `'token'` or `'sequence'` level. "
-            "`'token'` keeps the raw per-token log-probability ratios (one weight per token).  `'sequence'` averages "
+            "`'token'` keeps the raw per-token log-probability ratios (one weight per token). `'sequence'` averages "
             "the log-probability ratios across valid tokens to produce a single ratio per sequence. The GSPO paper "
             "shows that sequence-level sampling often yields more stable training and better alignment with "
             "sequence-level rewards."
@@ -1129,7 +1129,7 @@ class GRPOConfig(_BaseConfig):
 
         if self.vllm_importance_sampling_cap is not None:
             warnings.warn(
-                "The `vllm_importance_sampling_cap` argument is deprecated and will be removed in v2.0.0.  "
+                "The `vllm_importance_sampling_cap` argument is deprecated and will be removed in v2.0.0. "
                 "Use `vllm_importance_sampling_clip_max` instead.",
                 FutureWarning,
                 stacklevel=2,
