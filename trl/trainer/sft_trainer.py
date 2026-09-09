@@ -158,7 +158,7 @@ def _chunked_cross_entropy_loss(
         shift_labels (`torch.Tensor`, *optional*):
             Pre-shifted labels of shape `(B, S)`, aligned with `hidden_states` (position `i` predicts
             `shift_labels[i]`). Mutually exclusive with `labels`.
-        num_items_in_batch (`torch.Tensor`, `int` or `None`, *optional*):
+        num_items_in_batch (`torch.Tensor` or `int`, *optional*):
             Total number of valid tokens across the global batch, as plumbed by [`~transformers.Trainer`]. When
             provided, the loss is reduced as `sum / num_items_in_batch`, matching the gradient-accumulation-correct
             behavior of HF's default cross-entropy. When `None`, reduction is `mean` over local valid tokens.

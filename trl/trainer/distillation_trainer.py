@@ -199,7 +199,7 @@ def _chunked_divergence_loss(
             Interpolation coefficient. `0.0` = forward KL, `1.0` = reverse KL, else generalized JSD.
         chunk_size (`int`):
             Number of valid positions processed per chunk. Peak memory scales linearly with this.
-        num_items_in_batch (`torch.Tensor`, `int` or `None`, *optional*):
+        num_items_in_batch (`torch.Tensor` or `int`, *optional*):
             Total number of valid tokens across the global batch. When provided, the loss is reduced as `sum /
             num_items_in_batch` (gradient-accumulation-correct); when `None`, reduction is `mean` over local valid
             positions.
