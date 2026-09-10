@@ -428,9 +428,8 @@ class RewardTrainer(_BaseTrainer):
                     "in the vocabulary before using it as an EOS token."
                 )
             processing_class.eos_token = args.eos_token
-            # Mirror the eos token onto the model config: `Trainer` runs the same alignment at train time, so the end
-            # state is unchanged, but the model stays consistent with the tokenizer from the moment it is built. A
-            # sequence classification model has no generation config, so there is nothing else to align.
+            # The model must agree with the tokenizer on the eos token from construction, so mirror it onto the model
+            # config (a sequence classification model has no generation config).
             model.config.eos_token_id = processing_class.eos_token_id
 
         if args.chat_template_path is not None:
