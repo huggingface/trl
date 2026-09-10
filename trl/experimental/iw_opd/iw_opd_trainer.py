@@ -27,7 +27,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 from accelerate.utils import DistributedType, broadcast_object_list, gather_object
 from datasets import Dataset
-from packaging.version import Version
 from torch.utils.data import DataLoader
 from transformers import AutoTokenizer, TrainerCallback, is_trackio_available, is_wandb_available
 from transformers.data.data_collator import DataCollator
@@ -38,11 +37,12 @@ from transformers.modeling_utils import PreTrainedModel
 from transformers.processing_utils import ProcessorMixin
 from transformers.tokenization_utils_base import PreTrainedTokenizerBase
 from transformers.trainer_utils import EvalPrediction, seed_worker
-from transformers.utils import is_liger_kernel_available, is_peft_available, is_rich_available
+from transformers.utils import is_peft_available, is_rich_available
 
 from ...extras.profiling import profiling_decorator
 from ...generation.vllm_generation import VLLMGeneration
 from ...import_utils import is_vllm_available
+from ...losses import FusedLinearJSDLoss
 from ...models import prepare_deepspeed
 from ...models.utils import _ForwardRedirection, unwrap_model_for_generation
 from ...trainer.base_trainer import _BaseTrainer
@@ -50,12 +50,7 @@ from ...trainer.utils import RepeatSampler, create_model_from_path, disable_drop
 from .iw_opd_config import IWOPDConfig
 
 
-if is_liger_kernel_available():
-    from liger_kernel.chunked_loss import LigerFusedLinearJSDLoss
-
-
 if is_peft_available():
-    import peft
     from peft import PeftConfig, get_peft_model
 
 
@@ -423,9 +418,11 @@ class IWOPDTrainer(_BaseTrainer):
             import json
 
             teacher_model_init_kwargs = json.loads(teacher_model_init_kwargs)
+        model_revision = None
         if isinstance(model, str):
             model_name_or_path = model
             model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
+            model_revision = model_init_kwargs.get("revision")
             # Distributed training requires device_map=None ("auto" fails)
             if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 model_init_kwargs["device_map"] = None
@@ -436,11 +433,15 @@ class IWOPDTrainer(_BaseTrainer):
         # ── Processing class (tokenizer) ──
         if processing_class is None and model_name_or_path is not None:
             processing_class = AutoTokenizer.from_pretrained(
-                model_name_or_path, trust_remote_code=args.trust_remote_code
+                model_name_or_path, revision=model_revision, trust_remote_code=args.trust_remote_code
             )
         if processing_class is not None:
             if getattr(processing_class, "pad_token", None) is None:
                 processing_class.pad_token = processing_class.eos_token
+            # Mirror the pad token onto the model configs: `Trainer` runs the same alignment at train time, so the end
+            # state is unchanged, but the model stays consistent with the tokenizer from the moment it is built.
+            model.config.pad_token_id = processing_class.pad_token_id
+            model.generation_config.pad_token_id = processing_class.pad_token_id
 
         # ── PEFT ──
         if peft_config is not None:
@@ -464,17 +465,11 @@ class IWOPDTrainer(_BaseTrainer):
             # - See:
             #   - TRL issue: https://github.com/huggingface/trl/issues/6089
             #   - Upstream issue: https://github.com/deepspeedai/DeepSpeed/issues/8072
-            # - autocast_adapter_dtype was introduced in PEFT 0.12.0; before, no upcast existed: no need to pass the kwarg
             _is_quantized_model = getattr(model, "is_loaded_in_4bit", False) or getattr(
                 model, "is_loaded_in_8bit", False
             )
             get_peft_model_kwargs = {}
-            if (
-                args.deepspeed_plugin is not None
-                and args.deepspeed_plugin.zero_stage == 3
-                and not _is_quantized_model
-                and Version(peft.__version__) >= Version("0.12.0")
-            ):
+            if args.deepspeed_plugin is not None and args.deepspeed_plugin.zero_stage == 3 and not _is_quantized_model:
                 get_peft_model_kwargs["autocast_adapter_dtype"] = False
             model = get_peft_model(model, peft_config, **get_peft_model_kwargs)
 
@@ -489,7 +484,7 @@ class IWOPDTrainer(_BaseTrainer):
         # ── Liger fused JSD loss ──
         self.use_liger_loss = False
         if args.use_liger_kernel:
-            self.liger_loss = LigerFusedLinearJSDLoss(
+            self.liger_loss = FusedLinearJSDLoss(
                 beta=args.beta,
                 ignore_index=-100,
                 temperature=args.temperature,

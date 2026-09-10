@@ -193,10 +193,10 @@ def maybe_gather_lm_head_ctx(*params: torch.nn.Parameter):
     Fused losses (e.g. Liger) read `lm_head.weight` directly and hand it to the kernel without ever calling the
     `lm_head` module. Under DeepSpeed ZeRO-3 every parameter is sharded to `numel 0` and only re-materialized inside
     its owning module's forward hook, so the head's gather hook never fires and the kernel receives an empty weight.
-    This gathers the given parameters for the duration of the forward, so the fused matmul sees the full weight. The
-    weight gradient is computed and stashed during this forward, so the parameters need not stay gathered for the
-    backward — but the backward's gradient reduction relies on the ZeRO-3 pre-forward hooks being armed, so the caller
-    must run the fused loss inside the model's forward (e.g. via `_ForwardRedirection`).
+    This gathers the given parameters for the duration of a direct access, so the matmul sees the full weight. Fused
+    losses compute and stash their gradients during the forward; custom autograd functions that recompute during the
+    backward must enter this context again. The backward's gradient reduction relies on the ZeRO-3 pre-forward hooks
+    being armed, so the caller must run the loss inside the model's forward (e.g. via `_ForwardRedirection`).
 
     Returns a null context when ZeRO-3 is not enabled, or when the parameters are already gathered — with tied
     embeddings `embed_tokens` keeps the weight `AVAILABLE`, and re-partitioning it on exit would collide with
@@ -262,17 +262,22 @@ def get_peft_config(model_args: ModelConfig) -> "PeftConfig | None":
             "Make sure to run `pip install -U peft`."
         )
 
+    # `target_parameters` was added in PEFT 0.17.0, so only pass it when the user asked for it
+    lora_config_kwargs = {}
+    if model_args.lora_target_parameters is not None:
+        lora_config_kwargs["target_parameters"] = model_args.lora_target_parameters
+
     peft_config = LoraConfig(
         task_type=model_args.lora_task_type,
         r=model_args.lora_r,
         target_modules=model_args.lora_target_modules,
-        target_parameters=model_args.lora_target_parameters,
         lora_alpha=model_args.lora_alpha,
         lora_dropout=model_args.lora_dropout,
         bias="none",
         use_rslora=model_args.use_rslora,
         use_dora=model_args.use_dora,
         modules_to_save=model_args.lora_modules_to_save,
+        **lora_config_kwargs,
     )
 
     return peft_config
@@ -311,18 +316,18 @@ def generate_model_card(
             Weights & Biases run URL.
         trackio_url (`str` or `None`):
             Trackio Space URL.
-        comet_url (`str` or `None`):
-            Comet experiment URL.
         trainer_name (`str`):
             Trainer name.
-        trainer_citation (`str` or `None`, defaults to `None`):
+        trainer_citation (`str`, *optional*):
             Trainer citation as a BibTeX entry.
-        template_file (`str` *optional*):
+        template_file (`str`, *optional*):
             Template file name located in the `trl/templates` directory. Defaults to `lm_model_card.md`.
-        paper_title (`str` or `None`, defaults to `None`):
+        paper_title (`str`, *optional*):
             Paper title.
-        paper_id (`str` or `None`, defaults to `None`):
+        paper_id (`str`, *optional*):
             ArXiv paper ID as `YYMM.NNNNN`.
+        comet_url (`str`, *optional*):
+            Comet experiment URL.
 
     Returns:
         [`~huggingface_hub.ModelCard`]:
@@ -964,10 +969,12 @@ def nanmin(tensor: torch.Tensor) -> torch.Tensor:
     Compute the minimum value of a tensor, ignoring NaNs. This function only supports 1D tensors.
 
     Args:
-        tensor (`torch.Tensor`): Input tensor of shape `(N,)`.
+        tensor (`torch.Tensor`):
+            Input tensor of shape `(N,)`.
 
     Returns:
-        `torch.Tensor`: Minimum value of the tensor, ignoring NaNs. Returns NaN if all values are NaN.
+        `torch.Tensor`:
+            Minimum value of the tensor, ignoring NaNs. Returns NaN if all values are NaN.
     """
     if torch.isnan(tensor).all():
         return torch.tensor(float("nan"), dtype=tensor.dtype, device=tensor.device)
@@ -979,10 +986,12 @@ def nanmax(tensor: torch.Tensor) -> torch.Tensor:
     Compute the maximum value of a tensor, ignoring NaNs. This function only supports 1D tensors.
 
     Args:
-        tensor (`torch.Tensor`): Input tensor of shape `(N,)`.
+        tensor (`torch.Tensor`):
+            Input tensor of shape `(N,)`.
 
     Returns:
-        `torch.Tensor`: Maximum value of the tensor, ignoring NaNs. Returns NaN if all values are NaN.
+        `torch.Tensor`:
+            Maximum value of the tensor, ignoring NaNs. Returns NaN if all values are NaN.
     """
     if torch.isnan(tensor).all():
         return torch.tensor(float("nan"), dtype=tensor.dtype, device=tensor.device)
@@ -1151,7 +1160,7 @@ def create_model_from_path(
     Args:
         model_id (`str`):
             Path to the model. Can be either a local directory or a model identifier from the Hugging Face Hub.
-        architecture (`_BaseAutoModelClass` or `None`, *optional*):
+        architecture (`_BaseAutoModelClass`, *optional*):
             Model architecture class to instantiate. The model is initialized using the `from_pretrained` method of
             this class. If `None`, the architecture will be inferred from the model's configuration.
         kwargs (`dict`):
@@ -1324,6 +1333,7 @@ class _ChunkedLogProbFunction(torch.autograd.Function):
         ctx,
         last_hidden: torch.Tensor,  # [N, H]
         weight: torch.Tensor,  # [V, H]
+        bias: torch.Tensor | None,  # [V]
         targets: torch.Tensor,  # [N]
         temperature: float,
         chunk_size: int,
@@ -1356,6 +1366,8 @@ class _ChunkedLogProbFunction(torch.autograd.Function):
             # with last_hidden.dtype (float16) while w_chunk (the lm_head weights) is not auto casted
             w_chunk = weight[start:end].to(last_hidden.dtype)  # [C, H]
             torch.mm(last_hidden, w_chunk.t(), out=mm_buf[:, :C])
+            if bias is not None:
+                mm_buf[:, :C].add_(bias[start:end].to(last_hidden.dtype))
             logits_chunk = logits_buf[:, :C]
             logits_chunk.copy_(mm_buf[:, :C])
 
@@ -1385,7 +1397,7 @@ class _ChunkedLogProbFunction(torch.autograd.Function):
         logprobs = target_logit - log_z
         entropy = log_z - x_sum_exp / sum_exp
 
-        ctx.save_for_backward(last_hidden, weight, targets, log_z, entropy)
+        ctx.save_for_backward(last_hidden, weight, bias, targets, log_z, entropy)
         ctx.temperature = temperature
         ctx.chunk_size = chunk_size
         ctx.logit_scale = logit_scale
@@ -1395,7 +1407,7 @@ class _ChunkedLogProbFunction(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, grad_logprobs: torch.Tensor | None, grad_entropy: torch.Tensor | None):  # type: ignore
-        hidden, weight, labels, log_z, entropy = ctx.saved_tensors
+        hidden, weight, bias, labels, log_z, entropy = ctx.saved_tensors
         temperature: float = ctx.temperature
         chunk_size: int = ctx.chunk_size
         logit_scale: float = ctx.logit_scale
@@ -1403,63 +1415,78 @@ class _ChunkedLogProbFunction(torch.autograd.Function):
         inv_t = 1 / temperature
 
         N, _ = hidden.shape
-        vocab = weight.shape[0]
+        with maybe_gather_lm_head_ctx(weight, bias):
+            vocab = weight.shape[0]
 
-        # NOTE(@aminediro): always acc in fp32 even if input is not
-        grad_hidden = torch.zeros(hidden.shape, device=hidden.device, dtype=torch.float32)
-        grad_weight = torch.zeros(weight.shape, device=weight.device, dtype=torch.float32)
+            # NOTE(@aminediro): always acc in fp32 even if input is not
+            grad_hidden = torch.zeros(hidden.shape, device=hidden.device, dtype=torch.float32)
+            grad_weight = torch.zeros(weight.shape, device=weight.device, dtype=torch.float32)
+            grad_bias = torch.zeros(bias.shape, device=bias.device, dtype=torch.float32) if bias is not None else None
 
-        # Pre-allocate reusable buffers to avoid per-chunk allocation
-        mm_buf = torch.empty((N, chunk_size), device=hidden.device, dtype=hidden.dtype)
-        logits_buf = torch.empty((N, chunk_size), device=hidden.device, dtype=torch.float32)
+            # Pre-allocate reusable buffers to avoid per-chunk allocation
+            mm_buf = torch.empty((N, chunk_size), device=hidden.device, dtype=hidden.dtype)
+            logits_buf = torch.empty((N, chunk_size), device=hidden.device, dtype=torch.float32)
 
-        g = grad_logprobs.to(torch.float32) if grad_logprobs is not None else None  # [N]
-        g_entropy = grad_entropy.to(torch.float32) if grad_entropy is not None else None  # [N]
-        row_idx = torch.arange(N, device=hidden.device)
+            g = grad_logprobs.to(torch.float32) if grad_logprobs is not None else None  # [N]
+            g_entropy = grad_entropy.to(torch.float32) if grad_entropy is not None else None  # [N]
+            row_idx = torch.arange(N, device=hidden.device)
 
-        for start in range(0, vocab, chunk_size):
-            end = min(start + chunk_size, vocab)
-            C = end - start
-            w_chunk = weight[start:end]  # [C, H]
+            for start in range(0, vocab, chunk_size):
+                end = min(start + chunk_size, vocab)
+                C = end - start
+                w_chunk = weight[start:end]  # [C, H]
 
-            torch.mm(hidden, w_chunk.t(), out=mm_buf[:, :C])
-            logits_chunk = logits_buf[:, :C]
-            logits_chunk.copy_(mm_buf[:, :C])
+                torch.mm(hidden, w_chunk.t(), out=mm_buf[:, :C])
+                if bias is not None:
+                    mm_buf[:, :C].add_(bias[start:end].to(hidden.dtype))
+                logits_chunk = logits_buf[:, :C]
+                logits_chunk.copy_(mm_buf[:, :C])
 
-            logits_chunk.mul_(logit_scale)
-            if final_logit_softcapping is not None:
-                tanh_scaled = torch.tanh(logits_chunk / final_logit_softcapping)
-                logits_chunk.copy_(tanh_scaled * final_logit_softcapping)
+                logits_chunk.mul_(logit_scale)
+                if final_logit_softcapping is not None:
+                    tanh_scaled = torch.tanh(logits_chunk / final_logit_softcapping)
+                    logits_chunk.copy_(tanh_scaled * final_logit_softcapping)
 
-            logits_chunk.mul_(inv_t)  # [N, C]
-            probs = torch.exp(logits_chunk - log_z.unsqueeze(-1))  # [N, C]
+                logits_chunk.mul_(inv_t)  # [N, C]
+                probs = torch.exp(logits_chunk - log_z.unsqueeze(-1))  # [N, C]
 
-            if g is not None:
-                # dL/d(logits) = g * (1_[label] - p)
-                grad_logits = (-g).unsqueeze(-1) * probs  # [N, C]
+                if g is not None:
+                    # dL/d(logits) = g * (1_[label] - p)
+                    grad_logits = (-g).unsqueeze(-1) * probs  # [N, C]
 
-                in_chunk_cond = (labels >= start) & (labels < end)
-                local_idx = torch.clamp(labels - start, 0, end - start - 1)
-                # If label in chunk add g to grad else it stays the same
-                grad_logits[row_idx, local_idx] += g * in_chunk_cond
-            else:
-                grad_logits = torch.zeros_like(probs)
+                    in_chunk_cond = (labels >= start) & (labels < end)
+                    local_idx = torch.clamp(labels - start, 0, end - start - 1)
+                    # If label in chunk add g to grad else it stays the same
+                    grad_logits[row_idx, local_idx] += g * in_chunk_cond
+                else:
+                    grad_logits = torch.zeros_like(probs)
 
-            if g_entropy is not None:
-                # d(entropy)/d(logits_j) = -p_j * (log_p_j + entropy), entropy = -sum_k p_k * log_p_k
-                log_p_chunk = logits_chunk - log_z.unsqueeze(-1)  # [N, C]
-                grad_logits += (-g_entropy).unsqueeze(-1) * probs * (log_p_chunk + entropy.unsqueeze(-1))
+                if g_entropy is not None:
+                    # d(entropy)/d(logits_j) = -p_j * (log_p_j + entropy), entropy = -sum_k p_k * log_p_k
+                    log_p_chunk = logits_chunk - log_z.unsqueeze(-1)  # [N, C]
+                    grad_logits += (-g_entropy).unsqueeze(-1) * probs * (log_p_chunk + entropy.unsqueeze(-1))
 
-            grad_logits = grad_logits * inv_t
-            if final_logit_softcapping is not None:
-                grad_logits.mul_(1 - tanh_scaled.pow(2))
+                grad_logits = grad_logits * inv_t
+                if final_logit_softcapping is not None:
+                    grad_logits.mul_(1 - tanh_scaled.pow(2))
 
-            grad_logits = grad_logits * logit_scale
+                grad_logits = grad_logits * logit_scale
 
-            grad_hidden.add_(grad_logits @ w_chunk.float())
-            grad_weight[start:end].add_(grad_logits.t() @ hidden.float())
+                grad_hidden.add_(grad_logits @ w_chunk.float())
+                grad_weight[start:end].add_(grad_logits.t() @ hidden.float())
+                if grad_bias is not None:
+                    grad_bias[start:end].add_(grad_logits.sum(dim=0))
 
-        return grad_hidden.to(hidden.dtype), grad_weight.to(weight.dtype), None, None, None, None, None
+        return (
+            grad_hidden.to(hidden.dtype),
+            grad_weight.to(weight.dtype),
+            grad_bias.to(bias.dtype) if grad_bias is not None else None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
 
 
 def patch_chunked_lm_head(
@@ -1506,6 +1533,7 @@ def patch_chunked_lm_head(
         logprobs_valid, entropy_valid = _ChunkedLogProbFunction.apply(
             hidden_flat,
             self.lm_head.weight,
+            self.lm_head.bias,
             targets_flat,
             temperature,
             chunk_size,

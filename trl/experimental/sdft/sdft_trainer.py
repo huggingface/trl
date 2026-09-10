@@ -40,6 +40,7 @@ from transformers.trainer_utils import seed_worker
 from transformers.utils import is_datasets_available, is_liger_kernel_available, is_peft_available
 
 from ...data_utils import is_conversational
+from ...losses import FusedLinearJSDLoss
 from ...models import prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
 from ...models.utils import _ForwardRedirection
 from ...trainer.base_trainer import _BaseTrainer
@@ -65,10 +66,6 @@ from .loss_utils import (
 )
 from .sdft_config import SDFTConfig
 from .teacher_sync import PEFTAdapterEMACallback, SyncTeacherModelCallback, is_pure_lora_training
-
-
-if is_liger_kernel_available():
-    from liger_kernel.chunked_loss import LigerFusedLinearJSDLoss
 
 
 if is_peft_available():
@@ -251,11 +248,13 @@ class SDFTTrainer(_BaseTrainer):
         if train_dataset is None:
             raise ValueError("`train_dataset` is required")
 
+        model_revision = None
         if isinstance(model, str):
             model_init_kwargs = args.model_init_kwargs or {}
             if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 model_init_kwargs["device_map"] = None
             model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
+            model_revision = model_init_kwargs.get("revision")
             model = create_model_from_path(model, **model_init_kwargs)
         elif args.model_init_kwargs is not None:
             logger.warning(
@@ -299,6 +298,7 @@ class SDFTTrainer(_BaseTrainer):
         if processing_class is None:
             processing_class = AutoProcessor.from_pretrained(
                 get_config_model_id(model.config),
+                revision=model_revision,
                 truncation_side="left",
                 padding_side="left",
                 trust_remote_code=args.trust_remote_code,
@@ -313,6 +313,10 @@ class SDFTTrainer(_BaseTrainer):
 
         if self._tokenizer.pad_token is None:
             self._tokenizer.pad_token = self._tokenizer.eos_token
+        # Mirror the pad token onto the model configs: `Trainer` runs the same alignment at train time, so the end
+        # state is unchanged, but the model stays consistent with the tokenizer from the moment it is built.
+        model.config.pad_token_id = self._tokenizer.pad_token_id
+        model.generation_config.pad_token_id = self._tokenizer.pad_token_id
 
         self.max_prompt_length = args.max_prompt_length
         self.max_completion_length = args.max_completion_length
@@ -393,7 +397,7 @@ class SDFTTrainer(_BaseTrainer):
                     "`use_liger_kernel` is incompatible with `distillation_is_clip`: the fused kernel does not expose "
                     "per-token losses for importance-sampling clipping."
                 )
-            self.liger_loss = LigerFusedLinearJSDLoss(
+            self.liger_loss = FusedLinearJSDLoss(
                 beta=args.distillation_alpha,
                 ignore_index=-100,
                 temperature=args.temperature,

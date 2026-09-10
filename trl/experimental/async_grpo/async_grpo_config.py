@@ -32,7 +32,7 @@ class AsyncGRPOConfig(_BaseConfig):
 
         model_init_kwargs (`dict[str, Any]` or `str`, *optional*):
             Keyword arguments for [`~transformers.AutoModelForCausalLM.from_pretrained`], used when instantiating the
-            model from a path.
+            model from a path. The `revision` value is also used when loading the processing class.
         dtype (`str`, *optional*, defaults to `"float32"`):
             Data type to load the model under, one of `"auto"`, `"bfloat16"`, `"float16"` or `"float32"`. It defaults
             to `"float32"` because the training-inference mismatch this trainer is measured against ([Defeating the
@@ -164,14 +164,14 @@ class AsyncGRPOConfig(_BaseConfig):
     >   decaying schedule together with an explicit `max_steps`.
     """
 
-    _VALID_DICT_FIELDS = _BaseConfig._VALID_DICT_FIELDS + ["model_init_kwargs"]
+    _VALID_DICT_FIELDS = _BaseConfig._VALID_DICT_FIELDS + ["model_init_kwargs", "chat_template_kwargs"]
 
     # Parameters that control the model
     model_init_kwargs: dict[str, Any] | str | None = field(
         default=None,
         metadata={
             "help": "Keyword arguments for `transformers.AutoModelForCausalLM.from_pretrained`, used when instantiating "
-            "the model from a path."
+            "the model from a path. The `revision` value is also used when loading the processing class."
         },
     )
     dtype: str = field(
@@ -270,7 +270,7 @@ class AsyncGRPOConfig(_BaseConfig):
             "to repeat tokens."
         },
     )
-    chat_template_kwargs: dict | None = field(
+    chat_template_kwargs: dict | str | None = field(
         default=None,
         metadata={
             "help": "Additional keyword arguments to pass to the `apply_chat_template` function when generating "

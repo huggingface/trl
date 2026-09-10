@@ -1226,8 +1226,11 @@ class TestChunkedLogProbFunction:
     N, H, V = 64, 32, 128
     CHUNK_SIZE = 32
 
-    def _reference_logprobs_and_entropy(self, hidden, weight, labels, temperature):
-        logits = (hidden @ weight.t()).to(torch.float32) / temperature  # [N, V]
+    def _reference_logprobs_and_entropy(self, hidden, weight, labels, temperature, bias=None):
+        logits = hidden @ weight.t()
+        if bias is not None:
+            logits = logits + bias
+        logits = logits.to(torch.float32) / temperature  # [N, V]
         log_p = F.log_softmax(logits, dim=-1)
         logprobs = log_p.gather(-1, labels.unsqueeze(-1)).squeeze(-1)
         p = torch.softmax(logits, dim=-1)
@@ -1242,7 +1245,7 @@ class TestChunkedLogProbFunction:
         labels = torch.randint(0, self.V, (self.N,))
 
         logprobs_chunked, entropy_chunked = _ChunkedLogProbFunction.apply(
-            hidden, weight, labels, temperature, self.CHUNK_SIZE
+            hidden, weight, None, labels, temperature, self.CHUNK_SIZE
         )
         logprobs_ref, entropy_ref = self._reference_logprobs_and_entropy(hidden, weight, labels, temperature)
 
@@ -1257,7 +1260,7 @@ class TestChunkedLogProbFunction:
         labels = torch.randint(0, self.V, (self.N,))
 
         # Chunked backward
-        logprobs_chunked, _ = _ChunkedLogProbFunction.apply(hidden, weight, labels, temperature, self.CHUNK_SIZE)
+        logprobs_chunked, _ = _ChunkedLogProbFunction.apply(hidden, weight, None, labels, temperature, self.CHUNK_SIZE)
         logprobs_chunked.sum().backward()
         grad_hidden_chunked = hidden.grad.clone()
         grad_weight_chunked = weight.grad.clone()
@@ -1280,7 +1283,7 @@ class TestChunkedLogProbFunction:
         labels = torch.randint(0, self.V, (self.N,))
 
         # Chunked backward
-        logprobs_chunked, _ = _ChunkedLogProbFunction.apply(hidden, weight, labels, temperature, self.CHUNK_SIZE)
+        logprobs_chunked, _ = _ChunkedLogProbFunction.apply(hidden, weight, None, labels, temperature, self.CHUNK_SIZE)
         logprobs_chunked.sum().backward()
         grad_hidden_chunked = hidden.grad.clone()
         grad_weight_chunked = weight.grad.clone()
@@ -1304,7 +1307,7 @@ class TestChunkedLogProbFunction:
         labels = torch.randint(0, self.V, (self.N,))
 
         # Chunked backward
-        _, entropy_chunked = _ChunkedLogProbFunction.apply(hidden, weight, labels, temperature, self.CHUNK_SIZE)
+        _, entropy_chunked = _ChunkedLogProbFunction.apply(hidden, weight, None, labels, temperature, self.CHUNK_SIZE)
         entropy_chunked.sum().backward()
         grad_hidden_chunked = hidden.grad.clone()
         grad_weight_chunked = weight.grad.clone()
@@ -1330,7 +1333,7 @@ class TestChunkedLogProbFunction:
 
         # Chunked backward
         logprobs_chunked, entropy_chunked = _ChunkedLogProbFunction.apply(
-            hidden, weight, labels, temperature, self.CHUNK_SIZE
+            hidden, weight, None, labels, temperature, self.CHUNK_SIZE
         )
         (2.0 * logprobs_chunked + 0.5 * entropy_chunked).sum().backward()
         grad_hidden_chunked = hidden.grad.clone()
@@ -1345,6 +1348,30 @@ class TestChunkedLogProbFunction:
 
         torch.testing.assert_close(grad_hidden_chunked, hidden.grad, atol=1e-4, rtol=1e-4)
         torch.testing.assert_close(grad_weight_chunked, weight.grad, atol=1e-4, rtol=1e-4)
+
+    @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+    def test_bias(self, dtype):
+        torch.manual_seed(42)
+        hidden = torch.randn(self.N, self.H, dtype=dtype, requires_grad=True)
+        weight = torch.randn(self.V, self.H, dtype=dtype, requires_grad=True)
+        bias = torch.randn(self.V, dtype=dtype, requires_grad=True)
+        labels = torch.randint(0, self.V, (self.N,))
+
+        logprobs_chunked, entropy_chunked = _ChunkedLogProbFunction.apply(
+            hidden, weight, bias, labels, 0.7, self.CHUNK_SIZE
+        )
+        (2.0 * logprobs_chunked + 0.5 * entropy_chunked).sum().backward()
+        chunked_grads = hidden.grad.clone(), weight.grad.clone(), bias.grad.clone()
+
+        hidden.grad = weight.grad = bias.grad = None
+        logprobs_ref, entropy_ref = self._reference_logprobs_and_entropy(hidden, weight, labels, 0.7, bias)
+        (2.0 * logprobs_ref + 0.5 * entropy_ref).sum().backward()
+
+        atol, rtol = (5e-2, 2e-2) if dtype == torch.bfloat16 else (1e-4, 1e-4)
+        torch.testing.assert_close(logprobs_chunked, logprobs_ref, atol=atol, rtol=rtol)
+        torch.testing.assert_close(entropy_chunked, entropy_ref, atol=atol, rtol=rtol)
+        for actual, expected in zip(chunked_grads, (hidden.grad, weight.grad, bias.grad), strict=True):
+            torch.testing.assert_close(actual, expected, atol=atol, rtol=rtol)
 
 
 class _FakeTransformerModel(nn.Module):

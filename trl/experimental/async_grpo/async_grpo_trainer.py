@@ -37,6 +37,7 @@ from transformers import AutoTokenizer, PreTrainedModel, PreTrainedTokenizerBase
 from transformers.data.data_collator import DataCollatorMixin
 from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR
 
+from ...import_utils import is_vllm_available
 from ...trainer.base_trainer import _BaseTrainer
 from ...trainer.utils import (
     compute_flops_per_token,
@@ -797,6 +798,12 @@ class AsyncGRPOTrainer(_BaseTrainer):
             model_name = model.split("/")[-1]
             args = AsyncGRPOConfig(f"{model_name}-AsyncGRPO")
 
+        if weight_transfer is None and not is_vllm_available(min_version="0.22.0"):
+            raise ImportError(
+                "vLLM >= 0.22.0 is required to use the default Async GRPO weight transfer. "
+                "Install it with: pip install 'vllm>=0.22.0'"
+            )
+
         # Training arguments
         self.epsilon_low = args.epsilon
         self.epsilon_high = args.epsilon_high if args.epsilon_high is not None else args.epsilon
@@ -806,6 +813,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
         model_init_kwargs = args.model_init_kwargs or {}
         model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
         model_init_kwargs.setdefault("dtype", args.dtype)
+        model_revision = model_init_kwargs.get("revision")
         # FlashAttention is required: training runs in padding-free mode, where sequences are concatenated into a
         # single row and `cu_seq_lens` are derived from `position_ids` resets. SDPA/eager can't handle this.
         model = create_model_from_path(
@@ -844,10 +852,14 @@ class AsyncGRPOTrainer(_BaseTrainer):
         # Processing class
         if processing_class is None:
             processing_class = AutoTokenizer.from_pretrained(
-                get_config_model_id(model.config), trust_remote_code=args.trust_remote_code
+                get_config_model_id(model.config), revision=model_revision, trust_remote_code=args.trust_remote_code
             )
         if processing_class.pad_token is None:
             processing_class.pad_token = processing_class.eos_token
+        # Mirror the pad token onto the model configs: `Trainer` runs the same alignment at train time, so the end
+        # state is unchanged, but the model stays consistent with the tokenizer from the moment it is built.
+        model.config.pad_token_id = processing_class.pad_token_id
+        model.generation_config.pad_token_id = processing_class.pad_token_id
 
         # Reward functions
         if reward_funcs is None:
@@ -980,7 +992,6 @@ class AsyncGRPOTrainer(_BaseTrainer):
                         "names": weight_names,
                         "dtype_names": weight_dtype_names,
                         "shapes": weight_shapes,
-                        "packed": True,
                     },
                     weight_sync_timeout=self.args.weight_sync_timeout,
                 )

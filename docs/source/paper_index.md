@@ -51,7 +51,7 @@ Distillation: Empowering Small Models
 A key contribution of the paper is demonstrating that reasoning patterns can be distilled from a large model (DeepSeek-R1) into smaller dense models (e.g., Qwen and Llama series). Distillation was found to be more effective for small models than training them with pure RL from scratch.
 
 
-You can use the GRPOTrainer to replicate the reasoning-heavy stages of this pipeline. 
+You can use the GRPOTrainer to replicate the reasoning-heavy stages of this pipeline.
 ```python
 from trl import GRPOConfig, GRPOTrainer
 
@@ -88,7 +88,7 @@ from trl import GRPOConfig
 training_args = GRPOConfig(
     importance_sampling_level="sequence",
     loss_type="grpo",
-    beta=0.0,  # GSPO set KL regularization to zero: https://github.com/volcengine/verl/pull/2775#issuecomment-3131807306 
+    beta=0.0,  # GSPO set KL regularization to zero: https://github.com/volcengine/verl/pull/2775#issuecomment-3131807306
     epsilon=3e-4,  # GSPO paper (v2), section 5.1
     epsilon_high=4e-4,  # GSPO paper (v2), section 5.1
     gradient_accumulation_steps=1,
@@ -592,7 +592,7 @@ from trl import GRPOConfig
 
 training_args = GRPOConfig(
     ...,
-    off_policy_mask_threshold=0.5, 
+    off_policy_mask_threshold=0.5,
 )
 ```
 
@@ -1923,27 +1923,4 @@ and launch the training script using `accelerate launch --config_file config_fil
 
 ```sh
 accelerate launch --config_file config.yaml train.py
-```
-
-## Proximal Policy Optimization
-
-Papers relating to the [`experimental.ppo.PPOTrainer`]
-
-### Proximal Policy Optimization Algorithms
-
-**📜 Paper**: https://huggingface.co/papers/1707.06347
-
-Introduces Proximal Policy Optimization (PPO): policy gradient methods that alternate between collecting rollouts and optimizing a clipped surrogate objective over multiple minibatch epochs. PPO retains benefits of trust-region methods (e.g. TRPO) with simpler implementation and strong empirical sample efficiency, and was validated on robotics and Atari benchmarks. Used in TRL via [`experimental.ppo.PPOTrainer`]. To use PPO with TRL, use this configuration:
-
-```python
-from trl.experimental.ppo import PPOConfig
-
-training_args = PPOConfig(
-    cliprange=0.2,  # ε clipping range (Section 3 and Table 3 of the paper, Mujoco setting)
-    num_ppo_epochs=4,  # K epochs of minibatch updates (TRL default; paper uses K=10 Mujoco, K=3 Atari)
-    gamma=1.0,  # γ discount factor (TRL default for LLM tasks; paper uses γ=0.99)
-    lam=0.95,  # λ GAE parameter (Table 3 of the paper, Mujoco setting)
-    kl_coef=0.05,  # KL penalty coefficient (Section 4 of the paper discusses adaptive KL)
-    vf_coef=0.1,  # c₁ value function loss weight (Equation 9 of the paper)
-)
 ```

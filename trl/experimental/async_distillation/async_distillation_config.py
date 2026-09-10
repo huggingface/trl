@@ -34,7 +34,7 @@ class AsyncDistillationConfig(_BaseConfig):
 
         model_init_kwargs (`dict[str, Any]` or `str`, *optional*):
             Keyword arguments for [`~transformers.AutoModelForCausalLM.from_pretrained`], used when instantiating the
-            student model from a path.
+            student model from a path. The `revision` value is also used when loading the processing class.
         dtype (`str`, *optional*, defaults to `"float32"`):
             Data type to load the student model under, one of `"auto"`, `"bfloat16"`, `"float16"` or `"float32"`. It
             defaults to `"float32"` because the training-inference mismatch the async trainers are measured against
@@ -178,14 +178,19 @@ class AsyncDistillationConfig(_BaseConfig):
     > - `ignore_data_skip`: Defaults to `True` instead of `False`; the base Trainer's skip-and-replay loop does not apply to the async rollout queue.
     """
 
-    _VALID_DICT_FIELDS = _BaseConfig._VALID_DICT_FIELDS + ["model_init_kwargs", "teacher_server_urls"]
+    _VALID_DICT_FIELDS = _BaseConfig._VALID_DICT_FIELDS + [
+        "model_init_kwargs",
+        "teacher_server_urls",
+        "chat_template_kwargs",
+    ]
 
     # Parameters that control the model
     model_init_kwargs: dict[str, Any] | str | None = field(
         default=None,
         metadata={
             "help": "Keyword arguments for `transformers.AutoModelForCausalLM.from_pretrained`, used when "
-            "instantiating the student model from a path."
+            "instantiating the student model from a path. The `revision` value is also used when loading the "
+            "processing class."
         },
     )
     dtype: str = field(
@@ -257,7 +262,7 @@ class AsyncDistillationConfig(_BaseConfig):
             "to repeat tokens."
         },
     )
-    chat_template_kwargs: dict | None = field(
+    chat_template_kwargs: dict | str | None = field(
         default=None,
         metadata={
             "help": "Additional keyword arguments to pass to the `apply_chat_template` function when generating "

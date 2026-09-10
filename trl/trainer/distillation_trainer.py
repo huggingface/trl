@@ -23,7 +23,7 @@ import warnings
 from collections import defaultdict, deque
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import numpy as np
 import torch
@@ -45,7 +45,7 @@ from transformers import (
     is_trackio_available,
     is_wandb_available,
 )
-from transformers.utils import is_liger_kernel_available, is_peft_available, is_rich_available
+from transformers.utils import is_peft_available, is_rich_available
 
 from ..chat_template_utils import (
     _SUPPORTS_RESPONSE_TEMPLATE,
@@ -81,12 +81,7 @@ from .utils import (
 )
 
 
-if is_liger_kernel_available():
-    from liger_kernel.chunked_loss import LigerFusedLinearJSDLoss
-
-
 if is_peft_available():
-    import peft
     from peft import PeftConfig, PeftModel, PromptLearningConfig, get_peft_model
     from peft.tuners.tuners_utils import BaseTunerLayer
 
@@ -112,7 +107,10 @@ def _chunk(h_s, w_s, b_s, s_scale, s_softcap, h_t, w_t, b_t, t_scale, t_softcap,
     # the backward, never `(chunk, V)`. ZeRO-3 shards the `lm_head`, so gather it tightly around each projection.
     # `logit_scale` (Cohere) / `final_logit_softcapping` (Gemma) are applied per model to match its full forward.
     with maybe_gather_lm_head_ctx(w_s, b_s):
-        student_logits = h_s.float() @ w_s.float().t()
+        # Project in the compute dtype and upcast only for the softmax, like `"nll"` and
+        # `transformers`' own `ForCausalLMLoss` do. Matching the weight to the hidden-states dtype keeps the
+        # matmul in that dtype, which is what `lm_head`'s own forward computes in.
+        student_logits = (h_s @ w_s.to(h_s.dtype).t()).float()
         if b_s is not None:
             student_logits = student_logits + b_s.float()
     if s_scale != 1.0:
@@ -123,7 +121,7 @@ def _chunk(h_s, w_s, b_s, s_scale, s_softcap, h_t, w_t, b_t, t_scale, t_softcap,
     # and the teacher accumulates no gradients (the teacher params are not frozen by `prepare_model`). Everything
     # downstream inherits this since `teacher_logits` is already detached.
     with maybe_gather_lm_head_ctx(w_t, b_t), torch.no_grad():
-        teacher_logits = h_t.float() @ w_t.float().t()
+        teacher_logits = (h_t @ w_t.to(h_t.dtype).t()).float()
         if b_t is not None:
             teacher_logits = teacher_logits + b_t.float()
     if t_scale != 1.0:
@@ -201,7 +199,7 @@ def _chunked_divergence_loss(
             Interpolation coefficient. `0.0` = forward KL, `1.0` = reverse KL, else generalized JSD.
         chunk_size (`int`):
             Number of valid positions processed per chunk. Peak memory scales linearly with this.
-        num_items_in_batch (`torch.Tensor`, `int` or `None`, *optional*):
+        num_items_in_batch (`torch.Tensor` or `int`, *optional*):
             Total number of valid tokens across the global batch. When provided, the loss is reduced as `sum /
             num_items_in_batch` (gradient-accumulation-correct); when `None`, reduction is `mean` over local valid
             positions.
@@ -229,12 +227,14 @@ def _chunked_divergence_loss(
     # gradient-checkpointed chunk loop causes FSDP2 to re-gather it once per chunk during backward recomputation.
     # full_tensor() converts it to a plain tensor once; all chunks reference that tensor, so only one all-gather occurs
     # (in full_tensor()'s backward). Done per model since the student and teacher have their own heads.
+    # Under mixed precision the teacher's gathered weight is still the fp32 master copy, so cast to the
+    # hidden-states dtype here: once, rather than rebuilding a vocab-sized copy per chunk.
     if isinstance(student_lm_head_weight, torch.distributed.tensor.DTensor):
-        student_lm_head_weight = student_lm_head_weight.full_tensor()
+        student_lm_head_weight = student_lm_head_weight.full_tensor().to(student_hidden_states.dtype)
         if student_lm_head_bias is not None:
             student_lm_head_bias = student_lm_head_bias.full_tensor()
     if isinstance(teacher_lm_head_weight, torch.distributed.tensor.DTensor):
-        teacher_lm_head_weight = teacher_lm_head_weight.full_tensor()
+        teacher_lm_head_weight = teacher_lm_head_weight.full_tensor().to(teacher_hidden_states.dtype)
         if teacher_lm_head_bias is not None:
             teacher_lm_head_bias = teacher_lm_head_bias.full_tensor()
 
@@ -335,7 +335,7 @@ class DistillationTrainer(_BaseTrainer):
             that supply the teacher another way (e.g. a remote server).
         args ([`DistillationConfig`], *optional*):
             Configuration for this trainer. If `None`, a default configuration is used.
-        train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`], *optional*):
+        train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
             Dataset to use for training. It must include a column `"prompt"`. Any additional columns in the dataset is
             ignored. The format of the samples can be either:
 
@@ -396,15 +396,15 @@ class DistillationTrainer(_BaseTrainer):
     def __init__(
         self,
         model: "str | PreTrainedModel | PeftModel",
-        teacher_model: str | PreTrainedModel = None,
+        teacher_model: str | PreTrainedModel | None = None,
         args: DistillationConfig | None = None,
         train_dataset: Dataset | None = None,
         eval_dataset: Dataset | dict[str, Dataset] | None = None,
         processing_class: PreTrainedTokenizerBase | ProcessorMixin | None = None,
         callbacks: list[TrainerCallback] | None = None,
-        optimizers: tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
+        optimizers: tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None] = (None, None),
         quantization_config: "BitsAndBytesConfig | None" = None,
-        peft_config: Optional["PeftConfig"] = None,
+        peft_config: "PeftConfig | None" = None,
         tools: list[Callable] | None = None,
     ):
         if args is None:
@@ -430,9 +430,11 @@ class DistillationTrainer(_BaseTrainer):
             if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 model_init_kwargs["device_map"] = None
             model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
+            model_revision = model_init_kwargs.get("revision")
             model = create_model_from_path(model, **model_init_kwargs)
         else:
             model_name_or_path = get_config_model_id(model.config)
+            model_revision = None
             if args.model_init_kwargs is not None:
                 logger.warning(
                     "You passed `model_init_kwargs` to the `DistillationConfig`, but your model is already "
@@ -458,6 +460,7 @@ class DistillationTrainer(_BaseTrainer):
         if processing_class is None:
             processing_class = AutoProcessor.from_pretrained(
                 model_name_or_path,
+                revision=model_revision,
                 truncation_side="left",
                 padding_side="left",
                 trust_remote_code=args.trust_remote_code,
@@ -475,6 +478,11 @@ class DistillationTrainer(_BaseTrainer):
 
         if self._tokenizer.pad_token is None:
             self._tokenizer.pad_token = self._tokenizer.eos_token
+
+        # Mirror the pad token onto the model configs: `Trainer` runs the same alignment at train time, so the end
+        # state is unchanged, but the model stays consistent with the tokenizer from the moment it is built.
+        model.config.pad_token_id = self._tokenizer.pad_token_id
+        model.generation_config.pad_token_id = self._tokenizer.pad_token_id
 
         # Resolve vision placeholder token IDs once. Used by the forward pass to rebuild mm_token_type_ids
         # when tool responses inject images into the completion (see _generate forward_kwargs block).
@@ -567,14 +575,8 @@ class DistillationTrainer(_BaseTrainer):
             # - See:
             #   - TRL issue: https://github.com/huggingface/trl/issues/6089
             #   - Upstream issue: https://github.com/deepspeedai/DeepSpeed/issues/8072
-            # - autocast_adapter_dtype was introduced in PEFT 0.12.0; before, no upcast existed: no need to pass the kwarg
             get_peft_model_kwargs = {}
-            if (
-                args.deepspeed_plugin is not None
-                and args.deepspeed_plugin.zero_stage == 3
-                and not _is_quantized_model
-                and Version(peft.__version__) >= Version("0.12.0")
-            ):
+            if args.deepspeed_plugin is not None and args.deepspeed_plugin.zero_stage == 3 and not _is_quantized_model:
                 get_peft_model_kwargs["autocast_adapter_dtype"] = False
             model = get_peft_model(model, peft_config, **get_peft_model_kwargs)
 
@@ -611,7 +613,7 @@ class DistillationTrainer(_BaseTrainer):
                 if param.requires_grad:
                     param.data = param.data.to(torch.bfloat16)
 
-        # Both loss paths (chunked and Liger) read `lm_head.weight` directly and run the backbone via
+        # The chunked JSD loss reads `lm_head.weight` directly and runs the backbone via
         # `_get_last_hidden_state`, bypassing `PeftModel.forward()` — so PEFT setups that live outside the backbone
         # weights are silently ignored. Fail loudly rather than train on a silently-wrong objective.
         if is_peft_model(model):
@@ -636,27 +638,9 @@ class DistillationTrainer(_BaseTrainer):
                     "adapter such as LoRA instead."
                 )
 
-        # The chunked JSD loss (and the Liger path) call the student backbone directly, bypassing the DDP/FSDP
-        # wrapper's forward; route them through `_forward_redirection` so `prepare_for_backward()` still fires.
+        # The chunked JSD loss calls the student backbone directly, bypassing the DDP/FSDP wrapper's forward; route it
+        # through `_forward_redirection` so `prepare_for_backward()` still fires.
         self._forward_redirection = _ForwardRedirection()
-
-        # Liger fused JSD loss
-        self.use_liger_kernel = False
-        if args.use_liger_kernel:
-            if not is_liger_kernel_available():
-                raise ImportError(
-                    "Liger is required to use `use_liger_kernel` as the distillation loss. Run "
-                    "`pip install liger-kernel`."
-                )
-            self.liger_loss = LigerFusedLinearJSDLoss(
-                beta=args.beta,
-                ignore_index=-100,
-                temperature=args.temperature,
-                compiled=False,
-                weight_hard_loss=0.0,
-                weight_soft_loss=1.0,
-            )
-            self.use_liger_kernel = True
 
         # Teacher model setup
         # `teacher_model` may be None: subclasses (e.g. ServerDistillationTrainer) supply the teacher another way.
@@ -747,28 +731,6 @@ class DistillationTrainer(_BaseTrainer):
                     f"requires a shared vocabulary. Use a teacher with the same vocab_size, or GOLD for "
                     f"cross-tokenizer distillation."
                 )
-            # The Liger fused JSD kernel projects `h @ Wᵀ` directly and has no `logit_scale` /
-            # `final_logit_softcapping` parameters, so (unlike the chunked path) it cannot reproduce Cohere
-            # `logit_scale` or Gemma `final_logit_softcapping`. Refuse rather than silently optimize a different
-            # objective than the model's real forward.
-            if self.use_liger_kernel:
-                for name, model in [("student", self.model), ("teacher", teacher_model)]:
-                    # On VLMs the logit post-processing lives on `text_config`, so read it through
-                    # `get_text_config()`. Muse Glimmer names its pre-softcap multiplier `output_multiplier`.
-                    config = model.config.get_text_config()
-                    logit_scale = getattr(config, "logit_scale", None)
-                    if logit_scale is None:
-                        logit_scale = getattr(config, "output_multiplier", None)
-                    scaled = logit_scale not in (None, 1.0)
-                    softcapped = getattr(config, "final_logit_softcapping", None) is not None
-                    if scaled or softcapped:
-                        raise ValueError(
-                            f"`use_liger_kernel=True` is incompatible with the {name} model's `logit_scale` / "
-                            f"`final_logit_softcapping` (e.g. Cohere / Gemma models): the Liger fused JSD loss reads "
-                            f"`lm_head.weight` directly and cannot apply them, so it would optimize a different "
-                            f"objective than the model's real forward. Set `use_liger_kernel=False` to use the chunked "
-                            f"loss, which applies both."
-                        )
             if self.is_deepspeed_enabled:
                 self.teacher_model = prepare_deepspeed(teacher_model, self.accelerator)
             else:
@@ -849,8 +811,8 @@ class DistillationTrainer(_BaseTrainer):
         if self.use_vllm:
             if not is_vllm_available():
                 raise ImportError(
-                    "vLLM is not available and use_vllm is set to True. Please install vLLM with "
-                    "`pip install vllm` to use it."
+                    "vLLM is not available and `use_vllm` is set to True. Please install vLLM with "
+                    "`pip install trl[vllm]` to use it."
                 )
             self.vllm_generation = VLLMGeneration(
                 model=self.model,
@@ -1765,7 +1727,7 @@ class DistillationTrainer(_BaseTrainer):
                     forward_kwargs["mm_token_type_ids"] = mm_ids
                     num_images = None
 
-        # Log the prompt and completion texts
+        # Log prompt and completion texts
         if self.log_completions:
             prompts_text = self.processing_class.batch_decode(prompt_ids, skip_special_tokens=True)
             completions_text = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
@@ -1854,13 +1816,12 @@ class DistillationTrainer(_BaseTrainer):
 
         # Log the mean per-token student entropy (in nats). The reduction runs here, after `_forward_redirection`
         # returns, so the `gather_for_metrics` collective does not run inside the DDP/FSDP-wrapped forward (a hang/
-        # ordering risk). The Liger path produces no entropy, so it logs none. Mirrors `SFTTrainer.compute_loss`.
-        if entropy_sum is not None:
-            mode = "train" if self.model.training else "eval"
-            num_valid_tokens = self.accelerator.gather_for_metrics(num_valid_tokens).sum()
-            entropy_sum = self.accelerator.gather_for_metrics(entropy_sum).sum()
-            entropy = (entropy_sum / num_valid_tokens).item() if num_valid_tokens > 0 else 0.0
-            self._metrics[mode]["entropy"].append(entropy)
+        # ordering risk). Mirrors `SFTTrainer.compute_loss`.
+        mode = "train" if self.model.training else "eval"
+        num_valid_tokens = self.accelerator.gather_for_metrics(num_valid_tokens).sum()
+        entropy_sum = self.accelerator.gather_for_metrics(entropy_sum).sum()
+        entropy = (entropy_sum / num_valid_tokens).item() if num_valid_tokens > 0 else 0.0
+        self._metrics[mode]["entropy"].append(entropy)
 
         return (loss, None) if return_outputs else loss
 
@@ -1911,53 +1872,11 @@ class DistillationTrainer(_BaseTrainer):
         student_lm_head = unwrapped_student.get_output_embeddings()
         teacher_lm_head = unwrapped_teacher.get_output_embeddings()
 
-        if self.use_liger_kernel:
-            # Fused JSD over the same hidden states as the chunked path. `true_labels` only masks positions (the
-            # hard-loss weight is 0), so any non-ignore id marks a valid completion token; `_get_last_hidden_state`
-            # already returns the completion-aligned positions, so no shift is needed.
-            true_labels = torch.where(
-                loss_mask.bool(), inputs["completion_ids"], torch.full_like(inputs["completion_ids"], -100)
-            ).reshape(-1)
-            # Under FSDP2 the heads are DTensors; materialize them once with full_tensor() for the fused kernel, as the
-            # chunked path does. No-op off FSDP2; the ZeRO-3 (non-DTensor) case is handled by maybe_gather_lm_head_ctx.
-            student_weight, student_bias = student_lm_head.weight, student_lm_head.bias
-            teacher_weight, teacher_bias = teacher_lm_head.weight, teacher_lm_head.bias
-            if isinstance(student_weight, torch.distributed.tensor.DTensor):
-                student_weight = student_weight.full_tensor()
-                if student_bias is not None:
-                    student_bias = student_bias.full_tensor()
-            if isinstance(teacher_weight, torch.distributed.tensor.DTensor):
-                teacher_weight = teacher_weight.full_tensor()
-                if teacher_bias is not None:
-                    teacher_bias = teacher_bias.full_tensor()
-            # ZeRO-3 shards the heads and the fused kernel reads them directly, so gather them for the call.
-            with maybe_gather_lm_head_ctx(
-                student_lm_head.weight, student_lm_head.bias, teacher_lm_head.weight, teacher_lm_head.bias
-            ):
-                loss = self.liger_loss(
-                    student_input=student_hidden_states.reshape(-1, student_hidden_states.size(-1)),
-                    student_weight=student_weight,
-                    teacher_input=teacher_hidden_states.reshape(-1, teacher_hidden_states.size(-1)),
-                    teacher_weight=teacher_weight,
-                    true_labels=true_labels,
-                    student_bias=student_bias,
-                    teacher_bias=teacher_bias,
-                )
-            # Liger normalizes by the local valid-token count; rescale to the global count for grad-accum correctness.
-            if num_items_in_batch is not None:
-                num_valid_local = (true_labels != -100).sum().clamp_min(1)
-                if isinstance(num_items_in_batch, torch.Tensor):
-                    num_items_in_batch = num_items_in_batch.to(loss.device)
-                loss = loss * num_valid_local / num_items_in_batch
-            # The fused kernel produces no entropy; `compute_loss` logs none for the Liger path.
-            return loss, None, None
-
         # On VLMs the logit post-processing lives on `text_config`, so read it through `get_text_config()`.
         student_config = unwrapped_student.config.get_text_config()
         teacher_config = unwrapped_teacher.config.get_text_config()
         # `logit_scale` is None on models that don't scale (e.g. MPT); read that as unscaled (1.0). A real 0.0 is kept
-        # as-is: the Liger guard rejects it, and the chunked path applies it faithfully. Muse Glimmer applies the same
-        # pre-softcap multiplier under the name `output_multiplier`.
+        # as-is. Muse Glimmer applies the same pre-softcap multiplier under the name `output_multiplier`.
         student_logit_scale = getattr(student_config, "logit_scale", None)
         if student_logit_scale is None:
             student_logit_scale = getattr(student_config, "output_multiplier", None)
