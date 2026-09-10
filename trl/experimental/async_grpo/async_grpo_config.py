@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import warnings
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -57,20 +58,27 @@ class AsyncGRPOConfig(_BaseConfig):
         max_completion_length (`int`, *optional*, defaults to `2048`):
             Maximum length of the generated completion.
         temperature (`float`, *optional*, defaults to `1.0`):
-            Temperature for sampling. The higher the temperature, the more random the completions.
+            Temperature for sampling. The higher the temperature, the more random the completions. Any positive value
+            below `0.01` is raised to `0.01` by vLLM while the trainer keeps the requested value, which biases the
+            importance ratio, so a warning is raised for it.
         top_p (`float`, *optional*, defaults to `1.0`):
             Float that controls the cumulative probability of the top tokens to consider. Must be in (0, 1]. Set to 1.0
-            to consider all tokens.
+            to consider all tokens. Moving it off 1.0 biases the importance ratio: the server TRL prescribes runs with
+            `--logprobs-mode processed_logprobs`, so the logprobs kept as `old_log_probs` are renormalized over the
+            surviving tokens while the trainer takes a full-vocab log-softmax, and the ratio then reads the surviving
+            mass rather than 1.0 for an unchanged policy.
         top_k (`int`, *optional*, defaults to `0`):
             Number of highest probability vocabulary tokens to keep for top-k-filtering. If `0`, top-k-filtering is
-            disabled and all tokens are considered.
+            disabled and all tokens are considered. Biases the importance ratio the same way `top_p` does.
         min_p (`float`, *optional*):
             Minimum token probability, which will be scaled by the probability of the most likely token. It must be a
-            value between 0.0 and 1.0. Typical values are in the 0.01-0.2 range.
+            value between 0.0 and 1.0. Typical values are in the 0.01-0.2 range. Biases the importance ratio the same
+            way `top_p` does.
         repetition_penalty (`float`, *optional*, defaults to `1.0`):
             Float that penalizes new tokens based on whether they appear in the prompt and the generated text so far.
             Values > 1.0 encourage the model to use new tokens, while values < 1.0 encourage the model to repeat
-            tokens.
+            tokens. Biases the importance ratio too: vLLM applies the penalty before computing the logprobs kept as
+            `old_log_probs`, while the trainer scores the unpenalized logits.
         chat_template_kwargs (`dict[str, Any]`, *optional*):
             Additional keyword arguments to pass to the `apply_chat_template` function when generating completions.
         max_tool_calling_iterations (`int`, *optional*):
@@ -239,7 +247,11 @@ class AsyncGRPOConfig(_BaseConfig):
     )
     temperature: float = field(
         default=1.0,
-        metadata={"help": "Temperature for sampling. The higher the temperature, the more random the completions."},
+        metadata={
+            "help": "Temperature for sampling. The higher the temperature, the more random the completions. Any positive "
+            "value below 0.01 is raised to 0.01 by vLLM while the trainer keeps the requested value, which biases the "
+            "importance ratio, so a warning is raised for it."
+        },
     )
     top_p: float = field(
         default=1.0,
@@ -393,6 +405,55 @@ class AsyncGRPOConfig(_BaseConfig):
 
     def __post_init__(self):
         super().__post_init__()
+
+        # The rollout worker keeps vLLM's per-token logprobs as `old_log_probs`, and the trainer uses them directly as
+        # the denominator of `coef_1 = exp(log_probs - old_log_probs)`. TRL prescribes serving with
+        # `--logprobs-mode processed_logprobs` (see `trl.scripts.vllm_serve.build_command`), so those logprobs come
+        # from the reshaped logits while the trainer takes a full-vocab log-softmax. For an unchanged policy the ratio
+        # then departs from 1.0, which also shifts it against the `epsilon_low`/`epsilon_high` clip range: top_p/top_k/
+        # min_p truncate the support and renormalize, so the ratio reads the surviving mass S; `repetition_penalty`
+        # rescales the logits of already-seen tokens without truncating anything, so it moves the ratio by the rescaling
+        # instead. Unlike GRPO there is no importance-sampling correction to turn off, so the only lever is the
+        # sampling parameters themselves. `temperature` cancels as long as both sides use the same value: the trainer
+        # scales its own logits by it, and so does vLLM. vLLM's `SamplingParams` raises any `0 < temperature < 0.01`
+        # to 0.01 and treats anything below 1e-5 as greedy, while the trainer keeps dividing by the requested value, so
+        # in that band the two sides disagree on every token and the ratio is biased again. That band is checked
+        # separately below; the two vLLM constants are copied here, not imported, since vLLM is not a dependency of
+        # this config. One more limit: `top_k` at or above the vocabulary size is disabled by vLLM but still warns
+        # here, since the config does not know the vocabulary size.
+        if 0.0 < self.temperature < 0.01:
+            warnings.warn(
+                f"`temperature={self.temperature}` is below 0.01, which vLLM raises to 0.01 (and treats as greedy below "
+                "1e-5) while the trainer keeps dividing its logits by the requested value. The two sides then disagree "
+                "on every token and the importance ratio `exp(log_probs - old_log_probs)` is biased for an unchanged "
+                "policy. Use `temperature >= 0.01`.",
+                UserWarning,
+                stacklevel=3,
+            )
+        reshaping = [
+            name
+            for name, active in (
+                ("top_p", self.top_p < 1.0),
+                ("top_k", self.top_k > 0),
+                ("min_p", self.min_p is not None and self.min_p > 0.0),
+                ("repetition_penalty", self.repetition_penalty != 1.0),
+            )
+            if active
+        ]
+        if reshaping:
+            quoted = [f"`{name}`" for name in reshaping]
+            names = quoted[0] if len(quoted) == 1 else ", ".join(quoted[:-1]) + " and " + quoted[-1]
+            warnings.warn(
+                f"Setting {names} reshapes the sampled distribution, which biases the importance ratio "
+                "`exp(log_probs - old_log_probs)`: on a server started with `--logprobs-mode processed_logprobs`, as "
+                "TRL prescribes, vLLM computes the logprobs kept as `old_log_probs` from the reshaped logits while "
+                "the trainer normalizes over the full vocabulary. The ratio then departs from 1.0 for an unchanged "
+                "policy (by the mass that survives truncation for `top_p`, `top_k` and `min_p`, by the rescaling for "
+                "`repetition_penalty`) and can cross the clip range. Keep the sampling defaults (`top_p=1.0`, "
+                "`top_k=0`, `min_p=None`, `repetition_penalty=1.0`) to avoid it.",
+                UserWarning,
+                stacklevel=3,
+            )
 
         if self.parallelism_config is not None and (
             self.parallelism_config.cp_enabled or self.parallelism_config.sp_enabled

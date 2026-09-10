@@ -19,6 +19,7 @@ import math
 import multiprocessing as mp
 import os
 import queue
+import warnings
 from collections import defaultdict
 from unittest.mock import MagicMock, patch
 
@@ -148,6 +149,70 @@ class _StubWeightTransfer:
 
     def destroy(self):
         pass
+
+
+class TestAsyncGRPOConfig(TrlTestCase):
+    # Config-level checks only: building an `AsyncGRPOConfig` touches no accelerator, so these stay outside the
+    # Flash-Attention skip that gates `TestAsyncGRPOTrainer` and run in the CPU lanes as well.
+
+    @pytest.mark.parametrize(
+        ("top_p", "top_k", "min_p", "repetition_penalty", "should_warn"),
+        [
+            (1.0, 0, None, 1.0, False),  # defaults: nothing reshapes the logits, only the real mismatch remains
+            (0.9, 0, None, 1.0, True),
+            (1.0, 50, None, 1.0, True),
+            (1.0, 0, 0.05, 1.0, True),
+            (1.0, 0, None, 1.2, True),
+            (0.9, 50, 0.05, 1.2, True),
+        ],
+    )
+    def test_warning_raised_reshaped_sampling_biases_the_ratio(
+        self, top_p, top_k, min_p, repetition_penalty, should_warn
+    ):
+        """Reshaped sampling biases the AsyncGRPO importance ratio.
+
+        The rollout worker reads vLLM's per-token logprobs and the trainer uses them directly as `old_log_probs`, the
+        denominator of `coef_1 = exp(log_probs - old_log_probs)`. On a server started the way TRL prescribes, with
+        `--logprobs-mode processed_logprobs`, those logprobs come from the reshaped logits while the trainer takes a
+        full-vocab log-softmax, so the ratio carries that reshaping instead of reading 1.0 at the start of a step.
+        Unlike GRPO there is no `vllm_importance_sampling_correction` to switch off, so warn.
+        """
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            AsyncGRPOConfig(
+                output_dir=self.tmp_dir,
+                max_steps=5,
+                top_p=top_p,
+                top_k=top_k,
+                min_p=min_p,
+                repetition_penalty=repetition_penalty,
+                report_to="none",
+            )
+
+        messages = [str(w.message) for w in caught]
+        assert any("biases the importance ratio" in m for m in messages) == should_warn
+
+    @pytest.mark.parametrize(
+        ("temperature", "should_warn"),
+        [
+            (1.0, False),  # default
+            (0.7, False),  # an ordinary non-default temperature cancels between vLLM and the trainer
+            (0.01, False),  # vLLM's floor itself: both sides still use the same value
+            (0.001, True),  # vLLM raises this to 0.01, the trainer keeps 0.001
+            (0.0, False),  # greedy on both sides, no division to disagree on
+        ],
+    )
+    def test_warning_raised_temperature_below_vllm_floor(self, temperature, should_warn):
+        """vLLM's `SamplingParams` raises any `0 < temperature < 0.01` to 0.01 while the trainer keeps dividing by the
+        requested value, so the two sides disagree on every token in that band and the ratio is biased again. An
+        ordinary temperature cancels and must not warn, so the test pins both edges."""
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            AsyncGRPOConfig(output_dir=self.tmp_dir, max_steps=5, temperature=temperature, report_to="none")
+
+        messages = [str(w.message) for w in caught]
+        assert any("below 0.01" in m for m in messages) == should_warn
+        assert not any("reshapes the sampled distribution" in m for m in messages)
 
 
 @pytest.mark.skipif(
