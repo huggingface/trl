@@ -23,7 +23,7 @@ import warnings
 from collections import defaultdict, deque
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import numpy as np
 import torch
@@ -82,7 +82,6 @@ from .utils import (
 
 
 if is_peft_available():
-    import peft
     from peft import PeftConfig, PeftModel, PromptLearningConfig, get_peft_model
     from peft.tuners.tuners_utils import BaseTunerLayer
 
@@ -200,7 +199,7 @@ def _chunked_divergence_loss(
             Interpolation coefficient. `0.0` = forward KL, `1.0` = reverse KL, else generalized JSD.
         chunk_size (`int`):
             Number of valid positions processed per chunk. Peak memory scales linearly with this.
-        num_items_in_batch (`torch.Tensor`, `int` or `None`, *optional*):
+        num_items_in_batch (`torch.Tensor` or `int`, *optional*):
             Total number of valid tokens across the global batch. When provided, the loss is reduced as `sum /
             num_items_in_batch` (gradient-accumulation-correct); when `None`, reduction is `mean` over local valid
             positions.
@@ -336,7 +335,7 @@ class DistillationTrainer(_BaseTrainer):
             that supply the teacher another way (e.g. a remote server).
         args ([`DistillationConfig`], *optional*):
             Configuration for this trainer. If `None`, a default configuration is used.
-        train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`], *optional*):
+        train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
             Dataset to use for training. It must include a column `"prompt"`. Any additional columns in the dataset is
             ignored. The format of the samples can be either:
 
@@ -397,15 +396,15 @@ class DistillationTrainer(_BaseTrainer):
     def __init__(
         self,
         model: "str | PreTrainedModel | PeftModel",
-        teacher_model: str | PreTrainedModel = None,
+        teacher_model: str | PreTrainedModel | None = None,
         args: DistillationConfig | None = None,
         train_dataset: Dataset | None = None,
         eval_dataset: Dataset | dict[str, Dataset] | None = None,
         processing_class: PreTrainedTokenizerBase | ProcessorMixin | None = None,
         callbacks: list[TrainerCallback] | None = None,
-        optimizers: tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
+        optimizers: tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None] = (None, None),
         quantization_config: "BitsAndBytesConfig | None" = None,
-        peft_config: Optional["PeftConfig"] = None,
+        peft_config: "PeftConfig | None" = None,
         tools: list[Callable] | None = None,
     ):
         if args is None:
@@ -431,9 +430,11 @@ class DistillationTrainer(_BaseTrainer):
             if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 model_init_kwargs["device_map"] = None
             model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
+            model_revision = model_init_kwargs.get("revision")
             model = create_model_from_path(model, **model_init_kwargs)
         else:
             model_name_or_path = get_config_model_id(model.config)
+            model_revision = None
             if args.model_init_kwargs is not None:
                 logger.warning(
                     "You passed `model_init_kwargs` to the `DistillationConfig`, but your model is already "
@@ -459,6 +460,7 @@ class DistillationTrainer(_BaseTrainer):
         if processing_class is None:
             processing_class = AutoProcessor.from_pretrained(
                 model_name_or_path,
+                revision=model_revision,
                 truncation_side="left",
                 padding_side="left",
                 trust_remote_code=args.trust_remote_code,
@@ -476,6 +478,11 @@ class DistillationTrainer(_BaseTrainer):
 
         if self._tokenizer.pad_token is None:
             self._tokenizer.pad_token = self._tokenizer.eos_token
+
+        # Mirror the pad token onto the model configs: `Trainer` runs the same alignment at train time, so the end
+        # state is unchanged, but the model stays consistent with the tokenizer from the moment it is built.
+        model.config.pad_token_id = self._tokenizer.pad_token_id
+        model.generation_config.pad_token_id = self._tokenizer.pad_token_id
 
         # Resolve vision placeholder token IDs once. Used by the forward pass to rebuild mm_token_type_ids
         # when tool responses inject images into the completion (see _generate forward_kwargs block).
@@ -568,14 +575,8 @@ class DistillationTrainer(_BaseTrainer):
             # - See:
             #   - TRL issue: https://github.com/huggingface/trl/issues/6089
             #   - Upstream issue: https://github.com/deepspeedai/DeepSpeed/issues/8072
-            # - autocast_adapter_dtype was introduced in PEFT 0.12.0; before, no upcast existed: no need to pass the kwarg
             get_peft_model_kwargs = {}
-            if (
-                args.deepspeed_plugin is not None
-                and args.deepspeed_plugin.zero_stage == 3
-                and not _is_quantized_model
-                and Version(peft.__version__) >= Version("0.12.0")
-            ):
+            if args.deepspeed_plugin is not None and args.deepspeed_plugin.zero_stage == 3 and not _is_quantized_model:
                 get_peft_model_kwargs["autocast_adapter_dtype"] = False
             model = get_peft_model(model, peft_config, **get_peft_model_kwargs)
 
@@ -810,8 +811,8 @@ class DistillationTrainer(_BaseTrainer):
         if self.use_vllm:
             if not is_vllm_available():
                 raise ImportError(
-                    "vLLM is not available and use_vllm is set to True. Please install vLLM with "
-                    "`pip install vllm` to use it."
+                    "vLLM is not available and `use_vllm` is set to True. Please install vLLM with "
+                    "`pip install trl[vllm]` to use it."
                 )
             self.vllm_generation = VLLMGeneration(
                 model=self.model,
@@ -1726,7 +1727,7 @@ class DistillationTrainer(_BaseTrainer):
                     forward_kwargs["mm_token_type_ids"] = mm_ids
                     num_images = None
 
-        # Log the prompt and completion texts
+        # Log prompt and completion texts
         if self.log_completions:
             prompts_text = self.processing_class.batch_decode(prompt_ids, skip_special_tokens=True)
             completions_text = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
