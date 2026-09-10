@@ -42,6 +42,49 @@ The number of concurrent requests sent to the vLLM server is controlled by `max_
 
 **Checkpoint and resume**: `ignore_data_skip` defaults to `True`; the base Trainer's skip-and-replay loop does not apply to a live rollout queue. Instead, the index of the first prompt not yet trained on is saved to `rollout_state.json` alongside each checkpoint and restored on resume, so the worker fast-forwards to that prompt without replaying samples. It is the *trained* position, not the generator's: the worker runs ahead of training by the rollout queue depth, and those buffered samples are lost when the run ends, so resuming from the generator's position would skip prompts that were generated but never trained on. Streaming datasets (`IterableDataset`) cannot be repositioned; their worker restarts from prompt 0 on resume.
 
+## External training compute
+
+In addition to making rollout generation and weight transfer pluggable, [`AsyncGRPOTrainer`] accepts a
+`training_client` implementing [`TrainingClientProtocol`]. The client owns the model forward and backward compute,
+while the trainer continues to own the GRPO objective, advantages, masks, and metrics. If no client is provided,
+[`LocalTrainingClient`] runs the model in the trainer process and preserves the default behavior.
+
+The trainer passes the packed token row, position IDs, completion mask, and its loss as a Python callable to
+`training_client.forward_backward(...)`. An off-process implementation can score the tokens remotely, evaluate the
+callable in the trainer process, and send `d(loss) / d(log_probs)` back to the service. The service can then apply the
+equivalent first-order surrogate to its model. The callable itself is not a wire format: transport, serialization, and
+remote lifecycle are the responsibility of the backend adapter.
+
+A mixture-of-experts router loss is the one term that surrogate does not carry, because it is produced by the model
+rather than from its log probs. It stays with the backend, which adds `aux_loss_coef * aux_loss` to the objective it
+back-propagates and reports the same total back. For an off-process backend that means adding it to the remote
+backward, alongside the log-prob surrogate: adding it only to the returned scalar would report the term while dropping
+the router's gradients.
+
+The training client is independent of the other two extension points:
+
+| Extension point | Responsibility |
+|---|---|
+| `rollout_worker` | Generate and score rollouts |
+| `weight_transfer` | Synchronize the trained policy with the rollout engine |
+| `training_client` | Run policy forward and backward compute |
+
+A backend that owns the training parameters must also provide a compatible optimizer through the existing
+`optimizers=` argument. The backend remains responsible for applying the effective learning rate, gradient clipping,
+and its optimizer state correctly.
+
+> [!IMPORTANT]
+> This is an experimental Python extension point for [`AsyncGRPOTrainer`], not a standardized HTTP training API. The
+> trainer still loads and prepares its local model, and every Accelerate rank invokes its own `training_client`.
+> Backend implementations must support that rank topology or reject unsupported configurations before training.
+> Remote optimizer checkpointing and propagation of remotely skipped optimizer steps are not provided by this API.
+
+TRL does not bundle vendor clients or add their dependencies. The first external proof-of-concept is the
+[Arctic Platform adapter](https://github.com/Snowflake-AI-Research/Arctic-Platform/pull/84), which is maintained in
+Arctic Platform and targets the API proposed in
+[TRL PR #6676](https://github.com/huggingface/trl/pull/6676). Follow the backend's documentation for installation,
+configuration, supported rank topology, and optimizer/checkpoint limitations.
+
 ## Quick start
 
 ```python
@@ -295,3 +338,15 @@ The gap between them is `perf/rollout_wait_s` plus the optimizer and weight-sync
 ## RolloutWorkerProtocol
 
 [[autodoc]] trl.experimental.async_grpo.async_grpo_trainer.RolloutWorkerProtocol
+
+## TrainingClientProtocol
+
+[[autodoc]] trl.experimental.api.TrainingClientProtocol
+
+## ForwardBackwardOutput
+
+[[autodoc]] trl.experimental.api.ForwardBackwardOutput
+
+## LocalTrainingClient
+
+[[autodoc]] trl.experimental.api.LocalTrainingClient
