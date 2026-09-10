@@ -38,6 +38,7 @@ from accelerate.logging import get_logger
 from datasets import IterableDataset
 from huggingface_hub import ModelCard, ModelCardData
 from packaging.version import Version
+from torch.distributed.tensor import DTensor
 from torch.utils.data import Sampler
 from transformers import (
     AutoConfig,
@@ -1434,7 +1435,9 @@ class _ChunkedLogProbFunction(torch.autograd.Function):
             for start in range(0, vocab, chunk_size):
                 end = min(start + chunk_size, vocab)
                 C = end - start
-                w_chunk = weight[start:end]  # [C, H]
+                # Same cast as the forward: under mixed precision `hidden` is bf16 while `weight` keeps the fp32
+                # parameter dtype, and `torch.mm` rejects the mix.
+                w_chunk = weight[start:end].to(hidden.dtype)  # [C, H]
 
                 torch.mm(hidden, w_chunk.t(), out=mm_buf[:, :C])
                 if bias is not None:
@@ -1530,10 +1533,21 @@ def patch_chunked_lm_head(
             hidden_flat = hidden_flat[valid_mask]  # [N_valid, H]
             targets_flat = targets_flat[valid_mask]  # [N_valid]
 
+        # This function reads `lm_head.weight` instead of calling the module, so it never fires the pre-forward
+        # hook that unshards the head's FSDP2 group. Without PEFT the group unshards anyway, via the final norm that
+        # shares it; with PEFT accelerate fails to find that norm through the wrapper, and the weight arrives as a
+        # sharded `DTensor` that `torch.mm` rejects. Keyed off the tensor type, so it stops firing once accelerate's
+        # lookup handles PEFT. `full_tensor` is differentiable.
+        lm_head_weight, lm_head_bias = self.lm_head.weight, self.lm_head.bias
+        if isinstance(lm_head_weight, DTensor):
+            lm_head_weight = lm_head_weight.full_tensor()
+        if isinstance(lm_head_bias, DTensor):
+            lm_head_bias = lm_head_bias.full_tensor()
+
         logprobs_valid, entropy_valid = _ChunkedLogProbFunction.apply(
             hidden_flat,
-            self.lm_head.weight,
-            self.lm_head.bias,
+            lm_head_weight,
+            lm_head_bias,
             targets_flat,
             temperature,
             chunk_size,
