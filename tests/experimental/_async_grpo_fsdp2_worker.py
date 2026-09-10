@@ -1,0 +1,220 @@
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Companion worker launched under ``accelerate launch --config_file <fsdp2>`` by the FSDP2 case in
+``test_async_grpo_trainer.py``.
+
+It runs a couple of :class:`AsyncGRPOTrainer` steps on an FSDP2-sharded model, driven by an in-process stub rollout
+worker (no vLLM server, no NCCL weight transfer), and checks that training actually progresses under FSDP2: the loss is
+finite and the parameters change. It then prints one machine-parseable result line (``ASYNC_GRPO_FSDP2_RESULT {json}``)
+that the pytest side asserts on.
+
+This is a *functional* FSDP2 smoke, not a #6077 all-gather microbenchmark.
+
+Self-contained on purpose (mirrors ``tests/experimental/_openreward_echo_env.py``): it imports only public TRL symbols
+and carries its own stub, so it never imports pytest-internal classes across the subprocess boundary.
+"""
+
+from __future__ import annotations
+
+import itertools
+import json
+import os
+import queue
+
+import numpy as np
+import torch
+from datasets import load_dataset
+from transformers import AutoTokenizer
+
+from trl.experimental.async_grpo import AsyncGRPOConfig, AsyncGRPOTrainer
+from trl.experimental.async_grpo.async_rollout_worker import RolloutSample
+
+
+# The trainer loads the model with Flash Attention, which requires a `head_size` multiple of 8. Hence the `small-*`
+# model (`head_size=32`) below, rather than the usual `tiny-*` one (`head_size=2`).
+MODEL_ID = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
+RESULT_PREFIX = "ASYNC_GRPO_FSDP2_RESULT"
+# Reported alongside the measured step count so the launcher can require the whole loop to have run.
+_MAX_STEPS = 2
+
+
+def dummy_reward_func(completions, **kwargs):
+    # Mirrors tests/experimental/test_async_grpo_trainer.py: the stub pre-computes rewards, so this is
+    # only here to satisfy the trainer's required `reward_funcs` argument.
+    return [float(hash(c[0]["content"]) % 100) / 100.0 for c in completions]
+
+
+class _StubRolloutWorker:
+    """Minimal in-process rollout worker — same shape as the one in test_async_grpo_trainer.py.
+
+    Reproduced here (rather than imported) because this module runs as ``__main__`` under ``accelerate launch``, not as
+    a pytest module, so importing the test class would be fragile. Keeping it self-contained matches the openreward
+    companion-script precedent.
+    """
+
+    def __init__(self, tokenizer, dataset, num_generations: int = 3, samples_per_weight_sync: int = 10):
+        self.rollout_buffer = queue.Queue()
+        self.metrics_queue = queue.Queue()  # drained by the trainer in `log()`; this stub measures nothing
+        self._samples_per_weight_sync = samples_per_weight_sync
+        self._model_version = 0
+        self._sample_iter = self._make_sample_iter(tokenizer, dataset, num_generations)
+
+    def _make_sample_iter(self, tokenizer, dataset, num_generations):
+        for group_id, row in enumerate(itertools.cycle(dataset)):
+            completions = [
+                [{"role": "assistant", "content": f"{row['completion'][0]['content']} {idx}"}]
+                for idx in range(num_generations)
+            ]
+            prompt_completions = [row["prompt"] + completion for completion in completions]
+            prompt_ids = tokenizer.apply_chat_template(
+                row["prompt"], tokenize=True, add_generation_prompt=True, return_dict=False
+            )
+            prompt_completion_ids = tokenizer.apply_chat_template(
+                prompt_completions, tokenize=True, add_generation_prompt=False, return_dict=False
+            )
+            # Distinct rewards by construction. Hash-derived rewards can collide within a group under a randomized
+            # PYTHONHASHSEED, which makes `rewards.std()` zero and the advantages NaN, so a run would fail for a reason
+            # unrelated to FSDP2.
+            rewards = np.linspace(0.0, 1.0, num_generations)
+            advantages = (rewards - rewards.mean()) / rewards.std()
+            for idx in range(num_generations):
+                completion_ids = prompt_completion_ids[idx][len(prompt_ids) :]
+                yield RolloutSample(
+                    prompt=row["prompt"],
+                    completion=completions[idx],
+                    input_ids=prompt_ids + completion_ids,
+                    completion_mask=[0] * len(prompt_ids) + [1] * len(completion_ids),
+                    old_log_probs=[0.0] * len(prompt_ids) + [-0.5] * len(completion_ids),
+                    advantage=float(advantages[idx]),
+                    model_version=self._model_version,
+                    group_id=group_id,  # every completion of one prompt belongs to the same group
+                    metrics={"reward": float(rewards[idx]), "reward_std": float(rewards.std())},
+                )
+
+    def _fill_queue(self):
+        for _ in range(self._samples_per_weight_sync):
+            self.rollout_buffer.put(next(self._sample_iter))
+
+    def start(self):
+        self._fill_queue()
+
+    def update_model_version(self, version):
+        self._model_version = version
+        self._fill_queue()
+
+    def stop(self):
+        pass
+
+    def check_health(self, stale_after_s):
+        pass
+
+
+class _NoOpWeightTransfer:
+    """No-op `WeightTransferProtocol`, so the smoke exercises only the FSDP2 parameter lifecycle.
+
+    Without it `AsyncGRPOTrainer` builds the default `WeightTransferClient`, which needs a live vLLM server to stream
+    weights into over NCCL.
+    """
+
+    def init_weight_transfer(self) -> None: ...
+
+    def pause(self) -> None: ...
+
+    def send_weights(self, iterator) -> None:
+        # Drain the iterator so the trainer's weight-gathering path still runs end to end.
+        for _ in iterator:
+            pass
+
+    def resume(self) -> None: ...
+
+    def destroy(self) -> None: ...
+
+
+def main() -> None:
+    dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
+    tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
+
+    # Same minimal, memory-frugal config as the existing single-process test_train, with 2 steps so we
+    # exercise the optimizer loop more than once under FSDP2.
+    args = AsyncGRPOConfig(
+        # The launcher runs this worker with `cwd` at the repo root, so a relative `output_dir` would drop trainer
+        # artifacts into the working tree. The test owns a temporary directory and passes it in.
+        output_dir=os.environ["ASYNC_GRPO_FSDP2_OUTPUT_DIR"],
+        learning_rate=0.1,
+        per_device_train_batch_size=3,
+        num_generations=3,
+        max_completion_length=8,
+        # 0 selects the count-based FixedCountBatcher and, being non-None, still skips the vLLM
+        # max_model_len lookup. A positive budget starves here: the stub's samples are short enough
+        # that 2 rank-rows never fill, so TokenBudgetBatcher would never emit a micro-batch.
+        token_budget=0,
+        max_steps=_MAX_STEPS,
+        vllm_server_timeout=5.0,
+        report_to="none",
+    )
+    trainer = AsyncGRPOTrainer(
+        model=MODEL_ID,
+        reward_funcs=dummy_reward_func,
+        args=args,
+        train_dataset=dataset,
+        # 24 = 4 x microbatch_size (per_device_train_batch_size 3 x 2 ranks); max_steps=2 needs 2,
+        # so the initial fill covers the whole run without relying on a weight-sync refill.
+        rollout_worker=_StubRolloutWorker(tokenizer, dataset, num_generations=3, samples_per_weight_sync=24),
+        weight_transfer=_NoOpWeightTransfer(),
+    )
+
+    # Snapshot params before training so we can confirm FSDP2 training actually updated them.
+    before = {n: p.detach().clone() for n, p in trainer.model.named_parameters()}
+
+    trainer.train()
+
+    # Did any parameter change? Materialize DTensors (full_tensor) and move both operands to CPU before
+    # comparing: the `before` snapshot is captured at construction (pre-FSDP-wrap, plain tensor) while the
+    # post-train param is an FSDP2 DTensor on CUDA, so a direct torch.equal would raise a device mismatch.
+    def _materialize(t):
+        t = t.full_tensor() if isinstance(t, torch.distributed.tensor.DTensor) else t
+        return t.detach().cpu()
+
+    # Compare every parameter on every rank before deciding: `_materialize` calls the collective
+    # `full_tensor()`, so breaking early would leave the ranks issuing different numbers of collectives and
+    # rank 0 would hang instead of reporting `params_changed: false`. A list comprehension is deliberate,
+    # since `any()` over a generator short-circuits the same way `break` does. Only rank 0's verdict is
+    # asserted: with `fsdp_cpu_ram_efficient_loading`, the pre-wrap snapshot on other ranks holds
+    # placeholders rather than the loaded weights.
+    diffs = [not torch.equal(_materialize(before[n]), _materialize(p)) for n, p in trainer.model.named_parameters()]
+    changed = any(diffs)
+
+    last = trainer.state.log_history[-1] if trainer.state.log_history else {}
+    train_loss = last.get("train_loss")
+    # The pytest side asserts on the launch shape too: a replicated single-process run would also change the
+    # parameters and report a finite loss, so world size, the distributed type and sharded parameters are reported.
+    accelerator = trainer.accelerator
+    result = {
+        "steps": trainer.state.global_step,
+        "max_steps": _MAX_STEPS,
+        "params_changed": changed,
+        "train_loss_finite": train_loss is not None and bool(np.isfinite(train_loss)),
+        "num_processes": accelerator.num_processes,
+        "distributed_type": accelerator.distributed_type.value,
+        "fsdp_version": accelerator.state.fsdp_plugin.fsdp_version if accelerator.state.fsdp_plugin else None,
+        "sharded_params": sum(isinstance(p, torch.distributed.tensor.DTensor) for p in trainer.model.parameters()),
+    }
+    # Only rank 0 prints the asserted line, so the pytest side parses exactly one result.
+    if trainer.accelerator.is_main_process:
+        print(f"{RESULT_PREFIX} {json.dumps(result)}", flush=True)  # noqa: T201 - result channel for the launcher
+
+
+if __name__ == "__main__":
+    main()
