@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import accelerate
 import torch
 import torch.nn as nn
 import transformers
@@ -57,7 +58,6 @@ from .utils import create_model_from_path, disable_dropout_in_model, get_config_
 
 
 if is_peft_available():
-    import peft
     from peft import PeftConfig, PeftModel, get_peft_model
 
 
@@ -388,9 +388,11 @@ class RewardTrainer(_BaseTrainer):
                 model_init_kwargs["device_map"] = None
             model_init_kwargs["num_labels"] = 1  # the only output of the model is the reward score
             model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
+            model_revision = model_init_kwargs.get("revision")
             with suppress_seqcls_warning():
                 model = create_model_from_path(model, AutoModelForSequenceClassification, **model_init_kwargs)
         else:
+            model_revision = None
             if args.model_init_kwargs is not None:
                 logger.warning(
                     "You passed `model_init_kwargs` to the `RewardConfig`, but your model is already instantiated. "
@@ -414,7 +416,7 @@ class RewardTrainer(_BaseTrainer):
         # Processing class
         if processing_class is None:
             processing_class = AutoTokenizer.from_pretrained(
-                get_config_model_id(model.config), trust_remote_code=args.trust_remote_code
+                get_config_model_id(model.config), revision=model_revision, trust_remote_code=args.trust_remote_code
             )
 
         # Handle pad token for processors or tokenizers
@@ -426,6 +428,9 @@ class RewardTrainer(_BaseTrainer):
                     "in the vocabulary before using it as an EOS token."
                 )
             processing_class.eos_token = args.eos_token
+            # The model must agree with the tokenizer on the eos token from construction, so mirror it onto the model
+            # config (a sequence classification model has no generation config).
+            model.config.eos_token_id = processing_class.eos_token_id
 
         if args.chat_template_path is not None:
             if os.path.isfile(args.chat_template_path) and args.chat_template_path.endswith((".jinja", ".j2")):
@@ -489,14 +494,8 @@ class RewardTrainer(_BaseTrainer):
             # - See:
             #   - TRL issue: https://github.com/huggingface/trl/issues/6089
             #   - Upstream issue: https://github.com/deepspeedai/DeepSpeed/issues/8072
-            # - autocast_adapter_dtype was introduced in PEFT 0.12.0; before, no upcast existed: no need to pass the kwarg
             get_peft_model_kwargs = {}
-            if (
-                args.deepspeed_plugin is not None
-                and args.deepspeed_plugin.zero_stage == 3
-                and not _is_quantized_model
-                and Version(peft.__version__) >= Version("0.12.0")
-            ):
+            if args.deepspeed_plugin is not None and args.deepspeed_plugin.zero_stage == 3 and not _is_quantized_model:
                 get_peft_model_kwargs["autocast_adapter_dtype"] = False
             model = get_peft_model(model, peft_config, **get_peft_model_kwargs)
 
@@ -604,6 +603,14 @@ class RewardTrainer(_BaseTrainer):
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
         self._total_train_tokens = 0
+
+        # Tensor parallel ranks are given the same batch, so a token count gathered across all processes repeats
+        # every token once per rank in the group. Context and sequence parallelism shard the batch before the loss is
+        # computed, so they need no such correction. `parallelism_config` requires accelerate 1.12.0.
+        if Version(accelerate.__version__) >= Version("1.12.0") and self.accelerator.parallelism_config is not None:
+            self._tp_size = self.accelerator.parallelism_config.tp_size
+        else:
+            self._tp_size = 1
 
         # Gradient accumulation requires scaled loss. Normally, loss scaling in the parent class depends on whether the
         # model accepts loss-related kwargs. Since we compute our own loss, this check is irrelevant. We set
@@ -763,7 +770,7 @@ class RewardTrainer(_BaseTrainer):
 
         if mode == "train":
             num_tokens_in_batch = self.accelerator.gather_for_metrics(inputs["attention_mask"].sum()).sum().item()
-            self._total_train_tokens += num_tokens_in_batch
+            self._total_train_tokens += num_tokens_in_batch // self._tp_size
         self._metrics[mode]["num_tokens"] = [self._total_train_tokens]
 
         # Compute min, mean, max, accuracy and margin

@@ -1014,3 +1014,19 @@ class TestRewardTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    def test_eos_token_id_synced_with_model_config(self):
+        # The trainer sets the requested eos token on the tokenizer. The model config must follow: otherwise
+        # `Trainer` realigns it at train time and reports it as a change the user did not make.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_implicit_prompt_preference", split="train")
+
+        training_args = RewardConfig(output_dir=self.tmp_dir, eos_token="<|im_start|>", report_to="none")
+        trainer = RewardTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        eos_token_id = trainer.processing_class.eos_token_id
+        assert eos_token_id == 151644  # <|im_start|>
+        assert trainer.model.config.eos_token_id == eos_token_id

@@ -70,7 +70,7 @@ class ScriptArguments:
         log_level (`str`, *optional*, defaults to `"info"`):
             Log level for uvicorn. Possible choices: `"critical"`, `"error"`, `"warning"`, `"info"`, `"debug"`,
             `"trace"`.
-        distributed_executor_backend (`str` or `None`, *optional*):
+        distributed_executor_backend (`str`, *optional*):
             Distributed executor backend for vLLM. Set to `"ray"` to distribute tensor parallel workers across multiple
             nodes via a Ray cluster. Required when `tensor_parallel_size` exceeds the number of local GPUs. If not set,
             vLLM defaults to the multiproc backend (single-node only).
