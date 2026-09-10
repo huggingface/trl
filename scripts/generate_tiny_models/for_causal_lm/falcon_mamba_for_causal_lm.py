@@ -27,7 +27,7 @@ from .._common import (
 
 check_transformers_version()
 
-MODEL_ID = "tiiuae/falcon-7b-instruct"
+MODEL_ID = "tiiuae/falcon-mamba-7b-instruct"
 
 tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
 generation_config = GenerationConfig.from_pretrained(MODEL_ID)
