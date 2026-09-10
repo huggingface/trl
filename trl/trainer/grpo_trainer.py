@@ -3042,10 +3042,7 @@ class GRPOTrainer(_BaseTrainer):
         mask = completion_mask if "tool_mask" not in inputs else completion_mask * inputs["tool_mask"]
 
         # Compute the per_token_logps and the entropy at each position in the completion
-        # `compute_loss` already redirected `model` through the distributed wrapper before calling us, so call the
-        # implementation directly instead of `_get_per_token_logps_and_entropies`, which would try to redirect again
-        # on an already-unwrapped model.
-        per_token_logps, entropies, aux_loss = self._get_per_token_logps_and_entropies_impl(
+        per_token_logps, entropies, aux_loss = self._get_per_token_logps_and_entropies(
             model,
             input_ids,
             attention_mask,
