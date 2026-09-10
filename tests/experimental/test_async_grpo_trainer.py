@@ -487,7 +487,7 @@ class TestRolloutStateCheckpoint(TrlTestCase):
         dataset = Dataset.from_dict({"prompt": [f"row_{i}" for i in range(10)]})
         loop = self._make_rollout_loop(dataset, dataset_start_index=3)
         it = loop._repeat_iterator()
-        _group_id, row = next(it)
+        _group_id, _index, row = next(it)
         assert row["prompt"] == "row_3"
 
     def test_inner_training_loop_sets_dataset_start_index_from_file(self):
@@ -1188,3 +1188,118 @@ class TestEpochStop(TrlTestCase):
         # steps for the same 2 epochs. If forks leaked into the epoch count, the forked run would instead
         # stop in FEWER prompt-passes (the pre-fix bug).
         assert forked.state.global_step > no_fork.state.global_step
+
+
+def _strict_reward(completions, answer, **kwargs):
+    return [1.0 for _ in zip(completions, answer, strict=True)]
+
+
+_ROLLOUT = (
+    [{"role": "assistant", "content": "c"}],
+    [1, 2],
+    [TrainingSequence([1, 2], [0, 1], [0.0, -0.1], "r")],
+    0,
+    0,
+    None,
+)
+
+
+class TestGenerateLoop(TrlTestCase):
+    def _loop(self, num_generations, max_inflight_tasks, max_staleness=4):
+        PartialState()
+        with patch("trl.experimental.async_grpo.async_rollout_worker.add_response_schema", side_effect=lambda x: x):
+            return _AsyncRolloutLoop(
+                model_name="test",
+                dataset=Dataset.from_dict({"prompt": [f"q{i}" for i in range(8)]}),
+                reward_funcs=[dummy_reward_func],
+                processing_class=MagicMock(),
+                rollout_buffer=queue.Queue(),
+                metrics_queue=queue.Queue(),
+                model_version_value=mp.Value("i", 0),
+                heartbeat_value=mp.Value("d", 0.0),
+                failed_event=mp.Event(),
+                exception_info_queue=queue.Queue(),
+                num_generations=num_generations,
+                max_inflight_tasks=max_inflight_tasks,
+                max_staleness=max_staleness,
+            )
+
+    async def _groups(self, loop, generate_one, n, bump_version_to=None):
+        """Run the generate loop until `n` groups reach the score queue."""
+        loop._generate_one = generate_one
+        stop = asyncio.Event()
+        task = asyncio.create_task(loop._generate_loop(stop))
+        if bump_version_to is not None:
+            await asyncio.sleep(0.1)
+            loop._model_version_value.value = bump_version_to
+        groups = [await asyncio.wait_for(loop._groups_to_score.get(), 5) for _ in range(n)]
+        stop.set()
+        await task
+        return groups
+
+    def test_failed_rollout_is_dropped_and_the_group_scored_with_the_rest(self):
+        loop = self._loop(num_generations=4, max_inflight_tasks=4)
+        calls = itertools.count()
+
+        async def generate_one(prompt, tool_dict, tools, group_id):
+            if next(calls) == 1:
+                raise RuntimeError("boom")
+            return _ROLLOUT
+
+        (group,) = asyncio.run(self._groups(loop, generate_one, 1))
+        assert group.group_id == 0
+        assert len(group.completions) == 3
+
+    def test_group_with_a_single_surviving_rollout_is_dropped(self):
+        loop = self._loop(num_generations=3, max_inflight_tasks=3)
+        calls = itertools.count()
+
+        async def generate_one(prompt, tool_dict, tools, group_id):
+            if next(calls) < 2:
+                raise RuntimeError("boom")
+            return _ROLLOUT
+
+        (group,) = asyncio.run(self._groups(loop, generate_one, 1))
+        assert group.group_id == 1
+
+    def test_group_where_every_rollout_fails_raises(self):
+        loop = self._loop(num_generations=2, max_inflight_tasks=2)
+
+        async def generate_one(prompt, tool_dict, tools, group_id):
+            raise RuntimeError("boom")
+
+        loop._generate_one = generate_one
+        with pytest.raises(RuntimeError, match="boom"):
+            asyncio.run(asyncio.wait_for(loop._generate_loop(asyncio.Event()), 5))
+
+    def test_stale_in_flight_groups_are_cancelled_when_the_policy_advances(self):
+        loop = self._loop(num_generations=2, max_inflight_tasks=4, max_staleness=1)
+
+        async def generate_one(prompt, tool_dict, tools, group_id):
+            if loop.model_version == 0:
+                await asyncio.Event().wait()
+            return _ROLLOUT
+
+        groups = asyncio.run(self._groups(loop, generate_one, 2, bump_version_to=2))
+        assert [g.group_id for g in groups] == [2, 3]
+        assert [g.model_version for g in groups] == [2, 2]
+
+    def test_partially_dispatched_stale_group_is_regenerated_as_a_smaller_group(self):
+        loop = self._loop(num_generations=4, max_inflight_tasks=2, max_staleness=0)
+
+        async def generate_one(prompt, tool_dict, tools, group_id):
+            if loop.model_version == 0:
+                await asyncio.Event().wait()
+            return _ROLLOUT
+
+        (group,) = asyncio.run(self._groups(loop, generate_one, 1, bump_version_to=1))
+        assert group.group_id == 0
+        assert len(group.completions) == 2
+        assert group.model_version == 1
+
+    def test_reward_kwargs_are_trimmed_to_the_surviving_rollouts(self):
+        PartialState()
+        group = _group([[_ROLLOUT[2][0]]] * 3, [[1, 2]] * 3)
+        group.reward_kwargs = {"answer": ["a"] * 4}
+        samples = asyncio.run(_bare_loop([_strict_reward])._score_group(group))
+        assert len(samples) == 3

@@ -314,6 +314,7 @@ class _AsyncRolloutLoop:
         score_queue_maxsize: int = 16,
         vllm_server_url: str = "http://localhost:8000",
         max_tokens: int = 32,
+        max_staleness: int = 4,
         temperature: float = 1.0,
         top_p: float = 1.0,
         top_k: int = 0,
@@ -367,6 +368,7 @@ class _AsyncRolloutLoop:
         self.max_inflight_tasks = max_inflight_tasks
         self.queue_maxsize = queue_maxsize
         self.max_tokens = max_tokens
+        self.max_staleness = max_staleness
         self.temperature = temperature
         self.top_p = top_p
         self.top_k = top_k
@@ -504,14 +506,38 @@ class _AsyncRolloutLoop:
         inflight_tasks: dict[asyncio.Task, tuple[int, int, Any, object, Messages]] = {}
         free_slots = set(range(self.max_inflight_tasks))
         work_iter = self._repeat_iterator()
+        last_version = self.model_version
 
         self._generation_start_time = time.monotonic()
         try:
             while True:
                 # Wall-clock for cross-process comparison; parent uses time.time() in check_health.
                 self._heartbeat_value.value = time.time()
+
+                version = self.model_version
+                if version != last_version:
+                    last_version = version
+                    stale = {
+                        group_id
+                        for group_id, group in pending_groups.items()
+                        if version - group.model_version > self.max_staleness
+                    }
+                    for task, (group_id, slot, name, environment, _prompt) in list(inflight_tasks.items()):
+                        if group_id in stale:
+                            task.cancel()
+                            del inflight_tasks[task]
+                            free_slots.add(slot)
+                            if environment is not None:
+                                self._environment_pool[name].append(environment)
+                    for group_id in stale:
+                        del pending_groups[group_id]
+                        del pending_completed[group_id]
+                    if stale:
+                        self._counters["rollout/stale_groups_total"] += len(stale)
+                        logger.info(f"[generate] cancelled {len(stale)} stale group(s) at version {version}")
+
                 while free_slots and not stop_event.is_set():
-                    group_id, row = next(work_iter)
+                    group_id, index, row = next(work_iter)
                     slot = free_slots.pop()
                     # The environment is selected per example via its `environment` field (multi-env); only its tools
                     # are exposed in the example's prompt. When there are no environments, every example shares the
@@ -587,7 +613,7 @@ class _AsyncRolloutLoop:
                             env_rewards=[],
                             rollout_rewards=[],
                         )
-                        pending_completed[group_id] = 0
+                        pending_completed[group_id] = index
 
                     task = asyncio.create_task(
                         self._generate_one(prompt, tool_dict=tool_dict, tools=tools, group_id=group_id)
@@ -608,45 +634,58 @@ class _AsyncRolloutLoop:
                 for task in done:
                     group_id, slot, name, environment, prompt = inflight_tasks.pop(task)
                     free_slots.add(slot)
-                    if task.exception() is not None:
-                        raise task.exception()
-
-                    (
-                        completion,
-                        completion_ids,
-                        sequences,
-                        tool_call_count,
-                        tool_failure_count,
-                        rollout_reward,
-                    ) = task.result()
                     group = pending_groups[group_id]
-                    group.prompts.append(prompt)
-                    group.completions.append(completion)
-                    group.completions_ids.append(completion_ids)
-                    group.completions_sequences.append(sequences)
-                    group.tool_call_counts.append(tool_call_count)
-                    group.tool_failure_counts.append(tool_failure_count)
-                    group.rollout_rewards.append(rollout_reward)
-                    # The environment owns the reward: score it now, while this rollout's environment still holds its
-                    # final state and before returning it to the pool. `get_reward` may be async awaiting yields to
-                    # inflight requests instead of halting them. The env is returned to the pool only after scoring, so
-                    # a concurrent rollout can't draw and reset it during the await. Record `(env class, reward)` so
-                    # `_score_group` can place it in the matching env's reward column; rollouts whose env owns no reward
-                    # record `None` (turned into NaN and ignored) to stay aligned with the group's other per-rollout lists.
-                    if self._env_reward_types:
-                        env_type = type(environment)
-                        if env_type in self._env_reward_types:
-                            get_reward = environment.get_reward
-                            reward = await get_reward() if inspect.iscoroutinefunction(get_reward) else get_reward()
-                            group.env_rewards.append((env_type, reward))
-                        else:
-                            group.env_rewards.append(None)
+                    error = task.exception()
+                    if error is not None:
+                        logger.warning(f"[generate] rollout failed for group {group_id}, dropping it", exc_info=error)
+                        self._counters["rollout/failed_total"] += 1
+                    else:
+                        (
+                            completion,
+                            completion_ids,
+                            sequences,
+                            tool_call_count,
+                            tool_failure_count,
+                            rollout_reward,
+                        ) = task.result()
+                        group.prompts.append(prompt)
+                        group.completions.append(completion)
+                        group.completions_ids.append(completion_ids)
+                        group.completions_sequences.append(sequences)
+                        group.tool_call_counts.append(tool_call_count)
+                        group.tool_failure_counts.append(tool_failure_count)
+                        group.rollout_rewards.append(rollout_reward)
+                        # The environment owns the reward: score it now, while this rollout's environment still holds
+                        # its final state and before returning it to the pool. `get_reward` may be async awaiting
+                        # yields to inflight requests instead of halting them. The env is returned to the pool only
+                        # after scoring, so a concurrent rollout can't draw and reset it during the await. Record
+                        # `(env class, reward)` so `_score_group` can place it in the matching env's reward column;
+                        # rollouts whose env owns no reward record `None` (turned into NaN and ignored) to stay aligned
+                        # with the group's other per-rollout lists.
+                        if self._env_reward_types:
+                            env_type = type(environment)
+                            if env_type in self._env_reward_types:
+                                get_reward = environment.get_reward
+                                reward = (
+                                    await get_reward() if inspect.iscoroutinefunction(get_reward) else get_reward()
+                                )
+                                group.env_rewards.append((env_type, reward))
+                            else:
+                                group.env_rewards.append(None)
+                        self._total_completion_tokens += len(completion_ids)
                     if environment is not None:
                         self._environment_pool[name].append(environment)
-                    self._total_completion_tokens += len(completion_ids)
                     pending_completed[group_id] += 1
 
                     if pending_completed[group_id] == self.num_generations:
+                        del pending_groups[group_id]
+                        del pending_completed[group_id]
+                        if not group.completions:
+                            raise error
+                        if len(group.completions) < 2:
+                            logger.warning(f"[generate] dropping group {group_id}: a single rollout succeeded")
+                            self._counters["rollout/dropped_groups_total"] += 1
+                            continue
                         group.queued_at = time.monotonic()
                         t_blocked = None
                         while True:
@@ -662,8 +701,6 @@ class _AsyncRolloutLoop:
                         if t_blocked is not None:
                             # Generation held back by scoring
                             self._push_metrics({"rollout/score_block_s": time.monotonic() - t_blocked})
-                        del pending_groups[group_id]
-                        del pending_completed[group_id]
         finally:
             for task in inflight_tasks:
                 task.cancel()
@@ -828,7 +865,7 @@ class _AsyncRolloutLoop:
             }
         )
 
-    def _repeat_iterator(self) -> Iterator[tuple[int, dict[str, Any]]]:
+    def _repeat_iterator(self) -> Iterator[tuple[int, int, dict[str, Any]]]:
         group_id = 0
         while True:
             try:
@@ -836,8 +873,8 @@ class _AsyncRolloutLoop:
             except StopIteration:
                 self._dataset_iter = iter(self.dataset)
                 row = next(self._dataset_iter)
-            for _ in range(self.num_generations):
-                yield group_id, row
+            for index in range(self.num_generations):
+                yield group_id, index, row
             group_id += 1
 
     async def _generate_one(
@@ -971,11 +1008,12 @@ class _AsyncRolloutLoop:
         return choice["token_ids"], choice["logprobs"]["token_logprobs"]
 
     async def _score_group(self, group: RolloutGroup) -> list[RolloutSample]:
+        n = len(group.completions)
         kwargs = dict(
             completions=group.completions,
             prompts=group.prompts,
             completion_ids=group.completions_ids,
-            **group.reward_kwargs,
+            **{key: values[:n] for key, values in group.reward_kwargs.items()},
         )
         all_rewards = await asyncio.gather(
             *[
