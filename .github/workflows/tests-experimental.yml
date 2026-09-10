@@ -14,6 +14,10 @@ env:
   PYTORCH_ALLOC_CONF: "expandable_segments:True"
   TRL_EXPERIMENTAL_SILENCE: 1
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
 jobs:
   check_code_quality:
     name: Check code quality
