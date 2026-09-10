@@ -968,7 +968,12 @@ class _AsyncRolloutLoop:
             label="vllm /v1/completions",
         )
         choice = output["choices"][0]
-        return choice["token_ids"], choice["logprobs"]["token_logprobs"]
+        # vLLM can produce a NaN logprob for a token it could not score, and its response model serializes NaN
+        # (and missing steps) as JSON null, so it arrives here as None. Map it back to NaN so downstream tensors
+        # build (`torch.tensor([..., None, ...])` raises "must be real number, not NoneType"); the NaN positions
+        # are given an on-policy fallback in the loss so they train as plain policy gradient.
+        token_logprobs = [float("nan") if lp is None else lp for lp in choice["logprobs"]["token_logprobs"]]
+        return choice["token_ids"], token_logprobs
 
     async def _score_group(self, group: RolloutGroup) -> list[RolloutSample]:
         kwargs = dict(
