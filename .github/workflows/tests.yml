@@ -27,7 +27,7 @@ env:
   PYTORCH_ALLOC_CONF: "expandable_segments:True"
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
 
 jobs:
