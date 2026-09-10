@@ -69,7 +69,7 @@ git tag -a v{major}.{minor}.0 -m 'Adds tag v{major}.{minor}.0 for PyPI'
 git push origin v{major}.{minor}.0
 ```
 
-Pushing the tag triggers the publish workflow, which uploads the package to PyPI. Tag the release commit: do this before the dev bump of step 10.
+Pushing the tag triggers the publish workflow, which uploads the package to PyPI. It refuses to upload unless `VERSION` in the tagged commit is exactly `{major}.{minor}.0`, so tag the release commit: do this before the dev bump of step 10.
 
 ### 8. Create a branch `v{major}.{minor}-release` for future patch releases
 
@@ -159,7 +159,7 @@ git tag -a v{major}.{minor}.{patch} -m 'Adds tag v{major}.{minor}.{patch} for Py
 git push origin v{major}.{minor}.{patch}
 ```
 
-Pushing the tag triggers the publish workflow, which uploads the package to PyPI.
+Pushing the tag triggers the publish workflow, which uploads the package to PyPI. It refuses to upload unless `VERSION` in the tagged commit is exactly `{major}.{minor}.{patch}`.
 
 ### 6. Create a GitHub Release
 
