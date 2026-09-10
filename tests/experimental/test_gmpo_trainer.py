@@ -91,6 +91,24 @@ class TestGMPOTrainer(TrlTestCase):
         else:
             assert trainer.eval_dataset is eval_dataset
 
+    def test_init_fails_with_liger_kernel(self):
+        # Raise before GRPOTrainer.__init__ so the inherited Liger path cannot silently run the GRPO fused loss.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        training_args = GMPOConfig(
+            output_dir=self.tmp_dir,
+            use_liger_kernel=True,
+            report_to="none",
+        )
+
+        with pytest.raises(ValueError, match="not supported with GMPOTrainer"):
+            GMPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
+            )
+
     @pytest.mark.parametrize("config_name", ["standard_prompt_only", "conversational_prompt_only"])
     def test_train_conversational(self, config_name):
         dataset = load_dataset("trl-internal-testing/zen", config_name, split="train")
