@@ -1182,6 +1182,10 @@ def create_model_from_path(
         config = AutoConfig.from_pretrained(
             model_id,
             subfolder=kwargs.get("subfolder", ""),
+            revision=kwargs.get("revision", "main"),
+            cache_dir=kwargs.get("cache_dir"),
+            token=kwargs.get("token"),
+            local_files_only=kwargs.get("local_files_only", False),
             trust_remote_code=kwargs.get("trust_remote_code", False),
         )
         architecture = getattr(transformers, config.architectures[0], None)

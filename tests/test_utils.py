@@ -116,7 +116,7 @@ class TestUseAdapter(TrlTestCase):
         assert torch.equal(output_2, expected_2)
 
 
-class TestCreateModelFromPathSubfolder:
+class TestCreateModelFromPathSubfolder(TrlTestCase):
     @pytest.mark.parametrize("subfolder", ["", "checkpoint"])
     def test_loads_model_and_config_from_same_directory(self, tmp_path, subfolder):
         config = GPT2Config(
@@ -134,6 +134,56 @@ class TestCreateModelFromPathSubfolder:
             expected = model(input_ids).logits
             actual = loaded_model(input_ids).logits
         torch.testing.assert_close(actual, expected)
+
+    @pytest.mark.parametrize("subfolder", ["", "checkpoint"])
+    def test_loads_config_from_requested_cached_revision(self, tmp_path, subfolder):
+        model_id = "trl-offline-tests/tiny-gpt2"
+        revision = "b" * 40
+        snapshot = tmp_path / "models--trl-offline-tests--tiny-gpt2" / "snapshots" / revision
+        config = GPT2Config(
+            vocab_size=32, n_positions=16, n_embd=16, n_layer=1, n_head=2, bos_token_id=0, eos_token_id=1
+        )
+        model = GPT2LMHeadModel(config).eval()
+        model.save_pretrained(snapshot / subfolder)
+
+        # No default-revision snapshot exists, and the cache is outside the user's Hub cache.
+        with patch("huggingface_hub.constants.HF_HUB_OFFLINE", True):
+            loaded_model = create_model_from_path(
+                model_id,
+                revision=revision,
+                cache_dir=str(tmp_path),
+                subfolder=subfolder,
+                local_files_only=True,
+                device_map=None,
+            )
+
+        input_ids = torch.tensor([[1, 2, 3]])
+        with torch.no_grad():
+            expected = model(input_ids).logits
+            actual = loaded_model(input_ids).logits
+        torch.testing.assert_close(actual, expected)
+
+    def test_forwards_config_loading_options_without_model_only_kwargs(self):
+        config = GPT2Config(architectures=["GPT2LMHeadModel"])
+        loading_kwargs = {
+            "subfolder": "checkpoint",
+            "revision": "custom-revision",
+            "cache_dir": "custom-cache",
+            "token": "test-token-not-a-credential",
+            "local_files_only": True,
+            "trust_remote_code": True,
+        }
+        with (
+            patch("trl.trainer.utils.AutoConfig.from_pretrained", return_value=config) as config_loader,
+            patch("transformers.GPT2LMHeadModel.from_pretrained") as model_loader,
+        ):
+            result = create_model_from_path("model-id", **loading_kwargs, device_map=None, attn_implementation="eager")
+
+        config_loader.assert_called_once_with("model-id", **loading_kwargs)
+        model_loader.assert_called_once_with(
+            "model-id", **loading_kwargs, device_map=None, attn_implementation="eager", dtype=torch.float32
+        )
+        assert result is model_loader.return_value
 
 
 class TestPad(TrlTestCase):
