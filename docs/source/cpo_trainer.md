@@ -39,7 +39,7 @@ trainer.train()
 Execute the script using the following command:
 
 ```bash
-accelerate launch train_cpo.py
+torchrun --nproc_per_node 8 train_cpo.py
 ```
 
 ## Expected dataset type

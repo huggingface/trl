@@ -39,7 +39,7 @@ CUDA_VISIBLE_DEVICES=2 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen2.5-0.5B-Instr
     --port 8000 \
     --weight-transfer-config '{"backend":"nccl"}'
 
-CUDA_VISIBLE_DEVICES=3 accelerate launch examples/async_distillation_math/async_distillation_mopd.py
+CUDA_VISIBLE_DEVICES=3 python examples/async_distillation_math/async_distillation_mopd.py
 """
 
 from datasets import concatenate_datasets, load_dataset

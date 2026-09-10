@@ -19,18 +19,30 @@ pip install deepspeed
 
 ## Running Training Scripts with DeepSpeed
 
-No modifications to your training script are required. Simply run it with the DeepSpeed configuration file:
+No modifications to your training script are required. DeepSpeed is enabled through the training arguments, like for any [`~transformers.Trainer`]: set `deepspeed` to the path of a DeepSpeed configuration file, and launch with torchrun.
 
-```bash
-accelerate launch --config_file <ACCELERATE_WITH_DEEPSPEED_CONFIG_FILE.yaml> train.py
+```python
+training_args = SFTConfig(..., deepspeed="<DEEPSPEED_CONFIG_FILE.json>")
 ```
 
-We provide ready-to-use DeepSpeed configuration files in the [`examples/accelerate_configs`](https://github.com/huggingface/trl/tree/main/examples/accelerate_configs) directory. For example, to run training with ZeRO Stage 2, use the following command:
+```bash
+torchrun --nproc_per_node 8 train.py
+```
+
+Scripts that parse their arguments with [`TrlParser`], such as the ones behind the `trl` CLI, take it from the command line:
 
 ```bash
-accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml train.py
+trl sft ... --deepspeed <DEEPSPEED_CONFIG_FILE.json>
 ```
+
+We provide ready-to-use DeepSpeed configuration files in the [`examples/deepspeed_configs`](https://github.com/huggingface/trl/tree/main/examples/deepspeed_configs) directory. For example, to run training with ZeRO Stage 2:
+
+```bash
+trl sft ... --deepspeed examples/deepspeed_configs/zero2.json
+```
+
+Values set to `"auto"` in these files (batch size, gradient accumulation, precision, …) are filled in from the training arguments.
 
 ## Additional Resources
 
-Consult the 🤗 Accelerate [documentation](https://huggingface.co/docs/accelerate/usage_guides/deepspeed) for more information about the DeepSpeed plugin.
+Consult the 🤗 Transformers [DeepSpeed documentation](https://huggingface.co/docs/transformers/deepspeed) for more information about the DeepSpeed integration.

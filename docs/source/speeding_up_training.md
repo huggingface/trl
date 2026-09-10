@@ -70,7 +70,7 @@ You can customize the server configuration by passing additional arguments. For 
 > And GPUs **4-7** for training:
 >
 > ```sh
-> CUDA_VISIBLE_DEVICES=4,5,6,7 accelerate launch train.py
+> CUDA_VISIBLE_DEVICES=4,5,6,7 torchrun --nproc_per_node 4 train.py
 > ```
 
 </hfoption>
@@ -110,7 +110,7 @@ You can customize the server configuration by passing additional arguments. For 
 > And GPUs **4-7** for training:
 >
 > ```sh
-> CUDA_VISIBLE_DEVICES=4,5,6,7 accelerate launch train.py
+> CUDA_VISIBLE_DEVICES=4,5,6,7 torchrun --nproc_per_node 4 train.py
 > ```
 
 </hfoption>

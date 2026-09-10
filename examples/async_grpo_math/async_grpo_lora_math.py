@@ -39,8 +39,7 @@ vllm serve Qwen/Qwen3-8B \
     --weight-transfer-config '{"backend":"nccl"}' \
     --enable-lora --max-lora-rank 32 --max-loras 6
 
-CUDA_VISIBLE_DEVICES=1 accelerate launch --num_processes 1 \
-    examples/async_grpo_math/async_grpo_lora_math.py
+CUDA_VISIBLE_DEVICES=1 python examples/async_grpo_math/async_grpo_lora_math.py
 ```
 """
 

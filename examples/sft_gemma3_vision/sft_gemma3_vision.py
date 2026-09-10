@@ -24,9 +24,8 @@
 """
 Train Gemma 3 on the HuggingFaceH4/llava-instruct-mix-vsft dataset (single-image).
 
-accelerate launch \
-    --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
-    examples/sft_gemma3_vision/sft_gemma3_vision.py \
+torchrun --nproc_per_node 8 examples/sft_gemma3_vision/sft_gemma3_vision.py \
+    --deepspeed examples/deepspeed_configs/zero3.json \
     --dataset_name HuggingFaceH4/llava-instruct-mix-vsft \
     --model_name_or_path google/gemma-3-4b-it \
     --per_device_train_batch_size 1 \
@@ -38,9 +37,8 @@ accelerate launch \
 
 Train Gemma 3 on the FanqingM/MMIU-Benchmark dataset (multi-image).
 
-accelerate launch \
-    --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
-    examples/sft_gemma3_vision/sft_gemma3_vision.py \
+torchrun --nproc_per_node 8 examples/sft_gemma3_vision/sft_gemma3_vision.py \
+    --deepspeed examples/deepspeed_configs/zero3.json \
     --dataset_name FanqingM/MMIU-Benchmark \
     --dataset_train_split test \
     --model_name_or_path google/gemma-3-4b-it \

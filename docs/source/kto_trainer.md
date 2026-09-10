@@ -45,7 +45,7 @@ trainer.train()
 Execute the script using the following command:
 
 ```bash
-accelerate launch train_kto.py
+torchrun --nproc_per_node 8 train_kto.py
 ```
 
 Distributed across 8 x H100 GPUs, the training takes approximately 30 minutes. You can verify the training progress by checking the reward graph. An increasing trend in the reward margin indicates that the model is improving and generating better responses over time.
@@ -252,7 +252,7 @@ We provide an example script to train a model using the KTO method. The script i
 To test the KTO script with the [Qwen2 0.5B model](https://huggingface.co/Qwen/Qwen2-0.5B-Instruct) on the [UltraFeedback dataset](https://huggingface.co/datasets/trl-lib/kto-mix-14k), run the following command:
 
 ```bash
-accelerate launch trl/scripts/kto.py \
+torchrun --nproc_per_node 8 trl/scripts/kto.py \
     --model_name_or_path Qwen/Qwen2-0.5B-Instruct \
     --dataset_name trl-lib/kto-mix-14k \
     --num_train_epochs 1 \

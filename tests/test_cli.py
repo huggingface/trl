@@ -100,6 +100,20 @@ class TestCLI(TrlTestCase):
         with patch("sys.argv", command.split(" ")):
             main()
 
+    def test_sft_torchrun(self):
+        # Arguments the script does not know, `--nproc_per_node` here, go to torchrun.
+        from trl.cli import main
+
+        command = f"trl sft --output_dir {self.tmp_dir} --model_name_or_path trl-internal-testing/tiny-Qwen2ForCausalLM-2.5 --dataset_name trl-internal-testing/zen --dataset_config standard_language_modeling --report_to none --nproc_per_node 2"
+        with patch("torch.distributed.run.run") as mock_run, patch("sys.argv", command.split(" ")):
+            main()
+
+        torchrun_args = mock_run.call_args.args[0]
+        assert torchrun_args.nproc_per_node == "2"
+        assert torchrun_args.training_script.endswith("sft.py")
+        assert "--nproc_per_node" not in torchrun_args.training_script_args
+        assert "--report_to" in torchrun_args.training_script_args
+
     def test_sft_config_file(self):
         from trl.cli import main
 

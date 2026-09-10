@@ -58,8 +58,8 @@ The default hyperparameters follow the reference fine-tuning configs of the rele
 1.5e-4, Adam betas (0.95, 0.99), weight decay 1e-4, 25 warmup steps then cosine to 10% of the initial learning rate,
 global batch size 8, sequence length 1024, 800 steps, LoRA rank 16 with alpha 32), so a run only needs:
 
-accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
-    examples/sft_diffusion_gemma/sft_diffusion_gemma.py \
+torchrun --nproc_per_node 8 examples/sft_diffusion_gemma/sft_diffusion_gemma.py \
+    --deepspeed examples/deepspeed_configs/zero3.json \
     --use_peft \
     --gradient_checkpointing \
     --output_dir diffusiongemma-26B-A4B-it-gsm8k-lora
