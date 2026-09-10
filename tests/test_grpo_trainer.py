@@ -429,6 +429,38 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    def _assert_chunked_loss_matches_full_logits(self, trainer, inputs, loss_rtol=1e-4, grad_atol=5e-4):
+        """Compare the streamed-projection and full-logits loss paths on the same generated batch."""
+        # If the chunked path accidentally calls the LM-head module, it materializes the full logits tensor before
+        # the streamed projection gets a chance to save memory.
+        with patch.object(trainer.model.get_output_embeddings(), "forward", side_effect=AssertionError):
+            chunked_loss = trainer.compute_loss(trainer.model, inputs)
+        chunked_loss.backward()
+        chunked_grads = {
+            name: param.grad.detach().clone()
+            for name, param in trainer.model.named_parameters()
+            if param.grad is not None
+        }
+
+        trainer.model.zero_grad()
+        trainer._metrics["train"].clear()
+        trainer.use_liger_kernel = False
+        loss = trainer.compute_loss(trainer.model, inputs)
+        loss.backward()
+        grads = {name: param.grad for name, param in trainer.model.named_parameters() if param.grad is not None}
+
+        assert chunked_loss.abs() > 0  # the comparison below would hold vacuously for two zero losses
+        torch.testing.assert_close(chunked_loss, loss, rtol=loss_rtol, atol=1e-5)
+        assert chunked_grads.keys() == grads.keys()
+        for name, grad in grads.items():
+            torch.testing.assert_close(chunked_grads[name], grad, rtol=1e-3, atol=grad_atol)
+        chunked_grad = torch.cat([grad.flatten() for grad in chunked_grads.values()])
+        full_grad = torch.cat([grad.flatten() for grad in grads.values()])
+        torch.testing.assert_close(chunked_grad.norm(), full_grad.norm(), rtol=1e-3, atol=1e-5)
+        assert torch.nn.functional.cosine_similarity(chunked_grad, full_grad, dim=0) > 0.999
+
+        release_memory(trainer.model, trainer)
+
     @require_liger_kernel
     @pytest.mark.parametrize(
         "loss_type, beta",
@@ -475,39 +507,41 @@ class TestGRPOTrainer(TrlTestCase):
         trainer.current_gradient_accumulation_steps = training_args.gradient_accumulation_steps
         inputs = trainer._prepare_inputs(next(iter(trainer.get_train_dataloader())))
 
-        # If the chunked path accidentally calls the LM-head module, it materializes the full logits tensor before
-        # the streamed projection gets a chance to save memory.
-        with patch.object(trainer.model.get_output_embeddings(), "forward", side_effect=AssertionError):
-            chunked_loss = trainer.compute_loss(trainer.model, inputs)
-        chunked_loss.backward()
-        chunked_grads = {
-            name: param.grad.detach().clone()
-            for name, param in trainer.model.named_parameters()
-            if param.grad is not None
-        }
-
-        trainer.model.zero_grad()
-        trainer._metrics["train"].clear()
-        trainer.use_liger_kernel = False
-        loss = trainer.compute_loss(trainer.model, inputs)
-        loss.backward()
-        grads = {name: param.grad for name, param in trainer.model.named_parameters() if param.grad is not None}
-
-        assert chunked_loss.abs() > 0  # the comparison below would hold vacuously for two zero losses
         # VESPO's sequence weights amplify the small log-probability difference from streamed GEMM reductions.
         loss_rtol = 1e-3 if loss_type == "vespo" else 1e-4
-        torch.testing.assert_close(chunked_loss, loss, rtol=loss_rtol, atol=1e-5)
-        assert chunked_grads.keys() == grads.keys()
-        grad_atol = 2e-2 if loss_type in {"luspo", "vespo"} else 5e-4
-        for name, grad in grads.items():
-            # LUSPO/VESPO amplify the streamed-GEMM difference; PyTorch 2.8 differs by up to 1.4e-2 in fp32.
-            torch.testing.assert_close(chunked_grads[name], grad, rtol=1e-3, atol=grad_atol)
-        chunked_grad = torch.cat([grad.flatten() for grad in chunked_grads.values()])
-        full_grad = torch.cat([grad.flatten() for grad in grads.values()])
-        torch.testing.assert_close(chunked_grad.norm(), full_grad.norm(), rtol=1e-3, atol=1e-5)
-        assert torch.nn.functional.cosine_similarity(chunked_grad, full_grad, dim=0) > 0.999
+        # LUSPO/VESPO exponentiate a sequence-level sum of per-token log-probabilities, so a per-token streamed-GEMM
+        # discrepancy compounds linearly over `max_completion_length` instead of averaging out like the other losses.
+        grad_atol = 5e-4 * training_args.max_completion_length if loss_type in {"luspo", "vespo"} else 5e-4
+        self._assert_chunked_loss_matches_full_logits(trainer, inputs, loss_rtol=loss_rtol, grad_atol=grad_atol)
 
-        release_memory(trainer.model, trainer)
+    @require_liger_kernel
+    def test_chunked_loss_matches_full_logits_multiple_token_chunks(self):
+        # Same parity check as above, but with enough completion tokens that the streamed log-prob path has to chunk
+        # over tokens as well as vocabulary (a single microbatch there stays within one token chunk).
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            bf16=False,
+            per_device_train_batch_size=3,
+            num_generations=3,
+            max_completion_length=700,
+            steps_per_generation=4,
+            gradient_accumulation_steps=2,
+            use_liger_kernel=True,
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        trainer.model.train()
+        trainer.current_gradient_accumulation_steps = training_args.gradient_accumulation_steps
+        inputs = trainer._prepare_inputs(next(iter(trainer.get_train_dataloader())))
+        self._assert_chunked_loss_matches_full_logits(trainer, inputs)
 
     @require_liger_kernel
     def test_chunked_logps_honor_output_multiplier_and_empty_completion(self):
