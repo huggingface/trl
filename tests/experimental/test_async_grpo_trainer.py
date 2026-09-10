@@ -1721,6 +1721,14 @@ class TestAsyncGRPOTrainerPeft(TrlTestCase):
                     param, new_param, rtol=0, atol=1e-5, msg=f"Base parameter {name} has changed."
                 )
 
+    @pytest.mark.parametrize("target_modules", [["q_proj", "lm_head"], r".*_head$"])
+    def test_lora_on_the_head_is_refused(self, fake_vllm, target_modules):
+        # The chunked log-probability path reads `lm_head.weight`, which on a PEFT-wrapped head is the base weight:
+        # the adapter delta would be silently dropped from every trainer logprob. The regex case is why the check is
+        # on the module and not on `target_modules` — that string never contains "lm_head".
+        with pytest.raises(ValueError, match="lm_head"):
+            self._build(fake_vllm, self._lora_config(target_modules=target_modules), lora_config=SERVER_LORA_CONFIG)
+
     def test_an_injected_weight_transfer_keeps_adapter_sync_off(self, fake_vllm):
         # An injected backend owns weight sync and may be a no-op that disables it; adapter sync must not run behind
         # its back, and the server is not consulted.

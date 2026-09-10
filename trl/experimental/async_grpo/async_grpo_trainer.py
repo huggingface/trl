@@ -1138,6 +1138,21 @@ class AsyncGRPOTrainer(_BaseTrainer):
             # dtype mismatch, and AsyncGRPO is FSDP2-only) and no "ref" adapter (there is no reference model).
             model = get_peft_model(model, peft_config)
 
+        # `patch_chunked_lm_head` computes logits from `lm_head.weight` directly. On a PEFT-wrapped head that is the
+        # base layer's weight, so the adapter delta is never applied: the trainer scores a policy that does not exist
+        # while the server serves the real one, and `ratio` is wrong on every token with nothing raised. Checked on
+        # the module rather than on `target_modules`, so a regex that happens to match the head is caught too.
+        # `SFTTrainer` refuses the same configuration for `loss_type="chunked_nll"`.
+        if is_peft_model(model):
+            from peft.tuners.tuners_utils import BaseTunerLayer
+
+            if isinstance(model.get_output_embeddings(), BaseTunerLayer):
+                raise ValueError(
+                    "`AsyncGRPOTrainer` does not support a PEFT adapter on `lm_head`: its chunked log-probability "
+                    "computation reads the head's base weight and would silently ignore the adapter. Remove `lm_head` "
+                    "from `target_modules`."
+                )
+
         # NOTE: See https://github.com/huggingface/transformers/issues/42489
         if is_peft_model(model) and args.gradient_checkpointing:
             model.enable_input_require_grads()
