@@ -30,6 +30,7 @@ on:
       # Exclude if only experimental code/tests
       - "!trl/experimental/**"
       - "!tests/experimental/**"
+  workflow_dispatch:
 
 env:
   TQDM_DISABLE: 1
