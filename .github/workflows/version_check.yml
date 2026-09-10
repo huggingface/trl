@@ -1,0 +1,37 @@
+# Checks the VERSION file on pull requests to main:
+#   1. VERSION is either a release version ({major}.{minor}.{patch}) or a dev version ({major}.{minor}.{patch}.dev{n}).
+#   2. A release version can only be followed by a dev version. On main, VERSION is a release version only between the
+#      release PR and the post-release bump, so the bump must set a ".dev" version. Missing it is what turned the
+#      v1.11.0 bump into a v1.12.0 release.
+name: Version Check
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "VERSION"
+
+jobs:
+  check-version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Check VERSION bump
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          base=$(git show "$BASE_SHA":VERSION)
+          new=$(cat VERSION)
+          echo "VERSION: $base -> $new"
+          if [[ ! "$new" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.dev[0-9]+)?$ ]]; then
+            echo "::error::VERSION ($new) must be {major}.{minor}.{patch} or {major}.{minor}.{patch}.dev{n}, see RELEASE.md."
+            exit 1
+          fi
+          if [[ "$base" != *dev* && "$new" != *dev* ]]; then
+            echo "::error::VERSION goes from one release version ($base) to another ($new). The PR that follows a release is the dev bump, it must set a .dev version, see RELEASE.md."
+            exit 1
+          fi

@@ -105,6 +105,8 @@ This ensures that future patch releases (`v{major}.{minor}.1`, `v{major}.{minor}
    + {major}.{minor+1}.0.dev0
    ```
 
+   The `.dev0` suffix is mandatory. CI rejects a pull request that replaces a release version with another release version: dropping the suffix here is what published the empty `v1.12.0` to PyPI.
+
 3. Commit and push these changes
 
    ```shell
