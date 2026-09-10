@@ -12,8 +12,8 @@
 
 ## Overview
 
-[`AsyncDistillationTrainer`] is the async counterpart to [`~trl.experimental.distillation.DistillationTrainer`],
-architected like [`AsyncGRPOTrainer`]: a background rollout worker generates the student's own on-policy
+[`experimental.async_distillation.AsyncDistillationTrainer`] is the async counterpart to [`~trl.experimental.distillation.DistillationTrainer`],
+architected like [`experimental.async_grpo.AsyncGRPOTrainer`]: a background rollout worker generates the student's own on-policy
 completions and scores them against a teacher, while training proceeds concurrently instead of alternating between
 generation and gradient updates. Unlike the synchronous trainer, the teacher is never loaded locally — only a vLLM
 server URL is needed, so the teacher can run on entirely separate hardware from the student and trainer, or even be
@@ -58,7 +58,7 @@ example.
 
 In [`~trl.experimental.distillation.DistillationTrainer`], the teacher is a locally loaded model: generation,
 teacher forward pass, and the gradient update all happen sequentially in the same process.
-[`AsyncDistillationTrainer`] separates these concerns the same way [`AsyncGRPOTrainer`] separates GRPO's rollout
+[`experimental.async_distillation.AsyncDistillationTrainer`] separates these concerns the same way [`experimental.async_grpo.AsyncGRPOTrainer`] separates GRPO's rollout
 from its update:
 
 - **Rollout worker** (background process) — generates completions from the student's vLLM server, sends the full
@@ -68,12 +68,12 @@ from its update:
   the student's weights.
 
 Because the teacher is scored over HTTP rather than a local forward pass, only a sparse, top-k slice of its
-distribution is ever transmitted (`teacher_top_k`), not the full vocabulary — see [`AsyncDistillationConfig`]'s
+distribution is ever transmitted (`teacher_top_k`), not the full vocabulary — see [`experimental.async_distillation.AsyncDistillationConfig`]'s
 `beta` and `teacher_top_k` documentation for exactly which candidates the wire protocol guarantees a teacher
 logprob for at each `beta` regime.
 
 After every `weight_sync_steps` training steps, the updated student weights are transferred to its vLLM server via
-NCCL. As with [`AsyncGRPOTrainer`], generation runs ahead of training, so samples may reflect a slightly stale
+NCCL. As with [`experimental.async_grpo.AsyncGRPOTrainer`], generation runs ahead of training, so samples may reflect a slightly stale
 policy; `max_staleness` controls how many weight updates a sample can lag behind before being discarded.
 
 ## Quick start

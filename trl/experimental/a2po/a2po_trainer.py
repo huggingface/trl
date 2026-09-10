@@ -67,7 +67,7 @@ class A2POTrainer(_BaseTrainer):
             Reward function(s). Each takes `prompts` and `completions` (plus dataset columns as keyword arguments) and
             returns a list of float rewards. When multiple are provided, their weighted sum (see
             [`A2POConfig.reward_weights`]) is the scalar reward `r`, which A*-PO assumes to be binary (in `{0, 1}`).
-        args ([`A2POConfig`], *optional*):
+        args ([`experimental.a2po.A2POConfig`], *optional*):
             Configuration for this trainer. If `None`, a default configuration is used.
         train_dataset ([`~datasets.Dataset`], *optional*):
             Training dataset. Must contain a `"prompt"` column.

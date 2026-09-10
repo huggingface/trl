@@ -20,7 +20,7 @@ from trl.trainer.base_config import _BaseConfig
 @dataclass
 class A2POConfig(_BaseConfig):
     r"""
-    Configuration class for the [`A2POTrainer`].
+    Configuration class for the [`experimental.a2po.A2POTrainer`].
 
     This class includes only the parameters that are specific to A2PO training. For a full list of training arguments,
     please refer to the [`~transformers.TrainingArguments`] documentation. Note that default values in this class may
@@ -31,8 +31,8 @@ class A2POConfig(_BaseConfig):
 
         model_init_kwargs (`dict[str, Any]`, *optional*):
             Keyword arguments for [`~transformers.AutoModelForCausalLM.from_pretrained`], used when the `model`
-            argument of the [`A2POTrainer`] is provided as a string. The `revision` value is also used when loading the
-            processing class.
+            argument of the [`experimental.a2po.A2POTrainer`] is provided as a string. The `revision` value is also
+            used when loading the processing class.
         trust_remote_code (`bool`, *optional*, defaults to `False`):
             Whether to allow loading models and tokenizers that ship custom Python code from the Hub. Forwarded to
             [`~transformers.AutoModelForCausalLM.from_pretrained`] and [`~transformers.AutoTokenizer.from_pretrained`].

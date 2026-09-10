@@ -22,7 +22,7 @@ from ...trainer.sft_config import SFTConfig
 @dataclass
 class GOLDConfig(SFTConfig):
     r"""
-    Configuration class for [`GOLDTrainer`].
+    Configuration class for [`experimental.gold.GOLDTrainer`].
 
     This class includes only the parameters that are specific to GOLD training. For a full list of training arguments,
     please refer to the [`~transformers.TrainingArguments`] and [`SFTConfig`] documentation.
