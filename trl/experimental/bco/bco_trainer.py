@@ -76,7 +76,6 @@ if is_joblib_available():
 
 
 if is_peft_available():
-    import peft
     from peft import PeftConfig, get_peft_model, prepare_model_for_kbit_training
 
 
@@ -482,6 +481,7 @@ class BCOTrainer(_BaseTrainer):
             model_init_kwargs["device_map"] = model_init_kwargs.get("device_map", "auto")
 
         model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
+        model_revision = model_init_kwargs.get("revision") if isinstance(model, str) else None
 
         if isinstance(model, str):
             model = AutoModelForCausalLM.from_pretrained(model, **model_init_kwargs)
@@ -546,17 +546,11 @@ class BCOTrainer(_BaseTrainer):
             # - See:
             #   - TRL issue: https://github.com/huggingface/trl/issues/6089
             #   - Upstream issue: https://github.com/deepspeedai/DeepSpeed/issues/8072
-            # - autocast_adapter_dtype was introduced in PEFT 0.12.0; before, no upcast existed: no need to pass the kwarg
             _is_quantized_model = getattr(model, "is_loaded_in_4bit", False) or getattr(
                 model, "is_loaded_in_8bit", False
             )
             get_peft_model_kwargs = {}
-            if (
-                args.deepspeed_plugin is not None
-                and args.deepspeed_plugin.zero_stage == 3
-                and not _is_quantized_model
-                and Version(peft.__version__) >= Version("0.12.0")
-            ):
+            if args.deepspeed_plugin is not None and args.deepspeed_plugin.zero_stage == 3 and not _is_quantized_model:
                 get_peft_model_kwargs["autocast_adapter_dtype"] = False
             model = get_peft_model(model, peft_config, **get_peft_model_kwargs)
             if args.bf16 and getattr(model, "is_loaded_in_4bit", False):
@@ -604,7 +598,7 @@ class BCOTrainer(_BaseTrainer):
 
         if processing_class is None:
             processing_class = AutoTokenizer.from_pretrained(
-                get_config_model_id(model.config), trust_remote_code=args.trust_remote_code
+                get_config_model_id(model.config), revision=model_revision, trust_remote_code=args.trust_remote_code
             )
         if args.max_length is None:
             logger.warning(
