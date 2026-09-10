@@ -19,7 +19,9 @@ import math
 import multiprocessing as mp
 import os
 import queue
+import time
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -837,6 +839,76 @@ class TestWorkerMetricPush(TrlTestCase):
             loop._push_metrics({"rollout/score_s": 1.0})  # drops instead of blocking generation
 
 
+class TestToolExecution(TrlTestCase):
+    def _loop(self):
+        loop = object.__new__(_AsyncRolloutLoop)
+        loop._counters = defaultdict(float)
+        loop._rates = defaultdict(lambda: [0.0, 0.0])
+        loop._tool_pool = ThreadPoolExecutor(max_workers=4)
+        return loop
+
+    @staticmethod
+    def _call(name, **arguments):
+        return {"type": "function", "function": {"name": name, "arguments": arguments}}
+
+    def test_mixed_sync_and_async_tools_keep_call_order(self):
+        def sync_tool(value: int) -> str:
+            return f"sync:{value}"
+
+        async def async_tool(value: int) -> str:
+            await asyncio.sleep(0)
+            return f"async:{value}"
+
+        async def failing_tool(value: int) -> str:
+            raise RuntimeError(f"boom:{value}")
+
+        loop = self._loop()
+        tool_dict = {"sync_tool": sync_tool, "async_tool": async_tool, "failing_tool": failing_tool}
+        calls = [
+            self._call("sync_tool", value=1),
+            self._call("async_tool", value=2),
+            self._call("failing_tool", value=3),
+            self._call("missing_tool", value=4),
+        ]
+        messages, n_calls, n_failures = asyncio.run(loop._execute_tool_calls(calls, tool_dict))
+
+        assert n_calls == 4
+        assert n_failures == 2
+        assert [m["name"] for m in messages] == ["sync_tool", "async_tool", "failing_tool", "missing_tool"]
+        assert messages[0]["content"] == "sync:1"
+        assert messages[1]["content"] == "async:2"
+        assert "boom:3" in messages[2]["content"]
+        assert "unknown tool" in messages[3]["content"]
+        assert loop._counters["tools/failing_tool_failure_total"] == 1
+        assert loop._counters["tools/unknown_name_total"] == 1
+        assert loop._rates["tools/latency_s"][1] == 3
+
+    def test_slow_sync_tool_does_not_block_the_event_loop(self):
+        def slow_tool() -> str:
+            time.sleep(0.5)
+            return "done"
+
+        loop = self._loop()
+
+        async def scenario():
+            ticks = 0
+
+            async def ticker():
+                nonlocal ticks
+                while True:
+                    ticks += 1
+                    await asyncio.sleep(0.01)
+
+            task = asyncio.create_task(ticker())
+            messages, _, _ = await loop._execute_tool_calls([self._call("slow_tool")], {"slow_tool": slow_tool})
+            task.cancel()
+            return messages, ticks
+
+        messages, ticks = asyncio.run(scenario())
+        assert messages[0]["content"] == "done"
+        assert ticks > 10  # inline, the ticker would have advanced once at most
+
+
 class TestReconciler(TrlTestCase):
     def test_common_prefix_len(self):
         assert _common_prefix_len([1, 2, 3], [1, 2, 3]) == 3  # identical
@@ -966,8 +1038,11 @@ def _run(monkeypatch, *, prompt_ids, turns, assistants, fork_threshold=1024, max
     async def _generate_one_turn(prompt_ids):
         return tq.pop(0)
 
+    async def _execute_tool_calls(tool_calls, tool_dict):
+        return [{"role": "tool", "name": "t", "content": "ok"}], 1, 0
+
     loop._generate_one_turn = _generate_one_turn
-    loop._execute_tool_calls = lambda tool_calls, tool_dict: ([{"role": "tool", "name": "t", "content": "ok"}], 1, 0)
+    loop._execute_tool_calls = _execute_tool_calls
 
     # _generate_one returns (completion, completion_ids, sequences, n_calls, n_failures, rollout_reward).
     return asyncio.run(loop._generate_one([{"role": "user", "content": "hi"}], {}, []))
