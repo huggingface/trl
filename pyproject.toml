@@ -48,12 +48,21 @@ deepspeed = [
     "deepspeed>=0.18.6",
     "transformers!=5.1.0",  # see transformers#43780
 ]
+harbor = [
+    "harbor>=0.13.0; python_version >= '3.12'",  # harbor requires Python 3.12+ (pulls its sandbox backends)
+]
 kernels = [  # transformers renamed the "hub-kernels" extra to "kernels" in 5.1.0
     "transformers[kernels]",  # transformers >= 5.1.0
     "transformers[hub-kernels]",  # transformers < 5.1.0
 ]
 liger = [
     "liger-kernel>=0.8.2"
+]
+math_verify = [
+    "math-verify>=0.5.2",
+]
+openreward = [
+    "openreward>=0.1.109; python_version >= '3.11'",  # openreward requires Python 3.11+
 ]
 peft = [
     "peft>=0.13.0"
@@ -75,7 +84,7 @@ test = [
     "tabulate"  # test report rendering in scripts/log_reports.py
 ]
 vllm = [
-    "vllm>=0.19.1,<=0.27.1",
+    "vllm>=0.19.1,<=0.28.0",
     "aiohttp>=3.13.3",
     "requests",
 ]
@@ -83,15 +92,6 @@ vlm = [
     "Pillow",
     "torchvision",
     "num2words==0.5.14"
-]
-math_verify = [
-    "math-verify>=0.5.2",
-]
-openreward = [
-    "openreward>=0.1.109; python_version >= '3.11'",  # openreward requires Python 3.11+
-]
-harbor = [
-    "harbor>=0.13.0; python_version >= '3.12'",  # harbor requires Python 3.12+ (pulls its sandbox backends)
 ]
 dev = [
     # deepspeed
