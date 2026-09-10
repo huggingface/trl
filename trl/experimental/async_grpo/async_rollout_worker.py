@@ -319,6 +319,7 @@ class _AsyncRolloutLoop:
         top_k: int = 0,
         min_p: float | None = None,
         repetition_penalty: float = 1.0,
+        generation_kwargs: dict[str, Any] | None = None,
         request_timeout: int = 120,
         chat_template_kwargs: dict[str, Any] | None = None,
         max_tool_calling_iterations: int | None = None,
@@ -372,6 +373,7 @@ class _AsyncRolloutLoop:
         self.top_k = top_k
         self.min_p = min_p
         self.repetition_penalty = repetition_penalty
+        self.generation_kwargs = generation_kwargs or {}
         self.request_timeout = request_timeout
         self.chat_template_kwargs = chat_template_kwargs or {}
         self.max_tool_calling_iterations = max_tool_calling_iterations
@@ -962,6 +964,7 @@ class _AsyncRolloutLoop:
         }
         if self.min_p is not None:
             payload["min_p"] = self.min_p
+        payload.update(self.generation_kwargs)
         output = await self._retry(
             lambda: self._post("/v1/completions", payload, self.request_timeout),
             max_attempts=30,
