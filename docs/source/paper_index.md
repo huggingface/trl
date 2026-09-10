@@ -98,7 +98,7 @@ training_args = GRPOConfig(
 
 Note that this method only has an effect when training goes slightly off-policy—for example, when `steps_per_generation > gradient_accumulation_steps` or `num_iterations > 1`. Otherwise, it is effectively equivalent to no modification.
 
-TRL also provide an experimental implementation of GSPO-token, see [Experimental - GSPO-Token](gspo_token).
+TRL also provides an experimental implementation of GSPO-token, see [Experimental - GSPO-Token](gspo_token).
 
 #### Policy ratio: GRPO vs. GSPO
 
@@ -1153,7 +1153,7 @@ $$
 l_p=\min(|y_w|,|y_l|).
 $$
 
-Setting  \\( \alpha=1 \\) recovers standard  \\( \alpha \\) reduces verbosity while preserving preference quality.
+Setting  \\( \alpha=1 \\) recovers standard DPO; smaller  \\( \alpha \\) reduces verbosity while preserving preference quality.
 The optimal  \\( \alpha \\) depends on the model family and whether you’re training a base vs. instruct model, but the paper suggests  \\( \alpha=0.5 \\) as a strong default starting point.
 
 ```python
@@ -1621,7 +1621,7 @@ dataset = dataset.map(add_margin)
 
 ## Online Direct Preference Optimization
 
-Papers relating to the [`experimental.odpo.OnlineDPOTrainer`]
+Papers relating to the [`experimental.online_dpo.OnlineDPOTrainer`]
 
 ### Direct Language Model Alignment from Online AI Feedback
 
@@ -1629,7 +1629,7 @@ Papers relating to the [`experimental.odpo.OnlineDPOTrainer`]
 
 Online DPO improves direct alignment from preferences methods by providing real-time feedback from a model, outperforming both DPO and PPO methods.
 
-To use Online DPO, you can use the [`experimental.odpo.OnlineDPOTrainer`].
+To use Online DPO, you can use the [`experimental.online_dpo.OnlineDPOTrainer`].
 
 ### Exploratory Preference Optimization: Harnessing Implicit Q*-Approximation for Sample-Efficient RLHF
 
@@ -1749,16 +1749,21 @@ training_args = GKDConfig(
 )
 ```
 
-You can also use the [`GOLDTrainer`] and [`GOLDConfig`] to perform on-policy distillation with a similar configuration:
+You can also use [`experimental.gold.GOLDTrainer`] for on-policy distillation; see [Unlocking On-Policy Distillation for Any Model Family](#unlocking-on-policy-distillation-for-any-model-family).
+
+### Unlocking On-Policy Distillation for Any Model Family
+
+**🌐 Project**: https://huggingface.co/spaces/HuggingFaceH4/general-on-policy-logit-distillation
+
+Introduces General Online Logit Distillation (GOLD), which extends on-policy distillation to student/teacher pairs with different tokenizers and model families. GOLD aligns textual spans across tokenizers and can apply Universal Logit Distillation (ULD) so completion tokens are not dropped. Used in TRL via [`experimental.gold.GOLDTrainer`].
 
 ```python
 from trl.experimental.gold import GOLDConfig
 
-config = GOLDConfig(
-    lmbda=1.0, # student produces rollouts for all batches
-    beta=1.0, # to ensure reverse-kl as the loss function
-    teacher_model_name_or_path="teacher-model", # specify the teacher model
-
+training_args = GOLDConfig(
+    lmbda=1.0,  # student produces rollouts for all batches
+    beta=1.0,  # to ensure reverse-kl as the loss function
+    use_uld_loss=True,  # Universal Logit Distillation for cross-tokenizer pairs
 )
 ```
 

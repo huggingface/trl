@@ -82,6 +82,7 @@ Below is an overview of TRL trainers, organized by maturity and method type.
 - [`AsyncDistillationTrainer`](async_distillation_trainer)
 - [`GKDTrainer`](gkd_trainer)
 - [`GOLDTrainer`](gold_trainer)
+- [`IWOPDTrainer`](iw_opd_trainer)
 - [`MiniLLMTrainer`](minillm_trainer)
 - [`SDFTTrainer`](sdft_trainer)
 - [`SDPOTrainer`](sdpo_trainer)
