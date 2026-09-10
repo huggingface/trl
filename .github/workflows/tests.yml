@@ -26,6 +26,10 @@ env:
   PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"
   PYTORCH_ALLOC_CONF: "expandable_segments:True"
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
 jobs:
   check_code_quality:
     name: Check code quality
