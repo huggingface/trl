@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import accelerate
 import torch
 import torch.nn.functional as F
 import transformers
@@ -619,8 +620,10 @@ class KTOTrainer(_BaseTrainer):
             if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 model_init_kwargs["device_map"] = None
             model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
+            model_revision = model_init_kwargs.get("revision")
             model = create_model_from_path(model, **model_init_kwargs)
         else:
+            model_revision = None
             if args.model_init_kwargs is not None:
                 logger.warning(
                     "You passed `model_init_kwargs` to the `KTOConfig`, but your model is already instantiated. "
@@ -643,7 +646,7 @@ class KTOTrainer(_BaseTrainer):
         # Processing class
         if processing_class is None:
             processing_class = AutoProcessor.from_pretrained(
-                get_config_model_id(model.config), trust_remote_code=args.trust_remote_code
+                get_config_model_id(model.config), revision=model_revision, trust_remote_code=args.trust_remote_code
             )
         if isinstance(processing_class, ProcessorMixin):
             self._tokenizer = processing_class.tokenizer
@@ -655,6 +658,11 @@ class KTOTrainer(_BaseTrainer):
             raise TypeError("The `processing_class` must be either a `PreTrainedTokenizerBase` or a `ProcessorMixin`")
         if self._tokenizer.pad_token is None:
             self._tokenizer.pad_token = self._tokenizer.eos_token
+
+        # Mirror the pad token onto the model configs: `Trainer` runs the same alignment at train time, so the end
+        # state is unchanged, but the model stays consistent with the tokenizer from the moment it is built.
+        model.config.pad_token_id = self._tokenizer.pad_token_id
+        model.generation_config.pad_token_id = self._tokenizer.pad_token_id
 
         # PEFT
         if peft_config is not None:
@@ -685,14 +693,8 @@ class KTOTrainer(_BaseTrainer):
             # - See:
             #   - TRL issue: https://github.com/huggingface/trl/issues/6089
             #   - Upstream issue: https://github.com/deepspeedai/DeepSpeed/issues/8072
-            # - autocast_adapter_dtype was introduced in PEFT 0.12.0; before, no upcast existed: no need to pass the kwarg
             get_peft_model_kwargs = {}
-            if (
-                args.deepspeed_plugin is not None
-                and args.deepspeed_plugin.zero_stage == 3
-                and not _is_quantized_model
-                and Version(peft.__version__) >= Version("0.12.0")
-            ):
+            if args.deepspeed_plugin is not None and args.deepspeed_plugin.zero_stage == 3 and not _is_quantized_model:
                 get_peft_model_kwargs["autocast_adapter_dtype"] = False
             model = get_peft_model(model, peft_config, **get_peft_model_kwargs)
 
@@ -702,12 +704,13 @@ class KTOTrainer(_BaseTrainer):
             # 0.20.0, only one adapter per model was supported when the LoRA config uses `target_parameters` (see
             # peft#3340, fixed in peft#3350), so in that case we skip the "ref" adapter and compute the reference log
             # probs with adapters disabled, i.e. with the base model. The fix only allows adapters targeting the same
-            # parameters, which holds here since the "ref" adapter reuses the "default" config.
+            # parameters, which holds here since the "ref" adapter reuses the "default" config. `target_parameters`
+            # itself was only added in PEFT 0.17.0, so the version check is bounded on both sides.
             default_config = model.peft_config["default"]
             if (
                 isinstance(default_config, LoraConfig)
+                and Version("0.17.0") <= Version(peft.__version__) < Version("0.20.0")
                 and default_config.target_parameters
-                and Version(peft.__version__) < Version("0.20.0")
             ):
                 logger.warning(
                     "PEFT<0.20.0 can't add a frozen reference adapter alongside one that uses `target_parameters` "
@@ -940,7 +943,7 @@ class KTOTrainer(_BaseTrainer):
         else:
             self.ref_model = ref_model
 
-        # Disable dropout in the model and reference model
+        # Disable dropout in the models
         if args.disable_dropout:
             disable_dropout_in_model(model)
             if self.ref_model is not None:
@@ -949,6 +952,14 @@ class KTOTrainer(_BaseTrainer):
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
         self._total_train_tokens = 0
+
+        # Tensor parallel ranks are given the same batch, so a token count gathered across all processes repeats
+        # every token once per rank in the group. Context and sequence parallelism shard the batch before the loss is
+        # computed, so they need no such correction. `ParallelismConfig.tp_size` requires accelerate 1.10.0.
+        if Version(accelerate.__version__) >= Version("1.10.0") and self.accelerator.parallelism_config is not None:
+            self._tp_size = self.accelerator.parallelism_config.tp_size
+        else:
+            self._tp_size = 1
 
         # Gradient accumulation requires scaled loss. Normally, loss scaling in the parent class depends on whether the
         # model accepts loss-related kwargs. Since we compute our own loss, this check is irrelevant. We set
@@ -1057,7 +1068,7 @@ class KTOTrainer(_BaseTrainer):
 
                 dataset = dataset.map(add_eos, fn_kwargs={"eos_token": self._tokenizer.eos_token}, **map_kwargs)
 
-            # Tokenize dataset
+            # Tokenize the dataset
             if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                 map_kwargs["desc"] = f"Tokenizing {dataset_name} dataset"
 
@@ -1378,7 +1389,7 @@ class KTOTrainer(_BaseTrainer):
         if is_peft_model(model):
             model = model.base_model.model
 
-        # `base_model` gives the inner module (skipping `lm_head`) — text decoder for LMs, multimodal wrapper for
+        # `base_model` gives the backbone model (skipping `lm_head`) — text decoder for LMs, multimodal wrapper for
         # VLMs (so vision-token injection runs before the text decoder). `get_decoder()` won't do: on VLMs it
         # returns just the text stack and feeds image-placeholder IDs through it.
         # Pre-5.0 transformers VLMs set `base_model_prefix = ""` so `base_model is self` (re-runs `lm_head`).
@@ -1456,7 +1467,7 @@ class KTOTrainer(_BaseTrainer):
         # Number of tokens
         if mode == "train":
             num_tokens_in_batch = self.accelerator.gather_for_metrics(batch["attention_mask"].sum()).sum().item()
-            self._total_train_tokens += num_tokens_in_batch
+            self._total_train_tokens += num_tokens_in_batch // self._tp_size
         self._metrics[mode]["num_tokens"] = [self._total_train_tokens]
 
         all_num_chosen = self.accelerator.gather_for_metrics(num_chosen).sum().item()
@@ -1624,7 +1635,7 @@ class KTOTrainer(_BaseTrainer):
         # Number of tokens
         if mode == "train":
             num_tokens_in_batch = self.accelerator.gather_for_metrics(batch["attention_mask"].sum()).sum().item()
-            self._total_train_tokens += num_tokens_in_batch
+            self._total_train_tokens += num_tokens_in_batch // self._tp_size
         self._metrics[mode]["num_tokens"] = [self._total_train_tokens]
 
         # Average logits for chosen and rejected completions

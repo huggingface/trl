@@ -12,7 +12,7 @@
 
 ## Overview
 
-[`AsyncGRPOTrainer`] implements the same [GRPO](grpo_trainer) algorithm but decouples rollout generation from training. A background worker continuously streams completions from a vLLM server while the training loop consumes them, so generation and gradient updates overlap instead of alternating. The API mirrors [`GRPOTrainer`] — for full details on the GRPO method itself (advantage computation, KL estimation, loss formulation, reward functions, etc.), see the [GRPO Trainer](grpo_trainer) documentation. Not all features from [`GRPOTrainer`] are available; refer to [`AsyncGRPOConfig`] for the supported parameters.
+[`experimental.async_grpo.AsyncGRPOTrainer`] implements the same [GRPO](grpo_trainer) algorithm but decouples rollout generation from training. A background worker continuously streams completions from a vLLM server while the training loop consumes them, so generation and gradient updates overlap instead of alternating. The API mirrors [`GRPOTrainer`] — for full details on the GRPO method itself (advantage computation, KL estimation, loss formulation, reward functions, etc.), see the [GRPO Trainer](grpo_trainer) documentation. Not all features from [`GRPOTrainer`] are available; refer to [`experimental.async_grpo.AsyncGRPOConfig`] for the supported parameters.
 
 This trainer was contributed by [Quentin Gallouédec](https://huggingface.co/qgallouedec) and [Amine Dirhoussi](https://huggingface.co/aminediroHF).
 
@@ -20,7 +20,7 @@ This trainer was contributed by [Quentin Gallouédec](https://huggingface.co/qga
 
 In the standard [`GRPOTrainer`], generation and training are sequential: generate a batch, compute the loss, update weights, repeat. Even in [vLLM colocate mode](grpo_trainer#speed-up-training-with-vllm-powered-generation), where generation runs on the same GPUs, one phase must finish before the other begins.
 
-[`AsyncGRPOTrainer`] separates these two concerns:
+[`experimental.async_grpo.AsyncGRPOTrainer`] separates these two concerns:
 
 - **Rollout worker** (background process) — sends prompts to a vLLM server, scores completions with reward functions, computes advantages, and pushes ready-to-train samples into a queue.
 - **Training loop** (main process) — pulls samples from the queue, computes the clipped surrogate loss, and updates the model weights.

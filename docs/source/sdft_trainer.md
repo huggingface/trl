@@ -45,7 +45,7 @@ trainer.train()
 ```
 
 To generate from the teacher-conditioned prompt instead of the student prompt, set `generate_from_teacher=True`.
-To customize how the teacher prompt is built, set `teacher_prompt_template` on [`SDFTConfig`].
+To customize how the teacher prompt is built, set `teacher_prompt_template` on [`experimental.sdft.SDFTConfig`].
 
 ## Serving the teacher from the vLLM server
 

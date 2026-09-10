@@ -34,12 +34,17 @@ MODEL_ID = "Qwen/Qwen3-4B-Instruct-2507"
 tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
 generation_config = GenerationConfig.from_pretrained(MODEL_ID)
 config = Qwen3Config(
-    vocab_size=len(tokenizer.vocab),
+    vocab_size=151936,
     hidden_size=8,
     num_attention_heads=4,
     num_key_value_heads=2,
     num_hidden_layers=2,
     intermediate_size=32,
+    max_position_embeddings=262144,
+    rope_theta=5000000,
+    max_window_layers=36,
+    bos_token_id=151643,
+    eos_token_id=151645,
 )
 model = Qwen3ForCausalLM(config).to(dtype=torch.bfloat16)
 init_weights_tiny_model(model)

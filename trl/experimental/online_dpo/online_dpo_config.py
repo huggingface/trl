@@ -142,7 +142,7 @@ class OnlineDPOConfig(_BaseConfig):
             with vLLM generation.
         model_init_kwargs (`dict[str, Any]`, *optional*):
             Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the model from a
-            string.
+            string. The `revision` value is also used when loading reward processing classes.
         trust_remote_code (`bool`, *optional*, defaults to `False`):
             Whether to allow loading models that ship custom Python code from the Hub. Forwarded to
             [`~transformers.AutoModelForCausalLM.from_pretrained`]. Also applied to reward-model and reward-tokenizer
@@ -356,7 +356,7 @@ class OnlineDPOConfig(_BaseConfig):
         default=None,
         metadata={
             "help": "Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the model "
-            "from a string."
+            "from a string. The `revision` value is also used when loading reward processing classes."
         },
     )
     trust_remote_code: bool = field(

@@ -43,6 +43,7 @@ _TELEMETRY_TRAINERS = {
     "SFTTrainer",
     # Experimental
     "A2POTrainer",
+    "AsyncDistillationTrainer",
     "AsyncGRPOTrainer",
     "BCOTrainer",
     "CPOTrainer",
@@ -151,7 +152,7 @@ class _BaseTrainer(Trainer):
                 Name of the model.
             dataset_name (`str`, *optional*):
                 Name of the dataset used for training.
-            tags (`str`, `list[str]`, *optional*):
+            tags (`str` or `list[str]`, *optional*):
                 Tags to be associated with the model card.
         """
         if not self.is_world_process_zero():
