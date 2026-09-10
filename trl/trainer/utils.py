@@ -1436,15 +1436,20 @@ class _ChunkedLogProbFunction(torch.autograd.Function):
         logit_scale: float = ctx.logit_scale
         final_logit_softcapping: float = ctx.final_logit_softcapping
         inv_t = 1 / temperature
+        needs_hidden_grad, needs_weight_grad, needs_bias_grad = ctx.needs_input_grad[:3]
 
         N, _ = hidden.shape
         with maybe_gather_lm_head_ctx(weight, bias):
             vocab = weight.shape[0]
 
             # NOTE(@aminediro): always acc in fp32 even if input is not
-            grad_hidden = torch.zeros(hidden.shape, device=hidden.device, dtype=torch.float32)
-            grad_weight = torch.zeros(weight.shape, device=weight.device, dtype=torch.float32)
-            grad_bias = torch.zeros(bias.shape, device=bias.device, dtype=torch.float32) if bias is not None else None
+            grad_hidden = (
+                torch.zeros(hidden.shape, device=hidden.device, dtype=torch.float32) if needs_hidden_grad else None
+            )
+            grad_weight = (
+                torch.zeros(weight.shape, device=weight.device, dtype=torch.float32) if needs_weight_grad else None
+            )
+            grad_bias = torch.zeros(bias.shape, device=bias.device, dtype=torch.float32) if needs_bias_grad else None
 
             # Pre-allocate reusable buffers to avoid per-chunk allocation
             max_token_chunk = min(N, _CHUNKED_LOGPROB_TOKEN_CHUNK_SIZE)
@@ -1509,14 +1514,16 @@ class _ChunkedLogProbFunction(torch.autograd.Function):
 
                     grad_logits = grad_logits * logit_scale
 
-                    grad_hidden[token_start:token_end].add_(grad_logits @ w_chunk.float())
-                    grad_weight[start:end].add_(grad_logits.t() @ hidden_chunk_compute.float())
+                    if grad_hidden is not None:
+                        grad_hidden[token_start:token_end].add_(grad_logits @ w_chunk.float())
+                    if grad_weight is not None:
+                        grad_weight[start:end].add_(grad_logits.t() @ hidden_chunk_compute.float())
                     if grad_bias is not None:
                         grad_bias[start:end].add_(grad_logits.sum(dim=0))
 
         return (
-            grad_hidden.to(hidden.dtype),
-            grad_weight.to(weight.dtype),
+            grad_hidden.to(hidden.dtype) if grad_hidden is not None else None,
+            grad_weight.to(weight.dtype) if grad_weight is not None else None,
             grad_bias.to(bias.dtype) if grad_bias is not None else None,
             None,
             None,
