@@ -250,14 +250,7 @@ class TestDistributed(TrlTestCase):
                     reason="Upstream incompatibility: deepspeed and transformers==5.1.0 (see transformers#43780)",
                 ),
             ),
-            pytest.param(
-                "fsdp2",
-                marks=pytest.mark.xfail(
-                    reason="Liger KTO loss reads `lm_head.weight` and runs the backbone directly, which is "
-                    "incompatible with FSDP2's DTensor-sharded parameters (mixed Tensor/DTensor ops).",
-                    strict=True,
-                ),
-            ),
+            "fsdp2",
         ],
     )
     def test_kto_liger(self, config, get_config_path):
