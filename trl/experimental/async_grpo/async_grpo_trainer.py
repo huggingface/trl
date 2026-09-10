@@ -70,6 +70,66 @@ RewardFunc = Callable[..., list[float]]
 MetricValue = float | tuple[float, float]
 
 
+def _importance_sampling_gate(
+    log_ratio: torch.Tensor,
+    completion_mask: torch.Tensor,
+    position_ids: torch.Tensor,
+    mode: str,
+    clip_min: float | None,
+    clip_max: float | None,
+) -> torch.Tensor:
+    """Build the multiplicative importance-sampling gate for the packed policy loss.
+
+    AsyncGRPO trains on rollouts whose generating weights are up to ``max_staleness`` versions old,
+    so ``log_ratio`` (current policy minus vLLM sampler, per token) folds policy drift and
+    training-inference mismatch into one combined ratio. Left alone, that ratio is unbounded on the
+    negative-advantage branch of the PPO objective: ``-min(r*A, clip(r)*A)`` with ``A < 0`` grows
+    linearly in ``r``. The gate bounds it.
+
+    All inputs are ``(1, T)`` slices of the packed row, already label-shifted. ``mode`` selects two
+    orthogonal choices: granularity (``token_*`` uses each token's ratio; ``sequence_*`` uses one
+    ratio per packed sequence, the product of its completion-token ratios, located via
+    ``position_ids`` resets) and constraint (``*_truncate`` caps the effective gradient weight at
+    the clip bounds by multiplying with ``clamp(rho)/rho``; ``*_mask`` zeroes tokens or sequences
+    whose ratio leaves the bounds). Tokens whose sampler logprob was unavailable (NaN ratio) are
+    left uncorrected, matching the synchronous trainer's convention.
+
+    Returns a detached ``(1, T)`` tensor to multiply into the per-token loss.
+    """
+    log_ratio = log_ratio.detach()
+
+    if mode in ("sequence_truncate", "sequence_mask"):
+        # The collator packs sequences into one row with position_ids resetting to 0 at each
+        # sequence start, so cumsum over resets labels each token with its segment. The sequence
+        # log-ratio is the sum over its completion tokens (a product of ratios), scattered back
+        # to every token of the segment.
+        segment_ids = (position_ids == 0).cumsum(dim=-1)[0]
+        num_segments = int(segment_ids.max().item()) + 1 if segment_ids.numel() else 1
+        masked_log_ratio = torch.nan_to_num(log_ratio, nan=0.0) * completion_mask
+        segment_sums = torch.zeros(num_segments, dtype=log_ratio.dtype, device=log_ratio.device).index_add_(
+            0, segment_ids, masked_log_ratio[0]
+        )
+        effective_log_rho = segment_sums.gather(0, segment_ids).unsqueeze(0)
+        nan_positions = torch.zeros_like(log_ratio, dtype=torch.bool)
+    else:
+        nan_positions = torch.isnan(log_ratio)
+        effective_log_rho = torch.nan_to_num(log_ratio, nan=0.0)
+
+    log_clip_min = math.log(clip_min) if clip_min is not None else -torch.inf
+    log_clip_max = math.log(clip_max) if clip_max is not None else torch.inf
+
+    if mode in ("token_truncate", "sequence_truncate"):
+        # exp(clamp(log rho) - log rho) == clamp(rho, C_min, C_max) / rho, computed in log space so
+        # that extreme ratios cannot overflow before the division.
+        gate = torch.exp(effective_log_rho.clamp(min=log_clip_min, max=log_clip_max) - effective_log_rho)
+    else:  # token_mask, sequence_mask
+        in_range = (effective_log_rho >= log_clip_min) & (effective_log_rho <= log_clip_max)
+        gate = in_range.to(log_ratio.dtype)
+
+    # No sampler logprob means no correction for that token, never a masked-out token.
+    return torch.where(nan_positions, torch.ones_like(gate), gate)
+
+
 def _reduce_metric(key: str, values: list[MetricValue]) -> float:
     """Reduce one logging window into the number that gets logged.
 
@@ -809,6 +869,10 @@ class AsyncGRPOTrainer(_BaseTrainer):
         # Training arguments
         self.epsilon_low = args.epsilon
         self.epsilon_high = args.epsilon_high if args.epsilon_high is not None else args.epsilon
+        self.vllm_importance_sampling_correction = args.vllm_importance_sampling_correction
+        self.vllm_importance_sampling_mode = args.vllm_importance_sampling_mode
+        self.vllm_importance_sampling_clip_min = args.vllm_importance_sampling_clip_min
+        self.vllm_importance_sampling_clip_max = args.vllm_importance_sampling_clip_max
         self.temperature = args.temperature
 
         # Model
@@ -1149,6 +1213,21 @@ class AsyncGRPOTrainer(_BaseTrainer):
         per_token_loss1 = coef_1 * advantages
         per_token_loss2 = coef_2 * advantages
         per_token_loss = -torch.min(per_token_loss1, per_token_loss2)
+        if self.vllm_importance_sampling_correction:
+            # `old_log_probs` are the vLLM sampler's logprobs, not a recomputation with the
+            # generation-time weights (those are gone by dequeue time), so `log_ratio` is the
+            # combined drift-plus-mismatch ratio and the gate bounds its influence on the loss.
+            importance_sampling_gate = _importance_sampling_gate(
+                log_ratio,
+                completion_mask,
+                position_ids[:, 1:],
+                self.vllm_importance_sampling_mode,
+                self.vllm_importance_sampling_clip_min,
+                self.vllm_importance_sampling_clip_max,
+            )
+            per_token_loss = per_token_loss * importance_sampling_gate
+        else:
+            importance_sampling_gate = None
 
         # DDP/FSDP averages gradients across ranks (world_size).
         # To get correct per-token normalization we scale by 1/tokens_per_rank
@@ -1231,6 +1310,18 @@ class AsyncGRPOTrainer(_BaseTrainer):
             gathered_high_max = self.accelerator.gather(nanmax(per_seq_high))
             self._metrics["train"]["clip_ratio/low_min"].append(nanmin(gathered_low_min).item())
             self._metrics["train"]["clip_ratio/high_max"].append(nanmax(gathered_high_max).item())
+
+            if importance_sampling_gate is not None:
+                # Fraction of completion tokens whose loss the gate reduced (masked out, or damped by
+                # truncation). A rising value is the first sign that the queue is running further
+                # off-policy than the clip bounds tolerate.
+                gated = (importance_sampling_gate < 1.0) & valid_mask
+                gate_stats = torch.stack([gated.float().sum(), local_count])
+                gate_stats = self.accelerator.reduce(gate_stats, reduction="sum")
+                global_gated_sum, global_gate_count = gate_stats.unbind(0)
+                self._metrics["train"]["sampling/importance_sampling_gated_frac"].append(
+                    (global_gated_sum / global_gate_count.clamp(min=1.0)).item()
+                )
 
             if self.aux_loss_enabled:
                 gathered_aux = self.accelerator.reduce(aux_loss.detach().to(torch.float32), reduction="sum")
