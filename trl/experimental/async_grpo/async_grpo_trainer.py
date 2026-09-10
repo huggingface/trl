@@ -105,7 +105,8 @@ EnvironmentFactory = Callable[[], _SupportsReset]
 
 
 class RolloutWorkerProtocol(Protocol):
-    """Interface a rollout worker must implement to be passed as `rollout_worker` to [`AsyncGRPOTrainer`].
+    """Interface a rollout worker must implement to be passed as `rollout_worker` to
+    [`experimental.async_grpo.AsyncGRPOTrainer`].
 
     The default [`AsyncRolloutWorker`] spawns a CUDA-free child process and scores completions with the trainer's
     `reward_funcs`. Implement this protocol to plug in a custom rollout/scoring backend instead — for example, one that
@@ -144,7 +145,8 @@ class RolloutWorkerProtocol(Protocol):
 
 
 class WeightTransferProtocol(Protocol):
-    """Interface a weight-sync backend must implement to be passed as `weight_transfer` to [`AsyncGRPOTrainer`].
+    """Interface a weight-sync backend must implement to be passed as `weight_transfer` to
+    [`experimental.async_grpo.AsyncGRPOTrainer`].
 
     The default [`WeightTransferClient`] streams the trainer's weights into the vLLM server over NCCL. Implement this
     protocol to plug in a different sync mechanism, or pass a no-op implementation to disable trainer-side weight sync
@@ -701,7 +703,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
             `functools.partial`, or a callable class instance — lambdas and closures will fail at startup. The child
             process also runs with `CUDA_VISIBLE_DEVICES=""`, so a GPU-backed reward model runs on CPU (slow), not the
             trainer's GPU.
-        args ([`AsyncGRPOConfig`], *optional*):
+        args ([`experimental.async_grpo.AsyncGRPOConfig`], *optional*):
             Configuration for this trainer. If `None`, a default configuration is used.
         train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`], *optional*):
             Dataset to use for training. It must include a column `"prompt"`. Any additional columns in the dataset are

@@ -2,7 +2,7 @@
 
 In the paper [On the Position Bias of On-Policy Distillation](https://huggingface.co/papers/2606.22600), the authors introduce Importance-Weighted On-Policy Distillation (IW-OPD). IW-OPD addresses position bias in on-policy distillation by reweighting sampled-token updates according to accumulated teacher-student prefix discrepancy. Early tokens keep larger weights, while later tokens after high drift are downweighted.
 
-To use IW-OPD, you can use the [`IWOPDTrainer`] class in `trl.experimental.iw_opd`.
+To use IW-OPD, you can use the [`experimental.iw_opd.IWOPDTrainer`] class in `trl.experimental.iw_opd`.
 
 > [!NOTE]
 > IW-OPD is currently part of the `trl.experimental` namespace. APIs may change without notice while the feature is iterated on.
