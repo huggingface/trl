@@ -105,10 +105,10 @@
     title: Async Distillation
   - local: async_grpo_trainer
     title: Asynchronous GRPO
-  - local: bema_for_reference_model
-    title: BEMA for Reference Model
   - local: bco_trainer
     title: BCO
+  - local: bema_for_reference_model
+    title: BEMA for Reference Model
   - local: cpo_trainer
     title: CPO
   - local: gkd_trainer
@@ -119,6 +119,8 @@
     title: GOLD
   - local: gspo_token
     title: GSPO-token
+  - local: iw_opd_trainer
+    title: IW-OPD
   - local: merge_model_callback
     title: MergeModelCallback
   - local: minillm_trainer

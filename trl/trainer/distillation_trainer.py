@@ -23,7 +23,7 @@ import warnings
 from collections import defaultdict, deque
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import numpy as np
 import torch
@@ -199,7 +199,7 @@ def _chunked_divergence_loss(
             Interpolation coefficient. `0.0` = forward KL, `1.0` = reverse KL, else generalized JSD.
         chunk_size (`int`):
             Number of valid positions processed per chunk. Peak memory scales linearly with this.
-        num_items_in_batch (`torch.Tensor`, `int` or `None`, *optional*):
+        num_items_in_batch (`torch.Tensor` or `int`, *optional*):
             Total number of valid tokens across the global batch. When provided, the loss is reduced as `sum /
             num_items_in_batch` (gradient-accumulation-correct); when `None`, reduction is `mean` over local valid
             positions.
@@ -335,7 +335,7 @@ class DistillationTrainer(_BaseTrainer):
             that supply the teacher another way (e.g. a remote server).
         args ([`DistillationConfig`], *optional*):
             Configuration for this trainer. If `None`, a default configuration is used.
-        train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`], *optional*):
+        train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
             Dataset to use for training. It must include a column `"prompt"`. Any additional columns in the dataset is
             ignored. The format of the samples can be either:
 
@@ -396,15 +396,15 @@ class DistillationTrainer(_BaseTrainer):
     def __init__(
         self,
         model: "str | PreTrainedModel | PeftModel",
-        teacher_model: str | PreTrainedModel = None,
+        teacher_model: str | PreTrainedModel | None = None,
         args: DistillationConfig | None = None,
         train_dataset: Dataset | None = None,
         eval_dataset: Dataset | dict[str, Dataset] | None = None,
         processing_class: PreTrainedTokenizerBase | ProcessorMixin | None = None,
         callbacks: list[TrainerCallback] | None = None,
-        optimizers: tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
+        optimizers: tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None] = (None, None),
         quantization_config: "BitsAndBytesConfig | None" = None,
-        peft_config: Optional["PeftConfig"] = None,
+        peft_config: "PeftConfig | None" = None,
         tools: list[Callable] | None = None,
     ):
         if args is None:
@@ -430,9 +430,11 @@ class DistillationTrainer(_BaseTrainer):
             if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 model_init_kwargs["device_map"] = None
             model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
+            model_revision = model_init_kwargs.get("revision")
             model = create_model_from_path(model, **model_init_kwargs)
         else:
             model_name_or_path = get_config_model_id(model.config)
+            model_revision = None
             if args.model_init_kwargs is not None:
                 logger.warning(
                     "You passed `model_init_kwargs` to the `DistillationConfig`, but your model is already "
@@ -458,6 +460,7 @@ class DistillationTrainer(_BaseTrainer):
         if processing_class is None:
             processing_class = AutoProcessor.from_pretrained(
                 model_name_or_path,
+                revision=model_revision,
                 truncation_side="left",
                 padding_side="left",
                 trust_remote_code=args.trust_remote_code,
@@ -808,8 +811,8 @@ class DistillationTrainer(_BaseTrainer):
         if self.use_vllm:
             if not is_vllm_available():
                 raise ImportError(
-                    "vLLM is not available and use_vllm is set to True. Please install vLLM with "
-                    "`pip install vllm` to use it."
+                    "vLLM is not available and `use_vllm` is set to True. Please install vLLM with "
+                    "`pip install trl[vllm]` to use it."
                 )
             self.vllm_generation = VLLMGeneration(
                 model=self.model,
@@ -1724,7 +1727,7 @@ class DistillationTrainer(_BaseTrainer):
                     forward_kwargs["mm_token_type_ids"] = mm_ids
                     num_images = None
 
-        # Log the prompt and completion texts
+        # Log prompt and completion texts
         if self.log_completions:
             prompts_text = self.processing_class.batch_decode(prompt_ids, skip_special_tokens=True)
             completions_text = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)

@@ -427,7 +427,8 @@ class TokenBudgetBatcher(torch.utils.data.IterableDataset):
 
 
 class RolloutWorkerProtocol(Protocol):
-    """Interface a rollout worker must implement to be passed as `rollout_worker` to [`AsyncDistillationTrainer`].
+    """Interface a rollout worker must implement to be passed as `rollout_worker` to
+    [`experimental.async_distillation.AsyncDistillationTrainer`].
 
     Same contract as [`~trl.experimental.async_grpo.async_grpo_trainer.RolloutWorkerProtocol`].
 
@@ -454,7 +455,7 @@ class RolloutWorkerProtocol(Protocol):
 
 class WeightTransferProtocol(Protocol):
     """Interface a weight-sync backend must implement to be passed as `weight_transfer` to
-    [`AsyncDistillationTrainer`].
+    [`experimental.async_distillation.AsyncDistillationTrainer`].
 
     Same contract as [`~trl.experimental.async_grpo.async_grpo_trainer.WeightTransferProtocol`]. The default
     [`WeightTransferClient`] streams the student's weights into its vLLM server over NCCL; pass a no-op implementation
@@ -904,7 +905,7 @@ class AsyncDistillationTrainer(_BaseTrainer):
             [`~transformers.PreTrainedModel.save_pretrained`]. Loaded with
             [`~transformers.AutoModelForCausalLM.from_pretrained`]. The model name is also used to identify the student
             model on its vLLM server.
-        args ([`AsyncDistillationConfig`], *optional*):
+        args ([`experimental.async_distillation.AsyncDistillationConfig`], *optional*):
             Configuration for this trainer. If `None`, a default configuration is used.
         train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
             Dataset to use for training. Must include a `"prompt"` column
@@ -964,6 +965,7 @@ class AsyncDistillationTrainer(_BaseTrainer):
         model_init_kwargs = args.model_init_kwargs or {}
         model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
         model_init_kwargs.setdefault("dtype", args.dtype)
+        model_revision = model_init_kwargs.get("revision")
         # FlashAttention is required: training runs in padding-free mode, where sequences are concatenated into a
         # single row and attention is derived from `position_ids` resets. SDPA/eager can't handle this. Unlike
         # AsyncGRPOTrainer, the student's own lm_head is NOT patched (via `patch_chunked_lm_head`) to a chunked
@@ -983,7 +985,9 @@ class AsyncDistillationTrainer(_BaseTrainer):
 
         # Processing class
         if processing_class is None:
-            processing_class = AutoTokenizer.from_pretrained(model_name, trust_remote_code=args.trust_remote_code)
+            processing_class = AutoTokenizer.from_pretrained(
+                model_name, revision=model_revision, trust_remote_code=args.trust_remote_code
+            )
         if processing_class.pad_token is None:
             processing_class.pad_token = processing_class.eos_token
         # Mirror the pad token onto the model configs: `Trainer` runs the same alignment at train time, so the end
@@ -1110,7 +1114,6 @@ class AsyncDistillationTrainer(_BaseTrainer):
                         "names": weight_names,
                         "dtype_names": weight_dtype_names,
                         "shapes": weight_shapes,
-                        "packed": True,
                     },
                     weight_sync_timeout=self.args.weight_sync_timeout,
                 )
