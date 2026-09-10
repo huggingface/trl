@@ -143,5 +143,7 @@
     title: TPO
   - local: xpo_trainer
     title: XPO
+  - local: zero_sync_grpo_trainer
+    title: Zero-Sync GRPO
   title: Experimental
   isExpanded: false
