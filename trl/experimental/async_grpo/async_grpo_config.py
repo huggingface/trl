@@ -21,7 +21,7 @@ from ...trainer.base_config import _BaseConfig
 @dataclass
 class AsyncGRPOConfig(_BaseConfig):
     r"""
-    Configuration class for the [`AsyncGRPOTrainer`].
+    Configuration class for the [`experimental.async_grpo.AsyncGRPOTrainer`].
 
     This class includes only the parameters that are specific to asynchronous GRPO training. For a full list of
     training arguments, please refer to the [`~transformers.TrainingArguments`] documentation. Note that default values
@@ -32,7 +32,7 @@ class AsyncGRPOConfig(_BaseConfig):
 
         model_init_kwargs (`dict[str, Any]` or `str`, *optional*):
             Keyword arguments for [`~transformers.AutoModelForCausalLM.from_pretrained`], used when instantiating the
-            model from a path.
+            model from a path. The `revision` value is also used when loading the processing class.
         dtype (`str`, *optional*, defaults to `"float32"`):
             Data type to load the model under, one of `"auto"`, `"bfloat16"`, `"float16"` or `"float32"`. It defaults
             to `"float32"` because the training-inference mismatch this trainer is measured against ([Defeating the
@@ -171,7 +171,7 @@ class AsyncGRPOConfig(_BaseConfig):
         default=None,
         metadata={
             "help": "Keyword arguments for `transformers.AutoModelForCausalLM.from_pretrained`, used when instantiating "
-            "the model from a path."
+            "the model from a path. The `revision` value is also used when loading the processing class."
         },
     )
     dtype: str = field(

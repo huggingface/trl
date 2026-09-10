@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import accelerate
 import torch
 import torch.nn.functional as F
 import transformers
@@ -324,8 +325,10 @@ class TPOTrainer(_BaseTrainer):
             if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 model_init_kwargs["device_map"] = None
             model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
+            model_revision = model_init_kwargs.get("revision")
             model = create_model_from_path(model, **model_init_kwargs)
         else:
+            model_revision = None
             if args.model_init_kwargs is not None:
                 logger.warning(
                     "You passed `model_init_kwargs` to the `TPOConfig`, but your model is already instantiated. "
@@ -335,7 +338,7 @@ class TPOTrainer(_BaseTrainer):
         # Processing class
         if processing_class is None:
             processing_class = AutoProcessor.from_pretrained(
-                get_config_model_id(model.config), trust_remote_code=args.trust_remote_code
+                get_config_model_id(model.config), revision=model_revision, trust_remote_code=args.trust_remote_code
             )
         if not isinstance(processing_class, PreTrainedTokenizerBase):
             raise TypeError(
@@ -346,8 +349,8 @@ class TPOTrainer(_BaseTrainer):
 
         if self._tokenizer.pad_token is None:
             self._tokenizer.pad_token = self._tokenizer.eos_token
-        # Mirror the pad token onto the model configs: `Trainer` runs the same alignment at train time, so the end
-        # state is unchanged, but the model stays consistent with the tokenizer from the moment it is built.
+        # The model must agree with the tokenizer on the pad token from construction, so mirror it onto the model
+        # configs.
         model.config.pad_token_id = self._tokenizer.pad_token_id
         model.generation_config.pad_token_id = self._tokenizer.pad_token_id
 
@@ -455,6 +458,14 @@ class TPOTrainer(_BaseTrainer):
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
         self._total_train_tokens = 0
+
+        # Tensor parallel ranks are given the same batch, so a token count gathered across all processes repeats
+        # every token once per rank in the group. Context and sequence parallelism shard the batch before the loss is
+        # computed, so they need no such correction. `parallelism_config` requires accelerate 1.12.0.
+        if Version(accelerate.__version__) >= Version("1.12.0") and self.accelerator.parallelism_config is not None:
+            self._tp_size = self.accelerator.parallelism_config.tp_size
+        else:
+            self._tp_size = 1
 
         # Add tags to the model
         self.model.add_model_tags(self._tag_names)
@@ -708,7 +719,7 @@ class TPOTrainer(_BaseTrainer):
         # Number of tokens
         if mode == "train":
             num_tokens_in_batch = self.accelerator.gather_for_metrics(inputs["attention_mask"].sum()).sum().item()
-            self._total_train_tokens += num_tokens_in_batch
+            self._total_train_tokens += num_tokens_in_batch // self._tp_size
         self._metrics[mode]["num_tokens"] = [self._total_train_tokens]
 
         # Average logits for chosen and rejected completions

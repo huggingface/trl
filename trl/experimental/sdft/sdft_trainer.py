@@ -248,11 +248,13 @@ class SDFTTrainer(_BaseTrainer):
         if train_dataset is None:
             raise ValueError("`train_dataset` is required")
 
+        model_revision = None
         if isinstance(model, str):
             model_init_kwargs = args.model_init_kwargs or {}
             if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 model_init_kwargs["device_map"] = None
             model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
+            model_revision = model_init_kwargs.get("revision")
             model = create_model_from_path(model, **model_init_kwargs)
         elif args.model_init_kwargs is not None:
             logger.warning(
@@ -296,6 +298,7 @@ class SDFTTrainer(_BaseTrainer):
         if processing_class is None:
             processing_class = AutoProcessor.from_pretrained(
                 get_config_model_id(model.config),
+                revision=model_revision,
                 truncation_side="left",
                 padding_side="left",
                 trust_remote_code=args.trust_remote_code,
@@ -310,8 +313,8 @@ class SDFTTrainer(_BaseTrainer):
 
         if self._tokenizer.pad_token is None:
             self._tokenizer.pad_token = self._tokenizer.eos_token
-        # Mirror the pad token onto the model configs: `Trainer` runs the same alignment at train time, so the end
-        # state is unchanged, but the model stays consistent with the tokenizer from the moment it is built.
+        # The model must agree with the tokenizer on the pad token from construction, so mirror it onto the model
+        # configs.
         model.config.pad_token_id = self._tokenizer.pad_token_id
         model.generation_config.pad_token_id = self._tokenizer.pad_token_id
 

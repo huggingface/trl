@@ -316,18 +316,18 @@ def generate_model_card(
             Weights & Biases run URL.
         trackio_url (`str` or `None`):
             Trackio Space URL.
-        comet_url (`str` or `None`):
-            Comet experiment URL.
         trainer_name (`str`):
             Trainer name.
-        trainer_citation (`str` or `None`, defaults to `None`):
+        trainer_citation (`str`, *optional*):
             Trainer citation as a BibTeX entry.
-        template_file (`str` *optional*):
+        template_file (`str`, *optional*):
             Template file name located in the `trl/templates` directory. Defaults to `lm_model_card.md`.
-        paper_title (`str` or `None`, defaults to `None`):
+        paper_title (`str`, *optional*):
             Paper title.
-        paper_id (`str` or `None`, defaults to `None`):
+        paper_id (`str`, *optional*):
             ArXiv paper ID as `YYMM.NNNNN`.
+        comet_url (`str`, *optional*):
+            Comet experiment URL.
 
     Returns:
         [`~huggingface_hub.ModelCard`]:
@@ -969,10 +969,12 @@ def nanmin(tensor: torch.Tensor) -> torch.Tensor:
     Compute the minimum value of a tensor, ignoring NaNs. This function only supports 1D tensors.
 
     Args:
-        tensor (`torch.Tensor`): Input tensor of shape `(N,)`.
+        tensor (`torch.Tensor`):
+            Input tensor of shape `(N,)`.
 
     Returns:
-        `torch.Tensor`: Minimum value of the tensor, ignoring NaNs. Returns NaN if all values are NaN.
+        `torch.Tensor`:
+            Minimum value of the tensor, ignoring NaNs. Returns NaN if all values are NaN.
     """
     if torch.isnan(tensor).all():
         return torch.tensor(float("nan"), dtype=tensor.dtype, device=tensor.device)
@@ -984,10 +986,12 @@ def nanmax(tensor: torch.Tensor) -> torch.Tensor:
     Compute the maximum value of a tensor, ignoring NaNs. This function only supports 1D tensors.
 
     Args:
-        tensor (`torch.Tensor`): Input tensor of shape `(N,)`.
+        tensor (`torch.Tensor`):
+            Input tensor of shape `(N,)`.
 
     Returns:
-        `torch.Tensor`: Maximum value of the tensor, ignoring NaNs. Returns NaN if all values are NaN.
+        `torch.Tensor`:
+            Maximum value of the tensor, ignoring NaNs. Returns NaN if all values are NaN.
     """
     if torch.isnan(tensor).all():
         return torch.tensor(float("nan"), dtype=tensor.dtype, device=tensor.device)
@@ -1156,7 +1160,7 @@ def create_model_from_path(
     Args:
         model_id (`str`):
             Path to the model. Can be either a local directory or a model identifier from the Hugging Face Hub.
-        architecture (`_BaseAutoModelClass` or `None`, *optional*):
+        architecture (`_BaseAutoModelClass`, *optional*):
             Model architecture class to instantiate. The model is initialized using the `from_pretrained` method of
             this class. If `None`, the architecture will be inferred from the model's configuration.
         kwargs (`dict`):

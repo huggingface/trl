@@ -350,7 +350,7 @@ class TestGenerateModelCard(TrlTestCase):
         card_text = str(model_card)
         assert "[username/my_base_model](https://huggingface.co/username/my_base_model)" in card_text
         assert "my_model" in card_text
-        assert 'pipeline("text-generation", model="username/my_hub_model", device="cuda")' in card_text
+        assert 'pipeline("text-generation", model="username/my_hub_model", device_map="auto")' in card_text
         assert "datasets: username/my_dataset" in card_text
         assert "](https://wandb.ai/username/project_id/runs/abcd1234)" in card_text
         assert "](https://huggingface.co/spaces/username/space_id)" in card_text
@@ -376,7 +376,7 @@ class TestGenerateModelCard(TrlTestCase):
         )
         card_text = str(model_card)
         assert "my_model" in card_text
-        assert 'pipeline("text-generation", model="username/my_hub_model", device="cuda")' in card_text
+        assert 'pipeline("text-generation", model="username/my_hub_model", device_map="auto")' in card_text
         assert "My Trainer" in card_text
 
 

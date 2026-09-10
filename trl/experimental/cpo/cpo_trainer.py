@@ -175,6 +175,7 @@ class CPOTrainer(_BaseTrainer):
             model_init_kwargs["device_map"] = model_init_kwargs.get("device_map", "auto")
 
         model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
+        model_revision = model_init_kwargs.get("revision") if isinstance(model, str) else None
 
         if isinstance(model, str):
             model = AutoModelForCausalLM.from_pretrained(model, **model_init_kwargs)
@@ -281,7 +282,7 @@ class CPOTrainer(_BaseTrainer):
 
         if processing_class is None:
             processing_class = AutoTokenizer.from_pretrained(
-                get_config_model_id(model.config), trust_remote_code=args.trust_remote_code
+                get_config_model_id(model.config), revision=model_revision, trust_remote_code=args.trust_remote_code
             )
         if args.max_length is None:
             logger.warning(
@@ -330,8 +331,8 @@ class CPOTrainer(_BaseTrainer):
 
         if processing_class.pad_token is None:
             processing_class.pad_token = processing_class.eos_token
-        # Mirror the pad token onto the model configs: `Trainer` runs the same alignment at train time, so the end
-        # state is unchanged, but the model stays consistent with the tokenizer from the moment it is built.
+        # The model must agree with the tokenizer on the pad token from construction, so mirror it onto the model
+        # configs.
         model.config.pad_token_id = processing_class.pad_token_id
         model.generation_config.pad_token_id = processing_class.pad_token_id
         self.pad_token_id = processing_class.pad_token_id
