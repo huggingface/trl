@@ -2308,21 +2308,32 @@ class TestSFTTrainer(TrlTestCase):
         assert trainer.model.config.pad_token_id == pad_token_id
         assert trainer.model.generation_config.pad_token_id == pad_token_id
 
-    def test_eos_token_id_synced_with_model_config(self):
+    @pytest.mark.parametrize(
+        "generation_eos_token_id, expected_eos_token_ids",
+        [
+            ([151645, 151643], [151644, 151645, 151643]),  # a list of ids, as Qwen and Llama ship
+            (151645, [151644, 151645]),  # a single id, as Mistral and GPT-2 ship
+            (None, [151644]),  # no id at all
+            ([151644, 151645], [151644, 151645]),  # a list that already holds the requested token
+        ],
+    )
+    def test_eos_token_id_synced_with_model_config(self, generation_eos_token_id, expected_eos_token_ids):
         # The trainer sets the requested eos token on the tokenizer. The model configs must follow: otherwise
-        # `Trainer` realigns them at train time and reports it as a change the user did not make.
+        # `Trainer` realigns them at train time and reports it as a change the user did not make. The generation
+        # config holds the eos token as a list, as a single id, or not at all, so cover the three shapes.
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="float32")
+        model.generation_config.eos_token_id = generation_eos_token_id
+
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
 
         training_args = SFTConfig(output_dir=self.tmp_dir, eos_token="<|im_start|>", report_to="none")
-        trainer = SFTTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
-        )
+        trainer = SFTTrainer(model=model, args=training_args, train_dataset=dataset)
 
         eos_token_id = trainer.processing_class.eos_token_id
         assert eos_token_id == 151644  # <|im_start|>
         assert trainer.model.config.eos_token_id == eos_token_id
         # The model's own eos tokens are kept, since any of them halts generation
-        assert trainer.model.generation_config.eos_token_id == [151644, 151645, 151643]
+        assert trainer.model.generation_config.eos_token_id == expected_eos_token_ids
 
 
 @pytest.mark.slow
