@@ -1,12 +1,12 @@
+# Publishing is triggered by the release tag, not by a change to VERSION. A tag push is a deliberate act, while a
+# VERSION change is a side effect of an ordinary PR: v1.12.0 was published to PyPI because a post-release bump set
+# VERSION to "1.12.0" instead of "1.12.0.dev0".
 name: Publish to PyPI
 
 on:
   push:
-    branches:
-      - main
-      - v*-release
-    paths:
-      - "VERSION"
+    tags:
+      - "v*"
 
 jobs:
   publish:
