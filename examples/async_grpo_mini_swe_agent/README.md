@@ -38,7 +38,7 @@ Same prompts and templates (`mini-swe-agent`'s `swebench.yaml`), same step limit
 
 ```sh
 CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 VLLM_ALLOW_RUNTIME_LORA_UPDATING=1 vllm serve Qwen/Qwen3-32B \
-    --host 0.0.0.0 --port 8000 --max-model-len 65536 \
+    --host 0.0.0.0 --port 8000 --max-model-len 40960 \
     --enable-auto-tool-choice --tool-call-parser hermes --reasoning-parser qwen3 \
     --logprobs-mode processed_logprobs --generation-config vllm \
     --weight-transfer-config '{"backend":"nccl"}' \

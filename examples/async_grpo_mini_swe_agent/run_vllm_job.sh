@@ -18,7 +18,7 @@ FLAVOR=${VLLM_FLAVOR:-h200x2}
 TIMEOUT=${VLLM_TIMEOUT:-8h}
 # Prompt + completion. An agent trajectory re-sends the whole conversation every turn, and tool outputs run up to
 # 10k characters each, so this is what bounds how many steps a rollout can take.
-MAX_MODEL_LEN=${MAX_MODEL_LEN:-65536}
+MAX_MODEL_LEN=${MAX_MODEL_LEN:-40960}
 # A capacity bound, not the rank served; must be one of 1, 8, 16, 32, 64, 128, 256, 320, 512.
 MAX_LORA_RANK=${MAX_LORA_RANK:-32}
 # At least `max_staleness + 2`: the trainer keeps `max_staleness + 1` adapter versions servable, and each sync loads
