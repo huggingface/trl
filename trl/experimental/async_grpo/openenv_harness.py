@@ -349,7 +349,7 @@ def _turns_from_trace(
     for entry in entries:
         request = entry["request"]
         prompt_ids = tokenizer.apply_chat_template(
-            request["messages"],
+            _parse_tool_call_arguments(request["messages"]),
             tools=request.get("tools"),
             add_generation_prompt=True,
             tokenize=True,
@@ -358,6 +358,25 @@ def _turns_from_trace(
         )
         turns.append(TurnRecord(prompt_ids, _trace_output_ids(entry), entry.get("per_token_logps") or []))
     return turns
+
+
+def _parse_tool_call_arguments(messages: list[Message]) -> list[Message]:
+    """OpenAI-style requests carry tool-call arguments as JSON strings; vLLM parses them into dicts before rendering the
+    chat template (transformers' convention), so the prompt is rebuilt from the same dicts."""
+    out = []
+    for message in messages:
+        tool_calls = message.get("tool_calls")
+        if tool_calls:
+            message = dict(message, tool_calls=[dict(tc) for tc in tool_calls])
+            for tc in message["tool_calls"]:
+                function = tc.get("function")
+                if function and isinstance(function.get("arguments"), str):
+                    try:
+                        tc["function"] = dict(function, arguments=json.loads(function["arguments"]))
+                    except json.JSONDecodeError:
+                        pass
+        out.append(message)
+    return out
 
 
 def _tool_call_counts_by_name(entries: list[TraceEntry]) -> dict[str, int]:

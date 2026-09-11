@@ -65,6 +65,7 @@ CUDA_VISIBLE_DEVICES=1 HF_TOKEN=... accelerate launch --num_processes 1 \
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 import platform
@@ -107,10 +108,14 @@ SWEBENCH_CONFIG = yaml.safe_load((builtin_config_dir / "benchmarks" / "swebench.
 # ============================================================================================================
 
 
-def build_dataset(n_prompts: int, seed: int) -> tuple[Dataset, dict[str, dict]]:
+def build_dataset(n_prompts: int, seed: int, instance_ids: list[str] | None = None) -> tuple[Dataset, dict[str, dict]]:
     """Return `(dataset, instances)`: prompt rows holding the issue text only, and the full SWE-Gym instances keyed
-    by that text, for the factory (image, base commit) and the verifier (test patch, FAIL_TO_PASS, PASS_TO_PASS)."""
-    rows = load_dataset("SWE-Gym/SWE-Gym", split="train").shuffle(seed=seed).select(range(n_prompts))
+    by that text, for the factory (image, base commit) and the verifier (test patch, FAIL_TO_PASS, PASS_TO_PASS).
+    `instance_ids` restricts the pool, e.g. to instances the base policy sometimes solves."""
+    rows = load_dataset("SWE-Gym/SWE-Gym", split="train")
+    if instance_ids is not None:
+        rows = rows.filter(lambda row: row["instance_id"] in set(instance_ids))
+    rows = rows.shuffle(seed=seed).select(range(min(n_prompts, len(rows))))
     instances = {row["problem_statement"]: row for row in rows}
     dataset = Dataset.from_list([{"prompt": [{"role": "user", "content": text}]} for text in instances])
     return dataset, instances
@@ -375,6 +380,7 @@ def main() -> None:
     p.add_argument("--vllm-url", default="http://localhost:8000")
     p.add_argument("--output-dir", default="async_grpo_mini_swe_agent")
     p.add_argument("--n-prompts", type=int, default=256)
+    p.add_argument("--instances-file", default=None)  # JSON list of SWE-Gym instance ids to train on
     p.add_argument("--num-generations", type=int, default=8)
     p.add_argument("--max-inflight", type=int, default=32)  # concurrent rollouts, one sandbox each
     p.add_argument("--per-device-train-batch-size", type=int, default=1)
@@ -412,7 +418,8 @@ def main() -> None:
     logging.getLogger("trl").setLevel(logging.INFO)
 
     tokenizer = AutoTokenizer.from_pretrained(args.model)
-    dataset, instances = build_dataset(args.n_prompts, args.seed)
+    instance_ids = json.load(open(args.instances_file)) if args.instances_file else None
+    dataset, instances = build_dataset(args.n_prompts, args.seed, instance_ids)
 
     factory = MiniSWEAgentSessionFactory(
         instances=instances,
