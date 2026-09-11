@@ -98,13 +98,21 @@ class VLLMClient:
                 Directory holding `adapter_config.json` and the adapter weights. The server process reads it, so it
                 must sit on a filesystem the server can see: vLLM has no in-memory adapter API.
         """
-        response = requests.post(
-            f"{self.server_url}/v1/load_lora_adapter",
-            # `load_inplace` stays `False`: it makes the server re-read the adapter from disk on every request
-            # (https://github.com/vllm-project/vllm/pull/41482). New policies get a new name instead.
-            json={"lora_name": lora_name, "lora_path": lora_path, "load_inplace": False},
-            timeout=timeout,
-        )
+        deadline = time.monotonic() + timeout
+        while True:
+            response = requests.post(
+                f"{self.server_url}/v1/load_lora_adapter",
+                # `load_inplace` stays `False`: it makes the server re-read the adapter from disk on every request
+                # (https://github.com/vllm-project/vllm/pull/41482). New policies get a new name instead.
+                json={"lora_name": lora_name, "lora_path": lora_path, "load_inplace": False},
+                timeout=timeout,
+            )
+            # The server reads the path itself, and a shared filesystem it mounts may show the directory a few
+            # seconds after the trainer wrote it; vLLM reports that as `No adapter found`.
+            if response.status_code == 404 and "No adapter found" in response.text and time.monotonic() < deadline:
+                time.sleep(2)
+                continue
+            break
         if response.status_code == 404:
             raise RuntimeError(
                 f"The vLLM server at {self.server_url} does not expose `/v1/load_lora_adapter`. Restart it with "
