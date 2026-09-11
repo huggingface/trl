@@ -313,6 +313,7 @@ class _AsyncRolloutLoop:
         queue_maxsize: int = 0,
         score_queue_maxsize: int = 16,
         vllm_server_url: str = "http://localhost:8000",
+        lora_name: str | None = None,
         max_tokens: int = 32,
         temperature: float = 1.0,
         top_p: float = 1.0,
@@ -325,10 +326,16 @@ class _AsyncRolloutLoop:
         log_completions: bool = False,
         num_completions_to_print: int | None = None,
         fork_threshold_tokens: int = 1024,
+        dataset_start_index: int = 0,
     ):
         self.model_name = model_name
+        self.lora_name = lora_name
         self.dataset = dataset
-        self._dataset_iter = iter(dataset)
+        if dataset_start_index > 0:
+            start = dataset_start_index % len(dataset)
+            self._dataset_iter = iter(dataset.select(range(start, len(dataset))))
+        else:
+            self._dataset_iter = iter(dataset)
         self.reward_funcs = reward_funcs
         self.reward_func_names = [get_callable_name(f) for f in reward_funcs]
         # `add_response_schema` sets the response template (transformers >= 5.13) or legacy schema for known chat
@@ -460,6 +467,15 @@ class _AsyncRolloutLoop:
     @property
     def model_version(self) -> int:
         return int(self._model_version_value.value)
+
+    @property
+    def _request_model(self) -> str:
+        # In vLLM's API an adapter *is* a model name: naming the base model while an adapter is loaded silently
+        # serves the base model, so the published version has to be part of the request. `model_version` reads the
+        # shared `mp.Value`, so a sync is picked up without extra IPC.
+        if self.lora_name is None:
+            return self.model_name
+        return f"{self.lora_name}-v{self.model_version}"
 
     def run(self) -> None:
         asyncio.set_event_loop(self._loop)
@@ -944,7 +960,7 @@ class _AsyncRolloutLoop:
 
     async def _generate_one_turn(self, prompt_ids: list[int]) -> tuple[list[int], list[float]]:
         payload = {
-            "model": self.model_name,
+            "model": self._request_model,
             "prompt": prompt_ids,
             "max_tokens": self.max_tokens,
             "temperature": self.temperature,
@@ -1123,6 +1139,7 @@ class AsyncRolloutWorker:
         # Forwarded verbatim to _AsyncRolloutLoop in the child. queue_maxsize is also
         # forwarded — the child reads it for "rollout buffer full" log lines.
         loop_kwargs["queue_maxsize"] = queue_maxsize
+        loop_kwargs.setdefault("dataset_start_index", 0)
         self._loop_kwargs = loop_kwargs
         self._child_ready_timeout = child_ready_timeout
         self._process: mp.Process | None = None

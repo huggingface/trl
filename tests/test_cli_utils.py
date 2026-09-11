@@ -19,7 +19,7 @@ from unittest.mock import mock_open, patch
 import pytest
 from datasets import DatasetDict, load_dataset
 
-from trl import DatasetMixtureConfig, TrlParser, get_dataset
+from trl import DatasetMixtureConfig, DistillationConfig, GRPOConfig, RLOOConfig, SFTConfig, TrlParser, get_dataset
 from trl.scripts.utils import DatasetConfig
 
 from .testing_utils import TrlTestCase
@@ -37,6 +37,22 @@ class InvalidDataclass:
 
 
 class TestTrlParser(TrlTestCase):
+    @pytest.mark.parametrize(
+        ("config_cls", "field_name", "value", "expected"),
+        [
+            (SFTConfig, "dataset_kwargs", '{"skip_prepare_dataset": true}', {"skip_prepare_dataset": True}),
+            (GRPOConfig, "chat_template_kwargs", '{"enable_thinking": false}', {"enable_thinking": False}),
+            (GRPOConfig, "generation_kwargs", '{"suppress_tokens": [1, 2]}', {"suppress_tokens": [1, 2]}),
+            (RLOOConfig, "chat_template_kwargs", '{"enable_thinking": false}', {"enable_thinking": False}),
+            (DistillationConfig, "generation_kwargs", '{"suppress_tokens": [1]}', {"suppress_tokens": [1]}),
+        ],
+    )
+    def test_dict_field_from_command_line(self, config_cls, field_name, value, expected):
+        """Dict-typed fields are passed as JSON on the command line and decoded into dicts."""
+        parser = TrlParser(dataclass_types=[config_cls])
+        (config,) = parser.parse_args_into_dataclasses(["--output_dir", "dummy", f"--{field_name}", value])
+        assert getattr(config, field_name) == expected
+
     def test_init_without_config_field(self):
         """Test initialization without 'config' field in the dataclasses."""
         parser = TrlParser(dataclass_types=[MyDataclass])

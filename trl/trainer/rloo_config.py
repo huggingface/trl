@@ -35,9 +35,10 @@ class RLOOConfig(_BaseConfig):
     Parameters:
         > Parameters that control the model and reference model
 
-        model_init_kwargs (`str`, `dict[str, Any]`, *optional*):
+        model_init_kwargs (`str` or `dict[str, Any]`, *optional*):
             Keyword arguments for [`~transformers.AutoModelForCausalLM.from_pretrained`], used when the `model`
-            argument of the [`RLOOTrainer`] is provided as a string.
+            argument of the [`RLOOTrainer`] is provided as a string. The `revision` value is also used when loading
+            processing classes.
         trust_remote_code (`bool`, *optional*, defaults to `False`):
             Whether to allow loading models and tokenizers that ship custom Python code from the Hub. Forwarded to
             [`~transformers.AutoModelForCausalLM.from_pretrained`] and [`~transformers.AutoProcessor.from_pretrained`].
@@ -58,7 +59,7 @@ class RLOOConfig(_BaseConfig):
         num_generations (`int`, *optional*, defaults to `2`):
             Number of generations per prompt to sample. The effective batch size (num_processes * per_device_batch_size
             * gradient_accumulation_steps) must be evenly divisible by this value.
-        num_generations_eval (`int` or `None`, *optional*):
+        num_generations_eval (`int`, *optional*):
             Number of generations to sample during evaluation. This allows using fewer generations during evaluation to
             save computation. If `None`, uses the value of `num_generations`.
         max_completion_length (`int` or `None`, *optional*, defaults to `512`):
@@ -82,7 +83,7 @@ class RLOOConfig(_BaseConfig):
         steps_per_generation (`int`, *optional*):
             Number of steps per generation. If `None`, it defaults to `gradient_accumulation_steps`. Mutually exclusive
             with `generation_batch_size`.
-        temperature (`float`, defaults to `1.0`):
+        temperature (`float`, *optional*, defaults to `1.0`):
             Temperature for sampling. The higher the temperature, the more random the completions.
         top_p (`float`, *optional*, defaults to `1.0`):
             Float that controls the cumulative probability of the top tokens to consider. Must be in (0, 1]. Set to
@@ -116,14 +117,17 @@ class RLOOConfig(_BaseConfig):
             Mode to use for vLLM integration when `use_vllm` is set to `True`. Must be one of `"server"` or
             `"colocate"`.
 
-            - `"server"`: The trainer will send generation requests to a separate vLLM server. Make sure a TRL vLLM
-              server is running (start with `trl vllm-serve`).
+            - `"server"`: The trainer will send generation requests to a separate vLLM server. Make sure a vLLM server
+              is running (start with `vllm serve`).
             - `"colocate"`: vLLM will run in the same process and share the training GPUs. This avoids the need for a
               separate server but may cause resource contention with training.
         vllm_model_impl (`str`, *optional*, defaults to `"vllm"`):
             Model implementation to use for vLLM. Must be one of `"transformers"` or `"vllm"`. `"transformers"`: Use
             the `transformers` backend for model implementation. `"vllm"`: Use the `vllm` library for model
             implementation.
+        vllm_enable_sleep_mode (`bool`, *optional*, defaults to `False`):
+            Enable vLLM sleep mode to offload weights/cache during the optimizer step. Keeps GPU memory usage low, but
+            waking the engine adds host–device transfer latency.
         vllm_structured_outputs_regex (`str`, *optional*):
             Regex for vLLM structured outputs. If `None` (default), structured outputs is disabled.
 
@@ -156,17 +160,6 @@ class RLOOConfig(_BaseConfig):
             Control the tensor parallel size for vLLM. This setting only applies when `vllm_mode` is set to
             `"colocate"`. If you are using `vllm_mode="server"`, this parameter must be passed separately when
             launching the vLLM server via the `--vllm_tensor_parallel_size` flag.
-        vllm_enable_sleep_mode (`bool`, *optional*, defaults to `False`):
-            Enable vLLM sleep mode to offload weights/cache during the optimizer step. Keeps GPU memory usage low, but
-            waking the engine adds host–device transfer latency.
-
-        > Parameters that control generation acceleration powered by transformers continuous batching
-
-        use_transformers_continuous_batching (`bool`, *optional*, defaults to `False`):
-            Whether to use transformers' continuous batching engine for generating completions. Requires
-            `transformers>=5.8.0`.
-        transformers_continuous_batching_config (`dict`, *optional*):
-            Keyword arguments for [`~transformers.generation.ContinuousBatchingConfig`].
 
         > Parameters that control the training
 
@@ -221,6 +214,14 @@ class RLOOConfig(_BaseConfig):
             Whether to log unique prompts. If `True`, only unique prompts are logged. If `False`, all prompts are
             logged.
 
+        > Parameters that control generation acceleration powered by transformers continuous batching
+
+        use_transformers_continuous_batching (`bool`, *optional*, defaults to `False`):
+            Whether to use transformers' continuous batching engine for generating completions. Requires
+            `transformers>=5.8.0`.
+        transformers_continuous_batching_config (`dict`, *optional*):
+            Keyword arguments for [`~transformers.generation.ContinuousBatchingConfig`].
+
         > Deprecated parameters
 
         use_transformers_paged:
@@ -243,6 +244,8 @@ class RLOOConfig(_BaseConfig):
     _VALID_DICT_FIELDS = _BaseConfig._VALID_DICT_FIELDS + [
         "model_init_kwargs",
         "transformers_continuous_batching_config",
+        "generation_kwargs",
+        "chat_template_kwargs",
     ]
 
     # Parameters whose default values are overridden from TrainingArguments
@@ -256,7 +259,8 @@ class RLOOConfig(_BaseConfig):
         default=None,
         metadata={
             "help": "Keyword arguments for `transformers.AutoModelForCausalLM.from_pretrained`, used when the `model` "
-            "argument of the `RLOOTrainer` is provided as a string."
+            "argument of the `RLOOTrainer` is provided as a string. The `revision` value is also used when loading "
+            "processing classes."
         },
     )
     trust_remote_code: bool = field(
@@ -366,7 +370,7 @@ class RLOOConfig(_BaseConfig):
             "must be a value between 0.0 and 1.0. Typical values are in the 0.01-0.2 range."
         },
     )
-    generation_kwargs: dict | None = field(
+    generation_kwargs: dict | str | None = field(
         default=None,
         metadata={
             "help": "Additional keyword arguments to pass to `GenerationConfig` (if using transformers) or "
@@ -375,7 +379,7 @@ class RLOOConfig(_BaseConfig):
             "conflict with the other generation parameters (like `min_p`, `top_p`, etc.), they will override them."
         },
     )
-    chat_template_kwargs: dict | None = field(
+    chat_template_kwargs: dict | str | None = field(
         default=None,
         metadata={
             "help": "Additional keyword arguments to pass to the `apply_chat_template` function when generating "
@@ -408,7 +412,7 @@ class RLOOConfig(_BaseConfig):
         metadata={
             "help": "Mode to use for vLLM integration when `use_vllm` is set to `True`. Must be one of `'server'` or "
             "`'colocate'`. `'server'`: The trainer will send generation requests to a separate vLLM server. Make sure "
-            "a TRL vLLM server is running (start with `trl vllm-serve`). `'colocate'`: vLLM will run in the same "
+            "a vLLM server is running (start with `vllm serve`). `'colocate'`: vLLM will run in the same "
             "process and share the training GPUs. This avoids the need for a separate server but may cause resource "
             "contention with training."
         },
@@ -596,7 +600,7 @@ class RLOOConfig(_BaseConfig):
             "transformers>=5.8.0."
         },
     )
-    transformers_continuous_batching_config: dict | None = field(
+    transformers_continuous_batching_config: dict | str | None = field(
         default=None,
         metadata={"help": "Keyword arguments for `transformers.generation.ContinuousBatchingConfig`."},
     )
