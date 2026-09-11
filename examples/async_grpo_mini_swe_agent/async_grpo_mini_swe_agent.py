@@ -328,7 +328,6 @@ class MiniSWEAgentSessionFactory(ResourceSessionFactory):
             image=instance_image(instance),
             flavor=self.flavor,
             idle_timeout=self.agent_timeout + self.eval_timeout,
-            labels={"episode_id": episode_id or ""},
         )
         try:
             model = TracingModel(
