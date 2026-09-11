@@ -387,7 +387,8 @@ def main() -> None:
     p.add_argument("--per-device-train-batch-size", type=int, default=1)
     p.add_argument("--gradient-accumulation-steps", type=int, default=16)
     p.add_argument("--learning-rate", type=float, default=1e-5)
-    p.add_argument("--lora-rank", type=int, default=32)
+    p.add_argument("--lora-rank", type=int, default=32)  # 0: full fine-tuning
+    p.add_argument("--optim", default="adamw_torch")  # e.g. paged_adamw_8bit to fit a full fine-tune on fewer GPUs
     p.add_argument(
         "--lora-target-modules", default="all-linear"
     )  # or e.g. q_proj,k_proj,v_proj,o_proj for a smaller adapter
@@ -444,6 +445,7 @@ def main() -> None:
         max_completion_length=args.max_turn_tokens,
         token_budget=args.token_budget,
         learning_rate=args.learning_rate,
+        optim=args.optim,
         per_device_train_batch_size=args.per_device_train_batch_size,
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         max_staleness=args.max_staleness,
@@ -479,7 +481,8 @@ def main() -> None:
         processing_class=tokenizer,
         rollout_worker=worker,
         # Plain LoRA on the linear layers: anything else (`modules_to_save`, DoRA, trained biases) cannot be served
-        # as a vLLM adapter and would fall back to syncing the merged weights.
+        # as a vLLM adapter and would fall back to syncing the merged weights. `--lora-rank 0` trains the full model
+        # and syncs the merged weights over NCCL.
         peft_config=LoraConfig(
             r=args.lora_rank,
             lora_alpha=2 * args.lora_rank,
@@ -488,13 +491,17 @@ def main() -> None:
                 if args.lora_target_modules == "all-linear"
                 else args.lora_target_modules.split(",")
             ),
-        ),
+        )
+        if args.lora_rank
+        else None,
     )
 
     # Checkpoints live in `output_dir`, so a restarted job continues instead of starting over.
     last_checkpoint = get_last_checkpoint(args.output_dir) if os.path.isdir(args.output_dir) else None
     trainer.train(resume_from_checkpoint=last_checkpoint)
 
+    if not args.lora_rank:
+        return
     # The final adapter, outside `.vllm_lora/` where old versions are deleted as they leave the staleness window.
     # Every rank calls this: materializing a sharded adapter parameter all-gathers, and only rank 0 writes.
     async_grpo_trainer.save_lora_adapter(
